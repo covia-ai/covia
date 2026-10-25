@@ -3,17 +3,18 @@ package covia.adapter.speech;
 import java.util.List;
 
 /**
- * The speech-to-text models the local engine runs, each file pinned: its address names
- * a fixed revision, and its size and sha256 are written here, so a download is the file
- * that was tested or nothing. The catalogue is GetMine's (docs/proposals/
- * VOICE_TRANSCRIPTION.md), from the copies sherpa-onnx's maintainer publishes on
- * Hugging Face, file by file, so nothing needs unpacking.
+ * The models the local engine runs, each file pinned: its address names a fixed
+ * revision, and its size and sha256 are written here, so a download is the file that
+ * was tested or nothing. The speech-to-text catalogue is GetMine's (docs/proposals/
+ * VOICE_TRANSCRIPTION.md); the voices are those that need no espeak-ng data, so none
+ * is unpacked and nothing under the GPL is loaded. All come from the copies
+ * sherpa-onnx's maintainer publishes on Hugging Face, file by file.
  */
 final class SpeechModels {
 	private SpeechModels() {}
 
 	/** How sherpa-onnx is configured for a model. */
-	enum Kind { NEMO_TRANSDUCER, MOONSHINE }
+	enum Kind { NEMO_TRANSDUCER, MOONSHINE, SUPERTONIC, VITS }
 
 	/** One file of a model, where it comes from, and what it must be. */
 	record ModelFile(String name, String url, long bytes, String sha256) {}
@@ -77,6 +78,39 @@ final class SpeechModels {
 	/** The model with this id, or null. */
 	static Model byId(String id) {
 		for (Model m : ALL) if (m.id().equals(id)) return m;
+		return null;
+	}
+
+	private static final String VITS_LJS = "csukuangfj/vits-ljs";
+	private static final String VITS_LJS_REV = "7ac337c834f318e45a34037cb3371cc3929187ff";
+	private static final String SUPERTONIC_3 = "csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11";
+	private static final String SUPERTONIC_3_REV = "cca5a0e6c96e1d2c720986bf7e75fcc81dee3ae4";
+
+	/**
+	 * The default voice model: VITS on LJSpeech, under a standard permissive licence. It
+	 * says the words of its lexicon, so {@link Lexicon} makes text sayable first.
+	 */
+	static final String DEFAULT_VOICE = "vits-ljs";
+
+	/** The text-to-speech catalogue, the recommended model first. */
+	static final List<Model> VOICES = List.of(
+		new Model(DEFAULT_VOICE, "VITS LJSpeech", "English", "Apache-2.0", Kind.VITS, List.of(
+			hf(VITS_LJS, VITS_LJS_REV, "vits-ljs.onnx", 114_124_456L, "5bbd273797a9ecf8d94bd6ec02ad16cb41cbb85f055ad98d528ced3e44c9b31a"),
+			hf(VITS_LJS, VITS_LJS_REV, "lexicon.txt", 3_708_181L, "bdccfc6da71c45c48e2e0056fcf0aab760577c5f959f6c1b5eb3e3e916fd5a0e"),
+			hf(VITS_LJS, VITS_LJS_REV, "tokens.txt", 1_084L, "5fee2c6b238d712287f2ecb08f34a8a8b413bcb7390862ef6fb6fd6f0f8d3a17"))),
+		// Reads characters, so it needs no lexicon; a better voice, under a licence with use-based restrictions.
+		new Model("supertonic-3", "Supertonic 3", "31 languages", "OpenRAIL-M, Supertone", Kind.SUPERTONIC, List.of(
+			hf(SUPERTONIC_3, SUPERTONIC_3_REV, "duration_predictor.int8.onnx", 3_700_147L, "c3eb91414d5ff8a7a239b7fe9e34e7e2bf8a8140d8375ffb14718b1c639325db"),
+			hf(SUPERTONIC_3, SUPERTONIC_3_REV, "text_encoder.int8.onnx", 36_416_150L, "c7befd5ea8c3119769e8a6c1486c4edc6a3bc8365c67621c881bbb774b9902ff"),
+			hf(SUPERTONIC_3, SUPERTONIC_3_REV, "vector_estimator.int8.onnx", 78_400_833L, "20cd86fa5c6effedfda0e7cffe5b0569ca401c440a0c3a1d72bf39286c0db3fd"),
+			hf(SUPERTONIC_3, SUPERTONIC_3_REV, "vocoder.int8.onnx", 25_991_073L, "e923d60f53f95eb1ce235f1dc33ec56d9c057823c96fa6f8acf98f32b0da6152"),
+			hf(SUPERTONIC_3, SUPERTONIC_3_REV, "tts.json", 8_253L, "42078d3aef1cd43ab43021f3c54f47d2d75ceb4e75f627f118890128b06a0d09"),
+			hf(SUPERTONIC_3, SUPERTONIC_3_REV, "unicode_indexer.bin", 262_144L, "8402ca48e5189a8950138580b0fff64db6f072f24ac07cd54ba8b2fbb9883b30"),
+			hf(SUPERTONIC_3, SUPERTONIC_3_REV, "voice.bin", 517_168L, "67d5209b0ee8ce6c74105ffbe12fe6a7628aea3b4ba2fcb308a4a67938a93ce8"))));
+
+	/** The voice model with this id, or null. */
+	static Model voiceById(String id) {
+		for (Model m : VOICES) if (m.id().equals(id)) return m;
 		return null;
 	}
 }

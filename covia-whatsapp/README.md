@@ -141,11 +141,25 @@ nothing is overwritten. The 20 MiB limit applies.
 
 ## State and recovery
 
+For a local agent, COMPLETE means the input and session mapping were committed
+atomically with the receipt. It does not wait for the agent's turn or outgoing
+reply. Later inputs can arrive while the agent is thinking; failed replies never
+redeliver input. Reply callbacks are not a durable outbound queue. Operation
+handlers and remote agents retain STARTED until processing and replies finish.
+
+Each receipt is claimed before media download, preprocessing or dispatch.
+A failed handoff becomes FAILED with a reason and the last error after one
+attempt. No automatic retry is made, including after restart. A flush failure
+is reported directly; already committed admission remains COMPLETE.
+A message accepted before the bot was reconfigured
+also fails once rather than running under the new settings.
+
 The shared [webhook worker](../venue/docs/ADAPTERS.md#http-messaging-workers)
 owns receipts and sessions. Pending events resume when credentials become
 available or the venue restarts. Started events remain visible for manual
 reconciliation after an interruption; no send or Job is blindly replayed.
 `bots.started` includes currently running and potentially uncertain work;
+`bots.failed` counts failed processing attempts; inspect their reason before retrying;
 `queued` reports workers in this process. State is durable only when the
 venue's configured store is durable. Binding credentials, recipients and
 private API endpoints are never published in adapter info/config.
@@ -211,7 +225,7 @@ Principals call `/relay/whatsapp/c-main/<action>`; a runtime binding made with
   them from Meta on each request and keeps no copy, so a principal can transcribe a
   voice note itself.
 
-Links live under `w/adapters/whatsapp/config/<bot>/relay/` in the venue's private
-workspace (a runtime binding's under its owner's adapter state). Message text, codes
+Links live under `:adapters/whatsapp/config/<bot>/relay/` in the adapter's private
+state (a runtime binding's under its owner's adapter state). Message text, codes
 and the message→sender map are bounded and in memory: a restart or reconfiguration
 loses messages not yet collected, never a link.

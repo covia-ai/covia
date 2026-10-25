@@ -29,7 +29,6 @@ import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.Covia;
 import covia.test.DurabilityTest;
 
 /**
@@ -83,10 +82,10 @@ public class GoalTreeCrashResumeTest {
 			throws Exception {
 		activeStore = store;
 		NodeServer<Index<Keyword, ACell>> node =
-			new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			new NodeServer<>(CoviaApplication.open(store, keyPair).host(), NodeConfig.port(-1));
 		activeNode = node;
 		node.launch();
-		Engine engine = new Engine(config, node.getCursor(), keyPair).start();
+		Engine engine = new Engine(config, CoviaApplication.connect(node.getHost()), keyPair).start();
 		activeEngine = engine;
 		Engine.addDemoAssets(engine);
 		return engine;
@@ -152,7 +151,7 @@ public class GoalTreeCrashResumeTest {
 		AgentState restored = agent(second, agentId);
 		AVector<ACell> oldFrames = RT.ensureVector(restored.getSession(sid).get(Fields.FRAMES));
 		assertEquals(legacy, oldFrames.get(0), "read/restart alone does not rewrite legacy state");
-		assertTrue(restored.migrateSessionHistory(sid, oldFrames));
+		assertTrue(restored.session(sid).migrateHistory(oldFrames));
 		assertEquals(selected, GoalTreeContext.archivedConversation(RT.ensureMap(
 			RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO))));
 		second.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,

@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,6 +73,7 @@ public final class VenueAuthenticator {
 
 	/** Clock-skew leeway for JWT temporal bounds, in seconds. */
 	private static final long CLOCK_SKEW_SECONDS = 60;
+	private static final Pattern IDENTITY_SEGMENT = Pattern.compile("[A-Za-z0-9._-]+");
 
 	/**
 	 * Prefixes on a 401 message, naming which credential shape the verifier
@@ -278,7 +280,7 @@ public final class VenueAuthenticator {
 		public static final String KID_NOT_OF_SUBJECT = "is a key of ";
 		public static final String KID_NOT_A_KEY = "is not a Multikey-encoded Ed25519 public key";
 		public static final String WRONG_KEY_FOR_SUBJECT = "but the subject is ";
-		public static final String WRONG_KEY_HINT = ": a did:key subject signs with its own key";
+		public static final String WRONG_KEY_HINT = ": a did:key subject must name the signing key or a valid identity nested below it";
 		public static final String SIGNATURE_FAILS = "signature does not verify for ";
 		public static final String SIGNATURE_FAILS_PER_DID_DOCUMENT = " (per its DID document)";
 		public static final String DID_METHOD_FAILURE = "could not verify, through its DID method, the subject ";
@@ -440,7 +442,8 @@ public final class VenueAuthenticator {
 	}
 
 	/**
-	 * An EdDSA token whose subject issued it: a self-certifying {@code did:key},
+	 * An EdDSA token whose subject issued it: a self-certifying {@code did:key}
+	 * or an identity nested below it ({@code did:key:<key>:u:<name>:g:<agent>}),
 	 * a venue-managed named user signing with a registered key, or any other
 	 * DID verified through its method resolver.
 	 */
@@ -454,10 +457,11 @@ public final class VenueAuthenticator {
 		long now = System.currentTimeMillis() / 1000;
 
 		if (subject.startsWith("did:key:")) {
-			// Self-certifying: the subject is its own key, so kid must name it.
+			// Self-certifying key, or an identity in that key's exact namespace.
+			// Only the subject becomes the caller; it inherits no signer authority.
 			KeyRef key = signingKeyOf(parsed, sub);
 			if (key.reason() != null) return Verdict.fail(key.reason());
-			if (!sub.equals(key.did())) {
+			if (!sub.equals(key.did()) && !isNestedIdentity(sub, key.did())) {
 				return Verdict.fail("kid names key " + key.did() + " " + Reason.WRONG_KEY_FOR_SUBJECT + sub
 					+ Reason.WRONG_KEY_HINT);
 			}
@@ -582,6 +586,20 @@ public final class VenueAuthenticator {
 	// ------------------------------------------------------------- the checks
 	// Each returns null when it passes and the reason when it does not, the
 	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
+
+	/** Whether a subject uses valid nested segments below the exact signing identity.
+	 * Shared by authentication and issuance; this establishes no permissions. */
+	public static boolean isNestedIdentity(AString subject, AString signingIdentity) {
+		String prefix = signingIdentity + ":";
+		String value = subject.toString();
+		if (!value.startsWith(prefix)) return false;
+		// Validate each segment independently: arbitrary depth without a recursive
+		// regex, and the same character set as venue-managed usernames.
+		for (String segment : value.substring(prefix.length()).split(":", -1)) {
+			if (!IDENTITY_SEGMENT.matcher(segment).matches()) return false;
+		}
+		return true;
+	}
 
 	private static Verdict keyResult(AString signingIdentity, AString userDID,
 			AMap<AString, ACell> claims) {

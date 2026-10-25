@@ -1,6 +1,5 @@
 package covia.venue;
 
-import java.util.Arrays;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -8,10 +7,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
-import java.util.function.UnaryOperator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,11 +25,11 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.Utils;
-import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Asset;
+import covia.venue.ScheduleState.Entry;
+import static covia.venue.ScheduleState.*;
 
 /**
  * Per-venue scheduler for deferred grid-operation invocations. Fires any grid
@@ -82,69 +79,10 @@ public class Scheduler {
 
 	private static final Logger log = LoggerFactory.getLogger(Scheduler.class);
 
-	/** Event record field: the operation reference to invoke (AString). */
-	static final AString K_OP = Strings.intern("op");
-	/** Event record field: the input cell passed to the operation. */
-	static final AString K_INPUT = Strings.intern("input");
-	/** Event record field: the owning user DID. Ownership key for
-	 *  list/cancel/trigger, and the namespace the fired operation runs in. */
-	static final AString K_OWNER = Strings.intern("owner");
-	/** Event record field: the agent sub-principal that scheduled this event,
-	 *  when not the owner itself. Mirrors {@code Fields.ACTOR} on job records —
-	 *  the event fires as this identity, but the OWNER still administers it, so
-	 *  a user keeps sight of what their agents have queued. */
-	static final AString K_ACTOR = Strings.intern("actor");
-	/** Event record field: the DID of the caller that scheduled this event,
-	 *  always set — the owner's own DID when the user scheduled it directly.
-	 *  Attribution for {@link #list} only; it repeats {@link #K_ACTOR} for an
-	 *  agent, and firing never reads it. Absent on events stored before it was
-	 *  recorded. */
-	static final AString K_BY = Strings.intern("by");
-	/** Event record field: caller-written display text saying what the event is
-	 *  for (AString, at most {@link #MAX_DESCRIPTION_CHARS}). Never interpreted. */
-	static final AString K_DESCRIPTION = Fields.DESCRIPTION;
-	/** Event record field: wall-clock millis at which the event was scheduled
-	 *  (CVMLong). Absent on events stored before it was recorded. */
-	static final AString K_CREATED = Fields.CREATED;
-	/** Event record field: captured UCAN proofs (AVector), replayed at fire time. */
-	static final AString K_PROOFS = Strings.intern("proofs");
-	/** Event record field: captured capability attenuations (AVector). */
-	static final AString K_CAPS = Strings.intern("caps");
-	/** Event record field: absolute wake time in millis (CVMLong). */
-	static final AString K_TIME = Strings.intern("time");
-	/** Event record field: recurrence spec (AMap, see {@link #validateRepeat});
-	 *  absent ⇒ one-shot. */
-	static final AString K_REPEAT = Strings.intern("repeat");
-	/** Recurrence spec field: fixed interval between fires in millis (CVMLong).
-	 *  The only recurrence understood today; calendar forms may join it later. */
-	static final AString K_EVERY = Strings.intern("every");
-	/** Event record field: the caller's explicit tracking choice (CVMBool);
-	 *  absent ⇒ the venue default applies at fire time. */
-	static final AString K_TRACK = Strings.intern("track");
-	/** Event record field: wall-clock millis of the most recent fire (CVMLong).
-	 *  Only a recurring record survives a fire, so only it carries this. */
-	static final AString K_LAST_FIRED = Strings.intern("lastFired");
-	/** Event record field: ID of the durable Job produced by the most recent
-	 *  tracked fire (Blob) — the one link from a schedule to its executions. */
-	static final AString K_LAST_JOB = Strings.intern("lastJob");
-	/** Scheduler-record field holding the time-ordered events {@link Index}. */
-	static final AString K_EVENTS = Strings.intern("events");
-	/** List-result field: the event handle (its index key). */
-	static final AString K_HANDLE = Strings.intern("handle");
-
-	/** Floor on {@code repeat.every}: the first abuse guard against tight loops. */
-	public static final long MIN_REPEAT_MS = 1_000L;
-
-	/** Longest {@code description} an event may carry, in characters. */
-	public static final int MAX_DESCRIPTION_CHARS = 500;
-	/** Refusal for a {@code description} that is not a string. */
-	public static final String DESCRIPTION_NOT_STRING = "description must be a string";
-	/** Refusal for a {@code description} longer than {@link #MAX_DESCRIPTION_CHARS}. */
-	public static final String DESCRIPTION_TOO_LONG =
-		"description must be at most " + MAX_DESCRIPTION_CHARS + " characters";
-
-	/** Index key length: 8-byte big-endian wake time + 8-byte id. */
-	private static final int KEY_LENGTH = 16;
+	public static final long MIN_REPEAT_MS = ScheduleState.MIN_REPEAT_MS;
+	public static final int MAX_DESCRIPTION_CHARS = ScheduleState.MAX_DESCRIPTION_CHARS;
+	public static final String DESCRIPTION_NOT_STRING = ScheduleState.DESCRIPTION_NOT_STRING;
+	public static final String DESCRIPTION_TOO_LONG = ScheduleState.DESCRIPTION_TOO_LONG;
 
 	private final Engine engine;
 	private final LongSupplier clock;
@@ -155,9 +93,6 @@ public class Scheduler {
 	private volatile boolean shutdown = false;
 	/** Timer-thread owned: schedule writes during assembly must not arm alarms. */
 	private boolean started = false;
-
-	/** An event as it stands in the index. */
-	private record Entry(Blob key, AMap<AString, ACell> rec) {}
 
 	/**
 	 * A claimed fire: the event record as fired, and either the prepared Job
@@ -184,6 +119,31 @@ public class Scheduler {
 	}
 
 	// ---------------------------------------------------------------- public API
+
+	/** Commit wake intent and the event together, then arm from committed state. */
+	public void setThreadWakeTime(AString owner, AgentState agent,
+			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
+		User user = engine.getVenueState().users().get(owner);
+		if (user == null) throw new AuthException(Users.ACCOUNT_DELETED);
+		ACell generation = RT.getIn(user.get(), Users.GENERATION);
+		// Validate the retained agent after reading the generation. A run loop
+		// from an erased account must not schedule work for its replacement.
+		if (!agent.exists()) return;
+		onTimer(() -> {
+			engine.getVenueState().setAgentThreadWakeTime(owner, agent.getAgentId(), kind, threadId, wakeTime, generation);
+			armNext();
+			return null;
+		});
+	}
+
+	/** Rebuild an agent's persisted wake and arm only after the local commit. */
+	public boolean rescheduleAgentWake(AString owner, AString agentId) {
+		return onTimer(() -> {
+			boolean armed = engine.getVenueState().rescheduleAgentWake(owner, agentId);
+			armNext();
+			return armed;
+		});
+	}
 
 	/**
 	 * Schedule a one-shot {@code opRef(input)} to fire at absolute {@code wakeTime}
@@ -240,12 +200,8 @@ public class Scheduler {
 	/** Remove queued input and recurring work for an erased account. */
 	void cancelUser(AString did) {
 		onTimer(() -> {
-			putEvents(events -> {
-				for (var entry : events.entrySet()) {
-					if (did.equals(RT.getIn(entry.getValue(), K_OWNER))) events = events.dissoc(entry.getKey());
-				}
-				return events;
-			});
+			state().cancelUser(did);
+			armNext();
 			return null;
 		});
 	}
@@ -335,61 +291,10 @@ public class Scheduler {
 
 	// ------------------------------------------------------------- recurrence
 
-	/**
-	 * Validate a recurrence spec and return its canonical form. The only form
-	 * understood today is {@code {every: <millis>}} with
-	 * {@code every >= MIN_REPEAT_MS}; anything else is rejected outright rather
-	 * than guessed at, so a calendar form added later cannot be silently
-	 * misread by an older venue.
-	 */
-	public static AMap<AString, ACell> validateRepeat(AMap<AString, ACell> repeat) {
-		if (repeat.count() != 1 || !repeat.containsKey(K_EVERY)) {
-			throw new IllegalArgumentException("repeat must be {every: <millis>}");
-		}
-		CVMLong every = RT.ensureLong(repeat.get(K_EVERY));
-		if (every == null || every.longValue() < MIN_REPEAT_MS) {
-			throw new IllegalArgumentException(
-				"repeat.every must be an integer of at least " + MIN_REPEAT_MS + " millis");
-		}
-		return Maps.of(K_EVERY, every);
-	}
-
-	/**
-	 * Validate an event description and return it as a string, or null when
-	 * absent. It must be a string of at most {@link #MAX_DESCRIPTION_CHARS}
-	 * characters; anything else is refused with {@link #DESCRIPTION_NOT_STRING}
-	 * or {@link #DESCRIPTION_TOO_LONG}.
-	 */
-	public static AString validateDescription(ACell description) {
-		if (description == null) return null;
-		if (!(description instanceof AString s)) {
-			throw new IllegalArgumentException(DESCRIPTION_NOT_STRING);
-		}
-		if (s.toString().length() > MAX_DESCRIPTION_CHARS) {
-			throw new IllegalArgumentException(DESCRIPTION_TOO_LONG);
-		}
-		return s;
-	}
-
-	/** The fixed interval of a validated {@code {every}} spec. */
-	public static long everyOf(AMap<AString, ACell> repeat) {
-		return RT.ensureLong(repeat.get(K_EVERY)).longValue();
-	}
-
-	/**
-	 * Next due time for a recurring event that was due at {@code time} and is
-	 * firing at {@code now}: the first slot on the {@code time + n·every} grid
-	 * strictly after {@code now}. Keeping the grid's phase makes "every hour"
-	 * stay on the hour it started on; skipping missed slots means a backlog
-	 * (venue down for a day) collapses into the single catch-up fire that just
-	 * happened — never a burst.
-	 */
-	static long nextTime(AMap<AString, ACell> repeat, long time, long now) {
-		long every = everyOf(repeat);
-		long next = time + every;
-		if (next <= now) next = time + ((now - time) / every + 1) * every;
-		return next;
-	}
+	public static AMap<AString, ACell> validateRepeat(AMap<AString, ACell> repeat) { return ScheduleState.validateRepeat(repeat); }
+	public static AString validateDescription(ACell description) { return ScheduleState.validateDescription(description); }
+	public static long everyOf(AMap<AString, ACell> repeat) { return ScheduleState.everyOf(repeat); }
+	static long nextTime(AMap<AString, ACell> repeat, long time, long now) { return ScheduleState.nextTime(repeat, time, now); }
 
 	// ------------------------------------------------------- timer-thread bodies
 
@@ -397,37 +302,21 @@ public class Scheduler {
 			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description) {
 		engine.getVenueState().users().requireNotDeleted(owner);
-		Blob key = mintKey(wakeTime);
-		AMap<AString, ACell> rec = Maps.of(
-			K_OP, opRef,
-			K_OWNER, owner,
-			K_BY, by,
-			K_TIME, CVMLong.create(wakeTime),
-			K_CREATED, CVMLong.create(clock.getAsLong()));
-		if (actor != null) rec = rec.assoc(K_ACTOR, actor);
-		if (description != null) rec = rec.assoc(K_DESCRIPTION, description);
-		if (input != null) rec = rec.assoc(K_INPUT, input);
-		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
-		if (caps != null) rec = rec.assoc(K_CAPS, caps);
-		if (repeat != null) rec = rec.assoc(K_REPEAT, repeat);
-		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
-		final AMap<AString, ACell> frec = rec;
-		putEvents(events -> events.assoc(key, frec));
+		Blob key = state().schedule(opRef, input, owner, actor, by, proofs, caps, wakeTime,
+			repeat, track, description, clock.getAsLong());
+		armNext();
 		return key;
 	}
 
 	private boolean doCancel(Blob handle, AString caller) {
-		Entry e = find(handle);
-		if (e == null) return false;
-		requireOwner(e.rec(), caller);
-		final Blob key = e.key();
-		putEvents(events -> events.dissoc(key));
-		return true;
+		boolean cancelled = state().cancel(handle, caller);
+		armNext();
+		return cancelled;
 	}
 
 	/** Claim an event for an early fire, owner-checked. Returns null if absent. */
 	private Claimed doClaim(Blob handle, AString caller) {
-		Entry e = find(handle);
+		Entry e = state().find(handle);
 		if (e == null) return null;
 		requireOwner(e.rec(), caller);
 		return claim(e.key(), e.rec(), clock.getAsLong(), false);
@@ -465,47 +354,9 @@ public class Scheduler {
 		} catch (RuntimeException e) {
 			error = e;
 		}
-		AMap<AString, ACell> repeat = repeatOf(rec);
-		if (repeat == null) {
-			putEvents(events -> events.dissoc(key));
-			return new Claimed(rec, job, error);
-		}
-		AMap<AString, ACell> next = rec.assoc(K_LAST_FIRED, CVMLong.create(now));
-		if (tracked && job != null) next = next.assoc(K_LAST_JOB, job.job().getID());
-		Blob nextKey = key;
-		if (advance) {
-			long t = nextTime(repeat, timeOf(rec), now);
-			next = next.assoc(K_TIME, CVMLong.create(t));
-			nextKey = rekey(key, t);
-		}
-		final Blob fk = nextKey;
-		final AMap<AString, ACell> fn = next;
-		putEvents(events -> events.dissoc(key).assoc(fk, fn));
+		state().recordFire(new Entry(key, rec), now, advance, tracked && job != null ? job.job().getID() : null);
+		armNext();
 		return new Claimed(rec, job, error);
-	}
-
-	/**
-	 * Locate an event by handle: the exact key, else — because a recurring
-	 * event is re-keyed on every fire while its id suffix stays fixed — the
-	 * entry whose id matches. Schedules are small, so the fallback scan is
-	 * cheap and only ever runs for a handle that has moved on.
-	 */
-	private Entry find(Blob handle) {
-		Index<Blob, ACell> idx = index();
-		ACell rec = idx.get(handle);
-		if (rec instanceof AMap) return new Entry(handle, asMap(rec));
-		if (handle.count() != KEY_LENGTH) return null;
-		byte[] h = handle.getBytes();
-		long cnt = idx.count();
-		for (long i = 0; i < cnt; i++) {
-			var e = idx.entryAt(i);
-			Blob k = (Blob) e.getKey();
-			if (k.count() != KEY_LENGTH || !(e.getValue() instanceof AMap)) continue;
-			if (Arrays.equals(h, 8, KEY_LENGTH, k.getBytes(), 8, KEY_LENGTH)) {
-				return new Entry(k, asMap(e.getValue()));
-			}
-		}
-		return null;
 	}
 
 	/** Fire every event due at or before now, then re-arm. Runs on the timer thread. */
@@ -519,7 +370,7 @@ public class Scheduler {
 			final Blob key = (Blob) e.getKey();
 			ACell recCell = e.getValue();
 			if (!(recCell instanceof AMap)) {              // malformed — drop it
-				putEvents(events -> events.dissoc(key));
+				state().remove(key);
 				continue;
 			}
 			AMap<AString, ACell> rec = asMap(recCell);
@@ -528,22 +379,6 @@ public class Scheduler {
 			// slot (strictly after now, so this loop always advances).
 			dispatchFire(claim(key, rec, now, true));
 		}
-		armNext();
-	}
-
-	/**
-	 * Apply {@code op} to the scheduler record's events field and re-arm the
-	 * alarm. Navigating through the field crosses the schedule record's lattice
-	 * stamping boundary, which refreshes {@code updated} while preserving any
-	 * present or future sibling metadata. Runs on the timer thread.
-	 */
-	private void putEvents(UnaryOperator<Index<Blob, ACell>> op) {
-		eventsStore().updateAndGet(cur -> {
-			@SuppressWarnings("unchecked")
-			Index<Blob, ACell> events = (cur instanceof Index<?, ?>)
-				? (Index<Blob, ACell>) cur : Index.none();
-			return op.apply(events);
-		});
 		armNext();
 	}
 
@@ -623,23 +458,8 @@ public class Scheduler {
 
 	// ------------------------------------------------------------------ helpers
 
-	private ALatticeCursor<ACell> store() {
-		return engine.getVenueState().scheduleCursor();
-	}
-
-	/** Cursor at the event index inside the extensible scheduler record. */
-	private ALatticeCursor<ACell> eventsStore() {
-		return store().path(K_EVENTS);
-	}
-
-	/** Current events index from the scheduler record. */
-	private Index<Blob, ACell> index() {
-		ACell value = eventsStore().get();
-		if (!(value instanceof Index<?, ?>)) return Index.none();
-		@SuppressWarnings("unchecked")
-		Index<Blob, ACell> events = (Index<Blob, ACell>) value;
-		return events;
-	}
+	private ScheduleState state() { return engine.getVenueState().schedule(); }
+	private Index<Blob, ACell> index() { return state().events(); }
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> asMap(ACell c) {
@@ -651,16 +471,6 @@ public class Scheduler {
 		return (c instanceof AVector) ? (AVector<ACell>) c : null;
 	}
 
-	private static AMap<AString, ACell> repeatOf(AMap<AString, ACell> rec) {
-		ACell r = rec.get(K_REPEAT);
-		return (r instanceof AMap) ? asMap(r) : null;
-	}
-
-	private static long timeOf(AMap<AString, ACell> rec) {
-		ACell t = rec.get(K_TIME);
-		return (t instanceof CVMLong l) ? l.longValue() : 0L;   // malformed → due now
-	}
-
 	private static AMap<AString, ACell> copyIfPresent(AMap<AString, ACell> from,
 			AMap<AString, ACell> to, AString... keys) {
 		for (AString k : keys) {
@@ -668,27 +478,6 @@ public class Scheduler {
 			if (v != null) to = to.assoc(k, v);
 		}
 		return to;
-	}
-
-	private static void requireOwner(AMap<AString, ACell> rec, AString caller) {
-		if (caller == null || !caller.equals(rec.get(K_OWNER))) {
-			throw new AuthException("Not the owner of this scheduled event");
-		}
-	}
-
-	/** 16-byte key: 8-byte big-endian wakeTime (orders the index) + 8 random bytes (uniqueness). */
-	private static Blob mintKey(long wakeTime) {
-		byte[] bs = new byte[KEY_LENGTH];
-		Utils.writeLong(bs, 0, wakeTime);
-		Utils.writeLong(bs, 8, ThreadLocalRandom.current().nextLong());
-		return Blob.wrap(bs);
-	}
-
-	/** The same event id under a new wake time — how a recurring event moves. */
-	private static Blob rekey(Blob key, long wakeTime) {
-		byte[] bs = key.getBytes();
-		Utils.writeLong(bs, 0, wakeTime);
-		return Blob.wrap(bs);
 	}
 
 	/** Run a body on the single timer thread and await it, unwrapping its exception. */

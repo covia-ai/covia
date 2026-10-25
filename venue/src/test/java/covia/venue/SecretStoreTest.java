@@ -11,7 +11,6 @@ import convex.core.crypto.AKeyPair;
 import convex.core.crypto.HKDF;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
-import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -21,7 +20,6 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.lattice.Covia;
 import covia.lattice.Namespace;
 
 /**
@@ -216,9 +214,9 @@ public class SecretStoreTest {
 	public void testMalformedRecordsAreNotReportedAsMissing() {
 		AKeyPair kp = AKeyPair.generate();
 		User user = VenueState.create(kp).users().ensure("did:key:zAlice");
-		var entry = user.cursor().path(Namespace.S, Strings.create(SECRET_NAME));
+		var records = user.secrets().cursor();
 		for (ACell malformed : new ACell[] { null, Strings.create("invalid"), Maps.empty(), Maps.of(ENCRYPTED, "invalid") }) {
-			entry.set(malformed);
+			records.set(Maps.of(SECRET_NAME, malformed));
 			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
 				() -> user.secrets().decrypt(SECRET_NAME, SecretStore.keys(kp))).getMessage());
 			assertEquals(SecretStore.INVALID_RECORD, assertThrows(IllegalStateException.class,
@@ -402,7 +400,7 @@ public class SecretStoreTest {
 	private static void storeVersion1(User user, String name, String plaintext, AKeyPair kp) {
 		byte[] v1 = Hashing.sha256(kp.getSeed().getBytes()).getBytes();
 		Blob encrypted = Blob.wrap(AESGCM.encrypt(v1, plaintext.getBytes(StandardCharsets.UTF_8)));
-		user.cursor().path(Namespace.S, Strings.create(name)).set(Maps.of(
+		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create(name)).set(Maps.of(
 			ENCRYPTED, encrypted,
 			Fields.UPDATED, CVMLong.create(1000L)));
 	}

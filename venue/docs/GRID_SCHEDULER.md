@@ -307,13 +307,16 @@ Job, but `track:true` does the same with one Job per fire instead of two.
 
 ## 8. Agent wake as a consumer
 
-The agent wake path maps onto this service without the scheduler knowing what an
-agent is (the agent-side details are in [SCHEDULER.md](./SCHEDULER.md)):
+The agent wake path uses ordinary scheduled operations; its runtime entry point
+coordinates the venue transaction and timer (agent-side details are in
+[SCHEDULER.md](./SCHEDULER.md)):
 
 - A session or task carries its own `wakeTime` on the agent record — the
   authoritative per-thread "this thread wants to wake at T" marker.
-- `AgentState.setThreadWakeTime` writes that field, then `rescheduleWake`
-  re-derives the agent's **single** scheduled event at the *earliest* unfired
+- `Scheduler.setThreadWakeTime` commits the intent, event and handle in one
+  `VenueState` transaction, then arms the timer from committed state.
+  `AgentState.setThreadWakeTime` itself is a data-only mutation, safe on drafts.
+  The venue re-derives the agent's **single** scheduled event at the *earliest* unfired
   `wakeTime` across all its threads. The event fires `agent:trigger {agentId,
   force:false, wait:false}` with `track:false` stated explicitly — a wake is
   machinery, not user work, so the venue's `trackJobs` default does not turn
@@ -325,7 +328,7 @@ agent is (the agent-side details are in [SCHEDULER.md](./SCHEDULER.md)):
   loop runs iff there is work (`hasWork` = session pending or tasks); it processes
   what's due, and the post-cycle `setThreadWakeTime` re-arms for the next earliest
   or clears `wakeHandle` if none remain.
-- On boot, `Engine.rebuildSchedulerFromLattice` calls `rescheduleWake` per agent,
+- On boot, `Engine.rebuildSchedulerFromLattice` calls `Scheduler.rescheduleAgentWake` per agent,
   idempotently re-deriving each agent's event from the authoritative per-thread
   `wakeTime`s (healing any stale handle).
 

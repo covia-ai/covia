@@ -8,7 +8,7 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <bot-name>"
 
 **Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first. Telegram support comes from the **covia-telegram** module (`telegram` adapter) — it is not in `covia.jar`; `setup` covers loading it.
 
-A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in the venue-private adapter workspace under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
+A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in the venue-private adapter state under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
 
 ## `setup <bot-name>` — Bring a bot up
 
@@ -101,11 +101,21 @@ in `params.media` and matching `files` entries. Downloads and total upload bytes
 are bounded to 20 MiB. No token-bearing file URLs or local filesystem paths are
 needed. Downloaded files remain after deleting the bot; the owner manages them.
 
-Durable receipts precede Telegram acknowledgement. Pending updates recover after
-restart; STARTED updates are never blindly replayed. `bots` reports `pendingUpdates`
-and `startedUpdates` (in flight or interrupted); inspect Jobs and errors for the
-latter. This is not exactly-once delivery. Topics keep separate sessions; albums
-retain their group ID but are processed as separate turns.
+Durable receipts precede Telegram acknowledgement. Local agent delivery atomically
+adds session input, saves the chat/session mapping and completes the receipt,
+then flushes before waking the agent. It does not wait for the turn or reply;
+later inputs can be delivered while the agent is working. Delivered input is not
+replayed because a reply failed. Completed receipts deduplicate for seven days.
+Each receipt is claimed before media download or preprocessing, with one attempt.
+A known admission failure becomes FAILED and the sender gets one "⚠️ Your message
+was not delivered" notice. FAILED updates are never retried or reported again;
+fix the cause and ask the sender to resend. Storage errors surface directly;
+already committed input remains admitted even if its flush fails.
+Commands, operation handlers, remote agent facades and old STARTED receipts retain
+their inspection-based recovery policy. `bots` reports `pendingUpdates`,
+`startedUpdates` and `failedUpdates`. Outbound replies have no durable outbox or
+automatic restart recovery. Topics keep separate sessions;
+albums retain their group ID but are processed as separate messages.
 
 ## `create <bot-name>` / `delete <bot-name>` — Manage your own bots
 
@@ -173,5 +183,5 @@ The module ships the `telegram` agent skill at `v/skills/adapters/telegram` (pre
 | Bot replies *⚠️ … Agent is suspended* (after a *Transition failed* notice) | The agent tripped on an internal error and the framework suspended it (persisted — survives restarts). Fix the cause if there is one, then `agent_resume agentId=<id>` (`v/ops/agent/resume`); the bot works again at once. |
 | `send` fails with *Access denied* | Caller is not the bot's user; use that identity or a `telegram/send` delegation. |
 | Replies stop after `adapter/disable` | By design — a disabled adapter is offline; Telegram redelivers the backlog on enable. |
-| Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back from the venue-private `w/adapters/telegram` state; if one did not, the venue log says why it was skipped. |
+| Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back from the venue-private `:adapters/telegram` state; if one did not, the venue log says why it was skipped. |
 | `create` fails with *Capability denied* | Your scope lacks `telegram/manage` — on a public dev venue that means the public scope is read-only; use a config with `auth.public.caps: unrestricted` or authenticate. |

@@ -147,6 +147,23 @@ class EmbedderRoutePolicyTest {
 	}
 
 	@Test
+	void nestedAgentIdentityAuthenticatesWithoutBecomingAnAdmittedUser() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		AString root = UCAN.toDIDKey(key.getAccountKey());
+		AString subject = Strings.create(root + ":u:alice:g:worker");
+		String token = VenueAuth.namedKeyPair(key, subject.toString(),
+			strictServer.getEngine().getDIDString().toString(), 300).mintToken();
+		assertResponse(200, root + "|" + subject, get(strictServer, IDENTITIES, token));
+		assertNull(strictServer.getEngine().getVenueState().users().get(subject));
+		// Neither a known installation nor a known owner grants native user admission.
+		strictServer.getEngine().getVenueState().users().create(root);
+		strictServer.getEngine().getVenueState().users().create(Strings.create(root + ":u:alice"));
+		assertEquals(403, get(strictServer, USER, token).statusCode());
+		assertEquals(403, get(strictServer, "/api/v1/status", token).statusCode());
+		assertEquals(403, post(strictServer, "/mcp", token, "{}").statusCode());
+	}
+
+	@Test
 	void extenderCanOwnAuthenticationAndPublishBothIdentities()
 			throws Exception {
 		AString authenticatedIdentity =

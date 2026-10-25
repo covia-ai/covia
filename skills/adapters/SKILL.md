@@ -170,7 +170,7 @@ For changes that must survive restarts, edit the venue config instead (see `venu
 
 ## Writing a new adapter
 
-Follow the canonical developer contract in `venue/docs/ADAPTERS.md`: it covers `AAdapter` invocation, configuration validation, catalog and introspection publication, private `AdapterWorkspace` state versus user-managed storage, capability enforcement, lifecycle, tests, and optional module packaging. Ship it in `covia.jar` or as a module jar (`META-INF/services/covia.adapter.AAdapter`, shaded, `venue` provided-scope).
+Follow the canonical developer contract in `venue/docs/ADAPTERS.md`: it covers `AAdapter` invocation, configuration validation, catalog and introspection publication, private `AdapterState` state versus user-managed storage, capability enforcement, lifecycle, tests, and optional module packaging. Ship it in `covia.jar` or as a module jar (`META-INF/services/covia.adapter.AAdapter`, shaded, `venue` provided-scope).
 
 ## Troubleshooting
 

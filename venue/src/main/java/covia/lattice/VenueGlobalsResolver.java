@@ -3,7 +3,6 @@ package covia.lattice;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Strings;
-import convex.lattice.cursor.ALatticeCursor;
 import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
@@ -21,7 +20,7 @@ import covia.venue.RequestContext;
  * job), which navigate within the caller's own user data, this resolver
  * navigates to a fixed user (the venue) regardless of the caller. The
  * resolved cursor is the venue user's cursor, retrieved via
- * {@link CoviaAdapter#ensureUserCursor(AString)}.</p>
+ * {@link CoviaAdapter#ensureWorkspaceRoot(AString)}.</p>
  *
  * <p><b>Access policy.</b> Reads are universally allowed; writes require a
  * caller DID equal to the venue's own DID. The {@link #canWrite} override
@@ -52,7 +51,7 @@ public class VenueGlobalsResolver implements NamespaceResolver {
 		AString venueDID = adapter.engine.getDIDString();
 		if (venueDID == null) return null;
 
-		ALatticeCursor<ACell> venueCursor = adapter.ensureUserCursor(venueDID);
+		WorkspaceRoot venueCursor = adapter.ensureWorkspaceRoot(venueDID);
 
 		ACell[] rewritten = new ACell[keys.length + 1];
 		rewritten[0] = K_W;

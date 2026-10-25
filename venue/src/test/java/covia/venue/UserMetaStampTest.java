@@ -88,7 +88,7 @@ public class UserMetaStampTest {
 		// user-level stamp (StampedCursor deep-write re-stamp). Fresh wrapper
 		// after the clock advance, as real per-access derivation gives.
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("frame-agent");
-		assertTrue(agent.updateSessionFrames(sid, null,
+		assertTrue(agent.session(sid).updateFrames(null,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("x")))));
 		assertTrue(metaField("updated") > before,
 			"a deep frame write must bump meta.updated");

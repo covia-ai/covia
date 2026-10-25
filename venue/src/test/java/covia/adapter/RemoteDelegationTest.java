@@ -21,11 +21,10 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RemoteJobs;
@@ -225,10 +224,10 @@ class RemoteDelegationTest {
 
 	@Test void recoveredGridRunRetainsCancellationOwnership() throws Exception {
 		try (CancellationPeer peer = new CancellationPeer("grid")) {
-			var cursor = Cursors.createLattice(Covia.ROOT);
+			var cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, cursor, key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -236,7 +235,7 @@ class RemoteDelegationTest {
 				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
 			} finally { first.close(); }
 			assertEquals(0, peer.cancels.get());
-			Engine second = new Engine(config, cursor, key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -333,10 +332,10 @@ class RemoteDelegationTest {
 
 	@Test void observerRestartReattachesToTheSameRemoteJob() throws Exception {
 		try (Peer peer = new Peer()) {
-			RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+			Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, cursor, key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -345,7 +344,7 @@ class RemoteDelegationTest {
 			} finally { first.close(); }
 			assertFalse(job.isFinished(), "shutdown must not invent a remote cancellation");
 			peer.complete.set(true);
-			Engine second = new Engine(config, cursor, key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			second.jobs().recoverJobs();
 			try {
 				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());

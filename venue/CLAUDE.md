@@ -104,7 +104,7 @@ AUTH_REQUIRED).
 | `skills` | Agent skills discovery and SKILL.md import (see `docs/SKILLS.md`) | `list`, `read`, `parse`, `import` |
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
 | `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
-| `auth` | Authentication ops | login/token flows |
+| `auth` | Authentication and identity | `whoami`, `identity-token` (caller-only bearer saved as a secret) |
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
 | `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
@@ -122,7 +122,7 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 | `slack` | covia-slack | Slack workspace bindings with DMs/channel mentions over signed Events API callbacks or Socket Mode, durable intake and thread replies; `relay` bindings as for WhatsApp | `send`, `create`, `delete`, `bots` |
 | `sonnylabs` | covia-sonnylabs | SonnyLabs AI-firewall scanning for prompt injection and related LLM safety findings | `scan` |
 | `documents` | covia-documents | Readable text from PDF and Office documents (PDFBox, POI) behind `mode: "extract"` on file/vault/dlfs reads; page ranges and a character cap | `extract` |
-| `speech` | covia-speech | Speech to text and text to speech over an OpenAI-compatible audio API (a cloud provider, or a local server so audio stays on the machine), or transcription in-process with sherpa-onnx (`engine: "local"`); `transcribe` doubles as a messaging `mediaOperation`, `speak` stores Ogg/Opus voice notes | `transcribe`, `speak`, `engines`, `prepare` |
+| `speech` | covia-speech | Speech to text and text to speech over an OpenAI-compatible audio API (a cloud provider, or a local server so audio stays on the machine), or transcription in-process with sherpa-onnx (`engine: "local"`); `transcribe` doubles as a messaging `mediaOperation`, `speak` stores Ogg/Opus voice notes | `transcribe`, `speak`, `engines`, `prepare`, `listen`, `hear` |
 | `claudecode` | covia-claude-code | Drives the Claude Code CLI in venue-authorised project directories: one-shot runs and long-lived resumable sessions over a bounded warm-process pool | `run`, `session`, `sessions`, `stop`, `projects`, `create`, `delete` |
 
 ## API Endpoints
@@ -232,7 +232,7 @@ Index<Blob, ACell> userJobs = user.getJobs();
 
 ```
 
-Adapter-owned state uses `AdapterWorkspace`; see
+Adapter-owned state uses `AdapterState`; see
 [`docs/ADAPTERS.md`](docs/ADAPTERS.md#private-state-and-user-managed-storage).
 
 ### Testing

@@ -1147,7 +1147,14 @@ Deletion cancels accepted jobs, stops agents, removes queued schedules, and
 atomically removes the user's namespace and login profile/aliases. A small
 tombstone records the DID, deletion time and actor; public-key revocations
 remain without profile fields or key labels. Repeating deletion while the
-account is absent is idempotent. An interrupted cleanup can be retried.
+account is absent is idempotent. Adapter hooks remove their user-associated state
+in the same transaction and then stop their workers (including disabled messaging bots). An unloaded adapter
+retains a pending cleanup entry until its implementation is available; the venue
+does not guess its schema. An interrupted cleanup can be retried with the same
+delete operation; unavailable adapters reconcile before their next activation.
+Cleanup failure is reported with access already revoked, and account recreation
+remains blocked until all cleanup completes. See
+[adapter deletion hooks](ADAPTERS.md#user-deletion-hooks).
 
 The tombstone is **not a permanent registration ban**. Explicit `user:create`,
 automatic admission when `users.autoCreate` is enabled, and existing trusted
@@ -2128,7 +2135,10 @@ through an OpenAI-compatible audio API: OpenAI by default, or any server that
 speaks the same `/audio/transcriptions` and `/audio/speech` endpoints. Point it
 at a local server on loopback, such as speaches or LocalAI, and no audio leaves
 the venue's machine; a server that only transcribes keeps `transcribe` local but
-cannot `speak`.
+cannot `speak`. The module can also do both inside the venue itself
+([below](#local-transcription-and-speech-inside-the-venue)), and each direction
+may use its own engine: what is said can be transcribed on this machine whatever
+speaks.
 
 ```json
 {
@@ -2145,6 +2155,8 @@ cannot `speak`.
 }
 ```
 
+- `engine` — what transcribes: `openai` (default, the API at `baseUrl`) or `local`.
+- `speakEngine` — what speaks: `openai` or `local`; by default the same as `engine`.
 - `baseUrl` — the API root; HTTPS, or plain HTTP only on loopback. Never a caller input.
 - `apiKey` — optional `s/NAME` reference to an operator-held key, resolved from the
   venue's own store and used for every caller. Without it each caller's own
@@ -2167,28 +2179,51 @@ Operations:
   `mediaOperation` for Telegram and WhatsApp agent bindings: a voice note's
   transcript becomes its attachment's `text`.
 - `v/ops/speech/speak {text, voice?, model?, format?, speed?, instructions?,
-  destination?, fileName?}` synthesises up to 4,096 characters and stores the
-  audio without overwriting anything, by default as Ogg/Opus (a voice note) in
-  the caller's private DLFS `speech` drive; a `destination` directory is written
-  with the caller's authority. It returns `{ref, mediaType, size, fileName,
-  format, voice, model, engine}`; Telegram's `sendVoice` takes the ref.
-- `v/ops/speech/engines {}` says whether the engine is local and whether a key
+  language?, destination?, fileName?}` synthesises up to 4,096 characters and
+  stores the audio without overwriting anything, by default as Ogg/Opus (a voice
+  note; WAV from the local engine) in the caller's private DLFS `speech` drive; a
+  `destination` directory is written with the caller's authority. It returns
+  `{ref, mediaType, size, fileName, format, voice, model, engine}`; Telegram's
+  `sendVoice` takes an Ogg/Opus ref.
+- `v/ops/speech/say {text, voice?, model?, format?, speed?, instructions?,
+  language?}` synthesises the same way and returns the audio inline as base64
+  `{bytes, size, mediaType, format, voice, model, engine}`, for an app that plays
+  it at once. It is a read: nothing is stored, and run as a result (not invoked
+  as a tracked Job) it leaves no job record of the words or the audio.
+- `v/ops/speech/engines {}` lists the engines, the one that transcribes first
+  and then the one that speaks when it is another: whether each is local,
+  `transcribes` and `speaks`, its models and default voice, and whether a key
   resolves for the caller, without endpoints or keys.
-- `v/ops/speech/prepare {}` gets the engine ready before any audio is in hand,
-  for an app that asks its owner first: the local engine fetches its model and
+- `v/ops/speech/prepare {for?}` gets an engine ready before any audio or text is
+  in hand, for an app that asks its owner first: the local engine fetches the
+  model to transcribe with (or, with `for: "speak"`, to speak with) and its
   libraries, which can take minutes while `engines` shows the progress. It
   returns what `engines` does; a remote engine needs nothing.
+- `v/ops/speech/listen {sampleRate?}` and `v/ops/speech/hear {id, bytes?, end?}`
+  are live dictation, on the local engine only, for an app that shows the words
+  while someone is still speaking. `listen` opens one and returns its `id`;
+  each `hear` gives it more raw PCM (half a second or so) and returns
+  `{settled, partial, text, quiet?}`: the words up to the last pause, decoded
+  once and kept, then those still being spoken, decoded again as they grow,
+  and the seconds since speech was last heard, for an app that ends on a long
+  pause. With `end` the rest settles, a short last word such as a lone "go"
+  heard together with the stretch before it, and the dictation closes. Only its
+  caller may feed it, one left unfed for two minutes is dropped, and nothing is
+  stored.
 
 A transcript lives in the operation's Job like any other result. Provider
 failures fail the Job; nothing is retried.
 
-#### Local transcription inside the venue
+#### Local transcription and speech inside the venue
 
-`"engine": "local"` transcribes inside the venue's own JVM with sherpa-onnx, so
-audio never leaves the machine and no server is needed. It runs on glibc Linux
-(x64, arm64), macOS (Apple Silicon, Intel) and Windows x64; not on musl systems
-such as the Alpine Docker image, where `engines` says so. It does not speak yet:
-`speak` refuses while the local engine is configured.
+`"engine": "local"` transcribes, and `"speakEngine": "local"` speaks, inside the
+venue's own JVM with sherpa-onnx, so neither audio nor text leaves the machine
+and no server is needed. With `engine: "local"` alone the local engine does
+both; set `speakEngine: "openai"` to keep transcription here and have a provider
+speak, or `engine: "openai"` with `speakEngine: "local"` for the other way about.
+It runs on glibc Linux (x64, arm64), macOS (Apple Silicon, Intel) and Windows
+x64; not on musl systems such as the Alpine Docker image, where `engines` says
+so.
 
 ```json
 {
@@ -2197,6 +2232,8 @@ such as the Alpine Docker image, where `engines` says so. It does not speak yet:
       "engine": "local",
       "local": {
         "transcribeModel": "parakeet-tdt-v3",
+        "speakModel": "vits-ljs",
+        "voice": "0",
         "nativePath": "/opt/covia/speech-natives",
         "prefetch": true
       }
@@ -2210,6 +2247,22 @@ such as the Alpine Docker image, where `engines` says so. It does not speak yet:
   (English, smaller). The venue fetches the model once, file by file at a pinned
   revision and SHA-256, the first time it is needed (or at start with
   `prefetch: true`); `engines` shows the progress. Only the configured model runs.
+- `speakModel` — the voice. Neither needs espeak-ng data, so nothing is unpacked
+  and nothing under the GPL is loaded. Fetched the same way, when first needed or
+  on `prepare {for: "speak"}`; `engines` shows it as `voiceModel` and `voiceState`.
+  - `vits-ljs` (default; English, one voice, about 115 MB, Apache-2.0). It says
+    the words of its lexicon, and sherpa-onnx would drop any other without a
+    sound, so the venue first makes the text sayable: numbers, currency and
+    common symbols become words and accents fold; a Latin word the lexicon lacks
+    is spelled letter by letter and named in the result's `spelled`; anything
+    else fails the request, naming it. Nothing is passed over quietly.
+  - `supertonic-3` (31 languages, several voices, about 145 MB). It reads text
+    as characters, so it says any word, faster and better than `vits-ljs`; its
+    model is OpenRAIL-M, an open licence with use-based restrictions that pass
+    to anyone using it.
+- `voice` — the default voice, a number from 0; a caller may name another per
+  call. A caller's `language` (default `en`) tells `supertonic-3` what language
+  the text is in; `vits-ljs` speaks English only.
 - `nativePath` — a directory holding sherpa-onnx 1.13.8's native libraries for the
   platform (`onnxruntime` and `sherpa-onnx-jni`), installed by the operator or
   embedder; signed copies are fine. Alternatively `fetchNatives: true` lets the
@@ -2225,12 +2278,19 @@ and `engines` reports `nativeAccess: false`. A note longer than 30 seconds is
 split on its pauses; notes over 10 minutes are refused. WAV, raw PCM and Ogg/Opus
 voice notes are read; other formats are refused. The model is loaded when first
 used, takes about 1 GB of memory outside the Java heap, decodes one note at a
-time, and is released after 5 minutes unused.
+time, and is released after 5 minutes unused. The voice speaks 16-bit mono WAV
+at its own rate (22.05 kHz for `vits-ljs`, 44.1 kHz for `supertonic-3`) and nothing else, so `speak` and `say` default to
+`wav` here and refuse other formats; it is loaded and released the same way, and
+shares the one native thread with transcription, so one waits for the other.
 
 Credits: sherpa-onnx (Apache-2.0; its Java API is vendored in the module with its
 licence), ONNX Runtime (MIT), Silero VAD (MIT), Concentus (BSD), Parakeet TDT
-(CC-BY-4.0, NVIDIA), Moonshine (MIT, Useful Sensors). The models are fetched by
-the venue from Hugging Face, not distributed with Covia.
+(CC-BY-4.0, NVIDIA), Moonshine (MIT, Useful Sensors), VITS LJSpeech (Apache-2.0
+as published for sherpa-onnx; VITS is MIT, LJSpeech public domain, its lexicon
+from the CMU Pronouncing Dictionary, BSD), Supertonic (model
+OpenRAIL-M, Supertone: open use with use-based restrictions that pass to anyone
+using it). The models are fetched by the venue from Hugging Face, not
+distributed with Covia.
 
 ### Telegram bots (covia-telegram)
 
@@ -2286,7 +2346,7 @@ Per bot:
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
   Telegram chat (or forum topic) is one `agent:chat` session, persisted at
-  `<venue-did>/w/adapters/telegram/config/<bot>/sessions/<chatId>` so
+  `:adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
   receives each turn as `{text, via: {channel: "telegram", bot, access:
   "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
@@ -2386,7 +2446,7 @@ Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 greeting?, mediaOperation?, replyOperation?}` makes a bot that acts as the caller (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
 records it at
-`<venue-did>/w/adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
+`:adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
 and re-arms it on every venue start or module load; `v/ops/telegram/delete
 {name}` stops and removes it (record and sessions). Both are gated on
 `<caller>/telegram/<name>` × `telegram/manage`. Config-declared bots stay
@@ -2458,12 +2518,33 @@ Accepted updates are flushed through `WebhookInbox` before advancing the poll
 acknowledgement. Pending receipts resume in update order at startup/re-enable;
 completed receipts deduplicate redelivery and are retained for seven days.
 Receipts are private and scoped to the Covia owner and Telegram bot account.
-`telegram:bots` reports `pendingUpdates` and `startedUpdates`. STARTED includes
-in-flight work and interrupted/failed work: inspect the Jobs and bot error before
-recovery. Started work is never automatically replayed, and this does **not**
-promise exactly-once execution or delivery. Reattaching to interrupted Jobs and
-reconciling an uncertain Telegram send remain follow-up work. Removing a runtime
-bot removes its receipts, but downloaded files remain in its owner's DLFS drive.
+For local agent routes, delivery is one native lattice transaction: append the
+input to the session, save the chat-to-session mapping, and complete the receipt
+with its session and Job IDs. The venue flushes before waking the agent. A
+receipt therefore means **input delivered**, independently of turn completion,
+reply formatting or Telegram sending. Later inputs can enter the same session
+while the agent is working. Duplicate admission rolls back its entire draft;
+queued input survives a restart before wake and is processed by agent recovery.
+
+`telegram:bots` reports `pendingUpdates`, `startedUpdates` and `failedUpdates`.
+Workers claim a receipt as STARTED before media download or preprocessing.
+Each message gets one attempt. A known admission failure becomes FAILED with
+`reason` and `lastError`; the sender receives one "not delivered" notice. FAILED
+receipts are never retried or reported again, including after restart. A failed
+flush propagates directly and does not undo already committed admission.
+Interrupted STARTED work remains for inspection; it is not replayed automatically.
+A suspended agent is checked before dispatch, so it gets no failed chat Job.
+Commands, operation handlers and remote agent facades retain the
+STARTED/COMPLETE protocol: STARTED includes in-flight and uncertain interrupted
+work and is not replayed automatically. Old STARTED receipts also remain for
+inspection. Completed receipts are retained for seven days, so deduplication is
+bounded by that retention window.
+
+Outbound replies are separate best-effort continuations. A formatting or send
+failure is reported without reopening the inbound receipt. Reply continuations
+are not a durable outbox: a process interruption can lose an unsent reply, and
+uncertain sends still need reconciliation. Removing a runtime bot removes its
+receipts, but downloaded files remain in its owner's DLFS drive.
 Store durability follows the venue configuration (temporary venues remain
 ephemeral). Media albums retain `media_group_id` but each message is a separate
 turn; `/new` resets only the current topic. `via` also includes topic and reply
@@ -2505,7 +2586,7 @@ DMs and direct mentions alone are not a substitute for enabling it when the
 bot is expected to process guild text.
 
 Each bot has exactly one `agent` or `operation` handler. Agent conversations
-persist under `<venue-did>/w/adapters/discord/config/<bot>/sessions/<channelId>`
+persist under `:adapters/discord/config/<bot>/sessions/<channelId>`
 and receive
 `{text, via: {channel: "discord", bot, access, from, chat, guild?,
 message_id}, attachments}`. Operation handlers receive a normalized Discord
@@ -2527,7 +2608,7 @@ OAuth, absolute, and traversal routes are refused. HTTP 429 responses honor
 Discord's `retry_after` once. `discord:bots` reports state/counters without
 tokens. Runtime `discord:create` requires an `s/NAME` token reference and
 persists at
-`<venue-did>/w/adapters/discord/users/<caller-did>/bots/<name>`;
+`:adapters/discord/users/<caller-did>/bots/<name>`;
 `discord:delete` removes it and its sessions. The adapter owns this private,
 fixed schema; tokens remain in `s/`, and user-managed content is not moved
 into it. These require `discord/manage`. The module also publishes
@@ -2560,7 +2641,12 @@ and WhatsApp downloads `whatsapp/download`.
 Both fail closed on empty admission lists, acknowledge only after durable
 acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
 started receipts require inspection after an interruption and are never
-blindly replayed. The linked guides describe configuration changes, retention
+blindly replayed. Local agent input, receipt and session mapping commit together;
+COMPLETE means delivered, not replied. Handoffs are attempted once. Missing,
+suspended, terminated or refusing agents fail without a chat Job. Failed or
+reconfigured receipts become FAILED and remain in the `failed` count.
+Storage failures are reported directly without background retries.
+The linked guides describe configuration changes, retention
 and supported provider features. These modules do not install OAuth flows or
 WhatsApp templates; Slack handles no media.
 
@@ -2647,8 +2733,8 @@ Operations:
   as one Job. Completes with `{result, structured?, session, project,
   subtype, isError, turns, costUsd, durationMs, model, permissionDenials}`.
   Pass `session` (from a previous result) to continue that conversation.
-  While running, the job carries `progress {toolCalls, lastTool, text,
-  session, model}`. A turn Claude Code reports as an error (`error_max_turns`,
+  While it runs, the job's progress is its latest step, with `{toolCalls,
+  lastTool, text, session, model}` as detail. A turn Claude Code reports as an error (`error_max_turns`,
   `error_max_budget_usd`, `error_during_execution`) **fails** the Job with
   the reason and the session id to resume. `project` may be omitted when the
   caller can use exactly one project or `session` names a known one.

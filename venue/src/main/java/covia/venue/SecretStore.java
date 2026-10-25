@@ -18,7 +18,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.TransactionalComponent;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.AForkableCursor;
+import covia.api.Fields;
 
 /**
  * Per-user encrypted secret storage.
@@ -39,7 +42,15 @@ import convex.lattice.cursor.ALatticeCursor;
  *
  * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
-public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
+public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, SecretStore> {
+	@Override
+	public SecretStore withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
+		return new SecretStore(context, draft);
+	}
+
+	private final LatticeContext context;
+
+	public LatticeContext getContext() { return context; }
 
 	/** Key version 1: SHA-256 of the venue seed. Read only; nothing encrypts under it. */
 	public static final int KEY_VERSION_1 = 1;
@@ -66,9 +77,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	private static final AString KEY_VERSION_KEY = Strings.intern("keyVersion");
 	private static final CVMLong CURRENT_KEY_VERSION_CELL = CVMLong.create(CURRENT_KEY_VERSION);
 
-	SecretStore(ALatticeComponent<?> parent,
-			ALatticeCursor<AMap<AString, ACell>> cursor) {
-		super(parent, cursor);
+	SecretStore(LatticeContext context,
+			AForkableCursor<AMap<AString, ACell>> cursor) {
+		super(cursor);
+		this.context = context;
 	}
 
 	/**
@@ -148,8 +160,8 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 
 	public void store(AString name, AString plaintext, Keys keys) {
 		Blob encryptedBlob = encrypt(plaintext, keys);
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
-		cursor.updateAndGet(current -> {
+		CVMLong timestamp = getContext().currentTimestamp();
+		cursor().updateAndGet(current -> {
 			AMap<AString, ACell> m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			CVMLong effective = timestamp;
@@ -175,9 +187,9 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public boolean storeIfAbsent(AString name, AString plaintext, Keys keys) {
 		AMap<AString, ACell> record = record(encrypt(plaintext, keys),
-			cursor.getContext().currentTimestamp());
+			getContext().currentTimestamp());
 		AtomicBoolean wrote = new AtomicBoolean(false);
-		cursor.updateAndGet(current -> {
+		cursor().updateAndGet(current -> {
 			AMap m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			if (m.containsKey(name)) {
@@ -219,12 +231,51 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 
 	public AString decrypt(AString name, Keys keys) {
 		// One read: the blob and its version must come from the same record.
-		AMap<AString, ACell> record = getRecord(name);
+		return open(getRecord(name), keys);
+	}
+
+	/** Decrypts one stored record under the key of its version; null for no record. */
+	private static AString open(AMap<AString, ACell> record, Keys keys) {
 		Blob blob = encrypted(record);
 		if (blob == null) return null;
 		byte[] key = keys.forVersion(keyVersion(record));
 		if (key == null) throw new IllegalStateException(UNKNOWN_KEY_VERSION);
 		return plaintext(AESGCM.decrypt(key, blob.getBytes()));
+	}
+
+	/**
+	 * Every record of a stored secret map decrypted, as
+	 * {@code name → {value, updated}}. Package-private: a user export seals the
+	 * result to another key before it leaves the venue.
+	 *
+	 * @throws RuntimeException when any record cannot be decrypted
+	 */
+	static AMap<AString, ACell> plaintexts(AMap<AString, ACell> records, Keys keys) {
+		AMap<AString, ACell> out = Maps.empty();
+		if (records == null) return out;
+		for (var entry : records.entrySet()) {
+			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
+			if (record == null) throw new IllegalStateException(INVALID_RECORD);
+			out = out.assoc(entry.getKey(), Maps.of(
+				Fields.VALUE, open(record, keys),
+				UPDATED_KEY, record.get(UPDATED_KEY)));
+		}
+		return out;
+	}
+
+	/**
+	 * Stored records for {@link #plaintexts} output, encrypted under the current
+	 * key version and keeping each secret's last-modified stamp.
+	 */
+	static AMap<AString, ACell> records(AMap<AString, ACell> plaintexts, Keys keys) {
+		AMap<AString, ACell> out = Maps.empty();
+		for (var entry : plaintexts.entrySet()) {
+			AString value = RT.ensureString(RT.getIn(entry.getValue(), Fields.VALUE));
+			if (!(entry.getKey() instanceof AString) || value == null) throw new IllegalArgumentException(INVALID_RECORD);
+			CVMLong updated = RT.getIn(entry.getValue(), UPDATED_KEY) instanceof CVMLong stamp ? stamp : CVMLong.ZERO;
+			out = out.assoc(entry.getKey(), record(encrypt(value, keys), updated));
+		}
+		return out;
 	}
 
 	/**
@@ -294,7 +345,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @return Vector of secret names, or empty vector if none
 	 */
 	public AVector<AString> list() {
-		AMap<AString, ACell> all = cursor.get();
+		AMap<AString, ACell> all = cursor().get();
 		if (all == null || all.isEmpty()) return Vectors.empty();
 		return all.getKeys();
 
@@ -315,7 +366,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 
 	/** Atomically removes an entry and reports whether it existed. */
 	public boolean deleteIfPresent(AString name) {
-		AMap<AString, ACell> previous = cursor.getAndUpdate(current -> {
+		AMap<AString, ACell> previous = cursor().getAndUpdate(current -> {
 			AMap<AString,ACell> m = RT.ensureMap(current);
 			if (m == null) return null;
 			return m.dissoc(name);
@@ -328,7 +379,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 */
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getRecord(AString name) {
-		AMap<AString, ACell> all = cursor.get();
+		AMap<AString, ACell> all = cursor().get();
 		if (all == null) return null;
 		ACell value = all.get(name);
 		if (!(value instanceof AMap)) {

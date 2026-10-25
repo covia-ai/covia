@@ -13,6 +13,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -89,6 +90,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/** Long-poll wait requested from Telegram, in seconds. */
 	static final int POLL_TIMEOUT_SECS = 30;
 	static final String INVALID_REPLY = "replyOperation must return a non-empty string or an object with non-empty text";
+	static final String NOT_ADMITTED = "Accepted Telegram update is no longer admitted by this bot's policy";
+	/** The one notice a sender gets when their message could not be delivered. */
+	static final String DELIVERY_FAILED = "Message delivery failed; automatic retry is disabled";
+	static final String UNDELIVERED = "⚠️ Your message was not delivered: %s";
 
 
 	static final AString K_STATE = Strings.intern("state");
@@ -135,6 +140,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/** getUpdates offset: one past the last confirmed update. */
 	private int offset = 0;
 
+	private final covia.venue.AdapterState storage;
 	private final ConversationRouter conversations;
 	private volatile WebhookInbox inbox;
 	private volatile String fileMetadataRoot;
@@ -147,12 +153,13 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		this.spec = spec;
 		this.apiUrl = apiUrl;
 		this.managed = managed;
-		ConversationSessions sessionStore = new ConversationSessions(adapter.state(), sessionsRelativePath(),
+		this.storage = adapter.state(spec.userDID(adapter.engine));
+		ConversationSessions sessionStore = new ConversationSessions(storage, sessionsRelativePath(),
 			this::legacySession, chat -> {
 				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
-			});
+			}, this, () -> !stopped && adapter.isActive());
 		conversations = new ConversationRouter(adapter.engine, spec, sessionStore);
-		inbox = new WebhookInbox(adapter.engine, adapter.state(), statePath("inbox") + "/unbound");
+		inbox = new WebhookInbox(adapter.engine, storage, statePath("inbox") + "/unbound");
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -207,7 +214,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		// Bot names and secret references can be reused for another account.
 		// Receipts must be scoped to the actual Telegram identity and Covia owner.
 		String binding = spec.userDID(adapter.engine).getHash().toHexString() + "/" + me.user().id();
-		inbox = new WebhookInbox(adapter.engine, adapter.state(), statePath("inbox") + "/" + binding);
+		inbox = new WebhookInbox(adapter.engine, storage, statePath("inbox") + "/" + binding);
 		fileMetadataRoot = statePath("files") + "/" + binding;
 		username = me.user().username();
 		bot = candidate;
@@ -306,7 +313,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			K_SENT, CVMLong.create(sent.get()),
 			K_FAILED, CVMLong.create(failed.get()));
 		m = m.assoc(Strings.intern("pendingUpdates"), CVMLong.create(inbox.records(WebhookInbox.PENDING).size()))
-			.assoc(Strings.intern("startedUpdates"), CVMLong.create(inbox.records(WebhookInbox.STARTED).size()));
+			.assoc(Strings.intern("startedUpdates"), CVMLong.create(inbox.records(WebhookInbox.STARTED).size()))
+			.assoc(Strings.intern("failedUpdates"), CVMLong.create(inbox.records(WebhookInbox.FAILED).size()));
 		if (username != null) m = m.assoc(K_USERNAME, Strings.create(username));
 		if (error != null) m = m.assoc(Fields.ERROR, Strings.create(error));
 		if (!spec.open() && !spec.allowNames().isEmpty()) {
@@ -387,7 +395,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return offline;
 	}
 
-	/** Whether all work already accepted for one chat has finished. */
+	/** Whether queued intake for one chat has finished (replies may still be pending). */
 	boolean isChatIdle(long chatId) {
 		return conversations.isIdle(Long.toString(chatId));
 	}
@@ -459,18 +467,79 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void schedule(Update update) {
 		String id = Integer.toString(update.updateId());
 		conversations.enqueue(conversationKey(update.message(), chatOf(update)), () -> {
-			if (stopped || !adapter.isActive() || !inbox.claim(id)) return;
+			if (stopped || !adapter.isActive()) return;
+			boolean claimed = false;
 			try {
+				AMap<AString, ACell> receipt = inbox.get(id);
+				if (receipt == null || !WebhookInbox.PENDING.equals(receipt.get(Fields.STATUS))) return;
+				// Claim before media downloads, preprocessing or other external work.
+				claimed = inbox.claim(id);
+				if (!claimed) return;
+				// Only session delivery can share a local transaction with its recipient.
+				if (isAgentTurn(update) && conversations.supportsSessionDelivery()) {
+					deliverTurn(id, update);
+					return;
+				}
 				dispatch(update);
 				inbox.complete(id);
 			} catch (Throwable t) {
 				failed.incrementAndGet();
 				error = "Update " + id + " requires inspection: " + concise(t);
 				logFailure("update " + id + " requires inspection", chatOf(update), t);
-				// STARTED is deliberately retained: neither a Job nor an external
-				// send may be repeated safely after an uncertain outcome.
+				// Operation/command/remote-agent STARTED receipts retain their
+				// uncertain-outcome policy and are never replayed, so this notice
+				// is sent once. An unclaimed update is not reported here.
+				if (claimed && spec.routesToAgent()) sendQuietly(chatOf(update), "⚠️ " + concise(t), update.message());
 			}
 		});
+	}
+
+	/** An agent conversation turn: text or supported media, not a built-in command nor addressed to another bot. */
+	private boolean isAgentTurn(Update update) {
+		Message m = update.message();
+		if (!spec.routesToAgent() || m == null) return false;
+		String text = messageText(m);
+		if (!text.isEmpty()) return !addressedToAnotherBot(text) && !commands.containsKey(commandOf(text));
+		return !TelegramMedia.attachments(m).isEmpty();
+	}
+
+	/** The message text or caption without a leading mention of this bot; "" when there is none. */
+	private String messageText(Message m) {
+		String text = (m == null) ? null : (m.text() != null) ? m.text() : m.caption();
+		return (text == null || text.isBlank()) ? "" : stripMention(text.trim());
+	}
+
+	/** One attempt. Preprocessing is outside the atomic local session handoff. */
+	private void deliverTurn(String id, Update update) {
+		Message m = update.message();
+		try {
+			String refusal = admitted(update) ? conversations.deliveryRefusal() : NOT_ADMITTED;
+			if (refusal != null) throw new IllegalStateException(refusal);
+			respondAgent(id, m, messageText(m), true);
+		} catch (RuntimeException failure) {
+			String detail = concise(failure);
+			AMap<AString, ACell> rejected = guarded(() -> inbox.fail(id, DELIVERY_FAILED, detail, System.currentTimeMillis()));
+			if (rejected == null) throw failure; // Already admitted: report an uncertain outcome, not "not delivered".
+			failed.incrementAndGet();
+			error = "Update " + id + " was not delivered: " + detail;
+			log.warn("Telegram bot '{}': {}", spec.name(), error);
+			if (admitted(update)) sendQuietly(chatOf(update), UNDELIVERED.formatted(detail), update.message());
+		}
+	}
+
+	/** Receipt writes stop with the runner. */
+	private AMap<AString, ACell> guarded(Supplier<AMap<AString, ACell>> write) {
+		synchronized (adapter.engine) {
+			synchronized (this) { return (stopped || !adapter.isActive()) ? null : write.get(); }
+		}
+	}
+
+	/** Whether the bot's policy still admits an accepted update's sender and chat. */
+	private boolean admitted(Update update) {
+		User from = senderOf(update);
+		Chat chat = chatOfUpdate(update);
+		return admits(from == null ? null : from.id(), from == null ? null : from.username())
+			&& (spec.open() || chat == null || chat.type() == Chat.Type.Private);
 	}
 
 	private void recoverPending() {
@@ -481,55 +550,60 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		}
 	}
 
+	/** Claimed (non-session) handling: commands, operation handlers and remote agent facades. */
 	private void dispatch(Update update) {
 		Message m = update.message();
 		Long chatId = chatOf(update);
 		User from = senderOf(update);
 		Long fromId = from == null ? null : from.id();
 		String fromName = from == null ? null : from.username();
-		Chat chat = chatOfUpdate(update);
-		if (!admits(fromId, fromName) || (!spec.open() && chat != null && chat.type() != Chat.Type.Private)) {
-			throw new IllegalStateException("Accepted Telegram update is no longer admitted by this bot's policy");
-		}
-		String text = (m == null) ? null : (m.text() != null) ? m.text() : m.caption();
-		if (text != null && !text.isBlank()) {
-			text = stripMention(text.trim());
+		if (!admitted(update)) throw new IllegalStateException(NOT_ADMITTED);
+		String text = messageText(m);
+		if (!text.isEmpty()) {
 			if (addressedToAnotherBot(text)) return;   // /cmd@otherbot in a group
-			if (handleCommand(m, chatId, fromId, fromName, text)) return;
+			Command command = commands.get(commandOf(text));
+			if (command != null) {
+				command.answer(m, chatId, fromId, fromName);
+				return;
+			}
 		}
 		if (spec.routesToAgent()) {
 			// Text and supported media become turns; other update types stay provider-specific.
-			if (m == null || ((text == null || text.isBlank()) && TelegramMedia.attachments(m).isEmpty())) {
+			if (m == null || (text.isEmpty() && TelegramMedia.attachments(m).isEmpty())) {
 				if (isPrivate(m)) sendQuietly(chatId, "Send text, a voice note, a photo or a file.", m);
 				return;
 			}
-			respondAgent(m, text == null ? "" : text);
+			respondAgent(Integer.toString(update.updateId()), m, text, false);
 		} else {
 			respondOperation(update);
 		}
 	}
 
-	/** The built-in commands; true when the message was one and has been answered. */
-	private boolean handleCommand(Message m, Long chatId, Long fromId, String fromName, String text) {
-		switch (commandOf(text)) {
-			case "/start" -> commandReply(chatId, greeting(), m);
-			case "/help" -> commandReply(chatId, greeting() + "\n\nCommands:\n/new — start a new conversation\n"
-				+ "/id — show this chat's id and your user id\n/help — this message", m);
-			case "/id" -> commandReply(chatId, "Chat id: " + chatId + "\nYour user id: " + fromId
-				+ (fromName != null ? " (@" + fromName + ")" : ""), m);
-			case "/new" -> {
-				if (spec.routesToAgent()) {
-					conversations.reset(conversationKey(m, chatId));
-					send(chatId, "Started a new conversation.", null, null, threadOf(m), false);
-				} else {
-					commandReply(chatId, "This bot has no conversation state.", m);
-				}
-			}
-			default -> {
-				return false;
-			}
+	/** A built-in command's answer. */
+	private interface Command {
+		void answer(Message m, Long chatId, Long fromId, String fromName);
+	}
+
+	/**
+	 * The built-in commands. This one table both answers them and keeps them out
+	 * of session delivery ({@link #isAgentTurn}), so the two cannot drift apart.
+	 */
+	private final Map<String, Command> commands = Map.of(
+		"/start", (m, chatId, fromId, fromName) -> commandReply(chatId, greeting(), m),
+		"/help", (m, chatId, fromId, fromName) -> commandReply(chatId, greeting()
+			+ "\n\nCommands:\n/new — start a new conversation\n"
+			+ "/id — show this chat's id and your user id\n/help — this message", m),
+		"/id", (m, chatId, fromId, fromName) -> commandReply(chatId, "Chat id: " + chatId + "\nYour user id: " + fromId
+			+ (fromName != null ? " (@" + fromName + ")" : ""), m),
+		"/new", (m, chatId, fromId, fromName) -> newConversation(m, chatId));
+
+	private void newConversation(Message m, Long chatId) {
+		if (spec.routesToAgent()) {
+			conversations.reset(conversationKey(m, chatId));
+			send(chatId, "Started a new conversation.", null, null, threadOf(m), false);
+		} else {
+			commandReply(chatId, "This bot has no conversation state.", m);
 		}
-		return true;
 	}
 
 	private void commandReply(Long chat, String text, Message message) {
@@ -588,27 +662,45 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * user's job index (the canonical record of the interaction), the response
 	 * sent back as a reply.
 	 */
-	private void respondAgent(Message m, String text) {
+	private void respondAgent(String updateId, Message m, String text, boolean sessionDelivery) {
 		Long chatId = m.chat().id();
-		try {
+		ACell input = prepareMessage(m, text);
+		if (!sessionDelivery) {
+			// Remote agent facades cannot join a local lattice transaction. Preserve
+			// their existing claimed-receipt protocol until the remote result arrives.
 			typing(chatId, m);
-			ACell response = conversations.chat(conversationKey(m, chatId), prepareMessage(m, text));
-			String reply = ConversationRouter.responseText(response);
-			// The agent ended its turn without a reply: nothing to send, or to format.
-			if (reply == null) return;
-			String parseMode = spec.parseMode();
-			if (spec.replyOperation() != null) {
-				ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
-					Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
-				reply = formattedReply(formatted);
-				parseMode = formattedParseMode(formatted, parseMode);
-			}
-			send(chatId, reply, parseMode, m.messageId(), threadOf(m), false);
-		} catch (Throwable t) {
-			logFailure("failed to respond", chatId, t);
-			sendQuietly(chatId, "⚠️ " + concise(t), m);
-			throw new JobFailedException(concise(t));
+			sendAgentReply(m, text, conversations.chat(conversationKey(m, chatId), input));
+			return;
 		}
+		covia.grid.Job job = conversations.deliver(conversationKey(m, chatId), input,
+			(draft, sid, jid) -> inbox.deliver(draft, updateId, sid, jid));
+		if (job == null) return; // Already delivered; never send a duplicate reply.
+		// Delivery is now durable. Waiting, formatting and sending are independent
+		// of the receipt and cannot block another message's admission to the session.
+		ConversationRouter.onResponse(job, response -> {
+			if (!stopped) sendAgentReply(m, text, response);
+		}, t -> {
+			if (stopped) return;
+			failed.incrementAndGet();
+			error = "Reply for update " + updateId + " failed: " + concise(t);
+			logFailure("reply for update " + updateId + " failed", chatId, t);
+			sendQuietly(chatId, "⚠️ " + concise(t), m);
+		});
+		typing(chatId, m);
+	}
+
+	private void sendAgentReply(Message m, String text, ACell response) {
+		if (stopped || !adapter.isActive()) return;
+		String reply = ConversationRouter.responseText(response);
+		if (reply == null) return;
+		String parseMode = spec.parseMode();
+		if (spec.replyOperation() != null) {
+			ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
+				Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
+			reply = formattedReply(formatted);
+			parseMode = formattedParseMode(formatted, parseMode);
+		}
+		if (!stopped && adapter.isActive()) send(m.chat().id(), reply, parseMode, m.messageId(), threadOf(m), false);
 	}
 
 	/**
@@ -694,7 +786,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		send(chatId, reply, spec.parseMode(), replyTo, threadOf(m), false);
 	}
 	RequestContext context() {
-		return RequestContext.of(spec.userDID(adapter.engine));
+		return conversations.context();
 	}
 
 	private String statePath(String region) {
@@ -738,8 +830,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void rememberMedia(Message message) {
 		for (JsonObject media : TelegramMedia.attachments(message)) {
 			String fileId = media.get("file_id").getAsString();
-			AMap<AString, ACell> previous = RT.castMap(adapter.state().read(fileMetadataPath(fileId)));
-			adapter.state().write(fileMetadataPath(fileId), previous.merge(RT.castMap(JSON.parse(media.toString()))));
+			AMap<AString, ACell> previous = RT.castMap(storage.read(fileMetadataPath(fileId)));
+			storage.write(fileMetadataPath(fileId), previous.merge(RT.castMap(JSON.parse(media.toString()))));
 		}
 	}
 
@@ -771,7 +863,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if (response.body().contentLength() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
 			byte[] bytes = response.body().byteStream().readNBytes(TelegramMedia.MAX_BYTES + 1);
 			if (bytes.length > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
-			ACell metadata = fileMetadataRoot == null ? null : adapter.state().read(fileMetadataPath(fileId));
+			ACell metadata = fileMetadataRoot == null ? null : storage.read(fileMetadataPath(fileId));
 			AString originalName = RT.ensureString(RT.getIn(metadata, "file_name"));
 			AString originalType = RT.ensureString(RT.getIn(metadata, "mime_type"));
 			String contentType = originalType != null ? originalType.toString()
@@ -804,11 +896,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return "w/telegram/sessions/" + bot;
 	}
 
-	String sessionsPath() {
-		return adapter.state().path(sessionsRelativePath());
-	}
-
-	private String sessionsRelativePath() {
+	String sessionsRelativePath() {
 		return managed == Managed.CONFIG
 			? "config/" + spec.name() + "/sessions"
 			: adapter.userStatePath(spec.userDID(adapter.engine), "sessions/" + spec.name());
@@ -850,14 +938,14 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (!spec.allowNames().contains(handle)) return false;
 		Long bound = resolved().putIfAbsent(handle, fromId);
 		if (bound == null) {
-			adapter.state().write(resolvedRelativePath() + "/" + handle, CVMLong.create(fromId));
+			storage.write(resolvedRelativePath() + "/" + handle, CVMLong.create(fromId));
 			log.info("Telegram bot '{}': @{} resolved to Telegram account {}", spec.name(), handle, fromId);
 			return true;
 		}
 		if (bound.longValue() == fromId) return true;
 		log.warn("Telegram bot '{}': @{} is now account {} but resolved to {} when first seen — refusing; "
 			+ "delete {} to rebind, or list the id in allow", spec.name(), handle, fromId, bound,
-			adapter.state().path(resolvedRelativePath() + "/" + handle));
+			storage.path(resolvedRelativePath() + "/" + handle));
 		return false;
 	}
 
@@ -879,7 +967,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (!resolvedLoaded) {
 			synchronized (resolved) {
 				if (!resolvedLoaded) {
-					AMap<AString, ACell> m = RT.castMap(adapter.state().read(resolvedRelativePath()));
+					AMap<AString, ACell> m = RT.castMap(storage.read(resolvedRelativePath()));
 					if (m != null) {
 						for (var e : m.entrySet()) {
 							CVMLong id = RT.ensureLong(e.getValue());

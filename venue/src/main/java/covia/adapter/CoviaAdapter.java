@@ -7,20 +7,14 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import convex.auth.ucan.Capability;
-import convex.auth.ucan.UCAN;
-import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.ACountable;
 import convex.core.data.util.CellExplorer;
-import convex.core.data.ABlobLike;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Cells;
 import convex.core.data.ASet;
-import convex.core.data.Blob;
-import convex.core.data.Hash;
-import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -29,16 +23,23 @@ import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.core.util.Utils;
 import convex.lattice.ALattice;
-import convex.lattice.LatticeOps;
-import convex.lattice.cursor.ALatticeCursor;
+import covia.lattice.WorkspaceRoot;
+import static covia.lattice.WorkspaceRoot.deepGet;
+import static covia.lattice.WorkspaceRoot.deepSet;
+import static covia.lattice.WorkspaceRoot.deepDelete;
+import static covia.lattice.WorkspaceRoot.deepAppend;
+import static covia.lattice.WorkspaceRoot.parentExisted;
+import static covia.lattice.WorkspaceRoot.leafExisted;
+import static covia.lattice.WorkspaceRoot.leafPresentIn;
+import static covia.lattice.WorkspaceRoot.buildSubPath;
+import static covia.lattice.WorkspaceRoot.parseStringPath;
+
 import covia.api.Fields;
-import covia.grid.Asset;
 import covia.lattice.AgentNamespaceResolver;
-import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.lattice.NamespaceResolver;
+import covia.lattice.ExtensionNamespaceResolver;
 import covia.lattice.SessionNamespaceResolver;
 import covia.lattice.TempNamespaceResolver;
 import covia.lattice.VenueGlobalsResolver;
@@ -84,8 +85,9 @@ import covia.venue.Users;
  * </pre>
  *
  * <p>The {@code w/} and {@code o/} namespaces are user-writable via
- * {@code covia:write} and {@code covia:delete}. All other namespaces
- * ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
+ * {@code covia:write} and {@code covia:delete}. Virtual namespaces have their
+ * own policies, including opt-in adapter views at {@code x/<adapter>/}.
+ * Other stored namespaces ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
  * reject direct writes.</p>
  *
  * <p>All user state lives inside the venue {@code :value}, which merges
@@ -211,6 +213,7 @@ public class CoviaAdapter extends AAdapter {
 		registerResolver("c", new SessionNamespaceResolver());
 		registerResolver("t", new TempNamespaceResolver());
 		registerResolver("v", new VenueGlobalsResolver(this));
+		registerResolver("x", new ExtensionNamespaceResolver());
 	}
 
 	@Override
@@ -280,17 +283,17 @@ public class CoviaAdapter extends AAdapter {
 		}
 
 		// Fall back to local resolution: a stored null, or a vector path form.
-		Object[] target = resolveTargetPath(ctx, input);
-		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
-		ACell[] pathKeys = (ACell[]) target[1];
+		var target = resolveTargetPath(ctx, input);
+		WorkspaceRoot cursor = target.cursor();
+		ACell[] pathKeys = target.remainingKeys();
 
 		if (cursor == null) return result(null);
 
-		ACell value = readPath(cursor, pathKeys);
+		ACell value = cursor.read(pathKeys);
 		// A stored null reads back as present (exists:true, value:null), distinct
 		// from an absent path (exists:false) — decided by key presence in the parent.
 		if (value == null) {
-			return result(null, pathPresent(cursor, pathKeys));
+			return result(null, cursor.contains(pathKeys));
 		}
 		return sizeGuardedResult(value, input);
 	}
@@ -308,7 +311,7 @@ public class CoviaAdapter extends AAdapter {
 		engine.requireResourceAccess(ctx, path, Capability.CRUD_READ);
 		ACell[] pathKeys = parseStringPath(path.toString());
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
-		if (vns != null) return readPath(vns.cursor(), vns.remainingKeys());
+		if (vns != null) return vns.cursor().read(vns.remainingKeys());
 
 		// Physical namespaces and universal asset/op references.
 		return engine.resolvePathUnchecked(path, ctx);
@@ -443,15 +446,12 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
 		engine.requireResourceAccess(ctx, Strings.create(pathStr), Capability.CRUD_READ);
-		ACell[] pathKeys = parseStringPath(pathStr);
-
-		// Virtual (n/, t/, c/, ...) or physical namespace
-		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
-		ALatticeCursor<ACell> cursor = (vns != null) ? vns.cursor() : getUserCursor(ctx);
-		ACell[] keys = (vns != null) ? vns.remainingKeys() : pathKeys;
+		var target = resolvePathTarget(ctx, Strings.create(pathStr), Capability.CRUD_READ);
+		WorkspaceRoot cursor = target.cursor();
+		ACell[] keys = target.remainingKeys();
 		if (cursor == null) return "null /* no user data */";
 
-		ACell value = readPath(cursor, keys);
+		ACell value = cursor.read(keys);
 		if (value == null) return "null /* not found: " + pathStr + " */";
 
 		CellExplorer explorer = new CellExplorer(budget, compact);
@@ -544,54 +544,6 @@ public class CoviaAdapter extends AAdapter {
 		return result(value, value != null);
 	}
 
-	/**
-	 * True if the leaf key of {@code keys} is present in its parent under the
-	 * cursor's (namespace-unwrapped) value — so a stored null value (key present,
-	 * value nil) is distinguished from an absent path. {@code keys.length == 0}
-	 * means the whole namespace, present iff its value is non-null.
-	 */
-	private static boolean pathPresent(ALatticeCursor<ACell> cursor, ACell[] keys) {
-		Target t = Target.of(cursor, keys);
-		ACell root = t.root().get();
-		if (keys.length <= t.from()) return root != null;
-		ACell parent = deepGet(root, Arrays.copyOf(keys, keys.length - 1), t.from());
-		return containsLeaf(parent, keys[keys.length - 1]);
-	}
-
-	/** As {@link #pathPresent} but against a plain value already in hand. */
-	private static boolean leafPresentIn(ACell root, ACell[] keys) {
-		if (keys.length == 0) return root != null;
-		ACell parent = deepGet(root, Arrays.copyOf(keys, keys.length - 1), 0);
-		return containsLeaf(parent, keys[keys.length - 1]);
-	}
-
-	/**
-	 * True if {@code parent} contains {@code key} — a map/Index key or a vector
-	 * index — independent of whether the value stored there is null. Mirrors the
-	 * key resolution of {@link #navigateInto}.
-	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
-	private static boolean containsLeaf(ACell parent, ACell key) {
-		if (parent instanceof AVector<?> vec) {
-			long idx = parseIndex(key);
-			return idx >= 0 && idx < vec.count();
-		}
-		if (parent instanceof Index) {
-			Index idx = (Index) parent;
-			if (key instanceof ABlobLike && idx.containsKey((ACell) key)) return true;
-			if (key instanceof AString s) {
-				Blob b = Blob.parse(s.toString());
-				return b != null && idx.containsKey(b);
-			}
-			return false;
-		}
-		if (parent instanceof AMap<?,?> map) {
-			AString sk = RT.ensureString(key);
-			return sk != null && ((AMap<ACell, ACell>) map).containsKey(sk);
-		}
-		return false;
-	}
-
 	// ========== covia:copy — server-side path-to-path duplication ==========
 
 	private static final AString K_FROM = Strings.intern("from");
@@ -648,19 +600,21 @@ public class CoviaAdapter extends AAdapter {
 		// One gate for every lattice op — read or mutation. requireLocalAccess is
 		// the shared local-access check (a/ governed exactly like w/): the caller's
 		// own namespace goes through the scope seam; another user's needs a proof
-		// (or public/venue-catalog policy), else a denial. resolveDIDURL then only
-		// *locates* the owner's cursor — it does not re-authorise.
-		engine.requireLocalAccess(ctx, RT.ensureString(RT.getIn(input, Fields.PATH)), ability);
+		// (or public/venue-catalog policy), else a denial. Extension cursors also
+		// retain this authority check when accessing their adapter-provided view.
+		ACell path = RT.getIn(input, Fields.PATH);
+		AString resource = RT.ensureString(path);
+		if (path instanceof AVector<?>) resource = Strings.create(buildSubPath(parsePath(path)));
+		if (resource != null && resource.startsWith(Strings.create("/"))) resource = resource.slice(1);
+		engine.requireLocalAccess(ctx, resource, ability);
 	}
 
 	/**
 	 * Writes a value at a path in the user's lattice.
 	 *
-	 * <p>Only the {@code w/} (workspace) and {@code o/} (operations) namespaces
-	 * accept writes. The path must have at least two segments: namespace and
-	 * top-level key (e.g. {@code "w/my-key"}). Deeper paths are supported
-	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
-	 * as needed via read-modify-write on the top-level entry.</p>
+	 * <p>Physical writable namespaces are {@code w/} and {@code o/}; virtual
+	 * resolvers enforce their own policies, including opt-in {@code x/} views.
+	 * Deep paths create intermediate maps as needed within one atomic update.</p>
 	 *
 	 * @return {@code {existed, pathCreated?}} — {@code existed:false} created a new
 	 *         value, {@code true} replaced an existing one; {@code pathCreated:true}
@@ -669,12 +623,6 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		// A DID-URL path writes to the owner's namespace (authorised in requireCap
-		// above); a bare path to the caller's own. When present, xu = [ownerCursor,
-		// DID-relative keys] — never a virtual ns.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), true);
-		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
-		requireWriteAccess(ctx, jsonKeys);
 		// A write must supply a 'value'. An absent key means the caller (often an
 		// LLM tool call) forgot the argument — fail loudly so it retries. An
 		// explicit null is a valid value: it stores a null at the path (present,
@@ -691,24 +639,17 @@ public class CoviaAdapter extends AAdapter {
 		// lives only at tool-call boundaries whose schema admits nothing else.
 		ACell value = RT.getIn(input, Fields.VALUE);
 
-		// Cross-user owner cursor, virtual namespace (n/, t/, c/, v/), or own
-		// physical namespace: every target is a cursor plus namespace-prefixed
-		// keys, so one deepSet serves all of them — a scalar-clobbering write
-		// throws the same shape-conflict error everywhere (#176).
-		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
-		if (vns != null) jsonKeys = vns.remainingKeys();
-		@SuppressWarnings("unchecked")
-		ALatticeCursor<ACell> baseCursor = (xu != null) ? (ALatticeCursor<ACell>) xu[0]
-			: (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
-		final ACell[] keys = jsonKeys;
+		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
+		WorkspaceRoot baseCursor = target.cursor();
+		final ACell[] keys = target.remainingKeys();
 		final boolean[] built = {false};
 		final boolean[] existed = {false};
 		// deepSet first so a shape conflict throws its descriptive error (#146);
 		// pathCreated is read from the pre-state and means "a missing parent
 		// container had to be built" — not whether the leaf already had a value
 		// (that is `existed`).
-		updatePath(baseCursor, keys, vns != null && vns.requireExistingRecord(),
-			(vns != null) ? vns.recordTimestampKey() : null, (current, from) -> {
+		baseCursor.update(keys, target.requireExistingRecord(),
+			(current, from) -> {
 			existed[0] = leafExisted(current, keys, from);
 			ACell next = deepSet(current, keys, from, value);
 			// pathCreated reports building a nested parent below the namespace;
@@ -799,37 +740,24 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
-		// A DID-URL path deletes from the owner's namespace (authorised in
-		// requireCap above). create=false: an absent owner namespace has nothing to
-		// remove, and delete stays idempotent without materialising it.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), false);
-		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
-		requireDeleteAccess(ctx, jsonKeys);
-
-		// Cross-user owner cursor, virtual namespace, or own physical namespace:
-		// the same deepDelete for all (#176). An unresolvable path is a silent
-		// success (delete is idempotent).
-		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
-		if (vns != null) jsonKeys = vns.remainingKeys();
-		@SuppressWarnings("unchecked")
-		ALatticeCursor<ACell> cursor = (xu != null) ? (ALatticeCursor<ACell>) xu[0]
-			: (vns != null) ? vns.cursor() : getUserCursor(ctx);
+		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
+		WorkspaceRoot cursor = target.cursor();
 		if (cursor == null) return Maps.of(K_DELETED, CVMBool.FALSE);
-		final ACell[] keys = jsonKeys;
-		boolean requireExistingRecord = vns != null && vns.requireExistingRecord();
+		final ACell[] keys = target.remainingKeys();
+		boolean requireExistingRecord = target.requireExistingRecord();
 		// A missing unscoped target linearises as an immediate no-op. Avoid
 		// descending through a PathCursor merely to write null back: that would
 		// materialise an absent wrapped namespace even though nothing was deleted.
-		if (!requireExistingRecord && !pathPresent(cursor, keys)) {
+		if (!requireExistingRecord && !cursor.contains(keys)) {
 			return Maps.of(K_DELETED, CVMBool.FALSE);
 		}
 		final boolean[] deleted = {false};
-		updatePath(cursor, keys, requireExistingRecord,
-			(vns != null) ? vns.recordTimestampKey() : null, (current, from) -> {
+		cursor.update(keys, requireExistingRecord,
+			(current, from) -> {
 			deleted[0] = leafExisted(current, keys, from);
 			return deepDelete(current, keys, from);
 		});
-		if (deleted[0] && keys.length == 2 && NS_SECRETS.equals(keys[0].toString())) {
+		if (cursor.userNamespaces() && deleted[0] && keys.length == 2 && NS_SECRETS.equals(keys[0].toString())) {
 			// The name only, never the value — the same trail as secret:set.
 			engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
 				covia.venue.Audit.K_NAME, keys[1], covia.venue.Audit.K_TARGET, ctx.getUserDID());
@@ -852,28 +780,15 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		// A DID-URL path appends into the owner's namespace (authorised in
-		// requireCap above); a bare path into the caller's own.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), true);
-		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
-		requireWriteAccess(ctx, jsonKeys);
-
-		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
-		ACell element = RT.getIn(input, Fields.VALUE);   // stored verbatim, as in handleWrite
-
-		// Cross-user owner cursor, virtual namespace, or own physical namespace:
-		// the same deepAppend for all (#176).
-		if (vns != null) jsonKeys = vns.remainingKeys();
-		@SuppressWarnings("unchecked")
-		ALatticeCursor<ACell> baseCursor = (xu != null) ? (ALatticeCursor<ACell>) xu[0]
-			: (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
-
-		final ACell[] keys = jsonKeys;
+		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
+		ACell element = RT.getIn(input, Fields.VALUE);
+		WorkspaceRoot baseCursor = target.cursor();
+		final ACell[] keys = target.remainingKeys();
 		final boolean[] built = {false};
 		final boolean[] existed = {false};
 		final long[] newSize = {0};
-		updatePath(baseCursor, keys, vns != null && vns.requireExistingRecord(),
-			(vns != null) ? vns.recordTimestampKey() : null, (current, from) -> {
+		baseCursor.update(keys, target.requireExistingRecord(),
+			(current, from) -> {
 			existed[0] = leafExisted(current, keys, from);
 			ACell next = deepAppend(current, keys, from, element);
 			built[0] = keys.length > 2 && !parentExisted(current, keys, from);
@@ -975,411 +890,13 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * A positional update applied at a write target: receives the current
-	 * value at the navigation root and the index in the path keys where that
-	 * root sits, and returns the replacement value.
-	 */
-	@FunctionalInterface
-	private interface PathUpdate {
-		ACell apply(ACell current, int fromIndex);
-	}
-
-	/**
 	 * Reads the literal value targeted by an accessor input.
 	 */
 	private ACell readInputValue(RequestContext ctx, ACell input) {
-		Object[] target = resolveTargetPath(ctx, input);
-		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
+		var target = resolveTargetPath(ctx, input);
+		WorkspaceRoot cursor = target.cursor();
 		if (cursor == null) return null;
-		return readPath(cursor, (ACell[]) target[1]);
-	}
-
-	/**
-	 * The namespace container a path addresses: a cursor at its caller-visible
-	 * value, plus the index of the first path key below it.
-	 *
-	 * <p>Every resolved path — physical ({@code w/notes}), cross-user, or virtual
-	 * ({@code t/x} → the job record's {@code temp}) — has the shape
-	 * {@code [container, ...rest]} against its base cursor, so one rule serves all
-	 * of them. {@link Covia#child} crosses the {@code {updated, data}} view
-	 * boundary of a {@link covia.lattice.WrapperLattice} region, so {@code data}
-	 * is never addressed by callers or by this class.</p>
-	 */
-	private record Target(ALatticeCursor<ACell> root, int from) {
-		static Target of(ALatticeCursor<ACell> cursor, ACell[] keys) {
-			return (keys.length == 0)
-				? new Target(cursor, 0)
-				: new Target(Covia.child(cursor, keys[0]), 1);
-		}
-	}
-
-	/**
-	 * Applies an update to the value addressed by {@code keys} via a read-modify-
-	 * write on the navigation root ({@code baseCursor}). The write lands through
-	 * the venue {@code :value} stamp-on-write boundary (which re-stamps the whole
-	 * value), and whole-value LWW makes the result — including any deletion —
-	 * durable across the propagator's merge-back. Structural navigation builds
-	 * missing intermediates by key shape.
-	 *
-	 * <p>The update runs against the {@link Target} container's value, so a
-	 * {@code {updated, data}} region is entered through its view boundary (which
-	 * re-stamps {@code updated}) and every other namespace is entered plainly.</p>
-	 *
-	 * @param requireExistingRecord the record at {@code baseCursor} must already exist —
-	 *        scoped scratch never mints its own parent record (a phantom session)
-	 */
-	private static void updatePath(ALatticeCursor<ACell> baseCursor, ACell[] keys,
-			boolean requireExistingRecord, AString recordTimestampKey, PathUpdate update) {
-		if (requireExistingRecord) {
-			CVMLong timestamp = (recordTimestampKey != null)
-				? baseCursor.getContext().currentTimestamp() : null;
-			// The precondition and mutation must observe the same base value. A
-			// separate get() followed by a descendant update permits a concurrent
-			// delete to win between them, after which structural JSON navigation
-			// would auto-vivify the missing record again.
-			baseCursor.updateAndGet(base -> {
-				if (base == null) {
-					String container = (keys.length == 0) ? "root" : keys[0].toString();
-					throw new IllegalArgumentException(
-						"Scoped path is not available: " + container + " has no parent record");
-				}
-				if (keys.length == 0) return stampRecordUpdate(
-					base, update.apply(base, 0), recordTimestampKey, timestamp);
-
-				ACell current = navigateInto(base, keys[0]);
-				ACell replacement = update.apply(current, 1);
-				if (Utils.equals(current, replacement)) return base;
-				ACell changed = LatticeOps.assocIn(
-					base, replacement, baseCursor.getLattice(), keys[0]);
-				return stampRecordUpdate(base, changed, recordTimestampKey, timestamp);
-			});
-			return;
-		}
-
-		Target target = Target.of(baseCursor, keys);
-		target.root().updateAndGet(current -> update.apply(current, target.from()));
-	}
-
-	@SuppressWarnings("unchecked")
-	private static ACell stampRecordUpdate(ACell previous, ACell changed,
-			AString timestampKey, CVMLong proposed) {
-		if (timestampKey == null || !(changed instanceof AMap<?, ?> map)) return changed;
-		if (previous instanceof AMap<?, ?> oldMap) {
-			ACell oldValue = oldMap.get(timestampKey);
-			if (oldValue instanceof CVMLong old
-					&& old.longValue() > proposed.longValue()) proposed = old;
-		}
-		return ((AMap<AString, ACell>) map).assoc(timestampKey, proposed);
-	}
-
-	/**
-	 * Writes directly through an already-authorised lattice cursor using the
-	 * same deep-path semantics as {@code covia:write}.
-	 *
-	 * <p>This is an internal composition primitive for framework-owned state
-	 * transactions such as venue bootstrap. It deliberately performs no
-	 * capability check and creates no Job: possession of the target cursor is
-	 * the authority boundary. External requests must continue to use the
-	 * adapter operation.</p>
-	 *
-	 * @param baseCursor cursor at a user namespace root
-	 * @param keys path keys relative to that root
-	 * @param value value to store
-	 */
-	public static void writePathToCursor(
-			ALatticeCursor<ACell> baseCursor, ACell[] keys, ACell value) {
-		if (baseCursor == null) throw new IllegalArgumentException("baseCursor is required");
-		if (keys == null || keys.length == 0) {
-			throw new IllegalArgumentException("A non-empty cursor-relative path is required");
-		}
-		updatePath(baseCursor, keys, false, null,
-			(current, from) -> deepSet(current, keys, from, value));
-	}
-
-	/**
-	 * Deletes the value at a path through an already-authorised lattice cursor
-	 * using the same deep-path semantics as
-	 * {@code covia:delete}. The cursor-level twin of
-	 * {@link #writePathToCursor} for framework-owned state transactions (venue
-	 * catalog maintenance); no capability check, no Job — possession of the
-	 * cursor is the authority boundary.
-	 *
-	 * @param baseCursor cursor at a user namespace root
-	 * @param keys path keys relative to that root
-	 * @return true if a value was present and removed; false if already absent
-	 */
-	public static boolean deletePathFromCursor(ALatticeCursor<ACell> baseCursor, ACell[] keys) {
-		if (baseCursor == null) throw new IllegalArgumentException("baseCursor is required");
-		if (keys == null || keys.length == 0) {
-			throw new IllegalArgumentException("A non-empty cursor-relative path is required");
-		}
-		if (!pathPresent(baseCursor, keys)) return false;
-		final boolean[] deleted = {false};
-		updatePath(baseCursor, keys, false, null, (current, from) -> {
-			deleted[0] = leafExisted(current, keys, from);
-			return deepDelete(current, keys, from);
-		});
-		return deleted[0];
-	}
-
-	// ========== Type-aware deep navigation ==========
-	//
-	// These helpers navigate into opaque CVM values (maps AND vectors/sequences)
-	// beyond the lattice boundary. Path keys are interpreted by the value type:
-	//   - AMap:     string key lookup
-	//   - AVector:  integer index (parsed from string or CVMLong)
-	//   - other:    navigation fails (null for reads, error for writes)
-
-	/**
-	 * Reads a value at a path by navigating to its {@link Target} container and
-	 * then into that value with type-aware deep navigation — handles maps, vector
-	 * indices (e.g. {@code "w/events/0"}), and Index keys.
-	 */
-	public static ACell readPath(ALatticeCursor<ACell> cursor, ACell[] jsonKeys) {
-		Target target = Target.of(cursor, jsonKeys);
-		return deepGet(target.root().get(), jsonKeys, target.from());
-	}
-
-	/**
-	 * Type-aware deep get: navigates into a CVM value following the path,
-	 * interpreting keys as map keys or vector indices depending on the value type.
-	 */
-	static ACell deepGet(ACell root, ACell[] keys, int fromIndex) {
-		ACell current = root;
-		for (int i = fromIndex; i < keys.length && current != null; i++) {
-			current = navigateInto(current, keys[i]);
-		}
-		return current;
-	}
-
-	/**
-	 * True if the parent container of the leaf — the node at
-	 * {@code keys[from .. length-2]} — already exists in {@code root}. Used to
-	 * derive {@code pathCreated}: a write builds new hierarchy exactly when this
-	 * is false (a missing intermediate container had to be auto-created). It is
-	 * independent of whether a value already sat at the leaf — overwriting an
-	 * existing leaf inside an existing parent is not "path created".
-	 *
-	 * <p>A path that addresses the root level directly (≤1 segment from
-	 * {@code from}) has the namespace container itself as its parent, which
-	 * always exists — so it never counts as creating hierarchy.</p>
-	 */
-	static boolean parentExisted(ACell root, ACell[] keys, int from) {
-		if (keys.length - from <= 1) return true;
-		ACell node = root;
-		for (int i = from; i < keys.length - 1 && node != null; i++) {
-			node = navigateInto(node, keys[i]);
-		}
-		return node != null;
-	}
-
-	/**
-	 * True if the leaf key ({@code keys[length-1]}) already had an entry in
-	 * {@code root} before a mutation — the pre-state that distinguishes a
-	 * <em>created</em> write from a <em>replaced</em> one, and a real delete from a
-	 * no-op. Independent of whether the value there was null (a stored null still
-	 * counts as present). Called with the same {@code (current, keys, from)} the
-	 * write/delete lambda receives, so the namespace wrapper is already unwrapped.
-	 */
-	static boolean leafExisted(ACell root, ACell[] keys, int from) {
-		if (keys.length - from <= 0) return root != null;
-		ACell parent = root;
-		for (int i = from; i < keys.length - 1 && parent != null; i++) {
-			parent = navigateInto(parent, keys[i]);
-		}
-		return containsLeaf(parent, keys[keys.length - 1]);
-	}
-
-	/**
-	 * Navigates one level into a CVM value. For maps, uses string key lookup.
-	 * For vectors/sequences, parses the key as an integer index.
-	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
-	private static ACell navigateInto(ACell value, ACell key) {
-		if (value instanceof AVector<?> vec) {
-			long idx = parseIndex(key);
-			return (idx >= 0 && idx < vec.count()) ? vec.get(idx) : null;
-		}
-		// Index keys are blob-like (sessions, jobs, scheduler handles use Blob
-		// keys, rendered outward as hex by ALattice.toJSONKey). Check Index
-		// before AMap — Index is an AMap subtype. AString is itself ABlobLike, so
-		// try the key directly first (a string-keyed index), then fall back to
-		// parsing an AString as hex into a Blob (a Blob-keyed index).
-		if (value instanceof Index) {
-			Index idx = (Index) value;
-			if (key instanceof ABlobLike) {
-				ACell direct = (ACell) idx.get(key);
-				if (direct != null) return direct;
-			}
-			if (key instanceof AString s) {
-				Blob b = Blob.parse(s.toString());
-				if (b != null) return (ACell) idx.get(b);
-			}
-			return null;
-		}
-		if (value instanceof AMap<?,?> map) {
-			AString strKey = RT.ensureString(key);
-			return (strKey != null) ? ((AMap<AString, ACell>) map).get(strKey) : null;
-		}
-		return null;
-	}
-
-	/**
-	 * Parses a path key as a non-negative integer index.
-	 * Accepts CVMLong directly or AString that parses as a non-negative long.
-	 * Returns -1 if not a valid index.
-	 */
-	static long parseIndex(ACell key) {
-		if (key instanceof CVMLong l) return l.longValue();
-		AString str = RT.ensureString(key);
-		if (str == null) return -1;
-		try {
-			long idx = Long.parseLong(str.toString());
-			return (idx >= 0) ? idx : -1;
-		} catch (NumberFormatException e) {
-			return -1;
-		}
-	}
-
-	/**
-	 * Deep set: navigates into a CVM value by path and sets the leaf value.
-	 * Type-aware — handles both maps (creates intermediate maps as needed)
-	 * and vectors (updates element at index; index must be in bounds).
-	 */
-	@SuppressWarnings("unchecked")
-	static ACell deepSet(ACell root, ACell[] keys, int fromIndex, ACell value) {
-		if (fromIndex >= keys.length) return value;
-		ACell key = keys[fromIndex];
-
-		if (root instanceof AVector<?>) {
-			AVector<ACell> vec = (AVector<ACell>) root;
-			long idx = parseIndex(key);
-			if (idx < 0 || idx >= vec.count()) {
-				String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
-				if (idx >= 0) {   // numeric, just out of range
-					throw new IllegalArgumentException(
-						"List index out of bounds at '" + at + "': " + idx + " (size " + vec.count() + ")");
-				}
-				throw new IllegalArgumentException(   // non-index key on a list = shape conflict
-					"Cannot index the list at '" + at + "' (size " + vec.count() + ") with key '" + key
-					+ "': lists use non-negative integer positions. To store named keys here, replace "
-					+ "the whole node with a map first (write '" + at + "' = {}).");
-			}
-			return vec.assoc(idx, deepSet(vec.get(idx), keys, fromIndex + 1, value));
-		}
-
-		// Navigating into an existing non-map, non-vector value is a shape
-		// conflict — the scalar counterpart of the list case above. Only a
-		// genuinely absent (null) intermediate is auto-vivified into a map;
-		// a real value must never be silently clobbered.
-		if (root != null && !(root instanceof AMap)) {
-			String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
-			throw new IllegalArgumentException(
-				"Cannot set key '" + key + "' on the scalar value at '" + at
-				+ "': this path holds a value, not a map. To store named keys here, replace "
-				+ "the whole node with a map first (write '" + at + "' = {}).");
-		}
-		// Default: map navigation, creating intermediate maps as needed
-		AMap<AString, ACell> map = (root instanceof AMap)
-			? (AMap<AString, ACell>) root : Maps.empty();
-		AString mapKey = RT.ensureString(key);
-		return map.assoc(mapKey, deepSet(map.get(mapKey), keys, fromIndex + 1, value));
-	}
-
-	/**
-	 * Deep delete: navigates into a CVM value by path and removes the leaf.
-	 * For maps, dissociates the key. For vectors, sets the element to null
-	 * (preserving index stability).
-	 */
-	@SuppressWarnings("unchecked")
-	static ACell deepDelete(ACell root, ACell[] keys, int fromIndex) {
-		// Path addresses this node itself — deleting it yields null
-		// (the whole-entry delete case for entry-cursor namespaces).
-		if (fromIndex >= keys.length) return null;
-		if (root == null) return root;
-		ACell key = keys[fromIndex];
-		boolean isLeaf = (fromIndex == keys.length - 1);
-
-		if (root instanceof AVector<?>) {
-			AVector<ACell> vec = (AVector<ACell>) root;
-			long idx = parseIndex(key);
-			if (idx < 0 || idx >= vec.count()) return root;
-			return isLeaf
-				? vec.assoc(idx, null)
-				: vec.assoc(idx, deepDelete(vec.get(idx), keys, fromIndex + 1));
-		}
-
-		if (!(root instanceof AMap)) return root;
-		AMap<AString, ACell> map = (AMap<AString, ACell>) root;
-		AString mapKey = RT.ensureString(key);
-		if (isLeaf) return map.dissoc(mapKey);
-		if (!map.containsKey(mapKey)) return root;
-		ACell child = map.get(mapKey);
-		ACell replacement = deepDelete(child, keys, fromIndex + 1);
-		return Utils.equals(child, replacement) ? root : map.assoc(mapKey, replacement);
-	}
-
-	/**
-	 * Appends an element to a vector, creating a new vector if the current
-	 * value is null or an empty container (the latter occurs when an
-	 * atomic update lambda receives the value lattice's zero in place of
-	 * a missing path — see {@link convex.lattice.cursor.PathCursor}).
-	 *
-	 * @throws RuntimeException if current value is non-empty and non-vector
-	 */
-	@SuppressWarnings("unchecked")
-	private static ACell appendToVector(ACell current, ACell element) {
-		if (current == null) return Vectors.of(element);
-		if (current instanceof AVector) {
-			return ((AVector<ACell>) current).conj(element);
-		}
-		if (current instanceof AMap && ((AMap<?, ?>) current).isEmpty()) {
-			return Vectors.of(element);
-		}
-		throw new RuntimeException(
-			"Cannot append to non-vector value of type: " + current.getType());
-	}
-
-	/**
-	 * Deep append: navigates into a CVM value by path and appends an element
-	 * to the vector at the leaf. Type-aware — handles both map and vector
-	 * navigation, creating intermediate maps as needed.
-	 */
-	@SuppressWarnings("unchecked")
-	static ACell deepAppend(ACell root, ACell[] keys, int fromIndex, ACell element) {
-		if (fromIndex >= keys.length) return appendToVector(root, element);
-		ACell key = keys[fromIndex];
-
-		if (root instanceof AVector<?>) {
-			AVector<ACell> vec = (AVector<ACell>) root;
-			long idx = parseIndex(key);
-			if (idx < 0 || idx >= vec.count()) {
-				String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
-				if (idx >= 0) {   // numeric, just out of range
-					throw new IllegalArgumentException(
-						"List index out of bounds at '" + at + "': " + idx + " (size " + vec.count() + ")");
-				}
-				throw new IllegalArgumentException(   // non-index key on a list = shape conflict
-					"Cannot index the list at '" + at + "' (size " + vec.count() + ") with key '" + key
-					+ "': lists use non-negative integer positions. To store named keys here, replace "
-					+ "the whole node with a map first (write '" + at + "' = {}).");
-			}
-			return vec.assoc(idx, deepAppend(vec.get(idx), keys, fromIndex + 1, element));
-		}
-
-		// Shape conflict: cannot navigate into an existing non-map, non-vector
-		// scalar. Auto-vivify only a genuinely absent (null) intermediate.
-		if (root != null && !(root instanceof AMap)) {
-			String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
-			throw new IllegalArgumentException(
-				"Cannot set key '" + key + "' on the scalar value at '" + at
-				+ "': this path holds a value, not a map. To store named keys here, replace "
-				+ "the whole node with a map first (write '" + at + "' = {}).");
-		}
-		AMap<AString, ACell> map = (root instanceof AMap)
-			? (AMap<AString, ACell>) root : Maps.empty();
-		AString mapKey = RT.ensureString(key);
-		return map.assoc(mapKey, deepAppend(map.get(mapKey), keys, fromIndex + 1, element));
+		return cursor.read(target.remainingKeys());
 	}
 
 	/**
@@ -1730,34 +1247,13 @@ public class CoviaAdapter extends AAdapter {
 		return parseStringPath(pathStr.toString());
 	}
 
-	/**
-	 * Splits a slash-delimited path string into AString segments.
-	 *
-	 * <p>All segments are kept as AString — no attempt to parse numbers or
-	 * guess types. The lattice's {@link ALattice#resolveKey} at each level
-	 * is responsible for translating to the correct CVM type.</p>
-	 */
-	public static ACell[] parseStringPath(String path) {
-		if (path == null || path.isEmpty()) return new ACell[0];
-		if (path.startsWith("/")) path = path.substring(1);
-		if (path.endsWith("/")) path = path.substring(0, path.length() - 1);
-		if (path.isEmpty()) return new ACell[0];
-
-		String[] segments = path.split("/");
-		ACell[] keys = new ACell[segments.length];
-		for (int i = 0; i < segments.length; i++) {
-			keys[i] = Strings.create(segments[i]);
-		}
-		return keys;
-	}
-
 	// ========== Helpers ==========
 
 	/**
 	 * Gets the lattice cursor for the authenticated user's namespace root.
 	 * Returns null if the user has no lattice state.
 	 */
-	private ALatticeCursor<ACell> getUserCursor(RequestContext ctx) {
+	private WorkspaceRoot getWorkspaceRoot(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
 		// The USER's record, not the acting principal's: an agent sub-principal
 		// works inside its owner's namespace and has no lattice record of its own.
@@ -1766,7 +1262,7 @@ public class CoviaAdapter extends AAdapter {
 		// namespace and read it from another.
 		User user = users.get(ctx.getUserDID());
 		if (user == null) return null;
-		return user.cursor();
+		return user.workspaceRoot();
 	}
 
 	/**
@@ -1774,16 +1270,20 @@ public class CoviaAdapter extends AAdapter {
 	 * the user namespace if it does not yet exist. Used by write operations
 	 * that need to store data for a first-time user.
 	 */
-	public ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
+	public User ensureUser(RequestContext ctx) {
+		return engine.getVenueState().users().ensure(ctx.getUserDID());
+	}
+
+	public WorkspaceRoot ensureWorkspaceRoot(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getUserDID());
-		return user.cursor();
+		return user.workspaceRoot();
 	}
 
 	/**
 	 * Gets the lattice cursor for a specific user identified by DID, creating
 	 * the user namespace if it does not yet exist. Parallel to
-	 * {@link #ensureUserCursor(RequestContext)} but targets a named user
+	 * {@link #ensureWorkspaceRoot(RequestContext)} but targets a named user
 	 * rather than the calling user. Used by venue-scoped virtual namespace
 	 * resolvers (e.g. {@code VenueGlobalsResolver} for {@code /v/}) that
 	 * need to navigate to a fixed user's data regardless of the caller.
@@ -1791,41 +1291,38 @@ public class CoviaAdapter extends AAdapter {
 	 * @param did the DID of the user whose cursor to return
 	 * @return the lattice cursor positioned at that user's namespace root
 	 */
-	public ALatticeCursor<ACell> ensureUserCursor(AString did) {
+	public WorkspaceRoot ensureWorkspaceRoot(AString did) {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(did);
-		return user.cursor();
+		return user.workspaceRoot();
 	}
 
-	/**
-	 * Resolves a path that may target another user's namespace via DID URL syntax.
-	 *
-	 * <p>Paths can be either relative (e.g. {@code "w/notes"}) targeting the
-	 * caller's own namespace, or DID URL paths (e.g. {@code "did:key:z6Mk.../w/notes"})
-	 * targeting another user. DID URL parsing and owner lookup use the Engine's
-	 * shared physical user-path resolver.</p>
-	 *
-	 * @return A two-element result: [cursor, pathKeys] where pathKeys are the
-	 *         namespace-relative keys (DID prefix stripped)
-	 */
-	private Object[] resolveTargetPath(RequestContext ctx, ACell input) {
-		ACell pathCell = RT.getIn(input, Fields.PATH);
-		if (pathCell == null) {
-			return new Object[] { getUserCursor(ctx), new ACell[0] };
+	/** All standard accessors share this physical/virtual/DID target resolution. */
+	private NamespaceResolver.ResolvedNamespace resolveTargetPath(RequestContext ctx, ACell input) {
+		return resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_READ);
+	}
+
+	private NamespaceResolver.ResolvedNamespace resolvePathTarget(RequestContext ctx, ACell path, AString ability) {
+		boolean write = Capability.CRUD_WRITE.equals(ability);
+		boolean delete = Capability.CRUD_DELETE.equals(ability);
+		AString raw = RT.ensureString(path);
+		if (raw != null && raw.startsWith(Strings.create("/"))) raw = raw.slice(1);
+		var didTarget = raw != null && raw.toString().startsWith("did:")
+			? engine.resolveUserPath(ctx, raw, false) : null;
+		ACell[] keys = didTarget == null ? parsePath(path) : didTarget.pathKeys();
+		if (didTarget != null && isExtensionPath(keys)) {
+			return ExtensionNamespaceResolver.resolveForUser(ctx, this, didTarget.ownerDID(), keys, ability);
 		}
-
-		// Check if the raw path string is a DID URL (starts with "did:")
-		AString pathStr = RT.ensureString(pathCell);
-		if (pathStr != null && pathStr.toString().startsWith("did:")) {
-			return resolveDIDURL(ctx, pathStr.toString(), false);
+		if (write) requireWriteAccess(ctx, keys);
+		if (delete) requireDeleteAccess(ctx, keys);
+		if (didTarget == null) {
+			var virtual = resolveVirtual(ctx, keys, ability);
+			if (virtual != null) return virtual;
+			return new NamespaceResolver.ResolvedNamespace(write ? ensureWorkspaceRoot(ctx) : getWorkspaceRoot(ctx), keys, false);
 		}
-
-		ACell[] pathKeys = parsePath(pathCell);
-
-		// Virtual namespace (n/, t/, c/, v/): cursor + keys below its record
-		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
-		if (vns != null) return new Object[] { vns.cursor(), vns.remainingKeys() };
-		return new Object[] { getUserCursor(ctx), pathKeys };
+		if (write) didTarget = engine.resolveUserPath(ctx, raw, true);
+		User user = didTarget.user();
+		return new NamespaceResolver.ResolvedNamespace(user == null ? null : user.workspaceRoot(), keys, false);
 	}
 
 
@@ -1837,11 +1334,15 @@ public class CoviaAdapter extends AAdapter {
 	 *         For physical namespaces: null (caller uses standard user cursor flow).
 	 */
 	public NamespaceResolver.ResolvedNamespace resolveVirtual(RequestContext ctx, ACell[] pathKeys) {
+		return resolveVirtual(ctx, pathKeys, Capability.CRUD_READ);
+	}
+
+	public NamespaceResolver.ResolvedNamespace resolveVirtual(RequestContext ctx, ACell[] pathKeys, AString ability) {
 		if (pathKeys.length > 0) {
 			String prefix = pathKeys[0].toString();
 			NamespaceResolver resolver = resolvers.get(prefix);
 			if (resolver != null) {
-				return resolver.resolve(ctx, this, pathKeys);
+				return resolver.resolve(ctx, this, pathKeys, ability);
 			}
 		}
 		return null;
@@ -1863,7 +1364,7 @@ public class CoviaAdapter extends AAdapter {
 
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
 		if (vns == null) return null;
-		return readPath(vns.cursor(), vns.remainingKeys());
+		return vns.cursor().read(vns.remainingKeys());
 	}
 
 	/**
@@ -1878,52 +1379,14 @@ public class CoviaAdapter extends AAdapter {
 		return resolver != null && resolver.isWritable();
 	}
 
-	/**
-	 * <em>Locates</em> a DID URL path like {@code "did:key:z6MkAlice/w/notes"} —
-	 * a target cursor and namespace-relative keys. Authorisation is not repeated
-	 * here: {@link #requireCap} is the single gate and always runs first (own
-	 * paths through the scope seam, cross-user paths through the proof gate), so
-	 * by the time this resolves a cursor the caller is already authorised. Shared
-	 * verbatim by reads and mutations.
-	 *
-	 * @param create materialise the owner's namespace if absent (write/append) —
-	 *               a first delegated write may be the owner's first touch here,
-	 *               exactly as an own first write creates the caller's namespace —
-	 *               versus leave it null (read/delete: an absent namespace reads
-	 *               as {@code exists:false} / deletes idempotently)
-	 * @return {@code [cursor, pathKeys]}; {@code cursor} is null when
-	 *         {@code create} is false and the target has no namespace here
-	 */
-	private Object[] resolveDIDURL(RequestContext ctx, String rawPath, boolean create) {
-		var target = engine.resolveUserPath(ctx, Strings.create(rawPath), create);
-		User user = target.user();
-		return new Object[] { (user == null) ? null : user.cursor(), target.pathKeys() };
+	public static boolean isExtensionPath(ACell[] keys) {
+		return keys.length > 0 && Strings.intern("x").equals(keys[0]);
 	}
 
-	/**
-	 * The DID-URL mutation target for {@code write}/{@code delete}/{@code append}:
-	 * {@code [cursor, pathKeys]} against the owner's namespace when the path is a
-	 * DID URL, else {@code null} (the caller uses its own-cursor flow). A DID URL
-	 * never names a virtual ({@code n/}, {@code t/}) namespace, so this fully
-	 * determines the target. Authorisation is enforced upstream in
-	 * {@link #requireCap}; this only locates.
-	 */
-	private Object[] didUrlMutationTarget(RequestContext ctx, ACell pathCell, boolean create) {
-		AString pathStr = RT.ensureString(pathCell);
-		if (pathStr == null || !pathStr.toString().startsWith("did:")) return null;
-		return resolveDIDURL(ctx, pathStr.toString(), create);
-	}
-
-	/**
-	 * Builds a sub-path string from parsed path keys (e.g. ["w", "notes"] → "/w/notes").
-	 */
-	private static String buildSubPath(ACell[] pathKeys) {
-		if (pathKeys.length == 0) return "/";
-		StringBuilder sb = new StringBuilder();
-		for (ACell key : pathKeys) {
-			sb.append('/').append(key);
-		}
-		return sb.toString();
+	/** DID-qualified extension reads share the same view and authority checks as bare x paths. */
+	public ACell readExtensionNamespace(RequestContext ctx, AString owner, ACell[] keys) {
+		var resolved = ExtensionNamespaceResolver.resolveForUser(ctx, this, owner, keys, Capability.CRUD_READ);
+		return resolved.cursor().read(resolved.remainingKeys());
 	}
 
 }

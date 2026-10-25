@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -89,6 +90,60 @@ public class RequestContextAuthorityTest {
 			"delegated execution must not inherit the actor's unrestricted ambient scope");
 		assertSame(original, original.onBehalfOf(DELEGATE),
 			"acting in the existing namespace is a no-op");
+	}
+
+	@Test
+	public void testDelegationDoesNotRetargetExecutionReferences() {
+		AString agent = Strings.create("assistant");
+		Blob session = Blob.fromHex("1234");
+		Blob job = Blob.fromHex("5678");
+		Blob task = Blob.fromHex("9abc");
+		RequestContext original = RequestContext.ofAgent(DELEGATE, agent)
+			.withSessionId(session).withJobId(job).withTaskId(task, 7L);
+		RequestContext delegated = original.onBehalfOf(ALICE);
+		assertSame(original.getExecutionScope(), delegated.getExecutionScope());
+		assertEquals(new RequestContext.ExecutionScope(DELEGATE, agent, job, session, task, 7L),
+			delegated.getExecutionScope());
+		assertNull(delegated.getAgentId());
+		assertNull(delegated.getSessionId());
+		assertNull(delegated.getJobId());
+		assertNull(delegated.getTaskId());
+		assertEquals(-1L, delegated.getTaskRevision());
+
+		RequestContext copied = delegated.withCaps(Vectors.empty()).withProofs(Vectors.of(PROOF))
+			.withRawUcans(Vectors.empty()).withOp(Strings.create("test:echo"))
+			.withInvocation(Maps.empty(), null).withJob(null)
+			.withCancellation(new java.util.concurrent.atomic.AtomicBoolean()).withCycle(null)
+			.forGateEvaluation(Strings.create("test:gate"));
+		assertSame(original.getExecutionScope(), copied.getExecutionScope());
+		RequestContext returned = copied.onBehalfOf(DELEGATE);
+		assertEquals(agent, returned.getAgentId());
+		assertEquals(session, returned.getSessionId());
+		assertEquals(job, returned.getJobId());
+		assertEquals(task, returned.getTaskId());
+		assertEquals(7L, returned.getTaskRevision());
+
+		// Explicitly selecting an execution in Alice's namespace must not inherit
+		// the same-named agent's session or task from the other owner.
+		RequestContext rebound = delegated.withAgentId(agent);
+		assertEquals(ALICE, rebound.getExecutionScope().ownerDID());
+		assertEquals(agent, rebound.getAgentId());
+		assertNull(rebound.getSessionId());
+		assertNull(rebound.getJobId());
+		assertNull(rebound.getTaskId());
+		assertEquals(-1L, rebound.getTaskRevision());
+		assertNull(delegated.withJobId(job).getAgentId());
+		assertNull(delegated.withSessionId(session).getAgentId());
+		assertNull(delegated.withTaskId(task).getAgentId());
+	}
+
+	@Test
+	public void testExecutionReferencesRequireAnOwner() {
+		IllegalArgumentException refusal = assertThrows(IllegalArgumentException.class,
+			() -> RequestContext.ANONYMOUS.withAgentId(Strings.create("assistant")));
+		assertEquals(RequestContext.EXECUTION_OWNER_REQUIRED, refusal.getMessage());
+		assertThrows(IllegalArgumentException.class,
+			() -> RequestContext.ANONYMOUS.withJobId(Blob.fromHex("1234")));
 	}
 
 	@Test

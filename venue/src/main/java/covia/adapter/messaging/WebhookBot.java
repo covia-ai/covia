@@ -4,6 +4,7 @@ import java.util.Comparator;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,12 +30,15 @@ import covia.api.Fields;
  */
 public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<S> {
 	private static final Logger log = LoggerFactory.getLogger(WebhookBot.class);
+	public static final String REPLY_FAILED = "Reply failed after session delivery";
+	public static final String RECONFIGURED = "Bot settings changed after this message was accepted";
 	public static final AString VERSION = Strings.intern("bindingVersion");
-	public static final String PROCESSING_FAILED = "Processing failed; inspect the STARTED receipt before any manual retry";
+	public static final String PROCESSING_FAILED = "Processing failed; inspect the receipt before any manual retry";
 	public static final String CONNECTED = "CONNECTED", CONNECTING = "CONNECTING", RETRYING = "RETRYING";
 	private final AWebhookMessagingAdapter<S> adapter;
 	private final S spec;
 	private final Managed managed;
+	private final covia.venue.AdapterState state;
 	private final WebhookInbox inbox;
 	private final ConversationRouter router;
 	private final RelayBinding<S> relay;
@@ -50,6 +54,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	WebhookBot(AWebhookMessagingAdapter<S> adapter, S spec, Managed managed) {
 		this.adapter = adapter; this.spec = spec; this.managed = managed;
 		AString owner = spec.userDID(adapter.engine);
+		state = adapter.state(owner);
 		String identity = Strings.create(ConversationRouter.key(owner.toString(), spec.installationKey())).getHash().toHexString();
 		version = Strings.create(spec.settings().getHash().toHexString());
 		binding = managed == Managed.CONFIG ? "c-" + spec.name()
@@ -60,8 +65,8 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			: adapter.userStatePath(owner, "sessions/" + spec.name() + "/" + identity);
 		String relayRoot = managed == Managed.CONFIG ? "config/" + spec.name() + "/relay/" + identity
 			: adapter.userStatePath(owner, "relay/" + spec.name() + "/" + identity);
-		inbox = new WebhookInbox(adapter.engine, adapter.state(), inboxRoot);
-		router = new ConversationRouter(adapter.engine, spec, new ConversationSessions(adapter.state(), sessionsRoot + "/" + version,
+		inbox = new WebhookInbox(adapter.engine, state, inboxRoot);
+		router = new ConversationRouter(adapter.engine, spec, new ConversationSessions(state, sessionsRoot + "/" + version,
 			this, () -> running && adapter.isActive()));
 		relay = spec.routesToRelay() ? new RelayBinding<>(this, adapter, relayRoot) : null;
 	}
@@ -70,6 +75,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	public String binding() { return binding; }
 	public boolean running() { return running; }
 	public WebhookInbox inbox() { return inbox; }
+	covia.venue.AdapterState state() { return state; }
 	/** This binding's relay, or null when its handler is an agent or operation. */
 	public RelayBinding<S> relay() { return relay; }
 	/**
@@ -85,6 +91,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	 * grant bound to a url prefix covers it only there.
 	 */
 	public String credential(String field, String destination) {
+		state.requireCurrentUser();
 		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), this, destination);
 	}
 	public void requireReady() {
@@ -187,6 +194,12 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			synchronized (this) { if (running) inbox.complete(id); }
 		}
 	}
+	/** Receipt writes cannot recreate state after stop/delete; null once stopped. */
+	private AMap<AString, ACell> guarded(Supplier<AMap<AString, ACell>> write) {
+		synchronized (adapter.engine) {
+			synchronized (this) { return running && adapter.isActive() ? write.get() : null; }
+		}
+	}
 	private void recoverPending() {
 		try {
 			if (ready()) inbox.records(WebhookInbox.PENDING).stream()
@@ -200,14 +213,24 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private void queue(AMap<AString, ACell> receipt) {
 		if (!WebhookInbox.PENDING.equals(receipt.get(Fields.STATUS)) || !ready()) return;
 		var event = MessagingSettings.object(receipt.get(Fields.INPUT));
-		// Reconfiguration cannot execute old accepted work using a different handler
-		// or admission policy. Keep these pending receipts visible for the operator.
-		if (!version.equals(event.get(VERSION))) return;
 		String id = MessagingSettings.required(receipt, "id");
+		// Reconfiguration cannot execute old accepted work using a different handler
+		// or admission policy. Fail it once; the receipt stays visible for the operator.
+		if (!version.equals(event.get(VERSION))) {
+			if (guarded(() -> inbox.fail(id, RECONFIGURED, null, System.currentTimeMillis())) != null) lastError = RECONFIGURED;
+			return;
+		}
 		String conversation = MessagingSettings.required(event, "conversation");
 		if (!queued.add(id)) return;
+		boolean localSession = spec.routesToAgent() && router.supportsSessionDelivery();
 		router.enqueue(conversation, () -> {
 			if (!claim(id)) return;
+			if (localSession) {
+				String refusal = router.deliveryRefusal();
+				if (refusal != null) throw new IllegalStateException(refusal);
+				deliverSession(id, event, conversation);
+				return;
+			}
 			ACell input = event.get(Fields.INPUT);
 			String reply;
 			if (spec.routesToAgent()) {
@@ -218,7 +241,12 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			complete(id);
 		}).whenComplete((ignored, failure) -> {
 			queued.remove(id);
-			if (failure != null) lastError = PROCESSING_FAILED;
+			if (failure != null) {
+				lastError = PROCESSING_FAILED;
+				log.warn("{} bot '{}': {}: {}", adapter.getName(), spec.name(), PROCESSING_FAILED, AAdapter.describeFailure(failure));
+				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, AAdapter.describeFailure(failure), System.currentTimeMillis())); }
+				catch (RuntimeException writeFailure) { log.warn("Could not record processing failure: {}", writeFailure.toString()); }
+			}
 		});
 	}
 	/**
@@ -262,6 +290,21 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		message = message.assoc(MessagingMedia.K_ATTACHMENTS, attachments);
 		return content.isEmpty() ? message : message.assoc(Fields.CONTENT, content);
 	}
+	/** One atomic handoff: input, session mapping and COMPLETE receipt commit together. */
+	private void deliverSession(String id, AMap<AString, ACell> event, String conversation) {
+		ACell message = agentMessage(event);
+		covia.grid.Job job;
+		synchronized (adapter.engine) {
+			synchronized (this) {
+				if (!ready()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+				job = router.deliver(conversation, message, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
+			}
+		}
+		ConversationRouter.onResponse(job, response -> {
+			String reply = ConversationRouter.responseText(response);
+			if (running && adapter.isActive() && reply != null) adapter.sendReply(this, event, reply);
+		}, failure -> { if (running) lastError = REPLY_FAILED; });
+	}
 	@Override public AMap<AString, ACell> status() {
 		boolean connected;
 		synchronized (this) { connected = connection != null; }
@@ -269,7 +312,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			"managed", managed == Managed.CONFIG ? "config" : "runtime",
 			"state", ready() && (connected || !spec.connectionIngress()) ? "RUNNING" : "PENDING",
 			"pending", inbox.records(WebhookInbox.PENDING).size(), "started", inbox.records(WebhookInbox.STARTED).size(),
-			"queued", queued.size(), "error", lastError);
+			"failed", inbox.records(WebhookInbox.FAILED).size(), "queued", queued.size(), "error", lastError);
 		if (spec.webhookIngress()) status = status.assoc(MessagingSettings.key("webhookPath"), Strings.create("/webhooks/" + adapter.getName() + "/" + binding));
 		if (relay != null) status = status.assoc(MessagingSettings.key("relayPath"), Strings.create("/relay/" + adapter.getName() + "/" + binding));
 		if (spec.connectionIngress()) status = status.assoc(MessagingSettings.key("connection"),

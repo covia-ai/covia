@@ -17,12 +17,11 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.Covia;
 
 /**
  * Venue shutdown and the Jobs in flight at the time (JOBS.md § Shutdown):
@@ -98,11 +97,11 @@ public class JobShutdownTest {
 	@Test
 	public void pausableJobIsPausedAndRestoredAtBoot() throws Exception {
 		AMap<AString, ACell> config = config(0);
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceShutdownParked"));
 
-		Engine first = new Engine(config, cursor, keyPair).start();
+		Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		Engine.addDemoAssets(first);
 		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // registers a pause hook
 		Job slow = delay(first, alice, 60_000);
@@ -113,7 +112,7 @@ public class JobShutdownTest {
 		assertEquals(Status.PAUSED, parked.getStatus(), "a pausable job is suspended, not cancelled");
 		assertEquals(Status.CANCELLED, slow.getStatus(), "in-process work is cancelled with zero grace");
 
-		Engine second = new Engine(config, cursor, keyPair).start();
+		Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

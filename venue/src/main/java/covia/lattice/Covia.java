@@ -7,7 +7,6 @@ import convex.core.data.Keyword;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALattice;
-import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.generic.CASLattice;
 import convex.lattice.generic.JSONLattice;
 import convex.lattice.generic.IndexLattice;
@@ -15,57 +14,30 @@ import convex.lattice.generic.KeyedLattice;
 import convex.lattice.generic.LWWLattice;
 import convex.lattice.generic.MapLattice;
 import convex.lattice.generic.OwnerLattice;
-import convex.lattice.generic.StampingLattice;
 import convex.lattice.generic.StringKeyedLattice;
 import convex.lattice.fs.DLFSLattice;
 import covia.api.Fields;
 
 
 /**
- * Root lattice definition for Covia venue state.
+ * Stored shapes and merge rules for the Covia root.
  *
- * <p>Defines the lattice hierarchy for venue state management using standard
- * convex-core lattice types. Follows the same declarative pattern as Convex's
- * {@code Lattice.ROOT}.
+ * <p>The root contains {@code :grid/:venues}, signed by each venue owner,
+ * shared content-addressed {@code :grid/:meta}, and independently signed
+ * {@code :dlfs} owner regions. Each venue payload is a whole-value LWW register:
+ * a newer {@code :timestamp} wins, an external tie retains the local value,
+ * and deletions survive reconciliation.</p>
  *
- * <h2>Lattice Structure</h2>
- * <pre>
- * ROOT  ->  KeyedLattice
- *   :grid  ->  KeyedLattice
- *     :venues  ->  OwnerLattice (per-AccountKey signed state)
- *       &lt;AccountKey&gt;  ->  SignedLattice
- *         :value  ->  StampingLattice -> whole-value LWW -> KeyedLattice
- *           :timestamp   &lt;wall-clock millis&gt;  (re-stamped on every write)
- *           :assets      content-addressed asset store
- *           :storage     content-addressed blob store
- *           :did         venue DID
- *           :users       login directory (Auth)
- *           :schedule    extensible {updated, events, ...} record
- *           :user-data   &lt;DID-string&gt; -> per-user record {j, g, s, w, o, h, a, meta}
- *     :meta  ->  CASLattice (shared content-addressable metadata)
- *   :dlfs  ->  OwnerLattice -> SignedLattice -> per-user drive map
- * </pre>
+ * <p>A venue is an atomically updated running application instance. LWW is
+ * snapshot selection for backup, replication and failover, not an algorithm
+ * for combining divergent venue executions. Only one instance is authoritative;
+ * atomic local updates and transactions preserve its application invariants.</p>
  *
- * <h2>The venue {@code :value} region</h2>
- * <p>All mutable, deletable venue state is the signed venue {@code :value},
- * composed from three orthogonal Convex lattice layers (see convex#593):</p>
- * <ul>
- *   <li>{@link StampingLattice} — re-stamps {@code :timestamp} with real
- *       wall-clock time on every deep write (never inflated, never {@code +1});</li>
- *   <li>{@link LWWLattice} — whole-value merge: the newer {@code :timestamp}
- *       wins wholesale (tie → own), never recursing, so <b>deletions survive</b>
- *       the propagator's merge-back;</li>
- *   <li>typed keyed/map/index lattices with {@link JSONLattice} leaves —
- *       structural navigation and record-local write-stamping; keys are used
- *       exactly as given (no coercion).</li>
- * </ul>
- *
- * <p>This is correct because a venue's {@code :value} has a single authoritative
- * writer (its signing key under {@code OwnerLattice}/{@code SignedLattice}), so
- * every merge is a stale-vs-fresh snapshot of the same lineage, never independent
- * concurrent contributors — for which "newest coherent snapshot wins wholesale"
- * (whole-value LWW) is the correct CRDT. Per-entry union (the previous model)
- * resurrected deleted keys on merge-back.</p>
+ * <p>Components explicitly bind signing and timestamp functions to their editing
+ * cursors. These lattice definitions describe merge and structure only. Generic
+ * cursor paths neither install write policy nor invent missing containers.
+ * Adapter values live directly under :adapters. DLFS format compatibility is governed
+ * by the upstream filesystem and checked separately.</p>
  */
 public final class Covia {
 
@@ -106,6 +78,15 @@ public final class Covia {
 	/** Per-venue scheduled-event store. */
 	public static final Keyword SCHEDULE = Keyword.intern("schedule");
 
+	/** Adapter-owned components; each adapter defines the value at its name. */
+	public static final Keyword ADAPTERS = Keyword.intern("adapters");
+
+	/** Framework-owned unfinished user cleanup, indexed by adapter and DID. */
+	public static final Keyword USER_DELETIONS = Keyword.intern("user-deletions");
+
+	/** Persisted venue format version; independent of the running software release. */
+	public static final Keyword VERSION = Keyword.intern("version");
+
 	// ========== Venue-value whole-value-LWW plumbing ==========
 
 	/** Timestamp keyword re-stamped on every write to the venue value; LWW picks the newest. */
@@ -137,8 +118,8 @@ public final class Covia {
 
 	/**
 	 * One-way ratchet for stamp timestamps: never below the stamp the value
-	 * already carries. Derived and forked cursors retain the application's live
-	 * context policy, but fixed test contexts, explicit timestamp overrides or a
+	 * already carries. Components supply the application's live context policy,
+	 * but fixed test contexts, explicit timestamp overrides or a
 	 * backwards host-clock step can still present a timestamp older than the
 	 * value already stored. A plain assoc would REGRESS the stamp, and under
 	 * whole-value LWW a regressed
@@ -161,7 +142,7 @@ public final class Covia {
 
 	/** Injects the write-clock timestamp (from the LatticeContext) into the venue value's {@code :timestamp}. */
 	@SuppressWarnings("unchecked")
-	private static ACell stampVenue(ACell v, CVMLong ts) {
+	public static ACell stampVenue(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {
 			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
 			return m.assoc(K_TIMESTAMP, ratchet(m.get(K_TIMESTAMP), ts));
@@ -171,7 +152,7 @@ public final class Covia {
 
 	/** Injects a last-modified stamp into an extensible string-keyed record. */
 	@SuppressWarnings("unchecked")
-	private static ACell stampUpdated(ACell v, CVMLong ts) {
+	public static ACell stampUpdated(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {
 			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
 			return m.assoc(Fields.UPDATED, ratchet(m.get(Fields.UPDATED), ts));
@@ -181,7 +162,7 @@ public final class Covia {
 
 	/** Injects the existing agent record's {@code ts} last-modified stamp. */
 	@SuppressWarnings("unchecked")
-	private static ACell stampAgent(ACell v, CVMLong ts) {
+	public static ACell stampAgent(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {
 			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
 			return m.assoc(K_AGENT_TS, ratchet(m.get(K_AGENT_TS), ts));
@@ -209,7 +190,7 @@ public final class Covia {
 	 * activity to keep alive.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	private static ACell stampUserMeta(ACell v, CVMLong ts) {
+	public static ACell stampUserMeta(ACell v, CVMLong ts) {
 		if (!(v instanceof AMap<?,?>)) return v;
 		AMap<ACell, ACell> user = (AMap<ACell, ACell>) v;
 		// A late job/agent/secret/workspace write through a retained cursor must
@@ -225,12 +206,27 @@ public final class Covia {
 		return user.assoc(K_META, meta);
 	}
 
+	/** Caller-visible value inside a stamped workspace record. */
+	public static final AString WORKSPACE_DATA = Strings.intern("data");
+
+	/** Workspace envelope; components expose its data through an explicit view. */
+	public static final ALattice<ACell> WORKSPACE_RECORD =
+		ac(StringKeyedLattice.create(WORKSPACE_DATA, JSONLattice.INSTANCE));
+
+	/** Last-modified policy for a job record. */
+	public static final ALattice<ACell> JOB_RECORD =
+		JSONLattice.INSTANCE;
+
+	/** Last-modified policy for an agent record. */
+	public static final ALattice<ACell> AGENT_RECORD =
+		JSONLattice.INSTANCE;
+
 	/**
 	 * Per-DID user record. Jobs and agents have typed record boundaries that
 	 * maintain their existing {@code updated}/{@code ts} last-modified fields;
 	 * framework namespaces {@code s}/{@code a} are plain navigable JSON; and
 	 * user-writable {@code w}/{@code o}/{@code h} are
-	 * {@link WrapperLattice} regions ({@code {updated, data}} containers whose
+	 * {@link #WORKSPACE_RECORD} regions ({@code {updated, data}} containers whose
 	 * {@code data} is the caller-visible value). Merge is whole-value at
 	 * {@code :value}, so these child lattices are used only for navigation and
 	 * write-stamping.
@@ -240,43 +236,23 @@ public final class Covia {
 	 * once, {@code updated} bumped) — see {@link #stampUserMeta} and the
 	 * "User meta record" section of {@code GRID_LATTICE_DESIGN.md}.</p>
 	 */
-	private static final ALattice<ACell> JOB_RECORD = StampingLattice.create(
-		JSONLattice.INSTANCE,
-		Covia::stampUpdated);
-
-	private static final ALattice<ACell> AGENT_RECORD = StampingLattice.create(
-		JSONLattice.INSTANCE,
-		Covia::stampAgent);
-
-	private static final ALattice<ACell> USER_RECORD = StampingLattice.create(
+	public static final ALattice<ACell> USER_RECORD =
 		ac(StringKeyedLattice.create(
 			"j", IndexLattice.create(JOB_RECORD),
 			"g", MapLattice.create(AGENT_RECORD),
 			"s", JSONLattice.INSTANCE,
 			"a", JSONLattice.INSTANCE,
-			"w", WrapperLattice.INSTANCE,
-			"o", WrapperLattice.INSTANCE,
-			"h", WrapperLattice.INSTANCE)),
-		Covia::stampUserMeta);
+			"w", WORKSPACE_RECORD,
+			"o", WORKSPACE_RECORD,
+			"h", WORKSPACE_RECORD));
 
 	/**
 	 * Extensible scheduler record. Its stable physical shape is
 	 * {@code {updated, events, ...}}; writes below {@code events} refresh the
 	 * record's last-modified stamp without rebuilding or narrowing the record.
 	 */
-	private static final ALattice<ACell> SCHEDULE_RECORD = StampingLattice.create(
-		ac(StringKeyedLattice.create("events", JSONLattice.INSTANCE)),
-		Covia::stampUpdated);
-
-	/**
-	 * Cursor at the caller-visible value of {@code key} below {@code base}: through
-	 * the {@link WrapperLattice#VIEW data view} when the child is a wrapped region,
-	 * plain navigation otherwise. Reads and writes at the returned cursor see and
-	 * replace exactly what a caller addressing {@code key} would.
-	 */
-	public static ALatticeCursor<ACell> child(ALatticeCursor<ACell> base, ACell key) {
-		return WrapperLattice.wraps(base, key) ? base.path(key, WrapperLattice.VIEW) : base.path(key);
-	}
+	public static final ALattice<ACell> SCHEDULE_RECORD =
+		ac(StringKeyedLattice.create("events", JSONLattice.INSTANCE));
 
 	/**
 	 * Venue interior — keyword-keyed regions; {@code :user-data} maps each DID to a
@@ -284,11 +260,14 @@ public final class Covia {
 	 * is whole-value at {@code :value}.
 	 */
 	private static final ALattice<ACell> INTERIOR = ac(KeyedLattice.create(
+		VERSION, JSONLattice.INSTANCE,
 		ASSETS, JSONLattice.INSTANCE,
 		STORAGE, JSONLattice.INSTANCE,
 		DID, JSONLattice.INSTANCE,
 		USERS, JSONLattice.INSTANCE,
 		SCHEDULE, SCHEDULE_RECORD,
+		ADAPTERS, MapLattice.create(JSONLattice.INSTANCE),
+		USER_DELETIONS, JSONLattice.INSTANCE,
 		USER_DATA, MapLattice.create(USER_RECORD)));
 
 	/**
@@ -299,17 +278,16 @@ public final class Covia {
 	 * a stamp-on-write boundary. Composed as
 	 * {@code stamping(write) -> LWW(merge) -> typed-navigation}.
 	 *
-	 * <p>Correct because a venue's {@code :value} has a single authoritative writer
-	 * (its signing key under {@code OwnerLattice}/{@code SignedLattice}), so every
-	 * merge is a stale-vs-fresh snapshot of the same lineage — for which "newest
+	 * <p>This requires one authoritative running instance; signatures authenticate
+	 * snapshots but do not fence competing writers. Supported reconciliation
+	 * compares stale-vs-fresh snapshots of the same lineage — for which "newest
 	 * coherent snapshot wins wholesale" is the right CRDT. Content
 	 * ({@code :assets}/{@code :storage}) rides the same node (single-writer, so the
 	 * newest value already holds all content, making removal/GC durable). Genuinely
 	 * shared multi-writer content lives at grid {@code :meta} (a CAS region).
 	 */
-	public static final ALattice<ACell> VENUE = StampingLattice.create(
-		LWWLattice.create(INTERIOR, Covia::venueTimestamp),
-		Covia::stampVenue);
+	public static final ALattice<ACell> VENUE =
+		LWWLattice.create(INTERIOR, Covia::venueTimestamp);
 
 	/**
 	 * Per-user DLFS drives lattice. Each user (AccountKey) signs their own drive
@@ -325,9 +303,11 @@ public final class Covia {
 	 * state, signed by the venue's key) and {@code :dlfs} (per-user DLFS drives,
 	 * each signed by the user's own key).
 	 */
+	public static final OwnerLattice<ACell> VENUE_OWNERS = OwnerLattice.create(VENUE);
+
 	public static final KeyedLattice ROOT = KeyedLattice.create(
 		GRID, KeyedLattice.create(
-			VENUES, OwnerLattice.create(VENUE),
+			VENUES, VENUE_OWNERS,
 			META, CASLattice.create()
 		),
 		DLFS, DLFS_USERS

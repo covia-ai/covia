@@ -8,6 +8,37 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Convex 0.8.18 lattice applications
+
+These changes require Convex 0.8.18; until it is released, the local
+`0.8.18-fe473bdbd-SNAPSHOT` described in BUILD.md.
+
+- Messaging local-agent intake commits session input, receipt, conversation mapping
+  and Job admission state in one venue transaction, retaining user-deletion fencing
+  (#616). Delivery makes one attempt; failures remain visible without automatic
+  replay. Telegram reports admission failure once. HITL commits its inbox response,
+  final Job result and session notification together, with one winner under contention.
+- Venue components share atomic updates and transactions; whole-venue LWW is
+  for backup, replication and fenced failover, not arbitrary fork merging.
+- The signed venue value records `:version`. Ordered startup migrations run
+  atomically; legacy adapter storage moves on first access without a bulk scan.
+  Older binaries must not reopen upgraded stores.
+- `AdapterState` replaces `AdapterWorkspace` for private `:adapters/<name>`
+  storage. Embedders must replace removed `engine.adapterWorkspace(...)` calls;
+  user cleanup belongs in adapter deletion hooks, with external cleanup after commit.
+- Opt-in `x/<adapter>/...` views reuse standard accessors and CRUD authority.
+  `x/test` exposes read-only context and sample values plus persistent per-user
+  scratch. No private state is automatically exposed and venue identity does
+  not bypass cross-user authority. User exports do not include private adapter state.
+
+- Execution context IDs are grouped with their owning user. Namespace delegation
+  preserves that owner; local scope accessors never reinterpret another user's
+  agent/session/job/task IDs. Output handoff snapshots explicitly bind their
+  namespace, while old snapshots remain readable without a startup rewrite.
+- Adapter lattice write policy uses `latticeWriteDenial`: null allows, a refusal
+  reason is returned unchanged. Views last one operation/transaction; adapters
+  retain ownership of policy and value validation.
+
 ### Migration
 
 - External login (#298): replace `auth.loginRedirectOrigins` with exact
@@ -104,8 +135,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   operator-installed or pinned native libraries, Ogg/Opus voice notes.
 - `speech:transcribe` takes audio the caller holds as inline base64 `bytes`, stored nowhere;
   `speech:prepare` fetches the local engine's model and libraries before any audio is in hand.
+- `speech:listen` and `speech:hear`: live dictation on the local engine, settling words at each
+  pause and returning those still being spoken.
 - Every jar names its Java module (`Automatic-Module-Name`: `covia.venue`, `covia.core`,
   `covia.<module>`).
+- `user:export`, `user:import` and `user:clone`: a user's whole stored state as one value,
+  secrets sealed to the caller's key; import runs Covia's migrations (#615).
 
 ### Changed
 

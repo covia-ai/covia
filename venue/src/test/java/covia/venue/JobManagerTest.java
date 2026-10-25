@@ -50,6 +50,65 @@ import covia.test.Rendezvous;
 	 * inside one venue is covered by {@code GridAdapterTest}.</p>
  */
 public class JobManagerTest {
+	@Test
+	public void legacyJobReadsArePureAndNextWriteDropsOnlyTheChain() {
+		User user = engine.getVenueState().users().ensure(did);
+		Blob id = Blob.fromHex("61106110611061106110611061106110");
+		AString prev = Strings.intern("prev");
+		AString temp = Strings.intern("temp");
+		AMap<AString, ACell> payload = Maps.of(prev, "payload field stays");
+		AMap<AString, ACell> current = Maps.of(Fields.ID, id, Fields.CALLER, did,
+			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, payload, Fields.UPDATED, 123L,
+			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")), temp, payload);
+		AMap<AString, ACell> legacy = current.assoc(prev, Maps.of(Fields.STATUS, Status.STARTED,
+			prev, Maps.of(Fields.STATUS, Status.PENDING)));
+		// Simulate an old store or a legacy snapshot arriving after startup.
+		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, legacy));
+		var storage = user.cursor().path(covia.lattice.Namespace.J, id);
+		ACell before = user.get();
+		String path = "j/" + id.toHexString();
+		assertEquals(current, user.job(id).getRecord());
+		assertEquals(current, engine.jobs().getJobData(id, ctx));
+		assertEquals(current, engine.jobs().getJobs(ctx).get(id));
+		assertEquals(1, engine.jobs().countJobs(ctx));
+		assertEquals(payload, engine.jobs().getJob(id, ctx).awaitResult());
+		assertEquals(current, engine.resolvePath(Strings.create(path), ctx));
+		assertEquals(current, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
+		assertEquals(current, RT.getIn(user.workspaceRoot().read(), covia.lattice.Namespace.J, id));
+		assertNull(engine.resolvePath(Strings.create(path + "/prev"), ctx));
+		var adapter = (covia.adapter.CoviaAdapter) engine.getAdapter("covia");
+		assertEquals(current, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
+		assertEquals(CVMBool.FALSE,
+			RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path + "/prev")), "exists"));
+		assertSame(before, user.get(), "reads must neither rewrite records nor stamp user activity");
+		assertSame(legacy, storage.get());
+
+		// A failed transaction must not migrate the record either.
+		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
+			draft.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
+			throw new IllegalStateException("rollback");
+		}));
+		assertSame(legacy, storage.get());
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "new");
+		assertTrue(user.job(id).appendHistory(message));
+		AMap<AString, ACell> migrated = user.getJob(id);
+		assertEquals(migrated, storage.get(), "the next edit physically removes the legacy link");
+		assertFalse(migrated.containsKey(prev));
+		assertEquals(current.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY),
+			migrated.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY));
+		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), migrated.get(Fields.HISTORY));
+		ACell after = storage.get();
+		assertFalse(user.job(id).appendHistory(message));
+		assertSame(after, storage.get(), "repeat edits remain idempotent");
+
+		storage.set(legacy);
+		user.recordCursor(covia.lattice.Namespace.J, id).path(temp, Strings.create("scratch")).set(CVMLong.ONE);
+		assertNull(RT.getIn(storage.get(), prev), "scratch edits also discard the obsolete link");
+		assertEquals(payload.assoc(Strings.create("scratch"), CVMLong.ONE), RT.getIn(storage.get(), temp));
+		user.persistJob(id, legacy);
+		assertNull(RT.getIn(storage.get(), prev), "imports cannot reintroduce chains");
+		assertEquals(CVMLong.ONE, RT.getIn(storage.get(), temp, "scratch"));
+	}
 
 	@Test
 	public void testSynchronousAdapterErrorsSettleDurableJobs() {
@@ -632,6 +691,96 @@ public class JobManagerTest {
 			"deleted job must not reappear via the lattice fallback");
 		assertFalse(engine.jobs().deleteJob(job.getID(), ctx),
 			"second delete finds nothing");
+	}
+
+	@Test
+	public void testLiveJobEditsPreservePrimaryRecordChanges() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		User user = engine.getVenueState().users().get(did);
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "component-edit");
+		user.transact(draft -> {
+			draft.job(job.getID()).appendHistory(message);
+			draft.job(job.getID()).update(data -> data.assoc(Strings.intern("temp"), Maps.of("kept", true)));
+		});
+		assertEquals(user.getJob(job.getID()), job.getData());
+		job.setStatus(Status.INPUT_REQUIRED);
+		assertEquals(Vectors.of(message), job.getData().get(Fields.HISTORY));
+		assertEquals(Maps.of("kept", true), job.getData().get(Strings.intern("temp")));
+		AuthException rejection = new AuthException("test updater rejection");
+		assertSame(rejection, assertThrows(AuthException.class, () -> job.update(data -> { throw rejection; })));
+		job.cancel();
+	}
+
+	@Test
+	public void testPrimaryRecordRedactsSecretsButAwaiterReceivesOriginalOutput() {
+		AString token = Strings.create("token");
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, "test:echo", Strings.create("secretFields"), Vectors.of(token)));
+		AMap<AString, ACell> input = Maps.of(token, "private-test-value");
+		Job job = engine.jobs().invokeOperation(meta, input, ctx);
+		assertEquals(input, job.awaitResult(5000));
+		assertEquals(input, job.getOutput());
+		AMap<AString, ACell> primary = engine.getVenueState().users().get(did).job(job.getID()).getRecord();
+		assertEquals(primary, job.getData());
+		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.INPUT, token));
+		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.OUTPUT, token));
+		assertFalse(primary.toString().contains("private-test-value"));
+	}
+
+	@Test
+	public void testTransactionalCompletionPublishesOnlyAfterCommitAndRedactsSecrets() throws Exception {
+		AString token = Strings.create("token");
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, "test:never", Strings.create("secretFields"), Vectors.of(token)));
+		VenueJob job = (VenueJob) engine.jobs().invokeOperation(meta, Maps.empty(), ctx);
+		var notifications = new java.util.concurrent.atomic.AtomicInteger();
+		job.subscribe(ignored -> notifications.incrementAndGet());
+		var future = job.future();
+		var output = Maps.of(token, "private-test-value");
+		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
+		var users = engine.getVenueState().users();
+		assertThrows(IllegalStateException.class, () -> users.transact(draft -> {
+			assertNotNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output)));
+			assertFalse(job.isFinished());
+			throw new IllegalStateException("rollback");
+		}));
+		assertFalse(job.isFinished());
+		assertFalse(future.isDone());
+		assertEquals(0, notifications.get());
+		users.transact(draft -> notification.set(job.updateIn(draft,
+			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output))));
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertEquals(Fields.HIDDEN, RT.getIn(users.get(did).getJob(job.getID()), Fields.OUTPUT, token));
+		assertFalse(future.isDone(), "draft edits cannot notify live waiters");
+		notification.get().run();
+		notification.get().run();
+		assertEquals(output, future.get(5, TimeUnit.SECONDS));
+		assertEquals(1, notifications.get(), "terminal lifecycle notifications run once");
+		users.transact(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
+	}
+
+	@Test
+	public void testHistoryAppendDuringTerminalNotificationIsRetained() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "during-completion");
+		job.subscribe(updated -> {
+			if (updated.isFinished()) engine.jobs().appendToHistory(job.getID(), message, ctx);
+		});
+		job.cancel();
+		assertEquals(Vectors.of(message), engine.jobs().getJobData(job.getID(), ctx).get(Fields.HISTORY));
+	}
+
+	@Test
+	public void testLateCancellationEvidencePreservesDurableHistory() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		job.cancel();
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "after-cancellation");
+		engine.jobs().appendToHistory(job.getID(), message, ctx);
+		job.recordCancellation(Maps.of("backend", "stopped"));
+		AMap<AString, ACell> persisted = engine.jobs().getJobData(job.getID(), ctx);
+		assertEquals(Vectors.of(message), persisted.get(Fields.HISTORY));
+		assertEquals(Maps.of("backend", "stopped"), persisted.get(Fields.CANCELLATION));
+		assertEquals(persisted, job.getData(), "the live handle reads the same primary record");
 	}
 
 	@Test

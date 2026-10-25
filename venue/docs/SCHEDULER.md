@@ -75,18 +75,25 @@ millis): "this thread wants to wake at T". It is framework-managed — written o
 by the engine, never via the `n/` / `c/` / `t/` user-scratch namespaces. Absent ⇒
 the thread is event-driven only.
 
-**Single writer.** Every `wakeTime` change goes through
-`AgentState.setThreadWakeTime(scheduler, ownerDID, kind, threadId, wakeTime)`
-(`kind` is `AgentState.ThreadKind.SESSION | TASK`). It:
+**Atomic state, then timer.** Runtime wake changes go through
+`Scheduler.setThreadWakeTime(ownerDID, agent, kind, threadId, wakeTime)`
+(`kind` is `AgentState.ThreadKind.SESSION | TASK`). On the timer thread it:
 
-1. writes (or clears, when `wakeTime ≤ 0`) the field on the thread record, then
-2. calls `rescheduleWake`, which re-derives the agent's **single** scheduled
+1. opens a venue transaction and writes (or clears, when `wakeTime ≤ 0`) the
+   field on the draft's thread record;
+2. re-derives the agent's **single** scheduled
    event from the *earliest* `wakeTime` across all its sessions and tasks:
    cancel any previously-armed event (by the `wakeHandle` stored on the agent
    record), and — if any thread still wants a wake — schedule one
    `agent:trigger {agentId, force:false, wait:false}` event in the grid scheduler
    at that earliest time, storing the new handle. If none remain, clear
-   `wakeHandle`.
+   `wakeHandle`;
+3. commits the intent, event and handle together, then arms the timer from
+   committed state. Exceptions discard the entire draft; conflicts retry it.
+
+`AgentState.setThreadWakeTime(kind, threadId, wakeTime)` is a data-only operation.
+Larger venue transactions compose `draft.setAgentThreadWakeTime(...)` and arrange
+runtime re-arming after the outer commit. Drafts never call a live scheduler.
 
 So the grid scheduler holds **at most one operation-agnostic entry per agent**,
 while per-thread independence lives entirely in the agent's lattice state. The
@@ -106,7 +113,7 @@ persists no Job** — it just calls `wakeAgent(force:false)`. The run loop proce
 thread whose work is ready and, on merge, re-arms for the next earliest `wakeTime`
 (or clears the handle).
 
-**Boot.** `Engine.rebuildSchedulerFromLattice` calls `rescheduleWake` once per
+**Boot.** `Engine.rebuildSchedulerFromLattice` calls `Scheduler.rescheduleAgentWake` once per
 agent, idempotently re-deriving each agent's event from the authoritative
 per-thread `wakeTime`s. The `:schedule` slot itself persists across restarts
 (GRID_SCHEDULER.md §2), so this only heals a stale handle; overdue wakes fire

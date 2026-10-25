@@ -17,7 +17,6 @@ import convex.core.crypto.AKeyPair;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
-import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.adapter.DLFSAdapter;
@@ -70,12 +69,11 @@ public class DLFSPersistenceTest {
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			node.setMergeContext(LatticeContext.create(null, venueKey));
+				new NodeServer<>(CoviaApplication.open(store, venueKey).host(), NodeConfig.port(-1));
 			node.launch();
 
 			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Write via DLFS adapter
@@ -106,15 +104,13 @@ public class DLFSPersistenceTest {
 			assertEquals("persistent!", RT.ensureString(RT.getIn(readResult, "content")).toString(),
 				"File should be readable in same session");
 
-			// Sync DLFS drive, then synchronously persist the root via the
-			// node's persistSnapshot — guarantees data is on disk before we
-			// read it. Tests construct Engine with the 3-arg constructor
-			// (NOOP persist handler) so engine.flush() is a no-op here; we
-			// drive persistence directly through the local node.
+			// Sync the DLFS drive, then checkpoint the host: it retains the
+			// current root and completes the store's durability barrier, so
+			// the data is on disk before we read it back.
 			DLFSAdapter dlfsAdapter1 = (DLFSAdapter) engine.getAdapter("dlfs");
 			var drive1 = dlfsAdapter1.getDriveForIdentity(ALICE_DID.toString(), "test-drive");
 			drive1.sync();
-			node.persistSnapshot(node.getCursor().get());
+			node.getHost().checkpoint();
 
 			// Verify store actually received the data
 			ACell storeRootAfterSync = store.getRootData();
@@ -133,8 +129,7 @@ public class DLFSPersistenceTest {
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			node.setMergeContext(LatticeContext.create(null, venueKey));
+				new NodeServer<>(CoviaApplication.open(store, venueKey).host(), NodeConfig.port(-1));
 			node.launch();
 
 			// Verify restore — root level
@@ -145,7 +140,7 @@ public class DLFSPersistenceTest {
 
 			// Check the cursor chain that DLFSAdapter would use
 			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Navigate the same path DLFSAdapter.getUserDLFSCursor() takes

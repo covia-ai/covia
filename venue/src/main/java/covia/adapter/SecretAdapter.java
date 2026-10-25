@@ -160,7 +160,7 @@ public class SecretAdapter extends AAdapter {
 		AString name = name(input);
 		try {
 			if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
-					|| ctx.getAgentId() != null || ctx.getSessionId() != null || ctx.getTaskId() != null
+					|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
 					|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXTRACT_DIRECT_ONLY);
 			// Anonymous callers act as the public principal, whose store holds the
 			// operator's shared keys. Even unrestricted public access never reads them out.

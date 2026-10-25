@@ -365,7 +365,7 @@ and [OPERATIONS.md](OPERATIONS.md):
   they must not grant general anonymous operation execution.
 - Challenge state and authenticator bindings are private, venue-owned lattice
   records, using the existing auth store or a method adapter's
-  `AdapterWorkspace`, never caller-writable evidence. Reuse existing key
+  `AdapterState`, never caller-writable evidence. Reuse existing key
   bindings instead of creating parallel registries. Secret material follows
   `SecretStore` rules; job input/output, public catalog metadata and event
   details must not contain passwords, OTPs, private keys or bearer tokens.
@@ -625,7 +625,7 @@ remain separate from both login and the venue's authorization-server grants.
 
 | `method` id | Credential | User mapping | Verified evidence | Session? | Issue |
 |-------------|-----------|--------------|-----|----------|-------|
-| `key` | Self-issued EdDSA JWT | `did:key` direct; named user via active registered key | Only what the verified protocol establishes; bearer presentation alone is not `pop` | No — stateless | #296 |
+| `key` | Self-issued EdDSA JWT | `did:key` direct or nested installation identity; local named user via active registered key | Only what the verified protocol establishes; bearer presentation alone is not `pop` | No — stateless | #296 |
 | `ucan` | UCAN bearer (aud = venue) | Issuer DID | No fresh possession or human authentication inferred | No — stateless | — |
 | originating method, carried by `session` credential type | Opaque venue token (`covia_…`) | Index → per-user record | retained event, evaluated under current policy | Is the session | — |
 | `oidc` | Authorization Code + PKCE | `(issuer, subject)` binding (§7) | provider-dependent, under explicit trust mapping | Optional continuity | #298 |
@@ -653,8 +653,9 @@ Two notes:
 
 1. **Mismatched `iss` on `did:key` tokens is accepted by design**
    (covia#323, closed): identity binds to the *signing key* — a signed
-   `sub` claim conveys no authority by itself, and a distinct named
-   subject requires an explicitly registered authentication key.
+   `sub` claim conveys no authority by itself. A local named subject
+   requires an explicitly registered authentication key; an installation
+   identity must be nested below the signing key's exact DID (section 5.2).
    Enforcing `iss == sub` would conflate JWT claim semantics with
    Covia's separate subject-admission policy. (COG-3 §5's
    "MUST equal `sub` when present" wording is stricter than enforced
@@ -667,6 +668,85 @@ Two notes:
    existing gate (the named user themselves, or a venue-rooted
    delegation) applies. `user:create` continues to install keys at
    creation under the creating authority.
+
+### 5.2 Nested installation identities below a did:key (#613)
+
+An installation can sign a token for any identity nested below its exact
+`did:key:<key>`, including `:u:alice`, `:u:alice:g:worker`, `:g:worker`,
+and custom forms such as `:org:acme:service:build:job:42`. Nesting has no
+fixed depth. Each colon-separated segment must be nonempty and match the
+existing username character set `[A-Za-z0-9._-]+`. Empty segments, paths,
+queries, fragments and percent-encoded suffixes are refused.
+
+This is a Covia naming convention, not a standard resolvable `did:key`
+namespace. It proves that the installation identifies the subject in its
+scope, not that the subject independently holds a key. Identity establishes
+who is acting; admission and capabilities separately authorize actions.
+
+Issue the bearer with the existing client helper:
+
+```java
+VenueAuth.namedKeyPair(installKey, installDID + ":u:alice:g:worker", targetDID, 300).mintToken();
+```
+
+The signing key must match the exact base DID. Existing signature, audience,
+expiry and not-before checks still apply. As for a bare `did:key`, the
+`iss` claim does not confer authority. No subject register is needed for
+authentication at the receiving venue. This does not extend UCAN issuer
+resolution or grant an installation authority over descendant resources.
+
+`VenueAuthenticator.authenticatedIdentity(context)` returns the installation's
+`did:key`; `authenticatedUser(context)` and `AuthResult.userDID()` retain the
+complete subject, including any agent segments. The latter accessor names
+are compatibility APIs and do not imply admission as a local user. Relay
+handlers likewise receive the complete subject for their own authorization.
+Installation membership and grants do not transfer to descendants or siblings.
+
+For agent-shaped subjects, `AuthMiddleware.callerContext` binds both actor
+and namespace to the full subject and starts with an empty capability scope.
+It does not infer local agent execution or owner access from the name, even
+for ownership-only job checks. Verified transport grants can authorize the
+exact agent audience for specific resources; a sibling cannot reuse them.
+Trusted host code must separately authorize any owner-namespace execution.
+Internal local-agent contexts still use their established owner mapping and
+configured capabilities.
+
+Identity-only routes can authenticate these agents. Native routes requiring
+an admitted user still reject agent-shaped subjects; authentication does not
+register agents as users or bypass that admission policy. Ordinary nested
+users retain their independent admission and own-namespace behavior. Embedders
+must not replace the subject with the signing installation or strip name
+segments when constructing authority.
+
+### Minting an identity token through an operation
+
+Call `v/ops/auth/identity-token` on the signing venue:
+
+```json
+{"aud":"did:web:target.example","name":"RELAY_TOKEN","lifetime":300}
+```
+
+The operation derives `sub` and `iss` from the exact caller, including an
+agent's full nested identity. It accepts no subject, claims, capabilities or
+signing key from input. The caller must be the venue's signing `did:key` or a
+valid identity nested below it. An unrelated external key identity, a
+`did:web` identity, and anonymous/public callers are refused; an embedder
+holding a different installation key uses `VenueAuth.namedKeyPair` instead.
+
+It requires `invoke` on `v/ops/auth/identity-token` and `secret/write` on
+`s/RELAY_TOKEN`. Agents write into their owner's secret store under their
+existing capability scope. The bearer is encrypted there; the result contains
+only `{secret, sub, aud, exp}`, never the token or private key. An agent can
+use `s/RELAY_TOKEN` as a model relay `apiKey`, subject to its separate
+`secret/use` grant and any destination restriction. A direct owner who needs
+the raw bearer can use `v/ops/secret/extract` under that operation's stricter
+rules.
+
+The audience is required. Lifetime defaults to 300 seconds and must be an
+integer from 1 to 3600. Refresh by invoking again with `overwrite:true` before
+expiry; there is no automatic refresh. The receiver still applies its own
+audience, lifetime and admission policies. The token conveys identity only:
+it contains no UCAN grants or proofs and adds no permissions.
 
 ## 6. Configuration
 

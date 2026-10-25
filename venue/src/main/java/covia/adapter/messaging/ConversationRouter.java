@@ -3,6 +3,7 @@ package covia.adapter.messaging;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -40,7 +41,7 @@ public final class ConversationRouter {
 		this.sessions = Objects.requireNonNull(sessions);
 	}
 
-	/** Serializes the entire turn, including replies and resets, without blocking other conversations. */
+	/** Serializes submitted work per conversation. Delivery callers enqueue intake only; replies run independently. */
 	public CompletableFuture<Void> enqueue(String conversation, Runnable work) {
 		Objects.requireNonNull(conversation);
 		Objects.requireNonNull(work);
@@ -51,7 +52,7 @@ public final class ConversationRouter {
 		if (previous == null) previous = CompletableFuture.completedFuture(null);
 		next.whenComplete((result, failure) -> tails.remove(conversation, next));
 		previous.handleAsync((result, failure) -> {
-			try { work.run(); next.complete(null); }
+			try { sessions.requireCurrentUser(); work.run(); next.complete(null); }
 			catch (Throwable t) { next.completeExceptionally(t); }
 			return null;
 		}, AAdapter.VIRTUAL_EXECUTOR);
@@ -86,10 +87,72 @@ public final class ConversationRouter {
 		return RT.getIn(result, Fields.RESPONSE);
 	}
 
+	/** Whether this binding's agent takes input by atomic session delivery: a local
+	 * agent, or one that cannot take input at all, whose delivery is then refused
+	 * once. False for an external agent facade, which keeps its claimed-chat protocol. */
+	public boolean supportsSessionDelivery() {
+		return engine.getAdapter("agent") instanceof AgentAdapter adapter
+			&& (deliveryRefusal() != null || adapter.supportsSessionDelivery(context(), Strings.create(spec.agent())));
+	}
+
+	/** Null when this binding's agent can take a delivered message now; otherwise why not. */
+	public String deliveryRefusal() {
+		return engine.getAdapter("agent") instanceof AgentAdapter adapter
+			? adapter.sessionDeliveryRefusal(context(), Strings.create(spec.agent())) : null;
+	}
+
+	/** Admit input without waiting for a response. The participant and session map
+	 * commit with the input; null means a previously accepted delivery. */
+	public Job deliver(String conversation, ACell message, RequestContext.SessionDelivery delivery) {
+		// Registration/deletion also takes Engine before the binding lock. Keep
+		// stop/delete from racing the transaction's publication of private state.
+		synchronized (engine) {
+			return sessions.mutate(() -> deliverLocked(conversation, message, delivery));
+		}
+	}
+
+	private Job deliverLocked(String conversation, ACell message, RequestContext.SessionDelivery delivery) {
+		String sid = sessions.get(conversation);
+		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, Strings.create(spec.agent()), Fields.MESSAGE, message);
+		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
+		RequestContext ctx = context().withSessionDelivery((draft, session, job) -> {
+			boolean applied = delivery.accept(draft, session, job);
+			if (applied) sessions.put(draft, conversation, session.toString());
+			return applied;
+		});
+		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
+		Job job = adapter.deliverSession(input, ctx);
+		if (!deliveryAccepted(job) && sid != null && isUnknownSession(new JobFailedException(job))) {
+			job = adapter.deliverSession(input.dissoc(Fields.SESSION_ID), ctx);
+		}
+		// Admission may succeed even if execution subsequently fails immediately.
+		if (!deliveryAccepted(job) && job.getStatus() != Status.COMPLETE) throw new JobFailedException(job);
+		return deliveryAccepted(job) ? job : null;
+	}
+
+	private static boolean deliveryAccepted(Job job) {
+		return convex.core.data.prim.CVMBool.TRUE.equals(job.getData().get(AgentAdapter.DELIVERY_ACCEPTED));
+	}
+
+	/** Observe a delivered chat independently of intake. A duplicate has no reply.
+	 * Providers retain responsibility for checking their lifecycle before sending. */
+	public static void onResponse(Job job, Consumer<ACell> reply, Consumer<Throwable> failure) {
+		if (job == null) return;
+		job.future().whenCompleteAsync((result, error) -> {
+			try {
+				if (error != null) throw new JobFailedException(job);
+				reply.accept(RT.getIn(result, Fields.RESPONSE));
+			} catch (Throwable t) { failure.accept(t); }
+		}, AAdapter.VIRTUAL_EXECUTOR);
+	}
+
 	/** Call within the same queue as chat, so a reset cannot race an in-flight turn. */
 	public void reset(String conversation) { sessions.remove(conversation); }
 
-	public RequestContext context() { return RequestContext.of(spec.userDID(engine)); }
+	public RequestContext context() {
+		sessions.requireCurrentUser();
+		return RequestContext.of(spec.userDID(engine));
+	}
 
 	public ACell runOperation(String operation, ACell input) {
 		Job job = engine.jobs().invokeOperation(operation, input, context());

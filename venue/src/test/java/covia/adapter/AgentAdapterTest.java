@@ -7043,7 +7043,7 @@ public class AgentAdapterTest {
 		AVector<ACell> conversation = Vectors.empty();
 		for (ACell turn : turns) conversation = conversation.conj(turn);
 		final AVector<ACell> stored = conversation;
-		assertTrue(agent.updateSessionFrames(sid, null, frames -> {
+		assertTrue(agent.session(sid).updateFrames(null, frames -> {
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 			return frames.assoc(0, GoalTreeContext.appendTurns(root, stored));
 		}));

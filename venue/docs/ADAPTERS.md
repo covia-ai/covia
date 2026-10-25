@@ -97,6 +97,52 @@ context selects whose namespace a bare path means and confers no authority.
 Use them only after applying the check the read needs (for example
 `asset/read` before an asset lookup) or for state the adapter owns.
 
+## Atomic local session delivery
+
+Messaging adapters can use `ConversationRouter.deliver` with a trusted
+`RequestContext.SessionDelivery` participant. Agent intake runs on a native
+`VenueState.transact` draft, so the session input, adapter receipt and conversation
+mapping and Job admission state publish together. The callback must use only draft-bound components,
+perform no I/O, and tolerate retries. Returning false discards the draft as a
+duplicate. The engine flushes before waking the agent and returns the chat Job
+without waiting for its result. A flush failure propagates to the caller; no
+background retry is started and already committed input is not rolled back.
+`ConversationRouter.onResponse` observes replies
+on the shared virtual executor, handles failed Jobs and skips duplicate deliveries.
+Adapter writes use `AdapterState.inVenue(draft)`, preserving the original account
+generation even across deletion and recreation. The router holds the binding
+lifecycle lock through admission, so stopped/deleted
+bindings cannot recreate private session mappings after cleanup.
+
+Telegram, Slack and WhatsApp use this contract for local agent receipts. Discord
+uses the same admission/reply separation and atomic session mapping, but its Gateway
+intake has no durable inbox or duplicate-message guarantee; a failed delivery is
+reported once and never retried.
+
+Workers claim each receipt before media downloads, preprocessing or dispatch.
+They make one attempt. A known admission failure records FAILED with a reason
+and last error; interrupted STARTED work remains for inspection. Neither is
+replayed automatically. Local session admission completes the receipt atomically
+with the input, mapping and Job admission state. Later flush or reply failures
+must be reported without claiming that committed input was rolled back.
+
+HITL uses a native `Users.transact` transaction to resolve the inbox request,
+write the requesting Job's final result, and append the session notification.
+Competing resolutions cannot overwrite the winner or append another notification.
+Signing happens before the transaction; notifications and wake happen after commit.
+A flush error reaches the responder directly; live Job waiters still observe the
+committed result. There is no prepared-resolution checkpoint or replay step.
+Signed tokens stay in the requester's Job/session, never in the responder's `h/`.
+An older resolved request without a saved result fails explicitly rather than
+remaining INPUT_REQUIRED or reconstructing a missing grant.
+A session notification is independent of the completed HITL Job and survives
+restart before wake. If the requesting session is gone, the request still resolves
+and the adapter reports the unavailable destination.
+
+This is a local handoff contract, not an exactly-once external-effects claim.
+Remote agent facades cannot join the transaction. Keep their existing provider
+protocol, and keep preprocessing and outbound delivery outside the transaction.
+
 ## Reference-addressed content
 
 Storage adapters implement `ContentProvider` so consumers can resolve and write
@@ -124,7 +170,7 @@ The significant lifecycle is:
 3. Registration applies the effective `adapters.<name>` configuration through
    `configure(config, strict)`.
 4. Unless boot-disabled or declined, `install(engine)` binds the engine and
-   private `AdapterWorkspace`, then `installAssets()` declares its catalog.
+   private `AdapterState`, then `installAssets()` declares its catalog.
    Installation must not start inbound workers or other autonomous work.
 5. Before the venue serves requests, `recoverJob(job)` is called once per
    non-terminal durable Job the adapter's operations own. The default
@@ -283,7 +329,7 @@ not need an update; new helpers can opt into the metadata endpoint.
 
 Override `info()` for stable facts a client needs until the next reconfigure,
 such as a mount point or enabled protocol feature. Live status, sessions,
-connection counts, and mutable health belong behind operations, not in
+connection counts, and mutable health belong behind operations or explicit lattice views, not in
 `info()`. Framework-owned fields such as `name`, `description`, `kernel`,
 `module`, and `operations` cannot be replaced by adapter information.
 
@@ -298,44 +344,198 @@ There are three separate concerns:
 1. **User-managed data.** A user may select any location they can write. An
    operation should accept an ordinary caller-authorised path where this is
    useful, with a sane default such as `w/memory`.
-2. **Adapter-global state.** Durable state owned by an adapter lives at the
-   fixed well-known location `<venue-did>/w/adapters/<adapter>/` and is
-   accessed through `adapterWorkspace()`.
+2. **Adapter-owned state.** Each adapter has its own value at
+   `:adapters/<name>` within the venue. `adapterState()` returns its lattice
+   component; this is not a user workspace or a caller-addressable path.
 3. **Secrets.** Secret material remains in `s/`. Adapter records contain only
-   `s/NAME` references. An adapter that sends a secret resolves it with the
-   request's destination (`engine.resolveSecret(ref, ctx, url)`), so a
-   `secret/use` grant bound to a url is honoured.
+   `s/NAME` references. Resolve secrets against their destination
+   (`engine.resolveSecret(ref, ctx, url)`) so URL-bound `secret/use` grants apply.
 
-`AdapterWorkspace` is bound to the adapter name and venue principal during
-`install`; an invocation context cannot redirect it into the caller's
-workspace. Its root is not a configurable `statePath`. It validates adapter
-names, relative paths, traversal, bare user DIDs, null writes, and empty
-mutation paths.
+`AdapterState` uses upstream `ALatticeComponent` and `TransactionalComponent`.
+The value may be any CAD3 cell: there is no mandatory map, user prefix,
+workspace envelope or per-adapter merge rule. An adapter owns its schema and
+may wrap the component's cursor in its own typed domain components. For simple
+map/vector records, `read`, `write` and `delete` offer type-aware relative paths;
+`get`, `set`, `update` and `transact` operate on the complete value. `rootPath`
+and `path` are diagnostic locations, not workspace API addresses.
 
 ```java
-AdapterWorkspace state = adapterWorkspace();
-AString owner = ctx.getUserDID();
+AdapterState state = adapterState();
+state.transact(draft -> {
+    draft.write("settings/theme", Strings.create("dark"));
+    draft.write("settings/version", CVMLong.ONE);
+});
 
-String relative = state.userPath(owner, "preferences/theme");
-state.write(relative, Strings.create("dark"));
-ACell theme = state.read(relative);
-state.delete(relative);
+engine.getVenueState().transact(draft -> {
+    draft.adapterState("telegram").write("settings/enabled", CVMBool.TRUE);
+    draft.adapterState("slack").write("settings/enabled", CVMBool.FALSE);
+    // User, schedule and other domain operations can join this same commit.
+});
 ```
 
-An adapter may map user-level instances or preferences below
-`users/<did>/...`. The DID is an association key, not an access grant: the
-adapter owns and validates this schema, and users interact with it through
-capability-checked adapter operations. When an adapter needs durable state
-for operator-declared instances, `config/<instance>/...` is the conventional
-separation from `users/<did>/...`. Other adapter-global keys are adapter-owned
-but should remain stable and documented.
+Long-lived user-owned workers must capture `adapterState(ownerDID)` when
+created and use that component for their durable state, including configuration
+records. Reads, cursor updates and transaction commits are fenced to that
+account's generation. Call `requireCurrentUser()` before admitting queued work.
+The unbound component is for adapter-wide administration and deletion hooks;
+it does not infer ownership from field names. Messaging uses `users/<did>` and
+`config/<name>` as its own schema, but neither is a framework requirement.
+
+A venue is one authoritative running application instance. All these components
+share its atomic state and transaction boundary. Whole-venue LWW selects complete
+snapshots for backup, replication and failover; it does not combine changes from
+independently executing forks. Arbitrary workflow invariants and external effects
+cannot generally be merged. Failover must fence the previous writer before the
+replacement starts producing outputs. No per-adapter publication framework or
+independent store is introduced.
+
+Existing `w/adapters/<name>` data in the venue principal is moved on first
+access to that adapter component. The exact value is copied and the old key
+removed in one venue transaction, including when access happens inside a larger
+transaction. No unrelated adapter or user data is scanned on startup. Identical
+duplicate values are safe to collapse; conflicting old and new values fail
+without changing either copy. There is no generic field merge or dual-write
+fallback. Older binaries that write the workspace layout must not be run against
+a migrated store. The small legacy `w/user-deletions` queue migrates similarly
+to `:user-deletions` in the venue `0 → 1` migration, with an on-access fallback
+for transitional records. Venue `:version` describes this compatibility contract;
+it does not require an eager rewrite of adapter state. See
+[PERSISTENCE.md](PERSISTENCE.md#venue-versions-and-migrations).
+
+### User-visible extension routes
+
+`x/<adapterName>/...` is a virtual route into an active adapter's explicit
+view for the addressed user. It does not expose `:adapters/<name>` automatically
+or create an `x` field in user storage. Adapters own the shape of the view:
+maps, vectors, scalars and pure projections are all supported.
+
+Override `latticeView(ctx)` to return a Convex `AForkableCursor<ACell>`, or null
+for no view (the default). For example, an adapter whose private schema stores
+public account data under `accounts/<did>` can expose just that subtree:
+
+```java
+@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+    return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
+        .path(Strings.intern("accounts")).withDefault(Maps.empty())
+        .path(ctx.getUserDID());
+}
+```
+
+Use `ctx.getUserDID()` for the addressed owner; `ctx.getCallerDID()` still
+identifies the actor. The owner-bound component retains account deletion and
+recreation guards. Keep credentials and internal records outside the exposed
+subtree: reading a parent returns its entire value, including descendants.
+
+Execution references live together in `ctx.getExecutionScope()`, qualified by
+its `ownerDID`. Delegating the addressed namespace never changes that owner.
+The local `getAgentId()/getSessionId()/getJobId()/getTaskId()` helpers return null
+when the execution belongs to a different user, so `n/`, `c/` and `t/` cannot
+silently target identically named records under the addressed owner. Use the
+qualified scope for attribution. Explicitly binding a new local execution ID
+under a different user starts a fresh scope without inheriting the old IDs.
+
+Views are read-only by default. Override `latticeWriteDenial(ctx, path)` for
+write, append, copy-to and delete at selected paths relative to the view root.
+Return `null` to allow, or a refusal reason; the router returns that reason
+unchanged. Adapters own value validation in their cursor write transformations.
+An empty path addresses the whole view. Allowing a parent write allows replacement
+of its entire subtree; deny it if descendants must remain protected. Writable
+views must connect to authoritative venue state, retaining its atomic update
+and transaction semantics. A cursor over a projected snapshot must stay read-only.
+
+The standard `covia:read/list/slice/inspect/write/append/delete/copy` accessors,
+`Engine.resolvePath` and agent context references use the same route. Normal
+`crud/read`, `crud/write` and `crud/delete` authority applies in addition to the
+adapter policy. `<owner-did>/x/<adapter>/...` addresses a local owner's view
+under the usual cross-user delegation rules. Bare paths accept strings or vectors;
+DID-qualified addresses use strings.
+
+Hooks and cursor transformations must be local and pure, with no network I/O
+or external effects. Update callbacks and policy checks may run again on a
+transaction retry. External actions remain adapter operations/jobs. Views are
+scoped to one operation/transaction: do not cache them across operations or
+reconfiguration. Disabling or unloading
+an adapter removes its route; absent views never fall through to user storage.
+The bare `x` route has no automatic directory listing; use adapter discovery for
+available implementations and their documented paths.
+
+This is a routing contract, not a persisted schema change: existing records and
+the venue version are unchanged.
+
+#### Try it with the test adapter
+
+When the `test` adapter is enabled, `x/test` provides:
+
+| Path | Purpose | Access |
+|------|---------|--------|
+| `x/test/context` | Current `caller`, addressed `user`, `venue`, and `execution` (`owner`, `agentId`, `sessionId`, `jobId`, `taskId`); unset IDs are null | Read-only |
+| `x/test/samples` | Unicode/multiline text, a number vector, a nested record, null and empty containers | Read-only |
+| `x/test/scratch` | Persistent, per-user scratch data of any value shape | Read/write/delete |
+
+The adapter advertises these paths at `v/info/adapters/test/lattice`. Try the
+normal accessors (paths are also available as agent context references):
+
+```text
+covia:read    {"path":"x/test/context"}
+covia:slice   {"path":"x/test/samples/numbers","offset":2,"limit":3}
+covia:copy    {"from":"x/test/samples/record","to":"x/test/scratch/example"}
+covia:append  {"path":"x/test/scratch/events","value":{"message":"hello"}}
+covia:read    {"path":"x/test/scratch"}
+covia:delete  {"path":"x/test/scratch"}
+```
+
+Reading diagnostics or fixtures writes nothing. Scratch survives adapter reload
+and venue persistence; deleting its owner removes it through the normal adapter
+deletion hook. The venue principal gets its own view and scratch, with the same
+cross-user delegation rules as other callers. Context shows the actor and owner
+separately for delegated reads, and never exposes credentials or proofs. Root
+replacement is denied so it cannot overwrite the read-only branches. Scratch is
+disposable test data, not included in user exports.
+
+### User deletion hooks
+
+`AAdapter` has two narrowly scoped lifecycle hooks:
+
+- `deleteUserState(did, state)` removes the adapter's user-associated durable state through
+  the supplied **transaction-bound** `AdapterState`. It runs atomically with
+  the user tombstone, namespace and login-alias removal. Use only that component;
+  no live engine writes, runtime changes or I/O. It may run again on a transaction
+  conflict. The adapter owns all schema-specific cleanup; the default hook is
+  for adapters without user-associated state.
+- `onUserDeleted(did, previousUser)` runs after the commit is flushed. Stop
+  workers and release external resources here. It must be idempotent and throw
+  on incomplete cleanup so the venue can retry. The previous user record is
+  available only on initial deletion, never retained for recovery. Tolerate null
+  on retry and an instance that was boot-disabled and never installed.
+
+An adapter needing durable external cleanup identifiers must maintain its own
+cleanup records outside the data it erases and consume them idempotently in the runtime
+hook. Recovery cannot depend on the erased namespace or an in-memory snapshot.
+
+Both hooks apply to disabled adapters. Incomplete work is indexed privately at
+`:user-deletions/<adapter>/<did>` within the venue; `_venue` covers core
+job/scheduler cleanup. Entries contain only the deletion tombstone, not deleted
+payloads. Unloaded adapters retain their state and a pending entry until their
+next activation, when both hooks run before workers start. The framework cannot
+interpret an unavailable adapter's private schema. Failures leave the account revoked and bar
+recreation. Repeat `user:delete` to retry; loading an unavailable adapter also
+reconciles its queue. Normal startup checks only these small pending queues,
+with no sweep of user or job records. Repeating deletion repairs adapter data
+left by tombstones from older venues as well.
+
+The messaging base implements both hooks for runtime and configured bots. It
+records configured-bot ownership, removes sessions/inboxes/caches, stops runners,
+and skips deleted owners during rearming. External effects already in flight
+are not part of the lattice transaction; provider-specific cleanup remains the
+adapter's responsibility.
 
 The corresponding public and private roots therefore have different roles:
 
 | Root | Owner and purpose | Visibility |
 |------|-------------------|------------|
 | `v/adapters/<adapter>/` | Published operations, skills, templates, facts, safe config | Public discovery surface while active |
-| `<venue-did>/w/adapters/<adapter>/` | Durable runtime records, sessions, preferences, recovery state | Venue-private; accessed by adapter code |
+| `:adapters/<adapter>/` | Durable runtime records, sessions, preferences, recovery state | Venue-private; accessed by adapter code |
+| `<user-did>/x/<adapter>/` | Adapter's explicit view for this user; no separate storage | Normal CRUD authority plus adapter policy; read-only by default |
 | `<user-did>/w/...` | User-selected content and working data | Governed by that user's workspace capabilities |
 | `<user-did>/s/...` | Credentials and secret material | Secret-store rules; adapter state stores references only |
 
@@ -369,8 +569,8 @@ have different completion rules: A2A mirrors the remote task, Claude `run`
 completes after one turn, and Claude `session` waits in INPUT_REQUIRED after
 each reply. Only conversation operations opt into `returnsFirstReply`.
 Progress uses the shared `publishProgress(job, message, data)` helper: one
-line a person can read, with the provider's own detail beside it, shown
-while the Job runs and never recorded (JOBS.md, Progress). Provider-native
+line a person can read, with the provider's own detail beside it, kept in
+the Job's record as its current state (JOBS.md, Progress). Provider-native
 results, message parts and session/task identifiers are preserved.
 
 Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
@@ -471,7 +671,7 @@ and socket transports. Give each installation/binding a private root such as
 `config/<binding>/inbox` or `users/<did>/inbox/<binding>` and a provider event ID.
 IDs are hashed into path segments; the original ID remains in the record.
 Records contain `id`, `input`, `status`, `receivedAt` and, on completion,
-`completedAt`. Input must contain the event needed for processing, **not**
+`completedAt`; FAILED adds `reason`, `lastError` and `failedAt`. Input must contain the event needed for processing, **not**
 access tokens, signing secrets or credential-bearing HTTP headers.
 
 1. Authenticate/admit the event, then `accept(id, input)`. This writes PENDING
@@ -486,6 +686,11 @@ access tokens, signing secrets or credential-bearing HTTP headers.
    flush must not proceed to effects.
 4. After processing and any required reply, `complete(id)` flushes COMPLETE.
    Duplicate callbacks must not resubmit the Job or send another reply.
+
+Local agent intake also claims before preprocessing, then uses `deliver` to
+complete the receipt in the same venue transaction as session input, mapping
+and Job admission state. Failed admission becomes FAILED. FAILED receipts are
+terminal and excluded from completed-receipt pruning.
 
 STARTED records found after an interruption are uncertain: the provider must
 reconcile them with its Job/send checkpoints and external state. The shared
@@ -547,13 +752,21 @@ of the credential is the sharing test, so bindings with different credentials
 never share, whatever installation they claim.
 
 The worker scans PENDING receipts on start and periodically for late secret
-provisioning. Whole turns share the conversation queue, claim and flush before
-execution, and complete only after any reply. STARTED receipts remain uncertain
-after failure and are not replayed. Pending records also carry `bindingVersion`;
-after a policy/handler change, an older version stays pending for operator
-inspection rather than executing under the new settings. Completed receipts
+provisioning. For local agents, the conversation queue serializes admission:
+PENDING is claimed as STARTED before preprocessing, then becomes COMPLETE in the
+transaction that appends input and saves the mapping and Job admission state.
+Admission failure becomes FAILED without retry. Further inputs can be admitted while
+the agent is thinking. Replies
+run independently; a turn/send failure cannot reopen or replay a delivered receipt.
+Reply callbacks are not a durable outbound queue, so a process interruption can lose
+a reply. Operation handlers and remote agents retain claim-before-execution and
+complete-after-reply behavior; their STARTED receipts remain uncertain after failure
+and are not replayed. Pending records also carry `bindingVersion`;
+after a policy/handler change, an older version fails once with the
+`WebhookBot.RECONFIGURED` reason rather than executing under the new settings. Completed receipts
 continue deduplicating across those changes. Changing owner/installation
 isolates both inbox and sessions. No automatic receipt pruning is performed.
+`bots` reports `pending`, `started` and `failed` receipt counts.
 
 Stopping a worker prevents queued work, late replies and late session writes.
 Deleting a runtime binding removes its registry, sessions and inbox; this
@@ -666,7 +879,7 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 5. Override `installAssets()` and create JSON operation definitions under
    `src/main/resources/adapters/<name>/`. Ship relevant skills and templates
    with the adapter rather than registering them centrally.
-6. Use `adapterWorkspace()` only for adapter-owned state. Keep user-managed
+6. Use `adapterState()` only for adapter-owned state. Keep user-managed
    data in caller-authorised paths and credentials in `s/`.
 7. Implement `AutoCloseable` when the adapter owns threads, clients, native
    handles, or other resources.
@@ -770,7 +983,7 @@ At minimum, test the following where applicable:
 - catalog operations, skills, templates, and `v/adapters` mirrors materialise;
 - disable, enable, reconfigure, unload, and close semantics preserve or release
   state as designed;
-- `AdapterWorkspace` paths and ownership are exact, recover after restart, and
+- `AdapterState` values and ownership are exact, recover after restart, and
   clean up without exposing adapter-global state as user workspace data;
 - external I/O is exercised through a deterministic local fake where possible;
 - module service discovery and the shaded artifact work in integration tests.

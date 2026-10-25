@@ -96,6 +96,7 @@ public class JobRoutesTest {
 			HttpRequest.newBuilder().uri(new URI(base + "/api/v1/jobs/" + id)).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
 		assertEquals(200, status.statusCode(), status.body());
+		org.junit.jupiter.api.Assertions.assertFalse(RT.ensureMap(JSON.parse(status.body())).containsKey(Strings.intern("prev")));
 	}
 
 	/** Reads SSE data lines from the stream, completing when {@code until}
@@ -145,8 +146,10 @@ public class JobRoutesTest {
 			// it arrives the subscription is live and the cancel broadcast
 			// cannot be missed.
 			CompletableFuture<java.util.List<String>> initial = readUntil(in, "status");
-			assertTrue(!initial.get(10, TimeUnit.SECONDS).isEmpty(),
+			var initialFrames = initial.get(10, TimeUnit.SECONDS);
+			assertTrue(!initialFrames.isEmpty(),
 				"initial job-update frame must arrive on connect");
+			assertCurrentStates(initialFrames);
 
 			// Drive a status transition and expect its broadcast frame
 			CompletableFuture<java.util.List<String>> terminal = readUntil(in, "CANCELLED");
@@ -157,10 +160,18 @@ public class JobRoutesTest {
 			assertEquals(200, cancel.statusCode(), cancel.body());
 
 			java.util.List<String> frames = terminal.get(10, TimeUnit.SECONDS);
+			assertCurrentStates(frames);
 			assertTrue(frames.stream().anyMatch(l -> l.contains("CANCELLED")),
 				"the status-change broadcast must reach the subscriber (#225): " + frames);
 		} finally {
 			in.close();
+		}
+	}
+
+	private static void assertCurrentStates(java.util.List<String> frames) {
+		for (String frame : frames) {
+			var record = RT.ensureMap(JSON.parse(frame.substring("data:".length()).strip()));
+			org.junit.jupiter.api.Assertions.assertFalse(record.containsKey(Strings.intern("prev")), frame);
 		}
 	}
 
@@ -268,6 +279,17 @@ public class JobRoutesTest {
 	public void jobSseFinishedJobDeliversTerminalFrame() throws Exception {
 		String id = invoke("v/test/ops/echo");
 		awaitHttpStatus(id, "COMPLETE");
+		var jobId = Job.parseID(id);
+		var user = TestServer.ENGINE.getVenueState().users().get(TestServer.ENGINE.getDIDString() + ":public");
+		var current = user.getJob(jobId);
+		var storage = user.cursor().path(covia.lattice.Namespace.J, jobId);
+		var legacy = current.assoc(Strings.intern("prev"), Maps.of(Fields.STATUS, "STARTED"));
+		storage.set(legacy);
+		HttpResponse<String> status = http.send(
+			HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, status.statusCode());
+		assertEquals(JSON.toString(current), status.body());
 
 		HttpResponse<InputStream> sse = http.send(
 			HttpRequest.newBuilder()
@@ -278,9 +300,11 @@ public class JobRoutesTest {
 		try (InputStream in = sse.body()) {
 			assertEquals(200, sse.statusCode());
 			java.util.List<String> frames = readUntil(in, "COMPLETE").get(10, TimeUnit.SECONDS);
+			assertCurrentStates(frames);
 			assertTrue(frames.stream().anyMatch(l -> l.contains("COMPLETE")),
 				"terminal record must be delivered to a late subscriber: " + frames);
 		}
+		assertEquals(legacy, storage.get(), "REST and SSE reads must not rewrite an old record");
 	}
 
 	/** An unparseable job id is a plain 400, before any stream is committed. */

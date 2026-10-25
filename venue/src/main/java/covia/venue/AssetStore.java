@@ -11,7 +11,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.TransactionalComponent;
+import convex.lattice.cursor.AForkableCursor;
 
 /**
  * Cursor wrapper for the venue's asset store.
@@ -23,7 +24,12 @@ import convex.lattice.cursor.ALatticeCursor;
  *
  * <p>Each asset record is a 3-element vector: [json, content, metaMap].</p>
  */
-public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>> {
+public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>> implements TransactionalComponent<Index<AString, AVector<ACell>>, AssetStore> {
+	@Override
+	public AssetStore withCursor(AForkableCursor<Index<AString, AVector<ACell>>> draft) {
+		return new AssetStore(draft);
+	}
+
 
 	/** Position of JSON metadata string in asset record vector */
 	public static final long POS_JSON = 0;
@@ -34,9 +40,8 @@ public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>
 	/** Position of parsed metadata map in asset record vector */
 	public static final long POS_META = 2;
 
-	AssetStore(ALatticeComponent<?> parent,
-			ALatticeCursor<Index<AString, AVector<ACell>>> cursor) {
-		super(parent, cursor);
+	AssetStore(AForkableCursor<Index<AString, AVector<ACell>>> cursor) {
+		super(cursor);
 	}
 
 	/**
@@ -55,7 +60,7 @@ public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>
 		}
 		Hash id = metaMap.getHash();
 		AVector<ACell> record = Vectors.create(meta, content, metaMap);
-		cursor.updateAndGet(current -> {
+		cursor().updateAndGet(current -> {
 			// Content-addressed store is an Index; build one explicitly rather
 			// than relying on RT.castMap (which returns an empty AHashMap, not
 			// an Index, for a null input).
@@ -82,7 +87,7 @@ public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>
 	 * @return Map of all assets, or null if uninitialised
 	 */
 	public AMap<ABlob, AVector<?>> getAll() {
-		return RT.castMap(cursor.get());
+		return RT.castMap(cursor().get());
 	}
 
 	/**

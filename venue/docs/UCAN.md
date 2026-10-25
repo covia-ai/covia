@@ -738,9 +738,13 @@ The nesting is recoverable by parsing (`Principals.userOf`), and
 `Authority.of(did)` uses it, so reconstructing a context from a stored DID is
 lossless — a scheduled event or capability gate that replays as
 `<owner>:g:<agent>` still resolves the owner's namespace. That parse is
-therefore load-bearing for authorisation, which is why a user identity may
-never be agent-shaped: `Engine.admitUser` rejects one at the authentication
-boundary.
+therefore load-bearing for authorisation, which is why an admitted user may
+never be agent-shaped: `Engine.admitUser` rejects one at the admission
+boundary. A bearer may authenticate a nested agent identity on an identity-only
+route (AUTH.md section 5.2), but it establishes no local execution relationship.
+`AuthMiddleware.callerContext` keeps that full subject as both actor and
+namespace with an empty capability scope, so the name grants no owner access.
+Explicit authorization is required to act within another namespace.
 
 Being a sub-principal is **proximity, not permission**.
 `ctx.relationTo(target)` classifies a target as `SELF`, `OWNER`, `SAME_USER`

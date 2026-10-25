@@ -41,6 +41,12 @@ public final class Abilities {
 	/** Authorise an explicit sudo request into a user's namespace. Scoped to the
 	 *  target user DID itself; grants no operation or action authority. */
 	public static final AString USER_SUDO     = Strings.intern("user/sudo");
+	/** Read out another user's whole stored state ({@code user:export}, the
+	 *  source of {@code user:clone}). */
+	public static final AString USER_EXPORT   = Strings.intern("user/export");
+	/** Fill an empty account from stored user state ({@code user:import}, the
+	 *  target of {@code user:clone}). */
+	public static final AString USER_IMPORT   = Strings.intern("user/import");
 	public static final AString USER_AUTH_MANAGE =
 		Strings.intern("user/authentication-manage");
 	/** Venue-owned adapter and module lifecycle (enable/disable/configure,

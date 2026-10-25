@@ -1,5 +1,177 @@
 # Persistence and Lattice Component Layering
 
+## Venue versions and migrations
+
+Each signed venue value has an integer `:version`, alongside `:did` and
+`:timestamp`, at `:grid/:venues/<owner-key>/:value/:version`. This identifies
+the persisted format contract, independently of the software release published
+at `v/info/version`. Each venue owns its version; the application root and the
+upstream signing envelope do not.
+
+`VenueState.initialise(did)` runs `VenueState`'s ordered migrations before any
+Engine bootstrap writes, adapter activation or recovered work. `migrate()` is
+also available for explicit component transactions. A missing version means
+legacy `0`; explicit `0` follows the same path. Nil, negative and non-integer
+versions are invalid. A version above `VenueState.CURRENT_VERSION` refuses local
+startup without modifying the venue or its store. Opaque replication is not
+permission to execute a newer format.
+
+The `0 → 1` migration moves the small legacy `w/user-deletions` index to the
+venue's `:user-deletions` region and advances `:version` in the same transaction.
+Conflicting copies fail without changing either copy or the version. Identity
+initialization is part of that transaction too. Exceptions roll everything back;
+concurrent edits retry against the latest state. Reopening a current venue does
+not rewrite or re-stamp it just to check its version.
+
+**Version 1 permits transitional records.** Adapter values at legacy
+`w/adapters/<name>` move exactly and atomically on first access. Existing lazy
+job/session/secret migrations remain owned by their components. No venue-wide
+user, job or adapter scan is added. The version identifies the formats readers
+and writers must understand, not completion of a bulk rewrite. Adapters retain
+ownership of their private schemas.
+
+For future venue format changes, add the next ordered step in
+`VenueState.migrateInPlace`, then advance `CURRENT_VERSION`. Steps must be pure,
+retry-safe domain updates with no I/O; the version advances only after the step
+succeeds. Keep expensive per-record conversion lazy and explicitly include the
+supported transitional forms in that version's contract. Test rollback,
+compatibility rejection and reopen behaviour. Do not bump this integer for an
+ordinary software release. Binaries predating version checks must still be
+excluded operationally from upgraded stores.
+
+## Snapshot implementation contract
+
+With Convex 0.8.18's lattice applications, `LatticeHost` owns publication
+and persistence. Covia registers its live `LatticeApplication` on that host;
+`NodeServer` attaches the host's publisher. Components explicitly bind their
+clock and signing policy and share storage; there is no component-parent policy
+inheritance. `application.sync()` only reconciles application working state.
+`application.host().sync()` publishes the current root, and
+`application.host().flush()` supplies the durability barrier. Engine calls these
+in order for its sweeps and explicit flush. A concurrent write remains pending
+when the host finishes publishing an older snapshot; the host does not merge
+that stale snapshot back into current state.
+
+Engine now requires a `CoviaApplication`; the raw-cursor constructors and
+`PersistenceHandler` have been removed on this experimental branch. Embedders
+connect to their existing `LatticeHost`, or open an application over their store.
+Restart tests use the same host model as production. The host API migration
+preserves record formats; the separate adapter storage migration is described below.
+
+`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `JobState`, `AuthState`, `ScheduleState`, `AdapterState`, `AssetStore`, `SecretStore` and
+`WorkspaceRoot` implement upstream `TransactionalComponent`. Ordinary domain
+mutations are atomic; `transact(draft -> ...)` groups several operations into one
+local commit. Choose the component containing all data the operation reads or
+writes, obtain its children from the supplied draft, and keep external I/O out
+of the callback. Conflicts rerun the callback; exceptions discard the attempt.
+Retained draft objects remain isolated after completion. Nested transactions
+commit into their enclosing draft, not into live state.
+
+The normal operation shape is **event → atomic domain update → external outputs**.
+Validate invariants against the same snapshot being changed. Obtain child views
+from the transaction's draft, then perform timers, notifications and network/job
+execution after the outer commit. A commit is not an exactly-once external effect:
+crash-sensitive dispatch still needs its existing durable claim/recovery protocol.
+Do not introduce I/O or runtime service calls inside retryable callbacks.
+
+`user.job(id)` is the primary record of a recorded venue job. Admission creates
+it explicitly; updates only edit an existing row. `VenueJob` reads and mutates
+that component directly, then runs runtime hooks after commit. History edits and
+late cancellation diagnostics share this record, including after runtime-cache
+eviction. There is no persistence callback copying an in-memory record back to
+the lattice. Transient/client handles use local records; a handle whose backing
+row/account was erased may finish locally but cannot recreate storage. See
+[JOBS.md](JOBS.md) for redaction, result and recovery semantics.
+
+`agent.session(id)` is a composable component for an existing session. It owns
+frame history, pending input, summaries, external-turn claims and cycle completion.
+Session creation and admission checks stay at the agent boundary. Agent operations
+compose session edits with status checks, task removal and timeline updates in one
+transaction, using children obtained from its draft. Failed frame validation rolls
+back the entire completion. Session updates never recreate a missing session;
+retained account guards also apply through the child view. Stored record formats
+are unchanged, including legacy history/load migration on cycle admission.
+
+```java
+agent.transact(draft -> {
+    if (!draft.session(sessionId).beginCycle(epoch, turns, pendingCount)) {
+        throw new IllegalStateException("Session is no longer available");
+    }
+    draft.setStatus(AgentState.RUNNING);
+});
+// Dispatch runtime work only after this outer transaction returns successfully.
+```
+
+```java
+venue.transact(draft -> {
+    var user = draft.users().ensure(did);
+    user.ensureAgent("assistant", config, null);
+    user.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/ready"), CVMBool.TRUE);
+});
+```
+
+Components bind their editing policies once. Rebinding reconstructs timestamped
+views over draft storage; commit targets bound storage, avoiding double stamping.
+User storage retains the account-generation guard at the destination, so a
+transaction cannot commit into a deleted or recreated account. A changed venue
+transaction signs its completed value on commit; a signing failure leaves live
+state unchanged. Committing does not publish the host or flush the store.
+
+Adapter components live directly at `:adapters/<name>` within that same venue
+value. They have no user-workspace envelope and no independent publication
+boundary. Each adapter owns its schema. A user-owned worker receives an
+account-generation-guarded view; its transactions cannot commit after account
+deletion or recreation. Legacy venue-workspace state moves lazily and atomically
+on access, with conflicts reported rather than merged. User cleanup tracking
+belongs to the framework's `:user-deletions` region. See [ADAPTERS.md](ADAPTERS.md).
+
+Login provisioning commits the account and login directory row in one venue
+transaction. Agent wake changes likewise commit the thread's intent, schedule
+event and stored handle together. `AgentState` only changes lattice data;
+`Scheduler` serialises runtime wake requests with firing and arms the timer
+after the venue transaction commits. It preserves the caller's account lifecycle
+guard inside that same transaction across the timer handoff. Code composing wake changes inside a larger venue
+transaction uses `draft.setAgentThreadWakeTime(...)` and must re-arm the runtime
+scheduler after the outer commit (for example via `rescheduleAgentWake`). No
+runtime scheduler, job dispatch or other external effect belongs in a draft.
+
+The agent editing cursor is the sole owner of the record's `ts` version stamp.
+Domain methods retain event timestamps where they describe actual events, but
+do not independently re-stamp the containing record. No-op edits retain their
+version; whole-record replacement preserves the prior timestamp floor.
+
+`venue.auth()` owns directory records, authenticator uniqueness/revocation and
+their timestamps. Runtime `Auth` owns providers and admission policy; its monitor
+still coordinates account deletion with runtime cleanup. `venue.schedule()` owns
+event records, handles, recurrence and schedule timestamps; runtime `Scheduler`
+owns the timer, job preparation and dispatch. Both domain components rebind to
+draft storage and have no engine or runtime-service reference. Venue operations
+coordinate changes across these children without constructing their records.
+
+A venue is one atomically updated running lattice application instance.
+`VenueState.fork()` creates an independent snapshot. Its `sync()` uses whole-venue
+LWW selection for backup, replication and failover. It cannot combine arbitrary
+forked executions: application invariants and external effects cannot generally
+be merged. Failover must fence the previous writer; timestamps do not provide
+leader election. Live concurrent work uses atomic updates and retrying transactions. Interior components expose transactions,
+not independent fork/publication policies. Incoming venue merges preserve remote
+stamps; local edits pass through `StampedCursor`.
+
+Workspace path operations live in `WorkspaceRoot`; adapters handle request
+routing and authority checks before calling this domain API. Raw cursor access
+remains an internal integration primitive, not an authorised public endpoint.
+Bootstrap catalog changes use `WorkspaceRoot.transact` over the narrow
+venue-owned workspace. The materialiser is ordinary code operating on that draft,
+with no component/storage/rebinding wrapper of its own. DLFS file writes are live component edits;
+publication still belongs to Engine's host sweep or flush.
+
+The design history below describes the earlier 0.8.17 implementation and deferred
+ideas. Its `RootComponent`, cursor callbacks and implicit parent-policy APIs are
+superseded by the contract above; they are not APIs available on this branch.
+
+## Design history (Convex 0.8.17)
+
+
 **Status:** Draft v5 — hosted component model implemented; remaining migration
 phases are tracked below.
 **Owner:** venue team
@@ -240,8 +412,7 @@ signature batching alone are not transaction boundaries.
 A daemon publishes the connected root every 100 ms. Every 10 seconds it also
 invokes the store durability barrier, bounding the default unclean-shutdown
 loss window independently of the source of a mutation. Ephemeral applications
-and raw-cursor Engines with the no-op persistence handler do not start the
-daemon.
+and applications whose host has no store do not start the daemon.
 
 ```java
 // in covia.venue.Engine

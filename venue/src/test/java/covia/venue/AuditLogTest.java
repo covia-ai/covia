@@ -44,7 +44,6 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
-import covia.lattice.Namespace;
 import covia.venue.auth.VenueAuthenticator;
 import covia.venue.server.RequestLog;
 import covia.venue.server.VenueServer;
@@ -273,7 +272,7 @@ public class AuditLogTest {
 		String v2Value = "sk-v2-" + System.nanoTime();
 
 		// Written as a venue did before key versions existed: no keyVersion.
-		user.cursor().path(Namespace.S, Strings.create("MIGRATING")).set(Maps.of(
+		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create("MIGRATING")).set(Maps.of(
 			Strings.create("encrypted"), Blob.wrap(AESGCM.encrypt(keys.forVersion(SecretStore.KEY_VERSION_1),
 				v1Value.getBytes(StandardCharsets.UTF_8))),
 			Fields.UPDATED, CVMLong.create(1000L)));

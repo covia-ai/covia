@@ -457,7 +457,7 @@ class A2AAdapterTest {
 		}
 	}
 
-	/** A working remote Task's status message is the mirror's progress: shown, never recorded. */
+	/** A working remote Task's status message is the mirror's progress, in its record. */
 	@Test
 	void send_showsAWorkingRemoteTasksStatusMessageAsProgress() throws Exception {
 		HttpServer peer = HttpServer.create(new InetSocketAddress("localhost", 0), 0);

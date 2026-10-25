@@ -21,14 +21,36 @@ Each item is checkable; build + venue suite must stay green before commit.
 
 ## Scope
 
-Healthy lattice/job core; a handful of recurring structural debts, mostly
+Established lattice/job contracts; a handful of recurring structural debts, mostly
 deviations from the rules above. Tackling the cross-cutting themes first yields
 the most cleanup-per-effort because each is duplicated many times.
 
 Already good — **do not touch**: `A2ACodec` (clean pure-function codec — the
 model to copy), `Config` (disciplined typed accessors), `ContextLoader` &
-`GoalTreeContext` (pure functions), `JobManager` (large but cohesive — not a
-god-class), `RequestContext` (clean immutable value).
+`GoalTreeContext` (pure functions), `RequestContext` (clean immutable value).
+`JobManager` has cohesive runtime responsibilities, but its state ownership needs
+the component review below on the experimental lattice branch.
+
+### Experimental component consolidation
+
+Session record operations now belong to `SessionState`: frames, pending input,
+summaries, external turns and cycle completion. `AgentState` owns admission and
+composes child edits with tasks, status and timeline through upstream transactions.
+Record formats remain unchanged. Tests cover failed-completion rollback, retained
+draft isolation, concurrent deletion and summary admission after a concurrent stop.
+
+Recorded jobs now use `user.job(id)` (`JobState`) as their primary record.
+`VenueJob` has no independently updated live record and no persistence callback;
+its hooks run after the lattice update. Admission creates the row explicitly,
+and updates cannot recreate it. History appends share one path for active and
+completed jobs, fixing both reproduced history-loss cases. `JobManager` retains
+execution, recovery, permits and dispatch. Futures, original outputs, typed
+failures and subscriptions remain runtime state. Transient/client records stay
+local, and erased handles may finish detached without restoring storage.
+
+Tests cover terminal/history interleaving, late cancellation/history, primary
+record edits, transaction rollback and retained drafts, concurrent deletion,
+secret redaction and account-generation guards. Job record formats are unchanged.
 
 ---
 
@@ -119,8 +141,8 @@ Add new classes — **propose each design before cutting**. One at a time, suite
 - [ ] **`Engine` decomposition** → extract `AssetResolver`/`PathResolver`,
   `AdapterRegistry`, `ContentRouter`, `SecretService`, and a `VenueProvisioner`
   (breaks the `Engine → JobManager → Engine` startup cycle). Persistence stays
-  an Engine **seam** behind `PersistenceHandler` (see PERSISTENCE.md) — **not**
-  extracted.
+  an Engine integration with upstream `LatticeHost` (see PERSISTENCE.md);
+  the experimental component branch has removed the alternate `PersistenceHandler` path.
 - [ ] **`CoviaAPI`** → `handleJobLifecycle(...)` helper (4 near-identical
   handlers); consider splitting secrets/DID into their own `ACoviaAPI`
   subclasses like `UserAPI`.

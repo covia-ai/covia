@@ -213,7 +213,7 @@ public class CoviaAPI extends ACoviaAPI {
 		AMap<AString,ACell> stats = engine().getStats();
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		stats = stats.assoc(Strings.intern("userJobs"),
-			RT.cvm(engine().jobs().getJobs(rctx).count()));
+			RT.cvm(engine().jobs().countJobs(rctx)));
 		result=result.assoc(STATS_FIELD,stats);
 
 		// Curated admission-policy fields (#255) — safe to state to any caller,

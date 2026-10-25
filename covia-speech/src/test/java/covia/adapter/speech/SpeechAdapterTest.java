@@ -33,7 +33,8 @@ import covia.venue.RequestContext;
  * Speech against a stand-in OpenAI-compatible API: a voice note is read with the
  * caller's own authority and transcribed; the operation keeps the media-hook contract
  * (anything but audio returns {@code {}}, silence returns no text); raw PCM travels as
- * WAV; speech is stored as Ogg/Opus in the caller's private drive; keys come from the
+ * WAV; speech is stored as Ogg/Opus in the caller's private drive, or said inline with
+ * nothing stored and no job kept; each direction has its own engine; keys come from the
  * caller, the operator or nowhere; settings are refused when unsafe. The tests share
  * one stand-in and one adapter configuration, so they run one at a time.
  */
@@ -161,6 +162,15 @@ class SpeechAdapterTest {
 		assertTrue(api.requests.isEmpty(), "nothing refused reached the provider");
 	}
 
+	@Test void liveDictationIsTheLocalEnginesAndOnlyItsCallerFeedsOne() throws Exception {
+		assertTrue(failure(() -> run(owner, "listen", Maps.empty())).contains(SpeechAdapter.LIVE_UNAVAILABLE),
+			"a provider elsewhere hears whole recordings only");
+		assertTrue(failure(() -> run(owner, "hear", Maps.of("id", "someone-elses", "bytes", "AAAA")))
+			.contains(SpeechAdapter.NO_DICTATION.formatted("someone-elses")));
+		assertTrue(failure(() -> run(owner, "hear", Maps.empty())).contains(SpeechAdapter.ID_REQUIRED));
+		assertTrue(api.requests.isEmpty(), "and no audio went anywhere");
+	}
+
 	@Test void speechIsStoredAsAVoiceNoteInTheCallersDrive() throws Exception {
 		ACell spoken = run(owner, "speak", Maps.of("text", "Good morning", "voice", "nova", "speed", 1.25));
 		String ref = RT.getIn(spoken, "ref").toString();
@@ -184,6 +194,73 @@ class SpeechAdapterTest {
 
 		assertTrue(failure(() -> run(owner, "speak", Maps.of("text", "x".repeat(SpeechAdapter.MAX_TEXT + 1)))).contains(SpeechAdapter.TEXT_REQUIRED));
 		assertTrue(failure(() -> run(owner, "speak", Maps.of("text", "x", "fileName", "../escape.ogg"))).contains(MessagingMedia.INVALID_FILE_NAME));
+	}
+
+	@Test void speechSaidInlineIsStoredNowhereAndLeavesNoJob() throws Exception {
+		RequestContext caller = RequestContext.of(owner);
+		ACell said = engine.jobs().runOperation("v/ops/speech/say", Maps.of("text", "Good morning", "voice", "nova"), caller)
+			.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		assertArrayEquals(FakeSpeechApi.SPEECH, java.util.Base64.getDecoder().decode(RT.getIn(said, "bytes").toString()), "the audio itself");
+		assertEquals(FakeSpeechApi.SPEECH.length, ((convex.core.data.prim.CVMLong) RT.getIn(said, "size")).longValue());
+		assertEquals("audio/ogg", RT.getIn(said, "mediaType").toString());
+		assertEquals("nova", RT.getIn(said, "voice").toString());
+		assertNull(RT.getIn(said, "ref"), "nothing was stored to refer to");
+		assertEquals("Good morning", RT.getIn(JSON.parse(new String(api.take().body(), StandardCharsets.UTF_8)), "input").toString());
+		assertEquals(0, engine.jobs().getJobs(caller).count(), "a read: no job record keeps the words or the audio");
+
+		engine.jobs().runOperation("v/ops/speech/speak", Maps.of("text", "Good morning"), caller).get(10, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(1, engine.jobs().getJobs(caller).count(), "whereas speech stored as a file is recorded");
+
+		assertTrue(failure(() -> run(owner, "say", Maps.of("text", "x".repeat(SpeechAdapter.MAX_TEXT + 1)))).contains(SpeechAdapter.TEXT_REQUIRED));
+		assertTrue(failure(() -> run(owner, "say", Maps.of("text", "x", "format", "wma"))).contains(SpeechAdapter.INVALID_FORMAT));
+	}
+
+	@Test void eachDirectionHasItsOwnEngine(@org.junit.jupiter.api.io.TempDir java.nio.file.Path cache) throws Exception {
+		org.junit.jupiter.api.Assumptions.assumeTrue(NativeLibraries.platform() != null, "sherpa-onnx has no libraries for this platform");
+		String ref = save("both-ways.wav", SpeechAdapter.wav(new byte[3200], 16_000), "audio/wav");
+
+		// What is said stays on this machine; a provider elsewhere speaks.
+		engine.configureAdapter(SpeechAdapter.NAME, Maps.of("engine", "local", "speakEngine", "openai", "baseUrl", api.baseUrl(),
+			"local", Maps.of("transcribeModel", "moonshine-tiny", "cacheDir", cache.toString())));
+		var engines = RT.ensureVector(RT.getIn(run(owner, "engines", Maps.empty()), "engines"));
+		assertEquals(2, engines.count());
+		assertEquals(LocalSpeechEngine.NAME, RT.getIn(engines.get(0), "name").toString(), "the one that transcribes comes first");
+		assertEquals(CVMBool.TRUE, RT.getIn(engines.get(0), "transcribes"));
+		assertEquals(CVMBool.FALSE, RT.getIn(engines.get(0), "speaks"));
+		assertEquals(OpenAiSpeechEngine.NAME, RT.getIn(engines.get(1), "name").toString());
+		assertEquals(SpeechAdapter.DEFAULT_VOICE, RT.getIn(engines.get(1), "voice").toString());
+		assertNull(RT.getIn(engines.get(1), "transcribeModel"), "it does not transcribe");
+		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("ref", ref)))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "transcribed here");
+		assertArrayEquals(FakeSpeechApi.SPEECH, java.util.Base64.getDecoder().decode(
+			RT.getIn(run(owner, "say", Maps.of("text", "hi")), "bytes").toString()), "spoken there");
+		assertEquals("/v1/audio/speech", api.take().path());
+		assertTrue(api.requests.isEmpty(), "and no audio went to the provider");
+
+		// And the other way about.
+		engine.configureAdapter(SpeechAdapter.NAME, Maps.of("engine", "openai", "speakEngine", "local", "baseUrl", api.baseUrl(),
+			"local", Maps.of("voice", "3", "cacheDir", cache.toString())));
+		engines = RT.ensureVector(RT.getIn(run(owner, "engines", Maps.empty()), "engines"));
+		assertEquals(OpenAiSpeechEngine.NAME, RT.getIn(engines.get(0), "name").toString());
+		assertNull(RT.getIn(engines.get(0), "voice"), "it does not speak");
+		AMap<AString, ACell> speaker = RT.castMap(engines.get(1));
+		assertEquals(LocalSpeechEngine.NAME, RT.getIn(speaker, "name").toString());
+		assertEquals(CVMBool.FALSE, speaker.get(Strings.create("transcribes")));
+		assertEquals(SpeechModels.DEFAULT_VOICE, RT.getIn(speaker, "speakModel").toString());
+		assertEquals("Apache-2.0", RT.getIn(speaker, "voiceModel", "licence").toString(), "the voice is credited");
+		assertEquals("not downloaded", RT.getIn(speaker, "voiceState").toString());
+		assertEquals("3", RT.getIn(speaker, "voice").toString());
+		assertEquals("Hello world.", RT.getIn(run(owner, "transcribe", Maps.of("ref", ref)), "text").toString(), "transcribed there");
+		api.take();
+		assertTrue(failure(() -> run(owner, "say", Maps.of("text", "hi")))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "spoken here");
+		assertTrue(failure(() -> run(owner, "prepare", Maps.of("for", "speak")))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "a voice is prepared on request");
+		assertEquals(run(owner, "engines", Maps.empty()), run(owner, "prepare", Maps.empty()), "the provider needs no preparing to transcribe");
+		assertTrue(failure(() -> run(owner, "prepare", Maps.of("for", "sing")))
+			.contains(SpeechAdapter.INVALID_FOR));
+		assertFalse(java.nio.file.Files.exists(cache.resolve("models")), "nothing was downloaded");
+		assertTrue(api.requests.isEmpty(), "and no text went to the provider");
 	}
 
 	@Test void keysComeFromTheCallerTheOperatorOrNowhere() throws Exception {
@@ -228,14 +305,26 @@ class SpeechAdapterTest {
 			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "the libraries are named before any model is fetched");
 		assertTrue(failure(() -> run(owner, "prepare", Maps.empty()))
 			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "and preparing says the same");
+		assertTrue(failure(() -> run(owner, "listen", Maps.empty()))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "as does listening");
 		assertFalse(java.nio.file.Files.exists(cache.resolve("models")), "nothing was downloaded");
 		assertTrue(api.requests.isEmpty(), "and no audio left for a provider");
-		assertTrue(failure(() -> run(owner, "speak", Maps.of("text", "hello"))).contains(LocalSpeechEngine.SPEAK_UNAVAILABLE));
+		assertEquals(CVMBool.TRUE, status.get(Strings.create("speaks")), "the local engine speaks too, unless told otherwise");
+		assertEquals(SpeechModels.DEFAULT_VOICE, RT.getIn(status, "speakModel").toString());
+		assertEquals(SpeechAdapter.DEFAULT_LOCAL_VOICE, RT.getIn(status, "voice").toString());
+		assertTrue(failure(() -> run(owner, "say", Maps.of("text", "hello")))
+			.contains(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED)), "speaking needs the libraries as well");
+		assertTrue(failure(() -> run(owner, "say", Maps.of("text", "hello", "format", "opus"))).contains(LocalSpeechEngine.WAV_ONLY));
+		assertFalse(java.nio.file.Files.exists(cache.resolve("models")), "and still nothing was downloaded");
 		assertTrue(failure(() -> run(owner, "transcribe", Maps.of("ref", ref, "model", "parakeet-tdt-v3")))
 			.contains(LocalSpeechEngine.OTHER_MODEL.formatted("moonshine-tiny")), "a caller cannot make the venue fetch another model");
 
 		for (var bad : new Object[][] {
 				{Maps.of("engine", "whisper"), SpeechAdapter.INVALID_ENGINE},
+				{Maps.of("speakEngine", "whisper"), SpeechAdapter.INVALID_SPEAK_ENGINE},
+				{Maps.of("engine", "local", "local", Maps.of("speakModel", "kokoro")), SpeechAdapter.UNKNOWN_VOICE_MODEL.formatted(
+					SpeechModels.VOICES.stream().map(SpeechModels.Model::id).toList())},
+				{Maps.of("engine", "local", "local", Maps.of("voice", "alloy")), SpeechAdapter.INVALID_LOCAL_VOICE},
 				{Maps.of("engine", "local", "local", Maps.of("transcribeModel", "large")), SpeechAdapter.UNKNOWN_MODEL.formatted(
 					SpeechModels.ALL.stream().map(SpeechModels.Model::id).toList())},
 				{Maps.of("engine", "local", "local", Maps.of("threads", 0)), SpeechAdapter.INVALID_THREADS},

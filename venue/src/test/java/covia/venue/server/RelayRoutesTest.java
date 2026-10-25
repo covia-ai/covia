@@ -53,6 +53,14 @@ class RelayRoutesTest {
 			assertEquals(auth.getDID(), answered.body().split("\\|")[3], "the adapter sees the caller's own DID");
 			assertTrue(answered.body().startsWith("c-main|echo|POST"));
 
+			String agentDID = auth.getDID() + ":u:alice:g:worker";
+			VenueAuth agentAuth = VenueAuth.namedKeyPair(key, agentDID,
+				server.getEngine().getDIDString().toString(), 300);
+			HttpResponse<String> agentReply = send(client, endpoint, "{}", agentAuth);
+			assertEquals(200, agentReply.statusCode(), agentReply.body());
+			assertEquals(agentDID, agentReply.body().split("\\|")[3],
+				"relay policy receives the exact agent identity, never its owner or signing key");
+
 			CompletableFuture<HttpResponse<String>> held = client.sendAsync(request(
 				URI.create(endpoint.toString().replace("/echo", "/hold")), "{}", auth), HttpResponse.BodyHandlers.ofString());
 			Thread.sleep(200);

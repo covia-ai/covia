@@ -310,7 +310,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		AccountKey self = engine.getAccountKey();
 		AString declared = engine.getDIDString();
 		AHashMap<Keyword, ACell> metadata = declared.equals(UCAN.toDIDKey(self)) ? null : Maps.of(ID_DID, declared);
-		long timestamp = node.getNodeServer().getCursor().getContext().currentTimestampValue();
+		long timestamp = convex.core.util.Utils.getCurrentTimestamp();
 		P2PUser user = node.p2p();
 		user.setIdentity(P2PLattice.createIdentity(engine.config().getName(), Vectors.of(self), metadata, timestamp));
 		user.sync();
@@ -508,7 +508,6 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		boolean join = bool(config, K_JOIN);
 		boolean allowPrivate = bool(config, NodeConfig.ALLOW_PRIVATE_URL);
 		AMap<AString, ACell> node = Maps.of(NodeConfig.PORT, CVMLong.create(-1),
-			NodeConfig.PERSIST, CVMBool.FALSE, NodeConfig.RESTORE, CVMBool.FALSE,
 			NodeConfig.ALLOW_PRIVATE_URL, CVMBool.of(allowPrivate));
 		ACell rawPort = config.get(NodeConfig.PORT);
 		boolean listens = rawPort != null;
