@@ -273,7 +273,7 @@ public class CoviaAdapter extends AAdapter {
 		// ref-following or asset interpretation.
 		AString pathStr = RT.ensureString(RT.getIn(input, Fields.PATH));
 		if (pathStr != null) {
-			ACell value = engine.resolvePath(pathStr, ctx);
+			ACell value = engine.resolvePathUnchecked(pathStr, ctx);   // checked by requireCap above
 			if (value != null) {
 				return sizeGuardedResult(value, input);
 			}
@@ -311,7 +311,7 @@ public class CoviaAdapter extends AAdapter {
 		if (vns != null) return readPath(vns.cursor(), vns.remainingKeys());
 
 		// Physical namespaces and universal asset/op references.
-		return engine.resolvePath(path, ctx);
+		return engine.resolvePathUnchecked(path, ctx);
 	}
 
 	/**
@@ -624,9 +624,8 @@ public class CoviaAdapter extends AAdapter {
 		// Reads the source (handleWrite enforces crud/write on the destination).
 		engine.requireResourceAccess(ctx, from, Capability.CRUD_READ);
 
-		// Read from source via the canonical universal resolver. Caps
-		// enforcement happens inside resolvePath via the cursor it returns.
-		ACell value = engine.resolvePath(from, ctx);
+		// Read from source via the canonical universal resolver, checked above.
+		ACell value = engine.resolvePathUnchecked(from, ctx);
 		if (value == null) {
 			throw new RuntimeException("source not found: " + from);
 		}

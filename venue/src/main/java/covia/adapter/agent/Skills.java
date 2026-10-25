@@ -198,7 +198,7 @@ public final class Skills {
 					continue;
 				}
 				requireRead(engine, ctx, source);
-				ACell value = engine.resolvePath(source, ctx);
+				ACell value = engine.resolvePathUnchecked(source, ctx);
 				if (value == null) continue;                          // absent → skip quietly
 				addEntry(out, seen, describe(engine, ctx, source, value, source));
 			} catch (RuntimeException e) {
@@ -209,7 +209,7 @@ public final class Skills {
 			AString source = sourceRef(sources.skillsets().get(i));
 			try {
 				requireRead(engine, ctx, source);
-				ACell value = engine.resolvePath(source, ctx);
+				ACell value = engine.resolvePathUnchecked(source, ctx);
 				if (value == null) continue;                          // absent → skip quietly
 				if (!(value instanceof AMap)) {
 					out.add(new SkillIndexEntry(null, null, source,
@@ -417,7 +417,7 @@ public final class Skills {
 				AString source = RT.ensureString(sources.skillsets().get(i));
 				if (source == null) continue;
 				requireRead(engine, ctx, source);
-				ACell value = engine.resolvePath(source, ctx);
+				ACell value = engine.resolvePathUnchecked(source, ctx);
 				if (!(value instanceof AMap)) continue;
 				ACell entry = ((AMap<?, ?>) value).get(Strings.create(name));
 				if (entry != null && isSkillValue(entry)) {
@@ -486,7 +486,7 @@ public final class Skills {
 	public static ResolvedSkill resolveRef(Engine engine, RequestContext ctx, AString ref) {
 		if (isContentRef(ref.toString())) return resolveContentSkill(engine, ctx, ref, ref);
 		requireRead(engine, ctx, ref);
-		ACell value = engine.resolvePath(ref, ctx);
+		ACell value = engine.resolvePathUnchecked(ref, ctx);
 		return resolveValue(engine, ctx, ref, ref, value, true);
 	}
 
@@ -517,7 +517,7 @@ public final class Skills {
 				// String reference — one hop to the skill asset (no chains,
 				// matching Engine.resolveContent's one-hop rule).
 				requireRead(engine, ctx, s);
-				ACell target = engine.resolvePath(s, ctx);
+				ACell target = engine.resolvePathUnchecked(s, ctx);
 				if (target == null) throw new RuntimeException("skill reference does not resolve: " + str);
 				if (target instanceof AString) {
 					throw new RuntimeException("skill reference chains are not followed: " + path + " → " + str);
@@ -1184,7 +1184,7 @@ public final class Skills {
 	/** Resolution without the body read (identity + index fields only). */
 	private static ResolvedSkill resolveRefLight(Engine engine, RequestContext ctx, AString ref) {
 		requireRead(engine, ctx, ref);
-		return resolveValue(engine, ctx, ref, ref, engine.resolvePath(ref, ctx), false);
+		return resolveValue(engine, ctx, ref, ref, engine.resolvePathUnchecked(ref, ctx), false);
 	}
 
 	/** True when a loads-entry spec is skill-flagged. */
@@ -1339,7 +1339,7 @@ public final class Skills {
 			return Probe.OK;                   // not a source problem we classify
 		}
 		try {
-			ACell value = engine.resolvePath(ref, ctx);
+			ACell value = engine.resolvePathUnchecked(ref, ctx);   // probed by requireRead above
 			if (value == null) return Probe.MISSING;
 			if (value instanceof AMap<?, ?> m && m.isEmpty()) return Probe.EMPTY;
 			return Probe.OK;

@@ -89,6 +89,14 @@ another principal's resource, the venue's included, needs a grant. A null
 capability scope covers the caller's own namespace only: `requireAuthority`
 on a resource that is not DID-scoped does not establish venue authority.
 
+Read a reference a caller supplied with `engine.resolvePath` or
+`engine.resolveAsset`. Both check that the caller may read it: another user's
+path needs a grant, and a capability scope must cover the caller's own.
+`resolvePathUnchecked` and `resolveAssetUnchecked` are engine-internal: their
+context selects whose namespace a bare path means and confers no authority.
+Use them only after applying the check the read needs (for example
+`asset/read` before an asset lookup) or for state the adapter owns.
+
 ## Reference-addressed content
 
 Storage adapters implement `ContentProvider` so consumers can resolve and write

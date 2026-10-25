@@ -1841,10 +1841,61 @@ public class Engine {
 		return new UserPathTarget(parsed.ownerDID(), user, parsed.pathKeys(), parsed.resource());
 	}
 
+	/** Opening of every refusal to read a referenced path the caller may not read. */
+	public static final String READ_DENIED = "Read denied: ";
+
 	/**
-	 * Pure single-step path navigation. Returns the literal value at the
+	 * The standard read of a reference a caller supplies: {@link #requireReadable}
+	 * then {@link #resolvePathUnchecked}.
+	 *
+	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
+	 */
+	public ACell resolvePath(AString ref, RequestContext ctx) {
+		requireReadable(ctx, ref);
+		return resolvePathUnchecked(ref, ctx);
+	}
+
+	/**
+	 * The read check of {@link #resolvePath}. A physical user path, bare or
+	 * DID-qualified, and a DID-qualified asset reference on this venue need read
+	 * authority ({@link #requireMetadataRead}: {@code crud/read}, or
+	 * {@code asset/read} for a content hash), so another user's needs a grant and
+	 * a capability scope must cover the caller's own. A bare hash names the
+	 * caller's own store, then the venue catalog. The virtual namespaces
+	 * ({@code v/}, {@code n/}, {@code t/}, {@code c/}) apply their resolvers' own
+	 * policy, and a remote DID URL is never read here.
+	 *
+	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
+	 */
+	public void requireReadable(RequestContext ctx, AString ref) {
+		if (ref == null) return;
+		AString resource = ref.startsWith(NS_DID) ? ref : stripLeadingSlash(ref);
+		boolean checked;
+		try {
+			checked = ref.startsWith(NS_DID)
+				? isLocalDIDResource(ref)
+				: isPhysicalUserNamespace(CoviaAdapter.parseStringPath(resource.toString()));
+		} catch (IllegalArgumentException malformed) {
+			return;   // navigation rejects the same path
+		}
+		if (!checked) return;
+		try {
+			requireMetadataRead(ctx, resource);
+		} catch (covia.exception.AuthException e) {
+			throw new covia.exception.AuthException(READ_DENIED + ref + " — " + e.getMessage());
+		}
+	}
+
+	/**
+	 * Engine-internal navigation, <b>with no access check</b>: {@code ctx} only
+	 * selects whose namespace a bare path means and confers no authority. A
+	 * caller MUST apply the protection its read needs first, or read only what
+	 * it owns (framework state, the venue's own catalog). A reference a caller
+	 * supplies goes through {@link #resolvePath}.
+	 *
+	 * <p>Pure single-step path navigation. Returns the literal value at the
 	 * resolved local lattice cell. Does NOT chase references, follow
-	 * indirections, or interpret the value in any way.
+	 * indirections, or interpret the value in any way.</p>
 	 *
 	 * <p>Accepted input forms:</p>
 	 * <ul>
@@ -1863,10 +1914,10 @@ public class Engine {
 	 * resolvePath itself never touches the network.</p>
 	 *
 	 * @param ref Reference string
-	 * @param ctx Request context (caller identity for /o/ and workspace navigation)
+	 * @param ctx Request context: whose namespace a bare path means, not authority
 	 * @return Literal value at the resolved location, or null
 	 */
-	public ACell resolvePath(AString ref, RequestContext ctx) {
+	public ACell resolvePathUnchecked(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
 
 		// 1. Bare hex hash → look up in CAS
@@ -1962,19 +2013,35 @@ public class Engine {
 	 * aggregate callers that resolve many refs (tool/context assembly) catch it
 	 * and degrade visibly.</p>
 	 *
+	 * <p>The read is checked as by {@link #resolvePath}: naming another user's
+	 * definition does not make it readable, nor invocable.</p>
+	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ namespace scoping)
 	 * @return Resolved Asset, or null if genuinely not resolvable as an asset
 	 * @throws covia.exception.RemoteFetchException on operational remote-fetch failure
 	 */
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, true);
+	}
+
+	/**
+	 * Engine-internal {@link #resolveAsset}, <b>with no access check</b>, as
+	 * {@link #resolvePathUnchecked}: {@code ctx} selects a namespace and confers no
+	 * authority. A caller MUST apply the protection its read needs first.
+	 */
+	public Asset resolveAssetUnchecked(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, false);
+	}
+
+	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked) {
 		if (ref == null) return null;
 
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no
 		// venue — execution, if any, is local. See resolveDIDURL.
 		if (ref.startsWith(NS_DID)) {
-			Asset asset = resolveDIDURL(ref, ctx);
+			Asset asset = resolveDIDURL(ref, ctx, checked);
 			if (asset != null) return asset;
 			// Fall through — DID URL might be unresolvable but other forms
 			// could match (rare; defensive).
@@ -1984,7 +2051,7 @@ public class Engine {
 		// an "operation" field can be interpreted as callable Assets;
 		// other map shapes (and strings, vectors, scalars) resolve as raw
 		// data but are not callable as operations.
-		ACell value = resolvePath(ref, ctx);
+		ACell value = checked ? resolvePath(ref, ctx) : resolvePathUnchecked(ref, ctx);
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> map = (AMap<AString, ACell>) value;
@@ -2054,7 +2121,7 @@ public class Engine {
 		// remote, which made did:key:<this-venue>/v/... impossible to resolve and
 		// made a did:web self-reference perform an unnecessary network fetch.
 		if (!isVenueIdentity(r.didString())) return null;
-		ACell value = resolvePath(Strings.create(r.name()), ctx);
+		ACell value = resolvePathUnchecked(Strings.create(r.name()), ctx);
 		return (value instanceof AMap) ? Asset.fromMeta(value) : null;
 	}
 
@@ -2072,7 +2139,7 @@ public class Engine {
 	 * @return Resolved Asset, or null if not resolvable
 	 */
 	public Asset resolveAsset(AString ref) {
-		return resolveAsset(ref, venueContext());
+		return resolveAssetUnchecked(ref, venueContext());
 	}
 
 	/**
@@ -2147,6 +2214,10 @@ public class Engine {
 	 * other resolution forms or surface a clean error.</p>
 	 */
 	private Asset resolveDIDURL(AString ref, RequestContext ctx) {
+		return resolveDIDURL(ref, ctx, true);
+	}
+
+	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null) return null;
 		if (r.name() != null) {
@@ -2159,7 +2230,7 @@ public class Engine {
 			// Definition resolution precedes adapter dispatch, so it must enforce
 			// the private /a/ read itself. A later invoke capability is a separate
 			// right and cannot retroactively authorise this lookup.
-			requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+			if (checked) requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
 			return local;
 		}
 		return "web".equals(r.method()) ? fetchRemoteAsset(r.didString(), r.hash()) : null;
@@ -2563,7 +2634,8 @@ public class Engine {
 			record = getAssetRecord(hash, owner);
 			if (record != null) meta = record.get(AssetStore.POS_META);
 		} else {
-			ACell value = resolvePath(ref, ctx);
+			// Checked above: content reads take asset/read on the reference.
+			ACell value = resolvePathUnchecked(ref, ctx);
 			if (value instanceof AString s) {
 				// A lattice binding may point at any content reference, not just an
 				// asset hash. Re-enter the universal resolver so file://, DLFS, DID,

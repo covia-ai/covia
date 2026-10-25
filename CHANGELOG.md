@@ -50,6 +50,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   like any other secret reference.
 - A capability-scoped agent or delegate reaches only jobs it launched or its
   caps cover; a live job is never returned by id without read access.
+- Naming another user's path (config layer, agent definition, operation, A2A
+  binding, `did:…/a/<hash>`) needs read access to it; `Engine.resolvePath`
+  checks, `resolvePathUnchecked` is engine-internal.
 
 ### Added
 

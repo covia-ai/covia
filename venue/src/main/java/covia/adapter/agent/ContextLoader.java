@@ -425,8 +425,9 @@ public class ContextLoader {
 
 			// 2. No content — a metadata map falls back to its description
 			// (the standard asset convention); any other resolved value
-			// renders directly (v/ data paths, catalog entries).
-			ACell value = engine.resolvePath(ref, ctx);
+			// renders directly (v/ data paths, catalog entries). resolveContent
+			// above has checked asset/read on the reference.
+			ACell value = engine.resolvePathUnchecked(ref, ctx);
 			if (value != null) {
 				if (value instanceof AMap) {
 					AString desc = RT.ensureString(((AMap<?, ?>) value).get(Fields.DESCRIPTION));
@@ -437,7 +438,7 @@ public class ContextLoader {
 
 			// 3. Remote DID definitions (resolveAsset's fetch path) — local
 			// resolution found nothing.
-			Asset asset = engine.resolveAsset(ref, ctx);
+			Asset asset = engine.resolveAssetUnchecked(ref, ctx);
 			if (asset != null) {
 				AString desc = RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
 				if (desc != null) return desc.toString();

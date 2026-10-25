@@ -262,7 +262,8 @@ public class AssetAdapter extends AAdapter {
 				meta = RT.ensureMap(record.get(AssetStore.POS_META));
 			}
 		} else {
-			ACell value = engine.resolvePath(idStr, ctx);
+			// Read checked above (asset/read); crud/read must not be required too.
+			ACell value = engine.resolvePathUnchecked(idStr, ctx);
 			if (value instanceof AMap) meta = (AMap<AString, ACell>) value;
 		}
 
@@ -321,7 +322,8 @@ public class AssetAdapter extends AAdapter {
 		if (hash != null) {
 			record = engine.getAssetRecord(hash, readAs);
 		} else {
-			ACell value = engine.resolvePath(idStr, ctx);
+			// Read checked above (asset/read).
+			ACell value = engine.resolvePathUnchecked(idStr, ctx);
 			if (value instanceof AMap) {
 				Hash derived = ((AMap<AString, ACell>) value).getHash();
 				String source = idStr.toString();
@@ -483,7 +485,7 @@ public class AssetAdapter extends AAdapter {
 				// Remote adoption — pin IS the explicit act that makes a
 				// remote definition durable. Metadata arrives hash-verified;
 				// content (if the metadata declares any) sha256-verified.
-				Asset fetched = engine.resolveAsset(pathStr, ctx);
+				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);   // source read checked above
 				if (fetched == null) throw new IllegalArgumentException("Asset not found: " + pathStr);
 				metaString = fetched.getMetadata();
 				content = engine.fetchRemoteContent(pathStr);
@@ -493,8 +495,8 @@ public class AssetAdapter extends AAdapter {
 		} else {
 			// Non-hash reference: walk the universal resolver. The resolved
 			// value is treated as inline metadata; non-asset paths produce
-			// content-less pins.
-			ACell value = engine.resolvePath(pathStr, ctx);
+			// content-less pins. The source read is checked above.
+			ACell value = engine.resolvePathUnchecked(pathStr, ctx);
 			if (value != null) {
 				if (!(value instanceof AMap)) {
 					throw new IllegalArgumentException(
@@ -506,7 +508,7 @@ public class AssetAdapter extends AAdapter {
 				// Named remote reference (did:web:.../v/ops/...): adopt like
 				// any other remote definition. resolvePath is local-only, so
 				// a miss here is the expected route for remote bindings.
-				Asset fetched = engine.resolveAsset(pathStr, ctx);
+				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);
 				if (fetched == null) throw new IllegalArgumentException("Path not found: " + pathStr);
 				metaString = fetched.getMetadata();
 				content = engine.fetchRemoteContent(pathStr);

@@ -1446,7 +1446,8 @@ public class JobManager {
 		try {
 			Asset asset = engine.resolveAsset(opRef);
 			if (asset == null && callerDID != null) {
-				asset = engine.resolveAsset(opRef, RequestContext.of(callerDID));
+				// Recovery of a job already accepted: the read was checked at submission.
+				asset = engine.resolveAssetUnchecked(opRef, RequestContext.of(callerDID));
 			}
 			return asset;
 		} catch (RuntimeException e) {

@@ -596,7 +596,8 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Any other lattice address — resolve via the universal resolver (the same
 		// path invoke and covia:read use) and interpret the value as metadata.
-		ACell value = engine().resolvePath(refStr, ctx);
+		// Read checked above (asset/read).
+		ACell value = engine().resolvePathUnchecked(refStr, ctx);
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) value;
@@ -605,7 +606,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// Remote / named DID-URL bindings aren't in the local lattice — fetch the
 		// hash-verified definition from the publishing venue.
 		if (ref.startsWith("did:")) {
-			return engine().resolveAsset(refStr, ctx);
+			return engine().resolveAssetUnchecked(refStr, ctx);
 		}
 		return null;
 	}
@@ -771,10 +772,10 @@ public class CoviaAPI extends ACoviaAPI {
 			// enforce their native capability; asset/lattice refs enforce asset/read
 			// inside Engine.resolveContent. Metadata is resolved separately only for
 			// content.contentType / fileName headers; a provider ref may have no
-			// asset metadata at all.
-			AMap<AString,ACell> meta = RT.ensureMap(engine().resolvePath(ref, rctx));
+			// asset metadata at all. Content resolution checks access first.
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine().resolveContent(ref, rctx);
+			AMap<AString,ACell> meta = RT.ensureMap(engine().resolvePathUnchecked(ref, rctx));
 			if (resolved==null) {
 				if (meta==null) buildError(ctx,404,"Asset not found: "+id);
 				else if (!meta.containsKey(Fields.CONTENT)) buildError(ctx,404,"Asset metadata does not specify any content object: "+id);

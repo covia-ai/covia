@@ -84,7 +84,7 @@ public class AgentConferralTest {
 	private RequestContext bobWith(ACell... caps) {
 		long exp = System.currentTimeMillis() / 1000 + 3600;
 		return BOB.withProofs(Vectors.of(UCAN.create(aliceKP, bobKP.getAccountKey(), exp,
-			Vectors.of(caps), Vectors.empty()).toMap()));
+			Vectors.of((Object[]) caps), Vectors.empty()).toMap()));
 	}
 
 	/** A scoped agent: may create sub-agents and read and write w/data/. */
