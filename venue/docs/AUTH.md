@@ -718,6 +718,36 @@ users retain their independent admission and own-namespace behavior. Embedders
 must not replace the subject with the signing installation or strip name
 segments when constructing authority.
 
+### Minting an identity token through an operation
+
+Call `v/ops/auth/identity-token` on the signing venue:
+
+```json
+{"aud":"did:web:target.example","name":"RELAY_TOKEN","lifetime":300}
+```
+
+The operation derives `sub` and `iss` from the exact caller, including an
+agent's full nested identity. It accepts no subject, claims, capabilities or
+signing key from input. The caller must be the venue's signing `did:key` or a
+valid identity nested below it. An unrelated external key identity, a
+`did:web` identity, and anonymous/public callers are refused; an embedder
+holding a different installation key uses `VenueAuth.namedKeyPair` instead.
+
+It requires `invoke` on `v/ops/auth/identity-token` and `secret/write` on
+`s/RELAY_TOKEN`. Agents write into their owner's secret store under their
+existing capability scope. The bearer is encrypted there; the result contains
+only `{secret, sub, aud, exp}`, never the token or private key. An agent can
+use `s/RELAY_TOKEN` as a model relay `apiKey`, subject to its separate
+`secret/use` grant and any destination restriction. A direct owner who needs
+the raw bearer can use `v/ops/secret/extract` under that operation's stricter
+rules.
+
+The audience is required. Lifetime defaults to 300 seconds and must be an
+integer from 1 to 3600. Refresh by invoking again with `overwrite:true` before
+expiry; there is no automatic refresh. The receiver still applies its own
+audience, lifetime and admission policies. The token conveys identity only:
+it contains no UCAN grants or proofs and adds no permissions.
+
 ## 6. Configuration
 
 `auth.methods` is a binding table from venue method ids to trusted adapter

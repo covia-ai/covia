@@ -587,8 +587,9 @@ public final class VenueAuthenticator {
 	// Each returns null when it passes and the reason when it does not, the
 	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
 
-	/** Covia identity segments, not DID URL paths or permission inheritance. */
-	private static boolean isNestedIdentity(AString subject, AString signingIdentity) {
+	/** Whether a subject uses valid nested segments below the exact signing identity.
+	 * Shared by authentication and issuance; this establishes no permissions. */
+	public static boolean isNestedIdentity(AString subject, AString signingIdentity) {
 		String prefix = signingIdentity + ":";
 		String value = subject.toString();
 		if (!value.startsWith(prefix)) return false;
