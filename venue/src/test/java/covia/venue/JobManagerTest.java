@@ -80,15 +80,17 @@ public class JobManagerTest {
 		assertEquals(current, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
 		assertEquals(CVMBool.FALSE,
 			RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path + "/prev")), "exists"));
-		assertSame(before, user.get(), "reads must neither rewrite records nor stamp user activity");
-		assertSame(legacy, storage.get());
+		// Equal, not identical: the shared engine's background sync may swap in
+		// persisted references for the same value (LatticeHost.sync).
+		assertEquals(before, user.get(), "reads must neither rewrite records nor stamp user activity");
+		assertEquals(legacy, storage.get());
 
 		// A failed transaction must not migrate the record either.
 		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
 			draft.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
 			throw new IllegalStateException("rollback");
 		}));
-		assertSame(legacy, storage.get());
+		assertEquals(legacy, storage.get());
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "new");
 		assertTrue(user.job(id).appendHistory(message));
 		AMap<AString, ACell> migrated = user.getJob(id);
@@ -99,7 +101,7 @@ public class JobManagerTest {
 		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), migrated.get(Fields.HISTORY));
 		ACell after = storage.get();
 		assertFalse(user.job(id).appendHistory(message));
-		assertSame(after, storage.get(), "repeat edits remain idempotent");
+		assertEquals(after, storage.get(), "repeat edits remain idempotent");
 
 		storage.set(legacy);
 		user.recordCursor(covia.lattice.Namespace.J, id).path(temp, Strings.create("scratch")).set(CVMLong.ONE);
