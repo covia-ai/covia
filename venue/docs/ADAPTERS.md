@@ -334,7 +334,10 @@ duplicate values are safe to collapse; conflicting old and new values fail
 without changing either copy. There is no generic field merge or dual-write
 fallback. Older binaries that write the workspace layout must not be run against
 a migrated store. The small legacy `w/user-deletions` queue migrates similarly
-to `:user-deletions` when recovery first accesses it.
+to `:user-deletions` in the venue `0 → 1` migration, with an on-access fallback
+for transitional records. Venue `:version` describes this compatibility contract;
+it does not require an eager rewrite of adapter state. See
+[PERSISTENCE.md](PERSISTENCE.md#venue-versions-and-migrations).
 
 ### User deletion hooks
 

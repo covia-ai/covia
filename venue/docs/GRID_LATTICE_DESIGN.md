@@ -974,6 +974,13 @@ For day-to-day operations, the venue works directly with its cursor. It does not
 
 ### A.2 Merge Semantics
 
+The signed venue value stores `:version` next to `:did` and `:timestamp`.
+It is the integer storage format version, not the software version or the LWW
+ordering stamp. Missing means legacy `0`. Initialization validates compatibility
+and applies ordered migrations atomically with their version changes, before
+bootstrap or workers. Version `1` permits lazy adapter-record migration without
+startup scans. See [Venue versions and migrations](PERSISTENCE.md#venue-versions-and-migrations).
+
 The venue **`:value` is a single navigable whole-value-LWW node.** It carries a
 wall-clock `:timestamp`, re-stamped on every write (never inflated — a stamp is
 real time, never a `+1` logical bump). On merge, the value with the newer
@@ -1000,7 +1007,7 @@ and recovery. Independently executing forks are outside this contract: choosing
 one snapshot discards the other's changes and cannot undo its external effects.
 Per-entry LWW cannot preserve arbitrary application invariants either.
 
-The **interior** of `:value` (`:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:user-deletions`,
+The **interior** of `:value` (`:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:user-deletions`,
 `:user-data → <DID> → {j, g, s, w, o, h, a}`) is structurally navigable but
 carries no independent merge semantics — the merge happens only at the `:value`
 root. Writes are stamped on the way up by a
@@ -1214,7 +1221,7 @@ legacy-compatible workspace envelope:
 | `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
 | `Covia.VENUE` | `StampedCursor` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
 | `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
-| Venue interior | `KeyedLattice` (structural children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:user-deletions`, `:user-data` — navigated structurally; merged only at `:value` |
+| Venue interior | `KeyedLattice` (structural children) | `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:user-deletions`, `:user-data` — navigated structurally; merged only at `:value` |
 | `:schedule` | `StampedCursor` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
 | `:user-data → <DID>` | `MapLattice` → `StampedCursor` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
 | `j` / each Job | `IndexLattice` → `StampedCursor` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |

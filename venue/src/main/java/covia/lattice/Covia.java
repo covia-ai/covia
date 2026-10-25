@@ -84,6 +84,9 @@ public final class Covia {
 	/** Framework-owned unfinished user cleanup, indexed by adapter and DID. */
 	public static final Keyword USER_DELETIONS = Keyword.intern("user-deletions");
 
+	/** Persisted venue format version; independent of the running software release. */
+	public static final Keyword VERSION = Keyword.intern("version");
+
 	// ========== Venue-value whole-value-LWW plumbing ==========
 
 	/** Timestamp keyword re-stamped on every write to the venue value; LWW picks the newest. */
@@ -257,6 +260,7 @@ public final class Covia {
 	 * is whole-value at {@code :value}.
 	 */
 	private static final ALattice<ACell> INTERIOR = ac(KeyedLattice.create(
+		VERSION, JSONLattice.INSTANCE,
 		ASSETS, JSONLattice.INSTANCE,
 		STORAGE, JSONLattice.INSTANCE,
 		DID, JSONLattice.INSTANCE,
@@ -274,9 +278,9 @@ public final class Covia {
 	 * a stamp-on-write boundary. Composed as
 	 * {@code stamping(write) -> LWW(merge) -> typed-navigation}.
 	 *
-	 * <p>Correct because a venue's {@code :value} has a single authoritative writer
-	 * (its signing key under {@code OwnerLattice}/{@code SignedLattice}), so every
-	 * merge is a stale-vs-fresh snapshot of the same lineage — for which "newest
+	 * <p>This requires one authoritative running instance; signatures authenticate
+	 * snapshots but do not fence competing writers. Supported reconciliation
+	 * compares stale-vs-fresh snapshots of the same lineage — for which "newest
 	 * coherent snapshot wins wholesale" is the right CRDT. Content
 	 * ({@code :assets}/{@code :storage}) rides the same node (single-writer, so the
 	 * newest value already holds all content, making removal/GC durable). Genuinely

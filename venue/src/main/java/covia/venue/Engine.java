@@ -714,6 +714,7 @@ public class Engine {
 		// Writes cross the signed owner boundary immediately; explicit forks are
 		// reserved for bounded component transactions.
 		VenueState connected = application.venue(getAccountKey());
+		// Version validation and migrations precede every bootstrap write and worker.
 		connected.initialise(getDIDString());
 		this.venueState = connected;
 

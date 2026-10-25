@@ -17,6 +17,7 @@ import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.MapEntry;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.lattice.ALatticeComponent;
@@ -58,6 +59,11 @@ import covia.venue.storage.LatticeStorage;
  * Children have no independent publication or merge boundary.</p>
  */
 public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
+	/** Version 1 permits lazy legacy adapter records; it does not imply a full rewrite. */
+	public static final long CURRENT_VERSION = 1;
+	public static final String INVALID_STATE = "Venue state must be a keyword-keyed Index";
+	public static final String INVALID_VERSION = "Venue :version must be a non-negative integer";
+	public static final String UNSUPPORTED_VERSION = "Venue version %d is newer than supported version %d";
 	@Override
 	public VenueState withCursor(AForkableCursor<ACell> draft) {
 		return new VenueState(draft, ownerKey, context);
@@ -292,7 +298,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	private User venueUser() {
-		return users().get(RT.ensureString(RT.getIn(get(), Covia.DID)));
+		AString did = RT.ensureString(RT.getIn(get(), Covia.DID));
+		return did == null ? null : users().get(did);
 	}
 
 	private ACell legacyState(String path) {
@@ -304,8 +311,10 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Move one legacy value exactly, removing its old copy in the same commit. */
 	private void migrateLegacyState(String path, Keyword region, AString key) {
+		requireSupportedVersion();
 		if (legacyState(path) == null) return;
 		transact(draft -> {
+			draft.requireSupportedVersion();
 			ACell legacy = draft.legacyState(path);
 			if (legacy == null) return;
 			AMap<ACell, ACell> parent = RT.ensureMap(key == null ? draft.get() : RT.getIn(draft.get(), region));
@@ -406,23 +415,64 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return cursor().get();
 	}
 
+	/** Stored format version. An absent field (or a fresh venue) is legacy version 0. */
+	public long version() {
+		ACell value = get();
+		if (value == null) return 0;
+		if (!(value instanceof Index<?, ?> record)) throw new IllegalStateException(INVALID_STATE);
+		if (!record.containsKey(Covia.VERSION)) return 0;
+		ACell version = record.get(Covia.VERSION);
+		if (!(version instanceof CVMLong number) || number.longValue() < 0) {
+			throw new IllegalStateException(INVALID_VERSION);
+		}
+		return number.longValue();
+	}
+
+	private long requireSupportedVersion() {
+		long version = version();
+		if (version > CURRENT_VERSION) {
+			throw new IllegalStateException(UNSUPPORTED_VERSION.formatted(version, CURRENT_VERSION));
+		}
+		return version;
+	}
+
 	/**
-	 * Initialises this venue with the given DID if not already initialised.
-	 * Sets the venue state to the VENUE lattice zero value with the DID field.
-	 *
+	 * Apply ordered venue migrations and their version changes in one transaction.
+	 * Current venues are a no-op. Callbacks are pure and may retry; failures leave
+	 * the entire original value intact. Bulk record migrations remain lazy.
+	 */
+	public void migrate() {
+		transact(VenueState::migrateInPlace);
+	}
+
+	/** Only called on a transaction draft; add each future upgrade here. */
+	private void migrateInPlace() {
+		long version = requireSupportedVersion();
+		while (version < CURRENT_VERSION) {
+			switch ((int) version) {
+				case 0 -> {
+					// Version 1 introduces adapter-owned components and a framework
+					// cleanup index. Only the small pending index moves at startup;
+					// adapter values still move exactly on first access.
+					migrateLegacyState("w/user-deletions", Covia.USER_DELETIONS, null);
+				}
+				default -> throw new IllegalStateException(UNSUPPORTED_VERSION.formatted(version, CURRENT_VERSION));
+			}
+			cursor().withDefault(Index.none()).path(Covia.VERSION).set(CVMLong.create(++version));
+		}
+	}
+
+	/**
+	 * Validate compatibility, migrate and initialise identity atomically, before
+	 * Engine bootstrap or adapter activation. Existing identity is preserved.
 	 * @param did The venue's DID string
 	 */
 	public void initialise(ACell did) {
-		// Atomic init via CAS — read-then-set would let a late initialise()
-		// clobber state another thread already wrote. The venue value is a
-		// keyword-keyed Index; the whole-value-LWW lattice's zero() is null, so
-		// materialise an empty Index for a fresh venue and test by DID presence.
-		cursor().updateAndGet(current -> {
+		transact(draft -> {
+			draft.migrateInPlace();
 			@SuppressWarnings("unchecked")
-			Index<Keyword, ACell> v = (current instanceof Index<?,?>)
-				? (Index<Keyword, ACell>) current
-				: Index.none();
-			return v.containsKey(Covia.DID) ? v : v.assoc(Covia.DID, did);
+			Index<Keyword, ACell> value = (Index<Keyword, ACell>) draft.get();
+			if (!value.containsKey(Covia.DID)) draft.cursor().set(value.assoc(Covia.DID, did));
 		});
 	}
 

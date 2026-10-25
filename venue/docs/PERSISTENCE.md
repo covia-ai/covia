@@ -1,5 +1,44 @@
 # Persistence and Lattice Component Layering
 
+## Venue versions and migrations
+
+Each signed venue value has an integer `:version`, alongside `:did` and
+`:timestamp`, at `:grid/:venues/<owner-key>/:value/:version`. This identifies
+the persisted format contract, independently of the software release published
+at `v/info/version`. Each venue owns its version; the application root and the
+upstream signing envelope do not.
+
+`VenueState.initialise(did)` runs `VenueState`'s ordered migrations before any
+Engine bootstrap writes, adapter activation or recovered work. `migrate()` is
+also available for explicit component transactions. A missing version means
+legacy `0`; explicit `0` follows the same path. Nil, negative and non-integer
+versions are invalid. A version above `VenueState.CURRENT_VERSION` refuses local
+startup without modifying the venue or its store. Opaque replication is not
+permission to execute a newer format.
+
+The `0 → 1` migration moves the small legacy `w/user-deletions` index to the
+venue's `:user-deletions` region and advances `:version` in the same transaction.
+Conflicting copies fail without changing either copy or the version. Identity
+initialization is part of that transaction too. Exceptions roll everything back;
+concurrent edits retry against the latest state. Reopening a current venue does
+not rewrite or re-stamp it just to check its version.
+
+**Version 1 permits transitional records.** Adapter values at legacy
+`w/adapters/<name>` move exactly and atomically on first access. Existing lazy
+job/session/secret migrations remain owned by their components. No venue-wide
+user, job or adapter scan is added. The version identifies the formats readers
+and writers must understand, not completion of a bulk rewrite. Adapters retain
+ownership of their private schemas.
+
+For future venue format changes, add the next ordered step in
+`VenueState.migrateInPlace`, then advance `CURRENT_VERSION`. Steps must be pure,
+retry-safe domain updates with no I/O; the version advances only after the step
+succeeds. Keep expensive per-record conversion lazy and explicitly include the
+supported transitional forms in that version's contract. Test rollback,
+compatibility rejection and reopen behaviour. Do not bump this integer for an
+ordinary software release. Binaries predating version checks must still be
+excluded operationally from upgraded stores.
+
 ## Snapshot implementation contract
 
 On the Convex `f5d0345f6` experimental branch, `LatticeHost` owns publication

@@ -62,6 +62,30 @@ import covia.test.DurabilityTest;
 @DurabilityTest
 public class EnginePersistenceTest {
 	@Test
+	public void unsupportedVenueVersionLeavesStoreUntouched() throws Exception {
+		File file = newTempEtch();
+		AKeyPair key = AKeyPair.createSeeded(614);
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), key.getSeed().toHexString());
+		long future = VenueState.CURRENT_VERSION + 1;
+		ACell before;
+		try (var store = convex.etch.EtchStore.create(file)) {
+			CoviaApplication application = CoviaApplication.open(store, key);
+			VenueState venue = application.venue(key.getAccountKey());
+			venue.initialise(Strings.create("did:test:future"));
+			venue.cursor().path(Covia.VERSION).set(convex.core.data.prim.CVMLong.create(future));
+			application.host().sync();
+			application.host().flush();
+			before = store.getRootData();
+		}
+		var error = assertThrows(RuntimeException.class, () -> VenueServer.launch(config));
+		var cause = org.junit.jupiter.api.Assertions.assertInstanceOf(IllegalStateException.class, error.getCause());
+		assertEquals(VenueState.UNSUPPORTED_VERSION.formatted(future, VenueState.CURRENT_VERSION), cause.getMessage());
+		try (var store = convex.etch.EtchStore.create(file)) {
+			assertEquals(before, store.getRootData());
+		}
+	}
+
+	@Test
 	public void legacyAdapterStateMovesLazilyAndDoesNotReturnAfterReopen() throws Exception {
 		File file = newTempEtch();
 		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(612).getSeed().toHexString());
@@ -71,6 +95,7 @@ public class EnginePersistenceTest {
 		try {
 			Engine engine = server.getEngine();
 			engine.getVenueState().users().ensure(engine.getDIDString()).writeInternalPath(oldPath, value);
+			engine.getVenueState().cursor().updateAndGet(v -> RT.ensureMap(v).dissoc(Covia.VERSION));
 		} finally { server.close(); }
 
 		server = VenueServer.launch(config);
@@ -78,6 +103,7 @@ public class EnginePersistenceTest {
 			Engine engine = server.getEngine();
 			User host = engine.getVenueState().users().get(engine.getDIDString());
 			assertEquals(value, host.readInternalPath(oldPath), "startup leaves unloaded adapter state alone");
+			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
 			assertNull(RT.getIn(engine.getVenueState().get(), Covia.ADAPTERS, Strings.create("unloaded-test")));
 			assertEquals(value, engine.adapterState("unloaded-test").get());
 			assertNull(host.readInternalPath(oldPath));
@@ -87,6 +113,7 @@ public class EnginePersistenceTest {
 		try {
 			Engine engine = server.getEngine();
 			assertEquals(value, engine.adapterState("unloaded-test").get(), "exact migrated value survives reopening");
+			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
 			assertNull(engine.getVenueState().users().get(engine.getDIDString()).readInternalPath(oldPath));
 			engine.adapterState("unloaded-test").set(null);
 		} finally { server.close(); }
@@ -113,6 +140,7 @@ public class EnginePersistenceTest {
 			User host = venue.users().ensure(engine.getDIDString());
 			host.writeInternalPath(oldState, value);
 			host.writeInternalPath(oldQueue, Maps.of("cleanup-test", Maps.of(ALICE_DID, deleted.tombstone())));
+			venue.cursor().updateAndGet(v -> RT.ensureMap(v).dissoc(Covia.VERSION));
 		} finally { server.close(); }
 
 		server = VenueServer.launch(config);
@@ -121,6 +149,7 @@ public class EnginePersistenceTest {
 			VenueState venue = engine.getVenueState();
 			User host = venue.users().get(engine.getDIDString());
 			assertEquals(value, host.readInternalPath(oldState));
+			assertEquals(VenueState.CURRENT_VERSION, venue.version());
 			assertNull(host.readInternalPath(oldQueue), "recovery moves the pending index, without scanning adapter values");
 			assertNotNull(venue.pendingUserDeletions("cleanup-test").get(ALICE_DID));
 			assertThrows(covia.exception.AuthException.class, () -> venue.users().create(ALICE_DID));
