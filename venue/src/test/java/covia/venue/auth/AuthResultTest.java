@@ -152,10 +152,10 @@ class AuthResultTest {
 	}
 
 	@Test
-	void installationUsersRequireExactlyOneUsernameBelowTheSigningKey() {
-		for (String suffix : new String[] {":u:", ":u:alice:u:bob", ":u:alice/w/private",
+	void nestedIdentitiesRequireNonemptySafeSegmentsBelowTheSigningKey() {
+		for (String suffix : new String[] {":", "::alice", ":u:", ":u::alice", ":u:alice/w/private",
 			":u:alice?x", ":u:alice#x", ":u:alice%2fbob", ":u:alice bob", ":u:é",
-			":u:alice\\bob", ":g:alice", "other:u:alice"}) {
+			":u:alice\\bob", ":u:alice:g:", ":u:alice:g::worker", "other:u:alice"}) {
 			assertKeyRejected(JWT.signPublic(claims().assoc(Fields.SUB, Strings.create(did + suffix)), key),
 				VenueAuthenticator.Reason.WRONG_KEY_FOR_SUBJECT);
 		}
@@ -171,8 +171,61 @@ class AuthResultTest {
 	}
 
 	@Test
+	void arbitraryNestedIdentitiesAuthenticateWithoutRegistration() {
+		for (String suffix : new String[] {":alice", ":u:alice:u:bob", ":g:worker",
+			":u:alice:g:worker", ":org:acme:service:build:job:42", ":g:parent:g:child",
+			":segment".repeat(2000)}) {
+			AString subject = Strings.create(did + suffix);
+			AString token = Strings.create(VenueAuth.namedKeyPair(key, subject.toString(),
+				engine.getDIDString().toString(), 300).mintToken());
+			Context ctx = context();
+			assertEquals(subject, auth.authenticate(ctx, token));
+			assertEquals(subject, auth.authenticatedUser(ctx));
+			assertEquals(did, auth.authenticatedIdentity(ctx));
+			assertEquals(subject, AuthMiddleware.callerContext(ctx).getCallerDID());
+			assertNull(engine.getVenueState().users().get(subject));
+			assertUnknownEvidence(auth.authenticationResult(ctx));
+			assertKeyRejected(JWT.signPublic(claims().assoc(Fields.SUB, subject), AKeyPair.generate()),
+				VenueAuthenticator.Reason.WRONG_KEY_FOR_SUBJECT);
+		}
+	}
+
+	@Test
+	void authenticatedAgentsNeedExplicitGrantsAndCannotInheritOwnerAccess() {
+		AString resource = Strings.create(did + "/w/delegated");
+		for (String suffix : new String[] {":g:worker", ":u:alice:g:worker", ":g:parent:g:child"}) {
+			AString agent = Strings.create(did + suffix);
+			Context ctx = context();
+			auth.authenticate(ctx, JWT.signPublic(claims().assoc(Fields.SUB, agent), key));
+			RequestContext caller = AuthMiddleware.callerContext(ctx);
+			assertEquals(agent, caller.getCallerDID());
+			assertEquals(agent, caller.getUserDID(), "a bearer cannot claim a local owner's namespace");
+			assertEquals(Vectors.empty(), caller.getCaps(), "authentication supplies no agent capabilities");
+			AString owner = Strings.create(agent.toString().substring(0, agent.toString().lastIndexOf(":g:")));
+			assertFalse(engine.getAccessControl().canAccessJob(caller, Maps.of(Fields.CALLER, owner)),
+				"ownership-only checks must not grant access to the named owner's jobs");
+			assertThrows(AuthException.class, () -> engine.requireLocalAccess(caller,
+				Strings.create("w/private"), Capability.CRUD_READ));
+			assertThrows(AuthException.class, () -> engine.requireLocalAccess(caller,
+				Strings.create(owner + "/w/private"), Capability.CRUD_READ));
+			assertThrows(AuthException.class, () -> engine.requireLocalAccess(caller, resource, Capability.CRUD_READ));
+			assertThrows(AuthException.class, () -> engine.admitUser(agent));
+			AString proof = JWT.signPublic(UCAN.buildPayload(key.getAccountKey(), agent, expiry, null,
+				Vectors.of(Capability.create(resource, Capability.CRUD_READ)), Vectors.empty(), null), key);
+			RequestContext granted = AuthMiddleware.withTransportGrants(caller, Vectors.of(proof));
+			assertEquals(did, engine.requireLocalAccess(granted, resource, Capability.CRUD_READ));
+			assertThrows(AuthException.class, () -> engine.requireLocalAccess(granted, resource, Capability.CRUD_WRITE));
+			AString sibling = Strings.create(agent + "-sibling");
+			Context siblingCtx = context();
+			auth.authenticate(siblingCtx, JWT.signPublic(claims().assoc(Fields.SUB, sibling), key));
+			RequestContext other = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(siblingCtx), Vectors.of(proof));
+			assertThrows(AuthException.class, () -> engine.requireLocalAccess(other, resource, Capability.CRUD_READ));
+		}
+	}
+
+	@Test
 	void installationUsersKeepAudienceAndTemporalChecks() {
-		AString user = Strings.create(did + ":u:temporal");
+		AString user = Strings.create(did + ":u:temporal:g:worker");
 		AMap<AString, ACell> childClaims = claims().assoc(Fields.SUB, user).assoc(JWT.ISS, user);
 		assertKeyRejected(JWT.signPublic(childClaims.assoc(JWT.AUD, Strings.create("did:web:elsewhere")), key),
 			VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE);

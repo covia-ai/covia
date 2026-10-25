@@ -2939,11 +2939,8 @@ public class Engine {
 		return userNameBelow(did, getDIDString()) != null;
 	}
 
-	/**
-	 * One valid username segment immediately below an exact DID base, or null.
-	 * This checks the naming convention only; it does not authenticate or grant authority.
-	 */
-	public static AString userNameBelow(AString did, AString base) {
+	/** One valid username segment immediately below an exact DID base. */
+	private static AString userNameBelow(AString did, AString base) {
 		if (base == null || did == null) return null;
 		String prefix = base + ":u:";
 		String value = did.toString();
@@ -3116,10 +3113,11 @@ public class Engine {
 	 * load-bearing: {@code Principals.userOf} resolves it to the owner's
 	 * namespace. Admitting such a DID as a user in its own right would therefore
 	 * hand its bearer the namespace of whoever the prefix names. Agents are
-	 * minted by the venue as sub-principals of an existing account — they are
-	 * never registered, never authenticate, and so must never reach a user
-	 * record. Keeping that invariant at the admission boundary is what makes the
-	 * name safe to parse everywhere else.</p>
+	 * minted by the venue as sub-principals of an existing account, never
+	 * registered as users. A credential may authenticate an agent-shaped subject
+	 * on an identity-only route, but that does not admit a user or establish a
+	 * local owner relationship. This admission guard keeps such subjects out of
+	 * native user routes and records.</p>
 	 *
 	 * <p>Self-issued subjects may use any installed DID method, so this check is
 	 * an intentional method-independent admission invariant rather than an

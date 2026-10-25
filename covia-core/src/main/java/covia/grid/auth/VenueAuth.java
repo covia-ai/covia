@@ -145,16 +145,17 @@ public abstract class VenueAuth {
 
 	/**
 	 * Self-issued EdDSA authentication as a stable named DID using one of that
-	 * identity's registered public keys, or as an installation user directly
-	 * below the signing key's DID ({@code did:key:<key>:u:<name>}).
+	 * identity's registered public keys, or as an identity nested below the
+	 * signing key's DID ({@code did:key:<key>:u:<name>:g:<agent>}).
 	 *
 	 * <p>The token carries {@code iss == sub == subjectDID}, is signed by
 	 * {@code keyPair}, and is audience-bound to {@code audienceDID}. The target
 	 * venue authenticates a local named user only when that public key is active
-	 * in the user's venue-owned authentication record. An installation user needs
-	 * no such record: its subject must be exactly one valid username below the
-	 * signing key's DID. User admission remains separate in both cases, and the
-	 * user inherits no authority from the signing identity.
+	 * in the user's venue-owned authentication record. A nested identity needs
+	 * no such record: its subject must have nonempty colon-separated segments
+	 * below the signing key's exact DID, using letters, numbers, '.', '_' and '-'.
+	 * User admission remains separate, and the subject inherits no authority
+	 * from the signing identity or its parent names.
 	 *
 	 * @param keyPair registered Ed25519 authentication key or installation key
 	 * @param subjectDID stable named identity asserted in {@code iss}/{@code sub}
