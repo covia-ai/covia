@@ -2271,8 +2271,10 @@ Per bot:
 
 - `token` — the token from @BotFather, as an `s/NAME` secret reference
   (resolved in the bot user's store, then the venue's; a literal is accepted
-  but never logged or listed). A bot whose secret is absent parks as
-  `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
+  but never logged or listed). Only operator-declared bots fall back to the
+  venue's store: a bot created with `telegram:create` resolves its creator's
+  secrets, and another principal's only under a `secret/use` grant. A bot
+  whose secret is absent parks as `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
   up without a restart.
 - `user` — the DID the bot acts as; every invocation runs with that user's
   full authority, so it should be the owner of the agent it routes to.

@@ -93,7 +93,7 @@ The module ships the `slack` agent skill at `v/skills/adapters/slack` (send, sta
 | Symptom | Cause / fix |
 |---------|-------------|
 | `v/info/adapters/slack` missing | Module not loaded — setup step 5; check the venue log. |
-| `PENDING` | A token secret is missing for the binding's user (or the venue fallback); it retries automatically. |
+| `PENDING` | A token secret is missing for the binding's user (an operator-declared binding also checks the venue store); it retries automatically. |
 | `RETRYING` | Slack refused `apps.connections.open`: wrong or revoked `xapp-` token, missing `connections:write`, or Socket Mode disabled on the app. |
 | DM gets no reply | Sender not in `allow`; Messages tab disabled; or `message.im` / `im:history` missing from the app. |
 | Channel mention ignored | Channel not in `allowChannels`, bot not invited, or `app_mention` not subscribed. |

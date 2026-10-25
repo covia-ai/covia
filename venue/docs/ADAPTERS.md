@@ -80,6 +80,15 @@ not infer authority from an operation name or confuse `ctx.getCallerDID()`
 (who acted) with `ctx.getUserDID()` (whose namespace the action uses). See
 [UCAN.md](UCAN.md) for the authority model.
 
+`engine.venueContext()` is the operator's authority. Act under it only on what
+the operator declared: venue configuration, or a record created under
+`requireVenueAuthority`. Never use it on a reference taken from operation
+input or from a record a user created, such as a secret reference or a
+catalog path. Resolve those under the caller's or record owner's context, so
+another principal's resource, the venue's included, needs a grant. A null
+capability scope covers the caller's own namespace only: `requireAuthority`
+on a resource that is not DID-scoped does not establish venue authority.
+
 ## Reference-addressed content
 
 Storage adapters implement `ContentProvider` so consumers can resolve and write

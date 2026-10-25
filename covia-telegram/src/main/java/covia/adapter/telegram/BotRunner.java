@@ -168,14 +168,14 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (stopped || state == State.RUNNING) return;
 		String token;
 		try {
-			token = adapter.resolveToken(spec);
+			token = adapter.resolveToken(this);
 		} catch (RuntimeException e) {
 			pending("token resolution failed: " + e.getMessage());
 			return;
 		}
 		if (token == null) {
 			pending("token secret " + spec.tokenRef() + " not found in the store of " + spec.userRef()
-				+ " or the venue — store it with v/ops/secret/set");
+				+ (managed == Managed.CONFIG ? " or the venue" : "") + " — store it with v/ops/secret/set");
 			return;
 		}
 		// Our own client so stop() can cancel the in-flight long poll; the read

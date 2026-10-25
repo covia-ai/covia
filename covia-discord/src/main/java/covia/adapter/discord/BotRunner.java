@@ -52,7 +52,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	@Override public void start(){AAdapter.VIRTUAL_EXECUTOR.execute(this::tryStart);}
 	private synchronized void tryStart(){
 		if(stopped||state==State.RUNNING)return;String tok;
-		try{tok=adapter.resolveToken(spec);}catch(RuntimeException e){pending("token resolution failed: "+e.getMessage());return;}
+		try{tok=adapter.resolveToken(this);}catch(RuntimeException e){pending("token resolution failed: "+e.getMessage());return;}
 		if(tok==null){pending("token secret "+spec.tokenRef()+" not found");return;}
 		DiscordGateway candidate;
 		try{candidate=adapter.gatewayFactory.connect(tok,this::receive);}catch(Exception|LinkageError e){pending("Discord Gateway connection failed: "+concise(e));return;}

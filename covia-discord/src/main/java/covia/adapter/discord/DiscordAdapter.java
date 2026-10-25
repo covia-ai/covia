@@ -61,7 +61,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	@Override protected BotSpec parseBot(String name,ACell settings,boolean strict){return BotSpec.parse(name,settings,strict);}
 	@Override protected BotRunner newBot(BotSpec spec,Managed managed){return new BotRunner(this,spec,apiUrl,managed);}
 	@Override protected boolean configurationMatches(BotRunner runner){return apiUrl.equals(runner.apiUrl);}
-	String resolveToken(BotSpec spec){return resolveCredential(spec.tokenRef(),spec.userDID(engine));}
+	String resolveToken(BotRunner runner){return resolveCredential(runner.spec().tokenRef(),runner);}
 	BotRunner runnerForTest(String name){return runner(name);}
 	BotRunner runnerForTest(AString owner,String name){return runner(owner,name);}
 	void forgetForTest(AString owner,String name){forgetRuntimeBot(owner,name);}

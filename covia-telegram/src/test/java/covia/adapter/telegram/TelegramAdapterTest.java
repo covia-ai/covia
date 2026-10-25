@@ -1365,6 +1365,41 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testOnlyOperatorBotsUseVenueSecrets() throws Exception {
+		String token = "444:VENUE-ONLY";
+		telegram.registerBot(token, "venue_bot");
+		run(engine.venueContext(), "v/ops/secret/set", Maps.of("name", "TG_VENUE_ONLY", "value", token));
+		AMap<AString, ACell> echoCfg = botConfig(FakeTelegramServer.TOKEN, OWNER.toString(), "agent", AGENT,
+			Vectors.of(CVMLong.create(ALLOWED_ID), Strings.create("@alice")));
+		try {
+			// A user's bot naming the venue's secret, bare or by the venue's DID, gets
+			// nothing: the reference is the user's, so it never resolves as the venue.
+			run(RequestContext.of(OTHER), "v/ops/telegram/create", Maps.of(
+				"name", "borrowed", "token", "s/TG_VENUE_ONLY", "agent", AGENT));
+			run(RequestContext.of(OTHER), "v/ops/telegram/create", Maps.of(
+				"name", "named", "token", engine.getDIDString() + "/s/TG_VENUE_ONLY", "agent", AGENT));
+			BotRunner borrowed = adapter.runner(OTHER, "borrowed");
+			BotRunner named = adapter.runner(OTHER, "named");
+			await(() -> borrowed.state() == BotRunner.State.PENDING && named.state() == BotRunner.State.PENDING,
+				10_000, () -> "user bots must stay pending: " + borrowed.error() + " / " + named.error());
+			assertTrue(borrowed.error().contains("not found"), borrowed.error());
+			assertTrue(named.error().contains("token resolution failed"), named.error());
+			assertEquals(0, telegram.getMeCalls(token), "the venue's token never reaches Telegram for a user's bot");
+
+			// The operator wrote this reference, so the venue's store backs it.
+			configureBots(Maps.of(
+				Strings.create("echo"), echoCfg,
+				Strings.create("operator"), botConfig("s/TG_VENUE_ONLY", OWNER.toString(), "agent", AGENT, null)));
+			awaitState("operator", BotRunner.State.RUNNING, 10_000);
+			assertEquals("venue_bot", adapter.runner("operator").username());
+		} finally {
+			run(RequestContext.of(OTHER), "v/ops/telegram/delete", Maps.of("name", "borrowed"));
+			run(RequestContext.of(OTHER), "v/ops/telegram/delete", Maps.of("name", "named"));
+			configureBots(Maps.of(Strings.create("echo"), echoCfg));
+		}
+	}
+
+	@Test
 	public void testBadTokenIsPendingWithTelegramError() throws Exception {
 		AMap<AString, ACell> echoCfg = botConfig(FakeTelegramServer.TOKEN, OWNER.toString(), "agent", AGENT,
 			Vectors.of(CVMLong.create(ALLOWED_ID), Strings.create("@alice")));

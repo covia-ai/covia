@@ -171,19 +171,26 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	}
 
 	/** Provider credentials may have several names (e.g. Slack bot and app tokens). */
-	public final String resolveCredential(String reference, AString owner) {
-		return resolveCredential(reference, owner, null);
+	public final String resolveCredential(String reference, MessagingBot<?> bot) {
+		return resolveCredential(reference, bot, null);
 	}
 
 	/**
-	 * As {@link #resolveCredential(String, AString)} for a credential about to be sent
-	 * to {@code destination}: a {@code secret/use} grant bound to a url prefix covers
-	 * another principal's secret only there. Null when the use has no destination.
+	 * As {@link #resolveCredential(String, MessagingBot)} for a credential about to be
+	 * sent to {@code destination}: a {@code secret/use} grant bound to a url prefix
+	 * covers another principal's secret only there. Null when the use has no destination.
+	 *
+	 * <p>A reference resolves under the bot owner's authority, so another principal's
+	 * secret, the venue's included, needs a {@code secret/use} grant. Only an
+	 * operator-declared bot also looks in the venue's own store: the operator wrote
+	 * that reference, so the venue's authority stands behind it. A user-created bot's
+	 * reference is its creator's, and never resolves as the venue.</p>
 	 */
-	public final String resolveCredential(String reference, AString owner, String destination) {
+	public final String resolveCredential(String reference, MessagingBot<?> bot, String destination) {
 		if (!isSecretReference(reference)) return reference;
-		String value = engine.resolveSecret(reference, RequestContext.of(owner), destination);
-		return value != null ? value : engine.resolveSecret(reference, engine.venueContext(), destination);
+		String value = engine.resolveSecret(reference, RequestContext.of(bot.spec().userDID(engine)), destination);
+		if (value != null || bot.managed() != Managed.CONFIG) return value;
+		return engine.resolveSecret(reference, engine.venueContext(), destination);
 	}
 
 	protected static boolean isSecretReference(String value) {

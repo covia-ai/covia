@@ -162,7 +162,7 @@ The module ships the `telegram` agent skill at `v/skills/adapters/telegram` (pre
 | Symptom | Cause / fix |
 |---------|-------------|
 | `v/info/adapters/telegram` missing | Module not loaded — step 3; check the venue log for a module load error. |
-| Bot `PENDING`, error *token secret … not found* | Store the secret as the bot's user (or in the venue store); it retries automatically. |
+| Bot `PENDING`, error *token secret … not found* | Store the secret as the bot's user (an operator-declared bot also checks the venue store); it retries automatically. |
 | Bot `PENDING`, error *401 Unauthorized* | Wrong token — copy it again from @BotFather. |
 | Messages get *Not authorised* | Add the id/username to `allow` (or `open: true`), re-apply config. |
 | Bot silent in a group | An allow-listed bot converses only in private chats (by design). For an open bot: BotFather privacy mode: `/setprivacy` → Disable, or mention the bot / use commands. |

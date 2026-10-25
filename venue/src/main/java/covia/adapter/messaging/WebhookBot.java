@@ -85,7 +85,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	 * grant bound to a url prefix covers it only there.
 	 */
 	public String credential(String field, String destination) {
-		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), spec.userDID(adapter.engine), destination);
+		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), this, destination);
 	}
 	public void requireReady() {
 		if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);

@@ -39,6 +39,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `sql:execute` for every caller.
 - MCP venue-side targets (`v/ops/...`, `scope: "venue"`) require venue
   authority; any signed-in user could rewrite the venue catalog.
+- User-created messaging bots no longer resolve credentials from the venue's
+  store or environment; only operator-declared bots do.
 
 ### Added
 

@@ -231,8 +231,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		}
 	}
 
-	String resolveToken(BotSpec spec) {
-		return resolveCredential(spec.tokenRef(), spec.userDID(engine));
+	String resolveToken(BotRunner runner) {
+		return resolveCredential(runner.spec().tokenRef(), runner);
 	}
 
 	/** Test hooks retain the provider tests' restart simulation. */
