@@ -388,6 +388,36 @@ available implementations and their documented paths.
 This is a routing contract, not a persisted schema change: existing records and
 the venue version are unchanged.
 
+#### Try it with the test adapter
+
+When the `test` adapter is enabled, `x/test` provides:
+
+| Path | Purpose | Access |
+|------|---------|--------|
+| `x/test/context` | Current `caller`, owning `user`, `venue`, `agentId`, `sessionId`, `jobId`; unset scopes are null | Read-only |
+| `x/test/samples` | Unicode/multiline text, a number vector, a nested record, null and empty containers | Read-only |
+| `x/test/scratch` | Persistent, per-user scratch data of any value shape | Read/write/delete |
+
+The adapter advertises these paths at `v/info/adapters/test/lattice`. Try the
+normal accessors (paths are also available as agent context references):
+
+```text
+covia:read    {"path":"x/test/context"}
+covia:slice   {"path":"x/test/samples/numbers","offset":2,"limit":3}
+covia:copy    {"from":"x/test/samples/record","to":"x/test/scratch/example"}
+covia:append  {"path":"x/test/scratch/events","value":{"message":"hello"}}
+covia:read    {"path":"x/test/scratch"}
+covia:delete  {"path":"x/test/scratch"}
+```
+
+Reading diagnostics or fixtures writes nothing. Scratch survives adapter reload
+and venue persistence; deleting its owner removes it through the normal adapter
+deletion hook. The venue principal gets its own view and scratch, with the same
+cross-user delegation rules as other callers. Context shows the actor and owner
+separately for delegated reads, and never exposes credentials or proofs. Root
+replacement is denied so it cannot overwrite the read-only branches. Scratch is
+disposable test data, not included in user exports.
+
 ### User deletion hooks
 
 `AAdapter` has two narrowly scoped lifecycle hooks:

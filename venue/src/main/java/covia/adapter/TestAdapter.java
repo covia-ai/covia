@@ -19,12 +19,15 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.ATransformCursor;
 import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
 import covia.venue.AgentState;
+import covia.venue.AdapterState;
 import covia.venue.api.A2ACodec;
 
 public class TestAdapter extends AAdapter {
@@ -33,6 +36,59 @@ public class TestAdapter extends AAdapter {
 
 	/** Shared body used by the skill-adoption test fixture and its mock LLM. */
 	public static final String SKILL_LLM_BODY = "Use covia_read on w/probe.";
+
+	private static final AString K_CONTEXT = Strings.intern("context");
+	private static final AString K_SAMPLES = Strings.intern("samples");
+	private static final AString K_SCRATCH = Strings.intern("scratch");
+	private static final AString K_USERS = Strings.intern("users");
+	private static final AString K_USER = Strings.intern("user");
+	private static final AString K_VENUE = Strings.intern("venue");
+	private static final AString K_LATTICE = Strings.intern("lattice");
+	private static final AMap<AString, ACell> LATTICE_INFO = Maps.of(
+		"path", "x/test",
+		"context", "Read-only caller, user, venue and execution scope; no credentials or proofs",
+		"samples", "Read-only nested maps, vectors, Unicode text and stored nulls",
+		"scratch", "Per-user persistent scratch; write, append, copy and delete are allowed here only");
+	private static final AMap<AString, ACell> SAMPLES = Maps.of(
+		"text", "Hello, lattice!\nUnicode: café 🌍",
+		"numbers", Vectors.of(0L, 1L, 2L, 3L, 5L, 8L),
+		"record", Maps.of("name", "sample", "enabled", true, "tags", Vectors.of("demo", "lattice")),
+		"null", null, "emptyMap", Maps.empty(), "emptyVector", Vectors.empty());
+
+	@Override public AMap<AString, ACell> info() {
+		return Maps.of(K_LATTICE, LATTICE_INFO);
+	}
+
+	/** A small connected view: diagnostics are computed, only scratch is persisted. */
+	@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+		AMap<AString, ACell> context = Maps.of(
+			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
+			Fields.AGENT_ID, ctx.getAgentId(), Fields.SESSION_ID, ctx.getSessionId(), Fields.JOB_ID, ctx.getJobId());
+		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
+			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID());
+		return new ATransformCursor<ACell, ACell>(scratch) {
+			@Override protected ACell view(ACell stored) {
+				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);
+				AMap<AString, ACell> record = RT.ensureMap(stored);
+				return record != null && record.containsKey(K_SCRATCH)
+					? result.assoc(K_SCRATCH, record.get(K_SCRATCH)) : result;
+			}
+			@Override protected ACell write(ACell current, ACell value) {
+				AMap<AString, ACell> record = RT.ensureMap(value);
+				return record != null && record.containsKey(K_SCRATCH)
+					? Maps.of(K_SCRATCH, record.get(K_SCRATCH)) : null;
+			}
+		};
+	}
+
+	@Override public boolean canWriteLattice(RequestContext ctx, ACell[] path) {
+		// Replacing/deleting the view root could otherwise bypass read-only children.
+		return path.length > 0 && K_SCRATCH.equals(path[0]);
+	}
+
+	@Override public void deleteUserState(AString did, AdapterState state) {
+		state.delete(state.userPath(did, ""));
+	}
 
     /**
      * Test-only sink: the {@code capturectx} op records the {@link RequestContext}

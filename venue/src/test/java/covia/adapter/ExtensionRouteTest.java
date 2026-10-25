@@ -15,6 +15,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -208,5 +209,76 @@ class ExtensionRouteTest {
 			assertThrows(CompletionException.class, () -> run("read", Maps.of(Fields.PATH, path), alice));
 			assertEquals(before, probe.resolutions);
 		}
+	}
+
+	@Test void testAdapterExposesDiscoverableDiagnosticsAndSampleValuesWithoutWrites() {
+		engine.registerAdapter(new TestAdapter());
+		engine.materialiseBootstrapState();
+		ACell before = engine.getVenueState().get();
+		RequestContext scoped = alice.withAgentId(Strings.create("demo"))
+			.withSessionId(Blob.fromHex("1234")).withJobId(Blob.fromHex("5678"));
+		ACell context = read("x/test/context", scoped);
+		assertEquals(aliceDID, RT.getIn(context, "caller"));
+		assertEquals(aliceDID, RT.getIn(context, "user"));
+		assertEquals(Strings.create("demo"), RT.getIn(context, Fields.AGENT_ID));
+		assertEquals(scoped.getSessionId(), RT.getIn(context, Fields.SESSION_ID));
+		assertEquals(scoped.getJobId(), RT.getIn(context, Fields.JOB_ID));
+		assertEquals(engine.getDIDString(), RT.getIn(read("x/test/context", engine.venueContext()), "user"));
+		assertEquals(Strings.create("x/test"), read("v/info/adapters/test/lattice/path", alice));
+		assertEquals(CVMLong.create(8), read("x/test/samples/numbers/5", alice));
+		assertEquals(CVMBool.TRUE, RT.getIn(run("read", Maps.of(Fields.PATH, "x/test/samples/null"), alice), "exists"));
+		assertNotNull(run("slice", Maps.of(Fields.PATH, "x/test/samples/numbers", "limit", 3L), alice));
+		assertEquals(before, engine.getVenueState().get());
+		for (String path : new String[] {"x/test", "x/test/context", "x/test/samples/text"}) {
+			for (String op : new String[] {"write", "delete", "append"}) {
+				assertThrows(CompletionException.class, () -> run(op, Maps.of(Fields.PATH, path, Fields.VALUE, "no"), alice));
+			}
+		}
+	}
+
+	@Test void testScratchSupportsConcurrentUpdatesNullsAndAdapterReload() {
+		engine.registerAdapter(new TestAdapter());
+		run("copy", Maps.of("from", "x/test/samples/record", "to", "x/test/scratch/record"), alice);
+		assertEquals(read("x/test/samples/record", alice), read("x/test/scratch/record", alice));
+		CompletableFuture<?>[] writes = new CompletableFuture<?>[20];
+		for (int i = 0; i < writes.length; i++) {
+			long value = i;
+			writes[i] = CompletableFuture.runAsync(() -> run("append", Maps.of(
+				Fields.PATH, "x/test/scratch/events", Fields.VALUE, value), alice));
+		}
+		CompletableFuture.allOf(writes).join();
+		assertEquals(20, ((convex.core.data.AVector<?>) read("x/test/scratch/events", alice)).count());
+		assertNull(read("x/test/scratch", bob));
+		engine.removeAdapter("test");
+		engine.registerAdapter(new TestAdapter());
+		assertEquals(20, ((convex.core.data.AVector<?>) read("x/test/scratch/events", alice)).count());
+		write("x/test/scratch", null, alice);
+		assertEquals(CVMBool.TRUE, RT.getIn(run("read", Maps.of(Fields.PATH, "x/test/scratch"), alice), "exists"));
+		run("delete", Maps.of(Fields.PATH, "x/test/scratch"), alice);
+		assertEquals(CVMBool.FALSE, RT.getIn(run("read", Maps.of(Fields.PATH, "x/test/scratch"), alice), "exists"));
+		assertNotNull(read("x/test/samples", alice));
+	}
+
+	@Test void testScratchDelegationKeepsActorAndDeletionFencesOldViews() {
+		engine.registerAdapter(new TestAdapter());
+		String resource = aliceDID + "/x/test";
+		UCAN grant = UCAN.create(aliceKey, UCAN.fromDIDKey(bobDID), System.currentTimeMillis() / 1000 + 300,
+			Vectors.of(Capability.create(Strings.create(resource), Strings.create("crud"))), Vectors.empty());
+		RequestContext delegated = bob.withProofs(Vectors.of(grant.toMap()));
+		assertThrows(CompletionException.class, () -> read(resource + "/scratch", bob));
+		ACell context = read(resource + "/context", delegated);
+		assertEquals(aliceDID, RT.getIn(context, "user"));
+		assertEquals(bobDID, RT.getIn(context, "caller"));
+		write(resource + "/scratch", Strings.create("alice scratch"), delegated);
+		write("x/test/scratch", Strings.create("bob scratch"), bob);
+		var retained = covia.resolveVirtual(alice, WorkspaceRoot.parseStringPath("x/test/scratch"), Capability.CRUD_WRITE);
+		engine.disableAdapter("test");
+		engine.deleteUser(engine.venueContext(), aliceDID);
+		assertNull(engine.adapterState("test").read("users/" + aliceDID));
+		engine.getVenueState().users().create(aliceDID);
+		engine.enableAdapter("test");
+		assertNull(read("x/test/scratch", alice));
+		assertEquals(Strings.create("bob scratch"), read("x/test/scratch", bob));
+		assertThrows(AuthException.class, () -> retained.cursor().write(retained.remainingKeys(), Strings.create("late")));
 	}
 }
