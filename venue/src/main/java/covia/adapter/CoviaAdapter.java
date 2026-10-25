@@ -39,6 +39,7 @@ import covia.api.Fields;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.Covia;
 import covia.lattice.NamespaceResolver;
+import covia.lattice.ExtensionNamespaceResolver;
 import covia.lattice.SessionNamespaceResolver;
 import covia.lattice.TempNamespaceResolver;
 import covia.lattice.VenueGlobalsResolver;
@@ -84,8 +85,9 @@ import covia.venue.Users;
  * </pre>
  *
  * <p>The {@code w/} and {@code o/} namespaces are user-writable via
- * {@code covia:write} and {@code covia:delete}. All other namespaces
- * ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
+ * {@code covia:write} and {@code covia:delete}. Virtual namespaces have their
+ * own policies, including opt-in adapter views at {@code x/<adapter>/}.
+ * Other stored namespaces ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
  * reject direct writes.</p>
  *
  * <p>All user state lives inside the venue {@code :value}, which merges
@@ -211,6 +213,7 @@ public class CoviaAdapter extends AAdapter {
 		registerResolver("c", new SessionNamespaceResolver());
 		registerResolver("t", new TempNamespaceResolver());
 		registerResolver("v", new VenueGlobalsResolver(this));
+		registerResolver("x", new ExtensionNamespaceResolver());
 	}
 
 	@Override
@@ -280,9 +283,9 @@ public class CoviaAdapter extends AAdapter {
 		}
 
 		// Fall back to local resolution: a stored null, or a vector path form.
-		Object[] target = resolveTargetPath(ctx, input);
-		WorkspaceRoot cursor = (WorkspaceRoot) target[0];
-		ACell[] pathKeys = (ACell[]) target[1];
+		var target = resolveTargetPath(ctx, input);
+		WorkspaceRoot cursor = target.cursor();
+		ACell[] pathKeys = target.remainingKeys();
 
 		if (cursor == null) return result(null);
 
@@ -443,12 +446,9 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
 		engine.requireResourceAccess(ctx, Strings.create(pathStr), Capability.CRUD_READ);
-		ACell[] pathKeys = parseStringPath(pathStr);
-
-		// Virtual (n/, t/, c/, ...) or physical namespace
-		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
-		WorkspaceRoot cursor = (vns != null) ? vns.cursor() : getWorkspaceRoot(ctx);
-		ACell[] keys = (vns != null) ? vns.remainingKeys() : pathKeys;
+		var target = resolvePathTarget(ctx, Strings.create(pathStr), Capability.CRUD_READ);
+		WorkspaceRoot cursor = target.cursor();
+		ACell[] keys = target.remainingKeys();
 		if (cursor == null) return "null /* no user data */";
 
 		ACell value = cursor.read(keys);
@@ -601,19 +601,21 @@ public class CoviaAdapter extends AAdapter {
 		// One gate for every lattice op — read or mutation. requireLocalAccess is
 		// the shared local-access check (a/ governed exactly like w/): the caller's
 		// own namespace goes through the scope seam; another user's needs a proof
-		// (or public/venue-catalog policy), else a denial. resolveDIDURL then only
-		// *locates* the owner's cursor — it does not re-authorise.
-		engine.requireLocalAccess(ctx, RT.ensureString(RT.getIn(input, Fields.PATH)), ability);
+		// (or public/venue-catalog policy), else a denial. Extension cursors also
+		// retain this authority check when accessing their adapter-provided view.
+		ACell path = RT.getIn(input, Fields.PATH);
+		AString resource = RT.ensureString(path);
+		if (path instanceof AVector<?>) resource = Strings.create(buildSubPath(parsePath(path)));
+		if (resource != null && resource.startsWith(Strings.create("/"))) resource = resource.slice(1);
+		engine.requireLocalAccess(ctx, resource, ability);
 	}
 
 	/**
 	 * Writes a value at a path in the user's lattice.
 	 *
-	 * <p>Only the {@code w/} (workspace) and {@code o/} (operations) namespaces
-	 * accept writes. The path must have at least two segments: namespace and
-	 * top-level key (e.g. {@code "w/my-key"}). Deeper paths are supported
-	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
-	 * as needed via read-modify-write on the top-level entry.</p>
+	 * <p>Physical writable namespaces are {@code w/} and {@code o/}; virtual
+	 * resolvers enforce their own policies, including opt-in {@code x/} views.
+	 * Deep paths create intermediate maps as needed within one atomic update.</p>
 	 *
 	 * @return {@code {existed, pathCreated?}} — {@code existed:false} created a new
 	 *         value, {@code true} replaced an existing one; {@code pathCreated:true}
@@ -622,12 +624,6 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		// A DID-URL path writes to the owner's namespace (authorised in requireCap
-		// above); a bare path to the caller's own. When present, xu = [ownerCursor,
-		// DID-relative keys] — never a virtual ns.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), true);
-		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
-		requireWriteAccess(ctx, jsonKeys);
 		// A write must supply a 'value'. An absent key means the caller (often an
 		// LLM tool call) forgot the argument — fail loudly so it retries. An
 		// explicit null is a valid value: it stores a null at the path (present,
@@ -644,23 +640,16 @@ public class CoviaAdapter extends AAdapter {
 		// lives only at tool-call boundaries whose schema admits nothing else.
 		ACell value = RT.getIn(input, Fields.VALUE);
 
-		// Cross-user owner cursor, virtual namespace (n/, t/, c/, v/), or own
-		// physical namespace: every target is a cursor plus namespace-prefixed
-		// keys, so one deepSet serves all of them — a scalar-clobbering write
-		// throws the same shape-conflict error everywhere (#176).
-		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
-		if (vns != null) jsonKeys = vns.remainingKeys();
-		@SuppressWarnings("unchecked")
-		WorkspaceRoot baseCursor = (xu != null) ? (WorkspaceRoot) xu[0]
-			: (vns != null) ? vns.cursor() : ensureWorkspaceRoot(ctx);
-		final ACell[] keys = jsonKeys;
+		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
+		WorkspaceRoot baseCursor = target.cursor();
+		final ACell[] keys = target.remainingKeys();
 		final boolean[] built = {false};
 		final boolean[] existed = {false};
 		// deepSet first so a shape conflict throws its descriptive error (#146);
 		// pathCreated is read from the pre-state and means "a missing parent
 		// container had to be built" — not whether the leaf already had a value
 		// (that is `existed`).
-		baseCursor.update(keys, vns != null && vns.requireExistingRecord(),
+		baseCursor.update(keys, target.requireExistingRecord(),
 			(current, from) -> {
 			existed[0] = leafExisted(current, keys, from);
 			ACell next = deepSet(current, keys, from, value);
@@ -752,24 +741,11 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
-		// A DID-URL path deletes from the owner's namespace (authorised in
-		// requireCap above). create=false: an absent owner namespace has nothing to
-		// remove, and delete stays idempotent without materialising it.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), false);
-		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
-		requireDeleteAccess(ctx, jsonKeys);
-
-		// Cross-user owner cursor, virtual namespace, or own physical namespace:
-		// the same deepDelete for all (#176). An unresolvable path is a silent
-		// success (delete is idempotent).
-		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
-		if (vns != null) jsonKeys = vns.remainingKeys();
-		@SuppressWarnings("unchecked")
-		WorkspaceRoot cursor = (xu != null) ? (WorkspaceRoot) xu[0]
-			: (vns != null) ? vns.cursor() : getWorkspaceRoot(ctx);
+		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
+		WorkspaceRoot cursor = target.cursor();
 		if (cursor == null) return Maps.of(K_DELETED, CVMBool.FALSE);
-		final ACell[] keys = jsonKeys;
-		boolean requireExistingRecord = vns != null && vns.requireExistingRecord();
+		final ACell[] keys = target.remainingKeys();
+		boolean requireExistingRecord = target.requireExistingRecord();
 		// A missing unscoped target linearises as an immediate no-op. Avoid
 		// descending through a PathCursor merely to write null back: that would
 		// materialise an absent wrapped namespace even though nothing was deleted.
@@ -782,7 +758,7 @@ public class CoviaAdapter extends AAdapter {
 			deleted[0] = leafExisted(current, keys, from);
 			return deepDelete(current, keys, from);
 		});
-		if (deleted[0] && keys.length == 2 && NS_SECRETS.equals(keys[0].toString())) {
+		if (cursor.userNamespaces() && deleted[0] && keys.length == 2 && NS_SECRETS.equals(keys[0].toString())) {
 			// The name only, never the value — the same trail as secret:set.
 			engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
 				covia.venue.Audit.K_NAME, keys[1], covia.venue.Audit.K_TARGET, ctx.getUserDID());
@@ -805,27 +781,14 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		// A DID-URL path appends into the owner's namespace (authorised in
-		// requireCap above); a bare path into the caller's own.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), true);
-		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
-		requireWriteAccess(ctx, jsonKeys);
-
-		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
-		ACell element = RT.getIn(input, Fields.VALUE);   // stored verbatim, as in handleWrite
-
-		// Cross-user owner cursor, virtual namespace, or own physical namespace:
-		// the same deepAppend for all (#176).
-		if (vns != null) jsonKeys = vns.remainingKeys();
-		@SuppressWarnings("unchecked")
-		WorkspaceRoot baseCursor = (xu != null) ? (WorkspaceRoot) xu[0]
-			: (vns != null) ? vns.cursor() : ensureWorkspaceRoot(ctx);
-
-		final ACell[] keys = jsonKeys;
+		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
+		ACell element = RT.getIn(input, Fields.VALUE);
+		WorkspaceRoot baseCursor = target.cursor();
+		final ACell[] keys = target.remainingKeys();
 		final boolean[] built = {false};
 		final boolean[] existed = {false};
 		final long[] newSize = {0};
-		baseCursor.update(keys, vns != null && vns.requireExistingRecord(),
+		baseCursor.update(keys, target.requireExistingRecord(),
 			(current, from) -> {
 			existed[0] = leafExisted(current, keys, from);
 			ACell next = deepAppend(current, keys, from, element);
@@ -931,10 +894,10 @@ public class CoviaAdapter extends AAdapter {
 	 * Reads the literal value targeted by an accessor input.
 	 */
 	private ACell readInputValue(RequestContext ctx, ACell input) {
-		Object[] target = resolveTargetPath(ctx, input);
-		WorkspaceRoot cursor = (WorkspaceRoot) target[0];
+		var target = resolveTargetPath(ctx, input);
+		WorkspaceRoot cursor = target.cursor();
 		if (cursor == null) return null;
-		return cursor.read((ACell[]) target[1]);
+		return cursor.read(target.remainingKeys());
 	}
 
 	/**
@@ -1335,35 +1298,32 @@ public class CoviaAdapter extends AAdapter {
 		return user.workspaceRoot();
 	}
 
-	/**
-	 * Resolves a path that may target another user's namespace via DID URL syntax.
-	 *
-	 * <p>Paths can be either relative (e.g. {@code "w/notes"}) targeting the
-	 * caller's own namespace, or DID URL paths (e.g. {@code "did:key:z6Mk.../w/notes"})
-	 * targeting another user. DID URL parsing and owner lookup use the Engine's
-	 * shared physical user-path resolver.</p>
-	 *
-	 * @return A two-element result: [cursor, pathKeys] where pathKeys are the
-	 *         namespace-relative keys (DID prefix stripped)
-	 */
-	private Object[] resolveTargetPath(RequestContext ctx, ACell input) {
-		ACell pathCell = RT.getIn(input, Fields.PATH);
-		if (pathCell == null) {
-			return new Object[] { getWorkspaceRoot(ctx), new ACell[0] };
+	/** All standard accessors share this physical/virtual/DID target resolution. */
+	private NamespaceResolver.ResolvedNamespace resolveTargetPath(RequestContext ctx, ACell input) {
+		return resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_READ);
+	}
+
+	private NamespaceResolver.ResolvedNamespace resolvePathTarget(RequestContext ctx, ACell path, AString ability) {
+		boolean write = Capability.CRUD_WRITE.equals(ability);
+		boolean delete = Capability.CRUD_DELETE.equals(ability);
+		AString raw = RT.ensureString(path);
+		if (raw != null && raw.startsWith(Strings.create("/"))) raw = raw.slice(1);
+		var didTarget = raw != null && raw.toString().startsWith("did:")
+			? engine.resolveUserPath(ctx, raw, false) : null;
+		ACell[] keys = didTarget == null ? parsePath(path) : didTarget.pathKeys();
+		if (didTarget != null && isExtensionPath(keys)) {
+			return ExtensionNamespaceResolver.resolveForUser(ctx, this, didTarget.ownerDID(), keys, ability);
 		}
-
-		// Check if the raw path string is a DID URL (starts with "did:")
-		AString pathStr = RT.ensureString(pathCell);
-		if (pathStr != null && pathStr.toString().startsWith("did:")) {
-			return resolveDIDURL(ctx, pathStr.toString(), false);
+		if (write) requireWriteAccess(ctx, keys);
+		if (delete) requireDeleteAccess(ctx, keys);
+		if (didTarget == null) {
+			var virtual = resolveVirtual(ctx, keys, ability);
+			if (virtual != null) return virtual;
+			return new NamespaceResolver.ResolvedNamespace(write ? ensureWorkspaceRoot(ctx) : getWorkspaceRoot(ctx), keys, false);
 		}
-
-		ACell[] pathKeys = parsePath(pathCell);
-
-		// Virtual namespace (n/, t/, c/, v/): cursor + keys below its record
-		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
-		if (vns != null) return new Object[] { vns.cursor(), vns.remainingKeys() };
-		return new Object[] { getWorkspaceRoot(ctx), pathKeys };
+		if (write) didTarget = engine.resolveUserPath(ctx, raw, true);
+		User user = didTarget.user();
+		return new NamespaceResolver.ResolvedNamespace(user == null ? null : user.workspaceRoot(), keys, false);
 	}
 
 
@@ -1375,11 +1335,15 @@ public class CoviaAdapter extends AAdapter {
 	 *         For physical namespaces: null (caller uses standard user cursor flow).
 	 */
 	public NamespaceResolver.ResolvedNamespace resolveVirtual(RequestContext ctx, ACell[] pathKeys) {
+		return resolveVirtual(ctx, pathKeys, Capability.CRUD_READ);
+	}
+
+	public NamespaceResolver.ResolvedNamespace resolveVirtual(RequestContext ctx, ACell[] pathKeys, AString ability) {
 		if (pathKeys.length > 0) {
 			String prefix = pathKeys[0].toString();
 			NamespaceResolver resolver = resolvers.get(prefix);
 			if (resolver != null) {
-				return resolver.resolve(ctx, this, pathKeys);
+				return resolver.resolve(ctx, this, pathKeys, ability);
 			}
 		}
 		return null;
@@ -1416,40 +1380,14 @@ public class CoviaAdapter extends AAdapter {
 		return resolver != null && resolver.isWritable();
 	}
 
-	/**
-	 * <em>Locates</em> a DID URL path like {@code "did:key:z6MkAlice/w/notes"} —
-	 * a target cursor and namespace-relative keys. Authorisation is not repeated
-	 * here: {@link #requireCap} is the single gate and always runs first (own
-	 * paths through the scope seam, cross-user paths through the proof gate), so
-	 * by the time this resolves a cursor the caller is already authorised. Shared
-	 * verbatim by reads and mutations.
-	 *
-	 * @param create materialise the owner's namespace if absent (write/append) —
-	 *               a first delegated write may be the owner's first touch here,
-	 *               exactly as an own first write creates the caller's namespace —
-	 *               versus leave it null (read/delete: an absent namespace reads
-	 *               as {@code exists:false} / deletes idempotently)
-	 * @return {@code [cursor, pathKeys]}; {@code cursor} is null when
-	 *         {@code create} is false and the target has no namespace here
-	 */
-	private Object[] resolveDIDURL(RequestContext ctx, String rawPath, boolean create) {
-		var target = engine.resolveUserPath(ctx, Strings.create(rawPath), create);
-		User user = target.user();
-		return new Object[] { (user == null) ? null : user.workspaceRoot(), target.pathKeys() };
+	public static boolean isExtensionPath(ACell[] keys) {
+		return keys.length > 0 && Strings.intern("x").equals(keys[0]);
 	}
 
-	/**
-	 * The DID-URL mutation target for {@code write}/{@code delete}/{@code append}:
-	 * {@code [cursor, pathKeys]} against the owner's namespace when the path is a
-	 * DID URL, else {@code null} (the caller uses its own-cursor flow). A DID URL
-	 * never names a virtual ({@code n/}, {@code t/}) namespace, so this fully
-	 * determines the target. Authorisation is enforced upstream in
-	 * {@link #requireCap}; this only locates.
-	 */
-	private Object[] didUrlMutationTarget(RequestContext ctx, ACell pathCell, boolean create) {
-		AString pathStr = RT.ensureString(pathCell);
-		if (pathStr == null || !pathStr.toString().startsWith("did:")) return null;
-		return resolveDIDURL(ctx, pathStr.toString(), create);
+	/** DID-qualified extension reads share the same view and authority checks as bare x paths. */
+	public ACell readExtensionNamespace(RequestContext ctx, AString owner, ACell[] keys) {
+		var resolved = ExtensionNamespaceResolver.resolveForUser(ctx, this, owner, keys, Capability.CRUD_READ);
+		return resolved.cursor().read(resolved.remainingKeys());
 	}
 
 }

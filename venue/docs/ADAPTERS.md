@@ -266,7 +266,7 @@ not need an update; new helpers can opt into the metadata endpoint.
 
 Override `info()` for stable facts a client needs until the next reconfigure,
 such as a mount point or enabled protocol feature. Live status, sessions,
-connection counts, and mutable health belong behind operations, not in
+connection counts, and mutable health belong behind operations or explicit lattice views, not in
 `info()`. Framework-owned fields such as `name`, `description`, `kernel`,
 `module`, and `operations` cannot be replaced by adapter information.
 
@@ -338,6 +338,55 @@ to `:user-deletions` in the venue `0 → 1` migration, with an on-access fallbac
 for transitional records. Venue `:version` describes this compatibility contract;
 it does not require an eager rewrite of adapter state. See
 [PERSISTENCE.md](PERSISTENCE.md#venue-versions-and-migrations).
+
+### User-visible extension routes
+
+`x/<adapterName>/...` is a virtual route into an active adapter's explicit
+view for the addressed user. It does not expose `:adapters/<name>` automatically
+or create an `x` field in user storage. Adapters own the shape of the view:
+maps, vectors, scalars and pure projections are all supported.
+
+Override `latticeView(ctx)` to return a Convex `AForkableCursor<ACell>`, or null
+for no view (the default). For example, an adapter whose private schema stores
+public account data under `accounts/<did>` can expose just that subtree:
+
+```java
+@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+    return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
+        .path(Strings.intern("accounts")).withDefault(Maps.empty())
+        .path(ctx.getUserDID());
+}
+```
+
+Use `ctx.getUserDID()` for the addressed owner; `ctx.getCallerDID()` still
+identifies the actor. The owner-bound component retains account deletion and
+recreation guards. Keep credentials and internal records outside the exposed
+subtree: reading a parent returns its entire value, including descendants.
+
+Views are read-only by default. Override `canWriteLattice(ctx, path)` to allow
+write, append, copy-to and delete at selected paths relative to the view root.
+An empty path addresses the whole view. Allowing a parent write allows replacement
+of its entire subtree; deny it if descendants must remain protected. Writable
+views must connect to authoritative venue state, retaining its atomic update
+and transaction semantics. A cursor over a projected snapshot must stay read-only.
+
+The standard `covia:read/list/slice/inspect/write/append/delete/copy` accessors,
+`Engine.resolvePath` and agent context references use the same route. Normal
+`crud/read`, `crud/write` and `crud/delete` authority applies in addition to the
+adapter policy. `<owner-did>/x/<adapter>/...` addresses a local owner's view
+under the usual cross-user delegation rules. Bare paths accept strings or vectors;
+DID-qualified addresses use strings.
+
+Hooks and cursor transformations must be local and pure, with no network I/O
+or external effects. Update callbacks and policy checks may run again on a
+transaction retry. External actions remain adapter operations/jobs. Views are
+request-scoped: do not cache them across reconfiguration. Disabling or unloading
+an adapter removes its route; absent views never fall through to user storage.
+The bare `x` route has no automatic directory listing; use adapter discovery for
+available implementations and their documented paths.
+
+This is a routing contract, not a persisted schema change: existing records and
+the venue version are unchanged.
 
 ### User deletion hooks
 

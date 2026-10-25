@@ -1811,6 +1811,10 @@ public class Engine {
 			} catch (IllegalArgumentException e) {
 				return null;
 			}
+			if (covia.adapter.CoviaAdapter.isExtensionPath(target.pathKeys())) {
+				var adapter = (covia.adapter.CoviaAdapter) getAdapter("covia");
+				return adapter == null ? null : adapter.readExtensionNamespace(ctx, target.ownerDID(), target.pathKeys());
+			}
 			if (!isPhysicalUserNamespace(target.pathKeys())) return null;
 			return readUserPathValue(target);
 		}

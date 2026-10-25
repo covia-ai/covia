@@ -145,7 +145,7 @@ Any operation argument that accepts a lattice address — `path`, `from`, `ref`,
 | Explicit `/a/<hash>` | `/a/abc123...` | CAS lookup |
 | User namespace path | `o/merge`, `w/notes`, `g/alice/state` | Caller's own lattice region |
 | DID-qualified user path | `did:key:zAlice…/w/notes`, `did:key:zAlice…/g/Manager` | The named local user's physical lattice region, subject to capability checks |
-| Virtual prefix | `n/notes`, `t/draft`, `v/ops/json/merge` | Resolved by registered `NamespaceResolver` |
+| Virtual prefix | `n/notes`, `t/draft`, `v/ops/json/merge`, `x/<adapter>/...` | Resolved by registered `NamespaceResolver`; extension views are provided by the active adapter for this user |
 | DID URL (hash) | `did:key:z6Mk…/a/<hash>`, `did:web:venue.host/a/<hash>` | Asset as published by a principal — self-verifying. Read-side: local copies only. Invocation-side: a local copy if held, else a hash-verified metadata fetch from the publishing venue (`did:web` only) |
 | DID URL (named) | `did:web:venue.host/v/ops/json/merge` | Catalog binding maintained by the publishing venue — mutable, trusted at fetch time. Invocation-side only: name → id resolved at the publisher, then the same hash-verified definition fetch. The job record carries the resolved hash |
 
@@ -168,7 +168,7 @@ Op arguments fall into two classes:
 |-------|------------------|---------|
 | **Resolvable address** (read-side) | Any of the lattice forms above | `covia:read path`, `covia:list path`, `covia:slice path`, `covia:inspect path`, `covia:copy from`, `asset:get ref`, `asset:pin ref`, `grid:run operation` |
 | **Content reference** (read-side bytes) | Any asset/lattice form above, plus `file://<root>/<path>`, `dlfs/<drive>/<path>`, and `<ownerDID>/dlfs/<drive>/<path>` | `asset:content ref`; `file:write`, `file:append`, `dlfs:write`, `dlfs:append`, and `vault:write` `contentRef`; `archive:list` and `archive:extract` `contentRef` |
-| **Mutable target** (write-side) | Writable lattice paths only: `o/...`, `w/...`, `g/<own-agent>/...`, `s/...`, virtual writable namespaces (`n/`, `t/`); or an owner-scoped DID-URL form of one (`did:key:zOwner.../w/...`) when a UCAN proof grants the mutation | `covia:write path`, `covia:append path`, `covia:delete path`, `covia:copy to` |
+| **Mutable target** (write-side) | Writable lattice paths: `o/...`, `w/...`, virtual writable namespaces (`n/`, `t/`, `c/`, and adapter-permitted `x/<adapter>/...`); `s/NAME` permits whole-record deletion only. Physical paths and extension views also accept owner-scoped DID URLs when authority permits the mutation | `covia:write path`, `covia:append path`, `covia:delete path`, `covia:copy to` |
 
 A write-side argument is constrained because you can't write to a content-addressed location (`/a/` is hash-determined), to a read-only namespace (`/v/` from non-venue callers), or to another user's namespace without UCAN delegation.
 
@@ -179,8 +179,8 @@ A write-side argument is constrained because you can't write to a content-addres
 1. **Bare hex hash** → fetch from CAS
 2. **`/a/<hash>`** → fetch from CAS
 3. **`/o/<name>`** → caller's own `/o/`
-4. **`/v/<path>`** → venue globals via `VenueGlobalsResolver` (virtual prefix to `<venue-DID>/w/global/<path>`)
-5. **DID URL** → asset refs (`did:.../a/<hash>`) resolve local copies only; physical user refs (`did:.../w/...`, `did:.../g/...`, etc.) resolve through the named local user's cursor. `resolvePath` never touches the network
+4. **Virtual prefixes** → registered cursor views: `/v/<path>` for venue globals, `/n/`, `/c/` and `/t/` for execution scopes, `/x/<adapter>/...` for explicit adapter views
+5. **DID URL** → asset refs (`did:.../a/<hash>`) resolve local copies only; physical user refs (`did:.../w/...`, `did:.../g/...`, etc.) resolve through the named local user's cursor. `<owner-did>/x/<adapter>/...` selects that owner's adapter view under normal delegation checks. `resolvePath` never touches the network
 6. **Workspace path** (`w/`, `g/`, `o/`, `j/`, etc.) → caller's lattice cursor
 
 The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive.

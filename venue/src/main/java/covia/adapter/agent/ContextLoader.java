@@ -349,7 +349,7 @@ public class ContextLoader {
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
 		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
 			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/");
+			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/");
 	}
 
 	/**
@@ -371,7 +371,7 @@ public class ContextLoader {
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
 		if (s.startsWith("a/") || s.startsWith("w/") || s.startsWith("o/") || s.startsWith("g/")
 			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/")
+			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/")
 			|| s.startsWith("v/")) return true;
 		return false;
 	}

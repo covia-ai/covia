@@ -54,16 +54,15 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 	 * The namespace container a path addresses: a cursor at its caller-visible
 	 * value, plus the index of the first path key below it.
 	 *
-	 * <p>Every resolved path — physical ({@code w/notes}), cross-user, or virtual
-	 * ({@code t/x} → the job record's {@code temp}) — has the shape
-	 * {@code [container, ...rest]} against its base cursor, so one rule serves all
-	 * of them. {@link WorkspaceRoot#child} crosses the {@code {updated, data}} view
-	 * boundary of a {@link covia.lattice.Covia#WORKSPACE_RECORD} region, so {@code data}
-	 * is never addressed by callers or by this class.</p>
+	 * <p>Physical user paths cross the namespace boundary via {@link #child},
+	 * preserving workspace envelopes. Unwrapped virtual views navigate directly
+	 * from their exposed value using the same type-aware path operations.</p>
 	 */
 	private record Target(AForkableCursor<ACell> root, int from) {
 		static Target of(WorkspaceRoot cursor, ACell[] keys) {
-			return (keys.length == 0)
+			// Unwrapped views may themselves be vectors or Indexes. Navigate their
+			// first key by value type too, rather than assuming a namespace map.
+			return (keys.length == 0 || !cursor.userNamespaces())
 				? new Target(cursor.cursor(), 0)
 				: new Target(cursor.child(keys[0]), 1);
 		}

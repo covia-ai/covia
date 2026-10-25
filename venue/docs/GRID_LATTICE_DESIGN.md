@@ -72,7 +72,7 @@ The lattice resolves implicit context based on the active session identity.
 
 ## 4. Namespaces
 
-Each top-level namespace is hardcoded in the lattice app definition. This is not user-configurable — the namespace typing defines mutation rules, integrity constraints, access control, and execution semantics. Under the hood, each namespace is a lattice cursor with specialised sub-keys that enforce these rules.
+Platform prefixes define mutation rules, integrity constraints, access control, and execution semantics. Some address stored records; others are virtual cursor views. The `x/` prefix lets adapters define their own user-visible shape without extending the core user record.
 
 ### 4.1 Namespace Summary
 
@@ -84,6 +84,13 @@ Each top-level namespace is hardcoded in the lattice app definition. This is not
 | Agents | `/g/` | Identity-bound mutations | Index | System |
 | Workspace | `/w/` | Freely mutable | Hashmap | User/Agent |
 | Secrets | `/s/` | Encrypted, capability-gated | Index | System |
+| Extensions | `/x/<adapter>/` | Adapter-defined; read-only by default | Virtual cursor view | Adapter |
+
+An extension route selects the active adapter's view for the addressed user.
+It is independent of private `:adapters/<name>` storage and exposes nothing
+unless the adapter opts in. Standard accessors and CRUD capabilities apply;
+writable views use the authoritative venue's atomic updates. See
+[ADAPTERS.md](ADAPTERS.md#user-visible-extension-routes) for the hook contract.
 
 ### 4.2 Storage Type Rationale
 

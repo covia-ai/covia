@@ -18,6 +18,7 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -26,6 +27,27 @@ import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 public abstract class AAdapter {
+	/**
+	 * Opt-in, user-visible lattice at x/adapterName. Return a connected cursor or
+	 * a pure projected snapshot, or null to expose nothing. Resolution must be
+	 * local and side-effect-free; never return the entire private adapter state
+	 * unless every field is intentionally visible to this user. Use the supplied
+	 * context's user DID for ownership and retain account lifecycle guards.
+	 * The default is no route; exposed views are read-only unless opted in below.
+	 */
+	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+		return null;
+	}
+
+	/**
+	 * Additional write/delete policy for a path relative to this adapter's view.
+	 * Ordinary CRUD capabilities are enforced by the router as well. Keep this
+	 * pure: it can run again during an atomic update. Writable views must commit
+	 * to their authoritative lattice state, not to a disposable snapshot.
+	 */
+	public boolean canWriteLattice(RequestContext ctx, ACell[] path) {
+		return false;
+	}
 
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
 	private static final int MAX_FAILURE_CHARS = 1024;
@@ -100,7 +122,8 @@ public abstract class AAdapter {
 	 * needs to know to connect. Published when the adapter is materialised and
 	 * again after every {@link #configure} so it reflects the effective
 	 * configuration; keep it to facts that hold until the next reconfigure —
-	 * live state (counts, connections, sessions) belongs in an operation.
+	 * live state (counts, connections, sessions) belongs in an operation or
+	 * an explicit {@link #latticeView(RequestContext)}.
 	 *
 	 * <p>The framework keys {@code name}, {@code description}, {@code kernel},
 	 * {@code module} and {@code operations} are reserved and win over anything

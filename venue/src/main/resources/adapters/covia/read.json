@@ -10,7 +10,7 @@
 			"type": "object",
 			"properties": {
 				"path": {
-					"description": "Any resolvable lattice path (e.g. 'w/my-notes', 'o/my-op', 'v/ops/json/merge', '/a/<hash>', 'did:web:...', 'g/my-agent/state'). Deep paths walk into nested maps and vectors."
+					"description": "Any resolvable lattice path (e.g. 'w/my-notes', 'o/my-op', 'v/ops/json/merge', '/a/<hash>', 'did:web:...', 'g/my-agent/state', 'x/<adapter>/...'). Deep paths walk into nested maps and vectors."
 				},
 				"maxSize": {
 					"type": "integer",
