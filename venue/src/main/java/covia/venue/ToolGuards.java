@@ -97,6 +97,8 @@ public final class ToolGuards {
 			}
 		});
 		try {
+			// A timed wait on a virtual thread: on JDK 25 before 25.0.3
+			// (JDK-8370887) it can expire tens of seconds late.
 			return verdict.get(timeoutMs, TimeUnit.MILLISECONDS);
 		} catch (TimeoutException e) {
 			return TIMED_OUT;

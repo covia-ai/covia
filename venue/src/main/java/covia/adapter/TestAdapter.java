@@ -413,6 +413,8 @@ public class TestAdapter extends AAdapter {
 				ACell op = RT.getIn(input, Fields.OPERATION);
 				ACell opInput = RT.getIn(input, Fields.INPUT);
 				CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
+				// On JDK 25 before 25.0.3 (JDK-8370887) this virtual-thread sleep
+				// can overrun by tens of seconds.
 				Thread.sleep(delay.longValue());
 				ACell result = engine.jobs().invokeInternal(RT.ensureString(op), opInput, ctx).join();
 				job.completeWith(result);

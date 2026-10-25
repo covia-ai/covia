@@ -67,6 +67,9 @@
 		     dashes) is rejected by any JDK below 23, including an IDE JUnit launch
 		     on 21 that inherits this argLine, so it must never appear here. -->
 		<covia.test.jvmflags>-Dsun.misc.unsafe.memory.access=allow</covia.test.jvmflags>
+		<!-- Level of the JDK-8370887 check (see maven-enforcer-plugin below):
+		     WARN for anyone building, ERROR in CI and release. -->
+		<covia.jdk.check>WARN</covia.jdk.check>
 	</properties>
 
 	<modules>
@@ -126,12 +129,14 @@
 				</configuration>
 			</plugin>
 
-			<!-- Use this to require a minimum Maven version, and a JDK whose
-			     timers work. JDK 25 before 25.0.3 has JDK-8370887: cancelling a
-			     timer can corrupt ForkJoinPool's delay heap, so virtual-thread
-			     sleeps and timed waits, and CompletableFuture timeouts, fire
-			     tens of seconds late. Jobs stall and the test suite fails
-			     intermittently; no test can be trusted on such a JDK. -->
+			<!-- Require a minimum Maven version and JDK 21, and warn about a JDK
+			     whose timers misbehave. JDK 25 before 25.0.3 has JDK-8370887:
+			     cancelling a timer can corrupt ForkJoinPool's delay heap, so
+			     virtual-thread sleeps and timed waits, and CompletableFuture
+			     timeouts, fire tens of seconds late. The build still works, but
+			     jobs can stall and tests fail intermittently, so the check warns by
+			     default; CI and release run it with -Dcovia.jdk.check=ERROR so our
+			     own tests only ever run on a fixed JDK. -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-enforcer-plugin</artifactId>
@@ -148,8 +153,22 @@
 									<version>3.7</version>
 								</requireMavenVersion>
 								<requireJavaVersion>
+									<version>[21,)</version>
+								</requireJavaVersion>
+							</rules>
+						</configuration>
+					</execution>
+					<execution>
+						<id>check-jdk-timers</id>
+						<goals>
+							<goal>enforce</goal>
+						</goals>
+						<configuration>
+							<rules>
+								<requireJavaVersion>
+									<level>${covia.jdk.check}</level>
 									<version>[21,25),[25.0.3,)</version>
-									<message>JDK 25 before 25.0.3 has JDK-8370887: virtual-thread and CompletableFuture timeouts can fire tens of seconds late. Build with JDK 21-24 or 25.0.3+ (-Denforcer.skip overrides).</message>
+									<message>JDK 25 before 25.0.3 has JDK-8370887: virtual-thread and CompletableFuture timeouts can fire tens of seconds late, so jobs can stall and tests fail intermittently. Use JDK 21-24 or 25.0.3+.</message>
 								</requireJavaVersion>
 							</rules>
 						</configuration>
