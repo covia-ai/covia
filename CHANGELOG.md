@@ -21,6 +21,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `decrypt`. The `byte[]` `store` and `storeIfAbsent` overloads are removed.
 - A venue rolled back below 0.9.12 cannot read secrets written since the
   upgrade; configured secrets recover, as startup rewrites them.
+- An agent or delegate creating an agent must name `config.caps` it holds;
+  leaving them out (unrestricted) needs an unrestricted caller.
 
 ### Security
 
@@ -41,6 +43,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   authority; any signed-in user could rewrite the venue catalog.
 - User-created messaging bots no longer resolve credentials from the venue's
   store or environment; only operator-declared bots do.
+- Agent `caps`, `accepts` and public `a2a.caps` confer only what their author
+  holds, so sub-agents and delegated creates cannot escalate.
 
 ### Added
 

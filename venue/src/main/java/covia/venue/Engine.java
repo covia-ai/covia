@@ -3569,10 +3569,66 @@ public class Engine {
 	 * capability seam.</p>
 	 */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability) {
+		requireResourceAccess(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends the resource's value to {@code destination}. */
+	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (isLocalDIDResource(resource)) {
-			requireLocalAccess(ctx, resource, ability);
+			requireLocalAccess(ctx, resource, ability, destination);
 		} else {
-			requireAuthority(ctx, resource, ability);
+			requireAuthority(ctx, resource, ability, destination);
+		}
+	}
+
+	/** Opening of every {@link #requireConferrable} denial. */
+	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller does not hold";
+
+	/**
+	 * Attenuation where authority is handed on: may {@code ctx} confer {@code scope}
+	 * on a principal acting in {@code ownerDID}'s namespace, such as an agent's
+	 * {@code config.caps}? Each conferred capability must be covered by the
+	 * caller's own authority, so conferring only ever narrows: an agent may
+	 * create a sub-agent, never one more capable than itself.
+	 *
+	 * <p>A {@code null} scope is unrestricted, so only a caller unrestricted in that
+	 * namespace may confer it. A bare resource names {@code ownerDID}'s namespace, as
+	 * it will when the scope is used, and an empty one covers any resource. A
+	 * capability's {@code nb.url} is the destination its use is checked against;
+	 * other caveats only narrow it further.</p>
+	 *
+	 * @throws AuthException naming the first capability the caller cannot confer
+	 */
+	public void requireConferrable(RequestContext ctx, AString ownerDID, AVector<ACell> scope) {
+		if (scope == null) {
+			requireConferred(ctx, ownerDID, null, Capability.TOP, null);
+			return;
+		}
+		for (long i = 0; i < scope.count(); i++) {
+			AMap<AString, ACell> cap = RT.ensureMap(scope.get(i));
+			AString can = (cap == null) ? null : RT.ensureString(cap.get(Capability.CAN));
+			if (can == null) throw new AuthException(CONFERRAL_DENIED + ": capability " + i + " names no ability");
+			requireConferred(ctx, ownerDID, RT.ensureString(cap.get(Capability.WITH)), can,
+				RT.ensureString(RT.getIn(cap, Capability.NB, Fields.URL)));
+		}
+	}
+
+	private void requireConferred(RequestContext ctx, AString ownerDID, AString with, AString can,
+			AString destination) {
+		String resource = (with == null) ? "" : with.toString();
+		while (resource.startsWith("/")) resource = resource.substring(1);
+		try {
+			if (!resource.isEmpty()) {
+				requireResourceAccess(ctx, Strings.create(
+					covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID)), can, destination);
+			} else if (ownerDID.equals(ctx.getUserDID())) {
+				requireAuthority(ctx, (AString) null, can, destination);   // only a match-any grant covers
+			} else {
+				requireLocalAccess(ctx, ownerDID, can, destination);       // the whole other namespace
+			}
+		} catch (AuthException e) {
+			throw new AuthException(CONFERRAL_DENIED + ": " + can + " on "
+				+ (resource.isEmpty() ? "(any)" : resource) + " — " + e.getMessage());
 		}
 	}
 

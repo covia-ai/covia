@@ -777,6 +777,20 @@ This is why the guards are pinned to identity. An agent with no `config.caps`
 holds a `null` scope, which the `authorityCovers` fast path treats as
 unrestricted; a scope-based defence would therefore be absent on exactly the
 agent that most needs bounding.
+
+**Conferring:** attenuation only. Creating or reconfiguring an agent mints no
+token, but it hands authority on, so the caller may confer only what it holds
+(`Engine.requireConferrable`). `agent:create`, `agent:update` and `agent:fork`
+refuse a config whose `caps` the caller's own authority does not cover, one
+capability at a time; an absent `caps` is unrestricted, so only a caller
+unrestricted in that namespace may leave it out. The same holds for `accepts`,
+which confers `agent/request` and `agent/message` on the agent, and for a public
+`a2a.caps`. An agent may therefore create sub-agents, never more capable ones,
+and a delegated `agent/create` or `agent/write` confers nothing beyond the
+delegation. An update re-checks only the fields it changes. A direct
+`llmagent:chat` or `goaltree:chat` whose input `config.caps` would replace the
+caller's scope follows the same rule.
+
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.
 

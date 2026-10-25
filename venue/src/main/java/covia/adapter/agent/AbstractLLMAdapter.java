@@ -197,6 +197,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
+	 * {@link #capsContext} for a transition's input config, which its caller
+	 * supplies: the caps it names replace the caller's scope, so the caller must
+	 * hold each of them ({@link covia.venue.Engine#requireConferrable}).
+	 */
+	protected RequestContext conferredCapsContext(AMap<AString, ACell> config, RequestContext ctx) {
+		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
+		// No engine only in adapters constructed directly by unit tests (as requireInvoke).
+		if (caps != null && engine != null) engine.requireConferrable(ctx, ctx.getUserDID(), caps);
+		return capsContext(config, ctx);
+	}
+
+	/**
 	 * What the model declares that assembly needs: its context budget in
 	 * bytes, its label dialect, whether it can call tools at all, and whether
 	 * its provider should receive a persistent cache prefix — with

@@ -151,6 +151,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_TOOLS            = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS    = Strings.intern("defaultTools");
 	private static final AString K_CAPS             = Strings.intern("caps");
+	private static final AString K_PUBLIC           = Strings.intern("public");
+	private static final AString K_UNRESTRICTED     = Strings.intern("unrestricted");
 	private static final AString K_CONTEXT          = Strings.intern("context");
 	private static final AString K_OUTPUTS          = Strings.intern("outputs");
 	private static final AString K_RESPONSE_FORMAT  = Strings.intern("responseFormat");
@@ -319,6 +321,46 @@ public class AgentAdapter extends AAdapter {
 		AString ref = RT.ensureString(RT.getIn(input, field));
 		if (ref == null) throw new IllegalArgumentException(field + " is required");
 		return resolveAgentTarget(ctx, ref, ability, createOwner);
+	}
+
+	/**
+	 * Refuses a config that confers authority its author does not hold (see
+	 * {@link Engine#requireConferrable}): the agent's own {@code caps}, absent
+	 * meaning unrestricted; the right to talk to it for whoever {@code accepts}
+	 * admits; and a public A2A interaction scope, {@code a2a.caps}. An update
+	 * re-checks only what it changes from {@code previous}, so editing anything
+	 * else needs no more than {@code agent/write}.
+	 */
+	private void requireConferrable(RequestContext ctx, AgentTarget target,
+			AMap<AString, ACell> config, AMap<AString, ACell> previous) {
+		AString owner = target.ownerDID();
+		if (previous == null || changed(config, previous, K_CAPS)) {
+			engine.requireConferrable(ctx, owner, RT.ensureVector(config.get(K_CAPS)));
+		}
+		AVector<ACell> talk = Vectors.of(
+			Capability.create(target.address(), Abilities.AGENT_REQUEST),
+			Capability.create(target.address(), Abilities.AGENT_MESSAGE));
+		ACell accepts = config.get(Fields.ACCEPTS);
+		boolean admitsOthers = accepts != null && !Admission.OWNER.equals(accepts)
+			&& !(accepts instanceof AVector<?> entries && entries.isEmpty());
+		if (admitsOthers && (previous == null || changed(config, previous, Fields.ACCEPTS))) {
+			engine.requireConferrable(ctx, owner, talk);
+		}
+		AMap<AString, ACell> a2a = RT.ensureMap(config.get(Fields.A2A));
+		ACell a2aCaps = (a2a == null) ? null : a2a.get(K_CAPS);
+		boolean publicInteraction = a2aCaps != null && CVMBool.TRUE.equals(a2a.get(K_PUBLIC));
+		if (publicInteraction && (previous == null || changed(config, previous, Fields.A2A))) {
+			engine.requireConferrable(ctx, owner, talk);
+			if (K_UNRESTRICTED.equals(a2aCaps)) {
+				engine.requireConferrable(ctx, owner, null);
+			} else if (a2aCaps instanceof AVector<?>) {
+				engine.requireConferrable(ctx, owner, RT.ensureVector(a2aCaps));
+			}
+		}
+	}
+
+	private static boolean changed(AMap<AString, ACell> config, AMap<AString, ACell> previous, AString key) {
+		return !java.util.Objects.equals(config.get(key), (previous == null) ? null : previous.get(key));
 	}
 
 	private static AMap<AString, ACell> identify(AgentTarget target, AMap<AString, ACell> result) {
@@ -741,6 +783,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> config = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
 			if (config == null) config = Maps.empty();
 			validateComposedConfig(config);
+			requireConferrable(ctx, target, config, null);
 			AgentState created = user.createAgent(agentId, config,
 				RT.getIn(input, AgentState.KEY_STATE), definition);
 			if (created == null) throw new IllegalArgumentException("Agent already exists: " + agentId);
@@ -859,6 +902,7 @@ public class AgentAdapter extends AAdapter {
 			job.fail(describeFailure(e));
 			return;
 		}
+		requireConferrable(ctx, target, config, null);
 
 		AgentState agent = user.createAgent(agentId, config, initialState);
 		if (agent == null) {
@@ -1347,6 +1391,8 @@ public class AgentAdapter extends AAdapter {
 			job.fail(describeFailure(e));
 			return;
 		}
+		// The fork's authority is conferred by the forker, in the target's namespace.
+		requireConferrable(ctx, targetTarget, forkConfig, null);
 
 		ACell sourceState = sourceRecord.get(AgentState.KEY_STATE);
 		AVector<ACell> sourceTimeline = null;
@@ -2589,6 +2635,7 @@ public class AgentAdapter extends AAdapter {
 				job.fail(describeFailure(e));
 				return;
 			}
+			requireConferrable(ctx, target, newConfig, agent.getConfig());
 		}
 		// Config's single home is record.config (#144), and loads live on the
 		// context scope chain (#142) — see handleCreate.

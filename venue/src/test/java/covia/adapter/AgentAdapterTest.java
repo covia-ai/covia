@@ -163,9 +163,12 @@ public class AgentAdapterTest {
 		RequestContext delegated = RequestContext.of(delegateDID)
 			.withProofs(Vectors.of(grant.toMap()));
 
+		// The delegate names caps it holds: it may not create an unrestricted agent
+		// in the owner's namespace.
 		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, address,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
+					"caps", Vectors.of(Capability.create(address, Capability.CRUD_READ)))),
 			delegated).awaitResult(5000);
 		assertEquals(address, RT.getIn(created, Fields.ADDRESS));
 
@@ -6829,11 +6832,14 @@ public class AgentAdapterTest {
 				Strings.create("can"), Strings.create("agent/create")),
 			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
 				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ)));
+		// A scoped creator confers only caps it holds.
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-unreadable-source-agent",
 			Fields.CONFIG, Maps.of(
 				"operation", "v/ops/llmagent/chat",
-				"skillsets", Vectors.of(Strings.create("w/other-place"))));
+				"skillsets", Vectors.of(Strings.create("w/other-place")),
+				"caps", Vectors.of(convex.auth.ucan.Capability.create(
+					Strings.create("w/skills"), convex.auth.ucan.Capability.CRUD_READ))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, scoped).awaitResult(5000);
 
@@ -6860,7 +6866,9 @@ public class AgentAdapterTest {
 			Fields.AGENT_ID, "skills-readable-source-agent",
 			Fields.CONFIG, Maps.of(
 				"operation", "v/ops/llmagent/chat",
-				"skillsets", Vectors.of(Strings.create("v/skills/root"))));
+				"skillsets", Vectors.of(Strings.create("v/skills/root")),
+				"caps", Vectors.of(convex.auth.ucan.Capability.create(
+					Strings.create("v/skills"), convex.auth.ucan.Capability.CRUD_READ))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, scoped).awaitResult(5000);
 		assertNull(RT.getIn(result, Fields.WARNINGS), String.valueOf(result));
