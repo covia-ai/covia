@@ -783,7 +783,7 @@ public class Engine {
 		this.venueState = connected;
 
 		this.auth = new Auth(this, venueState, venueState.authCursor());
-		this.accessControl = new AccessControl();
+		this.accessControl = new AccessControl(this);
 	}
 
 	/**

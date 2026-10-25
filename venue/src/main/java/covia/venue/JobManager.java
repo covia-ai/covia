@@ -938,9 +938,7 @@ public class JobManager {
 		job = activeJobs.get(jobID);
 		if (job != null && !job.isRecorded()) return null;
 		if (job != null) {
-			if (!canReadJob(ctx, jobID, job.getData())) {
-				throw new AuthException("Access denied to job: " + jobID.toHexString());
-			}
+			requireReadable(ctx, jobID, job.getData());
 			return job.getData();
 		}
 
@@ -951,7 +949,16 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		return user.getJob(jobID);
+		AMap<AString, ACell> record = user.getJob(jobID);
+		if (record != null) requireReadable(ctx, jobID, record);
+		return record;
+	}
+
+	/** Opening of every refusal of access to a job. */
+	public static final String JOB_ACCESS_DENIED = "Access denied to job: ";
+
+	private void requireReadable(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
+		if (!canReadJob(ctx, jobID, data)) throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 	}
 
 	/**
@@ -963,7 +970,7 @@ public class JobManager {
 	 * ({@link #requireJobOwner}).
 	 */
 	private boolean canReadJob(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (engine.getAccessControl().canAccessJob(ctx, data)) return true; // owner
+		if (engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_READ)) return true; // owner
 		AString owner = RT.ensureString(data.get(Fields.CALLER));
 		if (owner == null) return false; // venue-internal job — owner/internal only
 		AString resource = owner.append("/j/" + jobID.toHexString());
@@ -977,8 +984,8 @@ public class JobManager {
 	 * read-delegable {@link #getJobData(Blob, RequestContext)}.
 	 */
 	private void requireJobOwner(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (!engine.getAccessControl().canAccessJob(ctx, data)) {
-			throw new AuthException("Access denied to job: " + jobID.toHexString());
+		if (!engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_WRITE)) {
+			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 		}
 	}
 
@@ -1008,7 +1015,10 @@ public class JobManager {
 	 */
 	public Job getJob(Blob jobID, RequestContext ctx) {
 		Job job = activeJobs.get(jobID);
-		if (job != null) return job;
+		if (job != null) {
+			requireReadable(ctx, jobID, job.getData());
+			return job;
+		}
 
 		// Fall back to user's lattice
 		AString did = ctx.getUserDID();
@@ -1017,6 +1027,7 @@ public class JobManager {
 		if (user == null) return null;
 		AMap<AString, ACell> record = user.getJob(jobID);
 		if (record == null) return null;
+		requireReadable(ctx, jobID, record);
 		return new Job(record);
 	}
 
@@ -1138,15 +1149,15 @@ public class JobManager {
 			// error too, just an honest one.
 			Job recorded = getJob(jobID, ctx);
 			if (recorded == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
-			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData())) {
-				throw new AuthException("Access denied to job: " + jobID.toHexString());
+			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData(), Capability.CRUD_WRITE)) {
+				throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 			}
 			throw new IllegalStateException(recorded.isFinished()
 				? "Job is in terminal state: " + jobID.toHexString()
 				: "Job is not active: " + jobID.toHexString());
 		}
-		if (!engine.getAccessControl().canAccessJob(ctx, job.getData())) {
-			throw new AuthException("Access denied to job: " + jobID.toHexString());
+		if (!engine.getAccessControl().canAccessJob(ctx, job.getData(), Capability.CRUD_WRITE)) {
+			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 		}
 		deliverMessage(job, message, ctx.getCallerDID());
 	}

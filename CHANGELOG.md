@@ -48,6 +48,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - MCP `tools-call` and `tools-list` apply the SSRF policy to the server URL.
 - `bearerSecret: "oauth/<provider>"` needs `secret/use` and honours `nb.url`,
   like any other secret reference.
+- A capability-scoped agent or delegate reaches only jobs it launched or its
+  caps cover; a live job is never returned by id without read access.
 
 ### Added
 
