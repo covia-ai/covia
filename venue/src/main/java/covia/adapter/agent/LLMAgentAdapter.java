@@ -375,7 +375,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		AVector<ACell> sessionFrames = store.frames();
 		AMap<AString, ACell> frameLoads = GoalTreeContext.rootLoads(sessionFrames);
-		RequestContext capsCtx = conferredCapsContext(recordConfig, ctx).withAgentId(agentId);
+		RequestContext capsCtx = conferredCapsContext(recordConfig, agentId, ctx).withAgentId(agentId);
 		AMap<AString, ACell> config = effectiveModelConfig(recordConfig, ctx);
 		AString llmOperation = getLLMOperation(config);
 		ModelProfile profile = modelProfileFor(config, ctx);

@@ -186,6 +186,40 @@ public class AgentConferralTest {
 	}
 
 	@Test
+	public void testStoredCapsAreNotReCheckedOnRuns() {
+		// Alice confers a cap over Bob's data that Bob granted her. The agent runs
+		// under it without holding Bob's grant itself: conferral was checked once,
+		// against Alice, when the caps were written.
+		assertComplete(run("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, "for Alice"), BOB));
+		long exp = System.currentTimeMillis() / 1000 + 3600;
+		RequestContext aliceWithGrant = ALICE.withProofs(Vectors.of(UCAN.create(bobKP,
+			aliceKP.getAccountKey(), exp, Vectors.of(cap(bob + "/w/shared/", Capability.CRUD_READ)),
+			Vectors.empty()).toMap()));
+		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "reader",
+			Fields.CONFIG, config(Vectors.of(cap(bob + "/w/shared/", Capability.CRUD_READ),
+				Maps.of(Capability.CAN, INVOKE)))), aliceWithGrant));
+
+		Job chat = run("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "reader",
+			Fields.MESSAGE, Strings.create("call echo")), ALICE);
+		assertComplete(chat);
+		assertTrue(RT.getIn(chat.getOutput(), Fields.RESPONSE).toString().contains("Tool returned"),
+			String.valueOf(chat.getOutput()));
+	}
+
+	@Test
+	public void testDirectChatCannotBorrowAnotherAgentsCaps() {
+		AVector<ACell> everything = Vectors.of(Maps.of(Capability.CAN, Capability.TOP));
+		assertComplete(run("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "wide", Fields.CONFIG, config(everything)), ALICE));
+		RequestContext sibling = RequestContext.ofAgent(alice, Strings.create("sibling")).withCaps(Vectors.of(
+			cap("v/ops/llmagent/chat", INVOKE), cap("v/test/ops/toolllm", INVOKE)));
+		assertNotConferrable(run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "wide",
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm", "caps", everything),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo"))), sibling));
+	}
+
+	@Test
 	public void testDirectChatCannotWidenCallerScope() {
 		RequestContext scoped = RequestContext.ofAgent(alice, Strings.create("narrow")).withCaps(Vectors.of(
 			cap("v/ops/llmagent/chat", INVOKE), cap("v/test/ops/toolllm", INVOKE)));

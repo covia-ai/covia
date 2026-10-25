@@ -199,13 +199,30 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/**
 	 * {@link #capsContext} for a transition's input config, which its caller
 	 * supplies: the caps it names replace the caller's scope, so the caller must
-	 * hold each of them ({@link covia.venue.Engine#requireConferrable}).
+	 * hold each of them ({@link covia.venue.Engine#requireConferrable}). An agent
+	 * running under the caps its own record holds confers nothing: they were
+	 * checked against their author when written, and are not re-checked against
+	 * the agent, which holds none of that author's grants.
 	 */
-	protected RequestContext conferredCapsContext(AMap<AString, ACell> config, RequestContext ctx) {
+	protected RequestContext conferredCapsContext(AMap<AString, ACell> config, AString agentId,
+			RequestContext ctx) {
 		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
 		// No engine only in adapters constructed directly by unit tests (as requireInvoke).
-		if (caps != null && engine != null) engine.requireConferrable(ctx, ctx.getUserDID(), caps);
+		if (caps != null && engine != null && !isOwnRecordScope(ctx, agentId, caps)) {
+			engine.requireConferrable(ctx, ctx.getUserDID(), caps);
+		}
 		return capsContext(config, ctx);
+	}
+
+	/** Whether the caller is agent {@code agentId} itself and {@code caps} are its stored caps. */
+	private boolean isOwnRecordScope(RequestContext ctx, AString agentId, AVector<ACell> caps) {
+		AString owner = ctx.getUserDID();
+		if (agentId == null || owner == null
+				|| !covia.grid.Principals.agentDID(owner, agentId).equals(ctx.getCallerDID())) {
+			return false;
+		}
+		AgentState agent = engine.getAgent(owner, agentId);
+		return agent != null && caps.equals(RT.getIn(agent.getConfig(), K_CAPS));
 	}
 
 	/**

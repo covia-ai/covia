@@ -597,7 +597,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Authority, palette and the cycle's Spec. Harness tool names in
 		// config.tools are skipped by the palette — they're resolved separately
 		// by resolveHarnessTools / buildTypedRootHarnessTools.
-		RequestContext capsCtx = conferredCapsContext(recordConfig, ctx).withAgentId(agentId);
+		RequestContext capsCtx = conferredCapsContext(recordConfig, agentId, ctx).withAgentId(agentId);
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		boolean cachePrefix = promptCaching(profile, l3Config);
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
