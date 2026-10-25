@@ -90,6 +90,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   pause and returning those still being spoken.
 - Every jar names its Java module (`Automatic-Module-Name`: `covia.venue`, `covia.core`,
   `covia.<module>`).
+- `user:export`, `user:import` and `user:clone`: a user's whole stored state as one value,
+  secrets sealed to the caller's key; import runs Covia's migrations (#615).
 
 ### Changed
 

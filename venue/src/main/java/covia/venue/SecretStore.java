@@ -21,6 +21,7 @@ import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
+import covia.api.Fields;
 
 /**
  * Per-user encrypted secret storage.
@@ -230,12 +231,51 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 
 	public AString decrypt(AString name, Keys keys) {
 		// One read: the blob and its version must come from the same record.
-		AMap<AString, ACell> record = getRecord(name);
+		return open(getRecord(name), keys);
+	}
+
+	/** Decrypts one stored record under the key of its version; null for no record. */
+	private static AString open(AMap<AString, ACell> record, Keys keys) {
 		Blob blob = encrypted(record);
 		if (blob == null) return null;
 		byte[] key = keys.forVersion(keyVersion(record));
 		if (key == null) throw new IllegalStateException(UNKNOWN_KEY_VERSION);
 		return plaintext(AESGCM.decrypt(key, blob.getBytes()));
+	}
+
+	/**
+	 * Every record of a stored secret map decrypted, as
+	 * {@code name → {value, updated}}. Package-private: a user export seals the
+	 * result to another key before it leaves the venue.
+	 *
+	 * @throws RuntimeException when any record cannot be decrypted
+	 */
+	static AMap<AString, ACell> plaintexts(AMap<AString, ACell> records, Keys keys) {
+		AMap<AString, ACell> out = Maps.empty();
+		if (records == null) return out;
+		for (var entry : records.entrySet()) {
+			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
+			if (record == null) throw new IllegalStateException(INVALID_RECORD);
+			out = out.assoc(entry.getKey(), Maps.of(
+				Fields.VALUE, open(record, keys),
+				UPDATED_KEY, record.get(UPDATED_KEY)));
+		}
+		return out;
+	}
+
+	/**
+	 * Stored records for {@link #plaintexts} output, encrypted under the current
+	 * key version and keeping each secret's last-modified stamp.
+	 */
+	static AMap<AString, ACell> records(AMap<AString, ACell> plaintexts, Keys keys) {
+		AMap<AString, ACell> out = Maps.empty();
+		for (var entry : plaintexts.entrySet()) {
+			AString value = RT.ensureString(RT.getIn(entry.getValue(), Fields.VALUE));
+			if (!(entry.getKey() instanceof AString) || value == null) throw new IllegalArgumentException(INVALID_RECORD);
+			CVMLong updated = RT.getIn(entry.getValue(), UPDATED_KEY) instanceof CVMLong stamp ? stamp : CVMLong.ZERO;
+			out = out.assoc(entry.getKey(), record(encrypt(value, keys), updated));
+		}
+		return out;
 	}
 
 	/**

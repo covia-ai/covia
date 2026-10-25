@@ -137,6 +137,51 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 		return previous == null || RT.getIn(previous, Covia.K_DELETED) != null;
 	}
 
+	public static final String NOT_EMPTY = "The target account already holds user state";
+
+	/** Lifecycle and activity bookkeeping of a record, never part of a user's state. */
+	private static final AString[] FRAMEWORK_SLOTS = { GENERATION, DELETING, Covia.K_DELETED, Covia.K_META };
+
+	private static AMap<AString, ACell> withoutSlots(AMap<AString, ACell> record) {
+		for (AString slot : FRAMEWORK_SLOTS) record = record.dissoc(slot);
+		return record;
+	}
+
+	/** A record's user state without its framework slots, or null for no live record. */
+	static AMap<AString, ACell> content(ACell record) {
+		AMap<AString, ACell> map = RT.ensureMap(record);
+		if (map == null || map.get(Covia.K_DELETED) != null) return null;
+		return withoutSlots(map);
+	}
+
+	/** A registered user's state without its framework slots, or null if not registered. */
+	public AMap<AString, ACell> content(AString did) {
+		AMap<AString, ACell> all = cursor().get();
+		return all == null ? null : content(all.get(did));
+	}
+
+	/**
+	 * Registers {@code did} if needed and fills it with user state. The account
+	 * must hold none: its own framework slots are kept, and the write through
+	 * {@link User} mints its {@code meta} as the account's first activity.
+	 *
+	 * @return true when this call registered the account
+	 */
+	boolean restore(AString did, AMap<AString, ACell> state) {
+		AMap<AString, ACell> incoming = withoutSlots(state);
+		boolean created = create(did);
+		User user = get(did);
+		if (user == null) throw new AuthException(ACCOUNT_DELETED);
+		user.cursor().updateAndGet(current -> {
+			AMap<AString, ACell> record = RT.ensureMap(current);
+			if (record == null) record = Maps.empty();
+			if (!withoutSlots(record).isEmpty()) throw new IllegalStateException(NOT_EMPTY);
+			for (var entry : incoming.entrySet()) record = record.assoc(entry.getKey(), entry.getValue());
+			return record;
+		});
+		return created;
+	}
+
 	/** Opens recreation only after runtime cleanup has completed. */
 	void finishDeletion(AString did) {
 		cursor().withDefault(Maps.empty()).path(did).updateAndGet(current -> {

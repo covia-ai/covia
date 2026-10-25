@@ -1,0 +1,36 @@
+{
+  "name": "Import user",
+  "description": "Fill an account from a user:export made by this or another venue. The target is registered when absent and must otherwise hold no user state. Sealed secrets open with seed and are re-encrypted under this venue's key. Covia's migrations of its stored shapes run as part of the import. An export written by a newer Covia, or holding a job not yet finished or an agent task outstanding, is refused. Agent wakes are re-armed in this venue's schedule; references from the state to anything outside it are carried as stored. Requires venue-issued user/import on <venueDID>/users.",
+  "operation": {
+    "adapter": "user:import",
+    "readOnly": false,
+    "secretFields": ["export"],
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "Exact DID of the account to fill"
+        },
+        "export": {
+          "type": "string",
+          "description": "The export from user:export, as a blob or hexadecimal (optional 0x prefix)"
+        },
+        "seed": {
+          "type": "string",
+          "description": "Secret reference (s/NAME or <did>/s/NAME) to the 32-byte hexadecimal Ed25519 seed the export's secrets were sealed to. Required when the export holds secrets. Never pass a raw seed."
+        }
+      },
+      "required": ["did", "export"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "created": { "type": "boolean", "description": "True when the import registered the account" }
+      },
+      "required": ["did", "created"]
+    }
+  }
+}
