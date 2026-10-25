@@ -107,13 +107,14 @@ public class MainVenue {
 
 		// On JVM shutdown (e.g. `docker stop` → SIGTERM) flush each venue's
 		// accumulated state before the process exits. Registered on Convex's
-		// shared, priority-ordered Shutdown registry at a priority BELOW SERVER,
-		// so the venue's high-level flush — final root publication + fsync via
-		// the idempotent Engine.close() — runs before Convex's own NodeServer
-		// persist (SERVER) and Etch flush (ETCH). Deliberately not a second
+		// shared, priority-ordered Shutdown registry at SERVICE, the slot for
+		// services, so the venue's final root publication + fsync via the
+		// idempotent Engine.close() completes before Convex closes its servers
+		// (SERVER) and Etch files (ETCH). NodeServer saves nothing on close, so
+		// this flush is the venue's last save. Deliberately not a second
 		// Runtime.addShutdownHook: that would run concurrently with Convex's
 		// shutdown and race the store close/flush.
-		Shutdown.addHook(Shutdown.SERVER - 10, () -> {
+		Shutdown.addHook(Shutdown.SERVICE, () -> {
 			log.info("Shutdown signal received — flushing {} venue(s)", servers.size());
 			for (VenueServer server: servers) {
 				try {

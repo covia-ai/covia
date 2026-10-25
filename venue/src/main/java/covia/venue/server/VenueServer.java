@@ -1349,20 +1349,20 @@ public class VenueServer {
 		}));
 	}
 
+	/** The MCP endpoint, or null when the venue has no {@code mcp} config block. */
+	public MCP getMcp() {
+		return mcp;
+	}
+
 	/**
 	 * Full shutdown: stops HTTP server, drains the engine's persistence sweep
 	 * and runs a final flush, then closes NodeServer and store.
 	 *
 	 * <p>The engine.close() must run BEFORE nodeServer.close() so its final
 	 * root publication and durability barrier complete while the host remains
-	 * available. See
-	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
+	 * available. NodeServer saves nothing on close, so the engine's flush is
+	 * the venue's last save. See {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
-	/** The MCP endpoint, or null when the venue has no {@code mcp} config block. */
-	public MCP getMcp() {
-		return mcp;
-	}
-
 	public void close() {
 		closeResources(null);
 	}
@@ -1402,7 +1402,7 @@ public class VenueServer {
 		NodeServer<Index<Keyword, ACell>> ownedNode = nodeServer;
 		if (ownedNode != null) {
 			try {
-				ownedNode.close(); // graceful drain — now sees the engine's final flush
+				ownedNode.close(); // stops the node; saves nothing, the engine's flush was the last save
 			} catch (IOException e) {
 				recordCloseFailure(launchFailure, "NodeServer close failed", e);
 			}

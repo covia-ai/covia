@@ -11,7 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Convex 0.8.18 lattice applications
 
 These changes require Convex 0.8.18; until it is released, the local
-`0.8.18-fe473bdbd-SNAPSHOT` described in BUILD.md.
+`0.8.18-9118b49fd-SNAPSHOT` described in BUILD.md.
 
 - Messaging local-agent intake commits session input, receipt, conversation mapping
   and Job admission state in one venue transaction, retaining user-deletion fencing

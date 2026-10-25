@@ -156,7 +156,7 @@ public class VenueRestartTest {
 			// ========== Stage 2: Sync and shut down ==========
 
 			engine.syncState();
-			closeActivePhase(); // persists via triggerAndClose
+			closeActivePhase(); // persists via the engine's final flush
 		}
 
 		// ========== Stage 3: Restart with the same store ==========
