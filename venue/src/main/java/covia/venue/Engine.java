@@ -3218,7 +3218,7 @@ public class Engine {
 		long total = 0;
 		for (var entry : userData.entrySet()) {
 			User user = getVenueState().users().get((AString) entry.getKey());
-			if (user != null) total += user.getJobs().count();
+			if (user != null) total += user.countJobs();
 		}
 		return total;
 	}

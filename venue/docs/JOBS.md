@@ -122,9 +122,9 @@ update. For recorded venue jobs this edits `JobState`, not an in-memory copy:
 - **Terminal lifecycle states are sticky**. Completion, failure and cancellation
   race for one winner. History and cancellation diagnostics remain independently
   editable after completion, without replaying terminal hooks.
-- Each lifecycle transition embeds its predecessor under `prev`. History edits
-  use that same chain and preserve concurrent state rather than replacing it.
-  A progress change is not a lifecycle transition (below).
+- Each update replaces the current state. A job never embeds or links earlier
+  versions under `prev`. Message `history` and scratch data remain ordinary
+  fields; version retention and audit are separate concerns.
 - Original outputs and typed failures are runtime outcomes. The primary record
   is redacted; `awaitResult()` and `getOutput()` on the executing handle retain
   the original result. Reading `getData()` always reads the primary record while
@@ -149,8 +149,7 @@ separate durability barrier.
 - **Current state, not history.** Each record replaces the last in place,
   through the same atomic backing-record update as any other change, and
   reaches the Job's listeners and the venue's job observers (`onProgress`).
-  It is not a lifecycle transition, so nothing is chained under `prev` for
-  it. The last progress stays in the finished record.
+  The last progress stays in the finished record.
 - **Mirrors copy it.** A Job mirroring another — `ExternalAgents` for an
   external agent's child, `RemoteAgentAdapter` for a remote venue's Job,
   `A2AAdapter` for a remote Task — records status changes as updates and
@@ -224,7 +223,14 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 - Admission creates the caller's job record once (`:user-data/<DID>/j/<id>`).
   Runtime mutations use the existing component and apply `redactJobSecrets`
   inside its atomic update, before storage. Both `input` and `output` are
-  redacted per `secretFields`; predecessor records therefore contain safe data.
+  redacted per `secretFields`.
+- Legacy records are normalised lazily: reads ignore only the top-level `prev`
+  link, without traversing the chain or writing to storage. The next accepted
+  record or scratch update drops that link atomically. Imports also drop it.
+  No startup migration scan is needed. Current fields, including payload fields
+  named `prev`, remain intact. A read does not change timestamps or activity.
+  Untouched legacy records retain their old storage references until edited or
+  deleted; normal store collection can then reclaim unreachable versions.
 - History appends use one component operation for both active and completed
   jobs. Late cancellation evidence edits the latest record and cannot overwrite
   independent history or scratch updates.

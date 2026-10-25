@@ -145,7 +145,7 @@ Lifecycle-managed execution records. Created by `invoke()`, transition through a
 
 **Lifecycle:** `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (terminal, sticky), plus the paused family `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED` (resume to `STARTED`).
 
-A job is stored as a single flat record at `/j/<id>` — `{status, op, input, output?, error?, caller, created, updated, ...}` — with the prior record embedded under `prev`, forming a structurally content-addressed state-history chain. Terminal states are **sticky**: the CAS update path refuses transitions out of a terminal state, so the terminal record's `output`/`error` never change (the record entry itself remains deletable and secret-redacted on every durable write).
+A job is stored as a single current-state record at `/j/<id>` — `{status, op, input, output?, error?, caller, created, updated, ...}`. Updates replace the state without retaining earlier versions. Legacy top-level `prev` links are ignored on reads and removed on the next write, without a startup scan. Terminal states are **sticky**: the CAS update path refuses transitions out of a terminal state, so the terminal record's `output`/`error` never change (the record entry itself remains deletable and secret-redacted on every durable write).
 
 ```json
 {

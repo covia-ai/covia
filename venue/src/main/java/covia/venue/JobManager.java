@@ -1037,6 +1037,13 @@ public class JobManager {
 		return user.getJobs();
 	}
 
+	/** Caller-scoped count, without materialising a listing. */
+	public long countJobs(RequestContext ctx) {
+		AString did = ctx.getUserDID();
+		User user = did == null ? null : engine.getVenueState().users().get(did);
+		return user == null ? 0 : user.countJobs();
+	}
+
 	// ========== Job Lifecycle Control ==========
 
 	/**
@@ -1232,7 +1239,11 @@ public class JobManager {
 			AString did = (AString) entry.getKey();
 			User user = engine.getVenueState().users().get(did);
 			if (user == null) continue;
-			Index<Blob, ACell> userJobs = user.getJobs();
+			// Recovery already visits every record. Avoid a separate normalisation
+			// pass over the listing; terminal legacy records need no startup rewrite.
+			ACell storedJobs = RT.getIn(entry.getValue(), covia.lattice.Namespace.J);
+			if (!(storedJobs instanceof Index)) continue;
+			Index<Blob, ACell> userJobs = (Index<Blob, ACell>) storedJobs;
 			long n = userJobs.count();
 			for (long i = 0; i < n; i++) {
 				var jobEntry = userJobs.entryAt(i);
@@ -1242,7 +1253,7 @@ public class JobManager {
 				AMap<AString, ACell> record = (AMap<AString, ACell>) value;
 				if (activeJobs.containsKey(jobID)) continue; // already live
 				if (Job.isFinished(record)) continue;
-				VenueJob job = restoreJob(jobID, record, did);
+				VenueJob job = restoreJob(jobID, Job.currentState(record), did);
 				restored.add(job);
 			}
 		}

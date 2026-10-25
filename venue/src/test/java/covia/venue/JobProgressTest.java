@@ -36,7 +36,7 @@ public class JobProgressTest {
 		AMap<AString, ACell> recorded = record(did, job);
 		assertNotNull(recorded, "the Job is durable");
 		assertEquals("step 2", Job.progressMessage(recorded.get(Fields.PROGRESS)), "its record holds the progress");
-		assertNull(RT.getIn(recorded, Job.PREV, Fields.PROGRESS), "and no earlier step of it under prev");
+		assertNull(recorded.get(Strings.intern("prev")), "no earlier state is embedded");
 		AMap<AString, ACell> running = engine.jobs().getJobData(job.getID(), ctx);
 		assertEquals("step 2", Job.progressMessage(running.get(Fields.PROGRESS)), "a reader of the running Job sees it");
 

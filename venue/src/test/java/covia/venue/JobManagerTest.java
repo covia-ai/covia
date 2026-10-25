@@ -50,6 +50,65 @@ import covia.test.Rendezvous;
 	 * inside one venue is covered by {@code GridAdapterTest}.</p>
  */
 public class JobManagerTest {
+	@Test
+	public void legacyJobReadsArePureAndNextWriteDropsOnlyTheChain() {
+		User user = engine.getVenueState().users().ensure(did);
+		Blob id = Blob.fromHex("61106110611061106110611061106110");
+		AString prev = Strings.intern("prev");
+		AString temp = Strings.intern("temp");
+		AMap<AString, ACell> payload = Maps.of(prev, "payload field stays");
+		AMap<AString, ACell> current = Maps.of(Fields.ID, id, Fields.CALLER, did,
+			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, payload, Fields.UPDATED, 123L,
+			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")), temp, payload);
+		AMap<AString, ACell> legacy = current.assoc(prev, Maps.of(Fields.STATUS, Status.STARTED,
+			prev, Maps.of(Fields.STATUS, Status.PENDING)));
+		// Simulate an old store or a legacy snapshot arriving after startup.
+		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, legacy));
+		var storage = user.cursor().path(covia.lattice.Namespace.J, id);
+		ACell before = user.get();
+		String path = "j/" + id.toHexString();
+		assertEquals(current, user.job(id).getRecord());
+		assertEquals(current, engine.jobs().getJobData(id, ctx));
+		assertEquals(current, engine.jobs().getJobs(ctx).get(id));
+		assertEquals(1, engine.jobs().countJobs(ctx));
+		assertEquals(payload, engine.jobs().getJob(id, ctx).awaitResult());
+		assertEquals(current, engine.resolvePath(Strings.create(path), ctx));
+		assertEquals(current, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
+		assertEquals(current, RT.getIn(user.workspaceRoot().read(), covia.lattice.Namespace.J, id));
+		assertNull(engine.resolvePath(Strings.create(path + "/prev"), ctx));
+		var adapter = (covia.adapter.CoviaAdapter) engine.getAdapter("covia");
+		assertEquals(current, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
+		assertEquals(CVMBool.FALSE,
+			RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path + "/prev")), "exists"));
+		assertSame(before, user.get(), "reads must neither rewrite records nor stamp user activity");
+		assertSame(legacy, storage.get());
+
+		// A failed transaction must not migrate the record either.
+		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
+			draft.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
+			throw new IllegalStateException("rollback");
+		}));
+		assertSame(legacy, storage.get());
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "new");
+		assertTrue(user.job(id).appendHistory(message));
+		AMap<AString, ACell> migrated = user.getJob(id);
+		assertEquals(migrated, storage.get(), "the next edit physically removes the legacy link");
+		assertFalse(migrated.containsKey(prev));
+		assertEquals(current.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY),
+			migrated.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY));
+		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), migrated.get(Fields.HISTORY));
+		ACell after = storage.get();
+		assertFalse(user.job(id).appendHistory(message));
+		assertSame(after, storage.get(), "repeat edits remain idempotent");
+
+		storage.set(legacy);
+		user.recordCursor(covia.lattice.Namespace.J, id).path(temp, Strings.create("scratch")).set(CVMLong.ONE);
+		assertNull(RT.getIn(storage.get(), prev), "scratch edits also discard the obsolete link");
+		assertEquals(payload.assoc(Strings.create("scratch"), CVMLong.ONE), RT.getIn(storage.get(), temp));
+		user.persistJob(id, legacy);
+		assertNull(RT.getIn(storage.get(), prev), "imports cannot reintroduce chains");
+		assertEquals(CVMLong.ONE, RT.getIn(storage.get(), temp, "scratch"));
+	}
 
 	@Test
 	public void testSynchronousAdapterErrorsSettleDurableJobs() {
@@ -665,7 +724,7 @@ public class JobManagerTest {
 		assertEquals(primary, job.getData());
 		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.INPUT, token));
 		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.OUTPUT, token));
-		assertFalse(primary.toString().contains("private-test-value"), "predecessors must not retain plaintext either");
+		assertFalse(primary.toString().contains("private-test-value"));
 	}
 
 	@Test

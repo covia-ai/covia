@@ -22,6 +22,7 @@ import convex.lattice.generic.JSONLattice;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
+import covia.grid.Job;
 
 /**
  * Path operations and transactions over an already-authorised workspace.
@@ -139,7 +140,26 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 	 */
 	public ACell read(ACell... jsonKeys) {
 		Target target = Target.of(this, jsonKeys);
+		if (userNamespaces && jsonKeys.length == 0) {
+			AMap<AString, ACell> user = RT.ensureMap(target.root().get());
+			if (user == null || !user.containsKey(Namespace.J)) return user;
+			return user.assoc(Namespace.J, currentJobs(user.get(Namespace.J)));
+		}
+		if (userNamespaces && jsonKeys.length > 0 && Namespace.J.equals(jsonKeys[0])) {
+			ACell jobs = target.root().get();
+			// A single-job read must not scan the user's job index, nor follow prev.
+			if (jsonKeys.length > 1) {
+				AMap<AString, ACell> record = Job.currentState(RT.ensureMap(navigateInto(jobs, jsonKeys[1])));
+				return deepGet(record, jsonKeys, 2);
+			}
+			return currentJobs(jobs);
+		}
 		return deepGet(target.root().get(), jsonKeys, target.from());
+	}
+
+	@SuppressWarnings("unchecked")
+	private static ACell currentJobs(ACell value) {
+		return value instanceof Index<?, ?> ? Job.currentStates((Index<Blob, ACell>) value) : value;
 	}
 
 	/**
@@ -368,7 +388,7 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 		Target t = Target.of(this, keys);
 		ACell root = t.root().get();
 		if (keys.length <= t.from()) return root != null;
-		ACell parent = deepGet(root, Arrays.copyOf(keys, keys.length - 1), t.from());
+		ACell parent = read(Arrays.copyOf(keys, keys.length - 1));
 		return containsLeaf(parent, keys[keys.length - 1]);
 	}
 

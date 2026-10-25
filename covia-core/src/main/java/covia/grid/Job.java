@@ -15,6 +15,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -79,8 +80,27 @@ public class Job {
 	 */
 	private volatile Runnable onResume = null;
 
-	/** Key for previous state pointer in job data */
-	public static final AString PREV = Strings.intern("prev");
+	/** Obsolete field, recognised only to discard legacy state chains. */
+	private static final AString LEGACY_PREV = Strings.intern("prev");
+
+	/** Current state of a job, including records from older venues. Only the
+	 * top-level legacy link is removed; payloads and message history are intact.
+	 * Never walks the chain, whose depth and contents are unbounded. */
+	public static AMap<AString, ACell> currentState(AMap<AString, ACell> record) {
+		return record == null ? null : record.dissoc(LEGACY_PREV);
+	}
+
+	/** Normalises an explicitly requested job listing without writing to storage. */
+	public static Index<Blob, ACell> currentStates(Index<Blob, ACell> records) {
+		Index<Blob, ACell> result = records;
+		for (var entry : records.entrySet()) {
+			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
+			if (record == null) continue;
+			AMap<AString, ACell> current = currentState(record);
+			if (current != record) result = result.assoc(entry.getKey(), current);
+		}
+		return result;
+	}
 
 	/**
 	 * Per-Job listeners invoked on every successful state update. Consumers
@@ -104,6 +124,7 @@ public class Job {
 	 * {@link #getData()} and {@link #updateState(UnaryOperator, Throwable)}.
 	 */
 	protected Job(AMap<AString, ACell> status, boolean recorded) {
+		status = currentState(status);
 		this.state = new AtomicReference<>(status == null ? null : new State(status, null));
 		if (status != null && isFinished(status)) terminalOutcome.set(new State(status, null));
 		this.recorded = recorded;
@@ -215,7 +236,7 @@ public class Job {
 			State before = state.get();
 			AMap<AString, ACell> next = updater.apply(before.data());
 			if (next == null) return null;
-			State after = new State(next, failure);
+			State after = new State(currentState(next), failure);
 			if (state.compareAndSet(before, after)) return after;
 		}
 	}
@@ -224,7 +245,7 @@ public class Job {
 	 * This detached record is never written back into the deleted namespace. */
 	protected final void detachRecord(AMap<AString, ACell> lastKnown) {
 		State terminal = terminalOutcome.get();
-		state.compareAndSet(null, terminal != null ? terminal : new State(lastKnown, null));
+		state.compareAndSet(null, terminal != null ? terminal : new State(currentState(lastKnown), null));
 	}
 
 	protected final boolean hasLocalRecord() { return state.get() != null; }
@@ -237,7 +258,7 @@ public class Job {
 			if (next == null) return null;
 			next = processUpdate(next);
 			if (next == null) return null;
-			return current.isEmpty() ? next : next.assoc(PREV, current);
+			return next;
 		}, failure);
 		if (committed == null) return false;
 		AMap<AString, ACell> next = committed.data();
@@ -391,9 +412,8 @@ public class Job {
 	 * {@code {message, data?}} under {@link Fields#PROGRESS}.
 	 *
 	 * <p>Progress is part of the Job's record, as current state: each record
-	 * replaces the last in place and reaches listeners and observers. A
-	 * progress change is not a step in the Job's lifecycle, so nothing is
-	 * chained under {@link #PREV} for it. The last progress stays in the
+	 * replaces the last in place and reaches listeners and observers.
+	 * The last progress stays in the
 	 * finished record. A null {@code message} clears it. No effect on a
 	 * finished Job.</p>
 	 *
@@ -534,17 +554,6 @@ public class Job {
 		return RT.ensureString(getData().get(Fields.CALLER));
 	}
 
-	// ===== State History =====
-
-	/**
-	 * Gets the previous state from the current job data's prev chain.
-	 * @return Previous state data, or null if this is the first state
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getPreviousState() {
-		return (AMap<AString, ACell>) getData().get(PREV);
-	}
-
 	/**
 	 * Cancel this Job. No effect if already finished.
 	 *
@@ -614,7 +623,7 @@ public class Job {
 		State committed = updateState(current -> {
 			if (!Status.CANCELLED.equals(current.get(Fields.STATUS))) return null;
 			if (details.equals(current.get(Fields.CANCELLATION))) return null;
-			return processUpdate(current.assoc(Fields.CANCELLATION, details)).assoc(PREV, current);
+			return processUpdate(current.assoc(Fields.CANCELLATION, details));
 		}, null);
 		if (committed == null) return;
 		try { onUpdate(committed.data()); }

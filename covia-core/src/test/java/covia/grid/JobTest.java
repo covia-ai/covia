@@ -25,6 +25,37 @@ import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 
 public class JobTest {
+	private static final AString LEGACY_PREV = Strings.intern("prev");
+
+	@Test void repeatedUpdatesKeepOnlyCurrentState() {
+		AMap<AString, ACell> initial = Maps.of(Fields.STATUS, Status.STARTED, Fields.OUTPUT, "a");
+		Job job = Job.create(initial);
+		for (int i = 0; i < 10_000; i++) {
+			job.update(d -> d.assoc(Fields.OUTPUT, Strings.create("b")));
+			job.updateData(initial);
+		}
+		assertEquals(initial, job.getData());
+		assertEquals(convex.core.util.JSON.toString(initial), convex.core.util.JSON.toString(job.getData()));
+		job.cancel();
+		job.recordCancellation(Maps.of("outcome", "stopped"));
+		assertFalse(job.getData().containsKey(LEGACY_PREV));
+	}
+
+	@Test void legacyChainsAreDiscardedWithoutWalkingOrChangingPayloads() {
+		AMap<AString, ACell> payload = Maps.of(LEGACY_PREV, "application data");
+		AMap<AString, ACell> current = Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, payload);
+		AMap<AString, ACell> legacy = current;
+		for (int i = 0; i < 10_000; i++) legacy = current.assoc(LEGACY_PREV, legacy);
+		Job job = Job.create(legacy);
+		assertEquals(current, job.getData());
+		assertEquals(payload, job.awaitResult());
+		assertSame(current, Job.currentState(current), "normalisation is a no-op for current records");
+		assertEquals(current, Job.currentState(current.assoc(LEGACY_PREV, Strings.create("unreadable old data"))));
+		Job running = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		running.updateData(legacy);
+		assertEquals(current, running.getData());
+		assertEquals(payload, running.awaitResult());
+	}
 
 	@Test void cancellationEvidenceDoesNotReopenOrFinishTheJobAgain() {
 		var finishes = new java.util.concurrent.atomic.AtomicInteger();
@@ -71,7 +102,7 @@ public class JobTest {
 		assertTrue(job.progress("Running the tests", detail));
 		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
 		assertEquals(detail, Job.progressData(job.getData().get(Fields.PROGRESS)));
-		assertNull(job.getData().get(Job.PREV), "a progress change is not a step in the Job's lifecycle");
+		assertNull(job.getData().get(LEGACY_PREV));
 		assertEquals(2, notifications.get());
 		assertEquals(2, observed.get());
 

@@ -61,6 +61,44 @@ import covia.test.DurabilityTest;
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
 @DurabilityTest
 public class EnginePersistenceTest {
+	@Test
+	public void legacyJobChainsMigrateLazilyAcrossReopens() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(611).getSeed().toHexString());
+		var id = convex.core.data.Blob.fromHex("61106110611061106110611061106110");
+		AString prev = Strings.intern("prev");
+		AMap<AString, ACell> current = Maps.of(Fields.ID, id, Fields.CALLER, ALICE_DID,
+			Fields.STATUS, covia.grid.Status.COMPLETE, Fields.OUTPUT, "kept", Fields.UPDATED, 123L);
+		var legacy = current.assoc(prev, Maps.of(Fields.STATUS, covia.grid.Status.STARTED));
+		VenueServer server = VenueServer.launch(config);
+		try {
+			User user = server.getEngine().getVenueState().users().ensure(ALICE_DID);
+			user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<convex.core.data.Blob, ACell>none().assoc(id, legacy));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			User user = engine.getVenueState().users().get(ALICE_DID);
+			var storage = user.cursor().path(covia.lattice.Namespace.J, id);
+			assertEquals(legacy, storage.get(), "startup does not rewrite terminal jobs");
+			assertEquals(current, engine.jobs().getJobData(id, RequestContext.of(ALICE_DID)));
+			assertEquals(current, engine.resolvePath(Strings.create("j/" + id.toHexString()), RequestContext.of(ALICE_DID)));
+			assertEquals(legacy, storage.get(), "reading the reopened record is pure");
+			user.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "after-reopen"));
+			assertNull(RT.getIn(storage.get(), prev));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			var user = server.getEngine().getVenueState().users().get(ALICE_DID);
+			var stored = RT.ensureMap(user.cursor().path(covia.lattice.Namespace.J, id).get());
+			assertNull(stored.get(prev));
+			assertEquals(current.get(Fields.OUTPUT), stored.get(Fields.OUTPUT));
+			assertEquals(current.get(Fields.STATUS), stored.get(Fields.STATUS));
+			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.MESSAGE_ID, "after-reopen")), stored.get(Fields.HISTORY));
+		} finally { server.close(); }
+	}
 
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlicePersistTest");
 	private static final AString BOB_DID   = Strings.create("did:key:z6MkBobPersistTest");

@@ -16,6 +16,7 @@ import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.lattice.WorkspaceRoot;
 import convex.lattice.cursor.StampedCursor;
+import covia.grid.Job;
 
 /**
  * Per-user domain state, with atomic mutations and compound transactions.
@@ -106,7 +107,13 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	@SuppressWarnings("unchecked")
 	public Index<Blob, ACell> getJobs() {
 		ACell value = cursor().path(Namespace.J).get();
-		return (value instanceof Index) ? (Index<Blob, ACell>) value : Index.none();
+		return (value instanceof Index) ? Job.currentStates((Index<Blob, ACell>) value) : Index.none();
+	}
+
+	/** Counts entries without reading or normalising their records. */
+	public long countJobs() {
+		ACell value = cursor().path(Namespace.J).get();
+		return value instanceof Index<?, ?> index ? index.count() : 0;
 	}
 
 	/**
@@ -128,10 +135,11 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	/** Admission creates a record exactly once; subsequent updates use its component. */
 	boolean createJob(Blob jobID, AMap<AString, ACell> record) {
+		AMap<AString, ACell> current = Job.currentState(record);
 		ACell before = cursor().path(Namespace.J).getAndUpdate(value -> {
 			Index<Blob, ACell> jobs = value instanceof Index<?, ?> index
 				? (Index<Blob, ACell>) index : Index.none();
-			return jobs.containsKey(jobID) ? value : jobs.assoc(jobID, record);
+			return jobs.containsKey(jobID) ? value : jobs.assoc(jobID, current);
 		});
 		return !(before instanceof Index<?, ?> index) || !index.containsKey(jobID);
 	}
@@ -163,7 +171,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	@SuppressWarnings("unchecked")
 	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
-		final AMap<AString, ACell> rec = record;
+		final AMap<AString, ACell> rec = Job.currentState(record);
 		cursor().path(Namespace.J).updateAndGet(jobs -> {
 			Index<Blob, ACell> idx = (jobs instanceof Index)
 				? (Index<Blob, ACell>) jobs

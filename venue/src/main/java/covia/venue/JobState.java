@@ -28,7 +28,8 @@ public final class JobState extends ALatticeComponent<ACell>
 	JobState(LatticeContext context, AForkableCursor<ACell> storage) {
 		super(storage);
 		this.context = context;
-		this.edits = StampedCursor.create(storage, context::currentTimestamp, Covia::stampUpdated);
+		this.edits = StampedCursor.create(storage, context::currentTimestamp,
+			(value, ts) -> Covia.stampUpdated(Job.currentState(RT.ensureMap(value)), ts));
 	}
 
 	@Override public AForkableCursor<ACell> cursor() { return edits; }
@@ -36,17 +37,17 @@ public final class JobState extends ALatticeComponent<ACell>
 		return new JobState(context, draft);
 	}
 
-	public AMap<AString, ACell> getRecord() { return RT.ensureMap(cursor().get()); }
+	public AMap<AString, ACell> getRecord() { return Job.currentState(RT.ensureMap(cursor().get())); }
 
 	/** Pure record edit; null rejects the edit. Returns the committed record or
 	 * null for a rejected/missing row, resetting acceptance on every retry. */
 	AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> action) {
 		boolean[] accepted = {false};
 		ACell committed = cursor().updateAndGet(value -> {
-			AMap<AString, ACell> current = RT.ensureMap(value);
+			AMap<AString, ACell> current = Job.currentState(RT.ensureMap(value));
 			AMap<AString, ACell> next = current == null ? null : action.apply(current);
 			accepted[0] = next != null;
-			return next == null ? value : next;
+			return next == null ? value : Job.currentState(next);
 		});
 		return accepted[0] ? RT.ensureMap(committed) : null;
 	}
@@ -63,7 +64,7 @@ public final class JobState extends ALatticeComponent<ACell>
 					if (item instanceof AMap<?, ?> map && messageId.equals(map.get(Fields.MESSAGE_ID))) return null;
 				}
 			}
-			return data.assoc(Fields.HISTORY, history.conj(message)).assoc(Job.PREV, data);
+			return data.assoc(Fields.HISTORY, history.conj(message));
 		}) != null;
 	}
 }
