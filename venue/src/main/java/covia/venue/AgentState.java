@@ -133,8 +133,10 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	public static final AString KEY_IN_CYCLE = K_IN_CYCLE;
 	/** Frame record `description` key. */
 	public static final AString KEY_DESCRIPTION  = K_DESCRIPTION;
-	/** Frame record `conversation` key — vector of turn envelopes and/or
-	 *  compacted segments. */
+	/** Legacy frame record {@code conversation} key. New frames use versioned
+	 *  history; readers needing the equivalent nested conversation should use
+	 *  {@link covia.adapter.agent.GoalTreeContext#archivedConversation(AMap)}
+	 *  instead of this key. */
 	public static final AString KEY_CONVERSATION = K_CONVERSATION;
 
 	/** Identity of a schedulable thread within an agent — a session or a task.

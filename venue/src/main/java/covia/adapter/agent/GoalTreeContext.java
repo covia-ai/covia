@@ -456,6 +456,11 @@ public class GoalTreeContext {
 	}
 
 	/** Exact legacy-shaped view for archive readers and ancestor rendering.
+	 * Drop-in replacement for a direct {@code frame.conversation} read by an
+	 * embedder that walks nested {@code items}: keeps original entry order,
+	 * metadata, internal tool activity and unfinished turns. Returns null for an
+	 * absent conversation, distinct from an existing empty vector. This is a raw
+	 * accessor; the caller remains responsible for authorisation and projection.
 	 * Range expansion uses immutable vector slices; it performs no IO and does
 	 * not change stored entries, summaries, provenance or cached prompt inputs. */
 	public static AVector<ACell> archivedConversation(AMap<AString, ACell> frame) {

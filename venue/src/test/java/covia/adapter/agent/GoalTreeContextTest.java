@@ -74,6 +74,64 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
+	public void embedderArchiveWalkersKeepTheirResultsAcrossStorageFormats() {
+		AMap<AString, ACell> legacy = legacyFrame("root");
+		AMap<AString, ACell> current = GoalTreeContext.createFrame("root");
+		AVector<ACell> expected = Vectors.empty();
+		// Beyond sessionRead's depth limit: raw embedder access has no such cap.
+		for (int i = 0; i < 12; i++) {
+			AVector<ACell> turns = Vectors.of(
+				Maps.of("role", "user", "content", Maps.of("text", "question " + i, "via", "phone"),
+					"ts", (long) i, "caller", "owner", "source", "chat"),
+				Maps.of("role", "assistant", "content", "internal", "toolCalls", Vectors.of(Maps.of("id", "call-" + i)),
+					Fields.PROVIDER_STATE, Maps.of("opaque", "keep exactly")),
+				Maps.of("role", "tool", "id", "call-" + i, "structuredContent", Maps.of("value", i)),
+				Maps.of("role", "assistant", "content", "answer " + i, "jobId", "job-" + i));
+			expected = expected.concat(turns);
+			legacy = GoalTreeContext.compactFrame(GoalTreeContext.appendTurns(legacy, turns), "notes " + i);
+			current = GoalTreeContext.compactFrame(GoalTreeContext.appendTurns(current, turns), "notes " + i);
+		}
+		ACell unanswered = Maps.of("role", "user", "content", "unfinished", "ts", 99L);
+		legacy = GoalTreeContext.appendTurn(legacy, unanswered);
+		current = GoalTreeContext.appendTurn(current, unanswered);
+		AVector<ACell> oldShape = GoalTreeContext.activeConversation(legacy);
+		ACell cached = Maps.of("messages", Vectors.of(Maps.of("role", "system", "content", "fixed")));
+		for (AMap<AString, ACell> frame : java.util.List.of(legacy, GoalTreeContext.migrateFrame(legacy), current)) {
+			AMap<AString, ACell> withCache = frame.assoc(GoalTreeContext.K_RENDERED_CONTEXT, cached);
+			AVector<ACell> compatible = GoalTreeContext.archivedConversation(withCache);
+			assertEquals(oldShape, compatible, "existing summary inspectors see the identical nested shape");
+			assertEquals(expected.conj(unanswered), flattenAsLegacyEmbedder(compatible),
+				"existing exports retain all original fields, internal turns and the unanswered tail");
+			AVector<ACell> earlier = Vectors.empty();
+			for (ACell entry : compatible) {
+				if (GoalTreeContext.isSegment(entry)) {
+					earlier = earlier.concat(flattenAsLegacyEmbedder(RT.ensureVector(RT.getIn(entry, "items"))));
+				}
+			}
+			assertEquals(expected, earlier, "existing archived-only callers exclude the live tail");
+			assertSame(unanswered, compatible.get(compatible.count() - 1));
+			assertSame(cached, withCache.get(GoalTreeContext.K_RENDERED_CONTEXT));
+			assertEquals(ConversationRenderer.renderFull(legacy), ConversationRenderer.renderFull(withCache));
+			for (int depth : new int[] {0, 1, 8}) {
+				assertEquals(ConversationRenderer.historical(legacy, 20, 1000, depth),
+					ConversationRenderer.historical(withCache, 20, 1000, depth),
+					"existing filtered callers retain their bounds and projection");
+			}
+		}
+	}
+
+	/** Representative pre-migration embedder logic; deliberately knows only items. */
+	private static AVector<ACell> flattenAsLegacyEmbedder(AVector<ACell> entries) {
+		AVector<ACell> result = Vectors.empty();
+		for (ACell entry : entries) {
+			result = GoalTreeContext.isSegment(entry)
+				? result.concat(flattenAsLegacyEmbedder(RT.ensureVector(RT.getIn(entry, "items"))))
+				: result.conj(entry);
+		}
+		return result;
+	}
+
+	@Test
 	public void historyRejectsDowngradesRewritesAndForwardReferences() {
 		AMap<AString, ACell> first = GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""), Maps.of("content", "first"));
 		AMap<AString, ACell> later = GoalTreeContext.appendTurn(first, Maps.of("content", "later"));

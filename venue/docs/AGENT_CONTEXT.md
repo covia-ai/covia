@@ -477,6 +477,35 @@ entry and every part of an oversized entry. History inspection does not change
 the active selection; recalled material enters an agent's context as a new tool
 result. Reader output is a versioned contract independent of storage layout.
 
+The current compatibility work supports existing callers through the existing
+format-aware accessors; see the replacement table in
+[AGENT_SESSIONS.md §5.2.1](./AGENT_SESSIONS.md#521-embedded-callers-and-storage-compatibility).
+Existing callers do not need a new REST operation or adoption of the preview
+reader below. Oversized-entry navigation and broader policy-aware projections remain proposed work in
+[#597](https://github.com/covia-ai/covia/issues/597) and
+[#461](https://github.com/covia-ai/covia/issues/461), not prerequisites for this
+storage migration. An embedder may use Java accessors directly; not every
+accessor needs an HTTP counterpart.
+
+**Preview Java API.** `ConversationHistory.open(frame)` captures an immutable,
+validated frame-history snapshot. Legacy archives are normalised in memory;
+no migration is published and cached context is untouched. `size()` includes
+retained history outside the active selection; `contextStart()` captures that
+selection's start. `read(start, end, limit)` returns complete entries within
+`[start, end)`, limited by entry count. The page's `next` is its exclusive end;
+continue with `read(page.next(), page.end(), limit)` on the same snapshot until
+`hasMore()` is false. `coverage(position)` returns a summary's half-open range
+or null for an ordinary entry. Following coverage is explicit, not automatic
+expansion. Live appends and compaction do not change an existing snapshot.
+
+This preview may change before stabilisation. It does not replace the existing
+compatibility accessors or the policy-aware retrospective operations. It returns
+raw entries, including tool activity, unfinished turns and provider continuation
+data; hosts retain their authorisation, audience rules and response budgets.
+Entry counts do not bound bytes or tokens. Opening may inspect the entire frame
+history; subsequent page reads use immutable vector slices. There is no external
+cursor registry, child-history navigation or REST endpoint in this preview.
+
 Immutable sequence prefixes and active context inputs can be shared by future
 forks, with independent appends after the branch point. History access or a
 branch reference does not grant execution authority. This foundation does not
@@ -1211,9 +1240,11 @@ The storage/accessor foundation in §1.3 is implemented. Remaining divergences:
 
 - **History navigation and internal activity (#597).** Writers, rendering,
   retrospective reads and migration support versioned history and summary
-  ranges. A common paged history-navigation surface and retained-child links
-  remain undesigned; `sessionRead` still excludes the caller's current session
-  and limits archive depth to eight. Existing cycle records retain completed
+  ranges. Existing embedders can use the compatibility accessors without a new
+  REST API. `ConversationHistory` offers frame-range reads as a preview Java API.
+  Tool-facing navigation, oversized-entry fragments and retained-child
+  links remain deferred under #597; `sessionRead` still excludes the caller's
+  current session and limits archive depth to eight. Existing cycle records retain completed
   children. Initialisation still combines source resolution with initial
   rendering; making resolved inputs explicit remains separate work.
 
