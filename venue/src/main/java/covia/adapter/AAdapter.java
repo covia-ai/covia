@@ -27,12 +27,15 @@ import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 public abstract class AAdapter {
+	public static final String LATTICE_READ_ONLY = "Adapter lattice view is read-only";
+
 	/**
 	 * Opt-in, user-visible lattice at x/adapterName. Return a connected cursor or
 	 * a pure projected snapshot, or null to expose nothing. Resolution must be
 	 * local and side-effect-free; never return the entire private adapter state
 	 * unless every field is intentionally visible to this user. Use the supplied
 	 * context's user DID for ownership and retain account lifecycle guards.
+	 * Views live for one operation/transaction and must not be cached.
 	 * The default is no route; exposed views are read-only unless opted in below.
 	 */
 	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
@@ -44,9 +47,11 @@ public abstract class AAdapter {
 	 * Ordinary CRUD capabilities are enforced by the router as well. Keep this
 	 * pure: it can run again during an atomic update. Writable views must commit
 	 * to their authoritative lattice state, not to a disposable snapshot.
+	 * Return null to allow, or a refusal reason that reaches the caller unchanged.
+	 * The adapter also owns value validation in its cursor write transformation.
 	 */
-	public boolean canWriteLattice(RequestContext ctx, ACell[] path) {
-		return false;
+	public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+		return LATTICE_READ_ONLY;
 	}
 
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);

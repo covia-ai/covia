@@ -363,8 +363,18 @@ identifies the actor. The owner-bound component retains account deletion and
 recreation guards. Keep credentials and internal records outside the exposed
 subtree: reading a parent returns its entire value, including descendants.
 
-Views are read-only by default. Override `canWriteLattice(ctx, path)` to allow
+Execution references live together in `ctx.getExecutionScope()`, qualified by
+its `ownerDID`. Delegating the addressed namespace never changes that owner.
+The local `getAgentId()/getSessionId()/getJobId()/getTaskId()` helpers return null
+when the execution belongs to a different user, so `n/`, `c/` and `t/` cannot
+silently target identically named records under the addressed owner. Use the
+qualified scope for attribution. Explicitly binding a new local execution ID
+under a different user starts a fresh scope without inheriting the old IDs.
+
+Views are read-only by default. Override `latticeWriteDenial(ctx, path)` for
 write, append, copy-to and delete at selected paths relative to the view root.
+Return `null` to allow, or a refusal reason; the router returns that reason
+unchanged. Adapters own value validation in their cursor write transformations.
 An empty path addresses the whole view. Allowing a parent write allows replacement
 of its entire subtree; deny it if descendants must remain protected. Writable
 views must connect to authoritative venue state, retaining its atomic update
@@ -380,7 +390,8 @@ DID-qualified addresses use strings.
 Hooks and cursor transformations must be local and pure, with no network I/O
 or external effects. Update callbacks and policy checks may run again on a
 transaction retry. External actions remain adapter operations/jobs. Views are
-request-scoped: do not cache them across reconfiguration. Disabling or unloading
+scoped to one operation/transaction: do not cache them across operations or
+reconfiguration. Disabling or unloading
 an adapter removes its route; absent views never fall through to user storage.
 The bare `x` route has no automatic directory listing; use adapter discovery for
 available implementations and their documented paths.
@@ -394,7 +405,7 @@ When the `test` adapter is enabled, `x/test` provides:
 
 | Path | Purpose | Access |
 |------|---------|--------|
-| `x/test/context` | Current `caller`, owning `user`, `venue`, `agentId`, `sessionId`, `jobId`; unset scopes are null | Read-only |
+| `x/test/context` | Current `caller`, addressed `user`, `venue`, and `execution` (`owner`, `agentId`, `sessionId`, `jobId`, `taskId`); unset IDs are null | Read-only |
 | `x/test/samples` | Unicode/multiline text, a number vector, a nested record, null and empty containers | Read-only |
 | `x/test/scratch` | Persistent, per-user scratch data of any value shape | Read/write/delete |
 

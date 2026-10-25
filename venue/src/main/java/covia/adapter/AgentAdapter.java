@@ -176,6 +176,7 @@ public class AgentAdapter extends AAdapter {
 	 * RequestContext held in {@link #outputContexts}; raw bearer UCANs are never
 	 * written into agent state. */
 	private static final AString K_OUTPUT_CONTEXT   = Strings.intern("outputContext");
+	private static final AString K_CONTEXT_USER     = Strings.intern("user");
 	private static final AString K_CONTEXT_CAPS     = Strings.intern("caps");
 	private static final AString K_CONTEXT_AGENT_ID = Strings.intern("agentId");
 	private static final AString K_CONTEXT_JOB_ID   = Strings.intern("jobId");
@@ -3162,8 +3163,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Captures identity, cap ceiling and execution scopes without bearer UCANs. */
-	private static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
-		AMap<AString, ACell> snapshot = Maps.of(Fields.CALLER, ctx.getCallerDID());
+	static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
+		AMap<AString, ACell> snapshot = Maps.of(Fields.CALLER, ctx.getCallerDID(), K_CONTEXT_USER, ctx.getUserDID());
 		if (ctx.getCaps() != null) snapshot = snapshot.assoc(K_CONTEXT_CAPS, ctx.getCaps());
 		if (ctx.getAgentId() != null) snapshot = snapshot.assoc(K_CONTEXT_AGENT_ID, ctx.getAgentId());
 		if (ctx.getJobId() != null) snapshot = snapshot.assoc(K_CONTEXT_JOB_ID, ctx.getJobId());
@@ -3178,7 +3179,7 @@ public class AgentAdapter extends AAdapter {
 	 * reconstructed: raw bearer credentials are never persisted.
 	 */
 	@SuppressWarnings("unchecked")
-	private static RequestContext restoreOutputContext(ACell snapshotCell) {
+	static RequestContext restoreOutputContext(ACell snapshotCell) {
 		if (!(snapshotCell instanceof AMap<?, ?> raw)) return null;
 		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
 		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
@@ -3188,6 +3189,14 @@ public class AgentAdapter extends AAdapter {
 			AVector<ACell> caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
 			if (caps == null) return null;
 			ctx = ctx.withCaps(caps);
+		}
+		// Legacy snapshots implicitly used the caller's namespace. New snapshots
+		// bind local execution IDs explicitly; changing the owner must retain the
+		// proof-only boundary (bearer credentials are deliberately not restored).
+		if (snapshot.containsKey(K_CONTEXT_USER)) {
+			AString owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
+			if (owner == null) return null;
+			ctx = ctx.onBehalfOf(owner);
 		}
 		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
 		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));

@@ -3743,7 +3743,7 @@ public class Engine {
 	 */
 	public void requireVenueAuthority(RequestContext ctx, String resource, AString ability) {
 		AString caller = (ctx != null) ? ctx.getCallerDID() : null;
-		if (getDIDString().equals(caller) && ctx.getAgentId() == null) return;
+		if (getDIDString().equals(caller) && ctx.getExecutionScope().agentId() == null) return;
 		AString full = Strings.create(getDIDString() + "/" + resource);
 		if (crossUserAllows(ctx, full, ability)) return;
 		throw new covia.exception.AuthException(VENUE_AUTHORITY_DENIED + ": requires " + ability

@@ -26,6 +26,14 @@ Convex `0.8.18-f5d0345f6-SNAPSHOT`; they are not part of released Covia 0.9.11.
   scratch. No private state is automatically exposed and venue identity does
   not bypass cross-user authority. User exports do not include private adapter state.
 
+- Execution context IDs are grouped with their owning user. Namespace delegation
+  preserves that owner; local scope accessors never reinterpret another user's
+  agent/session/job/task IDs. Output handoff snapshots explicitly bind their
+  namespace, while old snapshots remain readable without a startup rewrite.
+- Adapter lattice write policy uses `latticeWriteDenial`: null allows, a refusal
+  reason is returned unchanged. Views last one operation/transaction; adapters
+  retain ownership of policy and value validation.
+
 ### Migration
 
 - External login (#298): replace `auth.loginRedirectOrigins` with exact

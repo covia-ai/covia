@@ -210,7 +210,7 @@ public class UserAdapter extends AAdapter {
 	 */
 	private ACell export(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
-				|| ctx.getAgentId() != null || ctx.getSessionId() != null || ctx.getTaskId() != null
+				|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
 				|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXPORT_DIRECT_ONLY);
 		// A caller-controlled output schema could put the state in validation logs.
 		if (!getOperations().get(EXPORT).get(Fields.OPERATION).equals(meta.get(Fields.OPERATION))) {
@@ -321,7 +321,7 @@ public class UserAdapter extends AAdapter {
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		if (key == null) throw new IllegalArgumentException("key is required");
 		boolean directVenue = engine.getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getAgentId() == null;
+			&& ctx.getExecutionScope().agentId() == null;
 		boolean revoked = engine.getAuth().revokeAuthenticationKey(
 			id, key, ctx.getCallerDID(), directVenue);
 		engine.flush();
@@ -377,7 +377,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private void requireSelfOrVenueUserAuthority(RequestContext ctx, AString did, AString ability) {
-		if (did.equals(ctx.getCallerDID()) && ctx.getAgentId() == null) return;
+		if (did.equals(ctx.getCallerDID()) && ctx.getExecutionScope().agentId() == null) return;
 		requireVenueUserAuthority(ctx, ability);
 	}
 

@@ -56,8 +56,8 @@ class ExtensionRouteTest {
 			return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
 				.path(Strings.create("accounts")).withDefault(Maps.empty()).path(ctx.getUserDID());
 		}
-		@Override public boolean canWriteLattice(RequestContext ctx, ACell[] path) {
-			return writable && !projection && (path.length == 0 || !Strings.create("fixed").equals(path[0]));
+		@Override public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+			return writable && !projection && (path.length == 0 || !Strings.create("fixed").equals(path[0])) ? null : LATTICE_READ_ONLY;
 		}
 	}
 
@@ -142,10 +142,14 @@ class ExtensionRouteTest {
 		assertThrows(AuthException.class, () -> engine.resolvePath(Strings.create(resource + "/label"), bob));
 		UCAN grant = UCAN.create(aliceKey, UCAN.fromDIDKey(bobDID), System.currentTimeMillis() / 1000 + 300,
 			Vectors.of(Capability.create(Strings.create(resource), Strings.create("crud"))), Vectors.empty());
-		RequestContext delegated = bob.withProofs(Vectors.of(grant.toMap()));
+		RequestContext delegated = bob.withAgentId(Strings.create("demo"))
+			.withSessionId(Blob.fromHex("1234")).withProofs(Vectors.of(grant.toMap()));
 		assertEquals(Strings.create("alice"), read(resource + "/label", delegated));
 		assertEquals(aliceDID, probe.received.getUserDID());
 		assertEquals(bobDID, probe.received.getCallerDID());
+		assertSame(delegated.getExecutionScope(), probe.received.getExecutionScope());
+		assertNull(probe.received.getAgentId());
+		assertNull(probe.received.getSessionId());
 		write("/" + resource + "/label", Strings.create("delegated"), delegated);
 		run("append", Maps.of(Fields.PATH, resource + "/items", Fields.VALUE, 3L), delegated);
 		assertEquals(Strings.create("delegated"), read(path("/label"), alice));
@@ -153,6 +157,21 @@ class ExtensionRouteTest {
 		run("delete", Maps.of(Fields.PATH, resource + "/label"), delegated);
 		assertNull(read(path("/label"), alice));
 		assertNotNull(run("inspect", Maps.of("paths", Vectors.of(resource + "/items")), delegated));
+	}
+
+	@Test void delegatedExecutionCannotAliasAnotherUsersAgentSessionOrJob() {
+		RequestContext local = bob.withAgentId(Strings.create("demo"))
+			.withSessionId(Blob.fromHex("1234")).withJobId(Blob.fromHex("5678"))
+			.withTaskId(Blob.fromHex("9abc"));
+		RequestContext delegated = local.onBehalfOf(aliceDID);
+		// Exercise the resolver directly: authority checks are separate, and even
+		// an authorised caller must not resolve these IDs under the other user.
+		assertThrows(covia.exception.WrongScopeException.class, () -> covia.resolveVirtual(
+			delegated, WorkspaceRoot.parseStringPath("n/note"), Capability.CRUD_WRITE));
+		assertThrows(covia.exception.WrongScopeException.class, () -> covia.resolveVirtual(
+			delegated, WorkspaceRoot.parseStringPath("c/note"), Capability.CRUD_WRITE));
+		assertThrows(RuntimeException.class, () -> covia.resolveVirtual(
+			delegated, WorkspaceRoot.parseStringPath("t/note"), Capability.CRUD_WRITE));
 	}
 
 	@Test void absentDisabledAndUnloadedRoutesNeverFallThroughToUserStorage() {
@@ -220,9 +239,10 @@ class ExtensionRouteTest {
 		ACell context = read("x/test/context", scoped);
 		assertEquals(aliceDID, RT.getIn(context, "caller"));
 		assertEquals(aliceDID, RT.getIn(context, "user"));
-		assertEquals(Strings.create("demo"), RT.getIn(context, Fields.AGENT_ID));
-		assertEquals(scoped.getSessionId(), RT.getIn(context, Fields.SESSION_ID));
-		assertEquals(scoped.getJobId(), RT.getIn(context, Fields.JOB_ID));
+		assertEquals(aliceDID, RT.getIn(RT.getIn(context, "execution"), "owner"));
+		assertEquals(Strings.create("demo"), RT.getIn(RT.getIn(context, "execution"), Fields.AGENT_ID));
+		assertEquals(scoped.getSessionId(), RT.getIn(RT.getIn(context, "execution"), Fields.SESSION_ID));
+		assertEquals(scoped.getJobId(), RT.getIn(RT.getIn(context, "execution"), Fields.JOB_ID));
 		assertEquals(engine.getDIDString(), RT.getIn(read("x/test/context", engine.venueContext()), "user"));
 		assertEquals(Strings.create("x/test"), read("v/info/adapters/test/lattice/path", alice));
 		assertEquals(CVMLong.create(8), read("x/test/samples/numbers/5", alice));
@@ -231,7 +251,10 @@ class ExtensionRouteTest {
 		assertEquals(before, engine.getVenueState().get());
 		for (String path : new String[] {"x/test", "x/test/context", "x/test/samples/text"}) {
 			for (String op : new String[] {"write", "delete", "append"}) {
-				assertThrows(CompletionException.class, () -> run(op, Maps.of(Fields.PATH, path, Fields.VALUE, "no"), alice));
+				CompletionException refusal = assertThrows(CompletionException.class,
+					() -> run(op, Maps.of(Fields.PATH, path, Fields.VALUE, "no"), alice));
+				assertInstanceOf(AuthException.class, refusal.getCause());
+				assertEquals(TestAdapter.SCRATCH_ONLY, refusal.getCause().getMessage());
 			}
 		}
 	}
@@ -264,11 +287,15 @@ class ExtensionRouteTest {
 		String resource = aliceDID + "/x/test";
 		UCAN grant = UCAN.create(aliceKey, UCAN.fromDIDKey(bobDID), System.currentTimeMillis() / 1000 + 300,
 			Vectors.of(Capability.create(Strings.create(resource), Strings.create("crud"))), Vectors.empty());
-		RequestContext delegated = bob.withProofs(Vectors.of(grant.toMap()));
+		RequestContext delegated = bob.withAgentId(Strings.create("demo"))
+			.withSessionId(Blob.fromHex("1234")).withProofs(Vectors.of(grant.toMap()));
 		assertThrows(CompletionException.class, () -> read(resource + "/scratch", bob));
 		ACell context = read(resource + "/context", delegated);
 		assertEquals(aliceDID, RT.getIn(context, "user"));
 		assertEquals(bobDID, RT.getIn(context, "caller"));
+		assertEquals(bobDID, RT.getIn(RT.getIn(context, "execution"), "owner"));
+		assertEquals(Strings.create("demo"), RT.getIn(RT.getIn(context, "execution"), Fields.AGENT_ID));
+		assertEquals(delegated.getSessionId(), RT.getIn(RT.getIn(context, "execution"), Fields.SESSION_ID));
 		write(resource + "/scratch", Strings.create("alice scratch"), delegated);
 		write("x/test/scratch", Strings.create("bob scratch"), bob);
 		var retained = covia.resolveVirtual(alice, WorkspaceRoot.parseStringPath("x/test/scratch"), Capability.CRUD_WRITE);

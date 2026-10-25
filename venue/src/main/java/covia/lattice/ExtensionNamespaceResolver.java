@@ -49,9 +49,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 		RequestContext scoped = owner.equals(ctx.getUserDID()) ? ctx : ctx.onBehalfOf(owner);
 		ACell[] path = keys.length < 2 ? new ACell[0] : Arrays.copyOfRange(keys, 2, keys.length);
 		boolean mutation = Capability.CRUD_WRITE.equals(ability) || Capability.CRUD_DELETE.equals(ability);
-		if (mutation && (adapter == null || !adapter.canWriteLattice(scoped, path.clone()))) {
-			throw new AuthException(READ_ONLY);
-		}
+		if (mutation) requireWritable(adapter, scoped, path);
 		AForkableCursor<ACell> exposed = adapter == null ? null : adapter.latticeView(scoped);
 		if (mutation && exposed == null) throw new AuthException(READ_ONLY);
 		// An absent route is still resolved: never fall through to a physical user x slot.
@@ -60,7 +58,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 			private void check() {
 				if (name != null && covia.engine.getAdapter(name) != adapter) throw new AuthException(UNAVAILABLE);
 				covia.engine.requireLocalAccess(ctx, resource, ability);
-				if (mutation && !adapter.canWriteLattice(scoped, path.clone())) throw new AuthException(READ_ONLY);
+				if (mutation) requireWritable(adapter, scoped, path);
 			}
 			@Override protected ACell view(ACell value) { check(); return value; }
 			@Override protected ACell write(ACell current, ACell value) {
@@ -70,6 +68,11 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 			}
 		};
 		return new ResolvedNamespace(new WorkspaceRoot(guarded, covia.engine.getLatticeContext(), false), path, false);
+	}
+
+	private static void requireWritable(AAdapter adapter, RequestContext ctx, ACell[] path) {
+		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(ctx, path.clone());
+		if (denial != null) throw new AuthException(denial);
 	}
 
 	/** Individual adapters decide which paths accept mutations during resolution. */

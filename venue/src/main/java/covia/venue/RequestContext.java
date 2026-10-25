@@ -34,15 +34,23 @@ public class RequestContext {
 	 *  {@link Authority#ANONYMOUS}). */
 	private final Authority authority;
 
-	private final AString agentId;
-	private final Blob jobId;
-	private final Blob sessionId;
-	private final Blob taskId;
-	/** Revision of the task row presented to the current agent transition, or
-	 *  -1 outside a task cycle. Used to fence completion against continuation. */
-	private final long taskRevision;
+	/** Execution references are always qualified by their owning user. Delegating
+	 * a namespace never changes that ownership. Agent sessions use the owner,
+	 * agent ID and session ID together; job/task IDs are user-relative.
+	 * Task revision is -1 outside a task cycle and fences task completion. */
+	public record ExecutionScope(AString ownerDID, AString agentId, Blob jobId,
+			Blob sessionId, Blob taskId, long taskRevision) {
+		public ExecutionScope {
+			if (ownerDID == null && (agentId != null || jobId != null || sessionId != null || taskId != null)) {
+				throw new IllegalArgumentException(EXECUTION_OWNER_REQUIRED);
+			}
+		}
+	}
+
+	public static final String EXECUTION_OWNER_REQUIRED = "Execution references require an owning user";
+	private final ExecutionScope executionScope;
 	/** The Job wrapper for the operation currently executing under this context.
-	 * It may be transient; {@link #jobId} remains the durable/inherited temp scope. */
+	 * It may be transient; {@link #getExecutionScope()} remains the durable/inherited temp scope. */
 	private final Job job;
 	/** The raw transport UCAN tokens (JWT strings) as presented, relayable on
 	 *  cross-venue hops. Parsed proofs cannot be re-signed (a JWT signature covers
@@ -82,52 +90,20 @@ public class RequestContext {
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
 	public static final RequestContext ANONYMOUS =
-		new RequestContext(Authority.ANONYMOUS, null, null, null, null, null, null, null, null, null);
+		new RequestContext(Authority.ANONYMOUS);
 
-	private RequestContext(Authority authority, AString agentId, Blob jobId, Blob sessionId,
-			Blob taskId, AVector<ACell> rawUcans, AString op,
-			java.util.concurrent.atomic.AtomicBoolean cancellation,
-			ACell invocationInput, CapabilityGate gate) {
-		this(authority, agentId, jobId, sessionId, taskId, rawUcans, op,
-			cancellation, invocationInput, gate, false, null);
+	private RequestContext(Authority authority) {
+		this(authority, new ExecutionScope(authority.getUserDID(), null, null, null, null, -1L),
+			null, null, null, null, null, false, null, null);
 	}
 
-	private RequestContext(Authority authority, AString agentId, Blob jobId, Blob sessionId,
-			Blob taskId, AVector<ACell> rawUcans, AString op,
-			java.util.concurrent.atomic.AtomicBoolean cancellation,
-			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation) {
-		this(authority, agentId, jobId, sessionId, taskId, rawUcans, op,
-			cancellation, invocationInput, gate, gateEvaluation, null);
-	}
-
-	private RequestContext(Authority authority, AString agentId, Blob jobId, Blob sessionId,
-			Blob taskId, AVector<ACell> rawUcans, AString op,
-			java.util.concurrent.atomic.AtomicBoolean cancellation,
-			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation, Job job) {
-		this(authority, agentId, jobId, sessionId, taskId, rawUcans, op,
-			cancellation, invocationInput, gate, gateEvaluation, job, -1L);
-	}
-
-	private RequestContext(Authority authority, AString agentId, Blob jobId, Blob sessionId,
-			Blob taskId, AVector<ACell> rawUcans, AString op,
+	private RequestContext(Authority authority, ExecutionScope executionScope,
+			AVector<ACell> rawUcans, AString op,
 			java.util.concurrent.atomic.AtomicBoolean cancellation,
 			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation, Job job,
-			long taskRevision) {
-		this(authority, agentId, jobId, sessionId, taskId, rawUcans, op,
-			cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, null);
-	}
-
-	private RequestContext(Authority authority, AString agentId, Blob jobId, Blob sessionId,
-			Blob taskId, AVector<ACell> rawUcans, AString op,
-			java.util.concurrent.atomic.AtomicBoolean cancellation,
-			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation, Job job,
-			long taskRevision, AgentEvents.Cycle cycle) {
-		this.authority = (authority != null) ? authority : Authority.ANONYMOUS;
-		this.agentId = agentId;
-		this.jobId = jobId;
-		this.sessionId = sessionId;
-		this.taskId = taskId;
-		this.taskRevision = taskRevision;
+			AgentEvents.Cycle cycle) {
+		this.authority = authority;
+		this.executionScope = executionScope;
 		this.job = job;
 		this.rawUcans = rawUcans;
 		this.op = op;
@@ -136,6 +112,27 @@ public class RequestContext {
 		this.invocationInput = invocationInput;
 		this.gate = gate;
 		this.gateEvaluation = gateEvaluation;
+	}
+
+	/** The fully qualified execution scope, preserved across namespace delegation. */
+	public ExecutionScope getExecutionScope() {
+		return executionScope;
+	}
+
+	private boolean hasLocalExecutionScope() {
+		return java.util.Objects.equals(getUserDID(), executionScope.ownerDID());
+	}
+
+	/** Binding a scope under a different user starts a new execution, never
+	 * reinterprets the previous user's IDs. */
+	private ExecutionScope localExecutionScope() {
+		return hasLocalExecutionScope() ? executionScope
+			: new ExecutionScope(getUserDID(), null, null, null, null, -1L);
+	}
+
+	private RequestContext withExecutionScope(ExecutionScope scope) {
+		return new RequestContext(authority, scope, rawUcans, op, cancellation,
+			invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -152,7 +149,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.of(callerDID), null, null, null, null, null, null, null, null, null);
+		return new RequestContext(Authority.of(callerDID));
 	}
 
 	/**
@@ -160,7 +157,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.of(callerDID).withProofs(proofs), null, null, null, null, null, null, null, null, null);
+		return new RequestContext(Authority.of(callerDID).withProofs(proofs));
 	}
 
 	/**
@@ -176,8 +173,7 @@ public class RequestContext {
 	 */
 	public static RequestContext ofAgent(AString userDID, AString agentId) {
 		if (userDID == null || agentId == null) return ANONYMOUS;
-		return new RequestContext(Authority.ofAgent(userDID, agentId), agentId,
-			null, null, null, null, null, null, null, null);
+		return new RequestContext(Authority.ofAgent(userDID, agentId)).withAgentId(agentId);
 	}
 
 	/**
@@ -187,7 +183,7 @@ public class RequestContext {
 	 */
 	public static RequestContext ofAuthority(Authority authority) {
 		if (authority == null || authority.isAnonymous()) return ANONYMOUS;
-		return new RequestContext(authority, null, null, null, null, null, null, null, null, null);
+		return new RequestContext(authority);
 	}
 
 	/**
@@ -206,21 +202,20 @@ public class RequestContext {
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(authority.withProofs(proofs), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority.withProofs(proofs), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
 	 * Returns a context in which the authenticated actor executes on behalf of a
 	 * delegating user. Actor identity and execution scopes are preserved; bare
 	 * paths and per-user state resolve under {@code userDID}, and every action is
-	 * bounded by the attached delegation proofs.
+	 * bounded by the attached delegation proofs. Execution references keep their
+	 * original owner; local ID getters return null outside that owner's namespace.
 	 */
 	public RequestContext onBehalfOf(AString userDID) {
 		Authority delegated = authority.onBehalfOf(userDID);
 		if (delegated == authority) return this;
-		return new RequestContext(delegated, agentId, jobId, sessionId,
-			taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job,
-			taskRevision, cycle);
+		return new RequestContext(delegated, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -231,15 +226,16 @@ public class RequestContext {
 	 * sub-operations. {@code null} = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(authority.withGrantScope(caps), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority.withGrantScope(caps), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
-	 * Returns a new context with agent scope. When set, the {@code n/} path prefix
+	 * Returns a new context with agent scope bound to the current user. When set, the {@code n/} path prefix
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		ExecutionScope scope = localExecutionScope();
+		return withExecutionScope(new ExecutionScope(getUserDID(), agentId, scope.jobId(), scope.sessionId(), scope.taskId(), scope.taskRevision()));
 	}
 
 	/**
@@ -249,7 +245,8 @@ public class RequestContext {
 	 * id) takes precedence over an internal transition Job id.
 	 */
 	public RequestContext withJobId(Blob jobId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		ExecutionScope scope = localExecutionScope();
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), jobId, scope.sessionId(), scope.taskId(), scope.taskRevision()));
 	}
 
 	/**
@@ -259,7 +256,7 @@ public class RequestContext {
 	 * durable Job id may remain the temp scope of an internal sub-invocation.
 	 */
 	public RequestContext withJob(Job job) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -268,7 +265,8 @@ public class RequestContext {
 	 * conversation-scoped slot at {@code g/{agentId}/sessions/{sessionId}/c/}.
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		ExecutionScope scope = localExecutionScope();
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), sessionId, scope.taskId(), scope.taskRevision()));
 	}
 
 	/**
@@ -279,12 +277,14 @@ public class RequestContext {
 	 * work queue.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, -1L, cycle);
+		ExecutionScope scope = localExecutionScope();
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), scope.sessionId(), taskId, -1L));
 	}
 
 	/** Returns a context focused on the task row revision presented this cycle. */
 	public RequestContext withTaskId(Blob taskId, long taskRevision) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		ExecutionScope scope = localExecutionScope();
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), scope.sessionId(), taskId, taskRevision));
 	}
 
 	/**
@@ -297,7 +297,7 @@ public class RequestContext {
 	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
 	 */
 	public RequestContext withOp(AString op) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -319,7 +319,7 @@ public class RequestContext {
 	 * evaluator treat gated grants as unable to authorise (fail-closed).
 	 */
 	public RequestContext withInvocation(ACell invocationInput, CapabilityGate gate) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -336,8 +336,8 @@ public class RequestContext {
 			grants = grants.conj(Capability.create(gateOp, Strings.intern("invoke")));
 		}
 		Authority gateAuthority = authority.withGrantScope(grants).withProofs(null);
-		return new RequestContext(gateAuthority, agentId, jobId, sessionId, taskId,
-			null, gateOp, cancellation, null, null, true, job, taskRevision, cycle);
+		return new RequestContext(gateAuthority, executionScope,
+			null, gateOp, cancellation, null, null, true, job, cycle);
 	}
 
 	boolean isGateEvaluation() {
@@ -351,7 +351,7 @@ public class RequestContext {
 	 * stop the running transition thread by itself.
 	 */
 	public RequestContext withCancellation(java.util.concurrent.atomic.AtomicBoolean cancellation) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -369,7 +369,7 @@ public class RequestContext {
 	 * signal; the transition adapter opens its {@code CycleRecord} on it.
 	 */
 	public RequestContext withCycle(AgentEvents.Cycle cycle) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -492,7 +492,7 @@ public class RequestContext {
 	 * forwarding — the parsed {@link #getProofs() proofs} cannot be re-signed.
 	 */
 	public RequestContext withRawUcans(AVector<ACell> rawUcans) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, taskRevision, cycle);
+		return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle);
 	}
 
 	/**
@@ -601,20 +601,21 @@ public class RequestContext {
 	}
 
 	/**
-	 * Gets the agent ID for agent-scoped operations, or null if not in agent scope.
+	 * Gets the agent ID in the current user namespace, or null if no local scope.
+	 * For attribution across namespaces, use {@link #getExecutionScope()}.
 	 * When set, the {@code n/} path prefix resolves to the agent's private workspace.
 	 */
 	public AString getAgentId() {
-		return agentId;
+		return hasLocalExecutionScope() ? executionScope.agentId() : null;
 	}
 
 	/**
-	 * Gets the job ID for job-scoped operations, or null if not in job scope.
+	 * Gets the job ID in the current user namespace, or null if no local scope.
 	 * When set, the {@code t/} path prefix resolves to the job's temp field
 	 * (unless a focused task id is also set, which takes precedence).
 	 */
 	public Blob getJobId() {
-		return jobId;
+		return hasLocalExecutionScope() ? executionScope.jobId() : null;
 	}
 
 	/**
@@ -627,26 +628,26 @@ public class RequestContext {
 	}
 
 	/**
-	 * Gets the session ID for session-scoped operations, or null if not in
-	 * session scope. Used together with {@link #getAgentId()} to resolve the
+	 * Gets the session ID in the current user namespace, or null if no local scope.
+	 * Used together with {@link #getAgentId()} to resolve the
 	 * {@code c/} prefix.
 	 */
 	public Blob getSessionId() {
-		return sessionId;
+		return hasLocalExecutionScope() ? executionScope.sessionId() : null;
 	}
 
 	/**
-	 * Gets the task ID for task-scoped operations, or null if not in task
-	 * scope. Used together with {@link #getAgentId()} to resolve the
+	 * Gets the task ID in the current user namespace, or null if no local scope.
+	 * Used together with {@link #getAgentId()} to resolve the
 	 * {@code t/} prefix to the task Job's temp field.
 	 */
 	public Blob getTaskId() {
-		return taskId;
+		return hasLocalExecutionScope() ? executionScope.taskId() : null;
 	}
 
-	/** Task-row revision captured when the current transition cycle began. */
+	/** Task-row revision in the current namespace, or -1 outside a local task cycle. */
 	public long getTaskRevision() {
-		return taskRevision;
+		return hasLocalExecutionScope() ? executionScope.taskRevision() : -1L;
 	}
 
 	@Override
@@ -654,11 +655,8 @@ public class RequestContext {
 		AString callerDID = authority.getDID();
 		if (callerDID == null) return "RequestContext[ANONYMOUS]";
 		String s = "RequestContext[" + callerDID;
-		if (agentId != null) s += " agent=" + agentId;
-		if (sessionId != null) s += " session=" + sessionId;
-		if (taskId != null) s += " task=" + taskId;
-		if (jobId != null) s += " job=" + jobId;
-		if (job != null && !java.util.Objects.equals(job.getID(), jobId)) {
+		s += " execution=" + executionScope;
+		if (job != null && !java.util.Objects.equals(job.getID(), executionScope.jobId())) {
 			s += " invocation=" + job.getID() + (job.isRecorded() ? "" : " transient");
 		}
 		return s + "]";

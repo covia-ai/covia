@@ -37,6 +37,8 @@ public class TestAdapter extends AAdapter {
 	/** Shared body used by the skill-adoption test fixture and its mock LLM. */
 	public static final String SKILL_LLM_BODY = "Use covia_read on w/probe.";
 
+	public static final String SCRATCH_ONLY = "Only x/test/scratch accepts writes";
+	private static final AString K_EXECUTION = Strings.intern("execution");
 	private static final AString K_CONTEXT = Strings.intern("context");
 	private static final AString K_SAMPLES = Strings.intern("samples");
 	private static final AString K_SCRATCH = Strings.intern("scratch");
@@ -61,9 +63,11 @@ public class TestAdapter extends AAdapter {
 
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */
 	@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+		RequestContext.ExecutionScope scope = ctx.getExecutionScope();
 		AMap<AString, ACell> context = Maps.of(
 			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
-			Fields.AGENT_ID, ctx.getAgentId(), Fields.SESSION_ID, ctx.getSessionId(), Fields.JOB_ID, ctx.getJobId());
+			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
+				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
 		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
 			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID());
 		return new ATransformCursor<ACell, ACell>(scratch) {
@@ -81,9 +85,9 @@ public class TestAdapter extends AAdapter {
 		};
 	}
 
-	@Override public boolean canWriteLattice(RequestContext ctx, ACell[] path) {
+	@Override public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
 		// Replacing/deleting the view root could otherwise bypass read-only children.
-		return path.length > 0 && K_SCRATCH.equals(path[0]);
+		return path.length > 0 && K_SCRATCH.equals(path[0]) ? null : SCRATCH_ONLY;
 	}
 
 	@Override public void deleteUserState(AString did, AdapterState state) {
