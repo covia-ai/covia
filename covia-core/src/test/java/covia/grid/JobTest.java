@@ -55,6 +55,47 @@ public class JobTest {
 		assertEquals(2, notifications.get());
 	}
 
+	@Test void progressIsTheJobsCurrentStateNotItsHistory() {
+		var notifications = new java.util.concurrent.atomic.AtomicInteger();
+		var observed = new java.util.concurrent.atomic.AtomicInteger();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override protected void onProgress(AMap<AString, ACell> data) { observed.incrementAndGet(); }
+		};
+		job.subscribe(j -> notifications.incrementAndGet());
+
+		assertTrue(job.progress("Reading the files", null));
+		assertEquals(Maps.of(Fields.MESSAGE, Strings.create("Reading the files")), job.getData().get(Fields.PROGRESS),
+			"no data, no data entry");
+		assertFalse(job.progress("Reading the files", null), "the same progress again changes nothing");
+		ACell detail = Maps.of("lastTool", "Bash: run the tests");
+		assertTrue(job.progress("Running the tests", detail));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
+		assertEquals(detail, Job.progressData(job.getData().get(Fields.PROGRESS)));
+		assertNull(job.getData().get(Job.PREV), "a progress change is not a step in the Job's lifecycle");
+		assertEquals(2, notifications.get());
+		assertEquals(2, observed.get());
+
+		// Progress is part of the record: a lifecycle change carries it on.
+		job.update(d -> d.assoc(Fields.OUTPUT, Strings.create("partial")));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
+
+		job.completeWith(Strings.create("done"));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)),
+			"the finished record keeps the last progress");
+		assertFalse(job.progress("too late", null));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
+	}
+
+	@Test void progressReadsHoweverItWasWritten() {
+		assertEquals("plain", Job.progressMessage(Strings.create("plain")));
+		assertNull(Job.progressData(Strings.create("plain")));
+		ACell flat = Maps.of("lastTool", "Bash: ls", "toolCalls", 3L);
+		assertNull(Job.progressMessage(flat));
+		assertEquals(flat, Job.progressData(flat), "a map without a message is all detail");
+		assertNull(Job.progressMessage(convex.core.data.prim.CVMLong.create(40)));
+		assertNull(Job.progressData(null));
+	}
+
 	@Test
 	public void optionalProducerCodeSurvivesSnapshotAndExceptionWithoutClassifyingOtherFailures() {
 		String code = "example:retry-later";

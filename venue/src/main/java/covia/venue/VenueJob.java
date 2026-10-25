@@ -142,6 +142,12 @@ public class VenueJob extends Job {
 		finally { notifyListeners(); }
 	}
 
+	/** Progress reaches the venue's job observers as an update does. */
+	@Override
+	protected void onProgress(AMap<AString, ACell> newData) {
+		if (observable) manager.notifyGlobalListeners(this);
+	}
+
 	@Override
 	public void onFinish(AMap<AString, ACell> finalData) {
 		manager.evictActive(getID());

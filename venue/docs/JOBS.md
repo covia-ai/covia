@@ -124,6 +124,7 @@ update. For recorded venue jobs this edits `JobState`, not an in-memory copy:
   editable after completion, without replaying terminal hooks.
 - Each lifecycle transition embeds its predecessor under `prev`. History edits
   use that same chain and preserve concurrent state rather than replacing it.
+  A progress change is not a lifecycle transition (below).
 - Original outputs and typed failures are runtime outcomes. The primary record
   is redacted; `awaitResult()` and `getOutput()` on the executing handle retain
   the original result. Reading `getData()` always reads the primary record while
@@ -134,6 +135,33 @@ transaction's user draft; never invoke runtime `Job` verbs inside a retryable
 transaction. Runtime dispatch, notifications and future completion belong after
 the enclosing commit. A component commit is local; host flush remains the
 separate durability barrier.
+
+## Progress — the work in flight, in the record
+
+- An operation reports what its running work is doing with
+  `job.progress(message, data)`: `message` is one line a person can read,
+  `data` optional detail for a consumer that knows the operation (Claude
+  Code's carries `project`, `toolCalls`, `session`, `model`, `lastTool`,
+  `text`). The Job's record holds it as `progress: {message, data?}`.
+  `Job.progressMessage` and `Job.progressData` read it however a producer
+  wrote it: a bare string is the message, a map without `message` is all
+  detail.
+- **Current state, not history.** Each record replaces the last in place,
+  through the same atomic backing-record update as any other change, and
+  reaches the Job's listeners and the venue's job observers (`onProgress`).
+  It is not a lifecycle transition, so nothing is chained under `prev` for
+  it. The last progress stays in the finished record.
+- **Mirrors copy it.** A Job mirroring another — `ExternalAgents` for an
+  external agent's child, `RemoteAgentAdapter` for a remote venue's Job,
+  `A2AAdapter` for a remote Task — records status changes as updates and
+  copies progress with `setProgress`, so a child's progress replaces the
+  parent's in place rather than adding to its history.
+- **On the wire.** A2A: a working Task's `status.message` is the Job's
+  progress — an agent message with the line as a TextPart and the detail as
+  a DataPart — so each change is a `TaskStatusUpdateEvent`; inbound, a
+  remote working Task's status message becomes the mirror's progress. MCP:
+  a long call's `notifications/progress` carry the message. The agent tap
+  relays a tool call's as `tool:progress` (AGENT_LOOP.md §2.6).
 
 ## Waiting and polling — no framework timeout
 

@@ -110,13 +110,11 @@ public final class ExternalAgents {
 					} else if (Status.CANCELLED.equals(j.getStatus())) parent.cancel();
 					else parent.fail(j.getErrorMessage() == null ? MISSING_CHILD : j.getErrorMessage());
 				} else {
-					parent.update(d -> {
-						AMap<AString, ACell> next = d.assoc(Fields.STATUS,
-							Status.PENDING.equals(j.getStatus()) ? Status.STARTED : j.getStatus());
-						ACell progress = j.getData().get(ARemoteAgentAdapter.PROGRESS);
-						return progress == null ? next.dissoc(ARemoteAgentAdapter.PROGRESS)
-							: next.assoc(ARemoteAgentAdapter.PROGRESS, progress);
-					});
+					// The child's status is the parent's to record, when it changes;
+					// its progress is only shown, never recorded.
+					AString status = Status.PENDING.equals(j.getStatus()) ? Status.STARTED : j.getStatus();
+					parent.update(d -> status.equals(d.get(Fields.STATUS)) ? null : d.assoc(Fields.STATUS, status));
+					parent.setProgress(j.getData().get(Fields.PROGRESS));
 				}
 			} catch (RuntimeException failure) {
 				agent.session(sid).finishExternalTurn(parent.getID(), null, null);

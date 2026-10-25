@@ -313,7 +313,8 @@ one event on the venue's `AgentEvents` bus (`engine.agentEvents()`), and the
 same ordered stream is served over REST at `GET /api/v1/agents/{id}/sse`.
 Everything else — `agent:info`, `agent:context`, `agent:step`, the timeline —
 is post-hoc; this is the one live surface, and it carries nothing the
-timeline entry does not keep.
+timeline entry does not keep, except the progress a running operation
+reports, which is only ever the current state of work in flight.
 
 | Event | When | Payload |
 |-------|------|---------|
@@ -323,6 +324,7 @@ timeline entry does not keep.
 | `inference:start` | A model call is starting on an assembled prompt | `op`, `model?`, `messages`, `tools` (counts), `bytes`, `budget` |
 | `inference:end` | The call returned, or failed | `ms`, `content?`, `toolCalls?: [{id, name}]`, `tokens?`, `model?` — or `ms`, `error` |
 | `tool:start` | A tool call is being dispatched | `id`, `name`, `activityLabel` (operation metadata → asset name → raw tool name), `detail: {input}` |
+| `tool:progress` | The operation the call invoked published `progress` on its Job — each change once, before the call's `tool:result` | `id`, `name`, `message?` (the operation's own line for a person), `detail: {progress}` (the whole `{message, data?}` record, JOBS.md) |
 | `tool:result` | The call finished | `id`, `name`, `ms`, `isError?`, `detail: {result}` |
 | `cycle:end` | The merge committed — timeline entry and session turns are persisted | `ms`, `response?` \| `error?`, `tokens?`, `timeline` (index of the entry), `detail: {turns?}`; a cycle stopped by suspend/delete carries `error` and `cancelled` |
 | `run:end` | The run loop exited | `run`, `status` (the rest state reached), `cycles` |
@@ -341,7 +343,11 @@ cancellation token, and the transition opens its `CycleRecord` on it (§2.4).
 Activity is attributed to exactly the cycle that made it; a transition run
 outside a run loop — a direct `llmagent:chat`, `agent:step` — has no handle
 and emits nothing. Calls fenced after a terminal tool request never ran and
-are not announced.
+are not announced. An operation a call invokes is correlated the same way:
+the call is its thread's running call while it dispatches, and the Job it
+invokes is watched from creation, before its adapter starts, until the call
+has its result — so none of the operation's progress is missed and none
+follows the result.
 
 **Authority and display.** The stream is owner-level, the same authority as
 `GET /agents/{id}`: it carries what the completed timeline entry exposes,

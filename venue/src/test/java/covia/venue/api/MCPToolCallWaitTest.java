@@ -109,6 +109,22 @@ public class MCPToolCallWaitTest {
 	}
 
 	@Test
+	public void aLongCallsProgressSaysWhatItIsDoing() throws Exception {
+		String call = "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"test_progress\","
+			+ "\"arguments\":{\"hold\":true},\"_meta\":{\"progressToken\":\"p5\"}}}";
+		HttpResponse<InputStream> r = http.send(post(call, "application/json, text/event-stream"),
+			HttpResponse.BodyHandlers.ofInputStream());
+		java.util.List<String> said = new java.util.ArrayList<>();
+		try (BufferedReader in = new BufferedReader(new InputStreamReader(r.body(), StandardCharsets.UTF_8))) {
+			for (String line; (line = in.readLine()) != null;) {
+				if (!line.startsWith("data: ") || !line.contains("notifications/progress")) continue;
+				said.add(RT.getIn(JSON.parse(line.substring(6)), "params", "message").toString());
+			}
+		}
+		assertTrue(said.contains("step 2"), "the job's own progress message, not only that it still works: " + said);
+	}
+
+	@Test
 	public void aLongCallStreamsAndShowsItIsStillWorking() throws Exception {
 		HttpResponse<InputStream> r = http.send(post(never(2, ",\"_meta\":{\"progressToken\":\"p2\"}"),
 			"application/json, text/event-stream"), HttpResponse.BodyHandlers.ofInputStream());

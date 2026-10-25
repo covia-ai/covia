@@ -203,6 +203,8 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
 
+An agent may end a turn without a reply: a final message with nothing in it. That is an outcome, not a failure — the chat completes with an empty `response`, and the turn stays in the conversation as the agent's, so a later reader can see a message went unanswered. It is never sent back to a model as an empty message, which providers reject; the next inference simply sees the messages either side of it.
+
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
 
 Session-id inputs accept both canonical hexadecimal and the `0x`-prefixed representation emitted by CVM/lattice reads. Operation responses use canonical hexadecimal.

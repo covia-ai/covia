@@ -7,6 +7,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -576,6 +577,18 @@ public class JobManager {
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx) {
+		return invokeInternal(ref, input, ctx, null);
+	}
+
+	/**
+	 * As {@link #invokeInternal(AString, ACell, RequestContext)}, showing the
+	 * Job to {@code watch} once it exists and before its adapter starts, so a
+	 * caller observing the work as it runs — a tool call relaying the
+	 * operation's published progress — misses none of it. {@code watch} runs
+	 * on this thread and must not block; null watches nothing.
+	 */
+	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx,
+			Consumer<Job> watch) {
 		if (ref == null) {
 			return CompletableFuture.failedFuture(
 				new IllegalArgumentException("Operation must be specified"));
@@ -603,14 +616,21 @@ public class JobManager {
 		// Scope to the caller-supplied reference for resource-precise
 		// invoke-gating (#211) — this seam also covers the agent tool loop,
 		// which dispatches config.tools references through here.
-		return invokeInternal(op.meta(), input, ctx.withOp(ref));
+		return invokeInternal(op.meta(), input, ctx.withOp(ref), watch);
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		return invokeInternal(meta, input, ctx, null);
+	}
+
+	private CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx,
+			Consumer<Job> watch) {
 		try {
 			boolean memoryOnly = allowsInternal(meta)
 				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
-			Job job = dispatchOperation(meta, input, ctx, memoryOnly, Invocation.INTERNAL);
+			Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, Invocation.INTERNAL);
+			if (watch != null) watch.accept(prepared.job());
+			Job job = prepared.start();
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);

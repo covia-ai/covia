@@ -234,6 +234,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
+			installTestAsset("progress",     BASE+"progressop.json");
 			installTestAsset("error",        BASE+"failop.json");
 			installTestAsset("chat",         BASE+"chatop.json");
 			installTestAsset("pause",        BASE+"pauseop.json");
@@ -267,6 +268,18 @@ public class TestAdapter extends AAdapter {
             // Delay: needs Job for caller DID propagation to sub-invocation
 			job.setStatus(Status.STARTED);
             handleDelay(job, ctx, input);
+        } else if ("progress".equals(subOp)) {
+            // Reports progress from its own thread as a long-running operation
+            // does — two steps, the second published twice — then completes,
+            // or with {hold: true} keeps running until it is sent "done".
+            job.setStatus(Status.STARTED);
+            boolean hold = RT.bool(RT.getIn(input, "hold"));
+            VIRTUAL_EXECUTOR.submit(() -> {
+                for (String step : new String[] {"step 1", "step 2", "step 2"}) {
+                    job.progress(step, Maps.of("step", step));
+                }
+                if (!hold) job.completeWith(Maps.of("done", Strings.create("all steps")));
+            });
         } else if ("never".equals(subOp)) {
             // Never completes. Run the default one-shot path (starts the
             // never-completing future and wires the cancel hook), then register
@@ -572,6 +585,10 @@ public class TestAdapter extends AAdapter {
 					Maps.of("id", "call_echo_two", "name", "test_echo",
 						"arguments", "{\"echo\":\"two\"}")));
 		}
+		if (model != null && "no-reply-test".equals(model.toString())) {
+			// Ends the turn having said nothing, as a model may.
+			return Maps.of("role", Strings.create("assistant"));
+		}
         String text = "(no user message)";
         ACell messagesCell = RT.getIn(input, "messages");
         if (messagesCell instanceof AVector) {
@@ -649,7 +666,10 @@ public class TestAdapter extends AAdapter {
             // through the agent tool loop while keeping the L3 provider fully
             // deterministic. LangChain's provider boundary has separate tests
             // for its provider-only JSON rendering.
-            if (lastUserMsg.contains("issue-334-read")) {
+            if (lastUserMsg.contains("progress-relay")) {
+                toolName = "v/test/ops/progress";
+                arguments = "{}";
+            } else if (lastUserMsg.contains("issue-334-read")) {
                 toolName = "covia_read";
                 arguments = "{\"path\":\"w/issue-334/signals\"}";
             } else if (lastUserMsg.contains("issue-334-list")) {

@@ -351,8 +351,10 @@ acceptance is not durable external acceptance. A task, turn and conversation
 have different completion rules: A2A mirrors the remote task, Claude `run`
 completes after one turn, and Claude `session` waits in INPUT_REQUIRED after
 each reply. Only conversation operations opt into `returnsFirstReply`.
-Progress uses the shared `publishProgress` helper; provider-native results,
-message parts and session/task identifiers are preserved.
+Progress uses the shared `publishProgress(job, message, data)` helper: one
+line a person can read, with the provider's own detail beside it, kept in
+the Job's record as its current state (JOBS.md, Progress). Provider-native
+results, message parts and session/task identifiers are preserved.
 
 Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
 submission intent, protected transport authority and reattachment to an

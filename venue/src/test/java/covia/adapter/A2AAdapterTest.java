@@ -30,6 +30,7 @@ import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
+import covia.venue.TestEngine;
 import covia.venue.TestServer;
 import covia.venue.TwoVenueTestServer;
 import covia.venue.User;
@@ -452,6 +453,38 @@ class A2AAdapterTest {
 					TestServer.ENGINE.jobs().getJobData(seed.getID()).get(Fields.STATUS)));
 		} finally {
 			if (seed != null) covia.cancelJob(seed.getID());
+			peer.stop(0);
+		}
+	}
+
+	/** A working remote Task's status message is the mirror's progress, in its record. */
+	@Test
+	void send_showsAWorkingRemoteTasksStatusMessageAsProgress() throws Exception {
+		HttpServer peer = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		peer.createContext("/a2a", exchange -> {
+			exchange.getRequestBody().readAllBytes();
+			String body = "{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{"
+					+ "\"id\":\"a2a-working\",\"contextId\":\"test-context\","
+					+ "\"status\":{\"state\":\"TASK_STATE_WORKING\",\"message\":{\"messageId\":\"m1\","
+					+ "\"role\":\"ROLE_AGENT\",\"parts\":[{\"text\":\"Reading the sources\"}]}}}}}";
+			byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, bytes.length);
+			try (var out = exchange.getResponseBody()) { out.write(bytes); }
+		});
+		peer.start();
+		Job seed = null;
+		try {
+			seed = TestServer.COVIA.startJob(Strings.create("v/ops/a2a/raw/send"), Maps.of(
+					Fields.URL, Strings.create("http://localhost:" + peer.getAddress().getPort()),
+					Fields.MESSAGE, coviaMessageRecord("research this")));
+			convex.core.data.Blob id = seed.getID();
+			TestEngine.awaitCondition(() -> "Reading the sources".equals(Job.progressMessage(
+					RT.getIn(TestServer.ENGINE.jobs().getJobData(id), Fields.PROGRESS))), 10_000,
+					() -> "no progress on the mirror: " + TestServer.ENGINE.jobs().getJobData(id));
+			assertEquals(Status.STARTED, RT.ensureString(TestServer.ENGINE.jobs().getJobData(id).get(Fields.STATUS)));
+		} finally {
+			if (seed != null) TestServer.COVIA.cancelJob(seed.getID());
 			peer.stop(0);
 		}
 	}

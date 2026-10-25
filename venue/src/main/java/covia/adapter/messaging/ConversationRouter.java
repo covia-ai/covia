@@ -27,7 +27,6 @@ import covia.venue.RequestContext;
  */
 public final class ConversationRouter {
 	private static final String AGENT_CHAT = "v/ops/agent/chat";
-	public static final String NO_RESPONSE = "(no response)";
 	private static final AString[] TEXT_KEYS = {
 		Fields.TEXT, Fields.RESPONSE, Strings.intern("content"), Fields.MESSAGE, Fields.RESULT };
 	private final Engine engine;
@@ -108,9 +107,10 @@ public final class ConversationRouter {
 		return fixed != null ? fixed : responseText(result);
 	}
 
+	/** The reply to post, or null for none: an agent that ended its turn without one, or a result with no text. */
 	public static String responseText(ACell value) {
 		String text = renderText(value);
-		return text == null || text.isBlank() ? NO_RESPONSE : text;
+		return text == null || text.isBlank() ? null : text;
 	}
 
 	public static String renderText(ACell value) {

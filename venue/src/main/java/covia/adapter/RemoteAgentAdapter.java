@@ -155,13 +155,14 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				if (Job.isFinished(snapshot)) next = next.assoc(Fields.ERROR, snapshot.get(Fields.ERROR));
 				return next;
 			});
+			// The remote Job's progress is shown here as it is there: never recorded.
+			job.setProgress(snapshot.get(PROGRESS));
 		}
 	}
 
 	private static AMap<AString, ACell> observation(AMap<AString, ACell> data,
 		AMap<AString, ACell> snapshot, AString status) {
-		AMap<AString, ACell> next = RemoteJobs.observed(data, status).dissoc(PROGRESS);
-		if (snapshot.containsKey(PROGRESS)) next = next.assoc(PROGRESS, snapshot.get(PROGRESS));
+		AMap<AString, ACell> next = RemoteJobs.observed(data, status);
 		if (snapshot.containsKey(Fields.SESSION_ID)) next = next.assoc(Fields.SESSION_ID, snapshot.get(Fields.SESSION_ID));
 		return next;
 	}

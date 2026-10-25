@@ -1083,7 +1083,8 @@ within limits that keep waiting from tying the venue up:
 - A single `tools/call` from a client that accepts `text/event-stream` and is
   still running after `keepAliveInterval` (ms, default 15 s) is answered as an
   SSE stream. It carries `notifications/progress` at that interval when the
-  request's `_meta.progressToken` asks for them, which lets the client reset
+  request's `_meta.progressToken` asks for them — their message the job's
+  progress when it reports any (JOBS.md), else "Still working" — which lets the client reset
   its own timeout, and an SSE comment otherwise. A write that fails means the
   caller has gone: the venue stops waiting, frees its place and leaves the job
   running. A quicker call is answered as plain JSON, as before; a call inside a
@@ -2367,8 +2368,10 @@ Per bot:
 - `reply` — for an `operation` handler: `true` (default: the result
   rendered as text — a string as-is, a map's
   `text`/`response`/`content`/`message`/`result`, else pretty JSON),
-  `false` (never reply), or a fixed acknowledgement string. Agent
-  conversations always reply. Handler failures are always reported to the
+  `false` (never reply), or a fixed acknowledgement string; a result with
+  no text sends nothing. Agent conversations reply with the agent's answer,
+  and send nothing when it ended its turn without one. Handler failures are
+  always reported to the
   sender.
 - `allow` — Telegram user ids and/or `@usernames` permitted to talk to the
   bot. **Fail-closed**: with no `allow` and no `open: true`, everyone is
@@ -2689,8 +2692,8 @@ Operations:
   as one Job. Completes with `{result, structured?, session, project,
   subtype, isError, turns, costUsd, durationMs, model, permissionDenials}`.
   Pass `session` (from a previous result) to continue that conversation.
-  While running, the job carries `progress {toolCalls, lastTool, text,
-  session, model}`. A turn Claude Code reports as an error (`error_max_turns`,
+  While it runs, the job's progress is its latest step, with `{toolCalls,
+  lastTool, text, session, model}` as detail. A turn Claude Code reports as an error (`error_max_turns`,
   `error_max_budget_usd`, `error_during_execution`) **fails** the Job with
   the reason and the session id to resume. `project` may be omitted when the
   caller can use exactly one project or `session` names a known one.
