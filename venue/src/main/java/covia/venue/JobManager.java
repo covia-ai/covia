@@ -93,8 +93,9 @@ public class JobManager {
 	private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Job>> jobUpdateListeners =
 		new java.util.concurrent.CopyOnWriteArrayList<>();
 
-	// Job ID generation state
-	private final Random rand = new Random();
+	// Job ID generation state. The random half is unpredictable: an id is not a
+	// credential, but one observed id must not reveal the next.
+	private final Random rand = new java.security.SecureRandom();
 	/**
 	 * Monotonic 64-bit job-ID prefix: high 48 bits = millisecond timestamp,
 	 * low 16 bits = per-millisecond counter. Advanced atomically as
