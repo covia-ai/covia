@@ -16,6 +16,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpServer;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -23,7 +26,9 @@ import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -135,6 +140,75 @@ public class MCPBridgeTest {
 		}
 		assertNull(engine.resolveAsset(Strings.create("v/ops/mcp/selfd/test_echo"), RequestContext.of(ALICE_DID)),
 			"venue-scope removal must clear the shared catalog");
+	}
+
+	private void assertVenueDenied(Job job) {
+		assertThrows(Exception.class, () -> job.awaitResult(15000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains(Engine.VENUE_AUTHORITY_DENIED), job.getErrorMessage());
+	}
+
+	@Test
+	public void testOrdinaryUserCannotManageVenueCatalog() {
+		// An ordinary signed-in user holds a null (unrestricted) scope over their
+		// OWN namespace. That must not reach the venue catalog, which is written
+		// as the venue: every venue-side target is venue administration.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString merge = Strings.create("v/ops/json/merge");
+		AMap<AString, ACell> mergeMeta = engine.resolveAsset(merge, ctx).meta();
+
+		// add-tool cannot replace an existing venue op...
+		assertVenueDenied(addTool("v/ops/json/merge", "test_echo", ctx));
+		assertEquals(mergeMeta, engine.resolveAsset(merge, ctx).meta(),
+			"a denied add-tool must leave the venue op untouched");
+		// ...or publish a new one
+		assertVenueDenied(addTool("v/ops/mcpdenied/echo", "test_echo", ctx));
+		assertNull(engine.resolveAsset(Strings.create("v/ops/mcpdenied/echo"), ctx));
+
+		assertVenueDenied(addServer("selfv", TestServer.BASE_URL, "venue", ctx));
+		assertNull(engine.resolveAsset(Strings.create("v/ops/mcp/selfv/test_echo"), ctx));
+
+		// An operator's venue bridge cannot be refreshed or removed by the user
+		Job add = addServer("selfw", TestServer.BASE_URL, "venue", engine.venueContext());
+		add.awaitResult(15000);
+		assertEquals(Status.COMPLETE, add.getStatus(), String.valueOf(add.getErrorMessage()));
+		try {
+			assertVenueDenied(engine.jobs().invokeOperation("v/ops/mcp/refresh",
+				Maps.of(Fields.NAME, "selfw", "scope", "venue"), ctx));
+			assertVenueDenied(engine.jobs().invokeOperation("v/ops/mcp/refresh",
+				Maps.of(Fields.PATH, "v/ops/mcp/selfw"), ctx));
+			assertVenueDenied(engine.jobs().invokeOperation("v/ops/mcp/remove-server",
+				Maps.of(Fields.NAME, "selfw", "scope", "venue"), ctx));
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/mcp/selfw/test_echo"), ctx),
+				"a denied removal must leave the operator's bridge in place");
+		} finally {
+			engine.jobs().invokeOperation("v/ops/mcp/remove-server",
+				Maps.of(Fields.NAME, "selfw", "scope", "venue"),
+				engine.venueContext()).awaitResult(15000);
+		}
+	}
+
+	@Test
+	public void testVenueDelegationAuthorisesVenueCatalog() {
+		// The venue may delegate MCP management: a venue-issued mcp/manage grant
+		// over <venue DID>/v/mcp admits a user to venue-side targets.
+		AKeyPair operatorKP = AKeyPair.generate();
+		AString operator = UCAN.toDIDKey(operatorKP.getAccountKey());
+		UCAN grant = UCAN.create(engine.getKeyPair(), operatorKP.getAccountKey(),
+			System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/" + Abilities.V_MCP),
+				Abilities.MCP_MANAGE)),
+			Vectors.empty());
+		RequestContext ctx = RequestContext.of(operator).withProofs(Vectors.of(grant.toMap()));
+
+		Job add = addServer("selfx", TestServer.BASE_URL, "venue", ctx);
+		add.awaitResult(15000);
+		assertEquals(Status.COMPLETE, add.getStatus(), String.valueOf(add.getErrorMessage()));
+		Job remove = engine.jobs().invokeOperation("v/ops/mcp/remove-server",
+			Maps.of(Fields.NAME, "selfx", "scope", "venue"), ctx);
+		remove.awaitResult(15000);
+		assertEquals(Status.COMPLETE, remove.getStatus(), String.valueOf(remove.getErrorMessage()));
+		assertNull(engine.resolveAsset(Strings.create("v/ops/mcp/selfx/test_echo"), ctx));
 	}
 
 	@Test
