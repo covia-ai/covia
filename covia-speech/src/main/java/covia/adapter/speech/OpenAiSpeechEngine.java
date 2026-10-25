@@ -44,7 +44,8 @@ final class OpenAiSpeechEngine implements SpeechEngine {
 	public static final String TOO_LARGE = "Speech provider response exceeds the size limit";
 	private static final int MAX_JSON = 1024 * 1024;
 
-	private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
+	/** Shared by every engine: each HttpClient holds a selector thread for its lifetime. */
+	private static final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
 		.followRedirects(HttpClient.Redirect.NEVER).executor(AAdapter.VIRTUAL_EXECUTOR).build();
 	private final String baseUrl;
 	private final Duration timeout;

@@ -56,7 +56,8 @@ public class SonnyLabsAdapter extends AAdapter {
 	private static final Set<String> TIERS = Set.of("fast", "accurate", "auto");
 	private static final Set<String> ACTIONS = Set.of("blocked", "flagged", "warned", "allowed");
 
-	private final HttpClient http = HttpClient.newBuilder()
+	/** Shared by every venue in the process: each HttpClient holds a selector thread for its lifetime. */
+	private static final HttpClient http = HttpClient.newBuilder()
 		.connectTimeout(Duration.ofSeconds(10))
 		.executor(VIRTUAL_EXECUTOR)
 		.build();

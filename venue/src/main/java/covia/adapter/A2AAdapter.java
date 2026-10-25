@@ -94,7 +94,10 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	public static Hash CANCEL_OPERATION;
 	public static Hash SEND_OPERATION;
 
-	private final HttpClient httpClient;
+	/** Shared by every venue in the process: each client holds a selector thread for its lifetime. */
+	private static final HttpClient httpClient = HttpClient.newBuilder()
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
 	public static final String INVALID_CANCELLATION_RESPONSE = "Invalid remote cancellation response";
 
 	/** The remote Task each live mirror Job is bound to, for cancellation and continuation. */
@@ -105,12 +108,6 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			adapter.engine.remoteJobs().attemptCancellation(job, remoteTaskId,
 				() -> adapter.cancelRemote(rpcUrl, remoteTaskId, auth));
 		}
-	}
-
-	public A2AAdapter() {
-		this.httpClient = HttpClient.newBuilder()
-				.connectTimeout(Duration.ofSeconds(10))
-				.build();
 	}
 
 	@Override

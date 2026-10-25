@@ -40,6 +40,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final AString K_STATE=Strings.intern("state"),K_USERNAME=Strings.intern("username"),K_BOT_ID=Strings.intern("bot_id"),K_TARGET=Strings.intern("target"),K_RECEIVED=Strings.intern("received"),K_SENT=Strings.intern("sent"),K_FAILED=Strings.intern("failed"),K_MANAGED=Strings.intern("managed");
 	private static final AString K_BOT=Strings.intern("bot"),K_VIA=Strings.intern("via"),K_CHANNEL=Strings.intern("channel"),K_ACCESS=Strings.intern("access"),K_FROM=Strings.intern("from"),K_GUILD=Strings.intern("guild"),K_MESSAGE_ID=Strings.intern("message_id"),K_CHANNEL_ID=Strings.intern("channel_id"),K_NAME=Strings.intern("name"),K_ID=Strings.intern("id"),K_TYPE=Strings.intern("type"),K_ATTACHMENTS=Strings.intern("attachments");
 	enum State {STARTING,PENDING,RUNNING,STOPPED}
+	/** Shared by every bot: each HttpClient holds a selector thread for its lifetime. */
+	private static final HttpClient HTTP=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).executor(AAdapter.VIRTUAL_EXECUTOR).build();
 	private final DiscordAdapter adapter;
 	final BotSpec spec;final String apiUrl;final Managed managed;
 	private volatile DiscordGateway gateway;private volatile HttpClient http;private volatile String token,username,botId,error;private volatile State state=State.STARTING;private volatile boolean stopped;private volatile ScheduledFuture<?> retry;private final AtomicLong received=new AtomicLong(),sent=new AtomicLong(),failed=new AtomicLong();
@@ -57,7 +59,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		DiscordGateway candidate;
 		try{candidate=adapter.gatewayFactory.connect(tok,this::receive);}catch(Exception|LinkageError e){pending("Discord Gateway connection failed: "+concise(e));return;}
 		if(stopped){candidate.close();return;}
-		gateway=candidate;token=tok;username=candidate.username();botId=candidate.botId();http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).executor(AAdapter.VIRTUAL_EXECUTOR).build();error=null;state=State.RUNNING;
+		gateway=candidate;token=tok;username=candidate.username();botId=candidate.botId();http=HTTP;error=null;state=State.RUNNING;
 		log.info("Discord bot '{}' (@{}) running as {} -> {}",spec.name(),username,spec.userRef(),spec.target());
 	}
 	private void pending(String why){state=State.PENDING;error=why;log.warn("Discord bot '{}' not started: {} (will retry)",spec.name(),why);retry=adapter.scheduleRetry(this::tryStart,adapter.retryMillis);}

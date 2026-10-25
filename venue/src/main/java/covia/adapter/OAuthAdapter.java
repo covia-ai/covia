@@ -139,7 +139,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	private final ConcurrentHashMap<String, Pending> pending = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, Object> refreshLocks = new ConcurrentHashMap<>();
 	private final SecureRandom random = new SecureRandom();
-	private final HttpClient http = HttpClient.newBuilder()
+	/** Shared by every venue in the process: each client holds a selector thread for its lifetime. */
+	private static final HttpClient http = HttpClient.newBuilder()
 		.connectTimeout(Duration.ofSeconds(10))
 		.executor(VIRTUAL_EXECUTOR)
 		.build();

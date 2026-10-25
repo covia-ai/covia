@@ -161,6 +161,9 @@ These changes require Convex 0.8.18; until it is released, the local
   cause and settle queued callers without recording a fault (#590).
 - Discord splits long messages without breaking surrogate pairs.
 - Messaging sends honour url-bound `secret/use` grants.
+- Adapters share one HTTP client per class, not one per venue or call; on JDK 27
+  each client holds a virtual-thread carrier, and the suite hung on Windows.
+- Oversized messaging downloads are refused as too large on JDK 27.
 
 ## [0.9.11] - 2026-10-15
 

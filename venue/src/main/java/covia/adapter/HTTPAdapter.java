@@ -91,9 +91,14 @@ public class HTTPAdapter extends AAdapter {
 	private static final Set<String> CREDENTIAL_HEADERS = Set.of("authorization", "proxy-authorization", "cookie");
 	private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "DELETE", "PATCH");
 
-	// Instance-level HttpClient for reuse across requests. Redirects are
-	// followed by the adapter, never by the client, so every hop is guarded.
-	private final HttpClient httpClient;
+	// One HttpClient shared by every venue in the process: each client holds a
+	// selector thread for its lifetime, so one per adapter accumulates them.
+	// Redirects are followed by the adapter, never by the client, so every hop
+	// is guarded.
+	private static final HttpClient httpClient = HttpClient.newBuilder()
+		.connectTimeout(Duration.ofSeconds(10))
+		.followRedirects(HttpClient.Redirect.NEVER)
+		.build();
 
 	/** Hosts an embedding host allowed programmatically (bypass SSRF checks). */
 	private final Set<String> allowList = new HashSet<>();
@@ -107,16 +112,6 @@ public class HTTPAdapter extends AAdapter {
 
 	private volatile String userAgent = defaultUserAgent();
 	private volatile int maxRedirects = DEFAULT_MAX_REDIRECTS;
-
-	/**
-	 * Constructor initializes the HttpClient with optimal settings
-	 */
-	public HTTPAdapter() {
-		this.httpClient = HttpClient.newBuilder()
-			.connectTimeout(Duration.ofSeconds(10))
-			.followRedirects(HttpClient.Redirect.NEVER)
-			.build();
-	}
 
 	/** The User-Agent sent when a caller supplies none: the venue's own. */
 	public static String defaultUserAgent() {

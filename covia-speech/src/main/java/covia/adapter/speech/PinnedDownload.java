@@ -29,7 +29,8 @@ final class PinnedDownload {
 	static final String FAILED = "%s could not be downloaded (%s)";
 	private static final Duration TIMEOUT = Duration.ofMinutes(30);
 
-	private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))
+	/** Shared by every download: each HttpClient holds a selector thread for its lifetime. */
+	private static final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))
 		.followRedirects(HttpClient.Redirect.NORMAL).executor(AAdapter.VIRTUAL_EXECUTOR).build();
 
 	/**

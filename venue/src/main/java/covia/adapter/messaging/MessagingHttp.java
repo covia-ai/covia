@@ -103,7 +103,10 @@ public final class MessagingHttp {
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt(); throw new IllegalStateException(IO_ERROR);
 		} catch (ExecutionException e) {
-			if (e.getCause() instanceof IllegalStateException s && RESPONSE_ERROR.equals(s.getMessage())) throw new IllegalStateException(oversize);
+			// The subscriber's refusal is the cause, or (JDK 27 on) wrapped in an IOException beneath it.
+			for (Throwable t = e.getCause(); t != null; t = t.getCause()) {
+				if (t instanceof IllegalStateException s && RESPONSE_ERROR.equals(s.getMessage())) throw new IllegalStateException(oversize);
+			}
 			throw new IllegalStateException(IO_ERROR);
 		} catch (TimeoutException e) { throw new IllegalStateException(IO_ERROR); }
 	}
