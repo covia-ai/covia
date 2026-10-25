@@ -126,7 +126,12 @@
 				</configuration>
 			</plugin>
 
-			<!-- Use this to require a minimum Maven version -->
+			<!-- Use this to require a minimum Maven version, and a JDK whose
+			     timers work. JDK 25 before 25.0.3 has JDK-8370887: cancelling a
+			     timer can corrupt ForkJoinPool's delay heap, so virtual-thread
+			     sleeps and timed waits, and CompletableFuture timeouts, fire
+			     tens of seconds late. Jobs stall and the test suite fails
+			     intermittently; no test can be trusted on such a JDK. -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-enforcer-plugin</artifactId>
@@ -142,6 +147,10 @@
 								<requireMavenVersion>
 									<version>3.7</version>
 								</requireMavenVersion>
+								<requireJavaVersion>
+									<version>[21,25),[25.0.3,)</version>
+									<message>JDK 25 before 25.0.3 has JDK-8370887: virtual-thread and CompletableFuture timeouts can fire tens of seconds late. Build with JDK 21-24 or 25.0.3+ (-Denforcer.skip overrides).</message>
+								</requireJavaVersion>
 							</rules>
 						</configuration>
 					</execution>

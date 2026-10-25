@@ -70,7 +70,9 @@ covia/                          # ai.covia:covia (parent POM)
 
 ## Requirements
 
-- **Java 21+** (JDK; the published Docker image runs on Java 25)
+- **Java 21+** (JDK; the published Docker image runs on Java 25). Not JDK 25
+  before 25.0.3: JDK-8370887 makes virtual-thread timeouts fire tens of seconds
+  late, so jobs stall and tests fail intermittently; the build refuses it
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
 - **Convex 0.8.17**
 

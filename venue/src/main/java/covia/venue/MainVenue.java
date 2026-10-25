@@ -37,7 +37,13 @@ public class MainVenue {
 	@SuppressWarnings("unchecked")
 	public static void main(String[] args) throws Exception {
 		configureLogging(null);
-		
+		// JDK-8370887: on JDK 25 before 25.0.3, virtual-thread and
+		// CompletableFuture timeouts can fire tens of seconds late.
+		Runtime.Version jdk = Runtime.version();
+		if (jdk.feature() == 25 && jdk.update() < 3) {
+			log.warn("JDK {} has JDK-8370887: timeouts can fire tens of seconds late; run the venue on JDK 25.0.3 or later", jdk);
+		}
+
 		AMap<AString,ACell> config=null;
 		
 		// First argument is config file path, if specified

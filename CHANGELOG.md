@@ -111,6 +111,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Discord, Telegram and SQL module jars use the venue's Kotlin, Jackson, Gson and Protobuf
   instead of bundling their own copies.
+- The build refuses JDK 25 before 25.0.3 (JDK-8370887, late timeouts); the
+  venue warns at startup on one.
 
 ### Fixed
 
