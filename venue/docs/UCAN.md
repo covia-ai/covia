@@ -200,6 +200,16 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
 - **Ungated alternatives win first**: a covering local grant without a gate,
   or a complete delegated proof path without gates, authorises outright.
   An ungated leaf does not erase a gate on its parent.
+- **Bound to the grantor**: a bare gate reference means the grantor's
+  operation, as a bare `with` does: in a token it binds to that link's issuer
+  (`o/gate` → `<iss>/o/gate`, per hop), in an agent's `config.caps` to its
+  owner. Venue catalog (`v/…`), content-hash and DID-URL references are
+  absolute. A bare gate in a link that cannot be rewritten (a JWT-string
+  parent) names no one's gate and fails closed. The presenter cannot
+  substitute its own.
+- **Named, not read**: naming a gate is consent to run it as a gate check.
+  Its definition is resolved without a read check, so a grantor's private gate
+  works for a presenter who cannot read it.
 - **Fail-closed, always**: gate op fails → denied with the gate's reason;
   gate unresolvable, times out (30s), no evaluator in scope, or an unknown /
   malformed constraint → denied. Never fail-open.

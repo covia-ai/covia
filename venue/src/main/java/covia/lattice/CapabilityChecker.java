@@ -14,6 +14,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
@@ -218,7 +219,12 @@ public class CapabilityChecker {
 				if (cap == null) return false;
 				Caveats caveats = caveatsOf(cap);
 				if (!caveats.valid() || caveats.urlDenial(destination) != null) return false;
-				if (caveats.gate() != null) gates.add(caveats.gate());
+				if (caveats.gate() != null) {
+					// normaliseProofs binds a bare gate to its link's issuer; one still
+					// bare came from a link it could not rewrite, so names no one's gate.
+					if (isBareGate(caveats.gate())) return false;
+					gates.add(caveats.gate());
+				}
 			}
 			if (gates.isEmpty()) return true;
 			if (gate == null) return false;
@@ -270,6 +276,30 @@ public class CapabilityChecker {
 		return out;
 	}
 
+	/**
+	 * A gate reference bound to the principal whose grant names it, as a bare
+	 * {@code with} is: a bare path in a user namespace means that principal's
+	 * ({@code o/gate} → {@code <owner>/o/gate}). The venue catalog ({@code v/…}),
+	 * content hashes, DID URLs and scheme forms already name one definition.
+	 * Naming a gate is consent to have it run as a gate check, not to read it.
+	 *
+	 * @return the bound reference, or {@code gate} itself when nothing binds
+	 */
+	public static AString bindGate(AString gate, AString owner) {
+		if (gate == null || owner == null || !isBareGate(gate)) return gate;
+		String path = gate.toString();
+		while (path.startsWith("/")) path = path.substring(1);
+		return Strings.create(owner + "/" + path);
+	}
+
+	/** Whether a gate reference is a bare path whose meaning depends on its owner. */
+	static boolean isBareGate(AString gate) {
+		String g = gate.toString();
+		while (g.startsWith("/")) g = g.substring(1);
+		if (g.isEmpty() || g.startsWith("did:") || g.contains("://") || g.startsWith("v/")) return false;
+		return Hash.parse(g) == null;
+	}
+
 	/** Normalises one token map — full {@code {header, payload, sig}} form or a
 	 *  bare payload map ({@code att} at top level); anything else unchanged. */
 	private static ACell normaliseTokenMap(AMap<AString, ACell> token) {
@@ -297,9 +327,17 @@ public class CapabilityChecker {
 				if (w != null && !w.isEmpty() && !w.startsWith("did:") && !w.contains("://")) {
 					String path = w.startsWith("/") ? w.substring(1) : w;
 					if (!path.isEmpty()) {
-						capCell = cap.assoc(Capability.WITH, Strings.create(iss + "/" + path));
+						cap = cap.assoc(Capability.WITH, Strings.create(iss + "/" + path));
+						capCell = cap;
 						changed = true;
 					}
+				}
+				AMap<AString, ACell> nb = (cap != null) ? RT.castMap(cap.get(Capability.NB)) : null;
+				AString gate = (nb != null) ? RT.ensureString(nb.get(GATE)) : null;
+				AString bound = bindGate(gate, iss);
+				if (bound != gate) {
+					capCell = cap.assoc(Capability.NB, nb.assoc(GATE, bound));
+					changed = true;
 				}
 				newAtt = newAtt.conj(capCell);
 			}
@@ -401,9 +439,11 @@ public class CapabilityChecker {
 			if (!grantCovers(cap, resourceStr, abilityStr, ownerDID)) continue;
 			String detail = caveats.urlDenial(destination);
 			if (detail == null && caveats.gate() != null) {
+				// A held grant is its owner's: a bare gate names the owner's operation.
+				AString gateOp = bindGate(caveats.gate(), ownerDID);
 				detail = (gate == null)
-					? "gate " + caveats.gate() + " cannot be evaluated in this context"
-					: gate.evaluate(caveats.gate(), opRef, invocationInput, ownerDID);
+					? "gate " + gateOp + " cannot be evaluated in this context"
+					: gate.evaluate(gateOp, opRef, invocationInput, ownerDID);
 			}
 			if (detail == null) return null;                    // every caveat holds — authorised
 			if (denials == null) denials = new StringBuilder();

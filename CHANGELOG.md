@@ -53,6 +53,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Naming another user's path (config layer, agent definition, operation, A2A
   binding, `did:…/a/<hash>`) needs read access to it; `Engine.resolvePath`
   checks, `resolvePathUnchecked` is engine-internal.
+- A bare `nb.gate` binds to the grant's issuer, so a presenter cannot plant
+  its own gate; a grantor's private gate runs without the presenter reading it.
 
 ### Added
 

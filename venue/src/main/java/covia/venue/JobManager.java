@@ -706,6 +706,11 @@ public class JobManager {
 	 * Nested gated grants are disabled structurally by the gate-evaluation flag.
 	 * {@code invokeInternal} uses a transient Job wrapper, so checks retain the
 	 * normal execution context without bloating the etch.</p>
+	 *
+	 * <p>{@code gateOp} is already bound to the grant's issuer or owner
+	 * ({@link CapabilityChecker#bindGate}). Naming a gate is consent to run it as
+	 * a gate check, so its definition is resolved without a read check: the
+	 * caller need not be able to read a private gate to be checked by it.</p>
 	 */
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
@@ -714,7 +719,10 @@ public class JobManager {
 				Fields.OPERATION, opRef,
 				Fields.INPUT, input,
 				Fields.CALLER, caller);
-			invokeInternal(gateOp, gateInput, authorityCtx.forGateEvaluation(gateOp))
+			RequestContext gateCtx = authorityCtx.forGateEvaluation(gateOp);
+			Asset gate = engine.resolveAssetUnchecked(gateOp, gateCtx);
+			if (gate == null) return "gate " + gateOp + ": cannot resolve operation";
+			invokeInternal(gate.meta(), gateInput, gateCtx)
 				.get(GATE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 			return null;                                        // gate succeeded — capability applies
 		} catch (java.util.concurrent.TimeoutException e) {
