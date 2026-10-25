@@ -456,6 +456,10 @@ class AuthResultTest {
 
 	@Test
 	void providerEvidenceUsesVerifiedIssuerAndSubject() throws Exception {
+		// Swapping the auth adapter bumps the adapter registry version, which
+		// refuses verifications in flight on that engine (AuthMethods.CHANGED).
+		// This class's tests run concurrently, so this one swaps on its own engine.
+		Engine isolated = Engine.createTemp(Maps.of(Config.HOSTNAME, "auth-result.example"));
 		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
 		generator.initialize(2048);
 		KeyPair rsa = generator.generateKeyPair();
@@ -474,7 +478,7 @@ class AuthResultTest {
 			String jwksUri = "http://127.0.0.1:" + server.getAddress().getPort() + "/jwks";
 			String issuer = "https://provider.example";
 			AString email = Strings.create("auth-result@example.test");
-			engine.getAuth().putUser(Strings.create("result_provider"),
+			isolated.getAuth().putUser(Strings.create("result_provider"),
 				Maps.of(Fields.DID, did, Fields.EMAIL, email, LoginProviders.EXTERNAL_IDENTITY,
 					Maps.of("iss", issuer, "sub", "provider-subject")));
 			AMap<AString, ACell> payload = claims()
@@ -485,12 +489,12 @@ class AuthResultTest {
 			for (String expectedIssuer : new String[] {issuer}) {
 				OAuthConfig config = new OAuthConfig("test", "client", "unused",
 					null, null, null, jwksUri, expectedIssuer, null, null);
-				engine.registerAdapter(new AuthAdapter() {
+				isolated.registerAdapter(new AuthAdapter() {
 					@Override protected VenueAuthenticator createAuthenticator() {
-						return new VenueAuthenticator(engine, Map.of("test", config));
+						return new VenueAuthenticator(isolated, Map.of("test", config));
 					}
 				});
-				VenueAuthenticator verifier = new VenueAuthenticator(engine);
+				VenueAuthenticator verifier = new VenueAuthenticator(isolated);
 				AString token = signRSA(payload, rsa);
 				AuthResult result = verifier.verify(token);
 				assertEquals(did, result.userDID());
@@ -515,7 +519,7 @@ class AuthResultTest {
 			}
 		} finally {
 			server.stop(0);
-			engine.registerAdapter(new AuthAdapter());
+			isolated.close();
 		}
 	}
 
