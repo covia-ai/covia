@@ -62,6 +62,47 @@ import covia.test.DurabilityTest;
 @DurabilityTest
 public class EnginePersistenceTest {
 	@Test
+	public void adapterDeletionRetriesSurviveStoreReopen() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(609).getSeed().toHexString());
+		VenueServer server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			engine.getVenueState().users().create(ALICE_DID);
+			var adapter = new AdapterUserDeletionTest.Probe();
+			engine.registerAdapter(adapter);
+			var state = engine.adapterWorkspace(adapter.getName());
+			state.write(state.userPath(ALICE_DID, "bots/old"), Maps.of("token", "s/old"));
+			adapter.failStop = true;
+			assertThrows(IllegalStateException.class, () -> engine.deleteUser(engine.venueContext(), ALICE_DID));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			assertTrue(engine.getVenueState().users().isDeleted(ALICE_DID));
+			assertThrows(covia.exception.AuthException.class, () -> engine.getVenueState().users().create(ALICE_DID));
+			var adapter = new AdapterUserDeletionTest.Probe();
+			var state = engine.adapterWorkspace(adapter.getName());
+			assertNull(state.read(state.userPath(ALICE_DID, "")));
+			engine.registerAdapter(adapter);
+			assertEquals(1, adapter.stopped);
+			assertTrue(adapter.started);
+			assertTrue(engine.getVenueState().pendingUserDeletions(adapter.getName()).isEmpty());
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			var adapter = new AdapterUserDeletionTest.Probe();
+			engine.registerAdapter(adapter);
+			assertEquals(0, adapter.stopped, "completed cleanup is not repeated on ordinary startup");
+			assertTrue(engine.getVenueState().users().create(ALICE_DID));
+			assertNull(engine.adapterWorkspace(adapter.getName()).read("users/" + ALICE_DID));
+		} finally { server.close(); }
+	}
+
+	@Test
 	public void legacyJobChainsMigrateLazilyAcrossReopens() throws Exception {
 		File file = newTempEtch();
 		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(611).getSeed().toHexString());

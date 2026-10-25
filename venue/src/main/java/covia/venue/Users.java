@@ -46,12 +46,24 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 		return tombstone(did) != null;
 	}
 
+	boolean isDeleting(AString did) {
+		return RT.getIn(cursor().get(), did, DELETING) != null;
+	}
+
 	public ACell tombstone(AString did) {
 		return did == null ? null : RT.getIn(cursor().get(), did, Covia.K_DELETED);
 	}
 
 	public void requireNotDeleted(AString did) {
 		if (isDeleted(did)) throw new AuthException(ACCOUNT_DELETED);
+	}
+
+	/** The same lifecycle fence for account cursors and adapter-owned worker state. */
+	static void requireCurrent(ACell record, ACell generation) {
+		if (RT.getIn(record, Covia.K_DELETED) != null
+				|| !java.util.Objects.equals(generation, RT.getIn(record, GENERATION))) {
+			throw new AuthException(ACCOUNT_DELETED);
+		}
 	}
 
 	private static ACell initialise(ACell current) {

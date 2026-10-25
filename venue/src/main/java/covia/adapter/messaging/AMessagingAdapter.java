@@ -56,7 +56,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String CONFIG_BOT = "Bot '%s' is declared in venue config; remove it there";
 	public static final String MISSING_BOT = "You have no %s bot named '%s'";
 
-	private Map<String, S> specs = Map.of();
+	private volatile Map<String, S> specs = Map.of();
 	private final Map<String, R> runners = new LinkedHashMap<>();
 	private final ScheduledExecutorService retries = Executors.newSingleThreadScheduledExecutor(r -> {
 		Thread t = new Thread(r, getName() + "-retry");
@@ -90,6 +90,36 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		rearmRuntimeBots();
 	}
 
+	@Override
+	public void deleteUserState(AString did, AdapterWorkspace state) {
+		// Persisted ownership also covers configurations removed since the bot ran.
+		AMap<AString, ACell> configured = RT.ensureMap(state.read("config"));
+		if (configured != null) for (var entry : configured.entrySet()) {
+			if (did.equals(RT.getIn(entry.getValue(), K_USER))) state.delete("config/" + entry.getKey());
+		}
+		// Older config records predate the ownership field.
+		for (S spec : specs.values()) {
+			if (did.toString().equals(spec.userRef())) state.delete("config/" + spec.name());
+		}
+	}
+
+	@Override
+	public synchronized void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+		RuntimeException failure = null;
+		for (var iterator = runners.entrySet().iterator(); iterator.hasNext();) {
+			R runner = iterator.next().getValue();
+			if (!did.equals(runner.spec().userDID(engine))) continue;
+			try {
+				runner.stop();
+				iterator.remove();
+			} catch (RuntimeException e) {
+				// Keep failed runners reachable for the next deletion attempt.
+				if (failure == null) failure = e; else failure.addSuppressed(e);
+			}
+		}
+		if (failure != null) throw failure;
+	}
+
 	private void reconcile() {
 		List<String> stale = new ArrayList<>();
 		for (var entry : runners.entrySet()) {
@@ -102,9 +132,17 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		for (String name : stale) runners.remove(name).stop();
 		for (S spec : specs.values()) {
 			if (runners.containsKey(spec.name())) continue;
-			R runner = newBot(spec, Managed.CONFIG);
-			runners.put(spec.name(), runner);
-			runner.start();
+			if (engine.getVenueState().users().isDeleted(spec.userDID(engine))) continue;
+			try {
+				AdapterWorkspace state = state().forUser(spec.userDID(engine));
+				R runner = newBot(spec, Managed.CONFIG);
+				state.write("config/" + spec.name() + "/user", spec.userDID(engine));
+				runners.put(spec.name(), runner);
+				runner.start();
+			} catch (AuthException e) {
+				// Deletion may commit between admission and the owner-bound write.
+				if (!engine.getVenueState().users().isDeleted(spec.userDID(engine))) throw e;
+			}
 		}
 	}
 
@@ -126,7 +164,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	protected void rearmLegacyBots() { }
 
 	protected final synchronized void startRegistry(AString owner, AMap<AString, ACell> registry, boolean migrate) {
-		if (registry == null || closed) return;
+		if (registry == null || closed || engine.getVenueState().users().isDeleted(owner)) return;
 		for (var entry : registry.entrySet()) {
 			String name = String.valueOf(entry.getKey());
 			String key = runtimeKey(owner, name);

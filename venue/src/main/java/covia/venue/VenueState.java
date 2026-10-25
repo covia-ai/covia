@@ -29,7 +29,6 @@ import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.lattice.Namespace;
 import covia.venue.storage.LatticeStorage;
 
 /**
@@ -258,8 +257,12 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			AMap<ACell, ACell> venue = (AMap<ACell, ACell>) value;
 			AMap<AString, ACell> users = RT.ensureMap(venue.get(Covia.USER_DATA));
 			ACell previous = users == null ? null : users.get(did);
-			if (RT.getIn(previous, Covia.K_DELETED) != null) return value;
 			if (previous == null) throw new IllegalArgumentException(UNKNOWN_USER);
+			if (RT.getIn(previous, Covia.K_DELETED) != null) {
+				AMap<AString, ACell> record = RT.ensureMap(previous);
+				return venue.assoc(Covia.USER_DATA, users.assoc(did,
+					record.assoc(Users.DELETING, convex.core.data.prim.CVMBool.TRUE)));
+			}
 			venue = venue.assoc(Covia.USER_DATA, users.assoc(did, Maps.of(Covia.K_DELETED, tombstone,
 				Users.DELETING, convex.core.data.prim.CVMBool.TRUE)));
 			AMap<AString, ACell> directory = RT.ensureMap(venue.get(Covia.USERS));
@@ -269,10 +272,74 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		ACell previous = RT.getIn(before, Covia.USER_DATA, did);
 		ACell existing = RT.getIn(previous, Covia.K_DELETED);
 		return new DeletedUser(existing != null ? existing : tombstone,
-			RT.ensureMap(RT.getIn(previous, Namespace.G)));
+			existing == null ? RT.ensureMap(previous) : null);
 	}
 
-	record DeletedUser(ACell tombstone, AMap<AString, ACell> agents) {}
+	record DeletedUser(ACell tombstone, AMap<AString, ACell> previousUser) {}
+
+	/** Adapter storage obtained from a transaction draft stays in that draft. */
+	public AdapterWorkspace adapterWorkspace(String name) {
+		return new AdapterWorkspace(this, RT.ensureString(RT.getIn(get(), Covia.DID)), name);
+	}
+
+	private User venueUser() {
+		return users().ensure(RT.ensureString(RT.getIn(get(), Covia.DID)));
+	}
+
+	private static ACell[] deletionPath(String name) {
+		return covia.lattice.WorkspaceRoot.parseStringPath("w/user-deletions/" + name);
+	}
+
+	/** Only unfinished work is indexed here; no user/job scan is needed on startup. */
+	AMap<AString, ACell> pendingUserDeletions(String name) {
+		AMap<AString, ACell> pending = RT.ensureMap(venueUser().readInternalPath(deletionPath(name)));
+		return pending == null ? Maps.empty() : pending;
+	}
+
+	DeletedUser beginUserDeletion(AString did, AString actor,
+			java.util.Map<String, java.util.function.Consumer<AdapterWorkspace>> cleanups) {
+		DeletedUser[] result = new DeletedUser[1];
+		transact(draft -> {
+			DeletedUser deleted = draft.deleteUser(did, actor);
+			result[0] = deleted;
+			Set<String> names = new LinkedHashSet<>(cleanups.keySet());
+			AMap<AString, ACell> stored = RT.ensureMap(draft.venueUser().readInternalPath(
+				covia.lattice.WorkspaceRoot.parseStringPath("w/adapters")));
+			if (stored != null) for (AString name : stored.keySet()) names.add(name.toString());
+			// Repeating deletion also repairs tombstones made before adapter hooks existed.
+			for (String name : names) {
+				AdapterWorkspace state = draft.adapterWorkspace(name);
+				var cleanup = cleanups.get(name);
+				if (cleanup != null) cleanup.accept(state);
+				state.delete(state.userPath(did, ""));
+				draft.markUserDeletion(name, did, deleted.tombstone());
+			}
+			draft.markUserDeletion("_venue", did, deleted.tombstone());
+		});
+		return result[0];
+	}
+
+	private void markUserDeletion(String name, AString did, ACell tombstone) {
+		venueUser().writeInternalPath(deletionPath(name), pendingUserDeletions(name).assoc(did, tombstone));
+	}
+
+	/** Acknowledge exactly this deletion, opening recreation only when all work is done. */
+	void finishUserDeletion(String name, AString did, ACell tombstone) {
+		transact(draft -> {
+			AMap<AString, ACell> pending = draft.pendingUserDeletions(name);
+			if (!Objects.equals(tombstone, pending.get(did))) return;
+			pending = pending.dissoc(did);
+			User host = draft.venueUser();
+			if (pending.isEmpty()) host.deleteInternalPath(deletionPath(name));
+			else host.writeInternalPath(deletionPath(name), pending);
+			AMap<AString, ACell> all = RT.ensureMap(host.readInternalPath(
+				covia.lattice.WorkspaceRoot.parseStringPath("w/user-deletions")));
+			if (all != null) for (ACell value : all.values()) {
+				if (RT.getIn(value, did) != null) return;
+			}
+			draft.users().finishDeletion(did);
+		});
+	}
 
 	public static final String UNKNOWN_USER = "User is not registered at this venue";
 

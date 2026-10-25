@@ -4630,8 +4630,11 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Stop loops after the account tombstone has atomically removed their state. */
+	@Override
 	@SuppressWarnings("unchecked")
-	public void stopDeletedUser(AString did, AMap<AString, ACell> removedAgents) {
+	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+		if (engine == null) return;
+		AMap<AString, ACell> removedAgents = RT.ensureMap(RT.getIn(previousUser, covia.lattice.Namespace.G));
 		HashSet<AgentKey> keys = new HashSet<>(runningLoops.keySet());
 		keys.addAll(activeChats.keySet());
 		keys.addAll(deferredCompletions.keySet());

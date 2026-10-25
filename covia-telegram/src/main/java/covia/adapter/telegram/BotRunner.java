@@ -135,6 +135,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/** getUpdates offset: one past the last confirmed update. */
 	private int offset = 0;
 
+	private final covia.venue.AdapterWorkspace storage;
 	private final ConversationRouter conversations;
 	private volatile WebhookInbox inbox;
 	private volatile String fileMetadataRoot;
@@ -147,12 +148,13 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		this.spec = spec;
 		this.apiUrl = apiUrl;
 		this.managed = managed;
-		ConversationSessions sessionStore = new ConversationSessions(adapter.state(), sessionsRelativePath(),
+		this.storage = adapter.state().forUser(spec.userDID(adapter.engine));
+		ConversationSessions sessionStore = new ConversationSessions(storage, sessionsRelativePath(),
 			this::legacySession, chat -> {
 				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
 			});
 		conversations = new ConversationRouter(adapter.engine, spec, sessionStore);
-		inbox = new WebhookInbox(adapter.engine, adapter.state(), statePath("inbox") + "/unbound");
+		inbox = new WebhookInbox(adapter.engine, storage, statePath("inbox") + "/unbound");
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -207,7 +209,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		// Bot names and secret references can be reused for another account.
 		// Receipts must be scoped to the actual Telegram identity and Covia owner.
 		String binding = spec.userDID(adapter.engine).getHash().toHexString() + "/" + me.user().id();
-		inbox = new WebhookInbox(adapter.engine, adapter.state(), statePath("inbox") + "/" + binding);
+		inbox = new WebhookInbox(adapter.engine, storage, statePath("inbox") + "/" + binding);
 		fileMetadataRoot = statePath("files") + "/" + binding;
 		username = me.user().username();
 		bot = candidate;
@@ -694,7 +696,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		send(chatId, reply, spec.parseMode(), replyTo, threadOf(m), false);
 	}
 	RequestContext context() {
-		return RequestContext.of(spec.userDID(adapter.engine));
+		return conversations.context();
 	}
 
 	private String statePath(String region) {
@@ -738,8 +740,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void rememberMedia(Message message) {
 		for (JsonObject media : TelegramMedia.attachments(message)) {
 			String fileId = media.get("file_id").getAsString();
-			AMap<AString, ACell> previous = RT.castMap(adapter.state().read(fileMetadataPath(fileId)));
-			adapter.state().write(fileMetadataPath(fileId), previous.merge(RT.castMap(JSON.parse(media.toString()))));
+			AMap<AString, ACell> previous = RT.castMap(storage.read(fileMetadataPath(fileId)));
+			storage.write(fileMetadataPath(fileId), previous.merge(RT.castMap(JSON.parse(media.toString()))));
 		}
 	}
 
@@ -771,7 +773,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if (response.body().contentLength() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
 			byte[] bytes = response.body().byteStream().readNBytes(TelegramMedia.MAX_BYTES + 1);
 			if (bytes.length > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
-			ACell metadata = fileMetadataRoot == null ? null : adapter.state().read(fileMetadataPath(fileId));
+			ACell metadata = fileMetadataRoot == null ? null : storage.read(fileMetadataPath(fileId));
 			AString originalName = RT.ensureString(RT.getIn(metadata, "file_name"));
 			AString originalType = RT.ensureString(RT.getIn(metadata, "mime_type"));
 			String contentType = originalType != null ? originalType.toString()
@@ -805,7 +807,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	}
 
 	String sessionsPath() {
-		return adapter.state().path(sessionsRelativePath());
+		return storage.path(sessionsRelativePath());
 	}
 
 	private String sessionsRelativePath() {
@@ -850,14 +852,14 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (!spec.allowNames().contains(handle)) return false;
 		Long bound = resolved().putIfAbsent(handle, fromId);
 		if (bound == null) {
-			adapter.state().write(resolvedRelativePath() + "/" + handle, CVMLong.create(fromId));
+			storage.write(resolvedRelativePath() + "/" + handle, CVMLong.create(fromId));
 			log.info("Telegram bot '{}': @{} resolved to Telegram account {}", spec.name(), handle, fromId);
 			return true;
 		}
 		if (bound.longValue() == fromId) return true;
 		log.warn("Telegram bot '{}': @{} is now account {} but resolved to {} when first seen — refusing; "
 			+ "delete {} to rebind, or list the id in allow", spec.name(), handle, fromId, bound,
-			adapter.state().path(resolvedRelativePath() + "/" + handle));
+			storage.path(resolvedRelativePath() + "/" + handle));
 		return false;
 	}
 
@@ -879,7 +881,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (!resolvedLoaded) {
 			synchronized (resolved) {
 				if (!resolvedLoaded) {
-					AMap<AString, ACell> m = RT.castMap(adapter.state().read(resolvedRelativePath()));
+					AMap<AString, ACell> m = RT.castMap(storage.read(resolvedRelativePath()));
 					if (m != null) {
 						for (var e : m.entrySet()) {
 							CVMLong id = RT.ensureLong(e.getValue());

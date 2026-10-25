@@ -57,6 +57,8 @@ public final class ConversationSessions {
 		return null;
 	}
 
+	void requireCurrentUser() { workspace.requireCurrentUser(); }
+
 	public void put(String conversation, String session) {
 		synchronized (mutationLock) {
 			if (writable.getAsBoolean()) workspace.write(path(conversation), Strings.create(Objects.requireNonNull(session)));

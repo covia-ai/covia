@@ -313,6 +313,50 @@ for operator-declared instances, `config/<instance>/...` is the conventional
 separation from `users/<did>/...`. Other adapter-global keys are adapter-owned
 but should remain stable and documented.
 
+Long-lived workers must capture `state.forUser(did)` when created, and use that
+handle for all their durable state, including `config/...` paths. Reads and
+mutations are fenced to that account's generation. A late callback cannot restore
+deleted data or change a new account registered under the same DID. Call
+`requireCurrentUser()` before admitting queued work; each storage mutation also
+checks atomically. Unbound writes to `users/<did>/...` reject tombstoned owners;
+write individual user records rather than replacing the `users` map.
+
+### User deletion hooks
+
+`AAdapter` has two narrowly scoped lifecycle hooks:
+
+- `deleteUserState(did, state)` removes additional durable associations through
+  the supplied **transaction-bound** `AdapterWorkspace`. It runs atomically with
+  the user tombstone, namespace and login-alias removal. Use only that workspace;
+  no live engine writes, runtime changes or I/O. It may run again on a transaction
+  conflict. After the hook, the framework always removes `users/<did>` itself,
+  even when the adapter is unloaded. The default hook does nothing further.
+- `onUserDeleted(did, previousUser)` runs after the commit is flushed. Stop
+  workers and release external resources here. It must be idempotent and throw
+  on incomplete cleanup so the venue can retry. The previous user record is
+  available only on initial deletion, never retained for recovery. Tolerate null
+  on retry and an instance that was boot-disabled and never installed.
+
+An adapter needing durable external cleanup identifiers must maintain its own
+cleanup records outside `users/<did>` and consume them idempotently in the runtime
+hook. Recovery cannot depend on the erased namespace or an in-memory snapshot.
+
+Both hooks apply to disabled adapters. Incomplete work is indexed privately at
+`w/user-deletions/<adapter>/<did>` in the venue principal; `_venue` covers core
+job/scheduler cleanup. Entries contain only the deletion tombstone, not deleted
+payloads. Unloaded adapters retain an entry until their next activation, when
+both hooks run before workers start. Failures leave the account revoked and bar
+recreation. Repeat `user:delete` to retry; loading an unavailable adapter also
+reconciles its queue. Normal startup checks only these small pending queues,
+with no sweep of user or job records. Repeating deletion repairs adapter data
+left by tombstones from older venues as well.
+
+The messaging base implements both hooks for runtime and configured bots. It
+records configured-bot ownership, removes sessions/inboxes/caches, stops runners,
+and skips deleted owners during rearming. External effects already in flight
+are not part of the lattice transaction; provider-specific cleanup remains the
+adapter's responsibility.
+
 The corresponding public and private roots therefore have different roles:
 
 | Root | Owner and purpose | Visibility |

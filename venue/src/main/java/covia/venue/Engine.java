@@ -298,6 +298,7 @@ public class Engine {
 		}
 		lifecycle = Lifecycle.STARTING;
 		try {
+			resumeCoreUserDeletions();
 			// Reconcile wake handles while the alarm is still disarmed. Hosts
 			// prepare the catalog and recover Jobs before activating this engine.
 			rebuildSchedulerFromLattice();
@@ -1240,6 +1241,7 @@ public class Engine {
 		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
 		try {
+			resumeAdapterUserDeletions(adapter);
 			if (isStarted()) adapter.start();
 		} catch (RuntimeException | Error failure) {
 			// A failed worker start must not leave a dispatchable partial adapter,
@@ -2782,7 +2784,7 @@ public class Engine {
 	 * caller-selected paths through ordinary operations.
 	 */
 	public AdapterWorkspace adapterWorkspace(String adapterName) {
-		return new AdapterWorkspace(this, adapterName);
+		return venueState.adapterWorkspace(adapterName);
 	}
 
 	/**
@@ -3007,7 +3009,9 @@ public class Engine {
 	}
 
 	public static final String PROTECTED_USER = "The venue and public principals cannot be deleted";
-	private final Object userDeletionLock = new Object();
+	private final java.util.concurrent.locks.ReentrantLock userDeletionLock = new java.util.concurrent.locks.ReentrantLock();
+	public static final String USER_DELETION_IN_PROGRESS = "User deletion is in progress; retry adapter activation";
+	public static final String USER_DELETION_PENDING = "User access revoked; cleanup is pending unavailable adapters";
 
 	/** Operator account deletion, with no implicit self-service authority. */
 	public ACell deleteUser(RequestContext ctx, AString did) {
@@ -3016,25 +3020,81 @@ public class Engine {
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
 			throw new IllegalArgumentException(PROTECTED_USER);
 		}
-		synchronized (userDeletionLock) {
+		userDeletionLock.lock();
+		try {
 			return eraseUser(ctx, did);
+		} finally {
+			userDeletionLock.unlock();
 		}
 	}
 
 	private ACell eraseUser(RequestContext ctx, AString did) {
+		java.util.Map<String, AAdapter> registered;
+		synchronized (this) {
+			registered = new java.util.LinkedHashMap<>(disabledAdapters);
+			registered.putAll(adapters);
+		}
+		java.util.Map<String, java.util.function.Consumer<AdapterWorkspace>> cleanups = new java.util.LinkedHashMap<>();
+		registered.forEach((name, adapter) -> cleanups.put(name, state -> adapter.deleteUserState(did, state)));
 		VenueState.DeletedUser deleted;
 		synchronized (getAuth()) {
-			deleted = venueState.deleteUser(did, ctx.getCallerDID());
+			deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
 		}
-		// The durable tombstone closes admission first. Repeating deletion also
-		// retries runtime cleanup after an interrupted earlier request.
-		jobs().cancelUserJobs(did, ctx.getJob());
-		if (getAdapter("agent") instanceof covia.adapter.AgentAdapter agent) agent.stopDeletedUser(did, deleted.agents());
-		gridScheduler().cancelUser(did);
-		venueState.users().finishDeletion(did);
+		// Persist revocation and retry evidence before invoking external effects.
 		flush();
+		RuntimeException failure = null;
+		try {
+			finishCoreUserDeletion(did, ctx.getJob());
+		} catch (RuntimeException e) { failure = e; }
+		for (AAdapter adapter : registered.values()) {
+			if (!venueState.pendingUserDeletions(adapter.getName()).containsKey(did)) continue;
+			try {
+				adapter.onUserDeleted(did, deleted.previousUser());
+				venueState.finishUserDeletion(adapter.getName(), did, deleted.tombstone());
+			} catch (RuntimeException e) {
+				if (failure == null) failure = e; else failure.addSuppressed(e);
+			}
+		}
+		flush();
+		if (failure != null) throw failure;
+		if (venueState.users().isDeleting(did)) {
+			throw new IllegalStateException(USER_DELETION_PENDING);
+		}
 		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
 		return deleted.tombstone();
+	}
+
+	private void finishCoreUserDeletion(AString did, covia.grid.Job deletingJob) {
+		ACell tombstone = venueState.pendingUserDeletions("_venue").get(did);
+		if (tombstone == null) return;
+		jobs().cancelUserJobs(did, deletingJob);
+		gridScheduler().cancelUser(did);
+		venueState.finishUserDeletion("_venue", did, tombstone);
+	}
+
+	private void resumeCoreUserDeletions() {
+		AMap<AString, ACell> pending = venueState.pendingUserDeletions("_venue");
+		for (AString did : pending.keySet()) finishCoreUserDeletion(did, null);
+		if (!pending.isEmpty()) flush();
+	}
+
+	/** Activation holds the registry monitor: never wait for a deletion that needs it. */
+	private void resumeAdapterUserDeletions(AAdapter adapter) {
+		if (!userDeletionLock.tryLock()) throw new IllegalStateException(USER_DELETION_IN_PROGRESS);
+		try {
+			String name = adapter.getName();
+			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
+			for (var entry : pending.entrySet()) {
+				AString did = entry.getKey();
+				venueState.transact(draft -> adapter.deleteUserState(did, draft.adapterWorkspace(name)));
+				flush();
+				adapter.onUserDeleted(did, null);
+				venueState.finishUserDeletion(name, did, entry.getValue());
+			}
+			if (!pending.isEmpty()) flush();
+		} finally {
+			userDeletionLock.unlock();
+		}
 	}
 
 	/**

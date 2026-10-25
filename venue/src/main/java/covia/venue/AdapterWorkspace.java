@@ -6,6 +6,10 @@ import java.util.regex.Pattern;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Strings;
+import convex.core.lang.RT;
+import covia.exception.AuthException;
+import covia.lattice.Covia;
 
 /**
  * Venue-private durable storage bound to one adapter.
@@ -20,13 +24,24 @@ import convex.core.data.AString;
 public final class AdapterWorkspace {
 	private static final Pattern ADAPTER_NAME=Pattern.compile("[a-z][a-z0-9-]*");
 	private static final String ROOT="w/adapters/";
+	public static final String USER_RECORD_REQUIRED="Write individual adapter user records";
 
-	private final Engine engine;
+	private final VenueState venue;
+	private final AString venueDID;
+	private final AString owner;
+	private final ACell generation;
 	private final String adapterName;
 	private final String rootPath;
 
-	AdapterWorkspace(Engine engine,String adapterName) {
-		this.engine=Objects.requireNonNull(engine,"engine");
+	AdapterWorkspace(VenueState venue,AString venueDID,String adapterName) {
+		this(venue,venueDID,adapterName,null,null);
+	}
+
+	private AdapterWorkspace(VenueState venue,AString venueDID,String adapterName,AString owner,ACell generation) {
+		this.venue=Objects.requireNonNull(venue,"venue");
+		this.venueDID=Objects.requireNonNull(venueDID,"venueDID");
+		this.owner=owner;
+		this.generation=generation;
 		if(adapterName==null||!ADAPTER_NAME.matcher(adapterName).matches()) {
 			throw new IllegalArgumentException("Adapter workspace name must match [a-z][a-z0-9-]*: "+adapterName);
 		}
@@ -36,6 +51,17 @@ public final class AdapterWorkspace {
 
 	public String adapterName(){return adapterName;}
 	public String rootPath(){return rootPath;}
+
+	/** Reject a queued callback whose worker belongs to a deleted/replaced account. */
+	public void requireCurrentUser(){requireCurrent(venue);}
+
+	/** Bind a worker's storage to this account lifecycle, including config-owned paths. */
+	public AdapterWorkspace forUser(AString did) {
+		userPath(did,""); // validate the association key
+		ACell record=RT.getIn(venue.get(),Covia.USER_DATA,did);
+		if(RT.getIn(record,Covia.K_DELETED)!=null)throw new AuthException(Users.ACCOUNT_DELETED);
+		return new AdapterWorkspace(venue,venueDID,adapterName,did,RT.getIn(record,Users.GENERATION));
+	}
 
 	/** Canonical {@code w/adapters/<adapter>/<relative>} path for diagnostics and tests. */
 	public String path(String relative){
@@ -54,21 +80,48 @@ public final class AdapterWorkspace {
 	}
 
 	public ACell read(String relative){
-		return venueUser().readInternalPath(keys(path(relative)));
+		ACell[] path=keys(path(relative));
+		ACell[] result=new ACell[1];
+		venue.transact(draft -> {
+			requireCurrent(draft);
+			User user=draft.users().get(venueDID);
+			result[0]=user==null?null:user.readInternalPath(path);
+		});
+		return result[0];
 	}
 
 	public void write(String relative,ACell value){
 		Objects.requireNonNull(value,"Adapter workspace values must be non-null; use delete()");
 		validateRelative(relative,false);
-		venueUser().writeInternalPath(keys(path(relative)),value);
+		venue.transact(draft -> {
+			requireCurrent(draft);
+			// A caller using the conventional user path still gets an atomic
+			// tombstone check; long-lived workers must additionally use forUser.
+			if(relative.startsWith("users/")) {
+				String did=relative.substring(6).split("/",2)[0];
+				draft.users().requireNotDeleted(Strings.create(did));
+			}
+			if(relative.equals("users"))throw new IllegalArgumentException(USER_RECORD_REQUIRED);
+			draft.users().ensure(venueDID).writeInternalPath(keys(path(relative)),value);
+		});
 	}
 
 	public boolean delete(String relative){
 		validateRelative(relative,false);
-		return venueUser().deleteInternalPath(keys(path(relative)));
+		boolean[] removed=new boolean[1];
+		venue.transact(draft -> {
+			requireCurrent(draft);
+			User user=draft.users().get(venueDID);
+			removed[0]=user!=null && user.deleteInternalPath(keys(path(relative)));
+		});
+		return removed[0];
 	}
 
-	private User venueUser(){return engine.getVenueState().users().ensure(engine.getDIDString());}
+	private void requireCurrent(VenueState draft){
+		if(owner==null)return;
+		ACell record=RT.getIn(draft.get(),Covia.USER_DATA,owner);
+		Users.requireCurrent(record,generation);
+	}
 	private static ACell[] keys(String path){return WorkspaceRoot.parseStringPath(path);}
 
 	private static String validateRelative(String relative,boolean allowEmpty){

@@ -106,7 +106,7 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 		this.bot = bot;
 		this.adapter = adapter;
 		this.settings = RelaySettings.parse(bot.spec().relay(), false);
-		this.relay = new MessageRelay(adapter.state(), root, settings.holdSeconds(), adapter.relayReplyWindowMs(),
+		this.relay = new MessageRelay(bot.state(), root, settings.holdSeconds(), adapter.relayReplyWindowMs(),
 			System::currentTimeMillis);
 	}
 

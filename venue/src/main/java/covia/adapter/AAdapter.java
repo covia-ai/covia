@@ -147,6 +147,29 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Remove user-associated durable state in the venue deletion transaction.
+	 * Use only the supplied draft workspace: this callback may be retried and
+	 * must perform no I/O, runtime changes, or writes through the live engine.
+	 * The framework also removes the conventional users/DID subtree, including
+	 * for unloaded adapters. Override for additional adapter-owned indexes.
+	 * Called for disabled/uninstalled instances too; do not depend on install.
+	 */
+	public void deleteUserState(AString did, AdapterWorkspace state) {
+		// Conventional state is removed by the framework.
+	}
+
+	/**
+	 * Stop user-owned workers and release external resources after deletion commits.
+	 * Must be idempotent; failures retain a durable retry marker and bar account
+	 * recreation. Previous user state is supplied on first deletion only, and is
+	 * null on recovery. Never use it to restore data. Called on disabled adapters
+	 * too; an instance that has never been installed has no runtime to clean up.
+	 */
+	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+		// Most adapters have no user-owned runtime resources.
+	}
+
+	/**
 	 * Durable state owned by this adapter in the venue principal's private
 	 * workspace at {@code w/adapters/<name>/}. The returned handle is permanently
 	 * bound to both this adapter name and the venue identity; invocation contexts

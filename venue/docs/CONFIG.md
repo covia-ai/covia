@@ -1147,7 +1147,14 @@ Deletion cancels accepted jobs, stops agents, removes queued schedules, and
 atomically removes the user's namespace and login profile/aliases. A small
 tombstone records the DID, deletion time and actor; public-key revocations
 remain without profile fields or key labels. Repeating deletion while the
-account is absent is idempotent. An interrupted cleanup can be retried.
+account is absent is idempotent. Adapter-owned `users/<did>` records are removed
+in the same transaction, including those belonging to unloaded adapters.
+Adapter hooks remove other associations and stop their workers (including
+disabled messaging bots). An interrupted cleanup can be retried with the same
+delete operation; unavailable adapters reconcile before their next activation.
+Cleanup failure is reported with access already revoked, and account recreation
+remains blocked until all cleanup completes. See
+[adapter deletion hooks](ADAPTERS.md#user-deletion-hooks).
 
 The tombstone is **not a permanent registration ban**. Explicit `user:create`,
 automatic admission when `users.autoCreate` is enabled, and existing trusted

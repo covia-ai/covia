@@ -51,7 +51,7 @@ public final class ConversationRouter {
 		if (previous == null) previous = CompletableFuture.completedFuture(null);
 		next.whenComplete((result, failure) -> tails.remove(conversation, next));
 		previous.handleAsync((result, failure) -> {
-			try { work.run(); next.complete(null); }
+			try { sessions.requireCurrentUser(); work.run(); next.complete(null); }
 			catch (Throwable t) { next.completeExceptionally(t); }
 			return null;
 		}, AAdapter.VIRTUAL_EXECUTOR);
@@ -89,7 +89,10 @@ public final class ConversationRouter {
 	/** Call within the same queue as chat, so a reset cannot race an in-flight turn. */
 	public void reset(String conversation) { sessions.remove(conversation); }
 
-	public RequestContext context() { return RequestContext.of(spec.userDID(engine)); }
+	public RequestContext context() {
+		sessions.requireCurrentUser();
+		return RequestContext.of(spec.userDID(engine));
+	}
 
 	public ACell runOperation(String operation, ACell input) {
 		Job job = engine.jobs().invokeOperation(operation, input, context());

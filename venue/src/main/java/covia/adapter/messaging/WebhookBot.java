@@ -35,6 +35,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private final AWebhookMessagingAdapter<S> adapter;
 	private final S spec;
 	private final Managed managed;
+	private final covia.venue.AdapterWorkspace state;
 	private final WebhookInbox inbox;
 	private final ConversationRouter router;
 	private final RelayBinding<S> relay;
@@ -50,6 +51,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	WebhookBot(AWebhookMessagingAdapter<S> adapter, S spec, Managed managed) {
 		this.adapter = adapter; this.spec = spec; this.managed = managed;
 		AString owner = spec.userDID(adapter.engine);
+		state = adapter.state().forUser(owner);
 		String identity = Strings.create(ConversationRouter.key(owner.toString(), spec.installationKey())).getHash().toHexString();
 		version = Strings.create(spec.settings().getHash().toHexString());
 		binding = managed == Managed.CONFIG ? "c-" + spec.name()
@@ -60,8 +62,8 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			: adapter.userStatePath(owner, "sessions/" + spec.name() + "/" + identity);
 		String relayRoot = managed == Managed.CONFIG ? "config/" + spec.name() + "/relay/" + identity
 			: adapter.userStatePath(owner, "relay/" + spec.name() + "/" + identity);
-		inbox = new WebhookInbox(adapter.engine, adapter.state(), inboxRoot);
-		router = new ConversationRouter(adapter.engine, spec, new ConversationSessions(adapter.state(), sessionsRoot + "/" + version,
+		inbox = new WebhookInbox(adapter.engine, state, inboxRoot);
+		router = new ConversationRouter(adapter.engine, spec, new ConversationSessions(state, sessionsRoot + "/" + version,
 			this, () -> running && adapter.isActive()));
 		relay = spec.routesToRelay() ? new RelayBinding<>(this, adapter, relayRoot) : null;
 	}
@@ -70,6 +72,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	public String binding() { return binding; }
 	public boolean running() { return running; }
 	public WebhookInbox inbox() { return inbox; }
+	covia.venue.AdapterWorkspace state() { return state; }
 	/** This binding's relay, or null when its handler is an agent or operation. */
 	public RelayBinding<S> relay() { return relay; }
 	/**
@@ -85,6 +88,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	 * grant bound to a url prefix covers it only there.
 	 */
 	public String credential(String field, String destination) {
+		state.requireCurrentUser();
 		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), spec.userDID(adapter.engine), destination);
 	}
 	public void requireReady() {

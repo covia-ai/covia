@@ -1,13 +1,9 @@
 package covia.venue;
 
-import java.util.Objects;
-
 import convex.core.data.ACell;
 import convex.core.lang.RT;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.AUpdateCursor;
-import covia.exception.AuthException;
-import covia.lattice.Covia;
 
 /** A retained user/agent/workspace cursor belongs to exactly one account lifecycle. */
 final class AccountCursor extends AUpdateCursor<ACell, ACell> {
@@ -22,10 +18,7 @@ final class AccountCursor extends AUpdateCursor<ACell, ACell> {
 	protected ACell view(ACell value) {
 		// Evaluated inside the underlying atomic update, including CAS retries.
 		// Old cursors cannot read or write a newly provisioned account with the same DID.
-		if (RT.getIn(value, Covia.K_DELETED) != null
-				|| !Objects.equals(generation, RT.getIn(value, Users.GENERATION))) {
-			throw new AuthException(Users.ACCOUNT_DELETED);
-		}
+		Users.requireCurrent(value, generation);
 		return value;
 	}
 

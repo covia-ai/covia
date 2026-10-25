@@ -46,7 +46,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	private final ConversationRouter conversations;
 
-	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,new ConversationSessions(adapter.state(),sessionsRelativePath()));}
+	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,new ConversationSessions(adapter.state().forUser(spec.userDID(adapter.engine)),sessionsRelativePath()));}
 	@Override public BotSpec spec(){return spec;}
 	@Override public Managed managed(){return managed;}
 	@Override public void start(){AAdapter.VIRTUAL_EXECUTOR.execute(this::tryStart);}
