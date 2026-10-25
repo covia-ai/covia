@@ -244,6 +244,9 @@ public class HTTPAdapter extends AAdapter {
 		validateURL(uri);
 	}
 
+	/** Opening of the refusal for a URL that resolves to a private or internal address. */
+	public static final String PRIVATE_ADDRESS = "URL targets a private/internal address: ";
+
 	/**
 	 * Validates a URL for SSRF safety. Blocks private/internal network addresses
 	 * by default. Allow list entries bypass SSRF checks; block list is checked first.
@@ -277,7 +280,7 @@ public class HTTPAdapter extends AAdapter {
 						|| addr.isLinkLocalAddress()
 						|| addr.isAnyLocalAddress()) {
 					throw new IllegalArgumentException(
-						"URL targets a private/internal address: " + host
+						PRIVATE_ADDRESS + host
 						+ " (resolved to " + addr.getHostAddress() + ")"
 						+ ". Add to allowList if this is intentional.");
 				}

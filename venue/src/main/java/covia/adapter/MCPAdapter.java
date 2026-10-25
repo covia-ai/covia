@@ -108,6 +108,8 @@ public class MCPAdapter extends AAdapter {
 						if (serverUrl == null) {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
+						// The caller may name the server: the same outbound policy as http.
+						engine.requireSafeUrl(serverUrl.toString());
 
 						// Bridged form (#80): when the OPERATION metadata pins the
 						// remote tool, the op's declared input IS the tool's own
@@ -153,6 +155,7 @@ public class MCPAdapter extends AAdapter {
 						if (serverUrl == null) {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
+						engine.requireSafeUrl(serverUrl.toString());
 
 						// Get API access token, if provided
 						AString token = RT.getIn(input, Fields.TOKEN);

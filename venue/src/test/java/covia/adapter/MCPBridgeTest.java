@@ -282,8 +282,25 @@ public class MCPBridgeTest {
 		Job denied = addServer("selfg", "http://10.99.99.99:1234", null, ctx);
 		assertThrows(Exception.class, () -> denied.awaitResult(15000));
 		assertEquals(Status.FAILED, denied.getStatus());
-		assertTrue(denied.getErrorMessage().contains("private/internal"),
+		assertTrue(denied.getErrorMessage().contains(HTTPAdapter.PRIVATE_ADDRESS),
 			denied.getErrorMessage());
+	}
+
+	@Test
+	public void testCallerNamedServerIsSsrfChecked() {
+		// tools-list and tools-call take the server from the caller's input, so the
+		// same outbound policy applies before any connection is made.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		Job list = engine.jobs().invokeOperation("v/ops/mcp/tools-list",
+			Maps.of(Fields.SERVER, "http://10.99.99.99:1234"), ctx);
+		Job call = engine.jobs().invokeOperation("v/ops/mcp/tools-call",
+			Maps.of(Fields.SERVER, "http://10.99.99.99:1234", Fields.TOOL_NAME, "anything",
+				Fields.ARGUMENTS, Maps.empty()), ctx);
+		for (Job job : new Job[] {list, call}) {
+			assertThrows(Exception.class, () -> job.awaitResult(15000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains(HTTPAdapter.PRIVATE_ADDRESS), job.getErrorMessage());
+		}
 	}
 
 	@Test
@@ -330,7 +347,9 @@ public class MCPBridgeTest {
 
 	@Test
 	public void testToolsListInitializationFailureIsActionable() throws Exception {
-		HttpServer rejecting = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		// Addressed as localhost, the test venue's allow-listed host: caller-named
+		// MCP servers pass the same outbound policy as http.
+		HttpServer rejecting = HttpServer.create(new InetSocketAddress(0), 0);
 		AtomicReference<String> requestedPath = new AtomicReference<>();
 		rejecting.createContext("/mcp", exchange -> {
 			requestedPath.set(exchange.getRequestURI().getPath());
@@ -339,7 +358,7 @@ public class MCPBridgeTest {
 		});
 		rejecting.start();
 		try {
-			String server = "http://127.0.0.1:" + rejecting.getAddress().getPort() + "/mcp/";
+			String server = "http://localhost:" + rejecting.getAddress().getPort() + "/mcp/";
 			Job job = engine.jobs().invokeOperation("v/ops/mcp/tools-list",
 				Maps.of(Fields.SERVER, server), RequestContext.of(ALICE_DID));
 			assertThrows(Exception.class, () -> job.awaitResult(15000));
