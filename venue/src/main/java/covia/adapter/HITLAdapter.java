@@ -64,6 +64,9 @@ import covia.venue.User;
  */
 public class HITLAdapter extends AAdapter {
 	public static final String REQUEST_ALREADY_RESOLVED = "HITL request is no longer open";
+	public static final String RESOLVED_WITHOUT_RESULT = "HITL request was resolved before restart but its full result was not saved";
+	public static final String REQUEST_REJECTED = "HITL request rejected";
+	public static final String REQUEST_EXPIRED = "HITL request expired";
 
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
@@ -219,7 +222,22 @@ public class HITLAdapter extends AAdapter {
 		if (target == null) target = RT.ensureString(data.get(Fields.CALLER));
 		AString targetDID = target;
 		AString id = Strings.create(job.getID().toHexString());
+		User user = engine.getVenueState().users().get(target);
+		AMap<AString, ACell> record = user == null ? null : user.getHitlRequest(id);
+		if (record != null && !Hitl.OPEN.equals(record.get(Hitl.STATUS))) {
+			// Older records lack a prepared result. Never reissue a grant or pretend
+			// a redacted token is the original answer.
+			if (Hitl.CANCELLED.equals(record.get(Hitl.STATUS))) job.cancel();
+			else if (Hitl.EXPIRED.equals(record.get(Hitl.STATUS))) job.fail(REQUEST_EXPIRED);
+			else if (Hitl.REJECTED.equals(record.get(Hitl.STATUS))) job.fail(rejection(RT.getIn(record, Hitl.RESPONSE, Hitl.COMMENT)));
+			else job.fail(RESOLVED_WITHOUT_RESULT);
+			return;
+		}
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
+	}
+
+	private static String rejection(ACell comment) {
+		return REQUEST_REJECTED + (comment == null ? "" : ": " + comment);
 	}
 
 	/** An ask within the caller's own user family is always permitted — a user
@@ -335,9 +353,7 @@ public class HITLAdapter extends AAdapter {
 		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.REJECT);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
 		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(),
-				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), () -> {
-			if (job != null && !job.isFinished()) job.fail("HITL request rejected" + (comment != null ? ": " + comment : ""));
-		})) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
+				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), job)) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
 	}
 
@@ -394,9 +410,7 @@ public class HITLAdapter extends AAdapter {
 		// in its own durable session.
 		if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
 		AMap<AString, ACell> result = output;
-		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, () -> {
-			if (job != null && !job.isFinished()) job.completeWith(result);
-		})) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
+		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, job)) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
@@ -621,10 +635,8 @@ public class HITLAdapter extends AAdapter {
 	 *  stickiness makes the race against a response commit exactly one winner. */
 	private void expireRequest(AString targetDID, AString id, Blob jobId) {
 		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), Maps.of(
-				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED, Fields.ERROR, "HITL request expired"), () -> {
-			Job job = engine.jobs().getJob(jobId);
-			if (job != null && !job.isFinished()) job.fail("HITL request expired");
-		})) log.info("HITL request {} expired", id);
+				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED, Fields.ERROR, REQUEST_EXPIRED),
+				engine.jobs().getJob(jobId))) log.info("HITL request {} expired", id);
 	}
 
 	private record SessionWake(AString owner, AString agent) { }
@@ -633,13 +645,18 @@ public class HITLAdapter extends AAdapter {
 	 * Tokens have already been prepared; no signing, I/O or live Job mutation is
 	 * allowed inside the retryable draft callback. */
 	private boolean resolveRequest(AString targetDID, AString id, AString status,
-			AMap<AString, ACell> response, AString responder, ACell result, Runnable finishJob) {
+			AMap<AString, ACell> response, AString responder, ACell result, Job job) {
 		var resolved = new java.util.concurrent.atomic.AtomicBoolean();
 		var unavailable = new java.util.concurrent.atomic.AtomicBoolean();
 		var wake = new java.util.concurrent.atomic.AtomicReference<SessionWake>();
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
+		AString requester = job == null ? null : RT.ensureString(job.getData().get(Fields.CALLER));
+		AString requestingAgent = job == null ? null : Principals.agentIdOf(RT.ensureString(job.getData().get(Fields.ACTOR)));
+		User requesterAccount = requester == null ? null : engine.getVenueState().users().get(requester);
+		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
 		engine.getVenueState().users().transact(draft -> {
 			resolved.set(false);
+			notification.set(null);
 			unavailable.set(false);
 			wake.set(null);
 			User target = draft.get(targetDID);
@@ -648,6 +665,20 @@ public class HITLAdapter extends AAdapter {
 			AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
 			if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
 			target.putHitlRequest(id, updated);
+			if (job != null) {
+				Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data -> {
+					if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
+					String error = Hitl.REJECTED.equals(status) ? rejection(RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED;
+					return data.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(error)).dissoc(Fields.ERROR_CODE);
+				});
+				if (changed == null) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
+				notification.set(changed);
+				// Terminal jobs are skipped at restart: no live cleanup listener will
+				// survive to remove this wait, so settle it with the result itself.
+				User owner = draft.get(requester);
+				AgentState askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
+				if (askingAgent != null && askingAgent.getRecord() != null) askingAgent.removePending(job.getID());
+			}
 			resolved.set(true);
 			if (result == null) return;
 			AString agentId = RT.ensureString(record.get(Hitl.AGENT));
@@ -664,17 +695,22 @@ public class HITLAdapter extends AAdapter {
 			} else unavailable.set(true);
 		});
 		if (!resolved.get()) return false;
-		engine.flush();
-		finishJob.run();
 		SessionWake destination = wake.get();
-		if (destination != null) agents.wakeAgent(destination.owner(), destination.agent(), true);
+		// Notify live waiters even if the durability barrier fails: the in-memory
+		// transaction is already committed. The responder still receives that error.
+		try { engine.flush(); }
+		finally { if (notification.get() != null) notification.get().run(); }
+		if (destination != null && requesterAccount != null) synchronized (engine) {
+			requesterAccount.get(); // Fence wake against account deletion/recreation.
+			agents.wakeAgent(destination.owner(), destination.agent(), true);
+		}
 		if (unavailable.get()) log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
 		return true;
 	}
 
 	/** Cancellation uses the same terminal-state arbitration without a session reply. */
 	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
-		return resolveRequest(targetDID, id, status, response, null, null, () -> { });
+		return resolveRequest(targetDID, id, status, response, null, null, null);
 	}
 
 	/**

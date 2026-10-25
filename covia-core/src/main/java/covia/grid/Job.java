@@ -260,6 +260,11 @@ public class Job {
 			if (next == null) return null;
 			return next;
 		}, failure);
+		return publishUpdate(committed, continuation);
+	}
+
+	/** Publish lifecycle effects after the primary record transaction commits. */
+	protected final boolean publishUpdate(State committed, Runnable continuation) {
 		if (committed == null) return false;
 		AMap<AString, ACell> next = committed.data();
 		if (isFinished(next) && !terminalOutcome.compareAndSet(null, committed)) return false;

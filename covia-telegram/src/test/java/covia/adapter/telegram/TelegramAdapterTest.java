@@ -699,42 +699,32 @@ public class TelegramAdapterTest {
 
 	@Test
 	public void undeliverableTurnNotifiesOnceAndIsNotRetriedAfterRestart() throws Exception {
-		long window = adapter.deliveryWindowMillis, backoff = adapter.deliveryBackoffMillis;
-		adapter.deliveryWindowMillis = 1_000;
-		adapter.deliveryBackoffMillis = 50;
-		try {
-			telegram.drainSent();
-			// Intake downloads the document first; the file never becomes available.
-			var message = telegram.message(17101, "private", ALLOWED_ID, "alice");
-			message.put("document", java.util.Map.of("file_id", "never-uploaded", "file_unique_id", "never-uploaded-u",
-				"mime_type", "application/pdf", "file_name", "missing.pdf"));
-			message.put("caption", "Please read this");
-			String id = Integer.toString(telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message))));
-			var notice = telegram.awaitSent(15_000);
-			assertNotNull(notice, "the sender is told once the window closes");
-			var inbox = echoInbox();
-			var receipt = inbox.get(id);
-			assertEquals(covia.adapter.webhook.WebhookInbox.FAILED, receipt.get(Fields.STATUS));
-			assertEquals(Strings.create(covia.adapter.messaging.DeliveryRetry.WINDOW_EXHAUSTED), receipt.get(Fields.REASON));
-			String lastError = receipt.get(covia.adapter.webhook.WebhookInbox.LAST_ERROR).toString();
-			assertEquals(BotRunner.UNDELIVERED.formatted(lastError), notice.text());
-			long attempts = ((CVMLong) receipt.get(covia.adapter.webhook.WebhookInbox.ATTEMPTS)).longValue();
-			// Attempts start at 0, 50, 150, 350 and 750 ms; the next (1550 ms) is outside the window.
-			assertTrue(attempts >= 2 && attempts <= 5, receipt.toString());
-			assertEquals(attempts, telegram.getFileCalls.get("never-uploaded").get());
-			assertNull(telegram.awaitSent(400), "one notice per update");
+		telegram.drainSent();
+		// Intake downloads the document first; the file never becomes available.
+		var message = telegram.message(17101, "private", ALLOWED_ID, "alice");
+		message.put("document", java.util.Map.of("file_id", "never-uploaded", "file_unique_id", "never-uploaded-u",
+			"mime_type", "application/pdf", "file_name", "missing.pdf"));
+		message.put("caption", "Please read this");
+		String id = Integer.toString(telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message))));
+		var notice = telegram.awaitSent(15_000);
+		assertNotNull(notice, "the sender is told after the failed attempt");
+		var inbox = echoInbox();
+		var receipt = inbox.get(id);
+		assertEquals(covia.adapter.webhook.WebhookInbox.FAILED, receipt.get(Fields.STATUS));
+		assertEquals(Strings.create(BotRunner.DELIVERY_FAILED), receipt.get(Fields.REASON));
+		String lastError = receipt.get(covia.adapter.webhook.WebhookInbox.LAST_ERROR).toString();
+		assertEquals(BotRunner.UNDELIVERED.formatted(lastError), notice.text());
+		assertEquals(1, telegram.getFileCalls.get("never-uploaded").get());
+		assertNull(telegram.awaitSent(400), "one notice per update");
 
-			configureBots(Maps.empty());
-			configureBots(Maps.of("echo", echoBotConfig()));
-			awaitState("echo", BotRunner.State.RUNNING, 10_000);
-			assertNull(telegram.awaitSent(600), "a FAILED update is neither retried nor reported again after restart");
-			assertEquals(receipt, inbox.get(id));
-			assertEquals(attempts, telegram.getFileCalls.get("never-uploaded").get());
-			assertTrue(((CVMLong) adapter.runner("echo").status().get(Strings.intern("failedUpdates"))).longValue() >= 1);
-		} finally {
-			adapter.deliveryWindowMillis = window;
-			adapter.deliveryBackoffMillis = backoff;
-		}
+		configureBots(Maps.empty());
+		configureBots(Maps.of("echo", echoBotConfig()));
+		awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		assertNull(telegram.awaitSent(600), "a FAILED update is neither retried nor reported again after restart");
+		assertEquals(receipt, inbox.get(id));
+		assertEquals(1, telegram.getFileCalls.get("never-uploaded").get());
+		assertTrue(((CVMLong) adapter.runner("echo").status().get(Strings.intern("failedUpdates"))).longValue() >= 1);
+
 	}
 
 	@Test
@@ -755,8 +745,7 @@ public class TelegramAdapterTest {
 			assertEquals(BotRunner.UNDELIVERED.formatted(refusal), notice.text());
 			var receipt = echoInbox().get(id);
 			assertEquals(covia.adapter.webhook.WebhookInbox.FAILED, receipt.get(Fields.STATUS));
-			assertEquals(Strings.create(covia.adapter.messaging.DeliveryRetry.UNDELIVERABLE), receipt.get(Fields.REASON));
-			assertEquals(CVMLong.ONE, receipt.get(covia.adapter.webhook.WebhookInbox.ATTEMPTS));
+			assertEquals(Strings.create(BotRunner.DELIVERY_FAILED), receipt.get(Fields.REASON));
 			assertNull(telegram.awaitSent(400));
 			assertEquals(jobs, engine.jobs().getJobs(RequestContext.of(OWNER)).count(), "a suspended agent gets no failed chat Job");
 		} finally {

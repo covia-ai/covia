@@ -66,15 +66,6 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	private volatile boolean closed;
 	/** Retry cadence for missing credentials or temporarily unavailable providers. */
 	public volatile long retryMillis = 30_000;
-	/** Inbound session delivery: how long after a receipt's first attempt a retry may start. */
-	public volatile long deliveryWindowMillis = 120_000;
-	/** Inbound session delivery: the wait before the first retry, doubling for each later one. */
-	public volatile long deliveryBackoffMillis = 5_000;
-
-	/** The bounded retry policy for inbound session delivery, under the current settings. */
-	public final DeliveryRetry deliveryRetry() {
-		return new DeliveryRetry(deliveryWindowMillis, deliveryBackoffMillis);
-	}
 
 	protected abstract S parseBot(String name, ACell settings, boolean strict);
 	protected abstract R newBot(S spec, Managed managed);

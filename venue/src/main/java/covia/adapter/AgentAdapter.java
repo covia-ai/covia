@@ -342,9 +342,8 @@ public class AgentAdapter extends AAdapter {
 		return null;
 	}
 
-	/** Admit a local session delivery through normal Job dispatch, then durably
-	 * publish before waking. Flush failure must not fail the already accepted Job:
-	 * its pending input remains recoverable, and a duplicate retry can flush/wake it. */
+	/** Admit local input atomically, then flush before waking. Storage failures
+	 * propagate to the caller; the committed state remains available for inspection. */
 	public Job deliverSession(ACell input, RequestContext ctx) {
 		java.util.Objects.requireNonNull(ctx.getSessionDelivery());
 		Job job = engine.jobs().invokeOperation("v/ops/agent/chat", input, ctx);
@@ -1600,6 +1599,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.DELIVERED,  CVMBool.TRUE)));
 	}
 
+	public static final String DELIVERY_JOB_UNAVAILABLE = "Session delivery Job is no longer active";
 	public static final AString DELIVERY_ACCEPTED = Strings.intern("deliveryAccepted");
 	public static final String LOCAL_DELIVERY_REQUIRED = "Atomic session delivery requires a local agent";
 
@@ -1672,13 +1672,12 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent,
 			Fields.JOB_ID,     jobIdHex);
-		// Persist the job's session provenance before admission. Recovery can then
-		// recognise its queued input even if the process stops immediately after commit.
-		job.updateData(job.getData().assoc(Fields.AGENT_ID, agentId)
+		// Local delivery includes provenance in the admission transaction below.
+		if (ctx.getSessionDelivery() == null) job.updateData(job.getData().assoc(Fields.AGENT_ID, agentId)
 			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sidHex));
 		AgentState.SessionIntake intake;
 		try {
-			intake = appendChatInput(agent, target, session, envelope, ctx, sidHex, jobIdHex);
+			intake = appendChatInput(job, agent, target, session, envelope, ctx, sidHex, jobIdHex);
 		} catch (Throwable failure) {
 			chatsRef.remove(jobRef.getID(), jobRef);
 			throw failure;
@@ -1702,7 +1701,6 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		if (ctx.getSessionDelivery() != null) {
-			job.updateData(job.getData().assoc(DELIVERY_ACCEPTED, CVMBool.TRUE));
 			return; // deliverSession owns the durability barrier and wake outside Job dispatch.
 		}
 
@@ -1713,13 +1711,15 @@ public class AgentAdapter extends AAdapter {
 
 	/** The common VenueState root contains the agent and adapter-owned receipts.
 	 * Native transactions publish the input, receipt and session mapping together. */
-	private AgentState.SessionIntake appendChatInput(AgentState agent, AgentTarget target,
+	private AgentState.SessionIntake appendChatInput(Job job, AgentState agent, AgentTarget target,
 			SessionSpec session, ACell envelope, RequestContext ctx, AString sid, AString jobId) {
 		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
 			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
 		var result = new java.util.concurrent.atomic.AtomicReference<AgentState.SessionIntake>();
+		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
 		try {
 			engine.getVenueState().transact(draft -> {
+				notification.set(null);
 				var owner = draft.users().get(target.ownerDID());
 				var current = owner == null ? null : owner.agent(target.agentId());
 				if (current == null || AgentState.SUSPENDED.equals(current.getStatus())
@@ -1732,11 +1732,19 @@ public class AgentAdapter extends AAdapter {
 				result.set(intake);
 				if (intake == AgentState.SessionIntake.APPLIED
 						&& !ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
+				if (intake == AgentState.SessionIntake.APPLIED) {
+					Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft.users(), data ->
+						data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
+							.assoc(Fields.SESSION_ID, sid).assoc(DELIVERY_ACCEPTED, CVMBool.TRUE));
+					if (changed == null) throw new IllegalStateException(DELIVERY_JOB_UNAVAILABLE);
+					notification.set(changed);
+				}
 			});
 		} catch (DuplicateSessionDelivery duplicate) {
 			// Discard the private draft, including its speculative session append.
 			return null;
 		}
+		if (notification.get() != null) notification.get().run();
 		return result.get();
 	}
 

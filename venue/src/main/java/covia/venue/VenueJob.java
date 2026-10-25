@@ -17,6 +17,7 @@ import covia.grid.Job;
  * MCP notifications). Per-Job subscribers live on {@link Job} itself.
  */
 public class VenueJob extends Job {
+	public static final String RECORDED_JOB_REQUIRED = "A transaction requires a recorded Job";
 
 	private final JobManager manager;
 	private final AMap<AString, ACell> meta;
@@ -134,6 +135,32 @@ public class VenueJob extends Job {
 
 	@Override public void onUpdate(AMap<AString, ACell> newData) {
 		if (observable) manager.notifyGlobalListeners(this);
+	}
+
+	/** Edit this recorded Job in a caller-owned users transaction. The updater must
+	 * be pure. Run only the successful draft's returned notification after commit;
+	 * null means the row was missing, terminal, or the update was rejected. */
+	public Runnable updateIn(Users draft, UnaryOperator<AMap<AString, ACell>> updater) {
+		if (isMemoryOnly()) throw new IllegalStateException(RECORDED_JOB_REQUIRED);
+		User owner = draft.get(account.getDID());
+		if (owner == null) return null;
+		Users.requireCurrent(owner.get(), convex.core.lang.RT.getIn(account.get(), Users.GENERATION));
+		var original = new AtomicReference<AMap<AString, ACell>>();
+		AMap<AString, ACell> updated = owner.job(getID()).update(current -> {
+			if (Job.isFinished(current)) return null;
+			AMap<AString, ACell> next = updater.apply(current);
+			if (next == null) return null;
+			if (covia.grid.Status.COMPLETE.equals(next.get(Fields.STATUS))) manager.validateOutput(meta, next.get(Fields.OUTPUT));
+			original.set(next);
+			return JobManager.redactJobSecrets(next, meta);
+		});
+		if (updated == null) return null;
+		AMap<AString, ACell> outcome = updated.containsKey(Fields.OUTPUT)
+			? updated.assoc(Fields.OUTPUT, original.get().get(Fields.OUTPUT)) : updated;
+		return () -> {
+			lastKnown = updated;
+			publishUpdate(new State(outcome, null), null);
+		};
 	}
 
 	/** Called after a direct component edit commits, without replaying lifecycle effects. */

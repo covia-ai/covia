@@ -217,11 +217,11 @@ reply. Later inputs can arrive while the agent is thinking; failed replies never
 redeliver input. Reply callbacks are not a durable outbound queue. Operation
 handlers and remote agents retain STARTED until processing and replies finish.
 
-A handoff that fails is retried only briefly: from 5 s, doubling, within two
-minutes of the first attempt, and a restart does not reopen that window. Then,
-or at once when the agent is missing, suspended or does not admit the bot's
-owner, the receipt becomes FAILED with a reason and the last error. FAILED is
-final and is never retried. An event accepted before the bot was reconfigured
+Each receipt is claimed before media download, preprocessing or dispatch.
+A failed handoff becomes FAILED with a reason and the last error after one
+attempt. No automatic retry is made, including after restart. A flush failure
+is reported directly; already committed admission remains COMPLETE.
+An event accepted before the bot was reconfigured
 also fails once rather than running under the new settings.
 
 Each accepted `event_id` is flushed before acknowledgement. Processing and

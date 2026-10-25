@@ -2522,19 +2522,14 @@ while the agent is working. Duplicate admission rolls back its entire draft;
 queued input survives a restart before wake and is processed by agent recovery.
 
 `telegram:bots` reports `pendingUpdates`, `startedUpdates` and `failedUpdates`.
-Local session handoffs stay PENDING until admission and then become COMPLETE.
-Media download and configured preprocessing are part of each handoff attempt.
-A failed attempt is retried only briefly: from 5 s, doubling, within two minutes
-of the first attempt. Embedders can set `AMessagingAdapter.deliveryBackoffMillis`
-and `deliveryWindowMillis`; these are not bot JSON settings.
-The attempts are recorded on the receipt, so a restart does
-not reopen the window. When it closes, or when the message can never be delivered
-(the agent is missing, terminated or suspended, does not admit the bot's owner, or
-the sender is no longer allowed), the receipt becomes FAILED with a `reason` and
-`lastError`, and the sender gets one "not delivered" notice. FAILED is final: it is
-never retried or reported again, including after restart, and stays for the
-operator. A suspended agent is checked before each attempt, so it gets no failed
-chat Job. Commands, operation handlers and remote agent facades retain the
+Workers claim a receipt as STARTED before media download or preprocessing.
+Each message gets one attempt. A known admission failure becomes FAILED with
+`reason` and `lastError`; the sender receives one "not delivered" notice. FAILED
+receipts are never retried or reported again, including after restart. A failed
+flush propagates directly and does not undo already committed admission.
+Interrupted STARTED work remains for inspection; it is not replayed automatically.
+A suspended agent is checked before dispatch, so it gets no failed chat Job.
+Commands, operation handlers and remote agent facades retain the
 STARTED/COMPLETE protocol: STARTED includes in-flight and uncertain interrupted
 work and is not replayed automatically. Old STARTED receipts also remain for
 inspection. Completed receipts are retained for seven days, so deduplication is
@@ -2642,10 +2637,10 @@ Both fail closed on empty admission lists, acknowledge only after durable
 acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
 started receipts require inspection after an interruption and are never
 blindly replayed. Local agent input, receipt and session mapping commit together;
-COMPLETE means delivered, not replied. Failed handoffs back off from 5 s, doubling,
-within two minutes of the first attempt, persisted across restarts. Missing,
-suspended, terminated or refusing agents fail immediately without a chat Job.
-Exhausted or reconfigured receipts become FAILED and remain in the `failed` count.
+COMPLETE means delivered, not replied. Handoffs are attempted once. Missing,
+suspended, terminated or refusing agents fail without a chat Job. Failed or
+reconfigured receipts become FAILED and remain in the `failed` count.
+Storage failures are reported directly without background retries.
 The linked guides describe configuration changes, retention
 and supported provider features. These modules do not install OAuth flows or
 WhatsApp templates; Slack handles no media.

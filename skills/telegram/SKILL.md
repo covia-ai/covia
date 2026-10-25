@@ -106,12 +106,11 @@ adds session input, saves the chat/session mapping and completes the receipt,
 then flushes before waking the agent. It does not wait for the turn or reply;
 later inputs can be delivered while the agent is working. Delivered input is not
 replayed because a reply failed. Completed receipts deduplicate for seven days.
-A handoff (including media download and preprocessing) that fails is retried only
-briefly: from 5 s, doubling, within two minutes of the first attempt; a restart
-does not reopen that window. Then, or at once when the agent is missing, suspended
-or does not admit the bot's owner, the update becomes FAILED and the sender gets
-one "⚠️ Your message was not delivered" notice. FAILED updates are never retried
-or reported again; resume or fix the agent and ask the sender to resend.
+Each receipt is claimed before media download or preprocessing, with one attempt.
+A known admission failure becomes FAILED and the sender gets one "⚠️ Your message
+was not delivered" notice. FAILED updates are never retried or reported again;
+fix the cause and ask the sender to resend. Storage errors surface directly;
+already committed input remains admitted even if its flush fails.
 Commands, operation handlers, remote agent facades and old STARTED receipts retain
 their inspection-based recovery policy. `bots` reports `pendingUpdates`,
 `startedUpdates` and `failedUpdates`. Outbound replies have no durable outbox or

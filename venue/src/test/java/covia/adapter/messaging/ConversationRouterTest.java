@@ -273,9 +273,9 @@ class ConversationRouterTest {
 		} finally { second.close(); }
 	}
 
-	@Test void failedFlushKeepsAcceptedInputRecoverableAndDuplicateRetriesTheBarrier() throws Exception {
+	@Test void failedFlushReportsErrorWithoutRetryOrLostAdmission() throws Exception {
 		class FlushEngine extends Engine {
-			boolean failFlush;
+			volatile boolean failFlush;
 			FlushEngine(convex.core.crypto.AKeyPair key) throws java.io.IOException {
 				super(Maps.empty(), covia.venue.CoviaApplication.create(key), key);
 			}
@@ -311,9 +311,10 @@ class ConversationRouterTest {
 			assertEquals(0, wakes.get(), "do not execute before the durability barrier succeeds");
 			var jid = convex.core.data.Blob.fromHex(inbox.get("1").get(Fields.JOB_ID).toString());
 			assertFalse(engine.jobs().getJob(jid).isFinished(), "a failed flush must not fail accepted input");
+			assertEquals(convex.core.data.prim.CVMBool.TRUE, engine.jobs().getJob(jid).getData().get(AgentAdapter.DELIVERY_ACCEPTED));
 			engine.failFlush = false;
-			assertNull(router.deliver("chat", Strings.create("input"), (draft, sid, job) -> inbox.deliver(draft, "1", sid, job)));
-			assertEquals(1, wakes.get());
+			Thread.sleep(1200); // Past the removed flush-retry cadence.
+			assertEquals(0, wakes.get(), "no hidden background retries");
 			assertEquals(1, engine.getVenueState().users().get(owner).agent("flush")
 				.getSessionPending(convex.core.data.Blob.fromHex(sessions.get("chat"))).count());
 		} finally { engine.failFlush = false; engine.close(); }

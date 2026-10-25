@@ -85,10 +85,12 @@ not infer authority from an operation name or confuse `ctx.getCallerDID()`
 Messaging adapters can use `ConversationRouter.deliver` with a trusted
 `RequestContext.SessionDelivery` participant. Agent intake runs on a native
 `VenueState.transact` draft, so the session input, adapter receipt and conversation
-mapping publish together. The callback must use only draft-bound components,
+mapping and Job admission state publish together. The callback must use only draft-bound components,
 perform no I/O, and tolerate retries. Returning false discards the draft as a
 duplicate. The engine flushes before waking the agent and returns the chat Job
-without waiting for its result. `ConversationRouter.onResponse` observes replies
+without waiting for its result. A flush failure propagates to the caller; no
+background retry is started and already committed input is not rolled back.
+`ConversationRouter.onResponse` observes replies
 on the shared virtual executor, handles failed Jobs and skips duplicate deliveries.
 Adapter writes use `AdapterState.inVenue(draft)`, preserving the original account
 generation even across deletion and recreation. The router holds the binding
@@ -100,26 +102,23 @@ uses the same admission/reply separation and atomic session mapping, but its Gat
 intake has no durable inbox or duplicate-message guarantee; a failed delivery is
 reported once and never retried.
 
-A delivery that does not commit may be retried, but only briefly. `DeliveryRetry`
-is the one policy for this: each attempt is recorded on the receipt before it runs
-(`attempts`, `firstAttemptAt`, `attemptedAt`, then `lastError` on failure), retries
-back off from 5 s, doubling, and must start within two minutes of the first attempt
-(the adapter's `deliveryBackoffMillis` and `deliveryWindowMillis`). When the window
-closes, the receipt becomes FAILED with the `DeliveryRetry.WINDOW_EXHAUSTED` reason
-and `failedAt`. A message that can never be delivered fails at once with the
-`DeliveryRetry.UNDELIVERABLE` reason, its `lastError` saying why: the agent is missing,
-terminated or suspended, its admission policy refuses the bot's owner, or the input
-is invalid. The recipient is checked before every attempt, so a suspended agent
-gets no failed chat Job per retry. FAILED is terminal: it is never delivered,
-claimed, retried or pruned, including after restart, and remains for the operator.
-Because the window is persisted, a restart cannot reopen it. No continuation work
-outlives the window while the recipient is not operational.
+Workers claim each receipt before media downloads, preprocessing or dispatch.
+They make one attempt. A known admission failure records FAILED with a reason
+and last error; interrupted STARTED work remains for inspection. Neither is
+replayed automatically. Local session admission completes the receipt atomically
+with the input, mapping and Job admission state. Later flush or reply failures
+must be reported without claiming that committed input was rolled back.
 
-HITL uses a native `Users.transact` transaction to resolve a request and append its
-answer, rejection or expiry notification to the requesting local session. Competing
-resolutions cannot overwrite the winner or append another notification. Signing and
-validation happen before the transaction; Job notification and agent wake follow the
-flush. A session notification is independent of the completed HITL Job and survives
+HITL uses a native `Users.transact` transaction to resolve the inbox request,
+write the requesting Job's final result, and append the session notification.
+Competing resolutions cannot overwrite the winner or append another notification.
+Signing happens before the transaction; notifications and wake happen after commit.
+A flush error reaches the responder directly; live Job waiters still observe the
+committed result. There is no prepared-resolution checkpoint or replay step.
+Signed tokens stay in the requester's Job/session, never in the responder's `h/`.
+An older resolved request without a saved result fails explicitly rather than
+remaining INPUT_REQUIRED or reconstructing a missing grant.
+A session notification is independent of the completed HITL Job and survives
 restart before wake. If the requesting session is gone, the request still resolves
 and the adapter reports the unavailable destination.
 
@@ -655,8 +654,7 @@ and socket transports. Give each installation/binding a private root such as
 `config/<binding>/inbox` or `users/<did>/inbox/<binding>` and a provider event ID.
 IDs are hashed into path segments; the original ID remains in the record.
 Records contain `id`, `input`, `status`, `receivedAt` and, on completion,
-`completedAt`; delivery attempts add `attempts`, `firstAttemptAt`, `attemptedAt`
-and `lastError`, and FAILED adds `reason` and `failedAt`. Input must contain the event needed for processing, **not**
+`completedAt`; FAILED adds `reason`, `lastError` and `failedAt`. Input must contain the event needed for processing, **not**
 access tokens, signing secrets or credential-bearing HTTP headers.
 
 1. Authenticate/admit the event, then `accept(id, input)`. This writes PENDING
@@ -672,10 +670,10 @@ access tokens, signing secrets or credential-bearing HTTP headers.
 4. After processing and any required reply, `complete(id)` flushes COMPLETE.
    Duplicate callbacks must not resubmit the Job or send another reply.
 
-Local agent intake uses `deliver` instead of `claim`: the receipt completes in the
-same venue transaction as its session input and mapping. Failed admission stays
-PENDING only for the [bounded retry](#atomic-local-session-delivery). FAILED
-receipts are terminal and excluded from completed-receipt pruning.
+Local agent intake also claims before preprocessing, then uses `deliver` to
+complete the receipt in the same venue transaction as session input, mapping
+and Job admission state. Failed admission becomes FAILED. FAILED receipts are
+terminal and excluded from completed-receipt pruning.
 
 STARTED records found after an interruption are uncertain: the provider must
 reconcile them with its Job/send checkpoints and external state. The shared
@@ -738,10 +736,9 @@ never share, whatever installation they claim.
 
 The worker scans PENDING receipts on start and periodically for late secret
 provisioning. For local agents, the conversation queue serializes admission:
-PENDING becomes COMPLETE in the transaction that appends the input and saves the
-session mapping. A failed admission is retried only within the bounded delivery
-window, then the receipt is FAILED; a scan never revives it, and a scan of a receipt
-still backing off schedules no extra attempt. Further inputs can be admitted while
+PENDING is claimed as STARTED before preprocessing, then becomes COMPLETE in the
+transaction that appends input and saves the mapping and Job admission state.
+Admission failure becomes FAILED without retry. Further inputs can be admitted while
 the agent is thinking. Replies
 run independently; a turn/send failure cannot reopen or replay a delivered receipt.
 Reply callbacks are not a durable outbound queue, so a process interruption can lose

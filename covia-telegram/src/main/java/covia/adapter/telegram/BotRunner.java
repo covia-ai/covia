@@ -57,7 +57,6 @@ import covia.adapter.messaging.MessagingMedia;
 import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
-import covia.adapter.messaging.DeliveryRetry;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
@@ -93,6 +92,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final String INVALID_REPLY = "replyOperation must return a non-empty string or an object with non-empty text";
 	static final String NOT_ADMITTED = "Accepted Telegram update is no longer admitted by this bot's policy";
 	/** The one notice a sender gets when their message could not be delivered. */
+	static final String DELIVERY_FAILED = "Message delivery failed; automatic retry is disabled";
 	static final String UNDELIVERED = "⚠️ Your message was not delivered: %s";
 
 
@@ -143,7 +143,6 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private final covia.venue.AdapterState storage;
 	private final ConversationRouter conversations;
 	private volatile WebhookInbox inbox;
-	private final Set<String> waiting = ConcurrentHashMap.newKeySet();
 	private volatile String fileMetadataRoot;
 	/** Allow-listed handle (lower-case) → the Telegram account it resolved to; mirrors the persisted map once loaded. */
 	private final ConcurrentHashMap<String, Long> resolved = new ConcurrentHashMap<>();
@@ -473,13 +472,14 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			try {
 				AMap<AString, ACell> receipt = inbox.get(id);
 				if (receipt == null || !WebhookInbox.PENDING.equals(receipt.get(Fields.STATUS))) return;
+				// Claim before media downloads, preprocessing or other external work.
+				claimed = inbox.claim(id);
+				if (!claimed) return;
 				// Only session delivery can share a local transaction with its recipient.
 				if (isAgentTurn(update) && conversations.supportsSessionDelivery()) {
 					deliverTurn(id, update);
 					return;
 				}
-				claimed = inbox.claim(id);
-				if (!claimed) return;
 				dispatch(update);
 				inbox.complete(id);
 			} catch (Throwable t) {
@@ -509,47 +509,22 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return (text == null || text.isBlank()) ? "" : stripMention(text.trim());
 	}
 
-	/**
-	 * Hand one agent turn to its local session. A failed handoff is retried only
-	 * within the adapter's bounded delivery window; when that closes, or the agent
-	 * cannot take input, the receipt fails and the sender is told exactly once.
-	 */
+	/** One attempt. Preprocessing is outside the atomic local session handoff. */
 	private void deliverTurn(String id, Update update) {
 		Message m = update.message();
-		var result = adapter.deliveryRetry().attempt(inbox, id, this::guarded, new DeliveryRetry.Target() {
-			@Override public String refusal() {
-				return admitted(update) ? conversations.deliveryRefusal() : NOT_ADMITTED;
-			}
-			@Override public void deliver() {
-				respondAgent(id, m, messageText(m), true);
-			}
-		});
-		switch (result.outcome()) {
-			case WAITING -> retryAfter(update, result.waitMillis());
-			case FAILED -> undelivered(id, update, result);
-			default -> { }
+		try {
+			String refusal = admitted(update) ? conversations.deliveryRefusal() : NOT_ADMITTED;
+			if (refusal != null) throw new IllegalStateException(refusal);
+			respondAgent(id, m, messageText(m), true);
+		} catch (RuntimeException failure) {
+			String detail = concise(failure);
+			AMap<AString, ACell> rejected = guarded(() -> inbox.fail(id, DELIVERY_FAILED, detail, System.currentTimeMillis()));
+			if (rejected == null) throw failure; // Already admitted: report an uncertain outcome, not "not delivered".
+			failed.incrementAndGet();
+			error = "Update " + id + " was not delivered: " + detail;
+			log.warn("Telegram bot '{}': {}", spec.name(), error);
+			if (admitted(update)) sendQuietly(chatOf(update), UNDELIVERED.formatted(detail), update.message());
 		}
-	}
-
-	private void retryAfter(Update update, long millis) {
-		String id = Integer.toString(update.updateId());
-		if (stopped || !waiting.add(id)) return;
-		ScheduledFuture<?> wake = adapter.scheduleRetry(() -> {
-			waiting.remove(id);
-			if (!stopped) schedule(update);
-		}, millis);
-		if (wake == null) waiting.remove(id);
-	}
-
-	/** The terminal failure of a turn: reported once, the receipt kept for the operator.
-	 * A sender the bot no longer admits gets no notice. */
-	private void undelivered(String id, Update update, DeliveryRetry.Result result) {
-		String detail = result.error() != null ? result.error() : result.reason();
-		failed.incrementAndGet();
-		error = "Update " + id + " was not delivered: " + detail;
-		log.warn("Telegram bot '{}': update {} in chat {} was not delivered: {} ({})",
-			spec.name(), id, chatOf(update), detail, result.reason());
-		if (admitted(update)) sendQuietly(chatOf(update), UNDELIVERED.formatted(detail), update.message());
 	}
 
 	/** Receipt writes stop with the runner. */

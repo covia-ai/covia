@@ -13,11 +13,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 These changes are implemented on `codex/convex-lattice-snapshot`, requiring
 Convex `0.8.18-f5d0345f6-SNAPSHOT`; they are not part of released Covia 0.9.11.
 
-- Messaging local-agent intake commits session input, receipt and conversation mapping
-  in one venue transaction, retaining user-deletion fencing (#616). Delivery retries
-  back off within a durable two-minute window; permanent refusals fail immediately
-  without chat Jobs. Telegram reports terminal delivery failure once. HITL resolution
-  and its session notification commit together, with one winner under contention.
+- Messaging local-agent intake commits session input, receipt, conversation mapping
+  and Job admission state in one venue transaction, retaining user-deletion fencing
+  (#616). Delivery makes one attempt; failures remain visible without automatic
+  replay. Telegram reports admission failure once. HITL commits its inbox response,
+  final Job result and session notification together, with one winner under contention.
 - Venue components share atomic updates and transactions; whole-venue LWW is
   for backup, replication and fenced failover, not arbitrary fork merging.
 - The signed venue value records `:version`. Ordered startup migrations run

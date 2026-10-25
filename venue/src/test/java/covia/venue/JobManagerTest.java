@@ -728,6 +728,38 @@ public class JobManagerTest {
 	}
 
 	@Test
+	public void testTransactionalCompletionPublishesOnlyAfterCommitAndRedactsSecrets() throws Exception {
+		AString token = Strings.create("token");
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, "test:never", Strings.create("secretFields"), Vectors.of(token)));
+		VenueJob job = (VenueJob) engine.jobs().invokeOperation(meta, Maps.empty(), ctx);
+		var notifications = new java.util.concurrent.atomic.AtomicInteger();
+		job.subscribe(ignored -> notifications.incrementAndGet());
+		var future = job.future();
+		var output = Maps.of(token, "private-test-value");
+		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
+		var users = engine.getVenueState().users();
+		assertThrows(IllegalStateException.class, () -> users.transact(draft -> {
+			assertNotNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output)));
+			assertFalse(job.isFinished());
+			throw new IllegalStateException("rollback");
+		}));
+		assertFalse(job.isFinished());
+		assertFalse(future.isDone());
+		assertEquals(0, notifications.get());
+		users.transact(draft -> notification.set(job.updateIn(draft,
+			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output))));
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertEquals(Fields.HIDDEN, RT.getIn(users.get(did).getJob(job.getID()), Fields.OUTPUT, token));
+		assertFalse(future.isDone(), "draft edits cannot notify live waiters");
+		notification.get().run();
+		notification.get().run();
+		assertEquals(output, future.get(5, TimeUnit.SECONDS));
+		assertEquals(1, notifications.get(), "terminal lifecycle notifications run once");
+		users.transact(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
+	}
+
+	@Test
 	public void testHistoryAppendDuringTerminalNotificationIsRetained() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "during-completion");

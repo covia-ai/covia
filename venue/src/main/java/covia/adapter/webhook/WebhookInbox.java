@@ -26,9 +26,8 @@ import covia.venue.Engine;
  * completion cannot be atomic: this does not promise exactly-once effects.
  * Local session delivery can instead use {@link #deliver} on the same venue
  * transaction as input admission; its COMPLETE means delivered, not replied.
- * A delivery that cannot commit is retried only briefly: {@link #attempt}
- * records each attempt before it runs, and {@link #fail} ends the receipt as
- * FAILED, which is terminal — never delivered, claimed, retried or pruned.
+ * Processing is claimed once before preprocessing or external work. A known
+ * failure becomes FAILED; an interrupted STARTED receipt requires inspection.
  * Durability is that of the venue's configured store (memory/temp are ephemeral).
  * Claims coordinate a single Engine, not independent replicated venue processes.</p>
  */
@@ -39,13 +38,10 @@ public final class WebhookInbox {
 	public static final AString FAILED = Strings.intern("FAILED");
 	public static final AString RECEIVED_AT = Strings.intern("receivedAt");
 	public static final AString COMPLETED_AT = Strings.intern("completedAt");
-	public static final AString ATTEMPTS = Strings.intern("attempts");
-	public static final AString FIRST_ATTEMPT_AT = Strings.intern("firstAttemptAt");
-	public static final AString ATTEMPTED_AT = Strings.intern("attemptedAt");
 	public static final AString LAST_ERROR = Strings.intern("lastError");
 	public static final AString FAILED_AT = Strings.intern("failedAt");
 	public static final String EVENT_REQUIRED = "Webhook event ID is required";
-	public static final String NOT_PENDING = "Session delivery receipt must be pending";
+	public static final String NOT_PENDING = "Session delivery receipt must be pending or started";
 	public static final String NOT_STARTED = "Webhook receipt must be started before completion";
 	public static final String UNKNOWN_EVENT = "Unknown webhook receipt";
 	public static final String INVALID_RECEIPT = "Invalid webhook receipt";
@@ -107,49 +103,20 @@ public final class WebhookInbox {
 		AMap<AString, ACell> record = RT.ensureMap(state.read(path(eventId)));
 		if (record == null) throw new IllegalArgumentException(UNKNOWN_EVENT);
 		if (COMPLETE.equals(record.get(Fields.STATUS))) return false;
-		if (!PENDING.equals(record.get(Fields.STATUS))) throw new IllegalStateException(NOT_PENDING);
+		if (!PENDING.equals(record.get(Fields.STATUS)) && !STARTED.equals(record.get(Fields.STATUS))) throw new IllegalStateException(NOT_PENDING);
 		state.write(path(eventId), record.assoc(Fields.STATUS, COMPLETE)
 			.assoc(Fields.SESSION_ID, sessionId).assoc(Fields.JOB_ID, jobId)
 			.assoc(COMPLETED_AT, CVMLong.create(System.currentTimeMillis())));
 		return true;
 	}
 
-	/** Record a delivery attempt on a PENDING receipt before it runs, so neither a
-	 * restart nor a crash mid-attempt resets its retry window. Returns the updated
-	 * receipt, or null when it is no longer PENDING. */
-	public AMap<AString, ACell> attempt(String eventId, long now) {
-		synchronized (engine) {
-			AMap<AString, ACell> record = require(eventId);
-			if (!PENDING.equals(record.get(Fields.STATUS))) return null;
-			long attempts = record.get(ATTEMPTS) instanceof CVMLong n ? n.longValue() : 0;
-			record = record.assoc(ATTEMPTS, CVMLong.create(attempts + 1)).assoc(ATTEMPTED_AT, CVMLong.create(now));
-			if (record.get(FIRST_ATTEMPT_AT) == null) record = record.assoc(FIRST_ATTEMPT_AT, CVMLong.create(now));
-			workspace.write(path(eventId), record);
-			engine.flush();
-			return record;
-		}
-	}
-
-	/** Record why the latest attempt on a PENDING receipt did not deliver it.
-	 * Returns the updated receipt, or null when it is no longer PENDING. */
-	public AMap<AString, ACell> attemptFailed(String eventId, String error) {
-		synchronized (engine) {
-			AMap<AString, ACell> record = require(eventId);
-			if (!PENDING.equals(record.get(Fields.STATUS))) return null;
-			record = record.assoc(LAST_ERROR, Strings.create(Objects.requireNonNull(error)));
-			workspace.write(path(eventId), record);
-			engine.flush();
-			return record;
-		}
-	}
-
-	/** End a PENDING receipt as FAILED, with a reason and optionally the error of the
-	 * attempt that ended it. FAILED is terminal and is kept for the operator. Returns
-	 * the updated receipt, or null when it is no longer PENDING. */
+	/** End a pending or started receipt as FAILED. A completed local admission
+	 * remains COMPLETE even if a later flush or reply fails; the caller must
+	 * report that failure without claiming the input was rolled back. */
 	public AMap<AString, ACell> fail(String eventId, String reason, String error, long now) {
 		synchronized (engine) {
 			AMap<AString, ACell> record = require(eventId);
-			if (!PENDING.equals(record.get(Fields.STATUS))) return null;
+			if (!PENDING.equals(record.get(Fields.STATUS)) && !STARTED.equals(record.get(Fields.STATUS))) return null;
 			record = record.assoc(Fields.STATUS, FAILED).assoc(Fields.REASON, Strings.create(Objects.requireNonNull(reason)))
 				.assoc(FAILED_AT, CVMLong.create(now));
 			if (error != null) record = record.assoc(LAST_ERROR, Strings.create(error));

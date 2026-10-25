@@ -4,7 +4,6 @@ import java.util.Comparator;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -46,7 +45,6 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private final String binding;
 	private final AString version;
 	private final Set<String> queued = ConcurrentHashMap.newKeySet();
-	private final Set<String> waiting = ConcurrentHashMap.newKeySet();
 	private volatile boolean running;
 	private volatile String lastError;
 	private volatile boolean retrying;
@@ -224,18 +222,15 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		}
 		String conversation = MessagingSettings.required(event, "conversation");
 		if (!queued.add(id)) return;
-		var retryIn = new AtomicLong(-1);
+		boolean localSession = spec.routesToAgent() && router.supportsSessionDelivery();
 		router.enqueue(conversation, () -> {
-			if (spec.routesToAgent() && router.supportsSessionDelivery()) {
-				var result = adapter.deliveryRetry().attempt(inbox, id, this::guarded, new DeliveryRetry.Target() {
-					@Override public String refusal() { return router.deliveryRefusal(); }
-					@Override public void deliver() { deliverSession(id, event, conversation); }
-				});
-				if (result.outcome() == DeliveryRetry.Outcome.WAITING) retryIn.set(result.waitMillis());
-				if (result.outcome() == DeliveryRetry.Outcome.FAILED) lastError = result.reason();
+			if (!claim(id)) return;
+			if (localSession) {
+				String refusal = router.deliveryRefusal();
+				if (refusal != null) throw new IllegalStateException(refusal);
+				deliverSession(id, event, conversation);
 				return;
 			}
-			if (!claim(id)) return;
 			ACell input = event.get(Fields.INPUT);
 			String reply;
 			if (spec.routesToAgent()) {
@@ -246,8 +241,12 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			complete(id);
 		}).whenComplete((ignored, failure) -> {
 			queued.remove(id);
-			if (failure != null) lastError = PROCESSING_FAILED;
-			if (retryIn.get() >= 0) wakeAfter(id, retryIn.get());
+			if (failure != null) {
+				lastError = PROCESSING_FAILED;
+				log.warn("{} bot '{}': {}: {}", adapter.getName(), spec.name(), PROCESSING_FAILED, AAdapter.describeFailure(failure));
+				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, AAdapter.describeFailure(failure), System.currentTimeMillis())); }
+				catch (RuntimeException writeFailure) { log.warn("Could not record processing failure: {}", writeFailure.toString()); }
+			}
 		});
 	}
 	/**
@@ -305,17 +304,6 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			String reply = ConversationRouter.responseText(response);
 			if (running && adapter.isActive() && reply != null) adapter.sendReply(this, event, reply);
 		}, failure -> { if (running) lastError = REPLY_FAILED; });
-	}
-	private void wakeAfter(String id, long millis) {
-		if (!running || !waiting.add(id)) return;
-		ScheduledFuture<?> scheduled = adapter.scheduleRetry(() -> {
-			waiting.remove(id);
-			try {
-				AMap<AString, ACell> receipt = inbox.get(id);
-				if (receipt != null) queue(receipt);
-			} catch (RuntimeException e) { lastError = PROCESSING_FAILED; }
-		}, millis);
-		if (scheduled == null) waiting.remove(id);
 	}
 	@Override public AMap<AString, ACell> status() {
 		boolean connected;
