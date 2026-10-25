@@ -12,7 +12,7 @@ Set up a Covia venue for development, testing, or production.
 
 | Requirement | Version | Purpose |
 |-------------|---------|---------|
-| Java JDK | 21+ | Building and running |
+| Java JDK | 21+, not 25 before 25.0.3 | Building and running (JDK-8370887 there makes timeouts fire late) |
 | Maven | 3.7+ | Build tool |
 | Git | Any | Source control |
 
@@ -94,6 +94,7 @@ For a persistent test or staging venue on a Linux VM.
 ```bash
 sudo apt update
 sudo apt-get install -y openjdk-25-jdk caddy screen
+java -version   # must be 25.0.3 or later (JDK-8370887); otherwise install openjdk-21-jdk instead
 ```
 
 **Upload the JAR** (from build machine):

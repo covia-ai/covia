@@ -75,6 +75,9 @@ public class ToolGuardsTest {
 		}
 	}
 
+	// Only the guard check's 1s timeout ends this wait. On JDK 25 before 25.0.3
+	// (JDK-8370887) that timeout can fire tens of seconds late and the test fail
+	// intermittently; the build warns on such a JDK and CI refuses one.
 	@Test
 	public void aGuardThatTakesTooLongRefuses() {
 		CountDownLatch never = new CountDownLatch(1);

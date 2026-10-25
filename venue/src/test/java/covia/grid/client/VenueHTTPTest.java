@@ -209,6 +209,9 @@ public class VenueHTTPTest {
 		// is explicit and generous: this test asserts the loop *completes* —
 		// boundedness is clientPollingTimeoutIsBoundedAndRemoteJobSurvives's
 		// job — and the shared client's 5s default flaked under parallel load.
+		// On JDK 25 before 25.0.3 (JDK-8370887) the delay op's virtual-thread
+		// sleep can overrun past even this budget; the build warns on such a
+		// JDK and CI refuses one.
 		Job job = client.invokeAndWait(OP_DELAY, Maps.of(
 			Fields.DELAY, CVMLong.create(400),
 			Fields.OPERATION, OP_ECHO,

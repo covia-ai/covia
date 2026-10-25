@@ -36,10 +36,13 @@ sudo apt update
 
 ## Install Java
 
-The venue requires Java 21 or later; any recent JRE works, e.g.:
+The venue requires Java 21 or later, but not JDK 25 before 25.0.3: that has
+JDK-8370887, under which timeouts fire tens of seconds late and jobs stall (the
+venue logs a warning at startup on one). For example:
 
 ```
 sudo apt-get install -y openjdk-25-jdk
+java -version   # must report 25.0.3 or later; otherwise install openjdk-21-jdk
 ```
 
 ## Install Caddy
