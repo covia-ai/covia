@@ -278,6 +278,22 @@ public class GoalTreeContext {
 		return withLoads(createFrame(description), loads);
 	}
 
+	/**
+	 * The words of a turn's content, for a person to read: a string as it is,
+	 * a structured message's {@code text} (as a channel or voice delivers it),
+	 * or an agent request's {@code task}, the field
+	 * {@code agent:request} names for free-form instructions. Null for
+	 * anything else.
+	 */
+	public static AString turnText(ACell content) {
+		if (content instanceof AString s) return s;
+		AString text = RT.ensureString(RT.getIn(content, K_MESSAGE_TEXT));
+		return (text != null) ? text : RT.ensureString(RT.getIn(content, K_TASK_TEXT));
+	}
+
+	private static final AString K_MESSAGE_TEXT = Strings.intern("text");
+	private static final AString K_TASK_TEXT = Strings.intern("task");
+
 	// ========== Root goal description generators ==========
 
 	/**

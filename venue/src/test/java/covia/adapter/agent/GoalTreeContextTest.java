@@ -459,6 +459,22 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
+	public void testHistoricalTitleIsTheWordsOfTheFirstMessage() {
+		AMap<AString, ACell> voiced = withConversation(
+			Maps.of("role", "user", "content", Maps.of("text", "are you hearing me?",
+				"via", Maps.of("channel", "voice")), "ts", 1L),
+			Maps.of("role", "assistant", "content", "yes", "ts", 2L));
+		assertEquals("are you hearing me?",
+			ConversationRenderer.historical(voiced, 0, 0).firstUserContent().toString());
+		AMap<AString, ACell> requested = withConversation(
+			Maps.of("role", "user", "content", Maps.of("task", "Daily check-in", "format", "bullets"), "ts", 1L),
+			Maps.of("role", "assistant", "content", "done", "ts", 2L));
+		assertEquals("Daily check-in",
+			ConversationRenderer.historical(requested, 0, 0).firstUserContent().toString());
+		assertNull(GoalTreeContext.turnText(Maps.of("data", "no words")));
+	}
+
+	@Test
 	public void testHistoricalProjectionKeepsOnlyCompletedConversation() {
 		AMap<AString, ACell> frame = withConversation(
 			Maps.of("role", "user", "content", "first question", "ts", 1L),

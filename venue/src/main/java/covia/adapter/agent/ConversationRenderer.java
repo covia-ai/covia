@@ -95,8 +95,7 @@ public final class ConversationRenderer {
 			if (GoalTreeContext.ROLE_USER.equals(role)) {
 				AMap<AString, ACell> message = toHistoricalMessage(turn);
 				if (message == null) continue;
-				AString content = RT.ensureString(message.get(GoalTreeContext.K_CONTENT));
-				if (pendingFirst == null) pendingFirst = content;
+				if (pendingFirst == null) pendingFirst = firstWords(turn, message);
 				pendingCount++;
 				pendingUpdated = Math.max(pendingUpdated, timestamp(turn));
 				retain(pending, message, maxTurns);
@@ -175,7 +174,14 @@ public final class ConversationRenderer {
 			return null;
 		}
 		if (!GoalTreeContext.ROLE_USER.equals(RT.getIn(entry, GoalTreeContext.K_ROLE))) return null;
-		return RT.ensureString(RT.getIn(entry, GoalTreeContext.K_CONTENT));
+		return firstWords(entry, null);
+	}
+
+	/** A user turn's words where it has them, else its projected content. */
+	private static AString firstWords(ACell turn, AMap<AString, ACell> projected) {
+		AString words = GoalTreeContext.turnText(RT.getIn(turn, GoalTreeContext.K_CONTENT));
+		if (words != null) return words;
+		return (projected != null) ? RT.ensureString(projected.get(GoalTreeContext.K_CONTENT)) : null;
 	}
 
 	private static long latestTimestamp(ACell entry) {
