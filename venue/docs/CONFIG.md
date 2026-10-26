@@ -650,7 +650,7 @@ without HTTP through `Engine.launch(...)` or `Engine.launchAsync(...)`:
 
 ```java
 // The host must restore its root before connecting the application.
-CoviaApplication application = CoviaApplication.connect(host.getRootComponent());
+CoviaApplication application = CoviaApplication.connect(host);
 Engine engine = new Engine(config, application, keyPair);
 CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
     backend.bind(prepared);

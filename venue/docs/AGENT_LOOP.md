@@ -65,12 +65,11 @@ An agent lives at `:user-data → <owner-DID> → "g" → <agent-id>`.
 
 ```
 signed venue :value
-  → StampingLattice (:timestamp)
-  → whole-value LWW
+  → Timestamped venue record (:timestamp, whole-value LWW)
   → typed venue interior
       :user-data → MapLattice (DID → stamped user record)
         "g" → MapLattice (agent-id → stamped agent record)
-          <agent-id> → StampingLattice (ts) → JSONLattice
+          <agent-id> → stamped cursor (ts) → JSONLattice
 ```
 
 The inner agent component supplies typed navigation and maintains `ts` when a

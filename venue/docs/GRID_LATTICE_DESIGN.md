@@ -1,10 +1,10 @@
 # Covia Grid Lattice Structure
 
-**Snapshot branch:** Convex commit `538f3be06` separates storage cursors from
-component policy. `CoviaApplication` uses the upstream `LatticeApplication`
-adapter for `Covia.ROOT`, sharing its host's live cursor. `VenueState` binds a
-signed storage view and a stamped editing view; incoming merges bypass local
-stamping. `Users` supplies lifecycle-guarded, stamped user views, and
+**Convex 0.8.18** separates storage cursors from component policy.
+`CoviaApplication` uses the upstream `LatticeApplication` adapter for
+`Covia.ROOT`, sharing its host's live cursor. `VenueState` binds a signed
+storage view and holds the venue value as a Convex `Timestamped` record: local
+edits stamp it, and incoming merges keep the newest without re-stamping. `Users` supplies lifecycle-guarded, stamped user views, and
 `User.recordCursor` supplies job/agent stamps. `WorkspaceRoot` exposes the existing
 `{updated, data}` envelopes. Use these accessors for writes: raw paths do not
 apply record policy or create missing containers. Bootstrap uses upstream
