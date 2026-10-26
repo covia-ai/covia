@@ -29,7 +29,7 @@ import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import static convex.lattice.LatticeComponent.resolve;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.StampedCursor;
+import convex.lattice.Timestamped;
 import convex.lattice.cursor.SignedCursor;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
@@ -80,21 +80,22 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	private final AccountKey ownerKey;
 	private final LatticeContext context;
-	private final AForkableCursor<ACell> edits;
+	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
+	private final Timestamped<ACell> record;
 
 	public LatticeContext getContext() { return context; }
 
 	@Override
-	public AForkableCursor<ACell> cursor() { return edits; }
+	public AForkableCursor<ACell> cursor() { return record.cursor(); }
 
 	@Override
 	public ACell merge(ACell incoming) {
-		return storage.updateAndGet(own -> Covia.VENUE.merge(context, own, incoming));
+		return record.merge(incoming);
 	}
 
 	@Override
 	protected ACell mergePublication(ACell own, ACell other) {
-		return Covia.VENUE.merge(context, own, other);
+		return record.getLattice().merge(own, other);
 	}
 
 	/** Binds storage and its explicit signing/clock policy. */
@@ -102,7 +103,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		super(cursor);
 		this.ownerKey = ownerKey;
 		this.context = context;
-		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampVenue);
+		this.record = new Timestamped<>(cursor, Covia.VENUE, context::currentTimestamp, Covia::stampVenue);
 	}
 
 	/**
