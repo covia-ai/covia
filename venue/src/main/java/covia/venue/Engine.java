@@ -436,10 +436,23 @@ public class Engine {
 	}
 
 	private Engine launchInternal(Function<Engine, ? extends CompletionStage<?>> beforeStart) throws IOException {
+		java.util.List<Modules.Discovered> modules = java.util.List.of();
+		boolean modulesHandedOver = false;
 		try {
 			checkLaunchCancellation();
-			prepare();
-			installDefaultAdapters(this);
+			// Collect the start-up adapters first, so their state migrates in the
+			// venue's start-up transaction. A configured module's adapter replaces
+			// a built-in of the same name, so that built-in never registers.
+			modules = Modules.discoverModules(config);
+			java.util.Set<String> moduleAdapters = Modules.adapterNames(modules);
+			java.util.List<AAdapter> builtIns = builtInAdapters();
+			builtIns.removeIf(adapter -> moduleAdapters.contains(adapter.getName()));
+			java.util.List<AAdapter> startup = new java.util.ArrayList<>(builtIns);
+			for (Modules.Discovered module : modules) startup.addAll(module.adapters());
+			prepare(startup);
+			registerBuiltIns(this, builtIns);
+			modulesHandedOver = true;
+			Modules.registerModules(this, modules);
 			materialiseBootstrapState();
 			provisionConfiguredSecrets();
 			seedMcpServers();
@@ -488,6 +501,8 @@ public class Engine {
 			} finally {
 				if (interrupted) Thread.currentThread().interrupt();
 			}
+			// Modules discovered but never handed to the engine still hold open loaders.
+			if (!modulesHandedOver) Modules.close(modules, failure);
 			throw failure;
 		} finally {
 			synchronized (this) { launchInProgress = false; }
@@ -505,6 +520,18 @@ public class Engine {
 	 * @throws IOException if content storage cannot be initialised
 	 */
 	public synchronized Engine prepare() throws IOException {
+		return prepare(java.util.List.of());
+	}
+
+	/**
+	 * As {@link #prepare()}, also migrating the state of adapters that will
+	 * register as the venue starts. Their steps run after the venue's own, in
+	 * the one transaction that opens the venue, so a refusal or failing step
+	 * leaves the store exactly as it was. Register the same instances afterwards.
+	 *
+	 * @param startup adapters to register once prepared, in registration order
+	 */
+	synchronized Engine prepare(java.util.List<AAdapter> startup) throws IOException {
 		if (lifecycle == Lifecycle.PREPARED || lifecycle == Lifecycle.STARTED) return this;
 		if (lifecycle != Lifecycle.NEW) {
 			throw new IllegalStateException("Engine cannot start from state " + lifecycle);
@@ -518,15 +545,19 @@ public class Engine {
 				.withSigningKey(this.keyPair);
 			this.latticeContext = ctx;
 			application.setContext(ctx);
-			initialiseFromCursor();
+			// Authentication also serves manually assembled engines without a
+			// public operation catalogue. Its availability follows normal lifecycle.
+			AuthAdapter auth = new AuthAdapter();
+			java.util.List<AAdapter> migrating = new java.util.ArrayList<>();
+			migrating.add(auth);
+			migrating.addAll(startup);
+			initialiseFromCursor(migrating);
 
 			this.contentStorage = createStorage();
 			this.contentStorage.initialise();
 
 			bootstrapUsers();
-			// Authentication also serves manually assembled engines without a
-			// public operation catalogue. Its availability follows normal lifecycle.
-			registerAdapter(new AuthAdapter());
+			registerAdapter(auth);
 			startPersistenceSweep();
 			lifecycle = Lifecycle.PREPARED;
 			return this;
@@ -701,8 +732,11 @@ public class Engine {
 	 * in-memory state immediately. Components may still create a short-lived
 	 * {@link VenueState#transact} when a bounded group of writes must commit or be
 	 * discarded together.</p>
+	 *
+	 * @param adapters adapters starting with the venue, whose state migrates in
+	 *        the same transaction as the venue's own steps
 	 */
-	protected void initialiseFromCursor() {
+	protected void initialiseFromCursor(java.util.List<AAdapter> adapters) {
 		// Identity guard (#208): booting an existing store with the wrong key
 		// would not fail — venues are keyed by AccountKey, so it would silently
 		// create a fresh empty venue entry alongside the real one, orphaning all
@@ -714,8 +748,10 @@ public class Engine {
 		// Writes cross the signed owner boundary immediately; explicit forks are
 		// reserved for bounded component transactions.
 		VenueState connected = application.venue(getAccountKey());
-		// Version validation and migrations precede every bootstrap write and worker.
-		connected.initialise(getDIDString());
+		// Version validation and every start-up migration, the venue's and its
+		// adapters', precede every bootstrap write and worker, in one transaction.
+		connected.initialise(getDIDString(), migrationsOf(adapters));
+		migratedAtStart.addAll(adapters);
 		this.venueState = connected;
 
 		this.auth = new Auth(this);
@@ -1026,46 +1062,56 @@ public class Engine {
 
 	/** Installs built-ins and configured modules without publishing the catalog. */
 	public static void installDefaultAdapters(Engine venue) {
-		venue.registerAdapter(new TestAdapter());
-		venue.registerAdapter(new HTTPAdapter());
-		venue.registerAdapter(new OAuthAdapter());
-		venue.registerAdapter(new JVMAdapter());
-		venue.registerAdapter(new ConnectionsAdapter());
-		venue.registerAdapter(new FileAdapter());
-		venue.registerAdapter(new covia.adapter.ArchiveAdapter());
-		venue.registerAdapter(new SchemaAdapter());
-		venue.registerAdapter(new JSONAdapter());
-		venue.registerAdapter(new Orchestrator());
-		venue.registerAdapter(new MCPAdapter());
-		venue.registerAdapter(new LangChainAdapter());
-		venue.registerAdapter(new CoviaAdapter());
-		venue.registerAdapter(new covia.adapter.UserMemoryAdapter());
-		venue.registerAdapter(new covia.adapter.SkillsAdapter());
-		venue.registerAdapter(new AssetAdapter());
-		venue.registerAdapter(new GridAdapter());
-		venue.registerAdapter(new covia.adapter.A2AAdapter());
-		venue.registerAdapter(new covia.adapter.RemoteAgentAdapter());
-		venue.registerAdapter(new covia.adapter.P2PAdapter());
-		venue.registerAdapter(new ConvexAdapter());
-		venue.registerAdapter(new covia.adapter.CryptoAdapter());
-		venue.registerAdapter(new AgentAdapter());
-		venue.registerAdapter(new SecretAdapter());
-		venue.registerAdapter(new covia.adapter.SchedulerAdapter());
-		if (venue.getRegisteredAdapter("auth") == null) venue.registerAdapter(new AuthAdapter());
-		venue.registerAdapter(new UserAdapter());
-		venue.registerAdapter(new UCANAdapter());
-		venue.registerAdapter(new DLFSAdapter());
-		venue.registerAdapter(new VaultAdapter());
-		venue.registerAdapter(new LLMAgentAdapter());
-		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
-		venue.registerAdapter(new covia.adapter.HITLAdapter());
-		venue.registerAdapter(new covia.adapter.ProjectAdapter());
-		venue.registerAdapter(new covia.adapter.VenueAdapter());
+		registerBuiltIns(venue, builtInAdapters());
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone
 		// else's. Fail-fast on any load error — explicit config is explicit
 		// intent.
 		Modules.loadModules(venue);
+	}
+
+	/** New instances of the built-in adapters, in registration order; auth registers in prepare. */
+	static java.util.List<AAdapter> builtInAdapters() {
+		return new java.util.ArrayList<>(java.util.List.of(
+			new TestAdapter(),
+			new HTTPAdapter(),
+			new OAuthAdapter(),
+			new JVMAdapter(),
+			new ConnectionsAdapter(),
+			new FileAdapter(),
+			new covia.adapter.ArchiveAdapter(),
+			new SchemaAdapter(),
+			new JSONAdapter(),
+			new Orchestrator(),
+			new MCPAdapter(),
+			new LangChainAdapter(),
+			new CoviaAdapter(),
+			new covia.adapter.UserMemoryAdapter(),
+			new covia.adapter.SkillsAdapter(),
+			new AssetAdapter(),
+			new GridAdapter(),
+			new covia.adapter.A2AAdapter(),
+			new covia.adapter.RemoteAgentAdapter(),
+			new covia.adapter.P2PAdapter(),
+			new ConvexAdapter(),
+			new covia.adapter.CryptoAdapter(),
+			new AgentAdapter(),
+			new SecretAdapter(),
+			new covia.adapter.SchedulerAdapter(),
+			new UserAdapter(),
+			new UCANAdapter(),
+			new DLFSAdapter(),
+			new VaultAdapter(),
+			new LLMAgentAdapter(),
+			new covia.adapter.agent.GoalTreeAdapter(),
+			new covia.adapter.HITLAdapter(),
+			new covia.adapter.ProjectAdapter(),
+			new covia.adapter.VenueAdapter()));
+	}
+
+	private static void registerBuiltIns(Engine venue, java.util.List<AAdapter> builtIns) {
+		for (AAdapter adapter : builtIns) venue.registerAdapter(adapter);
+		if (venue.getRegisteredAdapter("auth") == null) venue.registerAdapter(new AuthAdapter());
 	}
 
 	/**
@@ -1202,7 +1248,8 @@ public class Engine {
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		if (venueState == null) throw new IllegalStateException(ADAPTER_BEFORE_PREPARE);
-		migrateAdapterState(adapter);
+		// Adapters collected at start-up were migrated in the venue's start-up transaction.
+		if (!migratedAtStart.remove(adapter)) migrateAdapterState(adapter);
 		String name = adapter.getName();
 		AAdapter previous = adapters.get(name);
 		if (previous == null) previous = disabledAdapters.get(name);
@@ -1220,31 +1267,41 @@ public class Engine {
 	}
 
 	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
-	public static final String INVALID_STATE_VERSION = "Adapter state version must not be negative: ";
+
+	/** Start-up adapters whose state the venue's start-up transaction migrated, until they register. */
+	private final java.util.Set<AAdapter> migratedAtStart =
+		java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+	/** An adapter's state migration rules, as plain data for {@link VenueState}. */
+	static VenueState.AdapterMigration migrationOf(AAdapter adapter) {
+		return new VenueState.AdapterMigration(adapter.getName(), adapter.stateVersion(), adapter::migrateState);
+	}
 
 	/**
-	 * Brings an adapter's state to the version it supports, with that version, in
-	 * one venue transaction. Runs the adapter's pure {@link AAdapter#migrateState}
-	 * steps; a retried transaction runs them again. Current state is not rewritten.
+	 * The migration rules of adapters starting with the venue, in registration
+	 * order. A later adapter of the same name replaces an earlier one, so only
+	 * its rules apply.
+	 */
+	private static java.util.List<VenueState.AdapterMigration> migrationsOf(java.util.List<AAdapter> adapters) {
+		java.util.LinkedHashMap<String, VenueState.AdapterMigration> byName = new java.util.LinkedHashMap<>();
+		for (AAdapter adapter : adapters) {
+			byName.remove(adapter.getName());
+			byName.put(adapter.getName(), migrationOf(adapter));
+		}
+		return java.util.List.copyOf(byName.values());
+	}
+
+	/**
+	 * Brings a later-registered adapter's state to the version it supports, in
+	 * its own venue transaction. Current state is not rewritten.
 	 */
 	private void migrateAdapterState(AAdapter adapter) {
-		String name = adapter.getName();
-		long supported = adapter.stateVersion();
-		if (supported < 0) throw new IllegalStateException(INVALID_STATE_VERSION + name);
-		if (venueState.requireAdapterVersion(name, supported) == supported) return;
-		venueState.transact(draft -> {
-			long version = draft.requireAdapterVersion(name, supported);
-			if (version == supported) return;
-			AdapterState state = draft.adapterState(name);
-			ACell value = state.get();
-			if (value != null) {
-				ACell migrated = value;
-				for (long v = version; v < supported; v++) migrated = adapter.migrateState(v, migrated);
-				if (migrated != value) state.set(migrated);
-			}
-			draft.setAdapterVersion(name, supported);
-		});
-		log.info("Adapter '{}' state now at version {}", name, supported);
+		VenueState.AdapterMigration migration = migrationOf(adapter);
+		long before = venueState.adapterVersion(migration.name());
+		venueState.migrateAdapter(migration);
+		if (before != migration.supported()) {
+			log.info("Adapter '{}' state now at version {}", migration.name(), migration.supported());
+		}
 	}
 
 	/** Withdraw live publication and dispatch under the engine monitor. */

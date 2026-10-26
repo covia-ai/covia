@@ -3,6 +3,7 @@ package covia.venue;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -71,6 +72,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	public static final String UNSUPPORTED_VERSION = "Venue version %d is newer than supported version %d";
 	public static final String UNSUPPORTED_ADAPTER_VERSION = "Adapter '%s' state version %d is newer than supported version %d";
 	public static final String INVALID_ADAPTER_VERSION = "Adapter state version must be a non-negative integer: ";
+	public static final String INVALID_STATE_VERSION = "Adapter state version must not be negative: ";
 	@Override
 	public VenueState withCursor(AForkableCursor<ACell> draft) {
 		return new VenueState(draft, ownerKey, context);
@@ -517,6 +519,53 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			.path(Strings.create(name)).set(CVMLong.create(version));
 	}
 
+	/** One pure step of an adapter's state, from {@code version} to {@code version + 1}. */
+	@FunctionalInterface
+	public interface StateStep {
+		ACell apply(long version, ACell state);
+	}
+
+	/**
+	 * The migration rules of one adapter's state at {@code :adapters/<name>}:
+	 * the version it reads and writes, and its step from each earlier version.
+	 *
+	 * @param name Adapter name
+	 * @param supported State version the adapter supports, 0 when unversioned
+	 * @param step Pure step from one version to the next
+	 */
+	public record AdapterMigration(String name, long supported, StateStep step) {
+		public AdapterMigration {
+			AdapterState.validateName(name);
+			if (supported < 0) throw new IllegalStateException(INVALID_STATE_VERSION + name);
+			Objects.requireNonNull(step, "step");
+		}
+	}
+
+	/**
+	 * Migrates one adapter's state in its own transaction with its version. For
+	 * an adapter registered after start-up; a current state is not rewritten.
+	 */
+	public void migrateAdapter(AdapterMigration migration) {
+		if (requireAdapterVersion(migration.name(), migration.supported()) == migration.supported()) return;
+		transact(draft -> draft.migrateAdapterInPlace(migration));
+	}
+
+	/** Only called on a transaction draft: steps run in order, then the version is recorded. */
+	private void migrateAdapterInPlace(AdapterMigration migration) {
+		String name = migration.name();
+		long supported = migration.supported();
+		long version = requireAdapterVersion(name, supported);
+		if (version == supported) return;
+		AdapterState state = adapterState(name);
+		ACell value = state.get();
+		if (value != null) {
+			ACell migrated = value;
+			for (long v = version; v < supported; v++) migrated = migration.step().apply(v, migrated);
+			if (migrated != value) state.set(migrated);
+		}
+		setAdapterVersion(name, supported);
+	}
+
 	/**
 	 * Apply ordered venue migrations and their version changes in one transaction.
 	 * Current venues are a no-op. Callbacks are pure and may retry; failures leave
@@ -549,8 +598,23 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @param did The venue's DID string
 	 */
 	public void initialise(ACell did) {
+		initialise(did, List.of());
+	}
+
+	/**
+	 * As {@link #initialise(ACell)}, also migrating the given adapters' state.
+	 * The venue's steps run first, then each adapter's in order, then identity is
+	 * initialised, all in one transaction: a refusal or a failing step leaves the
+	 * venue exactly as it was. Where two migrations name the same adapter, the
+	 * caller passes only the one that applies.
+	 *
+	 * @param did The venue's DID string
+	 * @param adapters Migration rules of the adapters starting with the venue
+	 */
+	public void initialise(ACell did, List<AdapterMigration> adapters) {
 		transact(draft -> {
 			draft.migrateInPlace();
+			for (AdapterMigration migration : adapters) draft.migrateAdapterInPlace(migration);
 			@SuppressWarnings("unchecked")
 			Index<Keyword, ACell> value = (Index<Keyword, ACell>) draft.get();
 			if (!value.containsKey(Covia.DID)) draft.cursor().set(value.assoc(Covia.DID, did));

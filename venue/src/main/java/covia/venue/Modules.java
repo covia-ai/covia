@@ -82,6 +82,21 @@ public class Modules {
 			List<String> adapterNames) {}
 
 	/**
+	 * A module jar opened and module-configured, not yet registered: its
+	 * classloader and the adapters that will register from it. Its adapters'
+	 * state migration rules are known before any of them registers.
+	 *
+	 * @param name Module name (jar file name without {@code .jar})
+	 * @param jar Resolved jar path
+	 * @param sha256 Pinned digest, or null when unpinned
+	 * @param config Module-level bootstrap settings
+	 * @param loader The module's open classloader
+	 * @param adapters Adapters that accepted the module configuration
+	 */
+	record Discovered(String name, Path jar, String sha256, AMap<AString, ACell> config,
+			ModuleClassLoader loader, List<AAdapter> adapters) {}
+
+	/**
 	 * Loads all config-declared modules into the engine. Called during boot
 	 * after built-in adapters are registered and BEFORE catalog
 	 * materialisation, so module ops materialise with everyone else's.
@@ -89,20 +104,61 @@ public class Modules {
 	 * @param engine The engine to load modules into
 	 */
 	public static void loadModules(Engine engine) {
-		ACell modulesCell = engine.config().getModules();
-		if (modulesCell == null) return;
+		registerModules(engine, discoverModules(engine.config()));
+	}
+
+	/**
+	 * Opens and module-configures every config-declared module, registering
+	 * nothing. Fail-fast: on any error, loaders already opened are closed.
+	 */
+	static List<Discovered> discoverModules(Config venueConfig) {
+		ACell modulesCell = venueConfig.getModules();
+		if (modulesCell == null) return List.of();
 		AVector<ACell> modules = RT.ensureVector(modulesCell);
 		if (modules == null) {
 			throw new IllegalStateException(
 				"Config 'modules' must be an array of module entries (path string or {path, sha256})");
 		}
-		for (long i = 0; i < modules.count(); i++) {
-			loadModule(engine, modules.get(i));
+		List<Discovered> discovered = new ArrayList<>();
+		try {
+			for (long i = 0; i < modules.count(); i++) {
+				discovered.add(discover(venueConfig, modules.get(i)));
+			}
+		} catch (RuntimeException | Error e) {
+			close(discovered, e);
+			throw e;
+		}
+		return discovered;
+	}
+
+	/** Registers discovered modules in order; if one fails, loaders not yet registered are closed. */
+	static void registerModules(Engine engine, List<Discovered> discovered) {
+		for (int i = 0; i < discovered.size(); i++) {
+			try {
+				register(engine, discovered.get(i));
+			} catch (RuntimeException | Error e) {
+				close(discovered.subList(i + 1, discovered.size()), e);
+				throw e;
+			}
 		}
 	}
 
-	/** Loads one boot config entry ({@code path} string or {@code {path, sha256?, config?}}). */
-	static LoadedModule loadModule(Engine engine, ACell entry) {
+	/** Names of the adapters the discovered modules will register. */
+	static java.util.Set<String> adapterNames(List<Discovered> discovered) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (Discovered module : discovered) {
+			for (AAdapter adapter : module.adapters()) names.add(adapter.getName());
+		}
+		return names;
+	}
+
+	/** Closes the loaders of discovered modules that were never registered. */
+	static void close(List<Discovered> discovered, Throwable primary) {
+		for (Discovered module : discovered) closeQuietly(module.loader(), primary);
+	}
+
+	/** Discovers one boot config entry ({@code path} string or {@code {path, sha256?, config?}}). */
+	static Discovered discover(Config venueConfig, ACell entry) {
 		String path;
 		String sha256 = null;
 		AMap<AString, ACell> config = Maps.empty();
@@ -122,7 +178,7 @@ public class Modules {
 				config = typed;
 			}
 		}
-		return load(engine, Path.of(path), sha256, config);
+		return discover(venueConfig, Path.of(path), sha256, config);
 	}
 
 	/**
@@ -145,6 +201,18 @@ public class Modules {
 	 */
 	public static LoadedModule load(Engine engine, Path jarPath, String sha256,
 			AMap<AString, ACell> config) {
+		return register(engine, discover(engine.config(), jarPath, sha256, config));
+	}
+
+	/**
+	 * Opens a module jar and module-configures its adapters without
+	 * registering them: verifies the optional digest, creates the module
+	 * classloader and discovers its adapters.
+	 *
+	 * @throws IllegalStateException on any failure (the loader is closed)
+	 */
+	static Discovered discover(Config venueConfig, Path jarPath, String sha256,
+			AMap<AString, ACell> config) {
 		File jar = jarPath.toFile();
 		if (!jar.isFile()) throw new IllegalStateException(
 			"Module jar not found: " + jar.getAbsolutePath());
@@ -152,8 +220,6 @@ public class Modules {
 		if (config == null) config = Maps.empty();
 
 		String name = moduleName(jarPath);
-		LoadedModule previous = engine.getModule(name);
-
 		ModuleClassLoader loader;
 		try {
 			URL url = jar.toURI().toURL();
@@ -162,17 +228,12 @@ public class Modules {
 			throw new IllegalStateException("Failed to open module: " + jarPath, e);
 		}
 
-		LoadedModule module = null;
-		List<String> registered = new ArrayList<>();
 		try {
-			// Discover and module-configure first, so the module record (and
-			// its v/info/modules entry) exists before its adapters publish —
-			// each adapter summary names its owning module.
 			List<AAdapter> active = new ArrayList<>();
 			int discovered = 0;
 			for (AAdapter adapter : ServiceLoader.load(AAdapter.class, loader)) {
 				discovered++;
-				if (!adapter.configureModule(config, engine.config().isStrictConfig())) {
+				if (!adapter.configureModule(config, venueConfig.isStrictConfig())) {
 					log.info("Adapter '{}' from module {} is inactive",
 						adapter.getName(), jar.getName());
 					continue;
@@ -181,14 +242,43 @@ public class Modules {
 			}
 			if (discovered == 0) throw new IllegalStateException(
 				"Module declares no adapters (missing META-INF/services/covia.adapter.AAdapter?): " + jarPath);
+			return new Discovered(name, jarPath, sha256, config, loader, List.copyOf(active));
+		} catch (RuntimeException | Error e) {
+			closeQuietly(loader, e);
+			if (e instanceof IllegalStateException ise) throw ise;
+			throw new IllegalStateException("Failed to load module: " + jarPath, e);
+		}
+	}
+
+	/**
+	 * Registers a discovered module's adapters and records the module on the
+	 * engine. When the venue catalog has already been published (runtime
+	 * load), each registered adapter is materialised incrementally and the
+	 * module's {@code v/info/modules} entry is written. A module of the same
+	 * name already loaded is replaced.
+	 *
+	 * @throws IllegalStateException on any failure (nothing is left registered)
+	 */
+	static LoadedModule register(Engine engine, Discovered discovered) {
+		String name = discovered.name();
+		Path jarPath = discovered.jar();
+		ModuleClassLoader loader = discovered.loader();
+		List<AAdapter> active = discovered.adapters();
+		LoadedModule previous = engine.getModule(name);
+
+		LoadedModule module = null;
+		List<String> registered = new ArrayList<>();
+		try {
+			// The module record (and its v/info/modules entry) exists before its
+			// adapters publish — each adapter summary names its owning module.
 			List<String> names = new ArrayList<>();
 			for (AAdapter adapter : active) names.add(adapter.getName());
-			module = new LoadedModule(name, jarPath, sha256, config, loader, List.copyOf(names));
+			module = new LoadedModule(name, jarPath, discovered.sha256(), discovered.config(), loader, List.copyOf(names));
 			engine.addModule(module);
 			for (AAdapter adapter : active) {
 				engine.registerAdapter(adapter);
 				registered.add(adapter.getName());
-				log.info("Loaded adapter '{}' from module {}", adapter.getName(), jar.getName());
+				log.info("Loaded adapter '{}' from module {}", adapter.getName(), jarPath.getFileName());
 			}
 			if (previous != null) {
 				for (String oldName : previous.adapterNames()) {

@@ -77,10 +77,12 @@ Only the static functions are already close to the migration function
 contract (R3). The transactions, the callbacks and the engine reads need to
 become migration functions over a declared part.
 
-Adapters can version their own state and migrate it step by step when they
-register, enabled or not (`AAdapter.stateVersion`, `AAdapter.migrateState`; see
-[ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). No built-in adapter
-versions its state yet. `VenueState.peekVersions` reads the stored versions
+Adapters can version their own state and migrate it step by step, enabled or
+not (`AAdapter.stateVersion`, `AAdapter.migrateState`; see
+[ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). At launch the venue's
+steps and those of the built-in and configured-module adapters run in one
+transaction, before any bootstrap write; an adapter registered later migrates
+in its own transaction. No built-in adapter versions its state yet. `VenueState.peekVersions` reads the stored versions
 before a start, and a newer version is refused with an
 `UnsupportedVersionException`.
 
@@ -92,9 +94,9 @@ before a start, and a newer version is refused with an
   the venue's `:version`.
 - A build upgrades venue state at any older supported version to its own by
   applying the run.
-- Starting a venue on older state applies the run, as `VenueState.initialise`
-  does today. An embedder that wants control applies the run itself first
-  (R2).
+- Starting a venue on older state applies the run in one venue transaction,
+  before any bootstrap write: all of it commits, or none of it does. An
+  embedder that wants control applies the run itself first (R2).
 - A read-only check reports, for each responsible code, the stored version
   against the version this build supports, and any lazy parts still in an
   older shape. It writes nothing, and can be called on a store before
@@ -175,9 +177,12 @@ They compose:
   together, a run is its steps in order, and an embedder composes Covia's run
   with its own steps.
 - **Batching belongs to the caller.** A function never decides how much is
-  committed together. A walk over every record of a large user is many part
+  committed together. At start-up the run is one transaction, all or nothing.
+  A live run, such as a walk over every record of a large user, is many part
   migrations, committed in batches of whatever size the caller chooses. A
-  batch holds parts of at most one user, so no commit spans users.
+  batch holds parts of at most one user, so no commit spans users. Run on a
+  fork of the venue state, the batches are all-or-nothing again when the
+  caller adopts the fork, provided no running venue writes in the meantime.
 - **Resume is a rerun.** An interrupted run starts again, and parts already
   current are no-ops. A progress cursor may make that faster, but correctness
   never depends on one.

@@ -8,9 +8,13 @@ the persisted format contract, independently of the software release published
 at `v/info/version`. Each venue owns its version; the application root and the
 upstream signing envelope do not.
 
-`VenueState.initialise(did)` runs `VenueState`'s ordered migrations before any
-Engine bootstrap writes, adapter activation or recovered work. `migrate()` is
-also available for explicit component transactions. A missing version means
+`VenueState.initialise(did, adapters)` runs `VenueState`'s ordered migrations,
+then the state migrations of every adapter starting with the venue, before any
+Engine bootstrap writes, adapter activation or recovered work. On launch those
+adapters are the built-ins and every configured module's adapters. It is one
+venue transaction: a refusal or a failing step discards all of it, so a start
+that fails leaves the store exactly as it was. `migrate()` is also available
+for explicit component transactions. A missing version means
 legacy `0`; explicit `0` follows the same path. Nil, negative and non-integer
 versions are invalid. A version above `VenueState.CURRENT_VERSION` refuses local
 startup with an `UnsupportedVersionException`, which carries the stored and
@@ -22,8 +26,10 @@ schema, or the schema of a component Covia ships, changes in a way an older
 build cannot read, so every older build refuses the result.
 
 An adapter versions its own state instead, in the venue's `:adapter-versions`
-region, and migrates it through `AAdapter.stateVersion` and `migrateState` when
-it registers ([ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). That
+region, and migrates it through `AAdapter.stateVersion` and `migrateState`:
+in the start-up transaction above, or, for an adapter registered later, in its
+own transaction as it registers
+([ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). That
 version is the adapter's own gate: raising it does not change `:version`, and
 it covers adapters Covia does not ship, such as modules an operator or
 embedder adds. A change to a built-in adapter's state that the adapter does

@@ -424,21 +424,32 @@ modules, and adapters an operator or embedder adds all use the same hook.
 - The venue records the version each adapter's state has reached in its
   `:adapter-versions` region. An adapter that does not override
   `stateVersion()` is at version 0 and records nothing.
-- Registration runs the steps, whether the adapter is enabled or disabled, and
-  before install or any deletion hook sees the state. They run in order from the
-  recorded version up to `stateVersion()`, in one venue transaction that also
-  records the new version. A legacy `w/adapters/<name>` value moves first. A
-  venue with no state for the adapter records the version without calling
-  `migrateState`.
+- Steps run in order from the recorded version up to `stateVersion()`, and the
+  new version is recorded with them. A legacy `w/adapters/<name>` value moves
+  first. A venue with no state for the adapter records the version without
+  calling `migrateState`.
+- At launch, the built-in adapters and every configured module's adapters
+  migrate together, after the venue's own steps, in the one transaction that
+  opens the venue and before any bootstrap write. A refusal or a failing step in
+  any of them discards the whole transaction, so the start fails with the store
+  exactly as it was. A module adapter with the same name as a built-in replaces
+  it, and that built-in never registers.
+- An adapter registered later (in the `beforeStart` hook, on an engine prepared
+  by hand, or by loading a module at runtime) migrates in its own transaction as
+  it registers.
+- Either way, steps run whether the adapter is enabled or disabled, and before
+  `configure`, install or any deletion hook sees the state. A step cannot depend
+  on the adapter's configuration.
 - Each step is a pure function of its arguments: no I/O, no engine calls, no
-  clock, no runtime changes. The transaction may run it again. It returns the
-  same cell when nothing changes, and throws for a shape it does not recognise.
-  The state and version then stay as they were, and registration fails.
+  clock, no runtime changes. The transaction may run it again, or discard its
+  result. It returns the same cell when nothing changes, and throws for a shape
+  it does not recognise. The state and version then stay as they were, and the
+  start or registration fails.
 - State recorded at a newer version than the adapter supports is refused with
-  an `UnsupportedVersionException` naming the adapter, when the adapter
-  registers. That includes a disabled adapter, so startup fails. To run an older
-  build without restoring the state from before the upgrade, remove the
-  adapter from the configuration; disabling it is not enough.
+  an `UnsupportedVersionException` naming the adapter, including a disabled
+  adapter, so the start or registration fails. To run an older build without
+  restoring the state from before the upgrade, remove the adapter from the
+  configuration; disabling it is not enough.
 - A replaced instance keeps running until its replacement has registered. When
   loading a module at runtime that raises its state version, disable the old
   instance first.

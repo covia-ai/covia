@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,6 +14,8 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -20,6 +23,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.lattice.Covia;
 import covia.lattice.WorkspaceRoot;
 
 /** Adapters migrate their own state schema when they register (#621). */
@@ -157,6 +161,52 @@ class AdapterStateMigrationTest {
 		}
 	}
 
+	@Test void startUpMigrationIsOneTransactionWithTheVenue() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(key);
+		try (var store = application.hostStore()) {
+			// A legacy venue: no :version, old-shaped state for one adapter, and
+			// another adapter's state recorded at a version newer than its build.
+			application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
+				.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a")))
+				.assoc(Covia.ADAPTER_VERSIONS, Maps.of("newer", 3L)));
+			application.host().sync();
+			ACell before = application.cursor().get();
+
+			Versioned versioned = new Versioned(NAME, 2);
+			Engine refused = new Engine(Maps.empty(), application, key);
+			try {
+				var error = assertThrows(UnsupportedVersionException.class,
+					() -> refused.prepare(List.of(versioned, new Versioned("newer", 1))));
+				assertEquals("newer", error.adapter());
+				assertNull(refused.getVenueState());
+			} finally {
+				refused.close();
+			}
+			assertEquals(2, versioned.steps.get(), "the earlier adapter's steps ran in the discarded draft");
+			assertEquals(before, application.cursor().get(), "neither the venue nor the earlier adapter migrated");
+			assertEquals(before, store.getRootData(), "the refused start left the store untouched");
+
+			Versioned again = new Versioned(NAME, 2);
+			Engine engine = new Engine(Maps.empty(), application, key);
+			try {
+				engine.prepare(List.of(again));
+				VenueState venue = engine.getVenueState();
+				assertEquals(VenueState.CURRENT_VERSION, venue.version());
+				assertEquals(2, venue.adapterVersion(NAME));
+				assertEquals(Maps.of("items", Vectors.of("a")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());
+				assertEquals(2, again.steps.get());
+
+				ACell state = venue.adapterState(NAME).get();
+				engine.registerAdapter(again);
+				assertSame(again, engine.getAdapter(NAME));
+				assertSame(state, venue.adapterState(NAME).get(), "registering a start-up adapter migrates nothing more");
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
 	@Test void registrationNeedsAPreparedEngineAndAValidVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		Engine unprepared = new Engine(Maps.empty(), CoviaApplication.create(key), key);
@@ -168,7 +218,7 @@ class AdapterStateMigrationTest {
 		}
 		Engine engine = prepared(Maps.empty());
 		try {
-			assertEquals(Engine.INVALID_STATE_VERSION + NAME,
+			assertEquals(VenueState.INVALID_STATE_VERSION + NAME,
 				assertThrows(IllegalStateException.class, () -> engine.registerAdapter(new Versioned(NAME, -1))).getMessage());
 		} finally {
 			engine.close();

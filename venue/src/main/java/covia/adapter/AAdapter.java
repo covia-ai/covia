@@ -191,16 +191,19 @@ public abstract class AAdapter {
 
 	/**
 	 * Migrates this adapter's state from {@code version} to {@code version + 1}.
-	 * The venue calls it when the adapter registers, enabled or disabled, before
-	 * install and before any deletion hook sees the state. Steps run in order from
-	 * the recorded version to {@link #stateVersion()}, in one venue transaction
-	 * that also records the new version. A venue holding no state for this
+	 * Steps run in order from the recorded version to {@link #stateVersion()},
+	 * enabled or disabled, before {@link #configure}, install and any deletion
+	 * hook. A built-in or configured-module adapter migrates at launch, after the
+	 * venue's own steps, in the one transaction that opens the venue; an adapter
+	 * registered later migrates in its own transaction as it registers. The new
+	 * version is recorded with the steps. A venue holding no state for this
 	 * adapter records the version without calling it.
 	 *
 	 * <p>Must be a pure function of its arguments: no I/O, no engine calls, no
-	 * clock, no runtime changes. The transaction may run it again. Return the
-	 * same cell when nothing changes. Throw for a shape it does not recognise:
-	 * the state and its version then stay as they were, and registration fails.</p>
+	 * clock, no runtime changes, no configuration. The transaction may run it
+	 * again or discard its result. Return the same cell when nothing changes.
+	 * Throw for a shape it does not recognise: the state and its version then
+	 * stay as they were, and the start or registration fails.</p>
 	 *
 	 * @param version the version {@code state} is at, below {@link #stateVersion()}
 	 * @param state this adapter's state at that version, never null
