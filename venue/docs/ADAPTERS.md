@@ -402,6 +402,47 @@ for transitional records. Venue `:version` describes this compatibility contract
 it does not require an eager rewrite of adapter state. See
 [PERSISTENCE.md](PERSISTENCE.md#venue-versions-and-migrations).
 
+### Versioned state and migration
+
+An adapter that changes the shape of its state versions it. A venue holding
+older state then has it migrated before the adapter reads it, and state newer
+than the adapter understands is refused instead of misread. Built-in adapters,
+modules, and adapters an operator or embedder adds all use the same hook.
+
+```java
+@Override public long stateVersion() { return 2; }
+
+@Override public ACell migrateState(long version, ACell state) {
+    return switch ((int) version) {
+        case 0 -> Maps.of("bots", state);                                  // 0 → 1
+        case 1 -> RT.ensureMap(state).assoc(Strings.create("limits"), Maps.empty()); // 1 → 2
+        default -> super.migrateState(version, state);
+    };
+}
+```
+
+- The venue records the version each adapter's state has reached in its
+  `:adapter-versions` region. An adapter that does not override
+  `stateVersion()` is at version 0 and records nothing.
+- Registration runs the steps, whether the adapter is enabled or disabled, and
+  before install or any deletion hook sees the state. They run in order from the
+  recorded version up to `stateVersion()`, in one venue transaction that also
+  records the new version. A legacy `w/adapters/<name>` value moves first. A
+  venue with no state for the adapter records the version without calling
+  `migrateState`.
+- Each step is a pure function of its arguments: no I/O, no engine calls, no
+  clock, no runtime changes. The transaction may run it again. It returns the
+  same cell when nothing changes, and throws for a shape it does not recognise.
+  The state and version then stay as they were, and registration fails.
+- State recorded at a newer version than the adapter supports is refused with
+  an `UnsupportedVersionException` naming the adapter, when the adapter
+  registers. That includes a disabled adapter, so startup fails. To run an older
+  build without restoring the state from before the upgrade, remove the
+  adapter from the configuration; disabling it is not enough.
+- A replaced instance keeps running until its replacement has registered. When
+  loading a module at runtime that raises its state version, disable the old
+  instance first.
+
 ### User-visible extension routes
 
 `x/<adapterName>/...` is a virtual route into an active adapter's explicit
@@ -543,6 +584,10 @@ State schemas need explicit tests. Cover the exact canonical paths, venue
 ownership, restart recovery, deletion, config/runtime separation, malformed
 records, and any migration from an older layout. A new schema should define
 which version wins during migration and make repeated migration idempotent.
+Version it with `stateVersion` and `migrateState`
+([Versioned state and migration](#versioned-state-and-migration)), and test each
+step: older state converts, a current state comes back as the same cell, and an
+unknown shape is refused.
 
 ## External agent interactions
 

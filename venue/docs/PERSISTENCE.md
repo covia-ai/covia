@@ -21,6 +21,16 @@ replication is not permission to execute a newer format.
 schema, or the schema of a component Covia ships, changes in a way an older
 build cannot read, so every older build refuses the result.
 
+An adapter versions its own state instead, in the venue's `:adapter-versions`
+region, and migrates it through `AAdapter.stateVersion` and `migrateState` when
+it registers ([ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). That
+version is the adapter's own gate: raising it does not change `:version`, and
+it covers adapters Covia does not ship, such as modules an operator or
+embedder adds. A change to a built-in adapter's state that the adapter does
+not version still advances `:version`. Version 1 includes the optional
+`:adapter-versions` region; a venue without it holds no versioned adapter
+state.
+
 `VenueState.peekVersions(store, ownerKey)` reads the stored versions from an
 open store without an Engine and without writing. An embedder calls it before
 starting a venue on that store, to learn whether the start will migrate or

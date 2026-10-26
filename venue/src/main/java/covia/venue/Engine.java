@@ -1193,9 +1193,16 @@ public class Engine {
 	 * catalog has been published, an active registration is materialised
 	 * immediately.
 	 *
+	 * <p>First, enabled or not, the adapter's state is migrated to its
+	 * {@link AAdapter#stateVersion()}. Requires a prepared engine.</p>
+	 *
 	 * @param adapter The adapter instance to register
+	 * @throws UnsupportedVersionException if the adapter's state is recorded at
+	 *         a newer version than it supports; nothing is registered or written
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
+		if (venueState == null) throw new IllegalStateException(ADAPTER_BEFORE_PREPARE);
+		migrateAdapterState(adapter);
 		String name = adapter.getName();
 		AAdapter previous = adapters.get(name);
 		if (previous == null) previous = disabledAdapters.get(name);
@@ -1210,6 +1217,34 @@ public class Engine {
 			return;
 		}
 		activate(adapter, previous);
+	}
+
+	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
+	public static final String INVALID_STATE_VERSION = "Adapter state version must not be negative: ";
+
+	/**
+	 * Brings an adapter's state to the version it supports, with that version, in
+	 * one venue transaction. Runs the adapter's pure {@link AAdapter#migrateState}
+	 * steps; a retried transaction runs them again. Current state is not rewritten.
+	 */
+	private void migrateAdapterState(AAdapter adapter) {
+		String name = adapter.getName();
+		long supported = adapter.stateVersion();
+		if (supported < 0) throw new IllegalStateException(INVALID_STATE_VERSION + name);
+		if (venueState.requireAdapterVersion(name, supported) == supported) return;
+		venueState.transact(draft -> {
+			long version = draft.requireAdapterVersion(name, supported);
+			if (version == supported) return;
+			AdapterState state = draft.adapterState(name);
+			ACell value = state.get();
+			if (value != null) {
+				ACell migrated = value;
+				for (long v = version; v < supported; v++) migrated = adapter.migrateState(v, migrated);
+				if (migrated != value) state.set(migrated);
+			}
+			draft.setAdapterVersion(name, supported);
+		});
+		log.info("Adapter '{}' state now at version {}", name, supported);
 	}
 
 	/** Withdraw live publication and dispatch under the engine monitor. */

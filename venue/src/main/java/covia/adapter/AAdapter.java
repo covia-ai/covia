@@ -174,6 +174,42 @@ public abstract class AAdapter {
 		// Most adapters have no autonomous workers.
 	}
 
+	public static final String NO_STATE_MIGRATION = "Adapter '%s' has no state migration from version %d";
+
+	/**
+	 * Version of the private state schema this adapter reads and writes at
+	 * {@code :adapters/<name>}. 0, the default, means the adapter does not
+	 * version its state. Raise it when the stored shape changes, and give the
+	 * step from the previous version in {@link #migrateState}. The venue records
+	 * the version each adapter's state has reached, so a step runs once per
+	 * venue. State recorded at a version above this one is refused with a
+	 * {@link covia.venue.UnsupportedVersionException} when the adapter registers.
+	 */
+	public long stateVersion() {
+		return 0;
+	}
+
+	/**
+	 * Migrates this adapter's state from {@code version} to {@code version + 1}.
+	 * The venue calls it when the adapter registers, enabled or disabled, before
+	 * install and before any deletion hook sees the state. Steps run in order from
+	 * the recorded version to {@link #stateVersion()}, in one venue transaction
+	 * that also records the new version. A venue holding no state for this
+	 * adapter records the version without calling it.
+	 *
+	 * <p>Must be a pure function of its arguments: no I/O, no engine calls, no
+	 * clock, no runtime changes. The transaction may run it again. Return the
+	 * same cell when nothing changes. Throw for a shape it does not recognise:
+	 * the state and its version then stay as they were, and registration fails.</p>
+	 *
+	 * @param version the version {@code state} is at, below {@link #stateVersion()}
+	 * @param state this adapter's state at that version, never null
+	 * @return the state at {@code version + 1}
+	 */
+	public ACell migrateState(long version, ACell state) {
+		throw new IllegalStateException(NO_STATE_MIGRATION.formatted(getName(), version));
+	}
+
 	/**
 	 * Remove user-associated durable state in the venue deletion transaction.
 	 * Use only the supplied draft component: this callback may be retried and

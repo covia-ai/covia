@@ -77,6 +77,13 @@ Only the static functions are already close to the migration function
 contract (R3). The transactions, the callbacks and the engine reads need to
 become migration functions over a declared part.
 
+Adapters can version their own state and migrate it step by step when they
+register, enabled or not (`AAdapter.stateVersion`, `AAdapter.migrateState`; see
+[ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). No built-in adapter
+versions its state yet. `VenueState.peekVersions` reads the stored versions
+before a start, and a newer version is refused with an
+`UnsupportedVersionException`.
+
 ## Requirements
 
 ### R1. Upgrading a venue's version
