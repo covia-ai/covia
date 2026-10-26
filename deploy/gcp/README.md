@@ -38,7 +38,8 @@ venues retired, Caddy moved under systemd):
   Etch stores and identities persist across redeploys.
 - **Caddy:** systemd `caddy.service`, config at `/etc/caddy/Caddyfile`
   (venue-test → :8080, venue-1 → :8081, venue-2 → :8082); cert storage
-  migrated from the legacy root-run instance to `/var/lib/caddy`
+  migrated from the legacy root-run instance to `/var/lib/caddy`; every site sends HSTS
+  (`max-age=31536000`, security#13)
 
 The Caddyfile on the host:
 
@@ -48,14 +49,17 @@ The Caddyfile on the host:
 }
 
 venue-1.covia.ai {
+        header Strict-Transport-Security "max-age=31536000"
         reverse_proxy :8081
 }
 
 venue-2.covia.ai {
+        header Strict-Transport-Security "max-age=31536000"
         reverse_proxy :8082
 }
 
 venue-test.covia.ai {
+        header Strict-Transport-Security "max-age=31536000"
         reverse_proxy :8080
 }
 ```
