@@ -43,6 +43,7 @@ These changes require Convex 0.8.18.
 
 ### Migration
 
+- Embedders upgrading from 0.9.x: see `venue/docs/EMBEDDING.md`.
 - External login (#298): replace `auth.loginRedirectOrigins` with exact
   `auth.loginRedirectUris`; configure Microsoft `tenantId`; use HTTPS except on
   loopback. Frontend redirects now carry a single-use code exchanged with PKCE,
@@ -91,6 +92,8 @@ These changes require Convex 0.8.18.
 
 ### Added
 
+- `venue/docs/EMBEDDING.md`: the supported embedder surface, checked by `EmbedderContractTest`.
+- `VenueServer.getHost()`: the host a standalone venue opened.
 - MCP `tools/list` includes `_meta["ai.covia/operation"]`, the actual dispatch
   reference, so clients can join MCP exposure to the venue catalog (#558).
 - Method-independent `EvidencePolicy` checks trusted authentication results against

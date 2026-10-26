@@ -267,6 +267,7 @@ java -jar target/covia.jar [config.json]
 - `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
 - `docs/ADAPTERS.md` — canonical adapter system, state, lifecycle, authoring, and module contract
 - `docs/CONFIG.md` — operator configuration reference
+- `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from 0.9.x
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
 - `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
