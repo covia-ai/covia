@@ -23,7 +23,16 @@ replication is not permission to execute a newer format.
 
 `:version` is the gate every build checks. It advances whenever Covia's own
 schema, or the schema of a component Covia ships, changes in a way an older
-build cannot read, so every older build refuses the result.
+build cannot read, so every older build refuses the result. That includes
+formats Covia adopts from Convex anywhere in the store, such as the DLFS drive
+nodes in the root `:dlfs` region, outside the venue value: the Etch header does
+not show a change in them, so `:version` is the only thing a later build can
+check.
+
+A user export (`user/export`) carries its own format version,
+`UserExports.VERSION`. It advances whenever the shape of a user's stored state
+changes in a way an older build cannot read, as `:version` does, so an older
+venue refuses the export rather than importing shapes it cannot read.
 
 An adapter versions its own state instead, in the venue's `:adapter-versions`
 region, and migrates it through `AAdapter.stateVersion` and `migrateState`:

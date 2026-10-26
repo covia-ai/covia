@@ -61,6 +61,20 @@ public class TestAdapter extends AAdapter {
 		return Maps.of(K_LATTICE, LATTICE_INFO);
 	}
 
+	/**
+	 * Version 1 is version 0's shape, {@code users/<did>/scratch}, unchanged.
+	 * The test adapter versions its state so every venue, and the
+	 * release-written fixtures, run adapter state migration at start-up.
+	 */
+	@Override public long stateVersion() {
+		return 1;
+	}
+
+	@Override public ACell migrateState(long version, ACell state) {
+		if (version == 0) return state;
+		return super.migrateState(version, state);
+	}
+
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */
 	@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
 		RequestContext.ExecutionScope scope = ctx.getExecutionScope();

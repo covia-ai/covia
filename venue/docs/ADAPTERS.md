@@ -167,6 +167,9 @@ The significant lifecycle is:
    `ServiceLoader`.
 2. A module adapter receives `configureModule(modules[].config, strict)` once.
    It may return `false` when optional runtime prerequisites are unavailable.
+   At launch this happens before the venue is prepared, so the venue can
+   migrate module adapters' state with its own; neither it nor the constructor
+   may use the engine.
 3. Registration applies the effective `adapters.<name>` configuration through
    `configure(config, strict)`.
 4. Unless boot-disabled or declined, `install(engine)` binds the engine and
@@ -426,14 +429,16 @@ modules, and adapters an operator or embedder adds all use the same hook.
   `stateVersion()` is at version 0 and records nothing.
 - Steps run in order from the recorded version up to `stateVersion()`, and the
   new version is recorded with them. A legacy `w/adapters/<name>` value moves
-  first. A venue with no state for the adapter records the version without
-  calling `migrateState`.
+  first. A venue with no state for the adapter records the adapter's own
+  version, lower or higher, without calling `migrateState`: with nothing
+  stored, there is nothing to misread.
 - At launch, the built-in adapters and every configured module's adapters
   migrate together, after the venue's own steps, in the one transaction that
   opens the venue and before any bootstrap write. A refusal or a failing step in
   any of them discards the whole transaction, so the start fails with the store
   exactly as it was. A module adapter with the same name as a built-in replaces
-  it, and that built-in never registers.
+  it, and that built-in never registers, so it cannot refuse the module's
+  newer state.
 - An adapter registered later (in the `beforeStart` hook, on an engine prepared
   by hand, or by loading a module at runtime) migrates in its own transaction as
   it registers.
@@ -445,14 +450,16 @@ modules, and adapters an operator or embedder adds all use the same hook.
   result. It returns the same cell when nothing changes, and throws for a shape
   it does not recognise. The state and version then stay as they were, and the
   start or registration fails.
-- State recorded at a newer version than the adapter supports is refused with
-  an `UnsupportedVersionException` naming the adapter, including a disabled
-  adapter, so the start or registration fails. To run an older build without
+- Stored state recorded at a newer version than the adapter supports is
+  refused with an `UnsupportedVersionException` naming the adapter, including a
+  disabled adapter, so the start or registration fails. To run an older build without
   restoring the state from before the upgrade, remove the adapter from the
   configuration; disabling it is not enough.
 - A replaced instance keeps running until its replacement has registered. When
   loading a module at runtime that raises its state version, disable the old
   instance first.
+- The built-in test adapter is at version 1, with version 0's shape unchanged,
+  so every venue and the release-written fixtures run this path.
 
 ### User-visible extension routes
 

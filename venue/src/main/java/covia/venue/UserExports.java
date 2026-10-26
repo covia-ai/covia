@@ -54,7 +54,12 @@ public final class UserExports {
 	/** The export's {@code format} value. */
 	public static final AString FORMAT = Strings.intern("covia/user-export");
 
-	/** The export format version this venue writes and the newest it reads. */
+	/**
+	 * The export format version this venue writes and the newest it reads.
+	 * Advance it whenever the shape of a user's stored state changes in a way an
+	 * older build cannot read, as the venue {@code :version} does, so an older
+	 * venue refuses the export with {@link #NEWER_VERSION}.
+	 */
 	public static final long VERSION = 1;
 
 	public static final String PROTECTED = "The venue and public principals cannot be exported, imported or cloned";

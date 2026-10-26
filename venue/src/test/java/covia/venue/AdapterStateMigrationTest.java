@@ -156,6 +156,10 @@ class AdapterStateMigrationTest {
 
 			engine.registerAdapter(new Versioned("unversioned", 0));
 			assertEquals(Map.of(NAME, 2L), venue.adapterVersions());
+
+			// With nothing stored there is nothing to misread: a lower version takes over.
+			engine.registerAdapter(new Versioned(NAME, 1));
+			assertEquals(1, venue.adapterVersion(NAME));
 		} finally {
 			engine.close();
 		}
@@ -168,7 +172,7 @@ class AdapterStateMigrationTest {
 			// A legacy venue: no :version, old-shaped state for one adapter, and
 			// another adapter's state recorded at a version newer than its build.
 			application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
-				.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a")))
+				.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a"), "newer", Vectors.of("future")))
 				.assoc(Covia.ADAPTER_VERSIONS, Maps.of("newer", 3L)));
 			application.host().sync();
 			ACell before = application.cursor().get();

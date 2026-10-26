@@ -441,12 +441,9 @@ public class Engine {
 		try {
 			checkLaunchCancellation();
 			// Collect the start-up adapters first, so their state migrates in the
-			// venue's start-up transaction. A configured module's adapter replaces
-			// a built-in of the same name, so that built-in never registers.
+			// venue's start-up transaction.
 			modules = Modules.discoverModules(config);
-			java.util.Set<String> moduleAdapters = Modules.adapterNames(modules);
-			java.util.List<AAdapter> builtIns = builtInAdapters();
-			builtIns.removeIf(adapter -> moduleAdapters.contains(adapter.getName()));
+			java.util.List<AAdapter> builtIns = builtInAdapters(modules);
 			java.util.List<AAdapter> startup = new java.util.ArrayList<>(builtIns);
 			for (Modules.Discovered module : modules) startup.addAll(module.adapters());
 			prepare(startup);
@@ -1062,12 +1059,29 @@ public class Engine {
 
 	/** Installs built-ins and configured modules without publishing the catalog. */
 	public static void installDefaultAdapters(Engine venue) {
-		registerBuiltIns(venue, builtInAdapters());
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone
 		// else's. Fail-fast on any load error — explicit config is explicit
 		// intent.
-		Modules.loadModules(venue);
+		java.util.List<Modules.Discovered> modules = Modules.discoverModules(venue.config());
+		try {
+			registerBuiltIns(venue, builtInAdapters(modules));
+		} catch (RuntimeException | Error failure) {
+			Modules.close(modules, failure);
+			throw failure;
+		}
+		Modules.registerModules(venue, modules);
+	}
+
+	/**
+	 * The built-in adapters less any a discovered module replaces by name. That
+	 * built-in never registers, so it cannot refuse the module's newer state.
+	 */
+	private static java.util.List<AAdapter> builtInAdapters(java.util.List<Modules.Discovered> modules) {
+		java.util.Set<String> replaced = Modules.adapterNames(modules);
+		java.util.List<AAdapter> builtIns = builtInAdapters();
+		builtIns.removeIf(adapter -> replaced.contains(adapter.getName()));
+		return builtIns;
 	}
 
 	/** New instances of the built-in adapters, in registration order; auth registers in prepare. */
@@ -1240,7 +1254,8 @@ public class Engine {
 	 * immediately.
 	 *
 	 * <p>First, enabled or not, the adapter's state is migrated to its
-	 * {@link AAdapter#stateVersion()}. Requires a prepared engine.</p>
+	 * {@link AAdapter#stateVersion()}, unless the venue's start-up transaction
+	 * already migrated it. Requires a prepared engine.</p>
 	 *
 	 * @param adapter The adapter instance to register
 	 * @throws UnsupportedVersionException if the adapter's state is recorded at

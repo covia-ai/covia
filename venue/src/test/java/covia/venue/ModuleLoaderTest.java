@@ -16,6 +16,7 @@ import java.util.zip.ZipEntry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -25,6 +26,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -169,6 +171,85 @@ public class ModuleLoaderTest {
 			assertTrue(e.getMessage().contains("Module jar not found"), e.getMessage());
 		} finally {
 			engine.close();
+		}
+	}
+
+	/** A module jar holding only the test-classpath VersionedTestAdapter, named "test". */
+	private static Path buildVersionedTestModuleJar(Path dir) throws Exception {
+		Path jar = dir.resolve("versioned-test-module.jar");
+		try (JarOutputStream jos = new JarOutputStream(Files.newOutputStream(jar))) {
+			String cls = "modtest/VersionedTestAdapter.class";
+			jos.putNextEntry(new ZipEntry(cls));
+			try (InputStream is = ModuleLoaderTest.class.getResourceAsStream("/" + cls)) {
+				jos.write(is.readAllBytes());
+			}
+			jos.closeEntry();
+			jos.putNextEntry(new ZipEntry("META-INF/services/covia.adapter.AAdapter"));
+			jos.write("modtest.VersionedTestAdapter\n".getBytes(StandardCharsets.UTF_8));
+			jos.closeEntry();
+		}
+		return jar;
+	}
+
+	/**
+	 * A module replacing the built-in test adapter migrates its state at launch,
+	 * and the version it records survives a restart on the same Etch store. The
+	 * replaced built-in never registers on either start-up path, so it cannot
+	 * refuse the module's newer state; without the module, it does.
+	 */
+	@Test
+	public void testModuleReplacingBuiltInMigratesAcrossRestarts(@TempDir Path dir) throws Exception {
+		AMap<AString, ACell> withModule = Maps.of(Config.MODULES,
+			Vectors.of(Strings.create(buildVersionedTestModuleJar(dir).toString())));
+		AKeyPair key = AKeyPair.generate();
+		String record = "users/did:test:versioned-scratch";
+		AMap<AString, ACell> migrated = Maps.of("scratch", "kept", "migrated", 2L);
+		try (EtchStore store = EtchStore.createTemp("module-migration")) {
+			Engine built = new Engine(Maps.empty(), CoviaApplication.open(store, key), key).launch();
+			try {
+				assertEquals(1, built.getVenueState().adapterVersion("test"));
+				built.adapterState("test").write(record + "/scratch", Strings.create("kept"));
+				built.flush();
+			} finally {
+				built.close();
+			}
+
+			Engine upgraded = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
+			try {
+				assertTrue(upgraded.getAdapter("test").getClass().getClassLoader() instanceof ModuleClassLoader);
+				assertEquals(2, upgraded.getVenueState().adapterVersion("test"));
+				assertEquals(migrated, upgraded.adapterState("test").read(record));
+				upgraded.flush();
+			} finally {
+				upgraded.close();
+			}
+
+			Engine restarted = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
+			try {
+				assertEquals(2, restarted.getVenueState().adapterVersion("test"), "read back from the store");
+				assertEquals(migrated, restarted.adapterState("test").read(record));
+			} finally {
+				restarted.close();
+			}
+			Engine legacy = new Engine(withModule, CoviaApplication.open(store, key), key).start();
+			try {
+				Engine.installDefaultAdapters(legacy);
+				assertTrue(legacy.getAdapter("test").getClass().getClassLoader() instanceof ModuleClassLoader);
+			} finally {
+				legacy.close();
+			}
+
+			ACell before = store.getRootData();
+			Engine refused = new Engine(Maps.empty(), CoviaApplication.open(store, key), key);
+			try {
+				UnsupportedVersionException e = assertThrows(UnsupportedVersionException.class, refused::launch);
+				assertEquals("test", e.adapter());
+				assertEquals(2, e.stored());
+				assertEquals(1, e.supported());
+			} finally {
+				refused.close();
+			}
+			assertEquals(before, store.getRootData(), "the refused start left the store untouched");
 		}
 	}
 

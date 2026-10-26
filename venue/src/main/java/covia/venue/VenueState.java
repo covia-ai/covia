@@ -546,19 +546,25 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * an adapter registered after start-up; a current state is not rewritten.
 	 */
 	public void migrateAdapter(AdapterMigration migration) {
-		if (requireAdapterVersion(migration.name(), migration.supported()) == migration.supported()) return;
+		if (adapterVersion(migration.name()) == migration.supported()) return;
 		transact(draft -> draft.migrateAdapterInPlace(migration));
 	}
 
-	/** Only called on a transaction draft: steps run in order, then the version is recorded. */
+	/**
+	 * Only called on a transaction draft: steps run in order, then the version is
+	 * recorded. With no state stored there is nothing to misread, so the
+	 * adapter's own version is recorded, lower or higher; otherwise state at a
+	 * newer version is refused.
+	 */
 	private void migrateAdapterInPlace(AdapterMigration migration) {
 		String name = migration.name();
 		long supported = migration.supported();
-		long version = requireAdapterVersion(name, supported);
+		long version = adapterVersion(name);
 		if (version == supported) return;
 		AdapterState state = adapterState(name);
 		ACell value = state.get();
 		if (value != null) {
+			requireAdapterVersion(name, supported);
 			ACell migrated = value;
 			for (long v = version; v < supported; v++) migrated = migration.step().apply(v, migrated);
 			if (migrated != value) state.set(migrated);

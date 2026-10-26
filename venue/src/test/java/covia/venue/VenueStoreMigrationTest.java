@@ -74,7 +74,9 @@ class VenueStoreMigrationTest {
 			assertCurrentJobs(server, alice);
 			assertCurrentJobs(server, bob);
 			assertUserIsolation(server, alice, bob);
-			// An old private adapter value moves through the normal lazy migration.
+			// The old private test adapter value moved, and its state reached the
+			// test adapter's version, in the venue's start-up transaction.
+			assertEquals(1, server.getEngine().getVenueState().adapterVersion("test"));
 			assertEquals(Maps.of("origin", "0.9.11"), read(client(server, "11"), "x/test/scratch"));
 			assertNull(read(client(server, "22"), "x/test/scratch"));
 			write(client(server, "11"), "x/test/scratch/updated", Strings.create("after-upgrade"));

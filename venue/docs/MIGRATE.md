@@ -82,7 +82,9 @@ not (`AAdapter.stateVersion`, `AAdapter.migrateState`; see
 [ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). At launch the venue's
 steps and those of the built-in and configured-module adapters run in one
 transaction, before any bootstrap write; an adapter registered later migrates
-in its own transaction. No built-in adapter versions its state yet. `VenueState.peekVersions` reads the stored versions
+in its own transaction. Only the test adapter versions its state so far
+(version 1, with version 0's shape), so every venue and the 0.9.11 fixture run
+adapter migration at start-up. `VenueState.peekVersions` reads the stored versions
 before a start, and a newer version is refused with an
 `UnsupportedVersionException`.
 

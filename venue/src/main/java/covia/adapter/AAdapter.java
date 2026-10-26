@@ -182,8 +182,8 @@ public abstract class AAdapter {
 	 * version its state. Raise it when the stored shape changes, and give the
 	 * step from the previous version in {@link #migrateState}. The venue records
 	 * the version each adapter's state has reached, so a step runs once per
-	 * venue. State recorded at a version above this one is refused with a
-	 * {@link covia.venue.UnsupportedVersionException} when the adapter registers.
+	 * venue. Stored state recorded at a version above this one is refused with a
+	 * {@link covia.venue.UnsupportedVersionException}.
 	 */
 	public long stateVersion() {
 		return 0;
@@ -197,7 +197,7 @@ public abstract class AAdapter {
 	 * venue's own steps, in the one transaction that opens the venue; an adapter
 	 * registered later migrates in its own transaction as it registers. The new
 	 * version is recorded with the steps. A venue holding no state for this
-	 * adapter records the version without calling it.
+	 * adapter records its version, lower or higher, without calling it.
 	 *
 	 * <p>Must be a pure function of its arguments: no I/O, no engine calls, no
 	 * clock, no runtime changes, no configuration. The transaction may run it
