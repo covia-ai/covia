@@ -899,10 +899,14 @@ public class Engine {
 	 * Publishes the complete hosted root and invokes the host store's physical
 	 * durability barrier.
 	 *
-	 * <p>Use sparingly — most writes don't need this. Default eventual
-	 * durability via the background sweep is fine for in-flight job state,
-	 * conversation history, etc. Use {@code flush()} for: job completion,
-	 * audit records, secret rotation, agent TERMINATED, OAuth login.</p>
+	 * <p>Use sparingly — most writes don't need this. The background sweep
+	 * publishes every {@code SWEEP_INTERVAL_MS} (100 ms), so a process crash
+	 * loses at most that much, and forces the store to disk every
+	 * {@code FLUSH_INTERVAL_MS} (10 s), which bounds the loss on a machine crash.
+	 * Commit state in transactions; call {@code flush()} where Covia promises
+	 * durability to someone outside: before acknowledging (an accepted job
+	 * handle, a webhook receipt, a login) and before an external effect that
+	 * must not be repeated after a crash. Each call does its own fsync.</p>
 	 */
 	public void flush() {
 		try {
