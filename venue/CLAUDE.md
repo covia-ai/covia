@@ -276,9 +276,9 @@ java -jar target/covia.jar [config.json]
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
-- `docs/MIGRATE.md` — schema migration requirements (#621): partial, idempotent,
-  pure conversions per part; a complete migrate embedders call, step by step,
-  from their own migration path, with their own steps after Covia's
+- `docs/MIGRATE.md` — venue migration requirements (#621): pure migration
+  functions per lattice component that embedders compose into their own
+  migration; adapter-defined migration rules; optional lazy migration
 - `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
   `docs/GOAL_TREE.md` — agent architecture
 - `docs/READ_API.md` — job-free read surface

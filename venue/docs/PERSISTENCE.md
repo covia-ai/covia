@@ -39,11 +39,10 @@ compatibility rejection and reopen behaviour. Do not bump this integer for an
 ordinary software release. Binaries predating version checks must still be
 excluded operationally from upgraded stores.
 
-[MIGRATE.md](MIGRATE.md) sets out requirements for a complete migrate that an
-embedder calls, step by step, from its own migration path, with its own
-migrations after Covia's (#621). It would change
-this section's contract, under which the version does not mean a bulk rewrite
-has completed.
+[MIGRATE.md](MIGRATE.md) sets out requirements for venue migration (#621):
+pure migration functions that embedders compose into their own migration, with
+migration rules defined by adapters too. The transitional records this section
+permits are its lazy migration.
 
 ## Snapshot implementation contract
 
