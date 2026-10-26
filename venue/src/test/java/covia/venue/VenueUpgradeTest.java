@@ -10,7 +10,6 @@ import java.util.zip.ZipInputStream;
 
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -42,8 +41,6 @@ class VenueUpgradeTest {
 	private static final AString K_HISTORY_VERSION = Strings.create("historyVersion");
 	private static final AString K_KEY_VERSION = Strings.create("keyVersion");
 
-	@TempDir Path temporary;
-
 	/** Every release fixture, oldest name first. */
 	static List<String> fixtures() throws Exception {
 		Path dir = Path.of(VenueUpgradeTest.class.getResource("/migrations").toURI());
@@ -55,9 +52,14 @@ class VenueUpgradeTest {
 		}
 	}
 
+	/**
+	 * Not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
+	 * close, so on Windows the store file stays pinned until the buffers are
+	 * garbage-collected and @TempDir's mandatory cleanup fails the test.
+	 */
 	@TestFactory Stream<DynamicTest> releaseStoresUpgradeToTheCurrentSchema() throws Exception {
 		return fixtures().stream().map(fixture -> DynamicTest.dynamicTest(fixture,
-			() -> upgrade(fixture, Files.createDirectory(temporary.resolve(fixture.replace(".zip", ""))))));
+			() -> upgrade(fixture, TestTemp.dir("upgrade-" + fixture.replace(".zip", "") + "-"))));
 	}
 
 	private static void upgrade(String fixture, Path dir) throws Exception {
