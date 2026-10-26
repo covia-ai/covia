@@ -11,9 +11,12 @@ upstream signing envelope do not.
 `VenueState.initialise(did, adapters)` runs `VenueState`'s ordered migrations,
 then the state migrations of every adapter starting with the venue, before any
 Engine bootstrap writes, adapter activation or recovered work. On launch those
-adapters are the built-ins and every configured module's adapters. It is one
-venue transaction: a refusal or a failing step discards all of it, so a start
-that fails leaves the store exactly as it was. `migrate()` is also available
+adapters are the built-ins and every configured module's adapters, collected by
+`Engine.launch` on a new engine, or by `Engine.prepareLaunch` when a host such
+as `VenueServer` prepares first. It is one venue transaction: a refusal or a
+failing step discards all of it, so a start that fails leaves the store exactly
+as it was. An engine prepared with plain `prepare()` migrates each adapter as it
+registers instead. `migrate()` is also available
 for explicit component transactions. A missing version means
 legacy `0`; explicit `0` follows the same path. Nil, negative and non-integer
 versions are invalid. A version above `VenueState.CURRENT_VERSION` refuses local

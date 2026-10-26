@@ -440,13 +440,22 @@ public class Engine {
 		boolean modulesHandedOver = false;
 		try {
 			checkLaunchCancellation();
-			// Collect the start-up adapters first, so their state migrates in the
-			// venue's start-up transaction.
-			modules = Modules.discoverModules(config);
-			java.util.List<AAdapter> builtIns = builtInAdapters(modules);
-			java.util.List<AAdapter> startup = new java.util.ArrayList<>(builtIns);
-			for (Modules.Discovered module : modules) startup.addAll(module.adapters());
-			prepare(startup);
+			java.util.List<AAdapter> builtIns;
+			synchronized (this) {
+				builtIns = launchBuiltIns;
+				if (launchModules != null) modules = launchModules;
+				launchBuiltIns = null;
+				launchModules = null;
+			}
+			if (builtIns == null) {
+				// Collect the start-up adapters first, so their state migrates in the
+				// venue's start-up transaction.
+				modules = Modules.discoverModules(config);
+				builtIns = builtInAdapters(modules);
+			}
+			// A no-op after prepareLaunch; after plain prepare, these adapters
+			// migrate one by one as they register.
+			prepare(startupAdapters(builtIns, modules));
 			registerBuiltIns(this, builtIns);
 			modulesHandedOver = true;
 			Modules.registerModules(this, modules);
@@ -518,6 +527,45 @@ public class Engine {
 	 */
 	public synchronized Engine prepare() throws IOException {
 		return prepare(java.util.List.of());
+	}
+
+	/** Built-in adapters and opened modules collected by {@link #prepareLaunch()}, for launch to register. */
+	private java.util.List<AAdapter> launchBuiltIns;
+	private java.util.List<Modules.Discovered> launchModules;
+
+	/**
+	 * As {@link #prepare()}, for a host that prepares before calling
+	 * {@link #launch(Function)}, as {@code VenueServer} does. Collects the
+	 * built-in adapters and opens the configured modules now, so their state
+	 * migrates with the venue's own in the start-up transaction; launch then
+	 * registers those same adapters.
+	 *
+	 * @return this engine
+	 * @throws IOException if content storage cannot be initialised
+	 * @throws UnsupportedVersionException if the venue, or a start-up adapter's
+	 *         stored state, is at a newer version than this build; nothing is written
+	 */
+	public synchronized Engine prepareLaunch() throws IOException {
+		if (lifecycle != Lifecycle.NEW) return prepare();
+		java.util.List<Modules.Discovered> modules = Modules.discoverModules(config);
+		java.util.List<AAdapter> builtIns = builtInAdapters(modules);
+		try {
+			prepare(startupAdapters(builtIns, modules));
+		} catch (IOException | RuntimeException | Error failure) {
+			Modules.close(modules, failure);
+			throw failure;
+		}
+		launchBuiltIns = builtIns;
+		launchModules = modules;
+		return this;
+	}
+
+	/** Start-up adapters in registration order: built-ins, then each module's. */
+	private static java.util.List<AAdapter> startupAdapters(java.util.List<AAdapter> builtIns,
+			java.util.List<Modules.Discovered> modules) {
+		java.util.List<AAdapter> startup = new java.util.ArrayList<>(builtIns);
+		for (Modules.Discovered module : modules) startup.addAll(module.adapters());
+		return startup;
 	}
 
 	/**
@@ -937,6 +985,18 @@ public class Engine {
 			}
 		}
 		modules.clear();
+		// Modules opened by prepareLaunch that launch never registered.
+		if (launchModules != null) {
+			for (Modules.Discovered module : launchModules) {
+				try {
+					module.loader().close();
+				} catch (Exception e) {
+					recordCloseFailure(startupFailure, "Failed to close module classloader", e);
+				}
+			}
+			launchModules = null;
+			launchBuiltIns = null;
+		}
 
 		// Persistence sweep is acquired last, so it is stopped first.
 		ScheduledExecutorService sweepExecutor = persistenceSweep;

@@ -173,7 +173,8 @@ public class VenueServer {
 			nodeServer.launch();
 			engine = new Engine(this.config, application, keyPair);
 			engine.setStoreControl(new StoreMaintenance());
-			engine.prepare();
+			// Collects the start-up adapters, so their state migrates with the venue's.
+			engine.prepareLaunch();
 		} catch (Exception e) {
 			// Engine construction is inert; start() owns and rolls back its active
 			// resources. close() remains safe here for NEW or failed engines.
