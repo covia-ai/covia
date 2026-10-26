@@ -83,6 +83,9 @@ public class Scheduler {
 	public static final int MAX_DESCRIPTION_CHARS = ScheduleState.MAX_DESCRIPTION_CHARS;
 	public static final String DESCRIPTION_NOT_STRING = ScheduleState.DESCRIPTION_NOT_STRING;
 	public static final String DESCRIPTION_TOO_LONG = ScheduleState.DESCRIPTION_TOO_LONG;
+	/** Refusal for a capability-scoped agent reaching an event it did not schedule. */
+	public static final String EVENT_ACCESS_DENIED =
+		"A capability-scoped agent manages only the scheduled events it created";
 
 	private final Engine engine;
 	private final LongSupplier clock;
@@ -192,9 +195,12 @@ public class Scheduler {
 		return onTimer(() -> doSchedule(opRef, input, owner, actor, by, proofs, caps, wakeTime, rep, track, desc));
 	}
 
-	/** Cancel a scheduled event by handle. Owner-only. Returns false if absent. */
+	/**
+	 * Cancel a scheduled event by handle. Owner-only; a capability-scoped agent
+	 * cancels only events it scheduled. Returns false if absent.
+	 */
 	public boolean cancel(Blob handle, RequestContext ctx) {
-		return onTimer(() -> doCancel(handle, ctx.getUserDID()));
+		return onTimer(() -> doCancel(handle, ctx));
 	}
 
 	/** Remove queued input and recurring work for an erased account. */
@@ -207,7 +213,8 @@ public class Scheduler {
 	}
 
 	/**
-	 * Fire a scheduled event now, ahead of its time. Owner-only. A one-shot
+	 * Fire a scheduled event now, ahead of its time. Owner-only; a
+	 * capability-scoped agent triggers only events it scheduled. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
 	 * due time. Returns the invocation's result future (run with the event's
 	 * stapled authority). The deterministic test hook as well as a real "run it
@@ -216,7 +223,7 @@ public class Scheduler {
 	public CompletableFuture<ACell> trigger(Blob handle, RequestContext ctx) {
 		Claimed c;
 		try {
-			c = onTimer(() -> doClaim(handle, ctx.getUserDID()));
+			c = onTimer(() -> doClaim(handle, ctx));
 		} catch (RuntimeException ex) {
 			return CompletableFuture.failedFuture(ex);
 		}
@@ -229,7 +236,7 @@ public class Scheduler {
 
 	/**
 	 * The calling user's pending events, time-ordered — including those queued
-	 * by their agents. Each is {@code {handle, op, time, track}} plus, when
+	 * by their agents; a capability-scoped agent sees only its own. Each is {@code {handle, op, time, track}} plus, when
 	 * present, {@code by}, {@code input}, {@code description}, {@code created},
 	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
 	 * the effective tracking that the next fire will use; {@code input} is
@@ -238,7 +245,7 @@ public class Scheduler {
 	 * and are never listed.
 	 */
 	public AVector<ACell> list(RequestContext ctx) {
-		AString caller = ctx.getUserDID();
+		AccessControl access = engine.getAccessControl();
 		Index<Blob, ACell> idx = index();
 		AVector<ACell> out = Vectors.empty();
 		long cnt = idx.count();
@@ -247,7 +254,7 @@ public class Scheduler {
 			if (!(e.getValue() instanceof AMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> rec = (AMap<AString, ACell>) e.getValue();
-			if (caller == null || !caller.equals(rec.get(K_OWNER))) continue;
+			if (!access.canAccessEvent(ctx, rec)) continue;
 			AMap<AString, ACell> item = Maps.of(
 				K_HANDLE, e.getKey(),
 				K_OP, rec.get(K_OP),
@@ -308,18 +315,28 @@ public class Scheduler {
 		return key;
 	}
 
-	private boolean doCancel(Blob handle, AString caller) {
-		boolean cancelled = state().cancel(handle, caller);
+	private boolean doCancel(Blob handle, RequestContext ctx) {
+		Entry e = state().find(handle);
+		if (e != null) requireAccess(e.rec(), ctx);
+		boolean cancelled = state().cancel(handle, ctx.getUserDID());
 		armNext();
 		return cancelled;
 	}
 
-	/** Claim an event for an early fire, owner-checked. Returns null if absent. */
-	private Claimed doClaim(Blob handle, AString caller) {
+	/** Claim an event for an early fire, access-checked. Returns null if absent. */
+	private Claimed doClaim(Blob handle, RequestContext ctx) {
 		Entry e = state().find(handle);
 		if (e == null) return null;
-		requireOwner(e.rec(), caller);
+		requireAccess(e.rec(), ctx);
 		return claim(e.key(), e.rec(), clock.getAsLong(), false);
+	}
+
+	/** Owner-only, and a capability-scoped agent only for an event it scheduled. */
+	private void requireAccess(AMap<AString, ACell> rec, RequestContext ctx) {
+		requireOwner(rec, ctx.getUserDID());
+		if (!engine.getAccessControl().canAccessEvent(ctx, rec)) {
+			throw new AuthException(EVENT_ACCESS_DENIED);
+		}
 	}
 
 	/**

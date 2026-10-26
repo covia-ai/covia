@@ -84,6 +84,8 @@ These changes require Convex 0.8.18.
   like any other secret reference.
 - A capability-scoped agent or delegate reaches only jobs it launched or its
   caps cover; a live job is never returned by id without read access.
+- A capability-scoped agent or delegate lists, cancels and triggers only the
+  scheduled events it created.
 - Naming another user's path (config layer, agent definition, operation, A2A
   binding, `did:…/a/<hash>`) needs read access to it; `Engine.resolvePath`
   checks, `resolvePathUnchecked` is engine-internal.

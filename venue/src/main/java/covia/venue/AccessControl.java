@@ -72,4 +72,25 @@ public class AccessControl {
 		return engine.authorityCovers(ctx, Strings.create(userDID + "/j/" + id.toHexString()), ability);
 	}
 
+	/**
+	 * Checks if the request can see or manage a scheduled event record.
+	 *
+	 * <p>Ownership first: the event's {@code owner} must be the request's user.
+	 * As for jobs, sharing the owner's namespace is proximity, not permission: a
+	 * capability-scoped sub-principal reaches only an event it scheduled itself,
+	 * recorded as the event's {@code actor}. Scheduled events are not a
+	 * capability resource, so no caps extend that reach.</p>
+	 *
+	 * @param ctx Request context with caller identity
+	 * @param event Scheduled event record
+	 * @return true if access is allowed
+	 */
+	public boolean canAccessEvent(RequestContext ctx, AMap<AString, ACell> event) {
+		if (event == null) return false;
+		AString userDID = ctx.getUserDID();
+		if (userDID == null || !userDID.equals(event.get(ScheduleState.K_OWNER))) return false;
+		if (!ctx.isSubPrincipal() || ctx.getCaps() == null) return true;
+		return ctx.getCallerDID().equals(event.get(ScheduleState.K_ACTOR));
+	}
+
 }

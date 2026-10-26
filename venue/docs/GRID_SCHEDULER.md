@@ -198,7 +198,10 @@ catch-up is a future concern).
 
 Every event records the `owner` DID taken from the `RequestContext` at schedule
 time. `cancel`, `trigger`, `inspect`, and `list` are restricted to the owner
-(reusing the venue's access control).
+(reusing the venue's access control). Sharing the owner's namespace is
+proximity, not permission: a capability-scoped agent or delegate reaches only
+the events it scheduled itself (its `actor`). Scheduled events are not a
+capability resource, so no caps extend that reach.
 
 A scheduled event is a *deferred* invocation, and at fire time the owner is not
 present to supply credentials. The venue must **not** fire the operation under
