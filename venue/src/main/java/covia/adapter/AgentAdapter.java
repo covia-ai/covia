@@ -170,6 +170,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_CURRENT          = Strings.intern("current");
 	private static final AString K_SKIP             = Strings.intern("skip");
 	private static final AString K_OLDER            = Strings.intern("older");
+	private static final AString K_FROM_TURN        = Strings.intern("from");
+	private static final AString K_TO_TURN          = Strings.intern("to");
 	private static final AString K_META             = Strings.intern("meta");
 	private static final AString K_FRAMES           = Strings.intern("frames");
 	private static final AString K_TITLE            = Strings.intern("title");
@@ -2400,8 +2402,15 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> session = access.agent().getSession(sid);
 		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
 		if (frame == null) return sessionNotFound();
-		ConversationRenderer.HistoricalView view = ConversationRenderer.historicalBeforeContext(
-			frame, maxTurns, maxChars, archiveDepth, skip);
+		ACell from = RT.getIn(input, K_FROM_TURN), to = RT.getIn(input, K_TO_TURN);
+		if ((from == null) != (to == null)) throw new IllegalArgumentException("from and to go together");
+		if (from != null && (!(from instanceof CVMLong) || !(to instanceof CVMLong))) {
+			throw new IllegalArgumentException("from and to must be turn numbers");
+		}
+		ConversationRenderer.HistoricalView view = (from != null)
+			? ConversationRenderer.historicalTurns(frame, ((CVMLong) from).longValue(), ((CVMLong) to).longValue(),
+				maxTurns, maxChars, skip)
+			: ConversationRenderer.historicalBeforeContext(frame, maxTurns, maxChars, archiveDepth, skip);
 		return Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			K_CURRENT, CVMBool.TRUE,

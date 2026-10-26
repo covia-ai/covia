@@ -41,6 +41,7 @@ public final class Labels {
 		LOADED_SKILL("Loaded skill: %s — unload key: %s", "loaded-skill", false, "name", "unload-key"),
 		PINNED_CONTEXT("Pinned context: %s", "pinned-context", false, "label"),
 		COMPACTED("Compacted: %s turns", "compacted", true, "turns"),
+		COMPACTED_TURNS("Compacted: turns %s–%s", "compacted", true, "from", "to"),
 		ANCESTORS("Ancestor Context", "ancestors", false),
 		TOOL_FAILURE("Tool failure: %s", "tool-failure", false, "name"),
 		PENDING("Pending job results", "pending-results", false),

@@ -1,6 +1,6 @@
 {
 	"name": "Read Past Agent Session",
-	"description": "Reads a bounded, model-safe transcript projection. An agent may omit agentId to inspect itself; an owner or authorised caller supplies agentId. Omit sessionId for the newest visible session. Compacted history is retained and can be opened to a bounded depth; a summary is marked compacted, with the turns it stands for. Set current to read back the session you are in: after a compaction, the turns your summary stands for, when you need their exact words. Page back with skip while older is true. Otherwise the caller's current session, missing sessions and sessions hidden by venue policy all return exactly {found:false}. Tool scratch, diagnostics and unanswered turns are omitted.",
+	"description": "Reads a bounded, model-safe transcript projection. An agent may omit agentId to inspect itself; an owner or authorised caller supplies agentId. Omit sessionId for the newest visible session. Compacted history is retained and can be opened to a bounded depth; a summary is marked compacted, with the turns it stands for. Set current to read back the session you are in: after a compaction, the turns your summary stands for, when you need their exact words; a summary names its turns, so pass them as from and to. Page back with skip while older is true. Otherwise the caller's current session, missing sessions and sessions hidden by venue policy all return exactly {found:false}. Tool scratch, diagnostics and unanswered turns are omitted.",
 	"dateCreated": "2026-08-24T00:00:00Z",
 	"operation": {
 		"adapter": "agent:sessionRead",
@@ -19,6 +19,8 @@
 				"maxChars": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Maximum total content characters. A single oversized turn is truncated. Default 8000." },
 				"archiveDepth": { "type": "integer", "minimum": 0, "maximum": 8, "description": "Compacted archive levels to open before applying the safe bounded projection. Default 0 returns compacted summaries only." },
 				"skip": { "type": "integer", "minimum": 0, "description": "Newest projected messages to pass over, to page further back. Default 0." },
+				"from": { "type": "integer", "minimum": 0, "description": "With current: the first of the turns a compaction summary names (\"Compacted: turns 1020–1075\" is from 1020 to 1075), to read exactly those turns. A summary among them names its own turns, read the same way." },
+				"to": { "type": "integer", "minimum": 0, "description": "With current and from: the last turn to read, included." },
 				"current": { "type": "boolean", "description": "Read the session you are in, from your own execution context: only what is no longer in your context, the turns behind its compaction summaries. Omit sessionId and agentId. Empty when the session was never compacted." }
 			}
 		},

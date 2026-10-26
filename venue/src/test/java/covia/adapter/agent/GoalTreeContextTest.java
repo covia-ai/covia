@@ -410,7 +410,7 @@ public class GoalTreeContextTest {
 		assertEquals("assistant", RT.ensureString(RT.getIn(messages.get(0), "role")).toString());
 		String content = RT.ensureString(RT.getIn(messages.get(0), "content")).toString();
 		assertTrue(content.contains("Compacted"));
-		assertTrue(content.contains("2 turns"));
+		assertTrue(content.contains("turns 0–1"), "a summary names the turns it stands for: " + content);
 		assertTrue(content.contains("Did steps 1 and 2"));
 		// Second is the live turn
 		assertEquals("assistant", RT.ensureString(RT.getIn(messages.get(1), "role")).toString());

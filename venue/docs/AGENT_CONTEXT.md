@@ -260,7 +260,7 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Agent-loaded skill — the path is its unload key | `[Loaded skill: <name> — unload key: <path>]` | `<loaded-skill name="…" unload-key="…">` | `## Loaded skill: <name> — unload key: <path>` |
 | Trusted operator context | `[Pinned context: <label>]` | `<pinned-context label="…">` | `## Pinned context: <label>` |
 | Late system message (§3.2.1) | `[system: …]` | `<system>` | `## System` |
-| Compacted conversation segment (assistant memory) | `[Compacted: <N> turns] <summary>` | `<compacted turns="…">` | `## Compacted: <N> turns` |
+| Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:sessionRead` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |

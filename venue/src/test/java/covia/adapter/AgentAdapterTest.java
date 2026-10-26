@@ -29,6 +29,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.ContextAssembler;
+import covia.adapter.agent.ConversationRenderer;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -7082,6 +7083,24 @@ public class AgentAdapterTest {
 		ACell oldest = readCurrent(scoped, Maps.of("archiveDepth", 1L, "maxTurns", 2L, "skip", 4L));
 		assertEquals(List.of("first question", "first answer"), contents(RT.ensureVector(RT.getIn(oldest, Fields.MESSAGES))));
 		assertEquals(CVMBool.FALSE, RT.getIn(oldest, "older"), "paged back to the start");
+
+		// What the agent sees names the turns its summary stands for, and those numbers read them back.
+		AMap<AString, ACell> root = RT.ensureMap(RT.getIn(agent.getSession(current), Fields.FRAMES, CVMLong.ZERO));
+		String marker = String.valueOf(RT.getIn(ConversationRenderer.renderFull(root).get(0), "content"));
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("^\\[Compacted: turns (\\d+)–(\\d+)\\] Second summary\\.$").matcher(marker);
+		assertTrue(m.matches(), "the marker names its turns: " + marker);
+		AVector<ACell> named = RT.ensureVector(RT.getIn(readCurrent(scoped,
+			Maps.of("from", Long.parseLong(m.group(1)), "to", Long.parseLong(m.group(2)))), Fields.MESSAGES));
+		assertEquals(3, named.count(), "the first summary and the turns after it: " + named);
+		assertEquals(CVMBool.TRUE, RT.getIn(named.get(0), "compacted"));
+		assertEquals(List.of("third question", "third answer"), contents(named.slice(1, 3)));
+		AVector<ACell> first = RT.ensureVector(RT.getIn(readCurrent(scoped,
+			Maps.of("from", RT.getIn(named.get(0), "from"), "to", RT.getIn(named.get(0), "to"))), Fields.MESSAGES));
+		assertEquals(List.of("first question", "first answer", "second question", "second answer"), contents(first),
+			"the summary inside names its own turns, read the same way");
+		Job inContext = engine.jobs().invokeOperation("v/ops/agent/session-read",
+			Maps.of("current", true, "from", 0L, "to", 1000L), scoped);
+		assertThrows(Exception.class, () -> inContext.awaitResult(5000), "turns in the context are not served again");
 
 		assertEquals(before, agent.getRecord(), "reading back changes nothing");
 

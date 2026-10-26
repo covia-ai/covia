@@ -28,6 +28,8 @@ public final class ConversationRenderer {
 
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 	private static final AString K_COMPACTED = Strings.intern("compacted");
+	private static final AString K_FROM = Strings.intern("from");
+	private static final AString K_TO = Strings.intern("to");
 
 	private ConversationRenderer() {}
 
@@ -108,9 +110,14 @@ public final class ConversationRenderer {
 				turnCount += (archivedTurns instanceof CVMLong n) ? n.longValue() : 1;
 				if (firstCompletedUser == null) firstCompletedUser = firstUser(entry);
 				updated = Math.max(updated, latestTimestamp(entry));
-				retain(tail, renderSegment(entry, Labels.BRACKET)
+				AMap<AString, ACell> marked = renderSegment(entry, Labels.BRACKET)
 					.assoc(K_COMPACTED, CVMBool.TRUE)
-					.assoc(GoalTreeContext.K_TURNS, (archivedTurns != null) ? archivedTurns : CVMLong.ONE), keep);
+					.assoc(GoalTreeContext.K_TURNS, (archivedTurns != null) ? archivedTurns : CVMLong.ONE);
+				long[] covered = coveredTurns(entry);
+				if (covered != null) {
+					marked = marked.assoc(K_FROM, CVMLong.create(covered[0])).assoc(K_TO, CVMLong.create(covered[1]));
+				}
+				retain(tail, marked, keep);
 				kept++;
 				continue;
 			}
@@ -194,6 +201,23 @@ public final class ConversationRenderer {
 		return historical(Maps.of(GoalTreeContext.K_CONVERSATION, outside), maxTurns, maxChars, archiveDepth, skip);
 	}
 
+	/**
+	 * The {@link #historical} projection of turns {@code from} to {@code to} of
+	 * a frame's history, both included, numbered as a compaction summary names
+	 * them; they must lie before the frame's current context. A summary among
+	 * them names its own turns, to be read the same way.
+	 */
+	public static HistoricalView historicalTurns(AMap<AString, ACell> frame, long from, long to,
+			int maxTurns, int maxChars, int skip) {
+		ConversationHistory history = ConversationHistory.open(frame);
+		if (from < 0 || to < from) throw new IllegalArgumentException("Turns run from a first to a last, from 0");
+		if (to >= history.contextStart()) {
+			throw new IllegalArgumentException("Turns from " + history.contextStart() + " on are in the current context");
+		}
+		AVector<ACell> entries = history.read(from, to + 1, Integer.MAX_VALUE).entries();
+		return historical(Maps.of(GoalTreeContext.K_CONVERSATION, entries), maxTurns, maxChars, 0, skip);
+	}
+
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> expandArchives(AVector<ACell> entries, int depth) {
 		if (depth <= 0 || entries == null || entries.isEmpty()) return entries;
@@ -263,6 +287,9 @@ public final class ConversationRenderer {
 	}
 
 	public static AVector<ACell> renderFull(AMap<AString, ACell> frame, AString dialect) {
+		// A legacy frame renders as it will once migrated, so that migration never
+		// changes what the model is given: summaries name their turns either way.
+		if (frame != null && !frame.containsKey(GoalTreeContext.K_HISTORY)) frame = GoalTreeContext.migrateFrame(frame);
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(frame);
 		if (conversation == null || conversation.count() == 0) return Vectors.empty();
 
@@ -373,9 +400,28 @@ public final class ConversationRenderer {
 	private static AMap<AString, ACell> renderSegment(ACell entry, AString dialect) {
 		AMap<AString, ACell> segment = (AMap<AString, ACell>) entry;
 		AString summary = RT.ensureString(segment.get(GoalTreeContext.K_SUMMARY));
-		ACell turns = segment.get(GoalTreeContext.K_TURNS);
-		return Labels.message(GoalTreeContext.ROLE_ASSISTANT, dialect, Labels.Kind.COMPACTED,
-			(summary != null) ? summary.toString() : "",
-			(turns != null) ? turns.toString() : "?");
+		String body = (summary != null) ? summary.toString() : "";
+		long[] turns = coveredTurns(segment);
+		if (turns != null) {
+			// The turns it stands for, by their numbers in the session's history,
+			// so a reader can ask for exactly those turns back.
+			return Labels.message(GoalTreeContext.ROLE_ASSISTANT, dialect, Labels.Kind.COMPACTED_TURNS, body,
+				Long.toString(turns[0]), Long.toString(turns[1]));
+		}
+		ACell count = segment.get(GoalTreeContext.K_TURNS);
+		return Labels.message(GoalTreeContext.ROLE_ASSISTANT, dialect, Labels.Kind.COMPACTED, body,
+			(count != null) ? count.toString() : "?");
+	}
+
+	/**
+	 * The first and last turn a summary stands for, numbered by position in
+	 * its frame's history ({@code historyRange} is half-open), or null for a
+	 * legacy segment, which keeps its turns nested instead.
+	 */
+	public static long[] coveredTurns(ACell entry) {
+		AVector<ACell> range = RT.ensureVector(RT.getIn(entry, GoalTreeContext.K_HISTORY_RANGE));
+		if (range == null || range.count() != 2 || !(range.get(0) instanceof CVMLong start)
+				|| !(range.get(1) instanceof CVMLong end) || end.longValue() <= start.longValue()) return null;
+		return new long[] {start.longValue(), end.longValue() - 1};
 	}
 }
