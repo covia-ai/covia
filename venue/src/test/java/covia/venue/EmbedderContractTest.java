@@ -3,11 +3,10 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
-import java.nio.file.Path;
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -42,7 +41,14 @@ class EmbedderContractTest {
 	static final ACell[] RECORD_PATH = WorkspaceRoot.parseStringPath("w/embedder/record");
 	static final ACell RECORD = Maps.of("name", "embedded", "count", 3);
 
-	@TempDir Path dir;
+	/**
+	 * Not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
+	 * close, so on Windows the store file stays pinned until the buffers are
+	 * garbage-collected and @TempDir's mandatory cleanup fails the test.
+	 */
+	static File storeFile(String name) throws IOException {
+		return TestTemp.dir("embedder-contract").resolve(name).toFile();
+	}
 
 	/** An embedder's own adapter, keeping per-user state as GetMine's and Brightside's do. */
 	static final class EmbedderAdapter extends AAdapter {
@@ -67,7 +73,7 @@ class EmbedderContractTest {
 	}
 
 	@Test void embedderRunsAVenueOnItsOwnStoreAndReopensIt() throws Exception {
-		File file = dir.resolve("embedder.etch").toFile();
+		File file = storeFile("embedder.etch");
 		EtchStore store = EtchStore.create(file);
 		assertTrue(VenueState.peekVenueKeys(store).isEmpty(), "a fresh store holds no venue");
 		AccountKey venueKey;
@@ -145,7 +151,7 @@ class EmbedderContractTest {
 	}
 
 	@Test void anEngineOnAnEmbeddersHostLeavesClosingItToTheEmbedder() throws Exception {
-		try (EtchStore store = EtchStore.create(dir.resolve("own-host.etch").toFile())) {
+		try (EtchStore store = EtchStore.create(storeFile("own-host.etch"))) {
 			AKeyPair key = AKeyPair.create(Blob.fromHex(SEED));
 			CoviaApplication application = CoviaApplication.open(store, key);
 			var host = application.host();

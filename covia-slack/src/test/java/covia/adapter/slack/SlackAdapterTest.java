@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static covia.adapter.slack.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -14,7 +13,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
@@ -28,7 +26,6 @@ import covia.venue.*;
 import covia.venue.server.VenueServer;
 
 class SlackAdapterTest {
-	@TempDir Path temp;
 	static AMap<AString, ACell> spec() {
 		return Maps.of("token", "s/TOKEN", "signingSecret", "s/SIGNING", "user", OWNER, "appId", "A123", "teamId", "T123",
 			"botUserId", "UBOT", "allow", Vectors.of("UALICE"), "allowChannels", Vectors.of("C123", "D123"),
@@ -240,7 +237,7 @@ class SlackAdapterTest {
 	}
 	@Test void restartRecoversPendingAndDoesNotReplayUncertainSends() throws Exception {
 		try (FakeAPI api = new FakeAPI()) {
-			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, temp.resolve("slack.etch").toString(),
+			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, storeDir("slack-restart").resolve("slack.etch").toString(),
 				Config.SEED, AKeyPair.createSeeded(9132).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
 			SlackAdapter firstAdapter = new SlackAdapter(); firstAdapter.retryMillis = 25;

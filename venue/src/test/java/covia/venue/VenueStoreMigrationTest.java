@@ -12,7 +12,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipInputStream;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -32,12 +31,15 @@ import covia.venue.server.VenueServer;
 @DurabilityTest
 class VenueStoreMigrationTest {
 
-	@TempDir Path temporary;
-
-	/** Optional retained output for manual testing; never reopen or overwrite an existing run. */
+	/**
+	 * Optional retained output for manual testing; never reopen or overwrite an existing run.
+	 * Otherwise not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
+	 * close, so on Windows the store file stays pinned until the buffers are
+	 * garbage-collected and @TempDir's mandatory cleanup fails the test.
+	 */
 	private Path runDirectory() throws IOException {
 		String output = System.getProperty("covia.migration.output");
-		return output == null ? temporary : Files.createDirectory(Path.of(output).toAbsolutePath());
+		return output == null ? TestTemp.dir("store-migration") : Files.createDirectory(Path.of(output).toAbsolutePath());
 	}
 
 	private static AMap<AString, ACell> unpack(Path directory) throws Exception {
@@ -123,7 +125,6 @@ class VenueStoreMigrationTest {
 		// Ready for an interactive launch; all keys/data are deliberately public.
 		AMap<AString, ACell> live = config(store).assoc(Strings.create("port"), CVMLong.create(18080));
 		Files.writeString(directory.resolve("venue.json"), JSON.toString(Maps.of("venues", Vectors.of(live))), StandardCharsets.UTF_8);
-		System.out.println("MIGRATION API REHEARSAL OK " + directory);
 	}
 
 	private static void assertCurrentJobs(VenueServer server, ACell user) throws Exception {

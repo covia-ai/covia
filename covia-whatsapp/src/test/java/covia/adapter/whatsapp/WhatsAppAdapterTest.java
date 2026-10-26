@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static covia.adapter.whatsapp.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -17,7 +16,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
@@ -32,7 +30,6 @@ import covia.venue.*;
 import covia.venue.server.VenueServer;
 
 class WhatsAppAdapterTest {
-	@TempDir Path temp;
 	static AMap<AString, ACell> spec() {
 		return Maps.of("token", "s/TOKEN", "appSecret", "s/SIGNING", "verifyToken", "s/VERIFY", "user", OWNER,
 			"phoneNumberId", "12345", "businessAccountId", "67890", "apiVersion", "v25.0", "operation", "v/test/ops/echo",
@@ -251,7 +248,7 @@ class WhatsAppAdapterTest {
 	}
 	@Test void restartDoesNotReplayFailedDelivery() throws Exception {
 		try (FakeAPI api = new FakeAPI()) {
-			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, temp.resolve("failed.etch").toString(),
+			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, storeDir("whatsapp-failed").resolve("failed.etch").toString(),
 				Config.SEED, AKeyPair.createSeeded(9133).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", agentSpec("durable-agent")))));
 			var firstAgents = new FlakyAgents(Integer.MAX_VALUE);
@@ -389,7 +386,7 @@ class WhatsAppAdapterTest {
 	}
 	@Test void durablePendingRecoversAfterRestartButStartedDoesNotReplay() throws Exception {
 		try (FakeAPI api = new FakeAPI()) {
-			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, temp.resolve("whatsapp.etch").toString(),
+			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, storeDir("whatsapp-restart").resolve("whatsapp.etch").toString(),
 				Config.SEED, AKeyPair.createSeeded(9131).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
 			WhatsAppAdapter firstAdapter = new WhatsAppAdapter(); firstAdapter.retryMillis = 25;

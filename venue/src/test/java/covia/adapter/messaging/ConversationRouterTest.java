@@ -225,7 +225,10 @@ class ConversationRouterTest {
 		} finally { release.countDown(); engine.close(); }
 	}
 
-	@Test void deliveredInputSurvivesPersistentRestartBeforeAgentWake(@org.junit.jupiter.api.io.TempDir java.nio.file.Path temp) throws Exception {
+	@Test void deliveredInputSurvivesPersistentRestartBeforeAgentWake() throws Exception {
+		// TestTemp, not @TempDir: on Java 21 (no FFM mapper) a closed store's file
+		// stays mapped until GC, and Windows will not delete a mapped file.
+		var temp = covia.venue.TestTemp.dir("router-intake");
 		convex.core.data.AMap<convex.core.data.AString, ACell> config = Maps.of(covia.venue.Config.PORT, 0, covia.venue.Config.BIND_ADDRESS, "127.0.0.1",
 			covia.venue.Config.STORE, temp.resolve("intake.etch").toString(),
 			covia.venue.Config.SEED, convex.core.crypto.AKeyPair.createSeeded(74123).getSeed().toHexString());

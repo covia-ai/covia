@@ -1,9 +1,13 @@
 package covia.adapter.whatsapp;
 
 import static org.junit.jupiter.api.Assertions.*;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -24,6 +28,23 @@ final class TestSupport {
   static final AString OTHER = Strings.create("did:test:whatsapp:other");
   static final String TOKEN = "test-outbound-token", SECRET = "test-signing-secret";
   static final String NAME = "whatsapp";
+  /**
+   * A directory for a venue store, deleted at JVM exit rather than by JUnit, as
+   * venue's TestTemp: on Java 21 (no FFM mapper) a closed store's file stays
+   * mapped until GC, and Windows will not delete a mapped file, so @TempDir's
+   * mandatory cleanup would fail the test.
+   */
+  static Path storeDir(String prefix) throws IOException {
+    Path dir = Files.createTempDirectory(prefix);
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      try (var walk = Files.walk(dir)) {
+        walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+      } catch (IOException ignored) {
+        // best-effort at exit
+      }
+    }));
+    return dir;
+  }
   static ACell run(Engine engine, AString owner, String op, ACell input) throws Exception {
     return engine.jobs().invokeOperation(op, input, RequestContext.of(owner)).awaitResult(10000);
   }
