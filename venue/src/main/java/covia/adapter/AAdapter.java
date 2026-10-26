@@ -222,6 +222,36 @@ public abstract class AAdapter {
 		return new covia.venue.VenueState.AdapterMigration(getName(), stateVersion(), this::migrateState);
 	}
 
+	public static final String STATES_FOR_EVERY_VERSION = "Adapter '%s' is at state version %d: give its state at versions 0 to %d";
+	public static final String STEPS_MISS_CURRENT = "Adapter '%s' state from version %d does not reach its state at version %d";
+	public static final String STEP_FAILED = "Adapter '%s' state from version %d failed to migrate: %s";
+
+	/**
+	 * Checks this adapter's migration rules against its state at every version,
+	 * oldest first, for the adapter's own tests: from each older version, the
+	 * steps must reach the state given for {@link #stateVersion()}. An adapter
+	 * that raises its version without a state for the new version fails the
+	 * check, so its migration cannot go untested.
+	 *
+	 * @param statesByVersion this adapter's state at versions 0 to {@link #stateVersion()}
+	 * @return null when the rules hold; otherwise the reason they do not
+	 */
+	public final String checkStateMigration(java.util.List<? extends ACell> statesByVersion) {
+		long version = stateVersion();
+		if (statesByVersion.size() != version + 1) return STATES_FOR_EVERY_VERSION.formatted(getName(), version, version);
+		ACell current = statesByVersion.get((int) version);
+		for (int from = 0; from < version; from++) {
+			ACell state = statesByVersion.get(from);
+			try {
+				for (long v = from; v < version; v++) state = migrateState(v, state);
+			} catch (RuntimeException e) {
+				return STEP_FAILED.formatted(getName(), from, e.getMessage());
+			}
+			if (!java.util.Objects.equals(current, state)) return STEPS_MISS_CURRENT.formatted(getName(), from, version);
+		}
+		return null;
+	}
+
 	/**
 	 * Remove user-associated durable state in the venue deletion transaction.
 	 * Use only the supplied draft component: this callback may be retried and

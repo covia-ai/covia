@@ -277,6 +277,19 @@ class AdapterStateMigrationTest {
 		}
 	}
 
+	@Test void anAdapterChecksItsOwnMigrationRules() {
+		ACell v0 = Vectors.of("a");
+		ACell v1 = Maps.of("items", v0);
+		ACell v2 = RT.ensureMap(v1).assoc(SCHEMA, CVMLong.create(2));
+		Versioned adapter = new Versioned(NAME, 2);
+		assertNull(adapter.checkStateMigration(List.of(v0, v1, v2)));
+		assertEquals(AAdapter.STATES_FOR_EVERY_VERSION.formatted(NAME, 2L, 2L), adapter.checkStateMigration(List.of(v0, v1)));
+		assertEquals(AAdapter.STEPS_MISS_CURRENT.formatted(NAME, 0, 2L), adapter.checkStateMigration(List.of(v0, v1, v1)));
+		assertEquals(AAdapter.STEP_FAILED.formatted(NAME, 0, AAdapter.NO_STATE_MIGRATION.formatted(NAME, 2L)),
+			new Versioned(NAME, 3).checkStateMigration(List.of(v0, v1, v2, v2)));
+		assertNull(new Versioned("unversioned", 0).checkStateMigration(List.of(v0)), "an unversioned adapter gives its one shape");
+	}
+
 	@Test void registrationNeedsAPreparedEngineAndAValidVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		Engine unprepared = new Engine(Maps.empty(), CoviaApplication.create(key), key);

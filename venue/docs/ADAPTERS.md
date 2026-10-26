@@ -612,6 +612,17 @@ Version it with `stateVersion` and `migrateState`
 step: older state converts, a current state comes back as the same cell, and an
 unknown shape is refused.
 
+Every adapter that keeps state has its own migration tests, fast and in memory:
+- Keep the adapter's state at every version, oldest first, and assert
+  `assertNull(adapter.checkStateMigration(states))`. It fails when the adapter
+  raises its version without a state for the new one, or when the steps from
+  an older version miss the current state.
+- Plant the state a release wrote, where that release wrote it, register the
+  adapter on a prepared in-memory engine, and read the state back through the
+  adapter's own paths, deletion hook included. Each messaging module's
+  `<Provider>MigrationTest` does this for 0.9.11's layout. No store, listener
+  or bot is needed.
+
 ## External agent interactions
 
 `covia.adapter.remote.ARemoteAgentAdapter<I extends RemoteInteraction>` is the

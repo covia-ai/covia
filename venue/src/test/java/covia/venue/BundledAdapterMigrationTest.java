@@ -64,15 +64,7 @@ class BundledAdapterMigrationTest {
 				assertFalse(STATES.containsKey(name), name + " no longer versions its state: remove its STATES entry");
 				continue;
 			}
-			List<ACell> states = STATES.get(name);
-			assertNotNull(states, name + " is at state version " + version + ": add its state at every version to STATES");
-			assertEquals(version + 1, states.size(), name + " is at state version " + version + ": STATES needs versions 0 to " + version);
-			// From every older version, the steps reach the current state.
-			for (int from = 0; from < version; from++) {
-				ACell state = states.get(from);
-				for (long v = from; v < version; v++) state = adapter.migrateState(v, state);
-				assertEquals(states.get((int) version), state, name + " from version " + from);
-			}
+			assertNull(adapter.checkStateMigration(STATES.getOrDefault(name, List.of())), "add its states to STATES");
 		}
 		assertTrue(names.containsAll(STATES.keySet()), "STATES names an adapter no longer bundled: " + STATES.keySet());
 	}
