@@ -27,6 +27,7 @@ import covia.venue.AgentState;
 public final class ConversationRenderer {
 
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
+	private static final AString K_COMPACTED = Strings.intern("compacted");
 
 	private ConversationRenderer() {}
 
@@ -39,7 +40,12 @@ public final class ConversationRenderer {
 	 * system authority merely because the venue persisted it.
 	 */
 	public record HistoricalView(AVector<ACell> messages, AString firstUserContent,
-			long updated, long turnCount, boolean truncated) {}
+			long updated, long turnCount, boolean truncated, boolean older) {
+		public HistoricalView(AVector<ACell> messages, AString firstUserContent,
+				long updated, long turnCount, boolean truncated) {
+			this(messages, firstUserContent, updated, turnCount, truncated, false);
+		}
+	}
 
 	/**
 	 * Builds the historical projection while retaining at most {@code maxTurns}
@@ -55,9 +61,22 @@ public final class ConversationRenderer {
 	/** Historical projection with bounded recursive expansion of compacted
 	 * archives. Depth zero shows summaries; each higher level opens one nested
 	 * {@code items} vector before applying the same safe turn projection. */
-	@SuppressWarnings("unchecked")
 	public static HistoricalView historical(AMap<AString, ACell> frame,
 			int maxTurns, int maxChars, int archiveDepth) {
+		return historical(frame, maxTurns, maxChars, archiveDepth, 0);
+	}
+
+	/**
+	 * As above, a page further back: the newest {@code skip} projected messages
+	 * are passed over, and {@link HistoricalView#older} says whether messages
+	 * older than the page remain, so a reader can page back to the start. A
+	 * compacted summary in the projection is marked {@code compacted} with the
+	 * {@code turns} it stands for, so it is never taken for something said.
+	 */
+	@SuppressWarnings("unchecked")
+	public static HistoricalView historical(AMap<AString, ACell> frame,
+			int maxTurns, int maxChars, int archiveDepth, int skip) {
+		if (skip < 0) throw new IllegalArgumentException("Historical view skip must be non-negative");
 		if (maxTurns < 0 || maxChars < 0) {
 			throw new IllegalArgumentException("Historical view limits must be non-negative");
 		}
@@ -70,6 +89,9 @@ public final class ConversationRenderer {
 		}
 
 		conversation = expandArchives(conversation, archiveDepth);
+		// The page plus everything newer than it; the newer part is dropped below.
+		int keep = (maxTurns == 0) ? 0 : (int) Math.min((long) maxTurns + skip, Integer.MAX_VALUE);
+		long kept = 0;
 		ArrayDeque<AMap<AString, ACell>> tail = new ArrayDeque<>();
 		ArrayDeque<AMap<AString, ACell>> pending = new ArrayDeque<>();
 		long pendingCount = 0;
@@ -86,7 +108,10 @@ public final class ConversationRenderer {
 				turnCount += (archivedTurns instanceof CVMLong n) ? n.longValue() : 1;
 				if (firstCompletedUser == null) firstCompletedUser = firstUser(entry);
 				updated = Math.max(updated, latestTimestamp(entry));
-				retain(tail, renderSegment(entry, Labels.BRACKET), maxTurns);
+				retain(tail, renderSegment(entry, Labels.BRACKET)
+					.assoc(K_COMPACTED, CVMBool.TRUE)
+					.assoc(GoalTreeContext.K_TURNS, (archivedTurns != null) ? archivedTurns : CVMLong.ONE), keep);
+				kept++;
 				continue;
 			}
 			if (!GoalTreeContext.isLiveTurn(entry)) continue;
@@ -98,7 +123,7 @@ public final class ConversationRenderer {
 				if (pendingFirst == null) pendingFirst = firstWords(turn, message);
 				pendingCount++;
 				pendingUpdated = Math.max(pendingUpdated, timestamp(turn));
-				retain(pending, message, maxTurns);
+				retain(pending, message, keep);
 				continue;
 			}
 			if (!GoalTreeContext.ROLE_ASSISTANT.equals(role) || hasToolCalls(turn)
@@ -107,9 +132,11 @@ public final class ConversationRenderer {
 			if (firstCompletedUser == null) firstCompletedUser = pendingFirst;
 			turnCount += pendingCount + 1;
 			for (AMap<AString, ACell> message : pending) {
-				retain(tail, message, maxTurns);
+				retain(tail, message, keep);
+				kept++;
 			}
-			retain(tail, toHistoricalMessage(turn), maxTurns);
+			retain(tail, toHistoricalMessage(turn), keep);
+			kept++;
 			updated = Math.max(updated, Math.max(pendingUpdated, timestamp(turn)));
 			pending.clear();
 			pendingCount = 0;
@@ -117,7 +144,9 @@ public final class ConversationRenderer {
 			pendingFirst = null;
 		}
 
-		boolean truncated = turnCount > tail.size();
+		boolean older = keep > 0 && kept > keep;
+		for (int i = 0; i < skip && !tail.isEmpty(); i++) tail.removeLast();
+		boolean truncated = older || (skip == 0 && turnCount > tail.size());
 		ArrayDeque<AMap<AString, ACell>> bounded = new ArrayDeque<>();
 		int remaining = maxChars;
 		Object[] selected = tail.toArray();
@@ -143,7 +172,26 @@ public final class ConversationRenderer {
 
 		AVector<ACell> messages = Vectors.empty();
 		for (AMap<AString, ACell> message : bounded) messages = messages.conj(message);
-		return new HistoricalView(messages, firstCompletedUser, updated, turnCount, truncated);
+		return new HistoricalView(messages, firstCompletedUser, updated, turnCount, truncated, older);
+	}
+
+	/**
+	 * The {@link #historical} projection of what a frame holds outside its
+	 * current context: the turns its compaction summaries stand for, at their
+	 * positions, earlier summaries among them. The entries in the context are
+	 * left out, so a frame never compacted projects nothing.
+	 */
+	public static HistoricalView historicalBeforeContext(AMap<AString, ACell> frame,
+			int maxTurns, int maxChars, int archiveDepth, int skip) {
+		AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
+		AVector<ACell> outside = Vectors.empty();
+		for (long i = 0; conversation != null && i < conversation.count(); i++) {
+			ACell entry = conversation.get(i);
+			if (!GoalTreeContext.isSegment(entry)) continue;
+			AVector<ACell> items = RT.ensureVector(RT.getIn(entry, GoalTreeContext.K_ITEMS));
+			if (items != null) outside = outside.concat(items);
+		}
+		return historical(Maps.of(GoalTreeContext.K_CONVERSATION, outside), maxTurns, maxChars, archiveDepth, skip);
 	}
 
 	@SuppressWarnings("unchecked")

@@ -335,7 +335,7 @@ historical execution checkpoints are not required.
 | Op | Purpose |
 |----|---------|
 | `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
-| `agent:sessionRead` | Read a bounded safe transcript projection; `archiveDepth` optionally opens nested compaction records before applying the bounds |
+| `agent:sessionRead` | Read a bounded safe transcript projection; `archiveDepth` optionally opens nested compaction records before applying the bounds; `current` reads back the caller's own session outside its context |
 | `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
 | `agent:compactSession` | Select owner-supplied assistant memory for an idle session while retaining the covered history |
 | `agent:reloadContext` | Clear an idle session's materialised provider prefix so the next inference rebuilds current prompt/tools/pinned context; conversation and loads stay exact |
@@ -343,7 +343,9 @@ historical execution checkpoints are not required.
 
 The retrospective operations have two explicit modes. From an agent execution context, omitting `agentId` self-scopes the call and requires only invocation capability for the exact operation asset. An owner or other authorised caller supplies `agentId`; normal `crud/read` resolution for `g/<agentId>` then applies. Neither mode confers generic `g/` read access. The in-scope caller session is excluded. Missing, current, unfinished and policy-vetoed sessions all produce exactly `{"found":false}` from `agent:sessionRead`, avoiding an existence oracle.
 
-The projection contains completed user/final-assistant turns and, by default, compacted summaries. `archiveDepth` opens at most that many nested compaction records and then applies the same safe projection and response bounds. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are never exposed by this operation. Both turn count and total content are bounded, including a single oversized turn.
+The projection contains completed user/final-assistant turns and, by default, compacted summaries, each marked `compacted` with the `turns` it stands for. `archiveDepth` opens at most that many nested compaction records and then applies the same safe projection and response bounds. `skip` passes over that many of the newest projected messages, and `older` says whether messages remain before the page, so a reader can page back to the start. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are never exposed by this operation. Both turn count and total content are bounded, including a single oversized turn.
+
+**Reading back the current session.** With `current: true`, from its own execution context, an agent reads the session it is in, but only what is no longer in its context: the turns its compaction summaries stand for, earlier summaries among them (opened with `archiveDepth`). Entries in the active context are never served again, and a session never compacted returns no messages. This is how an agent recovers the exact words its own summary paraphrases. It is the current-session part of [#597](https://github.com/covia-ai/covia/issues/597); search, time-based navigation and one projection shared with owners remain open there.
 
 `agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. Versioned frames append a summary with `historyRange` coverage and advance `contextStart`; legacy frames retain the replaced vector under `items`. Provenance is stamped on the summary, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the summary normally. The in-band `compact` harness tool applies the same transform from either built-in LLM runtime.
 

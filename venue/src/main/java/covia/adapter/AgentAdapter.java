@@ -167,6 +167,9 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_MAX_CHARS        = Strings.intern("maxChars");
 	private static final AString K_ARCHIVE_DEPTH    = Strings.intern("archiveDepth");
 	private static final AString K_TRUNCATED        = Strings.intern("truncated");
+	private static final AString K_CURRENT          = Strings.intern("current");
+	private static final AString K_SKIP             = Strings.intern("skip");
+	private static final AString K_OLDER            = Strings.intern("older");
 	private static final AString K_META             = Strings.intern("meta");
 	private static final AString K_FRAMES           = Strings.intern("frames");
 	private static final AString K_TITLE            = Strings.intern("title");
@@ -2340,6 +2343,12 @@ public class AgentAdapter extends AAdapter {
 		int maxChars = boundedInt(input, K_MAX_CHARS,
 			DEFAULT_HISTORY_CHARS, 1, MAX_HISTORY_CHARS);
 		int archiveDepth = boundedInt(input, K_ARCHIVE_DEPTH, 0, 0, MAX_ARCHIVE_DEPTH);
+		int skip = boundedInt(input, K_SKIP, 0, 0, Integer.MAX_VALUE);
+		ACell current = RT.getIn(input, K_CURRENT);
+		if (current != null && !(current instanceof CVMBool)) {
+			throw new IllegalArgumentException("current must be a boolean");
+		}
+		if (CVMBool.TRUE.equals(current)) return doCurrentSessionRead(ctx, access, input, maxTurns, maxChars, archiveDepth, skip);
 
 		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 		SessionSummary summary;
@@ -2358,7 +2367,7 @@ public class AgentAdapter extends AAdapter {
 
 		AMap<AString, ACell> frame = rootFrame(summary.session());
 		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
-			frame, maxTurns, maxChars, archiveDepth);
+			frame, maxTurns, maxChars, archiveDepth, skip);
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
@@ -2366,9 +2375,41 @@ public class AgentAdapter extends AAdapter {
 			Fields.UPDATED, CVMLong.create(summary.updated()),
 			K_TURN_COUNT, CVMLong.create(summary.turnCount()),
 			Fields.MESSAGES, view.messages(),
-			K_TRUNCATED, CVMBool.create(view.truncated()));
+			K_TRUNCATED, CVMBool.create(view.truncated()),
+			K_OLDER, CVMBool.create(view.older()));
 		if (summary.title() != null) result = result.assoc(K_TITLE, summary.title());
 		return result;
+	}
+
+	/**
+	 * The caller's own current session, as far as it is no longer in the
+	 * caller's context: the turns its compaction summaries stand for. Live
+	 * turns are never served again; a session never compacted has nothing to
+	 * read. Same safe projection, bounds and paging as any other session.
+	 */
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> doCurrentSessionRead(RequestContext ctx, SessionAccess access, ACell input,
+			int maxTurns, int maxChars, int archiveDepth, int skip) {
+		Blob sid = ctx.getSessionId();
+		if (RT.getIn(input, Fields.SESSION_ID) != null) {
+			throw new IllegalArgumentException("current reads the caller's own session; omit sessionId");
+		}
+		if (sid == null || access.excludedSession() == null || !sid.equals(access.excludedSession())) {
+			throw new IllegalArgumentException("current is only for an agent reading the session it is in");
+		}
+		AMap<AString, ACell> session = access.agent().getSession(sid);
+		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
+		if (frame == null) return sessionNotFound();
+		ConversationRenderer.HistoricalView view = ConversationRenderer.historicalBeforeContext(
+			frame, maxTurns, maxChars, archiveDepth, skip);
+		return Maps.of(
+			K_FOUND, CVMBool.TRUE,
+			K_CURRENT, CVMBool.TRUE,
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			K_TURN_COUNT, CVMLong.create(view.turnCount()),
+			Fields.MESSAGES, view.messages(),
+			K_TRUNCATED, CVMBool.create(view.truncated()),
+			K_OLDER, CVMBool.create(view.older()));
 	}
 
 	private SessionAccess resolveSessionAccess(RequestContext ctx, ACell input) {

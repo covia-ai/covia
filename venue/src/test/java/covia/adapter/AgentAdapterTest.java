@@ -2,6 +2,8 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 
@@ -7026,6 +7028,78 @@ public class AgentAdapterTest {
 				assertEquals(visible.toHexString(),
 					RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
 		}
+	}
+
+	@SuppressWarnings("unchecked")
+	@Test
+	public void testAnAgentReadsBackTheCompactedPartOfTheSessionItIsIn() {
+		AString agentId = Strings.create("own-history-agent");
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(agentId, Maps.empty(), null);
+		Blob current = Blob.fromHex("30000000000000000000000000000001");
+		Blob plain = Blob.fromHex("30000000000000000000000000000002");
+		agent.ensureSession(current, Strings.create("test-caller"));
+		assertTrue(agent.session(current).updateFrames(null, frames -> {
+			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+			root = GoalTreeContext.appendTurns(root, Vectors.of(turn("user", "first question", 100),
+				turn("assistant", "first answer", 110), turn("user", "second question", 120),
+				turn("assistant", "second answer", 130)));
+			root = GoalTreeContext.compactFrame(root, "First summary.");
+			root = GoalTreeContext.appendTurns(root, Vectors.of(turn("user", "third question", 140),
+				turn("assistant", "third answer", 150)));
+			root = GoalTreeContext.compactFrame(root, "Second summary.");
+			root = GoalTreeContext.appendTurns(root, Vectors.of(turn("user", "live question", 160),
+				turn("assistant", "live answer", 170)));
+			return frames.assoc(0, root);
+		}));
+		setConversation(agent, plain, turn("user", "never compacted", 100), turn("assistant", "fine", 110));
+
+		RequestContext scoped = RequestContext.ofAgent(ALICE_DID, agentId)
+			.withSessionId(current)
+			.withCaps(Vectors.of(
+				Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke"))));
+		AMap<AString, ACell> before = agent.getRecord();
+		assertEquals(Maps.of("found", false), readPastSession(scoped, current),
+			"without current, the session in context stays unread");
+
+		ACell read = readCurrent(scoped, Maps.empty());
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "current"));
+		AVector<ACell> messages = RT.ensureVector(RT.getIn(read, Fields.MESSAGES));
+		assertEquals(3, messages.count(), "the second summary's turns, the live ones left out: " + messages);
+		assertEquals(CVMBool.TRUE, RT.getIn(messages.get(0), "compacted"), "a summary is never taken for something said");
+		assertEquals(CVMLong.create(4), RT.getIn(messages.get(0), "turns"));
+		assertEquals(List.of("third question", "third answer"), contents(messages.slice(1, 3)));
+		assertNull(RT.getIn(messages.get(1), "compacted"));
+
+		AVector<ACell> opened = RT.ensureVector(RT.getIn(readCurrent(scoped, Maps.of("archiveDepth", 1L)), Fields.MESSAGES));
+		assertEquals(List.of("first question", "first answer", "second question", "second answer",
+			"third question", "third answer"), contents(opened), "every turn behind both summaries");
+
+		ACell newest = readCurrent(scoped, Maps.of("archiveDepth", 1L, "maxTurns", 2L));
+		assertEquals(List.of("third question", "third answer"), contents(RT.ensureVector(RT.getIn(newest, Fields.MESSAGES))));
+		assertEquals(CVMBool.TRUE, RT.getIn(newest, "older"));
+		ACell oldest = readCurrent(scoped, Maps.of("archiveDepth", 1L, "maxTurns", 2L, "skip", 4L));
+		assertEquals(List.of("first question", "first answer"), contents(RT.ensureVector(RT.getIn(oldest, Fields.MESSAGES))));
+		assertEquals(CVMBool.FALSE, RT.getIn(oldest, "older"), "paged back to the start");
+
+		assertEquals(before, agent.getRecord(), "reading back changes nothing");
+
+		RequestContext inPlain = RequestContext.ofAgent(ALICE_DID, agentId).withSessionId(plain)
+			.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke"))));
+		assertEquals(0, RT.ensureVector(RT.getIn(readCurrent(inPlain, Maps.empty()), Fields.MESSAGES)).count(),
+			"a session never compacted has nothing outside its context");
+	}
+
+	private ACell readCurrent(RequestContext ctx, AMap<AString, ACell> input) {
+		return engine.jobs().invokeOperation("v/ops/agent/session-read",
+			input.assoc(Strings.create("current"), CVMBool.TRUE), ctx).awaitResult(5000);
+	}
+
+	private static List<String> contents(AVector<ACell> messages) {
+		List<String> out = new ArrayList<>();
+		for (ACell m : messages) out.add(String.valueOf(RT.getIn(m, "content")));
+		return out;
 	}
 
 	private ACell readPastSession(RequestContext ctx, Blob sid) {
