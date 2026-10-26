@@ -25,6 +25,7 @@ These changes require Convex 0.8.18.
 - Typed refusal of a newer venue version; read stored versions before a start (#621).
 - Adapters version and migrate their own state: `AAdapter.stateVersion`, `migrateState` (#621).
 - Start-up migration is one venue transaction, built-in and module adapters included (#621).
+- Migration is a call: `VenueState.migrate` on a store before launch, `Engine.migrate` on a running venue (#621).
 - `AdapterState` replaces `AdapterWorkspace` for private `:adapters/<name>`
   storage. Embedders must replace removed `engine.adapterWorkspace(...)` calls;
   user cleanup belongs in adapter deletion hooks, with external cleanup after commit.
@@ -44,6 +45,9 @@ These changes require Convex 0.8.18.
 ### Migration
 
 - Embedders upgrading from 0.9.x: see `venue/docs/EMBEDDING.md`.
+- No rollback below 0.10.0: 0.9.x cannot read upgraded values (DLFS modification
+  times, versioned secrets, agent history) and has no version check. Keep the
+  state from before the upgrade.
 - External login (#298): replace `auth.loginRedirectOrigins` with exact
   `auth.loginRedirectUris`; configure Microsoft `tenantId`; use HTTPS except on
   loopback. Frontend redirects now carry a single-use code exchanged with PKCE,
