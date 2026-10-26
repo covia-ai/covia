@@ -8,6 +8,22 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `agent:sessionRead` with `current: true` reads back the caller's own session, but
+  only what is outside its context: the turns behind its compaction summaries (#597).
+  `from`/`to` read exactly the turns a summary names; `skip` and `older` page back.
+- `GoalTreeContext.turnText`: the words of a turn, from a string, a structured
+  message's `text` or an agent request's `task`.
+
+### Changed
+
+- A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
+  it stands for by position in the frame's history. A legacy frame renders as it will
+  once migrated, so migration still leaves the model's input unchanged.
+- Retrospective projections mark a summary `compacted`, with the turns it stands for.
+- Session titles are the words of the first message rather than its JSON.
+
 ## [0.10.0] - 2026-10-26
 
 ### Convex 0.8.18 lattice applications
