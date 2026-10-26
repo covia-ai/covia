@@ -91,6 +91,12 @@ adapter migration at start-up. `VenueState.peekVersions` reads the stored versio
 before a start, and a newer version is refused with an
 `UnsupportedVersionException`.
 
+Migration is a call, not only a start-up event. `VenueState.migrate(adapters)`
+runs the venue's eager steps and the given adapters' steps in one transaction,
+on a running venue or on a store before launch, and `Engine.migrate()` runs it
+with every installed adapter. That is the run for everything eager today; the
+lazy forms in the table above are not yet part of it.
+
 ## Requirements
 
 ### R1. Upgrading a venue's version
@@ -125,7 +131,13 @@ before a start, and a newer version is refused with an
   migration path. Neither takes embedder steps, and neither calls embedder
   code.
 - The check and the run can both be reached before Covia's own start-up step
-  changes anything, so the embedder chooses when Covia's values move.
+  changes anything, so the embedder chooses when Covia's values move: it opens
+  the store, checks, and migrates the venue with its adapters before calling
+  `launch`, which then finds the state current.
+- Migration is not only a start-up event. When the embedder installs adapters
+  and then migrates the venue, those adapters' steps run with the venue's. An
+  embedder that installs adapters after start-up and migration can: each
+  migrates as it is installed.
 - The run applies Covia's steps first, then each adapter's (R5). An adapter's
   functions see Covia's parts in their current shape. The embedder's own steps
   run after the run returns, and see every part Covia and the adapters are
@@ -318,9 +330,6 @@ function. An embedder does such work itself, between steps or after them.
 - Whether the check finds lazy parts in older shapes by scanning, or from a
   record kept as they change.
 - How long an older shape stays supported for lazy parts.
-- How an embedder reaches the run before Covia's own start-up step: by running
-  it on the store before calling `launch`, or by `launch` leaving that step to
-  the embedder's `beforeStart` hook.
 - Who may invoke the venue-owned operation.
 - How the harness is published: as a test jar of `venue`, or as a module of its
   own.

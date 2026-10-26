@@ -16,8 +16,16 @@ adapters are the built-ins and every configured module's adapters, collected by
 as `VenueServer` prepares first. It is one venue transaction: a refusal or a
 failing step discards all of it, so a start that fails leaves the store exactly
 as it was. An engine prepared with plain `prepare()` migrates each adapter as it
-registers instead. `migrate()` is also available
-for explicit component transactions. A missing version means
+registers instead.
+
+Start-up is only one caller: migration is a call, at any time.
+`VenueState.migrate(adapters)` runs the venue's steps and the given adapters'
+in one transaction, on a running venue or on a store before launch.
+`Engine.migrate()` runs it with every installed adapter, and an adapter
+installed afterwards migrates as it registers. `VenueState.migrate()` alone
+migrates the venue without adapters.
+
+A missing version means
 legacy `0`; explicit `0` follows the same path. Nil, negative and non-integer
 versions are invalid. A version above `VenueState.CURRENT_VERSION` refuses local
 startup with an `UnsupportedVersionException`, which carries the stored and

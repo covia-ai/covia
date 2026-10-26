@@ -34,14 +34,31 @@ runs before Convex closes its servers and Etch files. `MainVenue` registers
 there.
 
 **Before starting.** `VenueState.peekVenueKeys(store)` reads the venue keys
-recorded in an open store without starting a venue. To check versions and
-migrate stored state before serving, see [MIGRATE.md](MIGRATE.md).
+recorded in an open store, and `VenueState.peekVersions(store, venueKey)` its
+schema versions, Covia's and each adapter's, without starting a venue.
+
+**Migrating.** Migration is a call, not only a start-up event:
+- `engine.migrate()` migrates the venue and every installed adapter's state,
+  enabled or disabled, in one transaction, at any time.
+- Before launch, open the application over the store and call
+  `application.venue(venueKey).migrate(adapters)` with your adapters'
+  `stateMigration()`. Launch then finds the state current.
+- Launch itself migrates the venue with the built-in and configured-module
+  adapters, and an adapter you register later migrates as it registers.
+- Stored state newer than the build fails with `UnsupportedVersionException`,
+  with nothing written. From `VenueServer.launch` it is the cause of the
+  exception thrown: walk `getCause()`.
+
+Covia never runs your own migration steps: run them after Covia's, in your
+own code. See [MIGRATE.md](MIGRATE.md).
 
 ## Adapters
 
-Register your own adapters with `engine.registerAdapter(adapter)`. An adapter
-keeps its private state in `engine.adapterState(name)`, and owns that state's
-schema ([ADAPTERS.md](ADAPTERS.md)).
+Register your own adapters with `engine.registerAdapter(adapter)` on a
+prepared engine, in the launch hook or later. An adapter keeps its private
+state in `engine.adapterState(name)`, and owns that state's schema
+([ADAPTERS.md](ADAPTERS.md)): registering migrates it to the adapter's
+`stateVersion()`.
 
 **To switch an adapter off, disable it; don't remove it.**
 - `engine.disableAdapter(name)` stops dispatch, but the adapter still runs its

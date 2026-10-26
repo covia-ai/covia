@@ -1349,8 +1349,32 @@ public class Engine {
 
 	/** An adapter's state migration rules, as plain data for {@link VenueState}. */
 	static VenueState.AdapterMigration migrationOf(AAdapter adapter) {
-		return new VenueState.AdapterMigration(adapter.getName(), adapter.stateVersion(), adapter::migrateState);
+		return adapter.stateMigration();
 	}
+
+	/**
+	 * Migrates the venue and every installed adapter's state, enabled or
+	 * disabled, in one venue transaction. Callable at any time on a prepared or
+	 * started engine: migration is not only a start-up event. Writes made while
+	 * it runs are kept, and current state is not rewritten. An adapter installed
+	 * afterwards migrates as it registers.
+	 *
+	 * @throws UnsupportedVersionException if the venue, or an installed
+	 *         adapter's stored state, is at a newer version than supported;
+	 *         nothing is written
+	 */
+	public synchronized void migrate() {
+		if (venueState == null) throw new IllegalStateException(MIGRATE_BEFORE_PREPARE);
+		java.util.List<AAdapter> installed = new java.util.ArrayList<>();
+		for (String name : adapterRegistrationOrder) {
+			AAdapter adapter = adapters.get(name);
+			if (adapter != null) installed.add(adapter);
+		}
+		installed.addAll(disabledAdapters.values());
+		venueState.migrate(migrationsOf(installed));
+	}
+
+	public static final String MIGRATE_BEFORE_PREPARE = "A venue is migrated once the engine is prepared";
 
 	/**
 	 * The migration rules of adapters starting with the venue, in registration

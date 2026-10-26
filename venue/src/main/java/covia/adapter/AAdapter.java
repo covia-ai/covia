@@ -214,6 +214,15 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * This adapter's state migration rules as plain data, for
+	 * {@link covia.venue.VenueState#migrate(java.util.List)}: an embedder that
+	 * migrates a venue itself passes its adapters' rules with it.
+	 */
+	public final covia.venue.VenueState.AdapterMigration stateMigration() {
+		return new covia.venue.VenueState.AdapterMigration(getName(), stateVersion(), this::migrateState);
+	}
+
+	/**
 	 * Remove user-associated durable state in the venue deletion transaction.
 	 * Use only the supplied draft component: this callback may be retried and
 	 * must perform no I/O, runtime changes, or writes through the live engine.

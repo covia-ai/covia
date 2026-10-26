@@ -78,6 +78,8 @@ class EmbedderContractTest {
 			Engine engine = server.getEngine();
 			venueKey = engine.getAccountKey();
 			engine.registerAdapter(new EmbedderAdapter());
+			// Migration is a call, at any time: the venue and every installed adapter.
+			engine.migrate();
 
 			// Writes that must land together go in one user transaction.
 			User alice = engine.getVenueState().users().ensure(ALICE);
@@ -117,9 +119,20 @@ class EmbedderContractTest {
 			server.close();
 		}
 
-		// A stopped store names its venue without starting it, and reopens with its data.
+		// A stopped store names its venue and its versions without starting it,
+		// can be migrated with the embedder's adapters before launch, and reopens
+		// with its data.
 		EtchStore reopened = EtchStore.create(file);
 		assertEquals(java.util.Set.of(venueKey), VenueState.peekVenueKeys(reopened));
+		VenueState.StoredVersions versions = VenueState.peekVersions(reopened, venueKey).orElseThrow();
+		assertEquals(VenueState.CURRENT_VERSION, versions.venue());
+		assertEquals(new covia.adapter.TestAdapter().stateVersion(), versions.adapters().get("test"));
+		CoviaApplication beforeLaunch = CoviaApplication.open(reopened, AKeyPair.create(Blob.fromHex(SEED)));
+		VenueState offline = beforeLaunch.venue(venueKey);
+		ACell current = offline.get();
+		offline.migrate(java.util.List.of(new EmbedderAdapter().stateMigration()));
+		assertSame(current, offline.get(), "migrating a current store writes nothing");
+		beforeLaunch.host().close(); // whoever opens a host closes it; the store stays open
 		VenueServer again = VenueServer.launch(config(), reopened);
 		try {
 			Engine engine = again.getEngine();

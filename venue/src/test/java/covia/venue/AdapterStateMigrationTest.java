@@ -211,12 +211,80 @@ class AdapterStateMigrationTest {
 		}
 	}
 
+	@Test void migrateCoversEveryInstalledAdapterAtAnyTime() throws Exception {
+		Engine engine = prepared(Maps.of(Config.ADAPTERS, Maps.of("parked", Maps.of(Config.ENABLED, CVMBool.FALSE))));
+		try {
+			VenueState venue = engine.getVenueState();
+			engine.registerAdapter(new Versioned(NAME, 2));
+			engine.registerAdapter(new Versioned("parked", 1));
+			assertFalse(engine.hasAdapter("parked"));
+			// State in an older shape arriving after installation, as a restore,
+			// an import or another writer can bring it.
+			venue.transact(draft -> {
+				draft.adapterState(NAME).set(Vectors.of("a"));
+				draft.setAdapterVersion(NAME, 0);
+				draft.adapterState("parked").set(Vectors.of("b"));
+				draft.setAdapterVersion("parked", 0);
+			});
+
+			engine.migrate();
+			assertEquals(Maps.of("items", Vectors.of("a")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());
+			assertEquals(Maps.of("items", Vectors.of("b")), venue.adapterState("parked").get(), "disabled adapters migrate too");
+			assertEquals(2, venue.adapterVersion(NAME));
+			assertEquals(1, venue.adapterVersion("parked"));
+			ACell current = venue.get();
+			engine.migrate();
+			assertSame(current, venue.get(), "a current venue is not rewritten");
+
+			venue.setAdapterVersion(NAME, 5);
+			ACell newer = venue.get();
+			var error = assertThrows(UnsupportedVersionException.class, engine::migrate);
+			assertEquals(NAME, error.adapter());
+			assertSame(newer, venue.get(), "a refused migration writes nothing");
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test void anEmbedderMigratesAStoreWithItsAdaptersBeforeLaunch() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(key);
+		VenueState venue = application.venue(key.getAccountKey());
+		venue.cursor().set(Index.<Keyword, ACell>none()
+			.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a"), "newer", Vectors.of("future")))
+			.assoc(Covia.ADAPTER_VERSIONS, Maps.of("newer", 3L)));
+		ACell before = venue.get();
+
+		Versioned embedded = new Versioned(NAME, 2);
+		assertThrows(UnsupportedVersionException.class,
+			() -> venue.migrate(List.of(embedded.stateMigration(), new Versioned("newer", 1).stateMigration())));
+		assertSame(before, venue.get(), "neither the venue nor the earlier adapter migrated");
+
+		venue.migrate(List.of(embedded.stateMigration(), new Versioned("newer", 3).stateMigration()));
+		assertEquals(VenueState.CURRENT_VERSION, venue.version());
+		assertEquals(2, venue.adapterVersion(NAME));
+		assertEquals(Maps.of("items", Vectors.of("a")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());
+
+		// A later launch finds both current and runs no step.
+		Versioned launched = new Versioned(NAME, 2);
+		Engine engine = new Engine(Maps.empty(), application, key);
+		try {
+			engine.prepare(List.of(launched));
+			engine.registerAdapter(launched);
+			assertEquals(0, launched.steps.get());
+		} finally {
+			engine.close();
+		}
+	}
+
 	@Test void registrationNeedsAPreparedEngineAndAValidVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		Engine unprepared = new Engine(Maps.empty(), CoviaApplication.create(key), key);
 		try {
 			assertEquals(Engine.ADAPTER_BEFORE_PREPARE,
 				assertThrows(IllegalStateException.class, () -> unprepared.registerAdapter(new Versioned(NAME, 1))).getMessage());
+			assertEquals(Engine.MIGRATE_BEFORE_PREPARE,
+				assertThrows(IllegalStateException.class, unprepared::migrate).getMessage());
 		} finally {
 			unprepared.close();
 		}

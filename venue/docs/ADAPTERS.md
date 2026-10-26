@@ -442,6 +442,11 @@ modules, and adapters an operator or embedder adds all use the same hook.
 - An adapter registered later (in the `beforeStart` hook, on an engine prepared
   by hand, or by loading a module at runtime) migrates in its own transaction as
   it registers.
+- Migration is not only a start-up event. `Engine.migrate()` migrates the
+  venue and every installed adapter at any time, in one transaction, and an
+  embedder migrating a store itself passes each adapter's `stateMigration()` to
+  `VenueState.migrate(adapters)`. An adapter installed after a migration
+  migrates as it registers.
 - Either way, steps run whether the adapter is enabled or disabled, and before
   `configure`, install or any deletion hook sees the state. A step cannot depend
   on the adapter's configuration.

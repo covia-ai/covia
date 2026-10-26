@@ -576,9 +576,33 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * Apply ordered venue migrations and their version changes in one transaction.
 	 * Current venues are a no-op. Callbacks are pure and may retry; failures leave
 	 * the entire original value intact. Bulk record migrations remain lazy.
+	 * Adapters' state is not migrated: use {@link #migrate(List)}.
 	 */
 	public void migrate() {
-		transact(VenueState::migrateInPlace);
+		migrate(List.of());
+	}
+
+	/**
+	 * Migrates the venue and the given adapters' state in one transaction: the
+	 * venue's steps first, then each adapter's in order. Callable at any time,
+	 * on a running venue or on venue state no venue holds, such as a store an
+	 * embedder opens before launch. A refusal or a failing step leaves the venue
+	 * exactly as it was; current state is not rewritten. Where two migrations
+	 * name the same adapter, the caller passes only the one that applies.
+	 *
+	 * @param adapters Migration rules of the adapters to migrate with the venue,
+	 *        from {@code AAdapter.stateMigration()}
+	 * @throws UnsupportedVersionException if the venue, or an adapter's stored
+	 *         state, is at a newer version than supported
+	 */
+	public void migrate(List<AdapterMigration> adapters) {
+		transact(draft -> draft.migrateInPlace(adapters));
+	}
+
+	/** Only called on a transaction draft: the venue's steps, then each adapter's. */
+	private void migrateInPlace(List<AdapterMigration> adapters) {
+		migrateInPlace();
+		for (AdapterMigration migration : adapters) migrateAdapterInPlace(migration);
 	}
 
 	/** Only called on a transaction draft; add each future upgrade here. */
@@ -619,8 +643,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public void initialise(ACell did, List<AdapterMigration> adapters) {
 		transact(draft -> {
-			draft.migrateInPlace();
-			for (AdapterMigration migration : adapters) draft.migrateAdapterInPlace(migration);
+			draft.migrateInPlace(adapters);
 			@SuppressWarnings("unchecked")
 			Index<Keyword, ACell> value = (Index<Keyword, ACell>) draft.get();
 			if (!value.containsKey(Covia.DID)) draft.cursor().set(value.assoc(Covia.DID, did));
