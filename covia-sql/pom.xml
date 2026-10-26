@@ -59,6 +59,12 @@
 			<version>${junit.version}</version>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
 		<!-- A JDBC driver other than convex-db, for operator-registered
 		     connection tests. -->
 		<dependency>
