@@ -8,9 +8,10 @@ Related: #620 (knowing before a start, typed refusal), #615 (`user:import`),
 
 ## Need
 
-An embedder must be able to bring every stored value to the current schema in
-one operation it triggers, and from then on read only that schema. Its own
-migrations must run the same way, after Covia's.
+An embedder must be able to bring every stored value to the current schema,
+and from then on read only that schema. It does this from inside its own
+migration path: in one call, or step by step with its own checks and work
+between steps. Its own migrations must run the same way, after Covia's.
 
 Most schema changes today are lazy: a value takes its new shape when it is next
 written, or when its component next reaches it. Until every value has been
@@ -40,8 +41,10 @@ These are changes to lattice values. The Etch store format does not change.
   spans the source and the destination.
 - **Conversion**: a function from one part's value to that part in the current
   shape.
-- **Step**: the conversions an owner needs to go from version N to N + 1.
-- **Run**: one application of the complete migrate to a venue.
+- **Step**: the conversions an owner needs to go from version N to N + 1. Steps
+  are the stages of a migration: the unit an embedder calls and a test checks.
+- **Run**: the ordered list of steps that brings a store to the current schema,
+  and one application of them.
 
 ## Conversions
 
@@ -125,6 +128,25 @@ Further migrations run when the app loads (lifting nested `self-reported`,
 older roots and shapes. These become GetMine's first registered steps, under
 one GetMine version per user. Its readers can then drop their tolerances.
 
+## An embedder's migration path
+
+Migration orchestration is the embedder's (#354): copy forward, verify, then
+retire. Covia supplies the pieces of that path that only Covia can. A path built
+from them looks like this:
+
+1. Check the store, with the embedder's own steps included, before any venue
+   opens it (R3). If nothing is older, start as usual.
+2. Keep a restore point, or take a copy, as the embedder chooses.
+3. Apply the run's steps in order, one at a time or all together: Covia's, then
+   the adapters', then the embedder's. Between steps, check the result and do
+   any of the embedder's own work that is not a conversion.
+4. Verify the result by the embedder's own measures, such as a manifest of
+   counts and hashes.
+5. Release the restore point, or go back to it.
+6. Start the venue. Readers see current shapes only.
+
+Every requirement below must allow this path with no venue serving requests.
+
 ## Requirements
 
 ### R1. Owners and versions
@@ -135,18 +157,31 @@ one GetMine version per user. Its readers can then drop their tolerances.
 - Covia's steps run first, then each adapter's, then the embedder's. Each
   owner's conversions see the values of the owners before it in their current
   shape.
-- An embedder registers, at start-up, its owner name, its current version and
-  its ordered steps. Steps are plain Java with the embedder's code to hand (for
-  example GetMine's category registry), not lattice data.
+- An embedder supplies its owner name, its current version and its ordered
+  steps as code. The check, the run and a running venue all take them, and
+  supplying them never needs a running venue. Steps are plain Java with the
+  embedder's code to hand (for example GetMine's category registry), not
+  lattice data.
+- An adapter's conversions can be used without activating the adapter: no
+  bots, no network, no polling.
 
 ### R2. The complete migrate
 
-- One run, triggered by the embedder, available as a Java API and as a
-  venue-owned operation.
+- A run is an ordered list of steps. The caller can list the steps a store
+  needs and apply them one at a time, or all at once. Applying the whole run is
+  a convenience over applying each step.
+- The Java API is the main route, for embedders in the same process. A
+  venue-owned operation is a second route, for callers outside it.
+- A run works offline, on a store no venue has open or on a root value, and
+  live, on a running venue. Offline serves the embedder's own path. Live, writes
+  made during the run are kept.
 - It converts every part that has a registered conversion: the venue value,
   every user's jobs, agents, sessions and secrets, each adapter's state, and
   each embedder's paths.
 - A batch holds parts of at most one user, so no commit spans users.
+- Each step returns a report: the owner, the versions it went from and to, the
+  parts it converted, and the parts it refused, each with its reason. A refused
+  part leaves that owner's version where it was.
 - For each owner, for the venue identity and for each user, it records the
   version fully reached. That version advances only when no part of the owner
   remains older.
@@ -155,9 +190,10 @@ one GetMine version per user. Its readers can then drop their tolerances.
   run says so rather than reporting done, as `user:delete` does with
   `Engine.USER_DELETION_PENDING`.
 - Running it again changes nothing.
-- It keeps a reference to the root as it stood before the run: a restore point
-  that costs no copy of files. When to keep it, and when to restore from it,
-  is the embedder's decision (#354).
+- The caller gets the root before and after each step. A root it keeps is a
+  restore point that costs no copy of files. It stays readable, across store GC
+  and restarts, until the caller releases it. When to keep one, and when to
+  restore from it, is the embedder's decision (#354).
 - The lazy paths remain for parts a run has not reached, through the same
   conversions. Once the check (R3) reports an owner complete, readers of that
   owner's values may assume the current shape.
@@ -184,6 +220,37 @@ one GetMine version per user. Its readers can then drop their tolerances.
   it: Covia's steps, then the adapters', then the embedder's. An export newer
   than the build is refused as in R4.
 
+### R6. Step-by-step testing
+
+- **Fixtures by release.** Each release that changes a persisted format leaves
+  a fixture, written by that release's published jar and never regenerated, as
+  `covia-0.9.11.zip` is (see its
+  [README](../src/test/resources/migrations/README.md)). The
+  next is the 0.10.0 store, at tag time. Between them, the fixtures hold every
+  legacy form in the table above. Today none holds Telegram's registry or
+  session mappings, or embedder data.
+- **The embedders' API.** A harness walks each fixture through the run one step
+  at a time, through the API embedders call. It has no stepping path of its
+  own.
+- **Checks after every step:**
+  - the owner's version has advanced;
+  - that owner's parts are current in storage, not only on read;
+  - every other owner's parts are the same cells as before the step;
+  - applying the step again returns the same root;
+  - the fixture's data reads the same through the HTTP APIs, as
+    `VenueStoreFixture.verifyUser` checks today.
+- **Interruption.** A run stopped after any batch, then run again, ends equal to
+  an uninterrupted run (for secrets, equal in meaning, as under
+  [Conversions](#conversions)).
+- **Offline and live.** Both give equal results. Live, writes made during the
+  run are kept.
+- **For embedders.** The harness is published, so an embedder can run the same
+  walk with its own fixtures and steps: Covia's steps, then its own. GetMine's
+  per-release user exports (#615) are such fixtures. A failure names the step
+  and its owner, so it says whose migration broke.
+- **Kept runs.** On request a walk keeps each step's root and report, as
+  `-Dcovia.migration.output` keeps an upgraded store today.
+
 ## Out of scope
 
 - The Etch store format, which does not change.
@@ -201,10 +268,11 @@ one GetMine version per user. Its readers can then drop their tolerances.
   `migrations/covia-0.9.11.zip`), a run leaves no legacy form: no `prev`, no
   legacy frames or session `loads`, no `w/adapters`, and every secret at the
   current key version.
-- A second run changes nothing. An interrupted run completes when run again.
-  Writes made during a run are kept.
-- An embedder's registered steps run after Covia's, both in a run and in
-  `user:import`.
+- The R6 harness walks the 0.9.11 fixture step by step, offline and live, with
+  every check passing, and runs in CI's durability gate.
+- An embedder can run the same harness with its own fixtures and steps.
+- An embedder's steps run after Covia's, both in a run and in `user:import`.
+- A kept restore point is still readable after a store GC and a restart.
 - A newer stored version is refused with the typed error, for Covia and for an
   embedder.
 - PERSISTENCE.md describes schema versions per owner and the complete migrate.
@@ -215,5 +283,5 @@ one GetMine version per user. Its readers can then drop their tolerances.
   remains, or in a separate marker per owner.
 - The shape of the registration API for adapters and embedders.
 - Who may invoke the venue-owned operation.
-- Whether a run happens while the venue serves requests, or before it starts
-  serving.
+- How the harness is published: as a test jar of `venue`, or as a module of its
+  own.

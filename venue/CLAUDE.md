@@ -277,8 +277,8 @@ java -jar target/covia.jar [config.json]
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
 - `docs/MIGRATE.md` — schema migration requirements (#621): partial, idempotent,
-  pure conversions per part; a complete migrate embedders trigger, with their
-  own steps after Covia's
+  pure conversions per part; a complete migrate embedders call, step by step,
+  from their own migration path, with their own steps after Covia's
 - `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
   `docs/GOAL_TREE.md` — agent architecture
 - `docs/READ_API.md` — job-free read surface
