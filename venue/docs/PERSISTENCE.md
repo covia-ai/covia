@@ -39,6 +39,11 @@ compatibility rejection and reopen behaviour. Do not bump this integer for an
 ordinary software release. Binaries predating version checks must still be
 excluded operationally from upgraded stores.
 
+[MIGRATE.md](MIGRATE.md) sets out requirements for a complete migrate that an
+embedder triggers, with its own migrations after Covia's (#621). It would change
+this section's contract, under which the version does not mean a bulk rewrite
+has completed.
+
 ## Snapshot implementation contract
 
 With Convex 0.8.18's lattice applications, `LatticeHost` owns publication
