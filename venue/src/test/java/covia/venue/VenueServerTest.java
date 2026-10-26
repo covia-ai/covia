@@ -148,6 +148,21 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void closingAVenueClosesTheHostItOpened() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+			Config.BIND_ADDRESS, "127.0.0.1",
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false))));
+		var host = server.getHost();
+		try {
+			assertNotNull(host);
+			host.checkpoint(); // an embedder may checkpoint the venue's host while it runs
+		} finally { server.close(); }
+		assertThrows(IllegalStateException.class, host::sync, "the venue closes the host it opened");
+		assertNull(server.getHost());
+		server.close(); // closing again changes nothing
+	}
+
+	@Test
 	public void adapterOperationDiscoveryRequiresAuthenticationOnPrivateVenues() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
 			Config.BIND_ADDRESS, "127.0.0.1",

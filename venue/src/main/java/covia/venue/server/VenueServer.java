@@ -824,6 +824,16 @@ public class VenueServer {
 	}
 
 	/**
+	 * The lattice host this venue opened over its store, or null once closed.
+	 * The venue closes it in {@link #close()}. An embedder may checkpoint it,
+	 * for example before acknowledging work that must be durable, but must not
+	 * close it.
+	 */
+	public LatticeHost<Index<Keyword, ACell>> getHost() {
+		return host;
+	}
+
+	/**
 	 * Returns the venue's public credential authentication service. Embedders may
 	 * use it from contributed Javalin routes, including routes carrying tokens in
 	 * headers other than {@code Authorization}.
