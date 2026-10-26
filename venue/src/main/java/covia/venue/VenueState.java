@@ -3,8 +3,11 @@ package covia.venue;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ABlob;
@@ -17,6 +20,7 @@ import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.MapEntry;
+import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
@@ -27,6 +31,7 @@ import convex.lattice.LatticeContext;
 import convex.lattice.cursor.StampedCursor;
 import convex.lattice.cursor.SignedCursor;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -64,6 +69,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	public static final String INVALID_STATE = "Venue state must be a keyword-keyed Index";
 	public static final String INVALID_VERSION = "Venue :version must be a non-negative integer";
 	public static final String UNSUPPORTED_VERSION = "Venue version %d is newer than supported version %d";
+	public static final String UNSUPPORTED_ADAPTER_VERSION = "Adapter '%s' state version %d is newer than supported version %d";
+	public static final String INVALID_ADAPTER_VERSION = "Adapter state version must be a non-negative integer: ";
 	@Override
 	public VenueState withCursor(AForkableCursor<ACell> draft) {
 		return new VenueState(draft, ownerKey, context);
@@ -172,6 +179,37 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			}
 		}
 		return Collections.unmodifiableSet(keys);
+	}
+
+	/**
+	 * Schema versions held in a store for one venue.
+	 *
+	 * @param venue the venue's own {@code :version}, 0 for a legacy venue
+	 * @param adapters the state version each versioned adapter has reached
+	 */
+	public record StoredVersions(long venue, Map<String, Long> adapters) {}
+
+	/**
+	 * Reads the schema versions an already-open store holds for one venue,
+	 * without constructing an {@link Engine} and without writing. A caller
+	 * compares them with {@link #CURRENT_VERSION} and each adapter's
+	 * {@code stateVersion()} to learn whether starting a venue on the store will
+	 * migrate it, or refuse it with an {@link UnsupportedVersionException}.
+	 *
+	 * <p>The store stays open and owned by the caller.</p>
+	 *
+	 * @param store Open Covia lattice store
+	 * @param ownerKey The venue's account key
+	 * @return the versions, or empty when the store holds no state for this venue
+	 * @throws IOException if the persisted root cannot be read
+	 */
+	public static Optional<StoredVersions> peekVersions(AStore store, AccountKey ownerKey) throws IOException {
+		ACell root = Objects.requireNonNull(store, "store").getRootData();
+		if (root == null) return Optional.empty();
+		VenueState venue = fromRoot(Cursors.root(root), Objects.requireNonNull(ownerKey, "ownerKey"),
+			LatticeContext.create(null, null));
+		if (venue.get() == null) return Optional.empty();
+		return Optional.of(new StoredVersions(venue.version(), venue.adapterVersions()));
 	}
 
 	/**
@@ -430,10 +468,53 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	private long requireSupportedVersion() {
 		long version = version();
-		if (version > CURRENT_VERSION) {
-			throw new IllegalStateException(UNSUPPORTED_VERSION.formatted(version, CURRENT_VERSION));
+		if (version > CURRENT_VERSION) throw unsupportedVersion(version);
+		return version;
+	}
+
+	private static UnsupportedVersionException unsupportedVersion(long version) {
+		return new UnsupportedVersionException(UNSUPPORTED_VERSION.formatted(version, CURRENT_VERSION),
+			null, version, CURRENT_VERSION);
+	}
+
+	/** The state version an adapter has reached; 0 when none is recorded. */
+	public long adapterVersion(String name) {
+		AdapterState.validateName(name);
+		ACell version = RT.getIn(get(), Covia.ADAPTER_VERSIONS, Strings.create(name));
+		if (version == null) return 0;
+		if (!(version instanceof CVMLong number) || number.longValue() < 0) {
+			throw new IllegalStateException(INVALID_ADAPTER_VERSION + name);
+		}
+		return number.longValue();
+	}
+
+	/** Every recorded adapter state version, by adapter name. */
+	public Map<String, Long> adapterVersions() {
+		AMap<AString, ACell> recorded = RT.ensureMap(RT.getIn(get(), Covia.ADAPTER_VERSIONS));
+		if (recorded == null) return Map.of();
+		Map<String, Long> versions = new TreeMap<>();
+		for (AString name : recorded.keySet()) versions.put(name.toString(), adapterVersion(name.toString()));
+		return Collections.unmodifiableMap(versions);
+	}
+
+	/**
+	 * The recorded state version of an adapter that supports {@code supported},
+	 * refusing one recorded above it.
+	 */
+	long requireAdapterVersion(String name, long supported) {
+		long version = adapterVersion(name);
+		if (version > supported) {
+			throw new UnsupportedVersionException(UNSUPPORTED_ADAPTER_VERSION.formatted(name, version, supported),
+				name, version, supported);
 		}
 		return version;
+	}
+
+	/** Records the state version an adapter has reached. */
+	void setAdapterVersion(String name, long version) {
+		AdapterState.validateName(name);
+		cursor().withDefault(Index.none()).path(Covia.ADAPTER_VERSIONS).withDefault(Maps.empty())
+			.path(Strings.create(name)).set(CVMLong.create(version));
 	}
 
 	/**
@@ -456,7 +537,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 					// adapter values still move exactly on first access.
 					migrateLegacyState("w/user-deletions", Covia.USER_DELETIONS, null);
 				}
-				default -> throw new IllegalStateException(UNSUPPORTED_VERSION.formatted(version, CURRENT_VERSION));
+				default -> throw unsupportedVersion(version);
 			}
 			cursor().withDefault(Index.none()).path(Covia.VERSION).set(CVMLong.create(++version));
 		}

@@ -119,10 +119,37 @@ class VenueMigrationTest {
 		for (ACell version : new ACell[] {null, CVMLong.create(-1), Strings.create("1"),
 				CVMDouble.create(1), CVMLong.create(VenueState.CURRENT_VERSION + 1)}) {
 			ACell record = Index.<Keyword, ACell>none().assoc(Covia.VERSION, version);
-			String reason = version instanceof CVMLong number && number.longValue() > VenueState.CURRENT_VERSION
-				? VenueState.UNSUPPORTED_VERSION.formatted(number.longValue(), VenueState.CURRENT_VERSION)
+			boolean newer = version instanceof CVMLong number && number.longValue() > VenueState.CURRENT_VERSION;
+			String reason = newer
+				? VenueState.UNSUPPORTED_VERSION.formatted(VenueState.CURRENT_VERSION + 1, VenueState.CURRENT_VERSION)
 				: VenueState.INVALID_VERSION;
-			assertStartupRejected(record, reason);
+			IllegalStateException error = assertStartupRejected(record, reason);
+			assertEquals(newer, error instanceof UnsupportedVersionException);
+			if (error instanceof UnsupportedVersionException unsupported) {
+				assertNull(unsupported.adapter(), "the venue's own version names no adapter");
+				assertEquals(VenueState.CURRENT_VERSION + 1, unsupported.stored());
+				assertEquals(VenueState.CURRENT_VERSION, unsupported.supported());
+			}
+		}
+	}
+
+	@Test void storedVersionsAreReadWithoutWriting() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(key);
+		try (var store = application.hostStore()) {
+			assertTrue(VenueState.peekVersions(store, key.getAccountKey()).isEmpty(), "a fresh store holds no venue");
+			ACell record = Index.<Keyword, ACell>none()
+				.assoc(Covia.VERSION, CVMLong.create(VenueState.CURRENT_VERSION + 1))
+				.assoc(Covia.ADAPTER_VERSIONS, Maps.of("telegram", 2L, "example", 7L));
+			application.venue(key.getAccountKey()).cursor().set(record);
+			application.host().sync();
+			ACell before = store.getRootData();
+
+			var versions = VenueState.peekVersions(store, key.getAccountKey()).orElseThrow();
+			assertEquals(VenueState.CURRENT_VERSION + 1, versions.venue(), "a newer version is reported, not refused");
+			assertEquals(java.util.Map.of("example", 7L, "telegram", 2L), versions.adapters());
+			assertTrue(VenueState.peekVersions(store, AKeyPair.generate().getAccountKey()).isEmpty());
+			assertEquals(before, store.getRootData(), "peeking must leave the store untouched");
 		}
 	}
 
@@ -136,7 +163,7 @@ class VenueMigrationTest {
 		}
 	}
 
-	private static void assertStartupRejected(ACell record, String reason) throws Exception {
+	private static IllegalStateException assertStartupRejected(ACell record, String reason) throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		CoviaApplication application = CoviaApplication.create(key);
 		try (var store = application.hostStore()) {
@@ -144,13 +171,15 @@ class VenueMigrationTest {
 			application.host().sync();
 			ACell before = application.cursor().get();
 			Engine engine = new Engine(Maps.empty(), application, key);
+			IllegalStateException error;
 			try {
-				var error = assertThrows(IllegalStateException.class, engine::prepare);
+				error = assertThrows(IllegalStateException.class, engine::prepare);
 				assertEquals(reason, error.getMessage());
 				assertNull(engine.getVenueState());
 			} finally { engine.close(); }
 			assertEquals(before, application.cursor().get(), "failed startup must not stamp, initialise or bootstrap");
 			assertEquals(before, store.getRootData(), "failed startup must leave persisted state untouched");
+			return error;
 		}
 	}
 

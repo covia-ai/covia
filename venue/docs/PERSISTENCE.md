@@ -13,8 +13,18 @@ Engine bootstrap writes, adapter activation or recovered work. `migrate()` is
 also available for explicit component transactions. A missing version means
 legacy `0`; explicit `0` follows the same path. Nil, negative and non-integer
 versions are invalid. A version above `VenueState.CURRENT_VERSION` refuses local
-startup without modifying the venue or its store. Opaque replication is not
-permission to execute a newer format.
+startup with an `UnsupportedVersionException`, which carries the stored and
+supported versions, without modifying the venue or its store. Opaque
+replication is not permission to execute a newer format.
+
+`:version` is the gate every build checks. It advances whenever Covia's own
+schema, or the schema of a component Covia ships, changes in a way an older
+build cannot read, so every older build refuses the result.
+
+`VenueState.peekVersions(store, ownerKey)` reads the stored versions from an
+open store without an Engine and without writing. An embedder calls it before
+starting a venue on that store, to learn whether the start will migrate or
+refuse the store, and to take any copy it wants first.
 
 The `0 → 1` migration moves the small legacy `w/user-deletions` index to the
 venue's `:user-deletions` region and advances `:version` in the same transaction.

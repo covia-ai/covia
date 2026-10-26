@@ -22,6 +22,7 @@ These changes require Convex 0.8.18.
 - The signed venue value records `:version`. Ordered startup migrations run
   atomically; legacy adapter storage moves on first access without a bulk scan.
   Older binaries must not reopen upgraded stores.
+- Typed refusal of a newer venue version; read stored versions before a start (#621).
 - `AdapterState` replaces `AdapterWorkspace` for private `:adapters/<name>`
   storage. Embedders must replace removed `engine.adapterWorkspace(...)` calls;
   user cleanup belongs in adapter deletion hooks, with external cleanup after commit.
