@@ -5,8 +5,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -17,16 +15,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
+import convex.core.data.AVector;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.adapter.messaging.MessagingBot;
+import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
@@ -41,29 +42,34 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final AString K_STATE=Strings.intern("state"),K_USERNAME=Strings.intern("username"),K_BOT_ID=Strings.intern("bot_id"),K_TARGET=Strings.intern("target"),K_RECEIVED=Strings.intern("received"),K_SENT=Strings.intern("sent"),K_FAILED=Strings.intern("failed"),K_MANAGED=Strings.intern("managed");
 	private static final AString K_BOT=Strings.intern("bot"),K_VIA=Strings.intern("via"),K_CHANNEL=Strings.intern("channel"),K_ACCESS=Strings.intern("access"),K_FROM=Strings.intern("from"),K_GUILD=Strings.intern("guild"),K_MESSAGE_ID=Strings.intern("message_id"),K_CHANNEL_ID=Strings.intern("channel_id"),K_NAME=Strings.intern("name"),K_ID=Strings.intern("id"),K_TYPE=Strings.intern("type"),K_ATTACHMENTS=Strings.intern("attachments");
 	enum State {STARTING,PENDING,RUNNING,STOPPED}
+	/** Shared by every bot: each HttpClient holds a selector thread for its lifetime. */
+	private static final HttpClient HTTP=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).executor(AAdapter.VIRTUAL_EXECUTOR).build();
 	private final DiscordAdapter adapter;
 	final BotSpec spec;final String apiUrl;final Managed managed;
 	private volatile DiscordGateway gateway;private volatile HttpClient http;private volatile String token,username,botId,error;private volatile State state=State.STARTING;private volatile boolean stopped;private volatile ScheduledFuture<?> retry;private final AtomicLong received=new AtomicLong(),sent=new AtomicLong(),failed=new AtomicLong();
 
 	private final ConversationRouter conversations;
 
-	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,new ConversationSessions(adapter.state(),sessionsRelativePath()));}
+	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,new ConversationSessions(adapter.state(spec.userDID(adapter.engine)),sessionsRelativePath(),this,()->!stopped&&adapter.isActive()));}
 	@Override public BotSpec spec(){return spec;}
 	@Override public Managed managed(){return managed;}
 	@Override public void start(){AAdapter.VIRTUAL_EXECUTOR.execute(this::tryStart);}
 	private synchronized void tryStart(){
 		if(stopped||state==State.RUNNING)return;String tok;
-		try{tok=adapter.resolveToken(spec);}catch(RuntimeException e){pending("token resolution failed: "+e.getMessage());return;}
+		try{tok=adapter.resolveToken(this);}catch(RuntimeException e){pending("token resolution failed: "+e.getMessage());return;}
 		if(tok==null){pending("token secret "+spec.tokenRef()+" not found");return;}
 		DiscordGateway candidate;
 		try{candidate=adapter.gatewayFactory.connect(tok,this::receive);}catch(Exception|LinkageError e){pending("Discord Gateway connection failed: "+concise(e));return;}
 		if(stopped){candidate.close();return;}
-		gateway=candidate;token=tok;username=candidate.username();botId=candidate.botId();http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).executor(AAdapter.VIRTUAL_EXECUTOR).build();error=null;state=State.RUNNING;
+		gateway=candidate;token=tok;username=candidate.username();botId=candidate.botId();http=HTTP;error=null;state=State.RUNNING;
 		log.info("Discord bot '{}' (@{}) running as {} -> {}",spec.name(),username,spec.userRef(),spec.target());
 	}
 	private void pending(String why){state=State.PENDING;error=why;log.warn("Discord bot '{}' not started: {} (will retry)",spec.name(),why);retry=adapter.scheduleRetry(this::tryStart,adapter.retryMillis);}
 	@Override public synchronized void stop(){stopped=true;if(retry!=null)retry.cancel(false);DiscordGateway g=gateway;gateway=null;token=null;http=null;if(g!=null)try{g.close();}catch(RuntimeException e){log.debug("Discord Gateway close failed",e);}state=State.STOPPED;}
-	@Override public AMap<AString,ACell> status(){AMap<AString,ACell> m=Maps.of(Fields.NAME,Strings.create(spec.name()),BotSpec.K_USER,Strings.create(spec.userRef()),K_TARGET,Strings.create(spec.target()),K_STATE,Strings.create(state.name()),K_MANAGED,Strings.create(managed.name().toLowerCase(Locale.ROOT)),K_RECEIVED,CVMLong.create(received.get()),K_SENT,CVMLong.create(sent.get()),K_FAILED,CVMLong.create(failed.get()));if(username!=null)m=m.assoc(K_USERNAME,Strings.create(username));if(botId!=null)m=m.assoc(K_BOT_ID,Strings.create(botId));if(error!=null)m=m.assoc(Fields.ERROR,Strings.create(error));return m;}
+	@Override public AMap<AString,ACell> status(){AMap<AString,ACell> m=Maps.of(Fields.NAME,Strings.create(spec.name()),BotSpec.K_USER,Strings.create(spec.userRef()),K_TARGET,Strings.create(spec.target()),K_STATE,Strings.create(state.name()),K_MANAGED,Strings.create(managed.name().toLowerCase(Locale.ROOT)),K_RECEIVED,CVMLong.create(received.get()),K_SENT,CVMLong.create(sent.get()),K_FAILED,CVMLong.create(failed.get()));if(username!=null)m=m.assoc(K_USERNAME,Strings.create(username));if(botId!=null)m=m.assoc(K_BOT_ID,Strings.create(botId));if(error!=null)m=m.assoc(Fields.ERROR,Strings.create(error));
+		// Who may message the bot: ids, then usernames, as the spec matches them.
+		AVector<ACell> allow=Vectors.empty();for(String id:spec.allowIds())allow=allow.conj(Strings.create(id));for(String n:spec.allowNames())allow=allow.conj(Strings.create(n));
+		return m.assoc(BotSpec.K_ALLOW,allow);}
 
 	private void receive(InboundMessage m){
 		if(stopped||!adapter.isActive())return;received.incrementAndGet();
@@ -76,7 +82,27 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private String greeting(){if(spec.greeting()!=null)return spec.greeting();return spec.routesToAgent()?"Connected to agent '"+spec.agent()+"'. Send a message to talk; !new starts a fresh conversation.":"Messages are handled by "+spec.operation()+".";}
 	private String stripMention(String text){if(text==null)return "";if(botId!=null){text=text.replace("<@"+botId+">","").replace("<@!"+botId+">","");}return text.trim();}
 	private void enqueue(String id,Runnable work){conversations.enqueue(id,work);}
-	private void respondAgent(InboundMessage m,String text){try{String reply=ConversationRouter.responseText(conversations.chat(m.channelId(),agentMessage(m,text)));send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("failed to respond",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
+	private void respondAgent(InboundMessage m,String text) {
+		try {
+			if (stopped || !adapter.isActive()) return;
+			if (conversations.supportsSessionDelivery()) {
+				// Gateway delivery has no durable receipt yet. Still commit the
+				// input and session mapping together and release the intake queue.
+				var job = conversations.deliver(m.channelId(), agentMessage(m,text), (draft,sid,jid) -> true);
+				ConversationRouter.onResponse(job, response -> {
+					String reply = ConversationRouter.responseText(response);
+					if (!stopped && adapter.isActive() && reply != null) send(m.channelId(),reply,m.id());
+				}, t -> agentFailure(m,t));
+			} else {
+				String reply = ConversationRouter.responseText(conversations.chat(m.channelId(),agentMessage(m,text)));
+				if (!stopped && adapter.isActive() && reply != null) send(m.channelId(),reply,m.id());
+			}
+		} catch (Throwable t) { agentFailure(m,t); }
+	}
+	private void agentFailure(InboundMessage m,Throwable t) {
+		if (stopped || !adapter.isActive()) return;
+		failed.incrementAndGet();logFailure("failed to respond",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());
+	}
 	private void respondOperation(InboundMessage m){try{ACell result=conversations.runOperation(spec.operation(),messageRecord(m));String reply=conversations.operationReply(result);if(reply!=null)send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("handler failed",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
 
 	AMap<AString,ACell> messageRecord(InboundMessage m){AMap<AString,ACell> out=Maps.of(K_BOT,Strings.create(spec.name()),K_ID,Strings.create(m.id()),K_CHANNEL_ID,Strings.create(m.channelId()),Strings.intern("channel_type"),Strings.create(m.channelType()),K_FROM,userRecord(m),Fields.TEXT,Strings.create(m.content()==null?"":m.content()),K_ATTACHMENTS,m.attachments());if(m.channelName()!=null)out=out.assoc(Strings.intern("channel_name"),Strings.create(m.channelName()));if(m.guildId()!=null)out=out.assoc(K_GUILD,Maps.of(K_ID,Strings.create(m.guildId()),K_NAME,Strings.create(m.guildName())));return out;}
@@ -86,7 +112,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private String sessionsRelativePath(){return managed==Managed.CONFIG
 		? "config/"+spec.name()+"/sessions"
 		: adapter.userStatePath(spec.userDID(adapter.engine),"sessions/"+spec.name());}
-	ACell sendMessage(String channelId,AMap<AString,ACell> body){AString content=RT.ensureString(body.get(Strings.intern("content")));if(content==null||content.isBlank())throw new IllegalArgumentException("content is required");ACell last=null;boolean first=true;for(String chunk:split(content.toString(),MAX_MESSAGE_LENGTH)){AMap<AString,ACell> part=body.assoc(Strings.intern("content"),Strings.create(chunk));if(!first)part=part.dissoc(Strings.intern("message_reference"));last=call("POST","/channels/"+channelId+"/messages",part);sent.incrementAndGet();first=false;}return last;}
+	ACell sendMessage(String channelId,AMap<AString,ACell> body){AString content=RT.ensureString(body.get(Strings.intern("content")));if(content==null||content.isBlank())throw new IllegalArgumentException("content is required");ACell last=null;boolean first=true;for(String chunk:MessagingText.split(content.toString(),MAX_MESSAGE_LENGTH)){AMap<AString,ACell> part=body.assoc(Strings.intern("content"),Strings.create(chunk));if(!first)part=part.dissoc(Strings.intern("message_reference"));last=call("POST","/channels/"+channelId+"/messages",part);sent.incrementAndGet();first=false;}return last;}
 	private ACell send(String channel,String text,String reply){AMap<AString,ACell> body=Maps.of(Strings.intern("content"),Strings.create(text));if(reply!=null)body=body.assoc(Strings.intern("message_reference"),Maps.of(Strings.intern("message_id"),Strings.create(reply),Strings.intern("fail_if_not_exists"),CVMBool.FALSE));return sendMessage(channel,body);}
 	private void sendQuietly(String channel,String text,String reply){try{send(channel,text,reply);}catch(RuntimeException e){log.debug("Discord bot '{}': notice failed: {}",spec.name(),concise(e));}}
 
@@ -98,7 +124,6 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if(r.body()==null||r.body().isBlank())return CVMBool.TRUE;return JSON.parse(r.body());
 		}catch(InterruptedException e){Thread.currentThread().interrupt();throw new JobFailedException("Discord call interrupted");}catch(java.io.IOException|IllegalArgumentException e){throw new JobFailedException("Discord "+method+" "+route+" failed: "+concise(e));}
 	}
-	static List<String> split(String text,int max){List<String> out=new ArrayList<>();String rest=text;while(rest.length()>max){int cut=rest.lastIndexOf('\n',max);if(cut<max/2)cut=rest.lastIndexOf(' ',max);if(cut<max/2)cut=max;out.add(rest.substring(0,cut));rest=rest.substring(cut).stripLeading();}out.add(rest);return out;}
 	static String concise(Throwable t){Throwable c=t;while((c instanceof CompletionException||c instanceof ExecutionException)&&c.getCause()!=null)c=c.getCause();String msg=AAdapter.describeFailure(c);return msg.length()>400?msg.substring(0,400)+"…":msg;}
 	private static String trim(String s){if(s==null)return "";return s.length()>600?s.substring(0,600)+"…":s;}
 	private void logFailure(String what,InboundMessage m,Throwable t){log.warn("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t));}

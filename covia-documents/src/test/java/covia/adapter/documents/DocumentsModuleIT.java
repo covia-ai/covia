@@ -8,7 +8,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
+import java.util.jar.JarFile;
+import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import org.junit.jupiter.api.Assumptions;
@@ -37,6 +42,10 @@ class DocumentsModuleIT {
 		assertTrue(containsPrefix(moduleJar, "org/apache/pdfbox/"), "PDFBox ships in the module");
 		assertTrue(containsPrefix(moduleJar, "org/apache/poi/"), "POI ships in the module");
 		assertTrue(contains(moduleJar, "META-INF/services/covia.adapter.AAdapter"));
+		assertEquals("covia.documents", moduleName(moduleJar), "the jar names its Java module");
+		Set<String> shared = packages(moduleJar);
+		shared.retainAll(packages(venueJar));
+		assertTrue(shared.isEmpty(), "covia.jar already ships these packages: " + shared);
 
 		// The fixture is built here, where the parsers are on the classpath; the
 		// child process has only the venue jar and gets the parsers from the module.
@@ -72,6 +81,23 @@ class DocumentsModuleIT {
 	private static boolean contains(Path jar, String name) throws Exception {
 		try (ZipFile zip = new ZipFile(jar.toFile())) {
 			return zip.getEntry(name) != null;
+		}
+	}
+
+	/** The Automatic-Module-Name the jar declares. */
+	private static String moduleName(Path jar) throws Exception {
+		try (JarFile file = new JarFile(jar.toFile())) {
+			return file.getManifest().getMainAttributes().getValue("Automatic-Module-Name");
+		}
+	}
+
+	/** Packages holding classes in a jar, META-INF aside. */
+	private static Set<String> packages(Path jar) throws Exception {
+		try (ZipFile zip = new ZipFile(jar.toFile())) {
+			return zip.stream().map(ZipEntry::getName)
+				.filter(name -> name.endsWith(".class") && name.indexOf('/') > 0 && !name.startsWith("META-INF/"))
+				.map(name -> name.substring(0, name.lastIndexOf('/')))
+				.collect(Collectors.toCollection(TreeSet::new));
 		}
 	}
 }

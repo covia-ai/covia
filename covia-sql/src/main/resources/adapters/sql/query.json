@@ -1,6 +1,6 @@
 {
 	"name": "SQL Query",
-	"description": "Runs a read-only SQL query (SELECT) against a named database and returns the rows. 'db' names a venue-local convex-db database (per-user, lattice-backed, created on first use) or an operator-registered JDBC connection. Use params with ? placeholders for values — safer than interpolating them into the statement. Results are capped at maxRows (default 1000) with truncated: true when more rows were available.",
+	"description": "Runs a read-only SQL query (SELECT) against a named database and returns the rows. 'db' names a venue-local convex-db database (per-user, lattice-backed, created on first use) or an operator-registered JDBC connection. The statement must be a single query: anything else is refused or, on some operator-registered connections, run in a read-only transaction that is rolled back. Use sql/execute to change data. Use params with ? placeholders for values — safer than interpolating them into the statement. Results are capped at maxRows (default 1000) with truncated: true when more rows were available.",
 	"dateCreated": "2026-07-16T00:00:00Z",
 	"operation": {
 		"adapter": "sql:query",
@@ -9,7 +9,7 @@
 			"type": "object",
 			"properties": {
 				"db": { "type": "string", "description": "Database name, [a-zA-Z0-9_]{1,64}" },
-				"statement": { "type": "string", "description": "SQL SELECT statement, optionally with ? placeholders" },
+				"statement": { "type": "string", "description": "A single SQL query (SELECT, WITH, VALUES or a set operation), optionally with ? placeholders" },
 				"params": { "type": "array", "description": "Values for ? placeholders, in order" },
 				"maxRows": { "type": "integer", "description": "Row cap (default 1000, max 10000)" }
 			},

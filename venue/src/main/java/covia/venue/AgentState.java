@@ -1,5 +1,7 @@
 package covia.venue;
 
+import static covia.venue.SessionState.*;
+
 import java.util.Objects;
 import java.util.function.UnaryOperator;
 
@@ -16,20 +18,42 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.TransactionalComponent;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.StampedCursor;
+import covia.lattice.Covia;
 import covia.api.Fields;
 
 /**
- * Cursor wrapper for a single agent's state within a user's lattice.
+ * Agent state with named atomic mutations and compound transactions.
  *
- * <p>All mutations use atomic {@code cursor.updateAndGet} — no external
- * locking needed. The {@code update} method is private; callers use
- * named mutation methods that encapsulate the record structure.</p>
+ * <p>Named mutations encapsulate the record structure. Single-record edits use
+ * atomic cursor updates; changes spanning sessions and agent state compose
+ * through upstream transactions, without external locking or I/O.</p>
  */
-public class AgentState extends ALatticeComponent<ACell> {
+public class AgentState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, AgentState> {
+	@Override
+	public AgentState withCursor(AForkableCursor<ACell> draft) {
+		return new AgentState(context, draft, agentId);
+	}
+
+	private final LatticeContext context;
+	private final AForkableCursor<ACell> edits;
+
+	@Override
+	public AForkableCursor<ACell> cursor() { return edits; }
+
+	public LatticeContext getContext() { return context; }
 
 	public static final AString KEY_AGENT = Strings.intern("agent");
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
+	/** Present only for a deliberate stop; faults use {@link #KEY_ERROR}. */
+	public static final AString KEY_SUSPENSION = Strings.intern("suspension");
+	public static final AString SUSPENSION_BY = Strings.intern("by");
+	public static final int MAX_SUSPEND_REASON_LENGTH = 512;
+	public static final String SUSPENDED_BY = "Suspended by %s";
+	public static final String INVALID_SESSION_FRAMES = "Session frames must be a vector";
 
 	// Record field keys
 	private static final AString K_TS       = Strings.intern("ts");
@@ -38,8 +62,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
 	private static final AString K_SESSIONS = Strings.intern("sessions");
-	/** Legacy pre-frame loads slot. Read only by the cycle-start migration. */
-	private static final AString K_LOADS = Strings.intern("loads");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
@@ -62,26 +84,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 *  assert against the same constant the production wake uses. */
 	static final AString TRIGGER_OP = Strings.intern("v/ops/agent/trigger");
 
-	// Session record field keys (scoped within a single session map)
-	private static final AString K_C        = Strings.intern("c");
-	private static final AString K_FRAMES   = Strings.intern("frames");
-	/** Session attempt epoch: present while a transition owns this session
-	 *  (set by {@link #beginSessionCycle}, cleared by {@link #mergeRunResult}).
-	 *  Serves as a write fence for {@link #updateSessionFrames} (a
-	 *  cancelled cycle's zombie thread cannot write once a new epoch claims the
-	 *  session). A stale epoch after restart is abandoned executor state; a
-	 *  later attempt may supersede it but boot never wakes solely for it. */
-	private static final AString K_IN_CYCLE = Strings.intern("inCycle");
-	private static final AString K_META     = Strings.intern("meta");
-	private static final AString K_PARTIES  = Strings.intern("parties");
-	private static final AString K_CREATED  = Strings.intern("created");
-	private static final AString K_TURNS    = Strings.intern("turns");
-
-	// Frame record field keys (entries in session.frames). See GOAL_TREE.md.
-	private static final AString K_DESCRIPTION  = Strings.intern("description");
-	private static final AString K_CONVERSATION = Strings.intern("conversation");
-
-	// Turn record field keys (entries in session.frames[0].conversation, and
+	// Turn record field keys (entries in session root frame history, and
 	// in child frame conversations when the goal-tree adapter pushes them).
 	// See GOAL_TREE.md §Conversation Structure for the full spec.
 	public static final AString K_ROLE      = Strings.intern("role");
@@ -130,8 +133,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_IN_CYCLE = K_IN_CYCLE;
 	/** Frame record `description` key. */
 	public static final AString KEY_DESCRIPTION  = K_DESCRIPTION;
-	/** Frame record `conversation` key — vector of turn envelopes and/or
-	 *  compacted segments. */
+	/** Legacy frame record {@code conversation} key. New frames use versioned
+	 *  history; readers needing the equivalent nested conversation should use
+	 *  {@link covia.adapter.agent.GoalTreeContext#archivedConversation(AMap)}
+	 *  instead of this key. */
 	public static final AString KEY_CONVERSATION = K_CONVERSATION;
 
 	/** Identity of a schedulable thread within an agent — a session or a task.
@@ -142,74 +147,53 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	private final AString agentId;
 
-	AgentState(ALatticeComponent<?> parent, ALatticeCursor<ACell> cursor,
+	AgentState(LatticeContext context, AForkableCursor<ACell> cursor,
 			AString agentId) {
-		super(parent, cursor);
+		super(cursor);
+		this.context = context;
 		this.agentId = agentId;
+		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampAgent);
 	}
 
 	public AString getAgentId() { return agentId; }
 
-	public boolean exists() { return cursor.get() != null; }
+	public boolean exists() { return cursor().get() != null; }
 
 	// ========== Record access ==========
 
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getRecord() {
-		ACell v = cursor.get();
+		ACell v = cursor().get();
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 
 	/** Replaces the entire record. Use for initialisation only. */
 	public void putRecord(AMap<AString, ACell> record) {
-		CVMLong ts = now();
-		cursor.updateAndGet(current -> record.assoc(K_TS, ratchetTimestamp(current, ts)));
+		// Preserve the previous version floor when replacing the whole record;
+		// the editing cursor alone supplies the new write timestamp.
+		cursor().updateAndGet(current -> record.assoc(K_TS, RT.getIn(current, K_TS)));
 	}
 
 	/**
-	 * The write clock for this component: the lattice context resolves it once
-	 * per logical write, so a mutation stamps the same instant however many
-	 * times its CAS lambda retries under contention.
+	 * Clock for event provenance. Record version stamps belong to the editing cursor.
 	 */
 	private CVMLong now() {
-		return cursor.getContext().currentTimestamp();
-	}
-
-	@SuppressWarnings("unchecked")
-	private static CVMLong ratchetTimestamp(ACell current, CVMLong proposed) {
-		if (current instanceof AMap<?, ?> map) {
-			ACell previous = ((AMap<AString, ACell>) map).get(K_TS);
-			if (previous instanceof CVMLong old
-					&& old.longValue() > proposed.longValue()) return old;
-		}
-		return proposed;
+		return getContext().currentTimestamp();
 	}
 
 	// ========== Atomic update (private) ==========
 
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> fn) {
-		CVMLong ts = now();
-		ACell result = cursor.updateAndGet(current -> {
-			if (!(current instanceof AMap)) return current;
-			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
-			AMap<AString, ACell> updated = fn.apply(r);
-			if (Objects.equals(updated, r)) return r;
-			return updated.assoc(K_TS, ratchetTimestamp(r, ts));
-		});
+		ACell result = cursor().updateAndGet(current ->
+			current instanceof AMap ? fn.apply((AMap<AString, ACell>) current) : current);
 		return (result instanceof AMap) ? (AMap<AString, ACell>) result : null;
 	}
 
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getAndUpdate(UnaryOperator<AMap<AString, ACell>> fn) {
-		CVMLong ts = now();
-		ACell old = cursor.getAndUpdate(current -> {
-			if (!(current instanceof AMap)) return current;
-			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
-			AMap<AString, ACell> updated = fn.apply(r);
-			if (Objects.equals(updated, r)) return r;
-			return updated.assoc(K_TS, ratchetTimestamp(r, ts));
-		});
+		ACell old = cursor().getAndUpdate(current ->
+			current instanceof AMap ? fn.apply((AMap<AString, ACell>) current) : current);
 		return (old instanceof AMap) ? (AMap<AString, ACell>) old : null;
 	}
 
@@ -234,8 +218,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (initialState != null) record = record.assoc(K_STATE, initialState);
 		if (definition != null) record = record.assoc(KEY_AGENT, definition);
-		AMap<AString, ACell> initial = record.assoc(K_TS, now());
-		return cursor.getAndUpdate(current -> (current == null) ? initial : current) == null;
+		AMap<AString, ACell> initial = record;
+		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
 	/**
@@ -259,8 +243,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (state != null) record = record.assoc(K_STATE, state);
-		AMap<AString, ACell> initial = record.assoc(K_TS, now());
-		return cursor.getAndUpdate(current -> (current == null) ? initial : current) == null;
+		AMap<AString, ACell> initial = record;
+		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
 	// ========== Read accessors ==========
@@ -314,29 +298,13 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * Returns the session record for the given sid, or null if absent.
 	 */
 	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getSession(Blob sid) {
-		Index<Blob, ACell> sessions = getSessions();
-		ACell v = sessions.get(sid);
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
-	}
+	public AMap<AString, ACell> getSession(Blob sid) { return session(sid).getRecord(); }
 
-	/** Number of recorded root conversation turns, retained across compaction. */
-	public static long sessionTurnCount(AMap<AString, ACell> session) {
-		ACell count = RT.getIn(session, K_META, K_TURNS);
-		return (count instanceof CVMLong n) ? n.longValue() : 0;
+	/** Session view bound to this agent (including when this agent is a draft).
+	 * Missing sessions read as null; mutations never create or resurrect them. */
+	public SessionState session(Blob sid) {
+		return new SessionState(getContext(), cursor().path(K_SESSIONS, sid), sid);
 	}
-
-	/** A saved result remains readable regardless of subsequent conversation. */
-	public static AMap<AString, ACell> sessionSummary(AMap<AString, ACell> session, AString instruction) {
-		return RT.ensureMap(RT.getIn(session, KEY_SUMMARIES, instruction));
-	}
-
-	/** Reuse depends only on the conversation covered, not mutable agent state. */
-	public static boolean summaryCovers(AMap<AString, ACell> summary, long turns) {
-		return summary != null && summary.get(K_TURNS) instanceof CVMLong covered
-			&& covered.longValue() >= turns;
-	}
-
 	/**
 	 * Saves a result under its exact instruction, even if the conversation has
 	 * advanced during generation. The stored turn count describes the snapshot
@@ -347,27 +315,13 @@ public class AgentState extends ALatticeComponent<ACell> {
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> saveSessionSummary(Blob sid, AMap<AString, ACell> expectedSession,
 			AString instruction, AMap<AString, ACell> summary) {
-		if (expectedSession == null) return null;
-		long turns = sessionTurnCount(expectedSession);
-		ACell created = RT.getIn(expectedSession, K_META, K_CREATED);
-		AMap<AString, ACell> saved = summary.assoc(K_TURNS, CVMLong.create(turns)).assoc(Fields.TS, now());
-		AMap<AString, ACell> result = update(r -> {
-			if (SUSPENDED.equals(r.get(K_STATUS)) || TERMINATED.equals(r.get(K_STATUS))) return r;
-			AMap<AString, ACell> session = RT.ensureMap(RT.getIn(r, K_SESSIONS, sid));
-			if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return r;
-			if (summaryCovers(sessionSummary(session, instruction), turns)) return r;
-			AMap<AString, ACell> summaries = RT.ensureMap(session.get(KEY_SUMMARIES));
-			if (summaries == null) summaries = Maps.empty();
-			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid,
-				session.assoc(KEY_SUMMARIES, summaries.assoc(instruction, saved))));
+		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		transact(draft -> {
+			result.set(null);
+			if (!draft.exists() || SUSPENDED.equals(draft.getStatus()) || TERMINATED.equals(draft.getStatus())) return;
+			result.set(draft.session(sid).saveSummary(expectedSession, instruction, summary));
 		});
-		// Inspect the committed value, not a side channel from a possibly retried CAS.
-		if (result == null || SUSPENDED.equals(result.get(K_STATUS)) || TERMINATED.equals(result.get(K_STATUS))) return null;
-		AMap<AString, ACell> session = RT.ensureMap(RT.getIn(result, K_SESSIONS, sid));
-		if (session == null || !Objects.equals(created, RT.getIn(session, K_META, K_CREATED))) return null;
-		AMap<AString, ACell> published = sessionSummary(session, instruction);
-		return summaryCovers(published, turns) ? published : null;
+		return result.get();
 	}
 
 	/**
@@ -405,60 +359,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
 	@SuppressWarnings("unchecked")
 	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
-		AMap<AString, ACell> result = update(r -> {
-			if (TERMINATED.equals(r.get(K_STATUS)) || SUSPENDED.equals(r.get(K_STATUS))) return r;
-			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
-			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
-			if (session == null) {
-				if (!create) return r;
-				session = newSession(caller, null, now());
-			}
-			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
-			if (external == null) external = Maps.empty();
-			if (external.get(Fields.JOB_ID) != null) return r;
-			session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE, ROLE_USER,
-				K_CONTENT, content, K_SOURCE, SOURCE_CHAT, K_TURN_TS, now())));
-			session = session.assoc(KEY_EXTERNAL, external.assoc(Fields.JOB_ID, jobId));
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		boolean[] accepted = {false};
+		transact(draft -> {
+			accepted[0] = false;
+			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return;
+			if (create) draft.ensureSession(sid, caller);
+			accepted[0] = draft.session(sid).claimExternalTurn(jobId, content);
 		});
-		return result != null && jobId.equals(RT.getIn(result, K_SESSIONS, sid, KEY_EXTERNAL, Fields.JOB_ID));
-	}
-
-	/** Persist identity before exposing completion; only the claiming job may release the session. */
-	@SuppressWarnings("unchecked")
-	public void finishExternalTurn(Blob sid, Blob jobId, ACell remoteSession, ACell response) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (Index<Blob, ACell>) r.get(K_SESSIONS);
-			AMap<AString, ACell> session = RT.ensureMap(sessions.get(sid));
-			if (session == null) return r;
-			AMap<AString, ACell> external = RT.ensureMap(session.get(KEY_EXTERNAL));
-			if (external == null || !jobId.equals(external.get(Fields.JOB_ID))) return r;
-			external = external.dissoc(Fields.JOB_ID);
-			if (remoteSession != null) external = external.assoc(Fields.SESSION_ID, remoteSession);
-			if (response != null) session = appendTurnsToRoot(session, Vectors.of(Maps.of(K_ROLE,
-				ROLE_ASSISTANT, K_CONTENT, response, K_SOURCE, SOURCE_CHAT, K_TURN_TS, now())));
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session.assoc(KEY_EXTERNAL, external)));
-		});
-	}
-
-	private static AMap<AString, ACell> newSession(AString caller,
-			AMap<AString, ACell> initialLoads, CVMLong created) {
-		AMap<AString, ACell> meta = Maps.of(
-			K_CREATED, created,
-			Fields.UPDATED, created,
-			K_TURNS,   CVMLong.create(0),
-			K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
-		AMap<AString, ACell> rootFrame = Maps.of(
-			K_DESCRIPTION,  Strings.EMPTY,
-			K_CONVERSATION, Vectors.empty());
-		if (initialLoads != null && initialLoads.count() > 0) {
-			rootFrame = rootFrame.assoc(K_LOADS, initialLoads);
-		}
-		return Maps.of(
-			K_C,       Maps.empty(),
-			K_PENDING, Vectors.empty(),
-			K_FRAMES,  Vectors.of(rootFrame),
-			K_META,    meta);
+		return accepted[0];
 	}
 
 	/**
@@ -466,64 +374,41 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * agent removal or competing session creation from landing between the two
 	 * record changes.
 	 */
-	@SuppressWarnings("unchecked")
 	public SessionIntake addTaskInSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, Blob taskId, ACell taskData) {
-		java.util.concurrent.atomic.AtomicReference<SessionIntake> result =
-			new java.util.concurrent.atomic.AtomicReference<>(SessionIntake.MISSING);
-		CVMLong created = now();
-		update(r -> {
-			result.set(SessionIntake.MISSING);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell rawSession = sessions.get(sid);
-			if (rawSession != null && initialLoads != null) {
-				result.set(SessionIntake.LOADS_ON_EXISTING);
-				return r;
-			}
-			if (rawSession == null) {
-				rawSession = newSession(caller, initialLoads, created);
-				sessions = sessions.assoc(sid, rawSession);
-			}
-			if (!(rawSession instanceof AMap<?, ?>)) return r;
-			result.set(SessionIntake.APPLIED);
-			return r
-				.assoc(K_SESSIONS, sessions)
-				.assoc(K_TASKS, extractTasks(r).assoc(taskId, taskData));
-		});
-		return result.get();
+		return intakeSession(sid, caller, initialLoads, true, draft ->
+			draft.update(record -> record.assoc(K_TASKS, extractTasks(record).assoc(taskId, taskData))));
 	}
 
 	/** Atomically creates/reuses a session and appends one pending envelope. */
-	@SuppressWarnings("unchecked")
 	public SessionIntake appendSessionPending(Blob sid, AString caller,
-			AMap<AString, ACell> initialLoads, ACell envelope,
-			boolean createIfMissing) {
-		java.util.concurrent.atomic.AtomicReference<SessionIntake> result =
-			new java.util.concurrent.atomic.AtomicReference<>(SessionIntake.MISSING);
-		CVMLong created = now();
-		update(r -> {
-			result.set(SessionIntake.MISSING);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell rawSession = sessions.get(sid);
-			if (rawSession != null && initialLoads != null) {
-				result.set(SessionIntake.LOADS_ON_EXISTING);
-				return r;
+			AMap<AString, ACell> initialLoads, ACell envelope, boolean createIfMissing) {
+		return intakeSession(sid, caller, initialLoads, createIfMissing,
+			draft -> draft.session(sid).appendPending(envelope));
+	}
+
+	/** Session admission and the associated agent change observe one atomic snapshot. */
+	private SessionIntake intakeSession(Blob sid, AString caller,
+			AMap<AString, ACell> initialLoads, boolean create,
+			java.util.function.Consumer<AgentState> change) {
+		SessionIntake[] result = {SessionIntake.MISSING};
+		transact(draft -> {
+			result[0] = SessionIntake.MISSING;
+			if (!draft.exists()) return;
+			ACell raw = draft.getSessions().get(sid);
+			if (raw != null && initialLoads != null) {
+				result[0] = SessionIntake.LOADS_ON_EXISTING;
+				return;
 			}
-			if (rawSession == null) {
-				if (!createIfMissing) return r;
-				rawSession = newSession(caller, initialLoads, created);
+			if (raw == null) {
+				if (!create) return;
+				raw = draft.ensureSession(sid, caller, initialLoads);
 			}
-			if (!(rawSession instanceof AMap<?, ?> map)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) map;
-			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> vector)
-				? (AVector<ACell>) vector : Vectors.empty();
-			session = session.assoc(K_PENDING, pending.conj(envelope));
-			result.set(SessionIntake.APPLIED);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+			if (!(raw instanceof AMap<?, ?>)) return;
+			change.accept(draft);
+			result[0] = SessionIntake.APPLIED;
 		});
-		return result.get();
+		return result[0];
 	}
 
 	@SuppressWarnings("unchecked")
@@ -545,351 +430,27 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * pending entries.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	public AVector<ACell> getSessionPending(Blob sid) {
-		AMap<AString, ACell> session = getSession(sid);
-		if (session == null) return Vectors.empty();
-		ACell v = session.get(K_PENDING);
-		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
-	}
-
+	public AVector<ACell> getSessionPending(Blob sid) { return session(sid).pending(); }
 	/**
 	 * Atomically appends an envelope to {@code sessions[sid].pending} (S3b).
 	 * No-op if the session is missing — callers should ensureSession first.
 	 */
 	@SuppressWarnings("unchecked")
 	public void appendSessionPending(Blob sid, ACell envelope) {
-		appendSessionPending(sid, null, null, envelope, false);
-	}
-
-	/**
-	 * Atomically claims a session for a transition cycle: sets the
-	 * {@code inCycle} epoch, appends the cycle's input turns to
-	 * {@code frames[0].conversation} (bumping {@code meta.turns}), and drains
-	 * the first {@code drainCount} entries of {@code session.pending} — all in
-	 * ONE CAS, so an envelope is removed from pending only in the write that
-	 * lands its user turn (crash between the two is impossible).
-	 *
-	 * <p>A stale {@code inCycle} left by an abandoned attempt is overwritten.
-	 * The epoch is a write fence, not a checkpoint: claiming it starts a fresh
-	 * attempt and does not restore the former executor.</p>
-	 *
-	 * @return true if the session existed and was claimed; false if the
-	 *         record or session is missing (nothing written)
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean beginSessionCycle(Blob sid, ACell epoch, AVector<ACell> turns, long drainCount) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = migrateLegacySessionLoads(
-				(AMap<AString, ACell>) sv);
-
-			session = session.assoc(K_IN_CYCLE, epoch);
-			if (turns != null && turns.count() > 0) {
-				session = appendTurnsToRoot(session, turns);
-			}
-			if (drainCount > 0) {
-				session = drainPendingPrefix(session, drainCount);
-			}
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
-	}
-
-	/**
-	 * Moves the former {@code session.loads} tier into the root frame. Existing
-	 * root-frame entries retain their old inner-scope precedence, including nil
-	 * masks. Flattening the effective value preserves behaviour while giving
-	 * both LLM runtimes one durable frame shape. Pure and safe under CAS retry.
-	 */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> migrateLegacySessionLoads(
-			AMap<AString, ACell> session) {
-		if (!session.containsKey(K_LOADS)) return session;
-		AMap<AString, ACell> legacy = (session.get(K_LOADS) instanceof AMap lm)
-			? (AMap<AString, ACell>) lm : Maps.empty();
-		AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
-			? (AVector<ACell>) fv : Vectors.empty();
-		AMap<AString, ACell> root;
-		if (frames.isEmpty() || !(frames.get(0) instanceof AMap)) {
-			root = Maps.of(
-				K_DESCRIPTION, Strings.EMPTY,
-				K_CONVERSATION, Vectors.empty());
-			frames = Vectors.of(root);
-		} else {
-			root = (AMap<AString, ACell>) frames.get(0);
-		}
-		AMap<AString, ACell> frameLoads = (root.get(K_LOADS) instanceof AMap fm)
-			? (AMap<AString, ACell>) fm : Maps.empty();
-		AMap<AString, ACell> merged = mergeLoadTiers(legacy, frameLoads);
-		root = merged.isEmpty() ? root.dissoc(K_LOADS) : root.assoc(K_LOADS, merged);
-		return session.assoc(K_FRAMES, frames.assoc(0, root)).dissoc(K_LOADS);
-	}
-
-	/** Applies load tiers outer-to-inner; nil entries mask an outer value. */
-	@SafeVarargs
-	private static AMap<AString, ACell> mergeLoadTiers(AMap<AString, ACell>... tiers) {
-		AMap<AString, ACell> result = Maps.empty();
-		for (AMap<AString, ACell> tier : tiers) {
-			for (var entry : tier.entrySet()) {
-				result = (entry.getValue() == null)
-					? result.dissoc(entry.getKey())
-					: result.assoc(entry.getKey(), entry.getValue());
-			}
-		}
-		return result;
-	}
-
-	/**
-	 * Atomically presents input after a cycle has claimed and repaired its
-	 * frames. The epoch fence prevents an interrupted runner from draining
-	 * pending messages after a newer cycle has superseded it.
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean presentSessionCycleInput(Blob sid, ACell expectedEpoch,
-			AVector<ACell> turns, long drainCount) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (!Objects.equals(expectedEpoch, session.get(K_IN_CYCLE))) return r;
-
-			if (turns != null && turns.count() > 0) {
-				session = appendTurnsToRoot(session, turns);
-			}
-			if (drainCount > 0) {
-				session = drainPendingPrefix(session, drainCount);
-			}
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
-	}
-
-	/**
-	 * Atomically updates {@code sessions[sid].frames}, fenced by the cycle
-	 * epoch: the write applies only while {@code session.inCycle} equals
-	 * {@code expectedEpoch}. A transition whose cycle has been superseded
-	 * (cancelled and superseded, agent deleted and recreated, session claimed by
-	 * a fresh cycle) gets {@code false} and must stop — its view of the
-	 * frames is no longer authoritative.
-	 *
-	 * <p>{@code fn} must be pure: the CAS may re-apply it on contention.</p>
-	 *
-	 * @param expectedEpoch the claiming cycle's epoch (from
-	 *        {@link #beginSessionCycle}); null skips the fence for coordinated
-	 *        initialisation and tests. Owner mutations should use
-	 *        {@link #updateQuiescentSessionFrames}.
-	 * @return true if the update applied; false if the record/session is
-	 *         missing or the epoch fence rejected the write
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean updateSessionFrames(Blob sid, ACell expectedEpoch, UnaryOperator<AVector<ACell>> fn) {
-		return updateSessionFrames(sid, expectedEpoch, false, fn);
-	}
-
-	/** Applies an owner-side frame mutation only while the session is idle. */
-	public boolean updateQuiescentSessionFrames(Blob sid, UnaryOperator<AVector<ACell>> fn) {
-		return updateSessionFrames(sid, null, true, fn);
-	}
-
-	@SuppressWarnings("unchecked")
-	private boolean updateSessionFrames(Blob sid, ACell expectedEpoch,
-			boolean requireQuiescent, UnaryOperator<AVector<ACell>> fn) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (requireQuiescent && session.get(K_IN_CYCLE) != null) return r;
-			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) {
-				return r;   // fence: this cycle no longer owns the session
-			}
-			AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
-				? (AVector<ACell>) fv : Vectors.empty();
-			AVector<ACell> updatedFrames = fn.apply(frames);
-			if (updatedFrames == null || updatedFrames == frames) {
-				applied.set(updatedFrames != null);
-				return r;   // no change — skip the write (and the K_TS bump)
-			}
-			session = session.assoc(K_FRAMES, updatedFrames);
-			AVector<ACell> beforeRoot = rootConversation(frames);
-			AVector<ACell> afterRoot = rootConversation(updatedFrames);
-			if (afterRoot.count() > beforeRoot.count()) {
-				session = bumpTurnMeta(session,
-					(AVector<ACell>) afterRoot.slice(beforeRoot.count(), afterRoot.count()));
-			}
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
-	}
-
-	/** Appends one root-frame conversation turn under the active cycle fence,
-	 * updating session turn/timestamp metadata atomically with the frame. */
-	@SuppressWarnings("unchecked")
-	public boolean appendSessionRootTurn(Blob sid, ACell expectedEpoch, ACell turn) {
-		java.util.concurrent.atomic.AtomicBoolean applied =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			applied.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (expectedEpoch != null && !expectedEpoch.equals(session.get(K_IN_CYCLE))) return r;
-			session = appendTurnsToRoot(session, Vectors.of(turn));
-			applied.set(true);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return applied.get();
+		session(sid).appendPending(envelope);
 	}
 
 	/** Reads {@code sessions[sid].inCycle}, or null when absent. */
-	public ACell getSessionCycleEpoch(Blob sid) {
-		AMap<AString, ACell> session = getSession(sid);
-		return (session != null) ? session.get(K_IN_CYCLE) : null;
-	}
-
+	public ACell getSessionCycleEpoch(Blob sid) { return session(sid).cycleEpoch(); }
 	/**
 	 * Settles a session's cycle claim without a merge — used when an
 	 * interrupted cycle is administratively stopped (operator suspend): the
 	 * claim is released so the session does not register as crashed work,
 	 * and any zombie writes from the stopped cycle are fenced out.
 	 */
-	@SuppressWarnings("unchecked")
 	public void clearSessionCycle(Blob sid) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			AMap<AString, ACell> cleared = session.dissoc(K_IN_CYCLE);
-			if (cleared == session) return r;
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, cleared));
-		});
+		if (sid != null) session(sid).clearCycle();
 	}
-
-	/**
-	 * Appends turns to the session's {@code frames[0].conversation} and bumps
-	 * {@code meta.turns}. Shared by {@link #beginSessionCycle} and
-	 * {@link #mergeRunResult} so the two paths cannot drift. Defensive: mints
-	 * a root frame if the session predates frames. Pure — safe under CAS retry.
-	 */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> appendTurnsToRoot(AMap<AString, ACell> session,
-			AVector<ACell> turnsToAppend) {
-		AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
-			? (AVector<ACell>) fv : Vectors.empty();
-		AMap<AString, ACell> rootFrame;
-		if (frames.count() == 0) {
-			rootFrame = Maps.of(
-				K_DESCRIPTION,  Strings.EMPTY,
-				K_CONVERSATION, Vectors.empty());
-			frames = Vectors.of(rootFrame);
-		} else {
-			rootFrame = (AMap<AString, ACell>) frames.get(0);
-		}
-		AVector<ACell> rootConv = (rootFrame.get(K_CONVERSATION) instanceof AVector cv)
-			? (AVector<ACell>) cv : Vectors.empty();
-		for (long i = 0; i < turnsToAppend.count(); i++) {
-			rootConv = rootConv.conj(turnsToAppend.get(i));
-		}
-		rootFrame = rootFrame.assoc(K_CONVERSATION, rootConv);
-		frames = frames.assoc(0, rootFrame);
-		session = session.assoc(K_FRAMES, frames);
-		return bumpTurnMeta(session, turnsToAppend);
-	}
-
-	/** Updates root-turn count and timestamp metadata for an appended suffix. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> bumpTurnMeta(AMap<AString, ACell> session,
-			AVector<ACell> appended) {
-		if (session.get(K_META) instanceof AMap) {
-			AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
-			long current = (meta.get(K_TURNS) instanceof CVMLong cl) ? cl.longValue() : 0;
-			meta = meta.assoc(K_TURNS, CVMLong.create(current + appended.count()));
-			long updated = (meta.get(Fields.UPDATED) instanceof CVMLong cl) ? cl.longValue() : 0;
-			for (long i = 0; i < appended.count(); i++) {
-				ACell ts = RT.getIn(appended.get(i), K_TURN_TS);
-				if (ts instanceof CVMLong cl) updated = Math.max(updated, cl.longValue());
-			}
-			if (updated > 0) meta = meta.assoc(Fields.UPDATED, CVMLong.create(updated));
-			session = session.assoc(K_META, meta);
-		}
-		return session;
-	}
-
-	/** Root conversation or an empty vector for an absent/malformed root. */
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> rootConversation(AVector<ACell> frames) {
-		if (frames == null || frames.isEmpty() || !(frames.get(0) instanceof AMap root)) {
-			return Vectors.empty();
-		}
-		ACell conversation = ((AMap<AString, ACell>) root).get(K_CONVERSATION);
-		return (conversation instanceof AVector cv)
-			? (AVector<ACell>) cv : Vectors.empty();
-	}
-
-	/**
-	 * Adds a cycle's measured token counts — {@code input}, {@code output},
-	 * {@code total} and the cache counts when reported — into the session's
-	 * {@code meta.tokens} running totals (#217). Pure —
-	 * safe under CAS retry. A session without a meta map (shouldn't happen —
-	 * sessions mint meta at creation) is left untouched rather than grown a
-	 * partial one.
-	 */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> bumpMetaTokens(AMap<AString, ACell> session,
-			AMap<AString, ACell> cycleTokens) {
-		if (!(session.get(K_META) instanceof AMap)) return session;
-		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
-		AMap<AString, ACell> totals = (meta.get(Fields.TOKENS) instanceof AMap tm)
-			? (AMap<AString, ACell>) tm : Maps.empty();
-		for (AString k : new AString[] {Fields.INPUT, Fields.OUTPUT, Fields.TOTAL,
-				Fields.CACHE_READ, Fields.CACHE_WRITE, Fields.CACHE_WRITE_5M, Fields.CACHE_WRITE_1H}) {
-			if (!(cycleTokens.get(k) instanceof CVMLong measured)) continue;
-			long add = measured.longValue();
-			long current = (totals.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
-			totals = totals.assoc(k, CVMLong.create(current + add));
-		}
-		if (totals.count() == 0) return session;
-		return session.assoc(K_META, meta.assoc(Fields.TOKENS, totals));
-	}
-
-	/** Drops the first {@code drainCount} entries of {@code session.pending},
-	 *  preserving the tail (entries that arrived after the snapshot). Shared
-	 *  by {@link #beginSessionCycle} and {@link #mergeRunResult}. Pure. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> drainPendingPrefix(AMap<AString, ACell> session,
-			long drainCount) {
-		AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector pv)
-			? (AVector<ACell>) pv : Vectors.empty();
-		long drop = Math.min(drainCount, pending.count());
-		AVector<ACell> remaining = Vectors.empty();
-		for (long i = drop; i < pending.count(); i++) {
-			remaining = remaining.conj(pending.get(i));
-		}
-		return session.assoc(K_PENDING, remaining);
-	}
-
 	/**
 	 * Removes the session record at {@code sid} (no-op if absent). The
 	 * removal is durable: the venue merge is whole-value LWW, so the
@@ -905,72 +466,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 				? (Index<Blob, ACell>) idx : Index.none();
 			return r.assoc(K_SESSIONS, sessions.dissoc(sid));
 		});
-	}
-
-	/**
-	 * Sets (or clears, when {@code title} is null) the free-form human-facing
-	 * title in a session's {@code meta} — the field documented but never
-	 * implemented in the "suggested" shape at AGENT_SESSIONS.md §4.3. A
-	 * no-op if the session doesn't exist (caller should check first if it
-	 * needs to distinguish "not found" from "renamed").
-	 *
-	 * @return true if the session existed and was updated, false otherwise
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean setSessionTitle(Blob sid, AString title) {
-		java.util.concurrent.atomic.AtomicBoolean found =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			// updateAndGet may retry the callback after contention. Reset the
-			// side-channel so the return value describes the winning attempt.
-			found.set(false);
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sessionCell = sessions.get(sid);
-			if (!(sessionCell instanceof AMap)) return r;
-			found.set(true);
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sessionCell;
-			AMap<AString, ACell> meta = (session.get(K_META) instanceof AMap m)
-				? (AMap<AString, ACell>) m : Maps.empty();
-			meta = (title != null) ? meta.assoc(Fields.TITLE, title) : meta.dissoc(Fields.TITLE);
-			session = session.assoc(K_META, meta);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return found.get();
-	}
-
-	/** Removes a queued chat envelope by its external Job id. */
-	@SuppressWarnings("unchecked")
-	public void removeSessionPendingJob(Blob sid, Blob jobId) {
-		AString jobIdHex = Strings.create(jobId.toHexString());
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap<?, ?>)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector<?> v)
-				? (AVector<ACell>) v : Vectors.empty();
-			AVector<ACell> kept = Vectors.empty();
-			for (long i = 0; i < pending.count(); i++) {
-				ACell envelope = pending.get(i);
-				if (!jobIdHex.equals(RT.getIn(envelope, Fields.JOB_ID))) {
-					kept = kept.conj(envelope);
-				}
-			}
-			if (kept.count() == pending.count()) return r;
-			return r.assoc(K_SESSIONS,
-				sessions.assoc(sid, session.assoc(K_PENDING, kept)));
-		});
-	}
-
-	/**
-	 * Whether a session record has durable queued work. {@code inCycle} is an
-	 * executor fence, never a wake signal or a resume checkpoint.
-	 */
-	static boolean sessionHasWork(AMap<AString, ACell> session) {
-		ACell pv = session.get(K_PENDING);
-		return pv instanceof AVector<?> v && v.count() > 0;
 	}
 
 	/**
@@ -1003,6 +498,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public AString getError() {
 		AMap<AString, ACell> r = getRecord();
 		return (r != null) ? RT.ensureString(r.get(K_ERROR)) : null;
+	}
+
+	/** One description for the stop event, cancelled cycle and waiting callers. */
+	public static AString suspensionDetail(AMap<AString, ACell> record) {
+		if (record == null) return null;
+		ACell suspension = record.get(KEY_SUSPENSION);
+		AString by = RT.ensureString(RT.getIn(suspension, SUSPENSION_BY));
+		if (by == null) return null;
+		AString reason = RT.ensureString(RT.getIn(suspension, Fields.REASON));
+		return Strings.create(SUSPENDED_BY.formatted(by)
+			+ (reason == null || reason.isEmpty() ? "" : ": " + reason));
 	}
 
 	public long getTs() {
@@ -1186,115 +692,40 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Single-writer helper for per-thread wake scheduling. Writes
-	 * {@code wakeTime} on the named session or task record, then re-derives
-	 * the agent's single scheduled wake via {@link #rescheduleWake}. See
-	 * {@code venue/docs/GRID_SCHEDULER.md §8}.
-	 *
-	 * <p>Replace-semantics: the new {@code wakeTime} overwrites any prior
-	 * value on that thread. Pass {@code wakeTime <= 0} to clear it. A missing
-	 * session / task is a no-op (no lattice write, no scheduler change) —
-	 * callers should ensure the record exists first.</p>
-	 *
-	 * <p>Per-thread {@code wakeTime} fields stay the authoritative record of
-	 * "this thread wants to wake at T"; the agent holds at most one
-	 * {@code agent:wake} event in the venue grid scheduler, armed at the
-	 * <i>earliest</i> of them. Per-agent concurrency is zero under the
-	 * virtual-thread-per-agent model (one cycle per agent serialises all
-	 * in-cycle writers), so the read-then-write here needs no lock.</p>
-	 *
-	 * @param scheduler Venue grid scheduler to (re)arm the wake on
-	 * @param ownerDID  Agent owner's DID — the wake fires under its authority
-	 * @param kind      SESSION or TASK
-	 * @param threadId  Session or task id (Blob)
-	 * @param wakeTime  Absolute wall-clock millis, or {@code <= 0} to clear
+	 * Changes only this agent's thread wake intent. Safe on live or draft state.
+	 * Returns false for a missing thread. Runtime callers use
+	 * {@link Scheduler#setThreadWakeTime} to commit the intent and schedule together.
 	 */
 	@SuppressWarnings("unchecked")
-	public void setThreadWakeTime(Scheduler scheduler, AString ownerDID,
-			ThreadKind kind, Blob threadId, long wakeTime) {
-		Objects.requireNonNull(scheduler, "scheduler");
-		Objects.requireNonNull(ownerDID, "ownerDID");
+	public boolean setThreadWakeTime(ThreadKind kind, Blob threadId, long wakeTime) {
 		Objects.requireNonNull(kind, "kind");
 		Objects.requireNonNull(threadId, "threadId");
-
-		// Single pre-read so we can skip the write if the target record
-		// is missing. We don't retry on a race — callers ensure existence.
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-
 		AString key = (kind == ThreadKind.SESSION) ? K_SESSIONS : K_TASKS;
-		Index<Blob, ACell> idx0 = (record.get(key) instanceof Index i)
-			? (Index<Blob, ACell>) i : Index.none();
-		if (!(idx0.get(threadId) instanceof AMap)) return;
-
-		update(r -> {
-			Index<Blob, ACell> idx = (r.get(key) instanceof Index i)
-				? (Index<Blob, ACell>) i : Index.none();
-			ACell existing = idx.get(threadId);
-			if (!(existing instanceof AMap)) return r;
-			AMap<AString, ACell> rec = (AMap<AString, ACell>) existing;
+		AMap<AString, ACell> before = getAndUpdate(r -> {
+			if (!(r.get(key) instanceof Index<?, ?>)) return r;
+			Index<Blob, ACell> idx = (Index<Blob, ACell>) r.get(key);
+			if (!(idx.get(threadId) instanceof AMap<?, ?>)) return r;
+			AMap<AString, ACell> rec = (AMap<AString, ACell>) idx.get(threadId);
 			AMap<AString, ACell> updated = (wakeTime > 0)
 				? rec.assoc(Fields.WAKE_TIME, CVMLong.create(wakeTime))
 				: rec.dissoc(Fields.WAKE_TIME);
 			return r.assoc(key, idx.assoc(threadId, updated));
 		});
-
-		rescheduleWake(scheduler, ownerDID);
+		return RT.getIn(before, key, threadId) instanceof AMap<?, ?>;
 	}
 
-	/**
-	 * Re-derive this agent's single scheduled wake from the authoritative
-	 * per-thread {@code wakeTime} fields. Cancels any previously-armed
-	 * {@code agent:wake} event, then — if any thread still wants a wake —
-	 * arms exactly one event at the earliest of them, recording its handle on
-	 * the agent record. Clears the stored handle when no thread wants a wake.
-	 *
-	 * <p>Idempotent: safe to call on boot to rebuild the schedule from the
-	 * lattice regardless of how the prior run ended (a cancel of a missing or
-	 * already-fired handle is a no-op). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
-	 *
-	 * <p>The wake is scheduled under the owner's own authority with no extra
-	 * proofs or caps: the owner waking their own agent is the minimum,
-	 * non-escalating authority — the same as a manual {@code agent:wake}. The
-	 * work the run loop then performs still carries each task/session's own
-	 * captured authority.</p>
-	 *
-	 * @param scheduler Venue grid scheduler to (re)arm the wake on
-	 * @param ownerDID  Agent owner's DID — the wake fires under its authority
-	 * @return {@code true} if a wake was armed, {@code false} if none was due
-	 */
-	public boolean rescheduleWake(Scheduler scheduler, AString ownerDID) {
-		Objects.requireNonNull(scheduler, "scheduler");
-		Objects.requireNonNull(ownerDID, "ownerDID");
+	Blob wakeHandle() {
+		ACell handle = RT.getIn(getRecord(), K_WAKE_HANDLE);
+		return handle instanceof Blob b ? b : null;
+	}
 
+	void setWakeHandle(Blob handle) {
+		update(r -> handle == null ? r.dissoc(K_WAKE_HANDLE) : r.assoc(K_WAKE_HANDLE, handle));
+	}
+
+	long earliestWake() {
 		AMap<AString, ACell> record = getRecord();
-		if (record == null) return false;
-
-		long earliest = earliestWake(record);
-		RequestContext octx = RequestContext.of(ownerDID);
-
-		ACell oldHandle = record.get(K_WAKE_HANDLE);
-		if (oldHandle instanceof Blob ob) {
-			scheduler.cancel(ob, octx);
-		}
-
-		if (earliest > 0) {
-			// Non-forcing (run only if work), non-blocking (fire-and-forget), and
-			// explicitly untracked: a wake is machinery, not user work — the run
-			// loop it starts records its own tasks. Only the operator's
-			// forceTrackJobs makes wakes durable (GRID_SCHEDULER.md §7).
-			Blob handle = scheduler.schedule(TRIGGER_OP,
-				Maps.of(Fields.AGENT_ID, agentId,
-					Fields.FORCE, CVMBool.FALSE,
-					Fields.WAIT, CVMBool.FALSE),
-				octx, earliest, null, Boolean.FALSE);
-			update(r -> r.assoc(K_WAKE_HANDLE, handle));
-			return true;
-		}
-		if (oldHandle != null) {
-			update(r -> r.dissoc(K_WAKE_HANDLE));
-		}
-		return false;
+		return record == null ? 0 : earliestWake(record);
 	}
 
 	/** Earliest positive {@code wakeTime} across all sessions and tasks, or 0 if none. */
@@ -1322,11 +753,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	// ========== CAS operations ==========
 
-	/** Atomic CAS: SUSPENDED → SLEEPING, clear error. Returns true if resumed. */
+	/** Atomic CAS: SUSPENDED → SLEEPING, clear fault and deliberate stop. */
 	public boolean tryResume() {
 		AMap<AString, ACell> before = getAndUpdate(r ->
 			SUSPENDED.equals(RT.ensureString(r.get(K_STATUS)))
-				? r.assoc(K_STATUS, SLEEPING).dissoc(K_ERROR) : r);
+				? r.assoc(K_STATUS, SLEEPING).dissoc(K_ERROR).dissoc(KEY_SUSPENSION) : r);
 		return SUSPENDED.equals(RT.ensureString(before.get(K_STATUS)));
 	}
 
@@ -1344,9 +775,32 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return SLEEPING.equals(was) || RUNNING.equals(was);
 	}
 
-	/** Sets SUSPENDED status with error message. */
+	/**
+	 * Records a deliberate stop atomically. Repeated stops replace its provenance.
+	 * Returns the committed record, or null if deletion won the race.
+	 */
+	public AMap<AString, ACell> suspend(AString by, AString reason) {
+		Objects.requireNonNull(by);
+		AMap<AString, ACell> stop = Maps.of(SUSPENSION_BY, by, K_TS, now());
+		if (reason != null) {
+			String text = reason.toString();
+			stop = stop.assoc(Fields.REASON, Strings.create(
+				text.substring(0, Math.min(text.length(), MAX_SUSPEND_REASON_LENGTH))));
+		}
+		AMap<AString, ACell> suspension = stop;
+		AMap<AString, ACell> stopped = update(r -> TERMINATED.equals(r.get(K_STATUS)) ? r
+			: r.assoc(K_STATUS, SUSPENDED).assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
+		return stopped != null && SUSPENDED.equals(stopped.get(K_STATUS)) ? stopped : null;
+	}
+
+	/** Sets a fault suspension without overwriting a deliberate stop racing the failure. */
 	public void suspend(AString error) {
-		update(r -> r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED));
+		update(r -> faultSuspension(r, error));
+	}
+
+	private static AMap<AString, ACell> faultSuspension(AMap<AString, ACell> r, AString error) {
+		if (r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return r;
+		return r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED);
 	}
 
 	/**
@@ -1358,10 +812,31 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * clean state; callers re-submit if they want to retry.
 	 */
 	public void suspendAndDrain(AString error) {
-		update(r -> r
-			.assoc(K_ERROR, error)
-			.assoc(K_STATUS, SUSPENDED)
-			.assoc(K_TASKS, Index.none()));
+		update(r -> faultSuspension(r, error).assoc(K_TASKS, Index.none()));
+	}
+
+	/**
+	 * Records an administratively cancelled cycle, drains its queued tasks and
+	 * releases the session claim in one write. Never re-suspends a resumed agent.
+	 * Returns the previous record for notifying exactly the callers we drained.
+	 */
+	public AMap<AString, ACell> finishSuspendedCycle(AMap<AString, ACell> entry, Blob sid) {
+		var before = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		transact(draft -> {
+			before.set(null);
+			AMap<AString, ACell> r = draft.getRecord();
+			if (r == null || !SUSPENDED.equals(r.get(K_STATUS))) return;
+			before.set(r);
+			AMap<AString, ACell> stopped = entry;
+			ACell suspension = r.get(KEY_SUSPENSION);
+			if (suspension != null) stopped = stopped.assoc(KEY_SUSPENSION, suspension)
+				.assoc(Fields.RESULT, suspensionDetail(r));
+			AMap<AString, ACell> recorded = stopped;
+			draft.clearSessionCycle(sid);
+			draft.update(current -> current.assoc(K_TASKS, Index.none())
+				.assoc(K_TIMELINE, extractTimeline(current).conj(recorded)));
+		});
+		return before.get();
 	}
 
 	/**
@@ -1458,20 +933,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 	// ========== Run loop merge ==========
 
 	/**
-	 * Atomically merges run loop results into the agent record.
-	 *
-	 * <p>Reconciles concurrent modifications and preserves tasks added during
-	 * the transition. Executor status is deliberately absent from this merge:
-	 * the launcher writes {@code RUNNING} once and clears it on final exit.</p>
-	 */
-
-	/**
 	 * Atomic merge with frame-conversation append + session pending drain.
 	 *
 	 * <p>When {@code historySid != null}:
 	 * <ul>
 	 *   <li>If {@code turnsToAppend} is non-empty, turns are appended to
-	 *       {@code sessions[historySid].frames[0].conversation} and
+	 *       the root frame history of {@code sessions[historySid]} and
 	 *       {@code meta.turns} is bumped. (The root frame is minted lazily
 	 *       here if the session has no frames yet.)</li>
 	 *   <li>The first {@code presentedSessionPendingCount} entries of
@@ -1492,7 +959,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * {@code frames} vector is replaced wholesale before any turn append —
 	 * the adapter owns its own frame-stack changes (subgoal pushes/pops,
 	 * tool turns, compactions). Any {@code turnsToAppend} are still applied
-	 * to {@code frames[0].conversation} on top, which is how concurrent
+	 * to the root frame history on top, which is how concurrent
 	 * intake (drained pending envelopes → user turns at root) co-exists
 	 * with adapter-owned stack emission.</p>
 	 *
@@ -1517,68 +984,18 @@ public class AgentState extends ALatticeComponent<ACell> {
 			long presentedSessionPendingCount,
 			AVector<ACell> newFrames,
 			AMap<AString, ACell> cycleTokens) {
-		return update(r -> {
-			// Remove completed tasks, detect new ones
-			Index<Blob, ACell> currentTasks = extractTasks(r);
-			Index<Blob, ACell> remainingTasks = removeCompletedTasks(currentTasks, taskResults);
-
-			AVector<ACell> timeline = extractTimeline(r);
-
-			AMap<AString, ACell> updated = r
+		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		transact(draft -> {
+			draft.update(r -> r
 				.assoc(K_STATE, applyStateChange(r.get(K_STATE), snapshotState, newState))
-				.assoc(K_TASKS, remainingTasks)
-				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
-				.dissoc(K_ERROR);
-
-			// Atomic frames[0].conversation append + session.pending drain +
-			// inCycle clear for the picked session.
-			// All touch the same session record so we fold them into one assoc.
-			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
-			boolean hasDrain = presentedSessionPendingCount > 0;
-			boolean hasNewFrames = newFrames != null;
-			if (historySid != null) {
-				Index<Blob, ACell> sessions = (updated.get(K_SESSIONS) instanceof Index idx)
-					? (Index<Blob, ACell>) idx : Index.none();
-				ACell sv = sessions.get(historySid);
-				if (sv instanceof AMap) {
-					AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-					AMap<AString, ACell> before = session;
-
-					// Adapter-owned frame stack: replace wholesale before any
-					// turn append. Turn append below still lands on frames[0]
-					// so concurrent-intake user turns end up at root.
-					if (hasNewFrames) {
-						session = session.assoc(K_FRAMES, newFrames);
-					}
-
-					if (hasTurns) {
-						session = appendTurnsToRoot(session, turnsToAppend);
-					}
-
-					if (hasDrain) {
-						session = drainPendingPrefix(session, presentedSessionPendingCount);
-					}
-
-					// Session running token totals (#217): the cycle's measured
-					// usage — the sum over its recorded inferences — added to
-					// meta.tokens in the same CAS as the entry.
-					if (cycleTokens != null) {
-						session = bumpMetaTokens(session, cycleTokens);
-					}
-
-					// The cycle is complete — release the session's inCycle
-					// claim (set by beginSessionCycle) in the same CAS, so a
-					// merged cycle is never mistaken for a crashed one.
-					session = session.dissoc(K_IN_CYCLE);
-
-					if (session != before) {
-						updated = updated.assoc(K_SESSIONS, sessions.assoc(historySid, session));
-					}
-				}
-			}
-
-			return updated;
+				.assoc(K_TASKS, removeCompletedTasks(extractTasks(r), taskResults))
+				.assoc(K_TIMELINE, extractTimeline(r).conj(timelineEntry))
+				.dissoc(K_ERROR));
+			if (historySid != null) draft.session(historySid).finishCycle(
+				newFrames, turnsToAppend, presentedSessionPendingCount, cycleTokens);
+			result.set(draft.getRecord());
 		});
+		return result.get();
 	}
 
 	// ========== Private helpers ==========

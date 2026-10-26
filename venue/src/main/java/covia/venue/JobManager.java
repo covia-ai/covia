@@ -7,6 +7,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,11 +37,11 @@ import covia.grid.Operation;
 import covia.grid.Status;
 
 /**
- * Manages job lifecycle, persistence, and in-memory state for active jobs.
+ * Manages job execution, admission, recovery and runtime handles.
  *
  * <p>JobManager is the runtime layer for jobs. It holds an in-memory cache of
- * active (non-terminal) jobs and delegates persistence to per-user lattice
- * storage. Every job has an owner identified by caller DID — there are no
+ * active (non-terminal) handles over primary per-user lattice job components.
+ * Every job has an owner identified by caller DID — there are no
  * anonymous jobs. Venue-internal operations use the venue's own DID.</p>
  *
  * <p>Per-user lattice ({@code :user-data → <DID> → :jobs}) is the single
@@ -54,6 +55,7 @@ import covia.grid.Status;
 public class JobManager {
 
 	private static final Logger log = LoggerFactory.getLogger(JobManager.class);
+	private static final String JOB_ID_EXISTS = "Job ID already exists: ";
 
 	private final Engine engine;
 
@@ -92,8 +94,9 @@ public class JobManager {
 	private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Job>> jobUpdateListeners =
 		new java.util.concurrent.CopyOnWriteArrayList<>();
 
-	// Job ID generation state
-	private final Random rand = new Random();
+	// Job ID generation state. The random half is unpredictable: an id is not a
+	// credential, but one observed id must not reveal the next.
+	private final Random rand = new java.security.SecureRandom();
 	/**
 	 * Monotonic 64-bit job-ID prefix: high 48 bits = millisecond timestamp,
 	 * low 16 bits = per-millisecond counter. Advanced atomically as
@@ -473,23 +476,44 @@ public class JobManager {
 
 	/** Public tool dispatch retains admission and result semantics, but cannot reveal owner-only results. */
 	public CompletableFuture<ACell> runToolOperation(AString ref, ACell input, RequestContext ctx) {
-		return runOperation(ref, input, ctx, false, Invocation.TOOL);
+		return startToolOperation(ref, input, ctx).result();
+	}
+
+	/**
+	 * A run in progress: its Job, null if it failed before one was made, and
+	 * its result. The Job lets a caller that stops waiting say where the
+	 * result will be, or cancel it.
+	 */
+	public record Run(Job job, CompletableFuture<ACell> result) {
+		static Run failed(Throwable t) {
+			return new Run(null, CompletableFuture.failedFuture(t));
+		}
+	}
+
+	/** {@link #runToolOperation}, keeping the Job. */
+	public Run startToolOperation(AString ref, ACell input, RequestContext ctx) {
+		return startOperation(ref, input, ctx, false, Invocation.TOOL);
 	}
 
 	private CompletableFuture<ACell> runOperation(AString ref, ACell input,
 			RequestContext ctx, boolean privateJob, Invocation invocation) {
-		if (ref == null) return CompletableFuture.failedFuture(
+		return startOperation(ref, input, ctx, privateJob, invocation).result();
+	}
+
+	private Run startOperation(AString ref, ACell input,
+			RequestContext ctx, boolean privateJob, Invocation invocation) {
+		if (ref == null) return Run.failed(
 			new IllegalArgumentException("Operation must be specified"));
 		try {
 			Asset asset = engine.resolveAsset(ref, ctx);
-			if (asset == null) return CompletableFuture.failedFuture(
+			if (asset == null) return Run.failed(
 				new IllegalArgumentException("Cannot resolve operation: " + ref));
 			Operation op = Operation.from(asset);
-			if (op == null) return CompletableFuture.failedFuture(
+			if (op == null) return Run.failed(
 				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-			return runOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
+			return startOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
 		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
+			return Run.failed(e);
 		}
 	}
 
@@ -505,18 +529,23 @@ public class JobManager {
 
 	private CompletableFuture<ACell> runOperation(AMap<AString, ACell> meta,
 			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
+		return startOperation(meta, input, ctx, privateJob, invocation).result();
+	}
+
+	private Run startOperation(AMap<AString, ACell> meta,
+			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
 		try {
 			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
-				return CompletableFuture.failedFuture(new IllegalStateException(
+				return Run.failed(new IllegalStateException(
 					"Private runs are disabled on this venue (enablePrivateJobs=false)"));
 			}
 			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
 				&& !engine.config().isRecordReadOnlyOperations());
 			Job job = dispatchOperation(meta, input, ctx, memoryOnly, invocation);
-			return operationResultFuture(job, meta, input);
+			return new Run(job, operationResultFuture(job, meta, input));
 		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
+			return Run.failed(e);
 		}
 	}
 
@@ -549,6 +578,18 @@ public class JobManager {
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx) {
+		return invokeInternal(ref, input, ctx, null);
+	}
+
+	/**
+	 * As {@link #invokeInternal(AString, ACell, RequestContext)}, showing the
+	 * Job to {@code watch} once it exists and before its adapter starts, so a
+	 * caller observing the work as it runs — a tool call relaying the
+	 * operation's published progress — misses none of it. {@code watch} runs
+	 * on this thread and must not block; null watches nothing.
+	 */
+	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx,
+			Consumer<Job> watch) {
 		if (ref == null) {
 			return CompletableFuture.failedFuture(
 				new IllegalArgumentException("Operation must be specified"));
@@ -576,14 +617,21 @@ public class JobManager {
 		// Scope to the caller-supplied reference for resource-precise
 		// invoke-gating (#211) — this seam also covers the agent tool loop,
 		// which dispatches config.tools references through here.
-		return invokeInternal(op.meta(), input, ctx.withOp(ref));
+		return invokeInternal(op.meta(), input, ctx.withOp(ref), watch);
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		return invokeInternal(meta, input, ctx, null);
+	}
+
+	private CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx,
+			Consumer<Job> watch) {
 		try {
 			boolean memoryOnly = allowsInternal(meta)
 				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
-			Job job = dispatchOperation(meta, input, ctx, memoryOnly, Invocation.INTERNAL);
+			Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, Invocation.INTERNAL);
+			if (watch != null) watch.accept(prepared.job());
+			Job job = prepared.start();
 			return operationResultFuture(job, meta, input);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -659,6 +707,11 @@ public class JobManager {
 	 * Nested gated grants are disabled structurally by the gate-evaluation flag.
 	 * {@code invokeInternal} uses a transient Job wrapper, so checks retain the
 	 * normal execution context without bloating the etch.</p>
+	 *
+	 * <p>{@code gateOp} is already bound to the grant's issuer or owner
+	 * ({@link CapabilityChecker#bindGate}). Naming a gate is consent to run it as
+	 * a gate check, so its definition is resolved without a read check: the
+	 * caller need not be able to read a private gate to be checked by it.</p>
 	 */
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
@@ -667,7 +720,10 @@ public class JobManager {
 				Fields.OPERATION, opRef,
 				Fields.INPUT, input,
 				Fields.CALLER, caller);
-			invokeInternal(gateOp, gateInput, authorityCtx.forGateEvaluation(gateOp))
+			RequestContext gateCtx = authorityCtx.forGateEvaluation(gateOp);
+			Asset gate = engine.resolveAssetUnchecked(gateOp, gateCtx);
+			if (gate == null) return "gate " + gateOp + ": cannot resolve operation";
+			invokeInternal(gate.meta(), gateInput, gateCtx)
 				.get(GATE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 			return null;                                        // gate succeeded — capability applies
 		} catch (java.util.concurrent.TimeoutException e) {
@@ -766,9 +822,11 @@ public class JobManager {
 	 * Returns a copy of {@code input} with secret fields replaced by {@link Fields#HIDDEN}.
 	 * Secret fields are declared in {@code meta.operation.secretFields} as a vector of field names.
 	 * If there are no secret fields (or input is not a map), returns input unchanged.
+	 * The scheduler applies it to the inputs it lists, so a listing never shows
+	 * more than the job history would.
 	 */
 	@SuppressWarnings("unchecked")
-	private static ACell redactSecrets(ACell input, AMap<AString, ACell> meta) {
+	static ACell redactSecrets(ACell input, AMap<AString, ACell> meta) {
 		if (!(input instanceof AMap)) return input;
 		ACell sf = RT.getIn(meta, Fields.OPERATION, K_SECRET_FIELDS);
 		if (!(sf instanceof AVector)) return input;
@@ -866,9 +924,11 @@ public class JobManager {
 		job.setPreserveFailureCause(resultOriented);
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(callerDID);
+			// Create before publishing the runtime handle; updates only edit existing rows.
+			if (!memoryOnly && !job.account().createJob(jobID, status)) {
+				throw new IllegalStateException(JOB_ID_EXISTS + jobID);
+			}
 			activeJobs.put(jobID, job);
-			// Serialise acceptance with the account deletion admission barrier.
-			persistJobRecord(jobID, status, job.account());
 		}
 
 		if (memoryOnly) log.debug("Started transient job: {}", jobID);
@@ -880,7 +940,7 @@ public class JobManager {
 
 	/**
 	 * Gets a snapshot of the current job status data with request context.
-	 * Checks in-memory cache first, falls back to user's lattice.
+	 * Reads the primary lattice record, using a live handle's owner when available.
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> getJobData(Blob jobID, RequestContext ctx) {
@@ -890,10 +950,10 @@ public class JobManager {
 		job = activeJobs.get(jobID);
 		if (job != null && !job.isRecorded()) return null;
 		if (job != null) {
-			if (!canReadJob(ctx, jobID, job.getData())) {
-				throw new AuthException("Access denied to job: " + jobID.toHexString());
-			}
-			return job.getData();
+			AMap<AString, ACell> data = ((VenueJob) job).primaryRecord();
+			if (data == null) return null;
+			requireReadable(ctx, jobID, data);
+			return data;
 		}
 
 		// 2. User's lattice (authoritative). Scoped to the caller's own jobs;
@@ -903,7 +963,16 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		return user.getJob(jobID);
+		AMap<AString, ACell> record = user.getJob(jobID);
+		if (record != null) requireReadable(ctx, jobID, record);
+		return record;
+	}
+
+	/** Opening of every refusal of access to a job. */
+	public static final String JOB_ACCESS_DENIED = "Access denied to job: ";
+
+	private void requireReadable(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
+		if (!canReadJob(ctx, jobID, data)) throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 	}
 
 	/**
@@ -915,7 +984,7 @@ public class JobManager {
 	 * ({@link #requireJobOwner}).
 	 */
 	private boolean canReadJob(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (engine.getAccessControl().canAccessJob(ctx, data)) return true; // owner
+		if (engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_READ)) return true; // owner
 		AString owner = RT.ensureString(data.get(Fields.CALLER));
 		if (owner == null) return false; // venue-internal job — owner/internal only
 		AString resource = owner.append("/j/" + jobID.toHexString());
@@ -929,8 +998,8 @@ public class JobManager {
 	 * read-delegable {@link #getJobData(Blob, RequestContext)}.
 	 */
 	private void requireJobOwner(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
-		if (!engine.getAccessControl().canAccessJob(ctx, data)) {
-			throw new AuthException("Access denied to job: " + jobID.toHexString());
+		if (!engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_WRITE)) {
+			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 		}
 	}
 
@@ -960,7 +1029,10 @@ public class JobManager {
 	 */
 	public Job getJob(Blob jobID, RequestContext ctx) {
 		Job job = activeJobs.get(jobID);
-		if (job != null) return job;
+		if (job != null) {
+			requireReadable(ctx, jobID, job.getData());
+			return job;
+		}
 
 		// Fall back to user's lattice
 		AString did = ctx.getUserDID();
@@ -969,6 +1041,7 @@ public class JobManager {
 		if (user == null) return null;
 		AMap<AString, ACell> record = user.getJob(jobID);
 		if (record == null) return null;
+		requireReadable(ctx, jobID, record);
 		return new Job(record);
 	}
 
@@ -982,6 +1055,13 @@ public class JobManager {
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return Index.none();
 		return user.getJobs();
+	}
+
+	/** Caller-scoped count, without materialising a listing. */
+	public long countJobs(RequestContext ctx) {
+		AString did = ctx.getUserDID();
+		User user = did == null ? null : engine.getVenueState().users().get(did);
+		return user == null ? 0 : user.countJobs();
 	}
 
 	// ========== Job Lifecycle Control ==========
@@ -1048,16 +1128,13 @@ public class JobManager {
 
 	/**
 	 * Deletes a job permanently with request context: removes the durable
-	 * record from the owning user's job index (mirror of
-	 * {@link #persistJobRecord}) and evicts the active cache.
+	 * record from the owning user's job index and evicts the active cache.
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public boolean deleteJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return false;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
-		Job live = activeJobs.get(id);
-		if (live instanceof VenueJob venueJob && !venueJob.markDeleted()) return false;
 		AString ownerDID = RT.ensureString(data.get(Fields.CALLER));
 		boolean removed = false;
 		if (ownerDID != null) {
@@ -1065,7 +1142,8 @@ public class JobManager {
 			if (user != null) removed = user.removeJob(id);
 		}
 		// Remove from active cache if present (may already be evicted for terminal jobs)
-		return deleteJob(id) || removed;
+		deleteJob(id);
+		return removed;
 	}
 
 	public boolean deleteJob(Blob id) {
@@ -1090,15 +1168,15 @@ public class JobManager {
 			// error too, just an honest one.
 			Job recorded = getJob(jobID, ctx);
 			if (recorded == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
-			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData())) {
-				throw new AuthException("Access denied to job: " + jobID.toHexString());
+			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData(), Capability.CRUD_WRITE)) {
+				throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 			}
 			throw new IllegalStateException(recorded.isFinished()
 				? "Job is in terminal state: " + jobID.toHexString()
 				: "Job is not active: " + jobID.toHexString());
 		}
-		if (!engine.getAccessControl().canAccessJob(ctx, job.getData())) {
-			throw new AuthException("Access denied to job: " + jobID.toHexString());
+		if (!engine.getAccessControl().canAccessJob(ctx, job.getData(), Capability.CRUD_WRITE)) {
+			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 		}
 		deliverMessage(job, message, ctx.getCallerDID());
 	}
@@ -1148,54 +1226,15 @@ public class JobManager {
 	 */
 	@SuppressWarnings("unchecked")
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
-		// Read the current record from the active cache, falling back to the
-		// caller's lattice. The ctx-aware read both enforces ownership and finds
-		// a job that has already completed and been evicted from the active
-		// cache — e.g. a synchronously-completing A2A defaultChatOp, which the
-		// old activeJobs-only lookup missed, throwing "Job not found" and
-		// dropping the inbound message from the Task history (#178).
 		AMap<AString, ACell> current = getJobData(jobID, ctx);
-		if (current == null) {
-			throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		if (current == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		requireJobOwner(ctx, jobID, current);
+		Job live = activeJobs.get(jobID);
+		User user = live instanceof VenueJob job ? job.account()
+			: engine.getVenueState().users().get(ctx.getUserDID());
+		if (user != null && user.job(jobID).appendHistory(record) && live instanceof VenueJob job) {
+			job.historyUpdated();
 		}
-
-		AMap<AString, ACell> newData = appendHistoryRecord(current, record);
-		if (newData == current) return;
-
-		// Write back where the record actually lives: mutate the live job if it
-		// is still active (persisted on completion), otherwise persist the
-		// augmented record straight to the lattice so a finished job's Task
-		// history still carries the inbound message rather than silently losing it.
-		Job job = getJob(jobID);
-		if (job != null) {
-			job.update(data -> appendHistoryRecord(data, record));
-		} else {
-			// Mutate the durable row in place. A concurrent delete either happens
-			// before this update (so no row is recreated) or after it (so deletion
-			// wins); there is no stale whole-record resurrection window.
-			User user = engine.getVenueState().users().get(ctx.getUserDID());
-			if (user != null) {
-				user.updateJobIfPresent(jobID, data -> appendHistoryRecord(data, record));
-			}
-		}
-	}
-
-	/** Appends unless the same caller-provided messageId is already present. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> appendHistoryRecord(
-			AMap<AString, ACell> data, AMap<AString, ACell> record) {
-		ACell histCell = data.get(Fields.HISTORY);
-		AVector<ACell> history = (histCell instanceof AVector<?> v)
-			? (AVector<ACell>) v : convex.core.data.Vectors.empty();
-		ACell messageId = record.get(Fields.MESSAGE_ID);
-		if (messageId != null) {
-			for (long i = 0; i < history.count(); i++) {
-				ACell item = history.get(i);
-				if (item instanceof AMap<?, ?> map
-						&& messageId.equals(map.get(Fields.MESSAGE_ID))) return data;
-			}
-		}
-		return data.assoc(Fields.HISTORY, history.conj(record));
 	}
 
 	// ========== Job Recovery ==========
@@ -1220,7 +1259,11 @@ public class JobManager {
 			AString did = (AString) entry.getKey();
 			User user = engine.getVenueState().users().get(did);
 			if (user == null) continue;
-			Index<Blob, ACell> userJobs = user.getJobs();
+			// Recovery already visits every record. Avoid a separate normalisation
+			// pass over the listing; terminal legacy records need no startup rewrite.
+			ACell storedJobs = RT.getIn(entry.getValue(), covia.lattice.Namespace.J);
+			if (!(storedJobs instanceof Index)) continue;
+			Index<Blob, ACell> userJobs = (Index<Blob, ACell>) storedJobs;
 			long n = userJobs.count();
 			for (long i = 0; i < n; i++) {
 				var jobEntry = userJobs.entryAt(i);
@@ -1230,7 +1273,7 @@ public class JobManager {
 				AMap<AString, ACell> record = (AMap<AString, ACell>) value;
 				if (activeJobs.containsKey(jobID)) continue; // already live
 				if (Job.isFinished(record)) continue;
-				VenueJob job = restoreJob(jobID, record, did);
+				VenueJob job = restoreJob(jobID, Job.currentState(record), did);
 				restored.add(job);
 			}
 		}
@@ -1264,8 +1307,8 @@ public class JobManager {
 
 	/**
 	 * Rebuilds a non-terminal Job from its record and registers it as active
-	 * before any verb runs on it: persistence resolves the Job through the
-	 * active cache.
+	 * before any verb runs on it. The handle binds to the existing lattice row;
+	 * recovery never creates or copies a second mutable job record.
 	 */
 	private VenueJob restoreJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
 		AMap<AString, ACell> delegation = RT.ensureMap(record.get(RemoteJobs.DELEGATION));
@@ -1316,28 +1359,6 @@ public class JobManager {
 
 	// ========== Persistence ==========
 
-	/**
-	 * Persists a job record to the user's per-user lattice.
-	 * This is the single source of truth for all jobs.
-	 */
-	void persistJobRecord(Blob jobID, AMap<AString, ACell> record, User account) {
-		// Transient (memory-only) Job: the single persistence choke point
-		// is a no-op — nothing about the job ever touches the lattice. The job
-		// is still in the active cache here for every persist trigger (initial
-		// submit, status updates, history appends): terminal eviction happens
-		// AFTER the final persist call.
-		Job j = activeJobs.get(jobID);
-		if (j instanceof VenueJob vj && vj.isMemoryOnly()) return;
-		try {
-			// Cancellation evidence can arrive after terminal eviction, when
-			// deleteJob can no longer mark the old live handle. Fence it atomically
-			// at the lattice row rather than retaining terminal Jobs in memory.
-			account.persistJob(jobID, record, !record.containsKey(Fields.CANCELLATION));
-		} catch (AuthException deleted) {
-			// An account cursor is invalidated by erasure; late Job updates must
-			// still settle their in-memory futures without persisting old data.
-		}
-	}
 
 	User account(AString did) { return engine.getVenueState().users().ensure(did); }
 
@@ -1382,11 +1403,12 @@ public class JobManager {
 	 * unresolvable reference (renamed catalog entry, unreachable remote) leaves
 	 * the job without metadata rather than aborting recovery.
 	 */
-	private Asset resolveRecordedOp(AString opRef, AString callerDID) {
+	Asset resolveRecordedOp(AString opRef, AString callerDID) {
 		try {
 			Asset asset = engine.resolveAsset(opRef);
 			if (asset == null && callerDID != null) {
-				asset = engine.resolveAsset(opRef, RequestContext.of(callerDID));
+				// Recovery of a job already accepted: the read was checked at submission.
+				asset = engine.resolveAssetUnchecked(opRef, RequestContext.of(callerDID));
 			}
 			return asset;
 		} catch (RuntimeException e) {

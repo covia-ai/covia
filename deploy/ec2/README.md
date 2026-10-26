@@ -4,7 +4,8 @@ Docker-based deployment for `venue-3.covia.ai` on AWS.
 
 ## One-Time EC2 Setup
 
-SSH into the instance and run:
+Open a shell on the instance with SSM Session Manager (port 22 is not used;
+see *Access* below) and run:
 
 ```bash
 # Install Docker
@@ -20,22 +21,34 @@ sudo systemctl disable --now covia-venue.service
 
 # Create data directory
 mkdir -p /home/ec2-user/covia-data
-
-# Log in to GHCR (use a GitHub PAT with read:packages scope)
-docker login ghcr.io -u <github-username>
 ```
 
-## GitHub Secrets Required
+## How deploys reach the host
 
-| Secret | Value |
-|--------|-------|
-| `EC2_SSH_KEY` | Contents of `covia-venue-key.pem` |
-| `EC2_HOST` | `13.213.76.110` |
-| `EC2_USER` | `ec2-user` |
+No SSH and no stored keys (security#12). `deploy-ec2.yml`:
+
+1. assumes the IAM role `covia-deploy-venue-3` through GitHub OIDC. The role
+   trusts only `repo:covia-ai/covia:ref:refs/heads/develop` and may only run
+   `AWS-RunShellScript` on this instance and read the results;
+2. sends [`deploy.sh`](deploy.sh) through SSM Run Command, where it runs as
+   root, and fails the job unless the command finishes with `Success`.
+
+The image on GHCR is public, so the host needs no registry login. The
+instance role needs `AmazonSSMManagedInstanceCore` and the SSM agent
+(preinstalled on Amazon Linux 2023).
+
+## Access
+
+Open an admin shell without SSH (needs the Session Manager plugin locally):
+
+```bash
+aws ssm start-session --region us-east-1 --target i-0ba252844d8787529
+```
 
 ## Manual Deploy
 
-To deploy manually on the EC2 instance:
+Run the deploy workflow from the Actions tab (*Deploy to EC2*, `workflow_dispatch`), or in an SSM
+session on the instance:
 
 ```bash
 docker pull ghcr.io/covia-ai/covia:latest

@@ -204,7 +204,7 @@ public class HTTPTest {
 	private void checkSecretReferencesWithoutResolvedValues(String method) throws Exception {
 		AString caller = Strings.create("did:test:http:secret-headers:" + System.nanoTime());
 		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
-		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(TestServer.ENGINE.getKeyPair());
 		user.secrets().store("API_KEY", "resolved-api-key", key);
 		user.secrets().store("BASIC_AUTH", "Basic dXNlcjp0b2tlbg==", key);
 
@@ -258,7 +258,7 @@ public class HTTPTest {
 	@Test public void testUrlSecretResolvesIntoPathAndStaysOutOfJobRecords() throws Exception {
 		AString caller = Strings.create("did:test:http:url-secret:" + System.nanoTime());
 		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
-		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(TestServer.ENGINE.getKeyPair());
 		// A Telegram-shaped token: <id>:<hash>, must reach the server verbatim.
 		String token = "12345:AA-bb_ccDD";
 		user.secrets().store("TG_TOKEN", token, key);
@@ -305,7 +305,7 @@ public class HTTPTest {
 	@Test public void testBearerSecretConflictsWithAuthorizationSecretHeader() {
 		AString caller = Strings.create("did:test:http:secret-conflict:" + System.nanoTime());
 		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
-		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(TestServer.ENGINE.getKeyPair());
 		user.secrets().store("AUTH", "complete-header", key);
 		user.secrets().store("TOKEN", "bearer-token", key);
 
@@ -863,7 +863,7 @@ public class HTTPTest {
 	@Test public void testRedirectAcrossOriginsDropsCredentials() throws Exception {
 		AString caller = Strings.create("did:test:http:redirect-credentials:" + System.nanoTime());
 		User user = TestServer.ENGINE.getVenueState().users().ensure(caller);
-		byte[] key = SecretStore.deriveKey(TestServer.ENGINE.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(TestServer.ENGINE.getKeyPair());
 		user.secrets().store("API_KEY", "resolved-api-key", key);
 		user.secrets().store("TOKEN", "bearer-token", key);
 

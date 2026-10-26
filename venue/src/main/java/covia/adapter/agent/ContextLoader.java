@@ -349,7 +349,7 @@ public class ContextLoader {
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
 		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
 			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/");
+			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/");
 	}
 
 	/**
@@ -371,14 +371,14 @@ public class ContextLoader {
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
 		if (s.startsWith("a/") || s.startsWith("w/") || s.startsWith("o/") || s.startsWith("g/")
 			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/")
+			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/")
 			|| s.startsWith("v/")) return true;
 		return false;
 	}
 
 	/**
 	 * Reads a value from the user's lattice namespace using the internal
-	 * cursor-based path resolution (same as CoviaAdapter.readPath).
+	 * cursor-based path resolution (same as WorkspaceRoot.read).
 	 */
 	String resolveWorkspacePath(String path, RequestContext ctx) {
 		try {
@@ -425,8 +425,9 @@ public class ContextLoader {
 
 			// 2. No content — a metadata map falls back to its description
 			// (the standard asset convention); any other resolved value
-			// renders directly (v/ data paths, catalog entries).
-			ACell value = engine.resolvePath(ref, ctx);
+			// renders directly (v/ data paths, catalog entries). resolveContent
+			// above has checked asset/read on the reference.
+			ACell value = engine.resolvePathUnchecked(ref, ctx);
 			if (value != null) {
 				if (value instanceof AMap) {
 					AString desc = RT.ensureString(((AMap<?, ?>) value).get(Fields.DESCRIPTION));
@@ -437,7 +438,7 @@ public class ContextLoader {
 
 			// 3. Remote DID definitions (resolveAsset's fetch path) — local
 			// resolution found nothing.
-			Asset asset = engine.resolveAsset(ref, ctx);
+			Asset asset = engine.resolveAssetUnchecked(ref, ctx);
 			if (asset != null) {
 				AString desc = RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
 				if (desc != null) return desc.toString();

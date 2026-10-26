@@ -21,7 +21,7 @@ jobs:
       actions: read
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # Release the exact commit that passed the Test workflow, not the latest
         # develop commit at the time this runner starts.
@@ -30,7 +30,7 @@ jobs:
     - name: Download the jars the Test run built
       # The exact tested bits, never a rebuild: the Test workflow shares them
       # as the reactor-jars artifact after its module-boundary check.
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
       with:
         name: reactor-jars
         run-id: ${{ github.event.workflow_run.id }}
@@ -44,7 +44,7 @@ jobs:
       run: |
         # Run inside each jar's directory so the checksum file names the bare
         # jar and verifies with `sha256sum -c` next to the downloaded file.
-        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar covia-discord/target/*-module.jar covia-whatsapp/target/*-module.jar covia-slack/target/*-module.jar covia-sonnylabs/target/*-module.jar covia-documents/target/*-module.jar covia-claude-code/target/*-module.jar; do
+        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar covia-telegram/target/*-module.jar covia-discord/target/*-module.jar covia-whatsapp/target/*-module.jar covia-slack/target/*-module.jar covia-sonnylabs/target/*-module.jar covia-documents/target/*-module.jar covia-speech/target/*-module.jar covia-claude-code/target/*-module.jar; do
           (cd "$(dirname "$jar")" && sha256sum "$(basename "$jar")" > "$(basename "$jar").sha256")
         done
 
@@ -95,5 +95,7 @@ jobs:
           covia-sonnylabs/target/*-module.jar.sha256 \
           covia-documents/target/*-module.jar \
           covia-documents/target/*-module.jar.sha256 \
+          covia-speech/target/*-module.jar \
+          covia-speech/target/*-module.jar.sha256 \
           covia-claude-code/target/*-module.jar \
           covia-claude-code/target/*-module.jar.sha256

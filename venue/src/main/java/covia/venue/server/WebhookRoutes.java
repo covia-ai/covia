@@ -32,19 +32,32 @@ final class WebhookRoutes {
 			ctx.status(404).result(UNAVAILABLE);
 			return;
 		}
+		WebhookRequest request = read(ctx, engine, adapter, UNAVAILABLE, TOO_LARGE);
+		if (request == null) return;
+		answer(ctx, webhook.handleWebhook(ctx.pathParam("binding"), request));
+	}
+
+	/**
+	 * The request, its body capped, or null once answered with 413 or (when the
+	 * adapter was disabled, replaced or removed while the body was read) 404.
+	 * Shared by the routes that look an adapter up on every request.
+	 */
+	static WebhookRequest read(Context ctx, Engine engine, AAdapter adapter, String unavailable, String tooLarge) throws Exception {
 		byte[] body = ctx.req().getInputStream().readNBytes(MAX_BODY_BYTES + 1);
 		if (body.length > MAX_BODY_BYTES) {
-			ctx.status(413).result(TOO_LARGE);
-			return;
+			ctx.status(413).result(tooLarge);
+			return null;
 		}
 		// Recheck after reading; do not retain a receiver between requests. An
 		// already-dispatched request follows the normal in-flight module semantics.
 		if (engine.getAdapter(adapter.getName()) != adapter) {
-			ctx.status(404).result(UNAVAILABLE);
-			return;
+			ctx.status(404).result(unavailable);
+			return null;
 		}
-		WebhookResponse response = webhook.handleWebhook(ctx.pathParam("binding"),
-			new WebhookRequest(ctx.method().name(), ctx.headerMap(), ctx.queryParamMap(), body));
+		return new WebhookRequest(ctx.method().name(), ctx.headerMap(), ctx.queryParamMap(), body);
+	}
+
+	static void answer(Context ctx, WebhookResponse response) {
 		ctx.status(response.status()).contentType(response.contentType());
 		response.headers().forEach(ctx::header);
 		ctx.result(response.body());

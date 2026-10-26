@@ -1,7 +1,7 @@
 # WhatsApp venue module
 
 `covia-whatsapp` connects a WhatsApp Cloud API business phone number to a
-Covia agent or operation. It supplies `whatsapp:send`, `create`, `delete` and
+Covia agent or operation, or relays it to many principals. It supplies `whatsapp:send`, `download`, `create`, `delete` and
 `bots` operations, plus `v/skills/adapters/whatsapp`. It is an optional module,
 not a dependency of `covia.jar`, and uses the JDK HTTP client.
 
@@ -51,10 +51,10 @@ No venue bearer is needed on this provider-authenticated route.
 
 GET challenges require the verification token. POST callbacks require the
 raw-body `X-Hub-Signature-256` HMAC using the app secret. Account and phone
-IDs must match the binding. Each admitted text message in a batch gets its
-own durable receipt, keyed by WhatsApp message ID. Delivery statuses, media,
-other accounts/numbers and unadmitted senders are acknowledged without
-invoking a Job. Texts older than 24 hours or dated more than five minutes in
+IDs must match the binding. Each admitted text or media message in a batch gets its
+own durable receipt, keyed by WhatsApp message ID. Delivery statuses, reactions,
+other message kinds, other accounts/numbers and unadmitted senders are acknowledged without
+invoking a Job. Messages older than 24 hours or dated more than five minutes in
 the future are ignored. Sender IDs are numeric WhatsApp phone identifiers;
 usernames and business-scoped user IDs are not supported in this version.
 
@@ -70,11 +70,20 @@ provider message object. The result is rendered as text; `reply: false`
 suppresses a reply, or a string supplies a fixed reply. Agent handlers cannot
 set `reply`.
 
+An operation binding receives image, audio (including voice notes), video,
+document and sticker messages as well as text, each as WhatsApp sent it:
+`message.type` names the kind, and `message.<type>.id` is the media id that
+`whatsapp:download` saves. The binding fetches nothing itself, and an operation
+written for text alone should check `message.type`. The operation
+runs as the binding's owner, so it holds `whatsapp/download`; it names the
+binding as `bot` when the owner has more than one.
+
 ## Operations
 
 | Operation | Input | Authority / result |
 |---|---|---|
 | `v/ops/whatsapp/send` | `{bot?, to, text, reply_to?}` | `<owner>/whatsapp/<bot>` × `whatsapp/send`; provider message receipt |
+| `v/ops/whatsapp/download` | `{bot?, media_id, destination?, fileName?}` | `<owner>/whatsapp/<bot>` × `whatsapp/download`; `{ref, fileName, size, media_id, contentType?}` |
 | `v/ops/whatsapp/create` | `{name, ...bot settings}` without `user` | Caller-owned binding; `whatsapp/manage`; returns `webhookPath` |
 | `v/ops/whatsapp/delete` | `{name}` | Deletes caller-owned runtime binding and private state; `whatsapp/manage` |
 | `v/ops/whatsapp/bots` | `{}` | Own bindings (all for venue principal), readiness, paths and receipt counts |
@@ -93,13 +102,64 @@ templates, media, interactive content or provide embedded signup/OAuth.
 Provider errors and ambiguous network failures fail the send without an
 automatic retry, including rate-limit responses.
 
+## Voice notes, photos and files
+
+An agent binding receives images, voice notes and other audio, video, documents
+and stickers as attachments. When the message is handled, the adapter looks the
+media id up and downloads the short-lived link, both with the binding's token, and
+stores the bytes in the owner's private DLFS `whatsapp` drive (at most 20 MiB).
+The turn is `{text, via, attachments, content?}`:
+
+- `text` is the caption, or empty for a bare voice note.
+- Each attachment has `kind` (`audio`, `image`, `video`, `document`, `sticker`),
+  `id`, `mediaType`, `voice: true` for a voice note, `ref`, `size` and `fileName`.
+  A document keeps its own name only when it is a safe single filename; otherwise,
+  and for everything else, the name comes from the binding and the media id.
+- Images also arrive as image blocks for a vision-capable model; the agent needs
+  `crud/read` on the files.
+
+There is no implicit speech provider. Set `mediaOperation` on an agent binding to
+an operation that transcribes or extracts, such as `v/ops/speech/transcribe` from
+the speech module, which transcribes voice notes and passes other media through: it runs as the owner once per
+attachment, with the attachment plus `caption` and `via`, and returns `{}` to pass
+the attachment through or an object whose non-empty `text` becomes the
+attachment's `text`; the whole result is kept under `attachment.result` and cannot
+replace the reference or media type. A failed download or hook fails the turn like
+any other processing failure. Reactions are ignored. The download link is on a
+different host from the Graph API, so a `secret/use` grant bound to a url must cover both.
+
+`whatsapp:download` fetches one message's media the same way, by its media id, for
+an operation binding or anyone else holding `whatsapp/download` on the binding;
+`whatsapp/send` does not grant it. Without `destination` the file goes to the
+owner's private `whatsapp` drive, written with the owner's authority, so a caller
+other than the owner needs read authority there to open it. An explicit directory
+(`dlfs/imports`, `file://inbox`) is written with the caller's own authority and
+must support create-only writes. Meta's lookup returns no filename, so the stored
+name is `fileName` when given (a document's own `filename`, say) and otherwise comes
+from the binding and the media id; a taken name gets `(1)`, `(2)` and so on, and
+nothing is overwritten. The 20 MiB limit applies.
+
 ## State and recovery
+
+For a local agent, COMPLETE means the input and session mapping were committed
+atomically with the receipt. It does not wait for the agent's turn or outgoing
+reply. Later inputs can arrive while the agent is thinking; failed replies never
+redeliver input. Reply callbacks are not a durable outbound queue. Operation
+handlers and remote agents retain STARTED until processing and replies finish.
+
+Each receipt is claimed before media download, preprocessing or dispatch.
+A failed handoff becomes FAILED with a reason and the last error after one
+attempt. No automatic retry is made, including after restart. A flush failure
+is reported directly; already committed admission remains COMPLETE.
+A message accepted before the bot was reconfigured
+also fails once rather than running under the new settings.
 
 The shared [webhook worker](../venue/docs/ADAPTERS.md#http-messaging-workers)
 owns receipts and sessions. Pending events resume when credentials become
 available or the venue restarts. Started events remain visible for manual
 reconciliation after an interruption; no send or Job is blindly replayed.
 `bots.started` includes currently running and potentially uncertain work;
+`bots.failed` counts failed processing attempts; inspect their reason before retrying;
 `queued` reports workers in this process. State is durable only when the
 venue's configured store is durable. Binding credentials, recipients and
 private API endpoints are never published in adapter info/config.
@@ -108,3 +168,64 @@ Provider reference: [Meta Cloud API documentation](https://developers.facebook.c
 [Meta's raw webhook verification description](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/webhooks/start/),
 and [text message shape](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/messages/text/).
 The latter two references describe Meta's archived SDK; this module has no SDK dependency.
+
+## Relay: one number, many principals
+
+A binding whose handler is `relay`, in place of `agent` or `operation`, lets a hub
+venue hold one Cloud API number for many downstream principals: the venues or apps it
+relays to, each known by its DID. WhatsApp delivers only to a public webhook, so a
+principal without one (an app on someone's laptop) reaches WhatsApp through the hub
+instead of a number of its own. Only links are stored: messages wait in memory and are
+never written to the venue. The relay protocol is the same for every webhook provider;
+see [Relays](../venue/docs/ADAPTERS.md#relays-one-provider-binding-many-principals).
+
+```json
+{
+  "modules": ["modules/covia-whatsapp-<version>-module.jar"],
+  "adapters": {
+    "whatsapp": {
+      "bots": {
+        "main": {
+          "user": "did:key:YOUR_OWNER_DID",
+          "token": "s/WHATSAPP_TOKEN",
+          "appSecret": "s/META_APP_SECRET",
+          "verifyToken": "s/WHATSAPP_VERIFY",
+          "businessAccountId": "123456789012345",
+          "phoneNumberId": "987654321098765",
+          "apiVersion": "v25.0",
+          "number": "447700900000",
+          "relay": {
+            "holdSeconds": 60,
+            "maxParts": 10,
+            "admit": "v/ops/your-adapter/admit",
+            "charge": "v/ops/your-adapter/charge"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`"relay": true` takes the defaults. Meta's callback is
+`https://YOUR_VENUE/webhooks/whatsapp/c-main`, verified and signed as for any binding.
+Principals call `/relay/whatsapp/c-main/<action>`; a runtime binding made with
+`whatsapp:create` reports its own `relayPath`. On WhatsApp:
+
+- `number` is the number people message. With it, `link` and `status` return it and
+  `link` adds a `wa.me` URL that opens the chat with `LINK <code>` already typed.
+- A reply must follow its message within WhatsApp's 24-hour window. It is split at
+  4,096 characters; the first part quotes the message and later parts do not.
+- A relay binding admits every number, since linking is its admission; `open: false`
+  narrows it to `allow`. The binding's `whatsapp:send` stays as closed as `open` and
+  `allow` are written.
+- Voice notes, photos and files are relayed too. A polled message lists them under
+  `media` (`kind`, `mediaType`, `fileName`, `voice`) with the caption as its text, and
+  the principal fetches each one's bytes with the `media` action. The hub downloads
+  them from Meta on each request and keeps no copy, so a principal can transcribe a
+  voice note itself.
+
+Links live under `:adapters/whatsapp/config/<bot>/relay/` in the adapter's private
+state (a runtime binding's under its owner's adapter state). Message text, codes
+and the message→sender map are bounded and in memory: a restart or reconfiguration
+loses messages not yet collected, never a link.

@@ -8,6 +8,179 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-26
+
+### Convex 0.8.18 lattice applications
+
+These changes require Convex 0.8.18.
+
+- Messaging local-agent intake commits session input, receipt, conversation mapping
+  and Job admission state in one venue transaction, retaining user-deletion fencing
+  (#616). Delivery makes one attempt; failures remain visible without automatic
+  replay. Telegram reports admission failure once. HITL commits its inbox response,
+  final Job result and session notification together, with one winner under contention.
+- Venue components share atomic updates and transactions; whole-venue LWW is
+  for backup, replication and fenced failover, not arbitrary fork merging.
+- The signed venue value records `:version`. Ordered startup migrations run
+  atomically; legacy adapter storage moves on first access without a bulk scan.
+  Older binaries must not reopen upgraded stores.
+- Typed refusal of a newer venue version; read stored versions before a start (#621).
+- Adapters version and migrate their own state: `AAdapter.stateVersion`, `migrateState` (#621).
+- Start-up migration is one venue transaction, built-in and module adapters included (#621).
+- Migration is a call: `VenueState.migrate` on a store before launch, `Engine.migrate` on a running venue (#621).
+- `AdapterState` replaces `AdapterWorkspace` for private `:adapters/<name>`
+  storage. Embedders must replace removed `engine.adapterWorkspace(...)` calls;
+  user cleanup belongs in adapter deletion hooks, with external cleanup after commit.
+- Opt-in `x/<adapter>/...` views reuse standard accessors and CRUD authority.
+  `x/test` exposes read-only context and sample values plus persistent per-user
+  scratch. No private state is automatically exposed and venue identity does
+  not bypass cross-user authority. User exports do not include private adapter state.
+
+- Execution context IDs are grouped with their owning user. Namespace delegation
+  preserves that owner; local scope accessors never reinterpret another user's
+  agent/session/job/task IDs. Output handoff snapshots explicitly bind their
+  namespace, while old snapshots remain readable without a startup rewrite.
+- Adapter lattice write policy uses `latticeWriteDenial`: null allows, a refusal
+  reason is returned unchanged. Views last one operation/transaction; adapters
+  retain ownership of policy and value validation.
+
+### Migration
+
+- Embedders upgrading from 0.9.x: see `venue/docs/EMBEDDING.md`.
+- No rollback below 0.10.0: 0.9.x cannot read upgraded values (DLFS modification
+  times, versioned secrets, agent history) and has no version check. Keep the
+  state from before the upgrade.
+- External login (#298): replace `auth.loginRedirectOrigins` with exact
+  `auth.loginRedirectUris`; configure Microsoft `tenantId`; use HTTPS except on
+  loopback. Frontend redirects now carry a single-use code exchanged with PKCE,
+  not a bearer. Legacy email-based accounts require explicit identity-link
+  confirmation; provider bearer lookup now requires an issuer/subject binding.
+
+- `SecretStore.deriveKey` is deprecated and reads only secrets written before
+  key versions; pass `SecretStore.keys(keyPair)` to `store`, `storeIfAbsent` and
+  `decrypt`. The `byte[]` `store` and `storeIfAbsent` overloads are removed.
+- A venue rolled back below 0.10.0 cannot read secrets written since the
+  upgrade; configured secrets recover, as startup rewrites them.
+- An agent or delegate creating an agent must name `config.caps` it holds;
+  leaving them out (unrestricted) needs an unrestricted caller.
+
+### Security
+
+- External login uses browser-bound single-use state, S256 PKCE and verified
+  OIDC nonce; Nimbus validates provider tokens and manages JWKS. Invalid ID
+  tokens never fall back to user-info. New accounts retain a stable DID across
+  email changes, and matching emails never auto-link providers (#298).
+
+- Key and venue JWT verification rejects malformed supplied `exp`/`nbf` claims
+  even when expiry is optional, and avoids clock-skew overflow on extreme
+  timestamps. Existing missing-expiry policy and 60-second leeway are preserved.
+- Secret store key derived with HKDF under a domain label; each secret records
+  its key version and migrates on its next write (#535).
+- `sql:query` no longer applies data-changing statements.
+- Registered SQL databases take an operator `readOnly` flag that refuses
+  `sql:execute` for every caller.
+- MCP venue-side targets (`v/ops/...`, `scope: "venue"`) require venue
+  authority; any signed-in user could rewrite the venue catalog.
+- User-created messaging bots no longer resolve credentials from the venue's
+  store or environment; only operator-declared bots do.
+- Agent `caps`, `accepts` and public `a2a.caps` confer only what their author
+  holds, so sub-agents and delegated creates cannot escalate.
+- MCP `tools-call` and `tools-list` apply the SSRF policy to the server URL.
+- `bearerSecret: "oauth/<provider>"` needs `secret/use` and honours `nb.url`,
+  like any other secret reference.
+- A capability-scoped agent or delegate reaches only jobs it launched or its
+  caps cover; a live job is never returned by id without read access.
+- A capability-scoped agent or delegate lists, cancels and triggers only the
+  scheduled events it created.
+- Naming another user's path (config layer, agent definition, operation, A2A
+  binding, `did:…/a/<hash>`) needs read access to it; `Engine.resolvePath`
+  checks, `resolvePathUnchecked` is engine-internal.
+- A bare `nb.gate` binds to the grant's issuer, so a presenter cannot plant
+  its own gate; a grantor's private gate runs without the presenter reading it.
+
+### Added
+
+- `venue/docs/EMBEDDING.md`: the supported embedder surface, checked by `EmbedderContractTest`.
+- `VenueServer.getHost()`: the host a standalone venue opened.
+- MCP `tools/list` includes `_meta["ai.covia/operation"]`, the actual dispatch
+  reference, so clients can join MCP exposure to the venue catalog (#558).
+- Method-independent `EvidencePolicy` checks trusted authentication results against
+  originating methods, separate event/proof properties and freshness limits,
+  returning a refusal reason or `null`. Requirements project to immutable Convex
+  data. Sensitive-action enforcement and policy configuration remain pending (#297).
+- Adapter-backed authentication bindings (`auth.methods`) select trusted
+  implementations through `AuthenticationMethods`, with direct Convex input,
+  startup validation and rejection of stale in-flight verification after
+  lifecycle/configuration changes (#297). Omitted selection preserves current
+  credentials; explicit selection rejects legacy venue JWTs of unknown origin.
+- Common `AuthResult` from `VenueAuthenticator.verify`, with method-owned credential
+  provenance and conservative authentication evidence (#297 Phase 1). Existing
+  authentication APIs and acceptance rules remain unchanged; trusted embedders
+  can bind results, while identity-only rebinding clears earlier evidence.
+  Core records project directly to immutable Convex lattice data; method details
+  use maps and evidence properties use sets, without protocol-specific types
+  or a method-specific codec in the core.
+- `agent:suspend` records the actual caller, optional reason and time separately
+  from faults. Info/list expose the record; resume clears it. Suspended request/chat
+  refusals carry `agent:suspended` (#590).
+- `p2p` adapter: an opt-in Convex P2P node in the venue, `p2p:peers`, `p2p:connect` and peer events (#587).
+- Tool guards (`engine.toolGuards()`): an embedding host sees each operation
+  call an agent is about to make and passes or refuses it, holding it if need
+  be within the call's own timeout; a guard that times out or throws refuses.
+- Slack Socket Mode (`appToken`), one connection per app token routed by workspace;
+  messaging bindings may hold shared provider connections.
+- Slack agent template, `slack-bot-management` skill and `/slack` operator skill.
+- Slack thread replies continue an agent's conversation without a mention.
+- `scheduler:list` describes each event: `by`, `input`, `description`, `created` (#583).
+- `relay` handler for WhatsApp and Slack bindings: one number or app, many principals (#584).
+- `telegram:format`: an agent's Markdown to Telegram HTML, read-only. Set it as
+  an agent bot's `replyOperation`, or call it from an application's own reply
+  hook. A `parse_mode` returned by a reply hook now wins over the bot's
+  `parseMode`.
+- Venue `"tray": false` keeps the tray icon and AWT out of the process.
+- WhatsApp voice notes, photos and files: attachments and `mediaOperation` for agent
+  bindings, `media` on relay polls and a relay `media` action; Telegram's attachment
+  handling is now shared messaging code.
+- `whatsapp:download` (ability `whatsapp/download`); WhatsApp operation bindings now receive media messages.
+- `covia-speech` module: `speech:transcribe`, `speech:speak` and `speech:engines` over an
+  OpenAI-compatible audio API, cloud or local.
+- `speech` local engine: in-process transcription with sherpa-onnx (Parakeet, Moonshine),
+  operator-installed or pinned native libraries, Ogg/Opus voice notes.
+- `speech:transcribe` takes audio the caller holds as inline base64 `bytes`, stored nowhere;
+  `speech:prepare` fetches the local engine's model and libraries before any audio is in hand.
+- `speech:listen` and `speech:hear`: live dictation on the local engine, settling words at each
+  pause and returning those still being spoken.
+- Every jar names its Java module (`Automatic-Module-Name`: `covia.venue`, `covia.core`,
+  `covia.<module>`).
+- `user:export`, `user:import` and `user:clone`: a user's whole stored state as one value,
+  secrets sealed to the caller's key; import runs Covia's migrations (#615).
+
+### Changed
+
+- Discord, Telegram and SQL module jars use the venue's Kotlin, Jackson, Gson and Protobuf
+  instead of bundling their own copies.
+- The build and the venue warn on JDK 25 before 25.0.3 (JDK-8370887, late
+  timeouts); CI and release require a fixed JDK.
+- Javalin 7.2.4, MCP Java SDK 2.1.0 and Logback 1.6.6, matching Convex 0.8.18.
+- A standalone venue closes its lattice host after its node, saving the root
+  once more before the store closes.
+
+### Fixed
+
+- Secret operations expose distinct refusal constants for an existing name,
+  a missing secret and a decryption failure, including unreadable key versions
+  and malformed records (#586).
+- DLFS drive creation, deletion and listing use Convex's existing tombstone-aware
+  registry. Deleted drives survive a root save in flight and disappear from
+  listings, while file-level merge semantics remain intact (#589).
+- A deliberate agent stop survives late failures; cancelled cycles record its
+  cause and settle queued callers without recording a fault (#590).
+- Discord splits long messages without breaking surrogate pairs.
+- Messaging sends honour url-bound `secret/use` grants.
+- Adapters share one HTTP client per class, not one per venue or call; on JDK 27
+  each client holds a virtual-thread carrier, and the suite hung on Windows.
+- Oversized messaging downloads are refused as too large on JDK 27.
+
 ## [0.9.11] - 2026-10-15
 
 ### Security
@@ -1248,7 +1421,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.9.11...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.10.0...HEAD
+[0.10.0]: https://github.com/covia-ai/covia/compare/0.9.11...0.10.0
 [0.9.11]: https://github.com/covia-ai/covia/compare/0.9.10...0.9.11
 [0.9.10]: https://github.com/covia-ai/covia/compare/0.9.9...0.9.10
 [0.9.9]: https://github.com/covia-ai/covia/compare/0.9.8...0.9.9

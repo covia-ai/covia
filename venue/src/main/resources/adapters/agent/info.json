@@ -33,7 +33,16 @@
 					"required": ["input", "auth"]
 				},
 				"unavailableTools": { "type": "array", "description": "Configured operation tools currently missing or unreadable, with a reason for each" },
-				"error": { "type": "string", "description": "Last error message, if suspended" }
+				"error": { "type": "string", "description": "Last fault, if suspended" },
+				"suspension": {
+					"type": "object", "description": "Present for a deliberate stop, absent for a fault; cleared on resume",
+					"properties": {
+						"by": { "type": "string", "description": "Actual caller DID" },
+						"reason": { "type": "string", "maxLength": 512 },
+						"ts": { "type": "integer", "description": "Stop time in epoch milliseconds" }
+					},
+					"required": ["by", "ts"]
+				}
 			}
 		}
 	}

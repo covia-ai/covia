@@ -1,9 +1,13 @@
 package covia.adapter.whatsapp;
 
 import static org.junit.jupiter.api.Assertions.*;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -24,6 +28,23 @@ final class TestSupport {
   static final AString OTHER = Strings.create("did:test:whatsapp:other");
   static final String TOKEN = "test-outbound-token", SECRET = "test-signing-secret";
   static final String NAME = "whatsapp";
+  /**
+   * A directory for a venue store, deleted at JVM exit rather than by JUnit, as
+   * venue's TestTemp: on Java 21 (no FFM mapper) a closed store's file stays
+   * mapped until GC, and Windows will not delete a mapped file, so @TempDir's
+   * mandatory cleanup would fail the test.
+   */
+  static Path storeDir(String prefix) throws IOException {
+    Path dir = Files.createTempDirectory(prefix);
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      try (var walk = Files.walk(dir)) {
+        walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+      } catch (IOException ignored) {
+        // best-effort at exit
+      }
+    }));
+    return dir;
+  }
   static ACell run(Engine engine, AString owner, String op, ACell input) throws Exception {
     return engine.jobs().invokeOperation(op, input, RequestContext.of(owner)).awaitResult(10000);
   }
@@ -53,16 +74,56 @@ final class TestSupport {
     }
     fail("Receipt did not reach " + status + ": " + bot.inbox().get(id) + "; bot " + bot.status());
   }
+  /** The real agent adapter, failing its first {@code failures} session deliveries and never waking agents. */
+  static final class FlakyAgents extends covia.adapter.AgentAdapter {
+    static final String FAILURE = "Injected session delivery failure";
+    final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+    final int failures;
+    FlakyAgents(int failures) { this.failures = failures; }
+    @Override public covia.grid.Job deliverSession(ACell input, RequestContext ctx) {
+      if (calls.incrementAndGet() <= failures) throw new IllegalStateException(FAILURE);
+      return super.deliverSession(input, ctx);
+    }
+    @Override public java.util.concurrent.CompletableFuture<ACell> wakeAgent(AString owner, AString agent, boolean force) {
+      return java.util.concurrent.CompletableFuture.completedFuture(null);
+    }
+  }
+  static long jobCount(Engine engine) { return engine.jobs().getJobs(RequestContext.of(OWNER)).count(); }
   record Sent(String path, String authorization, AMap<AString,ACell> body) { }
+  /**
+   * A media item the stand-in serves: a lookup at /<version>/<id>, the bytes at /media/<id>.
+   * The lookup reports {@code size}, which may claim more than the bytes it serves.
+   */
+  record Media(byte[] bytes, String mimeType, long size) {
+    Media(byte[] bytes, String mimeType) { this(bytes, mimeType, bytes.length); }
+  }
   static final class FakeAPI implements AutoCloseable {
     final HttpServer server;
     final LinkedBlockingQueue<Sent> sends = new LinkedBlockingQueue<>();
+    /** GET requests (media lookups and downloads), with their Authorization header. */
+    final LinkedBlockingQueue<Sent> gets = new LinkedBlockingQueue<>();
+    final Map<String, Media> media = new java.util.concurrent.ConcurrentHashMap<>();
     volatile int status = 200;
     volatile String response = NAME.equals("slack") ? "{\"ok\":true,\"ts\":\"1700000000.000001\"}" : "{\"messages\":[{\"id\":\"wamid.sent\"}]}";
     FakeAPI() throws Exception {
       server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
       server.createContext("/", exchange -> {
         try {
+          if ("GET".equals(exchange.getRequestMethod())) {
+            String path = exchange.getRequestURI().getPath();
+            gets.add(new Sent(exchange.getRequestURI().toString(), exchange.getRequestHeaders().getFirst("Authorization"), Maps.empty()));
+            String id = path.substring(path.lastIndexOf('/') + 1);
+            Media item = media.get(id);
+            if (item == null) { exchange.sendResponseHeaders(404, -1); return; }
+            boolean download = path.startsWith("/media/");
+            byte[] bytes = download ? item.bytes() : JSON.print(Maps.of("messaging_product", "whatsapp", "id", id,
+              "url", url() + "/media/" + id + "?ext=1&hash=x", "mime_type", item.mimeType(), "file_size", item.size()))
+              .toString().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", download ? item.mimeType() : "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            return;
+          }
           AMap<AString,ACell> body = RT.castMap(JSON.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
           sends.add(new Sent(exchange.getRequestURI().toString(), exchange.getRequestHeaders().getFirst("Authorization"), body));
           byte[] bytes = response.getBytes(StandardCharsets.UTF_8);

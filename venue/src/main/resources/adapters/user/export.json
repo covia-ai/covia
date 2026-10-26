@@ -1,0 +1,42 @@
+{
+  "name": "Export user",
+  "description": "Export a user's whole stored state as one value for user:import: workspace, agents and their sessions, jobs, assets, operations, HITL inbox and secrets. Secrets are sealed together to accountKey with Convex ECIES, never exported in the clear or under the venue's key; secrets:false leaves them out. State the venue keeps outside the user's record (login aliases and authenticators, drives, adapter-owned state, scheduled events, content bytes) is not included, and references to it are carried as stored. Refused while the user has a job not yet finished or an agent task outstanding. A direct result-only run (POST /run): recorded jobs, MCP tools, agents, sessions and nested operation calls are refused. Use the published definition unchanged. Exporting another user requires venue-issued user/export on <venueDID>/users.",
+  "operation": {
+    "adapter": "user:export",
+    "readOnly": true,
+    "secretFields": ["export"],
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "User DID; defaults to the authenticated caller"
+        },
+        "accountKey": {
+          "type": "string",
+          "description": "32-byte Ed25519 public key to seal the user's secrets to, as a blob or hexadecimal (optional 0x prefix). Required when the user has secrets, unless secrets is false."
+        },
+        "secrets": {
+          "type": "boolean",
+          "default": true,
+          "description": "false leaves the user's secrets out of the export"
+        }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "version": { "type": "integer", "description": "Export format version" },
+        "export": {
+          "type": "string",
+          "description": "The export: a CAD3 multi-cell encoding as a 0x-prefixed hexadecimal string.",
+          "pattern": "^0x(?:[0-9a-f]{2})*$"
+        }
+      },
+      "required": ["did", "version", "export"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -33,6 +33,11 @@ public final class VenueDID {
 
 	private static final ConcurrentHashMap<String, String> CACHE = new ConcurrentHashMap<>();
 
+	/** One client for every discovery: each client holds a selector thread for its lifetime. */
+	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+		.connectTimeout(Duration.ofSeconds(10))
+		.build();
+
 	private VenueDID() {}
 
 	/**
@@ -56,14 +61,11 @@ public final class VenueDID {
 
 	private static String fetch(String base) {
 		try {
-			HttpClient client = HttpClient.newBuilder()
-				.connectTimeout(Duration.ofSeconds(10))
-				.build();
 			HttpRequest req = HttpRequest.newBuilder(URI.create(base + "/.well-known/did.json"))
 				.timeout(Duration.ofSeconds(10))
 				.GET()
 				.build();
-			HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> resp = HTTP_CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() != 200) {
 				throw new RuntimeException("Venue DID discovery failed: " + base
 					+ "/.well-known/did.json returned HTTP " + resp.statusCode());

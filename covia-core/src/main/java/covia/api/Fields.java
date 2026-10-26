@@ -38,6 +38,10 @@ public class Fields {
 	public static final StringShort INTERNAL = Strings.intern("internal");
 	public static final StringShort DEFAULT = Strings.intern("default");
 	public static final StringShort MESSAGE = Strings.intern("message");
+	/** What a running Job's work is doing now: {@code {message, data?}} (see {@code Job.progress}). */
+	public static final StringShort PROGRESS = Strings.intern("progress");
+	/** Additional structured detail beside a {@link #MESSAGE}, as in a progress record. */
+	public static final StringShort DATA = Strings.intern("data");
 	/** Stable caller-supplied message identity, used for idempotent A2A intake. */
 	public static final StringShort MESSAGE_ID = Strings.intern("messageId");
 	public static final StringShort DELAY = Strings.intern("delay");

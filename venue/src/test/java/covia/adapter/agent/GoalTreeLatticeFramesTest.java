@@ -95,7 +95,7 @@ public class GoalTreeLatticeFramesTest {
 	}
 
 	private static AVector<ACell> conversation(ACell frame) {
-		AVector<ACell> conv = RT.ensureVector(RT.getIn(frame, "conversation"));
+		AVector<ACell> conv = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frame));
 		return (conv != null) ? conv : Vectors.empty();
 	}
 
@@ -335,7 +335,7 @@ public class GoalTreeLatticeFramesTest {
 		// its tool finally returns — is rejected by the released claim and cannot
 		// touch the frames. Drives the fence directly rather than sleeping and
 		// hoping the tool timeout fired.
-		boolean applied = ag.updateSessionFrames(sid, zombieEpoch,
+		boolean applied = ag.session(sid).updateFrames(zombieEpoch,
 			f -> f.conj(Maps.of(Strings.create("zombie"), Strings.create("write"))));
 		assertFalse(applied, "a write with the superseded cycle epoch must be fenced (I1)");
 		assertEquals(atSuspend, frames("zombie-agent", sid),

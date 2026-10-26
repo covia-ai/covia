@@ -41,6 +41,12 @@ public final class Abilities {
 	/** Authorise an explicit sudo request into a user's namespace. Scoped to the
 	 *  target user DID itself; grants no operation or action authority. */
 	public static final AString USER_SUDO     = Strings.intern("user/sudo");
+	/** Read out another user's whole stored state ({@code user:export}, the
+	 *  source of {@code user:clone}). */
+	public static final AString USER_EXPORT   = Strings.intern("user/export");
+	/** Fill an empty account from stored user state ({@code user:import}, the
+	 *  target of {@code user:clone}). */
+	public static final AString USER_IMPORT   = Strings.intern("user/import");
 	public static final AString USER_AUTH_MANAGE =
 		Strings.intern("user/authentication-manage");
 	/** Venue-owned adapter and module lifecycle (enable/disable/configure,
@@ -52,7 +58,14 @@ public final class Abilities {
 	/** Online garbage collection of the venue's Etch store (covia#452) — guarded
 	 *  on {@code <venue DID>/store}. */
 	public static final AString VENUE_GC = Strings.intern("venue/gc");
+	/** See the venue's P2P node and the peers it knows (covia#587) — guarded
+	 *  on {@code <venue DID>/p2p}. */
+	public static final AString P2P_READ = Strings.intern("p2p/read");
+	/** Connect the venue's P2P node to a peer (covia#587) — guarded on
+	 *  {@code <venue DID>/p2p}. */
+	public static final AString P2P_MANAGE = Strings.intern("p2p/manage");
 
-	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
+	/** The venue-relative MCP management resource guarded by {@link #MCP_MANAGE}:
+	 *  a delegation names it as {@code <venue DID>/v/mcp}. */
 	public static final AString V_MCP = Strings.intern("v/mcp");
 }

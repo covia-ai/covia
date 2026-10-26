@@ -5,12 +5,16 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.11</version>
+		<version>0.10.0</version>
 	</parent>
 	<artifactId>covia-sonnylabs</artifactId>
 
 	<name>Covia SonnyLabs Module</name>
 	<description>SonnyLabs prompt-injection scanning adapter, packaged as an optional loadable venue module.</description>
+
+	<properties>
+		<covia.module.name>covia.sonnylabs</covia.module.name>
+	</properties>
 
 	<dependencies>
 		<dependency>
@@ -28,6 +32,12 @@
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
 			<version>${junit.version}</version>
 			<scope>test</scope>
 		</dependency>

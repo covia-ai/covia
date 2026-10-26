@@ -262,12 +262,49 @@ public class AgentEventsTest {
 		assertNull(cycleEnd.data().get(Fields.DETAIL),
 			"frame-owning runtimes do not duplicate already-persisted turns in cycle:end");
 		AgentState agent = engine.getVenueState().users().get(did).agent(id);
-		AVector<ACell> turns = RT.ensureVector(RT.getIn(
+		AVector<ACell> turns = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(
 			agent.getSession(Blob.fromHex(sid.toString())), Fields.FRAMES,
-			CVMLong.ZERO, AgentState.KEY_CONVERSATION));
+			CVMLong.ZERO)));
 		assertTrue(turns.count() >= 4,
 			"canonical session has user, tool-call reply, tool result and response: " + turns);
 		assertNull(RT.getIn(cycleEnd.data(), Fields.ERROR));
+	}
+
+	@Test
+	public void testRunningToolRelaysTheProgressItsOperationPublishes() {
+		String id = "progresser";
+		createAgent(id, Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/toolllm",
+			Fields.TOOLS, Vectors.of(Maps.of(
+				Fields.OPERATION, "v/test/ops/progress",
+				Fields.NAME, "v/test/ops/progress"))));
+		Capture c = new Capture();
+		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(did, Strings.create(id), c)) {
+			engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "progress-relay please"), ctx).awaitResult(10_000);
+			c.await(AgentEvents.RUN_END, null, 5_000);
+		}
+
+		// The operation published two steps, the second twice, from its own
+		// thread: each change is announced once, inside the call.
+		List<String> tool = new ArrayList<>();
+		for (String type : c.types()) if (type.startsWith("tool:")) tool.add(type);
+		assertEquals(List.of("tool:start", "tool:progress", "tool:progress", "tool:result"), tool);
+		assertSeqStrictlyIncreasing(c.events);
+
+		List<Event> progress = c.all(AgentEvents.TOOL_PROGRESS);
+		Event first = progress.get(0);
+		assertEquals(Strings.create("call_1"), str(first, Fields.ID), "correlated with the call that invoked it");
+		assertEquals(Strings.create("v/test/ops/progress"), str(first, Fields.NAME));
+		assertEquals(1, num(first, Fields.CYCLE));
+		assertEquals(Strings.create("step 1"), str(first, Fields.MESSAGE), "the operation's own line, for a person");
+		assertEquals(Strings.create("step 2"), str(progress.get(1), Fields.MESSAGE));
+		assertEquals(Strings.create("step 1"),
+			RT.getIn(first.data(), Fields.DETAIL, Fields.PROGRESS, Fields.DATA, "step"), "its record rides under detail");
+		Event safe = first.withoutDetail();
+		assertNull(safe.data().get(Fields.DETAIL));
+		assertEquals(Strings.create("step 1"), str(safe, Fields.MESSAGE), "the line stays in a display-safe view");
 	}
 
 	@Test

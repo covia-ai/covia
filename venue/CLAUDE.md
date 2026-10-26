@@ -26,7 +26,7 @@ venue/
 │   │   ├── api/                 # REST (CoviaAPI), MCP, A2A, UserAPI
 │   │   ├── server/              # HTTP server, AuthMiddleware, SSE
 │   │   └── storage/             # Content storage backends
-│   ├── adapter/         # Adapter implementations (AAdapter base + 34 adapters)
+│   ├── adapter/         # Adapter implementations (AAdapter base + 35 adapters)
 │   └── lattice/         # Lattice definitions (Covia.java), CapabilityChecker
 ├── src/main/resources/
 │   ├── adapters/        # Operation asset definitions (JSON, per adapter)
@@ -76,6 +76,7 @@ AUTH_REQUIRED).
 |---------|---------|------------|
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
 | `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
+| `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
 | `crypto` | Local cryptography in Convex formats; secret-backed keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
@@ -103,7 +104,7 @@ AUTH_REQUIRED).
 | `skills` | Agent skills discovery and SKILL.md import (see `docs/SKILLS.md`) | `list`, `read`, `parse`, `import` |
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
 | `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
-| `auth` | Authentication ops | login/token flows |
+| `auth` | Authentication and identity | `whoami`, `identity-token` (caller-only bearer saved as a secret) |
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
 | `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
@@ -115,12 +116,13 @@ Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venu
 |---------|--------|---------|------------|
 | `sql` | covia-sql | Venue-local convex-db and operator-registered JDBC databases | `query`, `execute` |
 | `python` | covia-python-adapter | Operator-configured Python operations and stateful instances | configured ops, `instances/*` |
-| `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats and media to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `download`, `create`, `delete`, `bots` |
+| `telegram` | covia-telegram | Telegram bots (operator-declared or user-created) routing chats and media to agents or handing Updates to operations; Bot API access in Telegram's own shapes | `send`, `call`, `download`, `create`, `delete`, `bots`, `format` |
 | `discord` | covia-discord | Discord bots (operator-declared or user-created) routing DMs and mentioned guild messages to agents or operations; Discord REST API access | `send`, `call`, `create`, `delete`, `bots` |
-| `whatsapp` | covia-whatsapp | WhatsApp Cloud API phone bindings with signed text callbacks, durable intake and text replies | `send`, `create`, `delete`, `bots` |
-| `slack` | covia-slack | Slack workspace bindings with signed Events API DMs/channel mentions, durable intake and thread replies | `send`, `create`, `delete`, `bots` |
+| `whatsapp` | covia-whatsapp | WhatsApp Cloud API phone bindings with signed callbacks, durable intake and text replies; voice notes, photos and files reach agents as attachments (shared `MessagingMedia`, optional `mediaOperation`) and operations as raw messages for `download`; `relay` bindings serve many principals at `/relay/whatsapp/<binding>` | `send`, `download`, `create`, `delete`, `bots` |
+| `slack` | covia-slack | Slack workspace bindings with DMs/channel mentions over signed Events API callbacks or Socket Mode, durable intake and thread replies; `relay` bindings as for WhatsApp | `send`, `create`, `delete`, `bots` |
 | `sonnylabs` | covia-sonnylabs | SonnyLabs AI-firewall scanning for prompt injection and related LLM safety findings | `scan` |
 | `documents` | covia-documents | Readable text from PDF and Office documents (PDFBox, POI) behind `mode: "extract"` on file/vault/dlfs reads; page ranges and a character cap | `extract` |
+| `speech` | covia-speech | Speech to text and text to speech over an OpenAI-compatible audio API (a cloud provider, or a local server so audio stays on the machine), or transcription in-process with sherpa-onnx (`engine: "local"`); `transcribe` doubles as a messaging `mediaOperation`, `speak` stores Ogg/Opus voice notes | `transcribe`, `speak`, `engines`, `prepare`, `listen`, `hear` |
 | `claudecode` | covia-claude-code | Drives the Claude Code CLI in venue-authorised project directories: one-shot runs and long-lived resumable sessions over a bounded warm-process pool | `run`, `session`, `sessions`, `stop`, `projects`, `create`, `delete` |
 
 ## API Endpoints
@@ -230,7 +232,7 @@ Index<Blob, ACell> userJobs = user.getJobs();
 
 ```
 
-Adapter-owned state uses `AdapterWorkspace`; see
+Adapter-owned state uses `AdapterState`; see
 [`docs/ADAPTERS.md`](docs/ADAPTERS.md#private-state-and-user-managed-storage).
 
 ### Testing
@@ -265,6 +267,7 @@ java -jar target/covia.jar [config.json]
 - `docs/AUTH.md` — authentication design (#297): method contract, central sessions, assurance policy
 - `docs/ADAPTERS.md` — canonical adapter system, state, lifecycle, authoring, and module contract
 - `docs/CONFIG.md` — operator configuration reference
+- `docs/EMBEDDING.md` — running a venue inside another application: lifecycle and close order, adapters, user data, upgrading from 0.9.x
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
 - `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
@@ -274,6 +277,9 @@ java -jar target/covia.jar [config.json]
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
+- `docs/MIGRATE.md` — venue migration requirements (#621): pure migration
+  functions per lattice component that embedders compose into their own
+  migration; adapter-defined migration rules; optional lazy migration
 - `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
   `docs/GOAL_TREE.md` — agent architecture
 - `docs/READ_API.md` — job-free read surface

@@ -5,11 +5,15 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.11</version>
+		<version>0.10.0</version>
 	</parent>
 	<artifactId>covia-python-adapter</artifactId>
 	<name>Covia Python Adapter Module</name>
 	<description>Optional loadable venue module for operator-configured in-process Python operations.</description>
+
+	<properties>
+		<covia.module.name>covia.python.adapter</covia.module.name>
+	</properties>
 
 	<dependencies>
 		<!-- Venue SPI supplied by the host and never bundled. -->
@@ -40,6 +44,12 @@
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
 			<version>${junit.version}</version>
 			<scope>test</scope>
 		</dependency>

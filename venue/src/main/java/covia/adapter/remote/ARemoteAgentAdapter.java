@@ -31,7 +31,8 @@ import covia.venue.RequestContext;
 public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends AAdapter {
 	public static final String NO_INTERACTION = "Job has no agent interaction accepting messages";
 	public static final String INTERACTION_ENDED = "Agent interaction ended";
-	public static final AString PROGRESS = Strings.intern("progress");
+	/** Where a running Job says what its work is doing now: see {@link Job#progress}. */
+	public static final AString PROGRESS = Fields.PROGRESS;
 
 	private final ConcurrentHashMap<Blob, Binding> interactions = new ConcurrentHashMap<>();
 
@@ -153,9 +154,13 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 		live.deliver(messageRecord);
 	}
 
-	/** Provider-neutral progress; Job's terminal transition fence rejects late updates. */
-	protected static void publishProgress(Job job, AMap<AString, ACell> progress) {
-		job.update(data -> data.assoc(PROGRESS, progress));
+	/**
+	 * Provider-neutral progress: {@code message}, one line a person can read,
+	 * and the provider's own {@code data} beside it. Observed while the Job
+	 * runs and never persisted; a finished Job refuses it.
+	 */
+	protected static void publishProgress(Job job, String message, ACell data) {
+		job.progress(message, data);
 	}
 
 	@Override

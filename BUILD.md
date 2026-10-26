@@ -4,11 +4,56 @@ This document describes how to build the Covia project using Maven.
 
 ## Prerequisites
 
-- **Java 21+**: The project compiles for Java 21 (`maven.compiler.release=21`); the published Docker image runs on a Java 25 JRE. This is deliberate policy: source targets Java 21 so client libraries stay broadly consumable, while container images ship the current Java LTS
+- **Java 21+**: The project compiles for Java 21 (`maven.compiler.release=21`); the published Docker image runs on a Java 25 JRE. This is deliberate policy: source targets Java 21 so client libraries stay broadly consumable, while container images ship the current Java LTS. JDK 25 before 25.0.3 has JDK-8370887, under which virtual-thread and CompletableFuture timeouts fire tens of seconds late: the build warns on one (maven-enforcer-plugin), and CI and release fail with `-Dcovia.jdk.check=ERROR`, so our own tests always run on a fixed JDK
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Covia targets Convex 0.8.17. Maven resolves the release from the local repository or configured remote repositories in the normal way.
+Covia builds against Convex 0.8.18, from Maven Central. The upstream
+cursor/component/DLFS checks can be run in a Convex checkout of the `0.8.18` tag
+(use `mvnw.cmd` on Windows) with:
+
+```sh
+./mvnw test -pl convex-core,convex-dlfs -am '-Dtest=*CursorTest,*ComponentTest,*ApplicationTest,*HostTest,DLFS*Test' '-Dsurefire.failIfNoSpecifiedTests=false'
+```
+
+### Upgrading from Convex 0.8.17
+
+The disposable-store upgrade from Convex 0.8.17 passes. **Upgrading is one-way:**
+the first DLFS write adds an optional modification-time slot (`POS_MTIME = 5`),
+producing six-element nodes that 0.8.17 rejects (that reader accepts only
+four/five-element nodes). Convex 0.8.18 makes this its contract (CHANGELOG and
+DLFS_DESIGN "Upgrading Is One-Way", [Convex #688](https://github.com/Convex-Dev/convex/issues/688)):
+back up a store before upgrading, and roll back only by restoring that backup.
+It is a DLFS format change, not an Etch encoding change or a Covia
+secret-record migration. Test with disposable stores or copies.
+
+### Store compatibility rehearsal
+
+Keep a baseline `covia.jar` built with Convex 0.8.17. Compile
+`venue/src/test/java/covia/venue/SnapshotCompatibilityProbe.java` against that jar
+once, then run the resulting class with the baseline, experimental, and baseline
+jars in that order. Pass the same **disposable** Etch path and marker pairs
+`- before`, `before snapshot`, and `snapshot rollback`. A fourth run of the
+experimental jar with `snapshot reopened` checks the return path after the
+expected rollback failure (which does not write the rollback marker). Each run
+checks workspace data, encrypted secrets, DLFS content, agent records and
+persisted jobs, writes a fresh marker, and flushes before closing. The probe uses
+a fixed public test seed and must never open a real venue store. No schema rewrite
+is intended by this migration; the rehearsal verifies actual cross-version reads.
+
+The repeatable API regression is `VenueStoreMigrationTest`. It starts from a
+checked-in store written by the published 0.9.11 jar, upgrades a copy, exercises
+authenticated operations and reopens it twice. It runs with the ordinary
+durability gate and requires no old jar or network download in CI:
+
+```sh
+mvn test -pl venue -am '-Dtest=VenueStoreMigrationTest' '-Dsurefire.failIfNoSpecifiedTests=false' '-Dcovia.tests.durability=true'
+```
+
+Add `-Dcovia.migration.output=/absolute/path/to/NEW-directory` to retain the
+upgraded store, report and a loopback launch config for manual API testing.
+See the [fixture guide](venue/src/test/resources/migrations/README.md) for
+contents, provenance, candidate-jar checks and generation instructions.
 
 ## Project Structure
 
@@ -52,6 +97,7 @@ covia/
 │   ├── pom.xml            # Venue SPI provided; JDK HTTP client only
 │   └── src/               # Prompt-injection scan adapter and local fake tests
 ├── covia-documents/       # Optional loadable documents module (PDF/Office text extraction)
+├── covia-speech/          # Optional loadable speech module (transcription and speech; JDK HTTP)
 │   ├── pom.xml            # Venue SPI provided; PDFBox and POI shaded
 │   └── src/               # Documents extract adapter and tests
 └── covia-claude-code/     # Optional loadable Claude Code module
@@ -131,7 +177,7 @@ A single heavy test still needs its flag, e.g.
 
 ### Venue Module
 
-The venue module produces several artifacts (`<version>` is the current Maven version, e.g. `0.9.11-SNAPSHOT`):
+The venue module produces several artifacts (`<version>` is the current Maven version, from the root `pom.xml`):
 
 - **Standard JAR**: `venue/target/venue-<version>.jar`
 - **Executable JAR**: `venue/target/covia.jar` (with dependencies)
@@ -345,7 +391,7 @@ groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
 `ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
 `covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
-`covia-sonnylabs`, `covia-documents` and
+`covia-sonnylabs`, `covia-documents`, `covia-speech` and
 `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue. Their slim jars are published so an embedding host can
 depend on a module through Maven; the shaded `-module.jar`s are GitHub Releases
@@ -436,6 +482,8 @@ Both snapshot and stable releases include:
 - `covia-sonnylabs-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-documents-<version>-module.jar` - Optional documents (PDF/Office text) venue module
 - `covia-documents-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-speech-<version>-module.jar` - Optional speech (transcription and text-to-speech) venue module
+- `covia-speech-<version>-module.jar.sha256` - SHA-256 checksum
 - `covia-claude-code-<version>-module.jar` - Optional Claude Code venue module
 - `covia-claude-code-<version>-module.jar.sha256` - SHA-256 checksum
 

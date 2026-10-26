@@ -3,7 +3,10 @@
 ################################################
 # Run stage
 
-# Use Eclipse Temurin 25 LTS as base image (modern JVM)
+# Use Eclipse Temurin 25 LTS as base image (modern JVM). The floating 25 tag
+# must resolve to 25.0.3 or later: earlier 25 updates have JDK-8370887, under
+# which timeouts fire tens of seconds late and jobs stall. Never pin it below
+# 25.0.3; the venue logs a warning at startup if it finds itself on one.
 FROM eclipse-temurin:25-jre-alpine
 
 LABEL org.opencontainers.image.source="https://github.com/covia-ai/covia" \

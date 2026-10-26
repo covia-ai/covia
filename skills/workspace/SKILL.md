@@ -19,6 +19,7 @@ Navigate and manage data in the venue's lattice namespace.
 | `j/` | Jobs | Read-only (framework-managed) | Job records and history |
 | `w/` | Workspace | Read/write | User data — free-form storage |
 | `o/` | Operations | Read/write | User-defined operations |
+| `x/<adapter>/` | Extensions | Adapter-defined; read-only by default | Adapter's explicit view for this user |
 
 ## Commands
 
@@ -54,7 +55,11 @@ For large values, use `covia_slice` with offset/limit for pagination.
 covia_write  path=w/<key>  value=<json>
 ```
 
-Only `w/` and `o/` namespaces are writable. Writing `null` deletes the entry.
+`w/` and `o/` are writable; scoped virtual paths and `x/<adapter>/` views
+accept writes only where their provider permits. Writing `null` stores a null
+value; use `covia_delete` to remove an entry. Extension routes expose only what
+the active adapter provides, not its private storage. Consult adapter discovery
+for supported paths; bare `x` does not list adapters.
 
 Deep paths are supported — intermediate maps are created as needed:
 ```

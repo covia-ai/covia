@@ -982,6 +982,10 @@ public class LangChainAdapter extends AAdapter {
 		return ids;
 	}
 
+	/** One client for every Ollama probe: each client holds a selector thread for its lifetime. */
+	private static final java.net.http.HttpClient OLLAMA_PROBE = java.net.http.HttpClient.newBuilder()
+		.connectTimeout(java.time.Duration.ofSeconds(2)).build();
+
 	/** Live Ollama reachability and installed models; catalog definitions stay authoritative. */
 	private AMap<AString, ACell> ollamaStatus() {
 		AMap<AString, ACell> adapterCfg = engine.adapterConfig("langchain");
@@ -990,12 +994,10 @@ public class LangChainAdapter extends AAdapter {
 		boolean ready = false;
 		String note = null;
 		try {
-			java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
-				.connectTimeout(java.time.Duration.ofSeconds(2)).build();
 			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(
 					java.net.URI.create(url + "/api/tags"))
 				.timeout(java.time.Duration.ofSeconds(3)).GET().build();
-			java.net.http.HttpResponse<String> resp = client.send(req,
+			java.net.http.HttpResponse<String> resp = OLLAMA_PROBE.send(req,
 				java.net.http.HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() == 200) {
 				ready = true;
@@ -1721,9 +1723,11 @@ public class LangChainAdapter extends AAdapter {
 						}
 						String text = (content != null) ? content.toString() : null;
 						ai = new AiMessage(text, reqs);
-					} else if (content != null) {
+					} else if (content != null && !content.toString().isBlank()) {
 						ai = AiMessage.from(content.toString());
 					} else {
+						// A turn that ended without a reply: nothing was said, so
+						// nothing goes back — providers reject an empty assistant message.
 						break;
 					}
 					ai = ProviderState.restore(provider, modelName,

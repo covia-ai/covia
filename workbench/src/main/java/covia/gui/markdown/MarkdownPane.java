@@ -2,6 +2,7 @@ package covia.gui.markdown;
 
 import java.awt.Cursor;
 import java.awt.Point;
+import java.awt.event.HierarchyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Rectangle2D;
@@ -24,7 +25,9 @@ import javax.swing.text.ViewFactory;
 /**
  * A read-only {@link JTextPane} showing rendered Markdown. Give it a style
  * source rather than a style: the text is rendered again with a fresh style
- * whenever the look and feel changes, so a theme switch carries through.
+ * whenever the look and feel changes, so a theme switch carries through — at
+ * once, or for a pane that {@linkplain #renderWhenShowing renders only when
+ * showing}, when it next comes into view.
  * Links are inert until the host supplies {@link #onLink}. Text stays selectable
  * and copyable. Border, background, opacity and focus behaviour are ordinary
  * Swing properties owned by the host. Construct and update on the event thread.
@@ -36,6 +39,10 @@ public class MarkdownPane extends JTextPane {
 	private String markdown = "";
 	private Consumer<String> linkHandler;
 	private boolean built;
+	/** Whether renders wait until the pane is showing: see {@link #renderWhenShowing}. */
+	private boolean whenShowing;
+	/** Whether the document is behind the source or the style, awaiting the pane coming into view. */
+	private boolean stale;
 
 	public MarkdownPane(Supplier<MarkdownStyle> style) {
 		this(style, "");
@@ -73,7 +80,25 @@ public class MarkdownPane extends JTextPane {
 	/** Renders {@code markdown} (null shows nothing), replacing what was shown. */
 	public void setMarkdown(String markdown) {
 		this.markdown = (markdown != null) ? markdown : "";
-		render();
+		refresh();
+	}
+
+	/**
+	 * For a host holding many panes, most out of view (a long transcript, a
+	 * screen not open): after the first render, the pane renders only while it
+	 * is showing. A new source or a look-and-feel change reaching it out of
+	 * view leaves the last render in place, measured and copied as it was,
+	 * until the pane comes into view and catches up — so a theme switch does
+	 * not render every hidden pane again.
+	 */
+	public MarkdownPane renderWhenShowing() {
+		if (!whenShowing) {
+			whenShowing = true;
+			addHierarchyListener(e -> {
+				if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && stale && isShowing()) render();
+			});
+		}
+		return this;
 	}
 
 	/** The source last given to {@link #setMarkdown}. */
@@ -134,10 +159,17 @@ public class MarkdownPane extends JTextPane {
 	@Override
 	public void updateUI() {
 		super.updateUI();
-		if (built) render();
+		if (built) refresh();
+	}
+
+	/** Renders now, unless renders wait for the pane to be showing and it is not. */
+	private void refresh() {
+		if (whenShowing && !isShowing()) stale = true;
+		else render();
 	}
 
 	private void render() {
+		stale = false;
 		setStyledDocument(new MarkdownRenderer(style.get()).render(markdown));
 	}
 

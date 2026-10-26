@@ -94,7 +94,10 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	public static Hash CANCEL_OPERATION;
 	public static Hash SEND_OPERATION;
 
-	private final HttpClient httpClient;
+	/** Shared by every venue in the process: each client holds a selector thread for its lifetime. */
+	private static final HttpClient httpClient = HttpClient.newBuilder()
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
 	public static final String INVALID_CANCELLATION_RESPONSE = "Invalid remote cancellation response";
 
 	/** The remote Task each live mirror Job is bound to, for cancellation and continuation. */
@@ -105,12 +108,6 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			adapter.engine.remoteJobs().attemptCancellation(job, remoteTaskId,
 				() -> adapter.cancelRemote(rpcUrl, remoteTaskId, auth));
 		}
-	}
-
-	public A2AAdapter() {
-		this.httpClient = HttpClient.newBuilder()
-				.connectTimeout(Duration.ofSeconds(10))
-				.build();
 	}
 
 	@Override
@@ -787,6 +784,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		}
 		if (remoteTask.status().state().isInterrupted()) {
 			applyInterruptedState(job, remoteTask, rawResultCell);
+		} else {
+			showProgress(job, remoteTask);
 		}
 	}
 
@@ -1004,6 +1003,16 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				.assoc(Fields.STATUS, localStatus).assoc(Fields.OUTPUT, rawTaskCell);
 			return next.equals(current) ? null : next;
 		});
+		showProgress(job, remote);
+	}
+
+	/**
+	 * A working remote Task's status message is its progress: shown on the
+	 * mirror as any Job's is, never recorded, and gone once it stops working.
+	 */
+	private static void showProgress(Job job, Task remote) {
+		boolean working = remote.status().state() == org.a2aproject.sdk.spec.TaskState.TASK_STATE_WORKING;
+		job.setProgress(working ? A2ACodec.progressOf(remote.status().message()) : null);
 	}
 
 	private AMap<AString, ACell> cancelRemote(String rpcUrl, String remoteTaskId, RequestAuth auth) throws Exception {

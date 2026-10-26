@@ -10,32 +10,33 @@ import java.util.function.BooleanSupplier;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 
-/** Session mappings in a binding's private workspace, with optional legacy migration. */
+/** Session mappings in a binding's private state, with optional legacy migration. */
 public final class ConversationSessions {
-	private final AdapterWorkspace workspace;
+	public static final String BINDING_STOPPED = "Conversation binding is stopped";
+	private final AdapterState workspace;
 	private final String root;
 	private final Function<String, String> legacyRead;
 	private final Consumer<String> legacyDelete;
 	private final Object mutationLock;
 	private final BooleanSupplier writable;
 
-	public ConversationSessions(AdapterWorkspace workspace, String root) {
+	public ConversationSessions(AdapterState workspace, String root) {
 		this(workspace, root, key -> null, key -> { });
 	}
 
-	public ConversationSessions(AdapterWorkspace workspace, String root,
+	public ConversationSessions(AdapterState workspace, String root,
 			Function<String, String> legacyRead, Consumer<String> legacyDelete) {
 		this(workspace, root, legacyRead, legacyDelete, new Object(), () -> true);
 	}
 
 	/** Coordinate session writes with a binding's stop/delete lifecycle. */
-	public ConversationSessions(AdapterWorkspace workspace, String root, Object mutationLock, BooleanSupplier writable) {
+	public ConversationSessions(AdapterState workspace, String root, Object mutationLock, BooleanSupplier writable) {
 		this(workspace, root, key -> null, key -> { }, mutationLock, writable);
 	}
 
-	private ConversationSessions(AdapterWorkspace workspace, String root,
+	public ConversationSessions(AdapterState workspace, String root,
 			Function<String, String> legacyRead, Consumer<String> legacyDelete, Object mutationLock, BooleanSupplier writable) {
 		this.workspace = Objects.requireNonNull(workspace);
 		workspace.path(root + "/check");
@@ -57,10 +58,26 @@ public final class ConversationSessions {
 		return null;
 	}
 
+	void requireCurrentUser() { workspace.requireCurrentUser(); }
+
 	public void put(String conversation, String session) {
 		synchronized (mutationLock) {
 			if (writable.getAsBoolean()) workspace.write(path(conversation), Strings.create(Objects.requireNonNull(session)));
 		}
+	}
+
+	/** Hold the binding lifecycle lock until a transaction has published. */
+	<T> T mutate(java.util.function.Supplier<T> work) {
+		synchronized (mutationLock) {
+			if (!writable.getAsBoolean()) throw new IllegalStateException(BINDING_STOPPED);
+			return work.get();
+		}
+	}
+
+	/** Writes the mapping in the same transaction as agent intake and its receipt. */
+	public void put(covia.venue.VenueState draft, String conversation, String session) {
+		if (!writable.getAsBoolean()) throw new IllegalStateException(BINDING_STOPPED);
+		workspace.inVenue(draft).write(path(conversation), Strings.create(session));
 	}
 
 	public void remove(String conversation) {

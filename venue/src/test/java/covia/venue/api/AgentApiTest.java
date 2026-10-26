@@ -242,10 +242,14 @@ public class AgentApiTest {
 			RT.getIn(direct.getData(), Fields.OUTPUT, Fields.ADDRESS),
 			"presenting a sudo grant must not itself select the owner's namespace");
 
+		// The delegate confers only caps it holds: an unrestricted agent in the
+		// owner's namespace would exceed its grant.
 		Job created = delegated.invokeAndWait(OP_SUDO, Maps.of(
 			Fields.DID, owner,
 			Fields.OPERATION, OP_CREATE,
-			Fields.INPUT, Maps.of(Fields.AGENT_ID, "delegated-agent")));
+			Fields.INPUT, Maps.of(Fields.AGENT_ID, "delegated-agent",
+				Fields.CONFIG, Maps.of("caps", Vectors.of(
+					Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE))))));
 
 		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
 		assertEquals(Strings.create(owner + "/g/delegated-agent"),

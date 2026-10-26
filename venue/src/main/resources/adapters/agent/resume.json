@@ -1,6 +1,6 @@
 {
 	"name": "Resume Agent",
-	"description": "Resumes a suspended agent, clearing any error and setting status to SLEEPING. If the agent has pending work (tasks or inbox messages), it will be woken immediately.",
+	"description": "Resumes a suspended agent, clearing its error and deliberate suspension record and setting status to SLEEPING. If the agent has pending work (tasks or inbox messages), it will be woken immediately.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:resume",

@@ -46,8 +46,26 @@ public class GoalTreeContext {
 	/** Frame description (the subgoal text that created this frame) */
 	static final AString K_DESCRIPTION = Strings.intern("description");
 
-	/** Frame conversation (vector of segments + live turns) */
+	/** Legacy frame conversation (vector of segments + live turns) */
 	static final AString K_CONVERSATION = Strings.intern("conversation");
+
+	/** Append-only frame history, selected by contextStart. */
+	static final AString K_HISTORY = Strings.intern("history");
+
+	/** First history position selected for model-context rendering. */
+	static final AString K_CONTEXT_START = Strings.intern("contextStart");
+	static final AString K_HISTORY_VERSION = Strings.intern("historyVersion");
+	static final AString K_HISTORY_RANGE = Strings.intern("historyRange");
+	static final CVMLong HISTORY_VERSION = CVMLong.ONE;
+	static final String INVALID_HISTORY_VERSION = "Unsupported frame history version";
+	static final String INVALID_HISTORY_RANGE = "Summary historyRange must reference an earlier range in the same frame";
+	static final String INVALID_CONVERSATION = "conversation must be a vector";
+	static final String INVALID_FRAME = "Session frames must be maps";
+	public static final String HISTORY_REWRITE = "A frame update cannot replace retained history or downgrade its format";
+
+	static final String INVALID_HISTORY = "history must be a vector and cannot coexist with conversation";
+	static final String INVALID_CONTEXT_START = "contextStart must be an integer between zero and history length";
+	static final String CONTEXT_START_WITHOUT_HISTORY = "contextStart requires history";
 
 	/** Frame-scoped loads (map of path → load metadata) */
 	static final AString K_LOADS = Strings.intern("loads");
@@ -120,8 +138,8 @@ public class GoalTreeContext {
 		AVector<ACell> repaired = frames;
 		for (long fi = 0; fi < frames.count(); fi++) {
 			AMap<AString, ACell> frame = (AMap<AString, ACell>) repaired.get(fi);
-			AVector<ACell> conv = (frame.get(K_CONVERSATION) instanceof AVector cv)
-				? (AVector<ACell>) cv : Vectors.empty();
+			AVector<ACell> conv = activeConversation(frame);
+			if (conv == null) conv = Vectors.empty();
 			AVector<ACell> fixed = conv;
 			for (long t = 0; t < conv.count(); t++) {
 				ACell turn = conv.get(t);
@@ -143,7 +161,7 @@ public class GoalTreeContext {
 				}
 			}
 			if (fixed != conv) {
-				repaired = repaired.assoc(fi, frame.assoc(K_CONVERSATION, fixed));
+				repaired = repaired.assoc(fi, appendTurns(frame, fixed.slice(conv.count(), fixed.count())));
 			}
 		}
 		return repaired;
@@ -157,8 +175,8 @@ public class GoalTreeContext {
 	@SuppressWarnings("unchecked")
 	public static boolean hasToolResultFor(AMap<AString, ACell> frame, AString id) {
 		if (id == null) return false;
-		AVector<ACell> conv = (frame.get(K_CONVERSATION) instanceof AVector cv)
-			? (AVector<ACell>) cv : Vectors.empty();
+		AVector<ACell> conv = activeConversation(frame);
+		if (conv == null) conv = Vectors.empty();
 		for (long i = 0; i < conv.count(); i++) {
 			ACell turn = conv.get(i);
 			if (ROLE_TOOL.equals(RT.getIn(turn, K_ROLE))
@@ -198,8 +216,8 @@ public class GoalTreeContext {
 	 */
 	@SuppressWarnings("unchecked")
 	public static ACell terminalValue(AMap<AString, ACell> frame) {
-		AVector<ACell> conv = (frame.get(K_CONVERSATION) instanceof AVector cv)
-			? (AVector<ACell>) cv : Vectors.empty();
+		AVector<ACell> conv = activeConversation(frame);
+		if (conv == null) conv = Vectors.empty();
 		if (conv.count() == 0) return null;
 		ACell last = conv.get(conv.count() - 1);
 		if (ROLE_ASSISTANT.equals(RT.getIn(last, K_ROLE))
@@ -249,7 +267,8 @@ public class GoalTreeContext {
 	public static AMap<AString, ACell> createFrame(String description) {
 		return Maps.of(
 			K_DESCRIPTION, Strings.create(description),
-			K_CONVERSATION, Vectors.empty());
+			K_HISTORY_VERSION, HISTORY_VERSION,
+			K_HISTORY, Vectors.empty(), K_CONTEXT_START, CVMLong.ZERO);
 	}
 
 	/**
@@ -367,16 +386,16 @@ public class GoalTreeContext {
 
 	/** Total ordinary turns represented by a frame, including nested archives. */
 	public static long countTurns(AMap<AString, ACell> frame) {
-		return turnCount(RT.ensureVector(frame != null ? frame.get(K_CONVERSATION) : null));
+		return turnCount(activeConversation(frame));
 	}
 
 	/**
-	 * Returns true if a conversation entry is a compacted segment (has summary + items).
+	 * Returns true if a conversation entry is a compacted segment (has summary plus items or a history range).
 	 */
 	public static boolean isSegment(ACell entry) {
 		if (!(entry instanceof AMap)) return false;
 		AMap<?, ?> map = (AMap<?, ?>) entry;
-		return map.get(K_SUMMARY) != null && map.get(K_ITEMS) != null;
+		return map.get(K_SUMMARY) != null && (map.get(K_ITEMS) != null || map.get(K_HISTORY_RANGE) != null);
 	}
 
 	/**
@@ -388,6 +407,195 @@ public class GoalTreeContext {
 	}
 
 	// ========== Context rendering ==========
+
+	/**
+	 * Selects a frame's current conversation for model-context rendering.
+	 *
+	 * <p>Legacy frames store that selection directly in {@code conversation}.
+	 * History frames select {@code [contextStart, history.count())}. Return the
+	 * immutable selection, including unexpanded compacted segments:
+	 * selection must not resolve sources, open archives or invalidate a rendered
+	 * prefix. Ancestor rendering uses {@link #archivedConversation} to preserve the
+	 * exact legacy archive shape exposed by CellExplorer.</p>
+	 *
+	 * @return the selected vector, or null when the frame/conversation is absent;
+	 *         absence is distinct from an empty vector in ancestor rendering
+	 * @throws IllegalArgumentException for an incomplete, mixed or invalid history selection
+	 */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> activeConversation(AMap<AString, ACell> frame) {
+		if (frame == null) return null;
+		if (!frame.containsKey(K_HISTORY)) {
+			if (frame.containsKey(K_CONTEXT_START)) {
+				throw new IllegalArgumentException(CONTEXT_START_WITHOUT_HISTORY);
+			}
+			if (frame.containsKey(K_HISTORY_VERSION)) throw new IllegalArgumentException(INVALID_HISTORY_VERSION);
+			ACell legacy = frame.get(K_CONVERSATION);
+			if (legacy != null && !(legacy instanceof AVector<?>)) throw new IllegalArgumentException(INVALID_CONVERSATION);
+			return (AVector<ACell>) legacy;
+		}
+		ACell version = frame.get(K_HISTORY_VERSION);
+		if (frame.containsKey(K_HISTORY_VERSION) && !HISTORY_VERSION.equals(version)) throw new IllegalArgumentException(INVALID_HISTORY_VERSION);
+		if (!(frame.get(K_HISTORY) instanceof AVector<?> history)
+				|| frame.containsKey(K_CONVERSATION)) {
+			throw new IllegalArgumentException(INVALID_HISTORY);
+		}
+		if (!(frame.get(K_CONTEXT_START) instanceof CVMLong start)
+				|| start.longValue() < 0 || start.longValue() > history.count()) {
+			throw new IllegalArgumentException(INVALID_CONTEXT_START);
+		}
+		return (AVector<ACell>) history.slice(start.longValue(), history.count());
+	}
+
+	/** The retained sequence, distinct from the active model-context selection. */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> history(AMap<AString, ACell> frame) {
+		AVector<ACell> active = activeConversation(frame); // validate format and selection
+		return frame != null && frame.containsKey(K_HISTORY)
+			? (AVector<ACell>) frame.get(K_HISTORY) : active;
+	}
+
+	/** Exact legacy-shaped view for archive readers and ancestor rendering.
+	 * Drop-in replacement for a direct {@code frame.conversation} read by an
+	 * embedder that walks nested {@code items}: keeps original entry order,
+	 * metadata, internal tool activity and unfinished turns. Returns null for an
+	 * absent conversation, distinct from an existing empty vector. This is a raw
+	 * accessor; the caller remains responsible for authorisation and projection.
+	 * Range expansion uses immutable vector slices; it performs no IO and does
+	 * not change stored entries, summaries, provenance or cached prompt inputs. */
+	public static AVector<ACell> archivedConversation(AMap<AString, ACell> frame) {
+		AVector<ACell> active = activeConversation(frame);
+		if (frame == null || !frame.containsKey(K_HISTORY)) return active;
+		AVector<ACell> entries = history(frame), expanded = Vectors.empty();
+		for (long i = 0; i < entries.count(); i++) {
+			ACell entry = entries.get(i);
+			if (entry instanceof AMap<?, ?> raw && raw.containsKey(K_HISTORY_RANGE)) {
+				@SuppressWarnings("unchecked") AMap<AString, ACell> summary = (AMap<AString, ACell>) raw;
+				AVector<ACell> range = summaryRange(summary, i);
+				entry = summary.dissoc(K_HISTORY_RANGE).assoc(K_ITEMS,
+					expanded.slice(((CVMLong) range.get(0)).longValue(), ((CVMLong) range.get(1)).longValue()));
+			}
+			expanded = expanded.conj(entry);
+		}
+		return expanded.slice(((CVMLong) frame.get(K_CONTEXT_START)).longValue(), expanded.count());
+	}
+
+	private static AVector<ACell> summaryRange(AMap<AString, ACell> entry, long position) {
+		AVector<ACell> range = RT.ensureVector(entry.get(K_HISTORY_RANGE));
+		if (range == null || range.count() != 2 || entry.containsKey(K_ITEMS)
+				|| !(entry.get(K_SUMMARY) instanceof AString) || !(entry.get(K_TURNS) instanceof CVMLong turns)
+				|| turns.longValue() < 0 || !(range.get(0) instanceof CVMLong start)
+				|| !(range.get(1) instanceof CVMLong end) || start.longValue() < 0
+				|| end.longValue() < start.longValue() || end.longValue() > position) {
+			throw new IllegalArgumentException(INVALID_HISTORY_RANGE);
+		}
+		return range;
+	}
+
+	/** Atomic/idempotent storage-only conversion. The caller publishes this pure
+	 * transform under its existing session CAS/epoch fence. Absent legacy
+	 * conversations remain absent because ancestor rendering distinguishes them. */
+	public static AMap<AString, ACell> migrateFrame(AMap<AString, ACell> frame) {
+		AVector<ACell> active = activeConversation(frame);
+		if (active == null) return frame;
+		if (frame.containsKey(K_HISTORY)) {
+			validateFrameUpdate(null, frame); // validate references without expanding archives
+			return HISTORY_VERSION.equals(frame.get(K_HISTORY_VERSION)) ? frame : frame.assoc(K_HISTORY_VERSION, HISTORY_VERSION);
+		}
+		HistoryBuilder builder = new HistoryBuilder();
+		long start = builder.append(active);
+		AMap<AString, ACell> migrated = frame.dissoc(K_CONVERSATION)
+			.assoc(K_HISTORY_VERSION, HISTORY_VERSION).assoc(K_HISTORY, builder.entries)
+			.assoc(K_CONTEXT_START, CVMLong.create(start));
+		if (!active.equals(archivedConversation(migrated))) throw new IllegalArgumentException(INVALID_HISTORY_RANGE);
+		return migrated;
+	}
+
+	/** Archives are emitted first, then their referencing entries as one contiguous
+	 * range. Even multiple legacy segments retain exactly the same active selection. */
+	private static final class HistoryBuilder {
+		AVector<ACell> entries = Vectors.empty();
+		long append(AVector<ACell> original) {
+			AVector<ACell> selected = Vectors.empty();
+			for (ACell entry : original) {
+				if (entry instanceof AMap<?, ?> raw && raw.containsKey(K_HISTORY_RANGE)) {
+					throw new IllegalArgumentException(INVALID_HISTORY_RANGE); // never reinterpret legacy metadata
+				}
+				if (isSegment(entry)) {
+					@SuppressWarnings("unchecked") AMap<AString, ACell> segment = (AMap<AString, ACell>) entry;
+					AVector<ACell> items = RT.ensureVector(segment.get(K_ITEMS));
+					if (items == null) throw new IllegalArgumentException(INVALID_HISTORY_RANGE);
+					long start = append(items);
+					entry = segment.dissoc(K_ITEMS).assoc(K_HISTORY_RANGE, Vectors.of(start, entries.count()));
+				}
+				selected = selected.conj(entry);
+			}
+			long start = entries.count();
+			entries = entries.concat(selected);
+			return start;
+		}
+	}
+
+	public static AVector<ACell> migrateFrames(AVector<ACell> frames) {
+		AVector<ACell> result = frames;
+		for (long i = 0; i < frames.count(); i++) {
+			AMap<AString, ACell> frame = RT.ensureMap(frames.get(i));
+			if (frame == null) throw new IllegalArgumentException(INVALID_FRAME);
+			AMap<AString, ACell> migrated = migrateFrame(frame);
+			if (migrated != frame) result = result.assoc(i, migrated);
+		}
+		return result;
+	}
+
+	/** Validate a publication against the current retained prefix, not the
+	 * caller's earlier snapshot. A stale writer must never discard later appends. */
+	public static void validateFramesUpdate(AVector<ACell> before, AVector<ACell> after) {
+		if (after.isEmpty() && before != null && !before.isEmpty()) {
+			AMap<AString, ACell> root = RT.ensureMap(before.get(0));
+			if (root != null && root.containsKey(K_HISTORY)) throw new IllegalArgumentException(HISTORY_REWRITE);
+		}
+		for (long i = 0; i < after.count(); i++) {
+			validateFrameUpdate(before != null && i < before.count() ? RT.ensureMap(before.get(i)) : null,
+				RT.ensureMap(after.get(i)));
+		}
+	}
+
+	/** Validates one retained frame; child-frame retirement is owned by the runtime. */
+	public static void validateFrameUpdate(AMap<AString, ACell> before, AMap<AString, ACell> after) {
+		if (after == null) throw new IllegalArgumentException(INVALID_FRAME);
+		if (before == after) return;
+		AVector<ACell> next = history(after);
+		long retained = 0;
+		if (before != null && before.containsKey(K_HISTORY)) {
+			AVector<ACell> previous = history(before);
+			if (!after.containsKey(K_HISTORY) || next.count() < previous.count()
+					|| !previous.equals(next.slice(0, previous.count()))) {
+				throw new IllegalArgumentException(HISTORY_REWRITE);
+			}
+			retained = previous.count();
+		}
+		if (after.containsKey(K_HISTORY)) {
+			for (long i = retained; i < next.count(); i++) {
+				AMap<AString, ACell> entry = RT.ensureMap(next.get(i));
+				if (entry != null && entry.containsKey(K_HISTORY_RANGE)) summaryRange(entry, i);
+			}
+		}
+	}
+
+	/** Append only; no general setter can accidentally replace retained history. */
+	public static AMap<AString, ACell> appendTurns(AMap<AString, ACell> frame, AVector<ACell> turns) {
+		AVector<ACell> retained = history(frame);
+		if (turns.isEmpty()) return frame;
+		if (retained == null) retained = Vectors.empty();
+		return frame.assoc(frame.containsKey(K_HISTORY) ? K_HISTORY : K_CONVERSATION, retained.concat(turns));
+	}
+
+	/** Keep observation metadata on an inspection-only copy without publishing
+	 * its appended messages. The source frame supplies its complete storage shape. */
+	static AMap<AString, ACell> observationState(AMap<AString, ACell> source, AMap<AString, ACell> observed) {
+		ACell observations = observed.get(K_OBSERVATIONS);
+		return observations == null ? source.dissoc(K_OBSERVATIONS) : source.assoc(K_OBSERVATIONS, observations);
+	}
 
 	/**
 	 * Renders ancestor frames as a single system message. Each ancestor's
@@ -430,7 +638,7 @@ public class GoalTreeContext {
 
 			int budget = budgetForDepth(activeIndex - 1 - i);
 			AString desc = RT.ensureString(frame.get(K_DESCRIPTION));
-			ACell conversation = frame.get(K_CONVERSATION);
+			AVector<ACell> conversation = archivedConversation(frame);
 
 			sb.append("\n");
 			if (desc != null) sb.append("Goal: ").append(desc).append("\n");
@@ -459,9 +667,9 @@ public class GoalTreeContext {
 
 	/**
 	 * Compacts the frame's complete visible conversation into one new segment.
-	 * Existing segments are nested in {@code items}, rather than retained as
-	 * siblings, so repeated compaction keeps provider-visible history bounded
-	 * while preserving every replaced cell for audit and later inspection.
+	 * History frames append a summary referencing the old selection and advance
+	 * contextStart. Legacy frames nest the selected vector under items. Both
+	 * keep model context bounded and retain every original cell for inspection.
 	 *
 	 * @param frame the frame to compact
 	 * @param summary LLM-provided summary of the compacted turns
@@ -475,7 +683,7 @@ public class GoalTreeContext {
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> compactFrame(AMap<AString, ACell> frame,
 			String summary, AMap<AString, ACell> provenance) {
-		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
+		AVector<ACell> conversation = activeConversation(frame);
 		if (conversation == null || conversation.count() == 0) return frame;
 
 		if (countLiveTurns(frame) == 0) return frame;
@@ -496,9 +704,17 @@ public class GoalTreeContext {
 		// bodies, contributions and tool schemas; watched values likewise get a
 		// fresh baseline. The next inference resolves all of that outside the
 		// atomic state update and installs the replacement prefix in one shot.
-		AMap<AString, ACell> compacted = frame
-			.assoc(K_CONVERSATION, newConversation)
-			.dissoc(K_RENDERED_CONTEXT)
+		AMap<AString, ACell> compacted;
+		if (frame.containsKey(K_HISTORY)) {
+			AVector<ACell> retained = history(frame);
+			segment = segment.dissoc(K_ITEMS).assoc(K_HISTORY_RANGE,
+				Vectors.of(frame.get(K_CONTEXT_START), CVMLong.create(retained.count())));
+			compacted = frame.assoc(K_HISTORY, retained.conj(segment))
+				.assoc(K_CONTEXT_START, CVMLong.create(retained.count()));
+		} else {
+			compacted = frame.assoc(K_CONVERSATION, newConversation);
+		}
+		compacted = compacted.dissoc(K_RENDERED_CONTEXT)
 			.dissoc(K_OBSERVATIONS);
 		AMap<AString, ACell> loads = getLoads(compacted);
 		AMap<AString, ACell> reloads = Loads.invalidateAgentMaterialisation(loads);
@@ -523,9 +739,7 @@ public class GoalTreeContext {
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> appendTurn(AMap<AString, ACell> frame, ACell turn) {
-		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
-		if (conversation == null) conversation = Vectors.empty();
-		return frame.assoc(K_CONVERSATION, conversation.conj(turn));
+		return appendTurns(frame, Vectors.of(turn));
 	}
 
 	// ========== Watched context observations ==========
@@ -543,8 +757,9 @@ public class GoalTreeContext {
 		AMap<AString, ACell> previous = (frame.get(K_OBSERVATIONS) instanceof AMap<?, ?> raw)
 			? (AMap<AString, ACell>) raw : Maps.empty();
 		AMap<AString, ACell> next = previous;
-		AVector<ACell> conversation = (frame.get(K_CONVERSATION) instanceof AVector<?> raw)
-			? (AVector<ACell>) raw : Vectors.empty();
+		AVector<ACell> conversation = activeConversation(frame);
+		if (conversation == null) conversation = Vectors.empty();
+		long originalCount = conversation.count();
 		java.util.Set<AString> active = new java.util.HashSet<>();
 
 		for (long i = 0; candidates != null && i < candidates.count(); i++) {
@@ -590,9 +805,8 @@ public class GoalTreeContext {
 		}
 
 		AMap<AString, ACell> updated = frame;
-		AVector<ACell> oldConversation = RT.ensureVector(frame.get(K_CONVERSATION));
-		if (oldConversation == null || !conversation.equals(oldConversation)) {
-			updated = updated.assoc(K_CONVERSATION, conversation);
+		if (conversation.count() > originalCount) {
+			updated = appendTurns(frame, conversation.slice(originalCount, conversation.count()));
 		}
 		if (next.isEmpty()) {
 			if (updated.get(K_OBSERVATIONS) != null) updated = updated.dissoc(K_OBSERVATIONS);
@@ -636,7 +850,7 @@ public class GoalTreeContext {
 	 */
 	public static long countLiveTurns(AMap<AString, ACell> frame) {
 		@SuppressWarnings("unchecked")
-		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
+		AVector<ACell> conversation = activeConversation(frame);
 		if (conversation == null) return 0;
 		long count = 0;
 		for (long i = 0; i < conversation.count(); i++) {

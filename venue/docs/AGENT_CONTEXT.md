@@ -6,7 +6,7 @@ representation and pipeline. Runtime-specific documents describe only their
 additional lifecycle behaviour and refer back here; they do not redefine the
 context state.
 
-**Status:** The code follows this document. Where it still differs, the difference is recorded in §9.1 and nowhere else.
+**Status:** Versioned append-only frame history, format-aware accessors and atomic legacy migration are implemented. §1.3 also records the wider history-navigation design for [#597](https://github.com/covia-ai/covia/issues/597); remaining work is listed in §9.1.
 
 See [AGENT_LOOP.md](./AGENT_LOOP.md) §3.2 for the surrounding level-2 architecture, [SKILLS.md](./SKILLS.md) for skills, [AGENT_TEMPLATES.md](./AGENT_TEMPLATES.md) for how configuration is composed, [GOAL_TREE.md](./GOAL_TREE.md) for the goal-tree harness, and [OPERATIONS.md](./OPERATIONS.md) (*The `model` facet*) for what a model declares about itself.
 
@@ -70,7 +70,9 @@ sessions[sessionId]
 └─ frames                         Vector<Frame>
    └─ Frame
       ├─ description              String
-      ├─ conversation             Vector<ConversationEntry>
+      ├─ historyVersion           Long (= 1)
+      ├─ history                  Vector<ConversationEntry>
+      ├─ contextStart             Long (active suffix start)
       ├─ loads?                   Loads
       ├─ observations?            Map<String, Observation>
       └─ renderedContext?         RenderedContext
@@ -172,7 +174,7 @@ ProviderState := {
 CompactedSegment := {
   summary: String,
   turns: Long,
-  items: Vector<ConversationEntry>,       // exact recursively archived vector
+  historyRange: [start: Long, end: Long], // backward half-open range in the same frame
   ... optional non-rendered provenance
 }
 
@@ -275,6 +277,278 @@ A block is its label followed by its body; in `xml` the body is followed by the 
 
 ---
 
+### 1.3 Append-only history and active context (#597)
+
+**History is append-only; context is a selection; rendering is pure.** This
+section defines the direction for the common history foundation. It does not
+change the persisted schema in §1.1 yet, or require full execution replay.
+
+**History.** Retained history consists of ordered, append-only sequences of
+immutable entries. Original messages, tool calls/results, recorded context
+inputs and summaries remain accessible after compaction. Summaries are
+distinct entries with explicit references to the history they cover; a reader
+never has to infer summary provenance from rendered text. Positions are scoped
+to a history/branch and remain stable through append and compaction. Neither a
+timestamp nor an entry's content hash alone identifies its occurrence.
+
+**Frame ownership.** Each frame owns its scoped history and active context
+selection. A child frame's sequence is separate from its parent's sequence:
+the parent records the invocation and result, with a reference through which
+the child's history can be inspected. Removing a completed child from the
+active execution stack must not remove its retained history. A sub-agent with
+its own session remains a separately owned conversation; following a reference
+does not bypass the target's access policy. A session-wide history registry is
+not required by this logical model.
+
+```text
+root frame
+  append-only history
+    user message
+    child invocation -> retained child frame
+                          its own history and active selection
+    child result
+    assistant reply
+  active selection
+  loads / observations / renderedContext
+```
+
+The live selection extends from a starting position to that frame's current
+history end; an immutable read/render snapshot fixes the end and any child
+ranges it reads. Summary coverage stores fixed ranges. Resolved current inputs
+and existing rendered prefixes remain attached to their context as before.
+History appends and selection updates must share the existing session update
+and execution-epoch fence.
+
+The agreed selection fields are:
+
+```text
+Frame
+  historyVersion: Long (= 1)      // storage format; independent of renderVersion
+  history: Vector<HistoryEntry>   // complete append-only sequence
+  contextStart: Long              // first entry included in current model context
+  description, loads?, observations?, renderedContext?, ...
+```
+
+`0 <= contextStart <= history.count()`. The active conversation is the suffix
+`[contextStart, history.count())`; equality with the history end selects an empty
+conversation. "Included" is a rendering selection, not execution status,
+relevance or user visibility. Completed tool exchanges can remain selected.
+The boundary must preserve valid native exchanges, including tool-call/result
+pairing. Selection validates numeric bounds. Compaction selects the summary
+appended after the complete previous selection; migration retains that exact
+selection, including native tool exchanges.
+
+The selection reader supports this shape and legacy `conversation` frames.
+`history` and `contextStart` must appear together and cannot coexist with a
+legacy `conversation` field. Invalid or ambiguous selections fail rather than
+silently selecting another range. New frames use `historyVersion: 1`.
+Legacy frames remain readable and writable through the same accessors until
+conversion. Unversioned prototype history frames are accepted and stamped with
+version 1 on migration; unknown explicit versions are rejected.
+
+A summary at position `p` stores `historyRange: [start, end]` with
+`0 <= start <= end <= p`, its original summary, logical turn count and provenance.
+Only backward references are valid, so summaries cannot form cycles. Legacy
+segments instead store an exact nested vector under `items`. Migration emits
+those archives first and then their referencing entries, preserving each
+selected range's order. There is no second canonical transcript. Retained-child
+references and the broader navigation contract below remain future work.
+
+**Conversation and internal activity.** User messages and user-facing replies
+form the main conversation, with references to internal activity in their
+chronological positions. Ordinary tool loops, subgoals and sub-agent work have
+child history sequences. Grouping an ordinary tool loop as internal activity
+does not by itself create an execution frame with independent context or
+lifecycle; that grouping's storage shape remains to be specified. Each child
+retains its relationship to the parent
+activity/call and remains discoverable after execution finishes. A running
+child appends to its own sequence through a stable reference; it does not
+require rewriting a growing embedded vector in an earlier parent entry.
+Existing cycle records already retain child activity; the implementation should
+connect retained records rather than introduce an independent duplicate
+transcript. Append-only describes ordinary session evolution, including
+compaction and context reset; it does not override explicit deletion or access
+policy.
+
+Audience/provenance classification is mandatory independently of rendering:
+user-facing replies, internal assistant text, tool output and child-agent
+activity must remain distinguishable. An `assistant` protocol role does not
+prove that text was communicated to the user, and a tool result carried by a
+provider's `user` role is not a human message. Expanding activity in an inspector
+does not reclassify it as a conversational reply; user-facing classification
+does not claim that the user actually read it. This distinction is separate
+from access policy and must survive history projection and summarisation.
+
+**Active context.** A frame selects the history it currently presents to the
+model and holds the immutable resolved configuration/context inputs needed to
+render it. Conceptually:
+
+```text
+active context = history reference + selection + resolved inputs + rendering profile
+```
+
+Selection is initially contiguous within each sequence: a history reference
+and a half-open range `[start, end)`. Child histories have their own positions
+and ranges; nesting does not require disjoint selection in the parent.
+Public history references must not expose legacy nested archive paths. Reading
+an immutable snapshot fixes the end position of each selected sequence,
+including children resolved for that view, even while live execution appends.
+Coverage/reference encoding and nested-activity storage remain to be decided.
+
+A mutable source reference such as `w/prompt` is a declaration, not a resolved
+rendering input. Resolution captures the actual prompt text, tool definitions,
+loaded values and effective rendering options before rendering. Source reads,
+capability checks and volatile observation resolution remain outside the pure
+renderer. A source change affects rendering only through new explicit inputs.
+
+**Pure rendering and prefix stability.** For a fixed renderer/profile, equal
+selected history and equal resolved inputs produce exactly equal tool and
+message vectors. Rendering performs no source reads, state writes, clock reads
+or random ID generation. Working turns and inference-local notices are explicit
+inputs; their changing tail remains outside the reusable committed prefix.
+`renderedContext` may memoise the result, but recomputing from the same inputs
+must give the same result. Disabling provider caching does not relax purity;
+resolving fresh sources produces new inputs rather than changing the rendering
+of existing inputs.
+
+Purity alone is insufficient for caching. While the selection's starting point,
+resolved initial inputs and rendering profile remain unchanged, extending the
+selected history must preserve the previous committed message vector as an exact prefix and
+leave the initial tool vector unchanged. Rendering must not re-budget, reorder,
+renumber or re-summarise earlier entries. Compaction, explicit reload and
+configuration/profile changes are deliberate context replacement boundaries.
+Provider adaptation must preserve these guarantees at the reusable wire prefix;
+this does not guarantee that a provider will retain or hit its cache.
+
+**Native continuation rendering.** Nested storage is rendered into the
+provider's native ordered message/tool stream by default. The current agent's
+tool-loop activity expands in place, preserving call/result pairing, IDs,
+order and applicable opaque provider continuation data. A sub-agent's private
+execution history is not automatically expanded into its parent's prompt;
+the parent ordinarily sees the invocation and result. Internal activity must
+not be flattened into ordinary assistant prose or an arbitrary JSON transcript
+in place of native tool events.
+
+The model also needs an explicit delivery rule: internal working text has not
+been communicated to the user. The existing final-reply notice (§3.2) supplies
+that distinction for conversational turns. Nesting alone cannot convey it
+after native rendering. Historical activity may instead be rendered as
+explicitly identified memory at a compaction/context replacement boundary, or
+as classified reference data returned by an inspection tool. Rendering choice
+belongs to the context's fixed rendering profile; completing a tool loop must
+not silently collapse or remove its earlier messages on the next inference.
+Any change to delivery instructions is separate from storage migration.
+
+**Compaction.** Append a summary referencing the covered history, then select
+that summary and subsequent entries for the active context. Original entries
+remain at their original positions, rather than moving into nested `items`.
+For example, compacting a frame's active selection:
+
+```text
+history before:  A B C D
+context before:  initial inputs + A B C D
+history after:   A B C D S       (S summarises A..D)
+context after:   initial inputs + S
+next append:     A B C D S E
+next context:    initial inputs + S E
+```
+
+The summary append and selection change are published atomically against the
+covered snapshot. Concurrently appended entries must not be lost or silently
+treated as covered by the summary. Initial inputs may also be refreshed at this
+explicit boundary, as they are today. Repeated compaction appends another
+summary with coverage references; it does not nest or rewrite previous history.
+Summaries remain assistant memory, without acquiring instruction authority.
+
+Coverage names the fixed range of the active sequence replaced by the summary.
+That range may contain earlier summaries or child-history references; originals
+remain reachable transitively. It describes what was summarised rather than
+enumerating every original turn again. The represented turn count includes
+original turns covered through earlier summaries, not just the number of
+entries in the immediate range. Summary text must distinguish internal findings
+from information communicated to the user. Coverage metadata and audience
+classification do not implicitly change the existing rendered summary message.
+
+**Discovery and branching.** One policy-aware reader navigates the retained
+sequences, summaries and child histories, including archives of the caller's
+current session. Views may select different authorised fields, but share entry
+identity, ordering and provenance. Bounded navigation must reach every visible
+entry and every part of an oversized entry. History inspection does not change
+the active selection; recalled material enters an agent's context as a new tool
+result. Reader output is a versioned contract independent of storage layout.
+
+The current compatibility work supports existing callers through the existing
+format-aware accessors; see the replacement table in
+[AGENT_SESSIONS.md §5.2.1](./AGENT_SESSIONS.md#521-embedded-callers-and-storage-compatibility).
+Existing callers do not need a new REST operation or adoption of the preview
+reader below. Oversized-entry navigation and broader policy-aware projections remain proposed work in
+[#597](https://github.com/covia-ai/covia/issues/597) and
+[#461](https://github.com/covia-ai/covia/issues/461), not prerequisites for this
+storage migration. An embedder may use Java accessors directly; not every
+accessor needs an HTTP counterpart.
+
+**Preview Java API.** `ConversationHistory.open(frame)` captures an immutable,
+validated frame-history snapshot. Legacy archives are normalised in memory;
+no migration is published and cached context is untouched. `size()` includes
+retained history outside the active selection; `contextStart()` captures that
+selection's start. `read(start, end, limit)` returns complete entries within
+`[start, end)`, limited by entry count. The page's `next` is its exclusive end;
+continue with `read(page.next(), page.end(), limit)` on the same snapshot until
+`hasMore()` is false. `coverage(position)` returns a summary's half-open range
+or null for an ordinary entry. Following coverage is explicit, not automatic
+expansion. Live appends and compaction do not change an existing snapshot.
+
+This preview may change before stabilisation. It does not replace the existing
+compatibility accessors or the policy-aware retrospective operations. It returns
+raw entries, including tool activity, unfinished turns and provider continuation
+data; hosts retain their authorisation, audience rules and response budgets.
+Entry counts do not bound bytes or tokens. Opening may inspect the entire frame
+history; subsequent page reads use immutable vector slices. There is no external
+cursor registry, child-history navigation or REST endpoint in this preview.
+
+Immutable sequence prefixes and active context inputs can be shared by future
+forks, with independent appends after the branch point. History access or a
+branch reference does not grant execution authority. This foundation does not
+define how to copy running jobs, pending tool exchanges or other execution
+state; the existing `agent:fork` continues to create fresh sessions.
+
+**Storage migration.** `GoalTreeContext.migrateFrame/migrateFrames` are pure,
+idempotent transforms. The normal cycle claim converts all frames in the same
+session CAS that fences the old executor; pending input is drained only after
+successful conversion. `SessionState.migrateHistory` also supports an idle
+session with an exact expected frame snapshot. Busy/stale snapshots do not
+publish, and malformed data or unknown versions leave the entire session,
+pending input and epoch unchanged. Completed cycle snapshots need no eager
+rewrite: readers accept both formats. Frame publication rejects replacing an
+already-retained prefix or downgrading its format.
+
+**Rollout:** deploy a compatible SDK transcript reader and frontend first, then
+the venue. Clients must consume the SDK's `AgentSession.conversation`, not
+inspect `frames[].conversation`. Back up the venue store before upgrading.
+An old venue binary cannot write migrated history; rollback requires restoring
+that backup or retaining the new reader/writer. Never run old and new writers
+against the same store. Migration is local to the venue's existing single-writer
+session authority; it introduces no new cross-venue merge protocol.
+
+Migration changes history storage and translates selection references only.
+It must preserve the current selected context, resolved inputs, rendered
+messages and tool definitions exactly. It must not refresh sources, clear
+`renderedContext`, increment the renderer version or force a prefix rebuild.
+This applies to ancestor context as well as the active frame: the current
+ancestor renderer exposes the selected conversation through `CellExplorer`,
+so changing its structure can change prompt bytes even when its active-frame
+rendering is equivalent. Equality of model input before and after conversion
+is a migration requirement, not a best-effort optimisation.
+
+**No full replay requirement.** Deterministic rendering applies to supplied
+inputs. It does not require retaining every historical configuration, initial
+tool manifest, inference tail or context selection, reproducing every past
+model request, replaying external side effects, or resuming at arbitrary past
+execution points. Retained conversation and compaction history must remain
+complete without becoming a sequence of full execution checkpoints.
+
+---
+
 ## 2. Design goals
 
 1. **One assembly, every runtime.** The order is defined once. A runtime chooses *what it puts in*, never *where it lands*. Divergence should be impossible to express, not merely discouraged.
@@ -368,12 +642,15 @@ duplicate.
 | 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
 | 10 | Changed watched context | append-only conversation | `system` or `assistant` / `tool` | A new observation for a `volatile` declaration, emitted only when its canonical rendered value differs (§5.5) |
 | 11 | Budget warning | inference tail | `system` | **Only** when the budget is under pressure (§3.4) |
-| 12 | Current date | inference tail | `system` | One line; changes daily |
-| 13 | Unavailable tools | inference tail | `system` | Configured tools that did not resolve this cycle |
-| 14 | Outstanding task | inference tail | `user` | The task the agent must complete or fail — the last thing before the reply |
+| 12 | Runtime notice | inference tail | `system` | The runtime's word on this turn: goal-tree's compaction nudge, and, on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
+| 13 | Current date | inference tail | `system` | One line; changes daily |
+| 14 | Unavailable tools | inference tail | `system` | Configured tools that did not resolve this cycle |
+| 15 | Outstanding task | inference tail | `user` | The task the agent must complete or fail — the last thing before the reply |
 | — | Empty-state signal | working turn | `user` | Replaces 7–8 when there is nothing to act on |
 
-The *Role* column is the role a section emits — the role that is true of its content. The initial consecutive system sections coalesce when the persisted context is first rendered. Sections 11–13 are **one `system` message**, composed of whichever parts are present: the inference tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
+How each kind of turn is answered is said where that turn is defined, beside it: a task by its message (row 15), a subgoal by the child-frame notice, a conversation by the runtime notice (row 12). The head never says it, being the same whatever the turn. A model trained on interfaces that show every text block otherwise writes its answer beside a tool call and closes with "as above"; the text stays in its context as written, and the notice says what reaches the reader.
+
+The *Role* column is the role a section emits — the role that is true of its content. The initial consecutive system sections coalesce when the persisted context is first rendered. Sections 11–14 are **one `system` message**, composed of whichever parts are present: the inference tail is re-rendered every inference, and one message is the cheapest shape for it. How a system message that follows conversation reaches a given provider is the edge's business (§3.2.1, §3.5), never a section's.
 
 ### 3.2.1 The role rule
 
@@ -694,13 +971,22 @@ Failures are visible, never silent: a skill or trusted entry keeps its instructi
 ### 5.6 Conversation
 Runtime-supplied frames, rendered by one `ConversationRenderer` for every runtime. llmagent supplies its session's single frame; goaltree supplies its frame stack, ancestors first at decreasing budgets and the active frame last (GOAL_TREE.md). The assembler does not know the difference.
 
+`GoalTreeContext.activeConversation(frame)` selects the legacy `conversation`
+or the validated active history suffix. `history(frame)` returns retained storage;
+`appendTurn/appendTurns` append to the correct field. Observation recording,
+interruption repair, counts and terminal-result checks use these same boundaries.
+`archivedConversation(frame)` reconstructs the exact legacy-shaped selection
+from backward ranges for retrospective readers and ancestor `CellExplorer`
+rendering. It performs no IO and does not mutate cached context. This preserves
+ancestor prompt bytes as well as the active frame's model input.
+
 The canonical conversation is append-only **across cycles as well as within
 one**: every inference sees the deterministic projection of the previous
 immutable vector plus newly appended events and the working turn. Calls and
 results remain paired and byte-identical in durable state. No end-of-cycle
 scratch-elision pass rewrites the conversation.
 
-**Compaction is the one ordinary rewrite.** The complete visible conversation vector collapses into one `[Compacted: N turns] summary` assistant-memory message whose summary the agent wrote, because only the agent knows what mattered. The exact replaced vector is retained under that segment's `items`; it is not copied into the Job result. The live observation index and the derived materialisation of active agent-managed loads are cleared, while their declarations and all pinned declarations remain. The next inference therefore looks just like the first inference of a conversation: the shared initial-load resolver reads current stable bodies, skill contributions and tool schemas/routes, and the shared observation pass reads current watched values. Those completed immutable results and the replacement prefix are installed through the normal atomic frame updates; compaction itself performs no source reads. A later compaction nests the earlier segment together with all turns appended since it, keeping the provider-visible representation bounded without discarding the audit history. The shared `compact` tool works in both LLM runtimes, and `agent:compactSession` applies the same transform to an idle session for an authorised owner.
+**Compaction changes the active selection.** The complete visible conversation vector collapses into one `[Compacted: N turns] summary` assistant-memory message whose summary the agent wrote, because only the agent knows what mattered. A version-1 frame appends a summary referencing the old selection and moves `contextStart` to it; every existing history cell stays unchanged. Legacy frames retain their nested `items` representation until migration. Archives are not copied into the Job result. The live observation index and the derived materialisation of active agent-managed loads are cleared, while their declarations and all pinned declarations remain. The next inference therefore looks just like the first inference of a conversation: the shared initial-load resolver reads current stable bodies, skill contributions and tool schemas/routes, and the shared observation pass reads current watched values. Those completed immutable results and the replacement prefix are installed through the normal atomic frame updates; compaction itself performs no source reads. A later compaction references the earlier summary together with all turns appended since it, keeping the provider-visible representation bounded without discarding the audit history. The shared `compact` tool works in both LLM runtimes, and `agent:compactSession` applies the same transform to an idle session for an authorised owner.
 
 Everything else is an append. Context state is obtained by folding its events in order; a repeated load makes its newest result current without pretending the model never saw the older one. That small amount of stale history is normal for an LLM conversation, while recency puts the relevant value nearest the reply. Compacted segments are `assistant` turns because their summaries are agent-authored and may describe untrusted tool data; persisting them never promotes them to operator instruction. Runtime diagnostics retain their own semantic role, and the edge keeps every event in place on every provider (§3.2.1).
 
@@ -941,6 +1227,7 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 | Entry resolution and rendering (§6) | `ContextLoader` |
 | Scope chain algebra (§7) | `ContextChain` |
 | Frame rendering, observation state, compaction and turn normalisation (§5.6) | `GoalTreeContext`, `ConversationRenderer` |
+| Current conversation selection for active and ancestor rendering (§5.6) | `GoalTreeContext.activeConversation` |
 | Skills index and skill elements | `Skills` |
 | Authority and the model profile: `capsContext`, `modelProfileFor` | `AbstractLLMAdapter` |
 | The edge (§3.5): system normalisation, cache marks and native tool-state events | `LangChainAdapter` |
@@ -949,8 +1236,17 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 
 ### 9.1 Known divergences
 
-Everything above is implemented except the provider-edge refinements listed here.
+The storage/accessor foundation in §1.3 is implemented. Remaining divergences:
 
-- **Native provider tool-state blocks are not mapped yet.** The canonical conversation persists exact `toolAddition` / `toolRemoval` state for skill and `more_tools` loads; `invoke_tool` is their fixed fallback. Provider edges currently receive the generic late-system representation and may map the same fields natively without changing stored history.
+- **History navigation and internal activity (#597).** Writers, rendering,
+  retrospective reads and migration support versioned history and summary
+  ranges. Existing embedders can use the compatibility accessors without a new
+  REST API. `ConversationHistory` offers frame-range reads as a preview Java API.
+  Tool-facing navigation, oversized-entry fragments and retained-child
+  links remain deferred under #597; `sessionRead` still excludes the caller's
+  current session and limits archive depth to eight. Existing cycle records retain completed
+  children. Initialisation still combines source resolution with initial
+  rendering; making resolved inputs explicit remains separate work.
+
 - **The head and current live surface share one provider breakpoint.** The client marks only the last block of the system parameter. The target initial/committed/working marks require shaping the provider request directly; langchain4j currently exposes only the 5-minute ephemeral cache kind, not a longer TTL.
 - The agent-facing text of `skill_load` and SKILLS.md §4.3 name the `[Skills]` index by its bracket label whatever the dialect.

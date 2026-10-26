@@ -268,10 +268,12 @@ public class ClaudeCodeAdapterTest {
 	public void testProgressPublishedWhileRunning() {
 		Job job = engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "tool 1500"), OWNER_CTX);
 		await(() -> job.getData().get(ClaudeCodeAdapter.K_PROGRESS) != null, 5000);
-		AMap<AString, ACell> progress = RT.castMap(job.getData().get(ClaudeCodeAdapter.K_PROGRESS));
-		assertEquals(CVMLong.create(1), progress.get(ClaudeSession.K_TOOL_CALLS));
-		assertEquals("Bash: List files", str(progress, "lastTool"));
-		assertNotNull(str(progress, "session"));
+		ACell progress = job.getData().get(ClaudeCodeAdapter.K_PROGRESS);
+		assertEquals("Bash: List files", Job.progressMessage(progress), "the line a person reads: the latest step");
+		AMap<AString, ACell> data = RT.castMap(Job.progressData(progress));
+		assertEquals(CVMLong.create(1), data.get(ClaudeSession.K_TOOL_CALLS));
+		assertEquals("Bash: List files", str(data, "lastTool"));
+		assertNotNull(str(data, "session"));
 		AMap<AString, ACell> res = RT.castMap(job.awaitResult(30_000));
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals("used a tool", str(res, "result"));

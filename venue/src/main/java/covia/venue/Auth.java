@@ -1,26 +1,16 @@
 package covia.venue;
 
-import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.UnaryOperator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.did.DID;
-import convex.core.crypto.util.Multikey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.data.Vectors;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.Utils;
-import convex.lattice.ALatticeComponent;
-import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
 import covia.lattice.CapabilityChecker;
 import covia.venue.auth.LoginProviders;
@@ -28,10 +18,10 @@ import covia.venue.auth.LoginProviders;
 /**
  * Authentication and user management for a Covia venue.
  *
- * <p>Wraps a lattice cursor at the {@code :users} level and manages OAuth
- * login providers. Users are stored as maps keyed by user ID (e.g.
- * "alice_gmail_com") with fields like "did", "email", "name", "provider",
- * "updated".
+ * <p>Delegates stored records to {@link AuthState} and manages OAuth
+ * login providers. Users are maps keyed by stable local account ID, with
+ * core fields such as "did" and "updated". External-login details live in
+ * the method-owned "externalIdentity" payload; email/name are profile metadata.
  *
  * <h2>Config format</h2>
  * <pre>
@@ -51,7 +41,7 @@ import covia.venue.auth.LoginProviders;
  *                                     //   for a did:web venue)
  *   "oauth": {
  *     "google": { "clientId": "...", "clientSecret": "..." },
- *     "microsoft": { "clientId": "...", "clientSecret": "..." },
+ *     "microsoft": { "clientId": "...", "clientSecret": "...", "tenantId": "..." },
  *     "github": { "clientId": "...", "clientSecret": "..." }
  *   }
  * }
@@ -62,14 +52,13 @@ import covia.venue.auth.LoginProviders;
  *
  * <p>Created and owned by {@link Engine}.
  */
-public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>> {
+public class Auth {
 
 	private static final Logger log = LoggerFactory.getLogger(Auth.class);
-	public static final AString ACTIVE = Strings.intern("active");
-	public static final AString REVOKED = Strings.intern("revoked");
-	/** Refusal messages; tests assert against these, never against the wording. */
-	public static final String CANNOT_REVOKE_FINAL_KEY = "Cannot revoke the final active authentication key";
-	public static final String KEY_ALREADY_BOUND = "Authentication key is already bound to named user ";
+	public static final AString ACTIVE = AuthState.ACTIVE;
+	public static final AString REVOKED = AuthState.REVOKED;
+	public static final String CANNOT_REVOKE_FINAL_KEY = AuthState.CANNOT_REVOKE_FINAL_KEY;
+	public static final String KEY_ALREADY_BOUND = AuthState.KEY_ALREADY_BOUND;
 
 	/** Default token expiry: 24 hours in seconds */
 	public static final long DEFAULT_TOKEN_EXPIRY = 86400;
@@ -89,12 +78,8 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * and OAuth providers.
 	 *
 	 * @param engine The venue engine
-	 * @param cursor Lattice cursor at the :users level
 	 */
-	@SuppressWarnings("unchecked")
-	Auth(Engine engine, ALatticeComponent<?> parent, ALatticeCursor<?> cursor) {
-		super(parent,
-			(ALatticeCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
+	Auth(Engine engine) {
 
 		Config config = engine.config();
 		this.engine = engine;
@@ -193,290 +178,56 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		return CapabilityChecker.readOnlyScope(publicDID);
 	}
 
-	/**
-	 * Get a user record by ID
-	 * @param id User identifier as AString (e.g. "alice_gmail_com")
-	 * @return User record map, or null if not found
-	 */
-	public AMap<AString, ACell> getUser(AString id) {
-		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
-		if (usersMap == null) return null;
-		return (AMap<AString, ACell>) usersMap.get(id);
-	}
+	private AuthState state() { return engine.getVenueState().auth(); }
 
-	/**
-	 * Store or update a user record. Adds an "updated" timestamp automatically.
-	 * @param id User identifier as AString (e.g. "alice_gmail_com")
-	 * @param record User record map (should contain "did" and any other fields)
-	 */
+	public AMap<AString, ACell> getUser(AString id) { return state().getUser(id); }
+	public AMap<AString, AMap<AString, ACell>> getUsers() { return state().getUsers(); }
+	public AMap<AString, ACell> getAuthenticationKeys(AString id) { return state().getAuthenticationKeys(id); }
+	public boolean isAuthenticationKeyActive(AString id, AString key) { return state().isAuthenticationKeyActive(id, key); }
+	public AVector<ACell> getActiveAuthenticationKeys(AString id) { return state().getActiveAuthenticationKeys(id); }
+
+	// Retain the runtime account-deletion monitor: Engine closes admission under
+	// this same monitor before cancelling jobs/providers outside lattice transactions.
 	public synchronized void putUser(AString id, AMap<AString, ACell> record) {
 		engine.getVenueState().users().requireNotDeleted(RT.ensureString(record.get(Fields.DID)));
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
-		cursor.updateAndGet(current -> {
-			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(current);
-			if (m == null) m = Maps.empty();
-			AMap<AString, ACell> previous = m.get(id);
-			return m.assoc(id, stampUser(record, previous, timestamp));
+		state().putUser(id, record);
+	}
+
+	public synchronized AMap<AString, ACell> updateUser(AString id, UnaryOperator<AMap<AString, ACell>> update) {
+		return state().updateUser(id, previous -> {
+			var record = update.apply(previous);
+			if (record != null) engine.getVenueState().users().requireNotDeleted(RT.ensureString(record.get(Fields.DID)));
+			return record;
 		});
 	}
 
-	/** Atomically updates one user row without replacing unrelated fields. */
-	public synchronized AMap<AString, ACell> updateUser(AString id,
-			UnaryOperator<AMap<AString, ACell>> updater) {
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
-		AMap<AString, AMap<AString, ACell>> result = cursor.updateAndGet(current -> {
-			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> users =
-				(AMap<AString, AMap<AString, ACell>>) (AMap<?, ?>) RT.castMap(current);
-			if (users == null) users = Maps.empty();
-			AMap<AString, ACell> previous = users.get(id);
-			AMap<AString, ACell> updated = updater.apply(previous);
-			if (updated == null || Objects.equals(previous, updated)) return users;
-			engine.getVenueState().users().requireNotDeleted(RT.ensureString(updated.get(Fields.DID)));
-			return users.assoc(id, stampUser(updated, previous, timestamp));
-		});
-		return (result != null) ? result.get(id) : null;
-	}
-
-	private static AMap<AString, ACell> stampUser(AMap<AString, ACell> record,
-			AMap<AString, ACell> previous, CVMLong proposed) {
-		if (previous != null) {
-			ACell oldValue = previous.get(Fields.UPDATED);
-			if (oldValue instanceof CVMLong old
-					&& old.longValue() > proposed.longValue()) proposed = old;
-		}
-		return record.assoc(Fields.UPDATED, proposed);
-	}
-
-	/** Trusted OAuth provisioning retains its existing authority to create accounts. */
 	public synchronized AMap<AString, ACell> provisionLogin(AString id, AMap<AString, ACell> profile) {
-		AMap<AString, ACell> existing = getUser(id);
-		AString did = existing == null ? null : RT.ensureString(existing.get(Fields.DID));
+		AString did = RT.ensureString(RT.getIn(getUser(id), Fields.DID));
 		if (did == null) did = engine.managedUserDID(id);
-		engine.getVenueState().users().create(did);
-		AString accountDID = did;
-		return updateUser(id, current -> {
-			AMap<AString, ACell> updated = current != null ? current : Maps.empty();
-			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
-			return updated.assoc(Fields.DID, accountDID);
-		});
+		return engine.getVenueState().provisionLogin(id, did, profile);
 	}
 
-	/**
-	 * Creates the venue-owned authentication-directory row for a managed user,
-	 * or verifies the existing row still names the same stable DID.
-	 *
-	 * @return true when the row was created
-	 */
 	public synchronized boolean ensureManagedUser(AString id, AString did) {
 		engine.getVenueState().users().requireNotDeleted(did);
-		CVMLong timestamp = cursor.getContext().currentTimestamp();
-		AtomicBoolean created = new AtomicBoolean(false);
-		cursor.updateAndGet(current -> {
-			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> users =
-				(AMap<AString, AMap<AString, ACell>>) (AMap<?, ?>) RT.castMap(current);
-			if (users == null) users = Maps.empty();
-			AMap<AString, ACell> existing = users.get(id);
-			if (existing != null) {
-				created.set(false);
-				AString stored = RT.ensureString(existing.get(Fields.DID));
-				if (!did.equals(stored)) {
-					throw new IllegalStateException("Named user " + id
-						+ " is already bound to a different DID: " + stored);
-				}
-				return users;
-			}
-			created.set(true);
-			AMap<AString, ACell> record = stampUser(
-				Maps.of(Fields.DID, did, Fields.NAME, id), null, timestamp);
-			return users.assoc(id, record);
-		});
-		return created.get();
+		return state().ensureManagedUser(id, did);
 	}
 
-	/** Public authenticator lifecycle records for one named user. */
-	public AMap<AString, ACell> getAuthenticationKeys(AString id) {
-		AMap<AString, ACell> record = getUser(id);
-		if (record == null) return Maps.empty();
-		AMap<AString, ACell> keys = RT.ensureMap(record.get(Fields.AUTHENTICATION_KEYS));
-		return (keys != null) ? keys : Maps.empty();
+	private void requireLiveUser(AString id) {
+		engine.getVenueState().users().requireNotDeleted(RT.ensureString(RT.getIn(getUser(id), Fields.DID)));
 	}
 
-	/** True when the named user's key is currently admitted for authentication. */
-	public boolean isAuthenticationKeyActive(AString id, AString keyDID) {
-		AMap<AString, ACell> entry =
-			RT.ensureMap(getAuthenticationKeys(id).get(keyDID));
-		return entry != null && ACTIVE.equals(entry.get(Fields.STATUS));
+	public synchronized boolean addAuthenticationKey(AString id, AString key, AString actor, AString label) {
+		requireLiveUser(id);
+		return state().addAuthenticationKey(id, key, actor, label);
 	}
 
-	/** Active public key DIDs, in deterministic lattice-map order. */
-	public AVector<ACell> getActiveAuthenticationKeys(AString id) {
-		AVector<ACell> result = Vectors.empty();
-		for (var entry : getAuthenticationKeys(id).entrySet()) {
-			AMap<AString, ACell> state = RT.ensureMap(entry.getValue());
-			if (state != null && ACTIVE.equals(state.get(Fields.STATUS))) {
-				result = result.conj(entry.getKey());
-			}
-		}
-		return result;
+	public synchronized long addAuthenticationKeys(AString id, AVector<ACell> keys, AString actor) {
+		requireLiveUser(id);
+		return state().addAuthenticationKeys(id, keys, actor);
 	}
 
-	/**
-	 * Adds one public {@code did:key} authenticator. A key may have history under
-	 * only one named user on this venue, and a revoked key is never silently
-	 * reactivated.
-	 *
-	 * @return true when a new active binding was added; false when already active
-	 */
-	public synchronized boolean addAuthenticationKey(AString id, AString keyDID,
-			AString actorDID, AString label) {
-		requireValidAuthenticationKey(keyDID);
-		requireActorDID(actorDID);
-		AMap<AString, ACell> user = getUser(id);
-		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
-		requireKeyNotBoundElsewhere(id, keyDID);
-
-		AMap<AString, ACell> keys = getAuthenticationKeys(id);
-		AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
-		if (existing != null) {
-			if (ACTIVE.equals(existing.get(Fields.STATUS))) return false;
-			throw new IllegalArgumentException(
-				"Revoked authentication keys cannot be reactivated");
-		}
-
-		long now = Utils.getCurrentTimestamp();
-		AMap<AString, ACell> state = Maps.of(
-			Fields.STATUS, ACTIVE,
-			Fields.ADDED_AT, CVMLong.create(now),
-			Fields.ADDED_BY, actorDID);
-		if (label != null && !label.isEmpty()) state = state.assoc(Fields.LABEL, label);
-		AMap<AString, ACell> updatedKeys = keys.assoc(keyDID, state);
-		updateUser(id, current -> current.assoc(Fields.AUTHENTICATION_KEYS, updatedKeys));
-		return true;
+	public synchronized boolean revokeAuthenticationKey(AString id, AString key, AString actor, boolean allowLast) {
+		requireLiveUser(id);
+		return state().revokeAuthenticationKey(id, key, actor, allowLast);
 	}
-
-	/**
-	 * Atomically installs an initial set of public authenticators. The complete
-	 * set is validated before the user record is changed.
-	 *
-	 * @return number of newly installed keys
-	 */
-	public synchronized long addAuthenticationKeys(AString id,
-			AVector<ACell> keyDIDs, AString actorDID) {
-		if (keyDIDs == null || keyDIDs.isEmpty()) {
-			throw new IllegalArgumentException("At least one authentication key is required");
-		}
-		requireActorDID(actorDID);
-		AMap<AString, ACell> user = getUser(id);
-		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
-
-		AMap<AString, ACell> keys = getAuthenticationKeys(id);
-		java.util.HashSet<AString> requested = new java.util.HashSet<>();
-		for (long i = 0; i < keyDIDs.count(); i++) {
-			AString keyDID = RT.ensureString(keyDIDs.get(i));
-			requireValidAuthenticationKey(keyDID);
-			if (!requested.add(keyDID)) {
-				throw new IllegalArgumentException("Duplicate authentication key");
-			}
-			requireKeyNotBoundElsewhere(id, keyDID);
-			AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
-			if (existing != null && !ACTIVE.equals(existing.get(Fields.STATUS))) {
-				throw new IllegalArgumentException(
-					"Revoked authentication keys cannot be reactivated");
-			}
-		}
-
-		long added = 0;
-		long now = Utils.getCurrentTimestamp();
-		for (AString keyDID : requested) {
-			if (keys.containsKey(keyDID)) continue;
-			keys = keys.assoc(keyDID, Maps.of(
-				Fields.STATUS, ACTIVE,
-				Fields.ADDED_AT, CVMLong.create(now),
-				Fields.ADDED_BY, actorDID));
-			added++;
-		}
-		if (added > 0) {
-			AMap<AString, ACell> updatedKeys = keys;
-			updateUser(id, current -> current.assoc(Fields.AUTHENTICATION_KEYS, updatedKeys));
-		}
-		return added;
-	}
-
-	/**
-	 * Revokes one authenticator while retaining its audit tombstone.
-	 *
-	 * @param allowLast true only for direct venue recovery authority
-	 * @return true when an active key was revoked; false when absent/already revoked
-	 */
-	public synchronized boolean revokeAuthenticationKey(AString id, AString keyDID,
-			AString actorDID, boolean allowLast) {
-		requireActorDID(actorDID);
-		AMap<AString, ACell> user = getUser(id);
-		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
-		AMap<AString, ACell> keys = getAuthenticationKeys(id);
-		AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
-		if (existing == null || REVOKED.equals(existing.get(Fields.STATUS))) return false;
-		if (!ACTIVE.equals(existing.get(Fields.STATUS))) {
-			throw new IllegalStateException("Malformed authentication key status");
-		}
-		if (!allowLast && getActiveAuthenticationKeys(id).count() <= 1) {
-			throw new IllegalArgumentException(
-				CANNOT_REVOKE_FINAL_KEY);
-		}
-		AMap<AString, ACell> revoked = existing
-			.assoc(Fields.STATUS, REVOKED)
-			.assoc(Fields.REVOKED_AT, CVMLong.create(Utils.getCurrentTimestamp()))
-			.assoc(Fields.REVOKED_BY, actorDID);
-		AMap<AString, ACell> updatedKeys = keys.assoc(keyDID, revoked);
-		updateUser(id, current -> current.assoc(Fields.AUTHENTICATION_KEYS, updatedKeys));
-		return true;
-	}
-
-	private void requireKeyNotBoundElsewhere(AString id, AString keyDID) {
-		AMap<AString, AMap<AString, ACell>> users = getUsers();
-		if (users == null) return;
-		for (var other : users.entrySet()) {
-			if (other.getKey().equals(id)) continue;
-			AMap<AString, ACell> otherKeys =
-				RT.ensureMap(other.getValue().get(Fields.AUTHENTICATION_KEYS));
-			if (otherKeys != null && otherKeys.containsKey(keyDID)) {
-				throw new IllegalArgumentException(
-					KEY_ALREADY_BOUND + other.getKey());
-			}
-		}
-	}
-
-	private static void requireActorDID(AString actorDID) {
-		if (actorDID == null) {
-			throw new IllegalArgumentException("Authentication key actor DID is required");
-		}
-	}
-
-	static void requireValidAuthenticationKey(AString keyDID) {
-		if (keyDID == null || !keyDID.toString().startsWith("did:key:")) {
-			throw new IllegalArgumentException("Authentication key must be a did:key");
-		}
-		String multikey = keyDID.toString().substring("did:key:".length());
-		try {
-			if (DID.fromString(keyDID.toString()) == null
-					|| Multikey.decodePublicKey(multikey) == null) {
-				throw new IllegalArgumentException("Invalid did:key authentication key");
-			}
-		} catch (RuntimeException e) {
-			throw new IllegalArgumentException("Invalid did:key authentication key", e);
-		}
-	}
-
-	/**
-	 * Get all users from the lattice cursor
-	 * @return Map of user ID to user record
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, AMap<AString, ACell>> getUsers() {
-		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(cursor.get());
-	}
-
 }

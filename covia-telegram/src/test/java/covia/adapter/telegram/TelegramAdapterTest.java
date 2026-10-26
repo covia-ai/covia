@@ -31,6 +31,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.messaging.AMessagingAdapter;
+import covia.adapter.messaging.MessagingText;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -580,9 +581,97 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void formatAsTheReplyHookSendsTheAgentsMarkdownAsTelegramHtml() throws Exception {
+		String token = "779:FORMAT-BOT";
+		telegram.registerBot(token, "format_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_FORMAT", "value", token));
+		// No parseMode: the formatter's own parse_mode is the whole setup.
+		run(RequestContext.of(OWNER), "v/ops/telegram/create", Maps.of("name", "formatted", "token", "s/TG_FORMAT", "agent", AGENT,
+			"allow", Vectors.of(ALLOWED_ID), "replyOperation", "v/ops/telegram/format"));
+		try {
+			BotRunner runner = adapter.runner(OWNER, "formatted");
+			await(() -> runner.state() == BotRunner.State.RUNNING, 10_000, () -> "formatted bot did not start");
+			// The echo agent repeats the message, Markdown and all.
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "**Bold** & <tag>");
+			var reply = telegram.awaitSent(token, 15_000);
+			assertNotNull(reply);
+			assertEquals(TelegramMarkdown.PARSE_MODE, reply.parseMode(), "sent under the parse mode the hook returned");
+			assertTrue(reply.text().contains("<b>Bold</b>"), reply.text());
+			TelegramMarkdownTest.assertTelegramHtml(reply.text());
+			await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "reply did not finish");
+
+			// Telegram refuses the HTML: the resend is the words it shows, not its markup.
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "**Bold** " + FakeTelegramServer.BAD_MARKUP);
+			var plain = telegram.awaitSent(token, 15_000);
+			assertNotNull(plain);
+			assertEquals(null, plain.parseMode(), "resent without a parse mode");
+			assertTrue(plain.text().contains("Bold") && plain.text().contains(FakeTelegramServer.BAD_MARKUP), plain.text());
+			assertFalse(plain.text().contains("<b>"), "no markup in the plain resend: " + plain.text());
+			await(() -> runner.isChatIdle(ALLOWED_ID), 10_000, () -> "second reply did not finish");
+		} finally {
+			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "formatted"));
+		}
+	}
+
+	@Test
+	public void sessionDeliveryCompletesBeforeTheTurnAndSurvivesReplyFailure() throws Exception {
+		long chat = 17001;
+		var entered = new java.util.concurrent.CountDownLatch(1);
+		var response = new java.util.concurrent.CompletableFuture<ACell>();
+		var modelCalls = new java.util.concurrent.atomic.AtomicInteger();
+		engine.registerAdapter(new covia.adapter.AAdapter() {
+			@Override public String getName() { return "telegram-held"; }
+			@Override public String getDescription() { return "Holds the model response after intake"; }
+			@Override protected void installAssets() {
+				installAsset("telegram-held/llm", Maps.of("name", "Held model", "operation", Maps.of("adapter", "telegram-held:llm")));
+			}
+			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+				modelCalls.incrementAndGet();
+				entered.countDown();
+				return response;
+			}
+		});
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-held", Fields.CONFIG,
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/ops/telegram-held/llm")));
+		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterState("telegram"),
+			"config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
+		var config = echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-held"));
+		int failedBefore = telegram.failedSends.get();
+		try {
+			configureBots(Maps.of("echo", config));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			String first = Integer.toString(telegram.push(chat, ALLOWED_ID, "alice", "First input"));
+			assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(first).get(Fields.STATUS));
+			assertFalse(response.isDone());
+			String second = Integer.toString(telegram.push(chat, ALLOWED_ID, "alice", "Second input while thinking"));
+			await(() -> inbox.get(second) != null && covia.adapter.webhook.WebhookInbox.COMPLETE.equals(inbox.get(second).get(Fields.STATUS)),
+				10_000, () -> "second input was blocked behind the first response");
+			assertEquals(inbox.get(first).get(Fields.SESSION_ID), inbox.get(second).get(Fields.SESSION_ID));
+			assertFalse(response.isDone());
+			telegram.failSendChats.add(chat);
+			response.complete(Maps.of("role", "assistant", "content", "Generated response"));
+			await(() -> telegram.failedSends.get() >= failedBefore + 4, 10_000, () -> "both replies and failure notices should fail");
+			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(first).get(Fields.STATUS));
+			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get(second).get(Fields.STATUS));
+			int calls = modelCalls.get();
+			configureBots(Maps.empty());
+			configureBots(Maps.of("echo", config));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			assertNull(telegram.awaitSent(600));
+			assertEquals(calls, modelCalls.get(), "a failed outbound reply must not redeliver session input");
+		} finally {
+			response.complete(Maps.of("role", "assistant", "content", "Generated response"));
+			configureBots(Maps.of("echo", echoBotConfig()));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			telegram.failSendChats.remove(chat);
+		}
+	}
+
+	@Test
 	public void pendingReceiptSurvivesRunnerRestartAndCompletedReceiptIsNotReplayed() throws Exception {
 		configureBots(Maps.empty());
-		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterWorkspace("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
+		var inbox = new covia.adapter.webhook.WebhookInbox(engine, engine.adapterState("telegram"), "config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
 		var message = telegram.message(15002, "private", ALLOWED_ID, "alice");
 		message.put("text", "Recover this pending turn");
 		ACell update = convex.core.util.JSON.parse(convex.core.util.JSON.toString(java.util.Map.of("update_id", 900001, "message", message)));
@@ -601,6 +690,68 @@ public class TelegramAdapterTest {
 		awaitState("echo", BotRunner.State.RUNNING, 10_000);
 		assertNull(telegram.awaitSent(600), "completed or uncertain receipts must not run again");
 		assertEquals(covia.adapter.webhook.WebhookInbox.STARTED, inbox.get("900002").get(Fields.STATUS));
+	}
+
+	private static covia.adapter.webhook.WebhookInbox echoInbox() {
+		return new covia.adapter.webhook.WebhookInbox(engine, engine.adapterState("telegram"),
+			"config/echo/inbox/" + OWNER.getHash().toHexString() + "/42");
+	}
+
+	@Test
+	public void undeliverableTurnNotifiesOnceAndIsNotRetriedAfterRestart() throws Exception {
+		telegram.drainSent();
+		// Intake downloads the document first; the file never becomes available.
+		var message = telegram.message(17101, "private", ALLOWED_ID, "alice");
+		message.put("document", java.util.Map.of("file_id", "never-uploaded", "file_unique_id", "never-uploaded-u",
+			"mime_type", "application/pdf", "file_name", "missing.pdf"));
+		message.put("caption", "Please read this");
+		String id = Integer.toString(telegram.pushUpdate(FakeTelegramServer.TOKEN, new java.util.HashMap<>(java.util.Map.of("message", message))));
+		var notice = telegram.awaitSent(15_000);
+		assertNotNull(notice, "the sender is told after the failed attempt");
+		var inbox = echoInbox();
+		var receipt = inbox.get(id);
+		assertEquals(covia.adapter.webhook.WebhookInbox.FAILED, receipt.get(Fields.STATUS));
+		assertEquals(Strings.create(BotRunner.DELIVERY_FAILED), receipt.get(Fields.REASON));
+		String lastError = receipt.get(covia.adapter.webhook.WebhookInbox.LAST_ERROR).toString();
+		assertEquals(BotRunner.UNDELIVERED.formatted(lastError), notice.text());
+		assertEquals(1, telegram.getFileCalls.get("never-uploaded").get());
+		assertNull(telegram.awaitSent(400), "one notice per update");
+
+		configureBots(Maps.empty());
+		configureBots(Maps.of("echo", echoBotConfig()));
+		awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		assertNull(telegram.awaitSent(600), "a FAILED update is neither retried nor reported again after restart");
+		assertEquals(receipt, inbox.get(id));
+		assertEquals(1, telegram.getFileCalls.get("never-uploaded").get());
+		assertTrue(((CVMLong) adapter.runner("echo").status().get(Strings.intern("failedUpdates"))).longValue() >= 1);
+
+	}
+
+	@Test
+	public void suspendedAgentFailsTheUpdateOnceWithoutJobs() throws Exception {
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "tg-resting", Fields.CONFIG,
+			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+		run(RequestContext.of(OWNER), "v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "tg-resting"));
+		var config = echoBotConfig().assoc(BotSpec.K_AGENT, Strings.create("tg-resting"));
+		try {
+			configureBots(Maps.of("echo", config));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+			telegram.drainSent();
+			long jobs = engine.jobs().getJobs(RequestContext.of(OWNER)).count();
+			String id = Integer.toString(telegram.push(17102, ALLOWED_ID, "alice", "Are you there?"));
+			var notice = telegram.awaitSent(10_000);
+			assertNotNull(notice);
+			String refusal = covia.adapter.AgentAdapter.DELIVERY_AGENT_SUSPENDED.formatted("tg-resting");
+			assertEquals(BotRunner.UNDELIVERED.formatted(refusal), notice.text());
+			var receipt = echoInbox().get(id);
+			assertEquals(covia.adapter.webhook.WebhookInbox.FAILED, receipt.get(Fields.STATUS));
+			assertEquals(Strings.create(BotRunner.DELIVERY_FAILED), receipt.get(Fields.REASON));
+			assertNull(telegram.awaitSent(400));
+			assertEquals(jobs, engine.jobs().getJobs(RequestContext.of(OWNER)).count(), "a suspended agent gets no failed chat Job");
+		} finally {
+			configureBots(Maps.of("echo", echoBotConfig()));
+			awaitState("echo", BotRunner.State.RUNNING, 10_000);
+		}
 	}
 
 	@Test
@@ -792,7 +943,7 @@ public class TelegramAdapterTest {
 
 	@Test
 	public void forumTopicsHaveIndependentSessionsAndResetOnlyTheirOwnTopic() throws Exception {
-		var sessions = new covia.adapter.messaging.ConversationSessions(engine.adapterWorkspace("telegram"), "config/echo/sessions");
+		var sessions = new covia.adapter.messaging.ConversationSessions(engine.adapterState("telegram"), "config/echo/sessions");
 		for (int topic : List.of(11, 22)) {
 			var message = telegram.message(15003, "private", ALLOWED_ID, "alice");
 			message.put("text", "Hello topic " + topic);
@@ -872,12 +1023,12 @@ public class TelegramAdapterTest {
 		assertEquals("created_bot", mine.username());
 
 		// Recorded in venue-private adapter state (settings only — no user, no literal token).
-		String recordPath = adapter.runtimeBotPath(OWNER, "mine");
-		ACell record = engine.resolvePath(Strings.create(recordPath), engine.venueContext());
+		String recordPath = adapter.userStatePath(OWNER, "bots/mine");
+		ACell record = adapter.state().read(recordPath);
 		assertNotNull(record, "registry record");
 		assertEquals(Strings.create("s/TG_CREATED"), RT.getIn(record, BotSpec.K_TOKEN));
 		assertNull(RT.getIn(record, BotSpec.K_USER));
-		assertNull(engine.resolvePath(Strings.create(recordPath), RequestContext.of(OWNER)),
+		assertNull(engine.resolvePath(Strings.create("w/adapters/telegram/" + recordPath), RequestContext.of(OWNER)),
 			"user association does not make adapter-owned state part of that user's workspace");
 
 		// Same name again is refused; another user may use the name; bots lists it as runtime
@@ -922,9 +1073,8 @@ public class TelegramAdapterTest {
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(deleted, TelegramAdapter.K_DELETED));
 		assertNull(adapter.runner(OWNER, "mine"));
 		assertEquals(BotRunner.State.STOPPED, rearmed.state());
-		assertNull(engine.resolvePath(Strings.create(recordPath), engine.venueContext()), "record removed");
-		assertNull(engine.resolvePath(Strings.create(adapter.state().path(
-			adapter.userStatePath(OWNER, "sessions/mine/" + ALLOWED_ID))), engine.venueContext()), "sessions removed");
+		assertNull(adapter.state().read(recordPath), "record removed");
+		assertNull(adapter.state().read(adapter.userStatePath(OWNER, "sessions/mine/" + ALLOWED_ID)), "sessions removed");
 		assertNull(adapter.state().read(resolvedPath), "resolved handles removed");
 	}
 
@@ -941,11 +1091,11 @@ public class TelegramAdapterTest {
 		BotRunner legacy=adapter.runner(OTHER,"legacy");
 		assertNotNull(legacy);
 		await(()->legacy.state()==BotRunner.State.RUNNING,10_000,()->"legacy bot did not start: "+legacy.error());
-		assertEquals(settings,engine.resolvePath(Strings.create(adapter.runtimeBotPath(OTHER,"legacy")),engine.venueContext()),
+		assertEquals(settings,adapter.state().read(adapter.userStatePath(OTHER,"bots/legacy")),
 			"legacy record is copied into the canonical venue-private adapter workspace");
 
 		run(RequestContext.of(OTHER),"v/ops/telegram/delete",Maps.of("name","legacy"));
-		assertNull(engine.resolvePath(Strings.create(adapter.runtimeBotPath(OTHER,"legacy")),engine.venueContext()));
+		assertNull(adapter.state().read(adapter.userStatePath(OTHER,"bots/legacy")));
 		assertNull(RT.getIn(run(RequestContext.of(OTHER),"v/ops/covia/read",Maps.of(
 			Fields.PATH,TelegramAdapter.LEGACY_REGISTRY_PATH+"/legacy")),Fields.VALUE));
 	}
@@ -1122,7 +1272,7 @@ public class TelegramAdapterTest {
 		assertTrue(text.length() > 2 * BotRunner.MAX_MESSAGE_LENGTH);
 		run(RequestContext.of(OWNER), "v/ops/telegram/send", Maps.of(
 			"chat_id", CVMLong.create(ALLOWED_ID), "text", text));
-		List<String> expected = BotRunner.split(text, BotRunner.MAX_MESSAGE_LENGTH);
+		List<String> expected = MessagingText.split(text, BotRunner.MAX_MESSAGE_LENGTH);
 		List<String> actual = new java.util.ArrayList<>(expected.size());
 		for (int i = 0; i < expected.size(); i++) {
 			FakeTelegramServer.Sent sent = telegram.awaitSent(i == 0 ? 10_000 : 0);
@@ -1136,9 +1286,9 @@ public class TelegramAdapterTest {
 	@Test
 	public void testSplitPrefersLineBreaks() {
 		String text = "aaaa\nbbbb\ncccc";
-		assertEquals(java.util.List.of("aaaa\nbbbb", "cccc"), BotRunner.split(text, 10));
-		assertEquals(java.util.List.of("abcdefghij", "klm"), BotRunner.split("abcdefghijklm", 10));
-		assertEquals(java.util.List.of("short"), BotRunner.split("short", 10));
+		assertEquals(java.util.List.of("aaaa\nbbbb", "cccc"), MessagingText.split(text, 10));
+		assertEquals(java.util.List.of("abcdefghij", "klm"), MessagingText.split("abcdefghijklm", 10));
+		assertEquals(java.util.List.of("short"), MessagingText.split("short", 10));
 	}
 
 	@Test
@@ -1331,6 +1481,41 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testOnlyOperatorBotsUseVenueSecrets() throws Exception {
+		String token = "444:VENUE-ONLY";
+		telegram.registerBot(token, "venue_bot");
+		run(engine.venueContext(), "v/ops/secret/set", Maps.of("name", "TG_VENUE_ONLY", "value", token));
+		AMap<AString, ACell> echoCfg = botConfig(FakeTelegramServer.TOKEN, OWNER.toString(), "agent", AGENT,
+			Vectors.of(CVMLong.create(ALLOWED_ID), Strings.create("@alice")));
+		try {
+			// A user's bot naming the venue's secret, bare or by the venue's DID, gets
+			// nothing: the reference is the user's, so it never resolves as the venue.
+			run(RequestContext.of(OTHER), "v/ops/telegram/create", Maps.of(
+				"name", "borrowed", "token", "s/TG_VENUE_ONLY", "agent", AGENT));
+			run(RequestContext.of(OTHER), "v/ops/telegram/create", Maps.of(
+				"name", "named", "token", engine.getDIDString() + "/s/TG_VENUE_ONLY", "agent", AGENT));
+			BotRunner borrowed = adapter.runner(OTHER, "borrowed");
+			BotRunner named = adapter.runner(OTHER, "named");
+			await(() -> borrowed.state() == BotRunner.State.PENDING && named.state() == BotRunner.State.PENDING,
+				10_000, () -> "user bots must stay pending: " + borrowed.error() + " / " + named.error());
+			assertTrue(borrowed.error().contains("not found"), borrowed.error());
+			assertTrue(named.error().contains("token resolution failed"), named.error());
+			assertEquals(0, telegram.getMeCalls(token), "the venue's token never reaches Telegram for a user's bot");
+
+			// The operator wrote this reference, so the venue's store backs it.
+			configureBots(Maps.of(
+				Strings.create("echo"), echoCfg,
+				Strings.create("operator"), botConfig("s/TG_VENUE_ONLY", OWNER.toString(), "agent", AGENT, null)));
+			awaitState("operator", BotRunner.State.RUNNING, 10_000);
+			assertEquals("venue_bot", adapter.runner("operator").username());
+		} finally {
+			run(RequestContext.of(OTHER), "v/ops/telegram/delete", Maps.of("name", "borrowed"));
+			run(RequestContext.of(OTHER), "v/ops/telegram/delete", Maps.of("name", "named"));
+			configureBots(Maps.of(Strings.create("echo"), echoCfg));
+		}
+	}
+
+	@Test
 	public void testBadTokenIsPendingWithTelegramError() throws Exception {
 		AMap<AString, ACell> echoCfg = botConfig(FakeTelegramServer.TOKEN, OWNER.toString(), "agent", AGENT,
 			Vectors.of(CVMLong.create(ALLOWED_ID), Strings.create("@alice")));
@@ -1379,7 +1564,7 @@ public class TelegramAdapterTest {
 		BotRunner runner=adapter.runner(OWNER,bot);
 		if(runner==null)runner=adapter.runner(bot);
 		if(runner==null)return null;
-		ACell v=engine.resolvePath(Strings.create(runner.sessionsPath()+"/"+chatId),engine.venueContext());
+		ACell v=adapter.state().read(runner.sessionsRelativePath()+"/"+chatId);
 		return (v == null) ? null : v.toString();
 	}
 

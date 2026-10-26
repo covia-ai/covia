@@ -335,8 +335,7 @@ public class A2AAgentCardTest {
 				"the stale cycle and both distinct continuations each run exactly once");
 			var session = continued.getSession(Blob.fromHex(initial.contextId()));
 			var frames = (convex.core.data.AVector<?>) session.get(AgentState.KEY_FRAMES);
-			var conversation = (convex.core.data.AVector<?>)
-				((convex.core.data.AMap<?, ?>) frames.get(0)).get(AgentState.KEY_CONVERSATION);
+			var conversation = covia.adapter.agent.GoalTreeContext.activeConversation(convex.core.lang.RT.ensureMap(frames.get(0)));
 			assertEquals(6, conversation.count(),
 				"three user turns and three agent turns must be recorded without duplicate frames");
 

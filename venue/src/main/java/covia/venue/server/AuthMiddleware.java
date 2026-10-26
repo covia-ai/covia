@@ -293,14 +293,7 @@ public class AuthMiddleware {
 	 */
 	public static void setRequestIdentity(Context ctx,
 			AString authenticatedIdentity, AString venueUserDID) {
-		if (authenticatedIdentity == null) {
-			throw new IllegalArgumentException("authenticatedIdentity is required");
-		}
-		if (venueUserDID == null) {
-			throw new IllegalArgumentException("venueUserDID is required");
-		}
-		ctx.attribute(AUTHENTICATED_IDENTITY_ATTR, authenticatedIdentity);
-		ctx.attribute(CALLER_DID_ATTR, venueUserDID);
+		VenueAuthenticator.setRequestIdentity(ctx, authenticatedIdentity, venueUserDID);
 	}
 
 	/**
@@ -348,12 +341,22 @@ public class AuthMiddleware {
 	 * Javalin context (e.g. an MCP call with no HTTP context) yields
 	 * {@link RequestContext#ANONYMOUS}.
 	 *
+	 * <p>An authenticated agent identity starts with an empty capability scope
+	 * and its own full subject as namespace. Its name alone must not establish
+	 * local owner access (including ownership-only job checks). Explicit host
+	 * policy or verified transport proofs must authorize access to other namespaces.</p>
+	 *
 	 * @param ctx Javalin context, or null
 	 * @return the caller's request context with its grant scope applied
 	 */
 	public static RequestContext callerContext(Context ctx) {
 		if (ctx == null) return RequestContext.ANONYMOUS;
 		RequestContext rctx = RequestContext.of(getCallerDID(ctx));
+		if (rctx.isSubPrincipal()) {
+			// Undo the local-agent owner projection and drop ambient authority.
+			// A credential proves the subject, not a local execution relationship.
+			rctx = RequestContext.ofAuthority(rctx.getAuthority().onBehalfOf(rctx.getCallerDID()));
+		}
 		AVector<ACell> caps = ctx.attribute(CALLER_CAPS_ATTR);
 		if (caps != null) rctx = rctx.withCaps(caps);
 		return rctx;

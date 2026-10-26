@@ -36,6 +36,9 @@ public final class Audit {
 	public static final String USER_CREATE = "user.create";
 	public static final String USER_DELETE = "user.delete";
 	public static final String USER_SUDO = "user.sudo";
+	public static final String USER_EXPORT = "user.export";
+	public static final String USER_IMPORT = "user.import";
+	public static final String USER_CLONE = "user.clone";
 	public static final String KEY_ADD = "auth.key.add";
 	public static final String KEY_REVOKE = "auth.key.revoke";
 	public static final String SECRET_WRITE = "secret.write";

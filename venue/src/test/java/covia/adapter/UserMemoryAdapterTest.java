@@ -2,6 +2,16 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -70,6 +80,64 @@ public class UserMemoryAdapterTest {
 		assertNotNull(block);
 		assertEquals("1. Prefers metric units\n2. Anxious about heart\n3. Lactose intolerant",
 			block.toString());
+	}
+
+	// ========== concurrent mutations (an agent's parallel tool calls) ==========
+
+	/** Runs {@code tasks} at once on virtual threads, as an agent's parallel tool calls run, and returns their results. */
+	private static List<ACell> together(List<Callable<ACell>> tasks) throws Exception {
+		CountDownLatch go = new CountDownLatch(1);
+		List<Future<ACell>> futures = new ArrayList<>();
+		try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+			for (Callable<ACell> t : tasks) {
+				futures.add(pool.submit(() -> {
+					go.await();
+					return t.call();
+				}));
+			}
+			go.countDown();
+			List<ACell> results = new ArrayList<>();
+			for (Future<ACell> f : futures) results.add(f.get(10, TimeUnit.SECONDS));
+			return results;
+		}
+	}
+
+	/** The recalled entries' texts, in order, without their numbers. */
+	private List<String> recalledTexts() {
+		List<String> texts = new ArrayList<>();
+		for (String line : recall().toString().split("\n")) texts.add(line.substring(line.indexOf(". ") + 2));
+		return texts;
+	}
+
+	@Test
+	public void testConcurrentRemembersAllSurviveWithDistinctNumbers() throws Exception {
+		int n = 16;
+		List<Callable<ACell>> tasks = new ArrayList<>();
+		for (int i = 0; i < n; i++) {
+			String text = "fact " + i;
+			tasks.add(() -> remember(text));
+		}
+		Set<ACell> numbers = new HashSet<>();
+		for (ACell r : together(tasks)) numbers.add(RT.getIn(r, "n"));
+		assertEquals(n, numbers.size(), "each remember reports the position it took");
+		List<String> texts = recalledTexts();
+		assertEquals(n, texts.size(), "none lost");
+		for (int i = 0; i < n; i++) assertTrue(texts.contains("fact " + i), "kept: fact " + i);
+	}
+
+	@Test
+	public void testConcurrentForgetsAndRemembersAllApply() throws Exception {
+		for (int i = 0; i < 8; i++) remember("old " + i);
+		List<Callable<ACell>> tasks = new ArrayList<>();
+		for (int i = 0; i < 4; i++) {
+			String text = "new " + i;
+			tasks.add(() -> run(Maps.of(Strings.create("command"), Strings.create("forget"), Strings.create("n"), CVMLong.create(1))));
+			tasks.add(() -> remember(text));
+		}
+		together(tasks);
+		List<String> texts = recalledTexts();
+		assertEquals(List.of("old 4", "old 5", "old 6", "old 7"), texts.subList(0, 4), "the first four forgotten, none twice");
+		assertEquals(8, texts.size(), "every forget and every remember took effect");
 	}
 
 	// ========== update / forget by number ==========

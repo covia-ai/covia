@@ -1,0 +1,31 @@
+{
+  "name": "P2P connect",
+  "description": "Connects this venue's P2P node to another node, given the node's did:key and its address, and returns once the node has proved its key and the two have exchanged what they know. The venue keeps redialling the node until its own node stops; this is not saved across restarts, so list lasting bootstrap peers in adapters.p2p.peers. Fails when the venue has not joined the network. Venue-owned: requires p2p/manage on <venue DID>/p2p.",
+  "operation": {
+    "adapter": "p2p:connect",
+    "activityLabel": "Connecting to a P2P peer",
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "The node's did:key, as p2p/peers lists it."
+        },
+        "address": {
+          "type": "string",
+          "description": "Where the node listens: host:port or tcp://host:port."
+        }
+      },
+      "required": ["did", "address"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "connected": { "type": "boolean" }
+      },
+      "required": ["did", "connected"]
+    }
+  }
+}

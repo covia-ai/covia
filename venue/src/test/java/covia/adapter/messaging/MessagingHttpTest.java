@@ -87,6 +87,16 @@ class MessagingHttpTest {
 		}
 	}
 
+	@Test void socketUrlsAreWssOrLoopbackAndKeepTheirTicket() {
+		String ticket = "wss://wss-primary.slack.com/link/?ticket=single-use&app_id=A123";
+		assertEquals(ticket, MessagingHttp.socket(ticket).toString());
+		assertEquals("ws://127.0.0.1:9/link", MessagingHttp.socket("ws://127.0.0.1:9/link").toString());
+		for (String url : new String[] {"ws://example.com/link", "https://example.com/link", "wss://user@example.com/link",
+				"wss://example.com/link#fragment", "wss:///link", "not a url"}) {
+			assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(IllegalArgumentException.class, () -> MessagingHttp.socket(url)).getMessage(), url);
+		}
+	}
+
 	@Test void timesOutWaitingForHeaders() throws Exception { assertTimeoutAt(false); }
 	@Test void timesOutWhileReadingTheBody() throws Exception { assertTimeoutAt(true); }
 
@@ -108,6 +118,35 @@ class MessagingHttpTest {
 				});
 				assertEquals(1, server.requests.get());
 			} finally { release.countDown(); }
+		}
+	}
+
+	@Test void getsJsonAndFetchesBoundedBytesWithTheToken() throws Exception {
+		byte[] audio = "OggS-bytes".getBytes(StandardCharsets.UTF_8);
+		try (Server server = new Server(exchange -> {
+			assertEquals("GET", exchange.getRequestMethod());
+			assertEquals("Bearer " + TOKEN, exchange.getRequestHeaders().getFirst("Authorization"));
+			if (exchange.getRequestURI().getQuery() == null) { reply(exchange, 200, "{\"url\":\"link\"}"); return; }
+			exchange.getResponseHeaders().set("Content-Type", "audio/ogg");
+			exchange.sendResponseHeaders(200, audio.length);
+			exchange.getResponseBody().write(audio);
+		})) {
+			assertEquals(Maps.of("url", "link"), MessagingHttp.get(server.url(), TOKEN));
+			MessagingMedia.Fetched fetched = MessagingHttp.fetch(MessagingHttp.download(server.url() + "?hash=signed"), TOKEN, 1024);
+			assertArrayEquals(audio, fetched.bytes());
+			assertEquals("audio/ogg", fetched.contentType());
+			assertEquals(MessagingMedia.TOO_LARGE, assertThrows(IllegalStateException.class,
+				() -> MessagingHttp.fetch(MessagingHttp.download(server.url() + "?hash=signed"), TOKEN, 4)).getMessage(),
+				"a download past its bound is refused as too large");
+		}
+	}
+
+	@Test void downloadLinksKeepTheirQueryButNeedTls() {
+		assertEquals("ext=1&hash=x", MessagingHttp.download("https://lookaside.example/media?ext=1&hash=x").getQuery());
+		for (String bad : new String[] {"http://lookaside.example/media", "https://user@lookaside.example/media",
+				"https://lookaside.example/media#part", "ftp://lookaside.example/media", "not a url"}) {
+			assertEquals(MessagingHttp.INVALID_DOWNLOAD_URL, assertThrows(IllegalArgumentException.class,
+				() -> MessagingHttp.download(bad)).getMessage(), bad);
 		}
 	}
 

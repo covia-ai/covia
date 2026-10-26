@@ -16,6 +16,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpServer;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -23,7 +26,9 @@ import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -137,6 +142,75 @@ public class MCPBridgeTest {
 			"venue-scope removal must clear the shared catalog");
 	}
 
+	private void assertVenueDenied(Job job) {
+		assertThrows(Exception.class, () -> job.awaitResult(15000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains(Engine.VENUE_AUTHORITY_DENIED), job.getErrorMessage());
+	}
+
+	@Test
+	public void testOrdinaryUserCannotManageVenueCatalog() {
+		// An ordinary signed-in user holds a null (unrestricted) scope over their
+		// OWN namespace. That must not reach the venue catalog, which is written
+		// as the venue: every venue-side target is venue administration.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString merge = Strings.create("v/ops/json/merge");
+		AMap<AString, ACell> mergeMeta = engine.resolveAsset(merge, ctx).meta();
+
+		// add-tool cannot replace an existing venue op...
+		assertVenueDenied(addTool("v/ops/json/merge", "test_echo", ctx));
+		assertEquals(mergeMeta, engine.resolveAsset(merge, ctx).meta(),
+			"a denied add-tool must leave the venue op untouched");
+		// ...or publish a new one
+		assertVenueDenied(addTool("v/ops/mcpdenied/echo", "test_echo", ctx));
+		assertNull(engine.resolveAsset(Strings.create("v/ops/mcpdenied/echo"), ctx));
+
+		assertVenueDenied(addServer("selfv", TestServer.BASE_URL, "venue", ctx));
+		assertNull(engine.resolveAsset(Strings.create("v/ops/mcp/selfv/test_echo"), ctx));
+
+		// An operator's venue bridge cannot be refreshed or removed by the user
+		Job add = addServer("selfw", TestServer.BASE_URL, "venue", engine.venueContext());
+		add.awaitResult(15000);
+		assertEquals(Status.COMPLETE, add.getStatus(), String.valueOf(add.getErrorMessage()));
+		try {
+			assertVenueDenied(engine.jobs().invokeOperation("v/ops/mcp/refresh",
+				Maps.of(Fields.NAME, "selfw", "scope", "venue"), ctx));
+			assertVenueDenied(engine.jobs().invokeOperation("v/ops/mcp/refresh",
+				Maps.of(Fields.PATH, "v/ops/mcp/selfw"), ctx));
+			assertVenueDenied(engine.jobs().invokeOperation("v/ops/mcp/remove-server",
+				Maps.of(Fields.NAME, "selfw", "scope", "venue"), ctx));
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/mcp/selfw/test_echo"), ctx),
+				"a denied removal must leave the operator's bridge in place");
+		} finally {
+			engine.jobs().invokeOperation("v/ops/mcp/remove-server",
+				Maps.of(Fields.NAME, "selfw", "scope", "venue"),
+				engine.venueContext()).awaitResult(15000);
+		}
+	}
+
+	@Test
+	public void testVenueDelegationAuthorisesVenueCatalog() {
+		// The venue may delegate MCP management: a venue-issued mcp/manage grant
+		// over <venue DID>/v/mcp admits a user to venue-side targets.
+		AKeyPair operatorKP = AKeyPair.generate();
+		AString operator = UCAN.toDIDKey(operatorKP.getAccountKey());
+		UCAN grant = UCAN.create(engine.getKeyPair(), operatorKP.getAccountKey(),
+			System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/" + Abilities.V_MCP),
+				Abilities.MCP_MANAGE)),
+			Vectors.empty());
+		RequestContext ctx = RequestContext.of(operator).withProofs(Vectors.of(grant.toMap()));
+
+		Job add = addServer("selfx", TestServer.BASE_URL, "venue", ctx);
+		add.awaitResult(15000);
+		assertEquals(Status.COMPLETE, add.getStatus(), String.valueOf(add.getErrorMessage()));
+		Job remove = engine.jobs().invokeOperation("v/ops/mcp/remove-server",
+			Maps.of(Fields.NAME, "selfx", "scope", "venue"), ctx);
+		remove.awaitResult(15000);
+		assertEquals(Status.COMPLETE, remove.getStatus(), String.valueOf(remove.getErrorMessage()));
+		assertNull(engine.resolveAsset(Strings.create("v/ops/mcp/selfx/test_echo"), ctx));
+	}
+
 	@Test
 	public void testRemoveServerDeletesCatalog() {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
@@ -208,8 +282,25 @@ public class MCPBridgeTest {
 		Job denied = addServer("selfg", "http://10.99.99.99:1234", null, ctx);
 		assertThrows(Exception.class, () -> denied.awaitResult(15000));
 		assertEquals(Status.FAILED, denied.getStatus());
-		assertTrue(denied.getErrorMessage().contains("private/internal"),
+		assertTrue(denied.getErrorMessage().contains(HTTPAdapter.PRIVATE_ADDRESS),
 			denied.getErrorMessage());
+	}
+
+	@Test
+	public void testCallerNamedServerIsSsrfChecked() {
+		// tools-list and tools-call take the server from the caller's input, so the
+		// same outbound policy applies before any connection is made.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		Job list = engine.jobs().invokeOperation("v/ops/mcp/tools-list",
+			Maps.of(Fields.SERVER, "http://10.99.99.99:1234"), ctx);
+		Job call = engine.jobs().invokeOperation("v/ops/mcp/tools-call",
+			Maps.of(Fields.SERVER, "http://10.99.99.99:1234", Fields.TOOL_NAME, "anything",
+				Fields.ARGUMENTS, Maps.empty()), ctx);
+		for (Job job : new Job[] {list, call}) {
+			assertThrows(Exception.class, () -> job.awaitResult(15000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains(HTTPAdapter.PRIVATE_ADDRESS), job.getErrorMessage());
+		}
 	}
 
 	@Test
@@ -233,7 +324,7 @@ public class MCPBridgeTest {
 		AString aliceDID = convex.auth.ucan.UCAN.toDIDKey(aliceKP.getAccountKey());
 		AString bobDID = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
 		engine.getVenueState().users().ensure(aliceDID).secrets().store("GITHUB_TOKEN", "alice-token",
-			covia.venue.SecretStore.deriveKey(engine.getKeyPair()));
+			covia.venue.SecretStore.keys(engine.getKeyPair()));
 		MCPAdapter adapter = (MCPAdapter) engine.getAdapter("mcp");
 		AString ref = Strings.create(aliceDID + "/s/GITHUB_TOKEN");
 		AString server = Strings.create("https://mcp.example/sse");
@@ -256,7 +347,9 @@ public class MCPBridgeTest {
 
 	@Test
 	public void testToolsListInitializationFailureIsActionable() throws Exception {
-		HttpServer rejecting = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		// Addressed as localhost, the test venue's allow-listed host: caller-named
+		// MCP servers pass the same outbound policy as http.
+		HttpServer rejecting = HttpServer.create(new InetSocketAddress(0), 0);
 		AtomicReference<String> requestedPath = new AtomicReference<>();
 		rejecting.createContext("/mcp", exchange -> {
 			requestedPath.set(exchange.getRequestURI().getPath());
@@ -265,7 +358,7 @@ public class MCPBridgeTest {
 		});
 		rejecting.start();
 		try {
-			String server = "http://127.0.0.1:" + rejecting.getAddress().getPort() + "/mcp/";
+			String server = "http://localhost:" + rejecting.getAddress().getPort() + "/mcp/";
 			Job job = engine.jobs().invokeOperation("v/ops/mcp/tools-list",
 				Maps.of(Fields.SERVER, server), RequestContext.of(ALICE_DID));
 			assertThrows(Exception.class, () -> job.awaitResult(15000));

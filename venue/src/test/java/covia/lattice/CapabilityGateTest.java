@@ -158,14 +158,15 @@ public class CapabilityGateTest {
 
 	@Test
 	public void testDelegatedProofRequiresEveryGateOnPath() {
-		ProofChain chain = proofChain("root-gate", "leaf-gate");
+		// Catalog gates are absolute, so the stub sees the names as written.
+		ProofChain chain = proofChain("v/gates/root", "v/gates/leaf");
 		AtomicInteger rootChecks = new AtomicInteger();
 		AtomicInteger leafChecks = new AtomicInteger();
 		boolean allowed = CapabilityChecker.proofsCover(chain.proofs(), chain.caller(),
 			RootAuthorityPolicy.SELF_SOVEREIGN, chain.resource(), Capability.CRUD_READ,
 			System.currentTimeMillis() / 1000, Strings.create("v/ops/covia/read"),
 			Maps.of(Fields.PATH, chain.resource()), (gate, op, input, caller) -> {
-				if ("root-gate".equals(gate.toString())) {
+				if ("v/gates/root".equals(gate.toString())) {
 					rootChecks.incrementAndGet();
 					return null;
 				}
@@ -196,7 +197,9 @@ public class CapabilityGateTest {
 
 	@Test
 	public void testDelegatedProofCachesRepeatedGateWithinDecision() {
-		ProofChain chain = proofChain("same-gate", "same-gate");
+		// One absolute reference on both links: a repeated bare path would name two
+		// gates, each bound to its own link's issuer.
+		ProofChain chain = proofChain("v/gates/same", "v/gates/same");
 		AtomicInteger checks = new AtomicInteger();
 		boolean allowed = CapabilityChecker.proofsCover(chain.proofs(), chain.caller(),
 			RootAuthorityPolicy.SELF_SOVEREIGN, chain.resource(), Capability.CRUD_READ,
@@ -221,9 +224,9 @@ public class CapabilityGateTest {
 		AString resource = Strings.create(ownerDID + "/w/shared");
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		UCAN deniedRoot = UCAN.create(owner, delegate.getAccountKey(), exp,
-			Vectors.of(proofCap(resource, Capability.CRUD, "deny-path")), Vectors.empty());
+			Vectors.of(proofCap(resource, Capability.CRUD, "v/gates/deny")), Vectors.empty());
 		UCAN allowedRoot = UCAN.create(owner, delegate.getAccountKey(), exp,
-			Vectors.of(proofCap(resource, Capability.CRUD, "allow-path")), Vectors.empty());
+			Vectors.of(proofCap(resource, Capability.CRUD, "v/gates/allow")), Vectors.empty());
 		UCAN leaf = UCAN.create(delegate, caller.getAccountKey(), exp,
 			Vectors.of(proofCap(resource, Capability.CRUD_READ, null)),
 			Vectors.of(deniedRoot.toMap(), allowedRoot.toMap()));
@@ -234,7 +237,7 @@ public class CapabilityGateTest {
 			System.currentTimeMillis() / 1000, Strings.create("v/ops/covia/read"), null,
 			(gate, op, input, audience) -> {
 				checks.incrementAndGet();
-				return "deny-path".equals(gate.toString()) ? "this path refuses" : null;
+				return "v/gates/deny".equals(gate.toString()) ? "this path refuses" : null;
 			});
 
 		assertTrue(allowed, "a separate, fully accepted proof path may authorise");

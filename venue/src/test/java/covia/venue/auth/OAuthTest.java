@@ -82,7 +82,7 @@ public class OAuthTest {
 		AMap<AString, ACell> oauthConfig = Maps.of(
 			Config.BASE_URL, "https://example.com",
 			"google", creds,
-			"microsoft", creds,
+			"microsoft", creds.assoc(Strings.intern("tenantId"), Strings.create("11111111-1111-1111-1111-111111111111")),
 			"github", creds
 		);
 		AMap<AString, ACell> authConfig = Maps.of(
@@ -124,7 +124,7 @@ public class OAuthTest {
 		// The point of the reference form: the real secret lives in the venue's
 		// own store, never in the config file. Resolution runs as the venue
 		// identity, the same context adapters.oauth uses.
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(engine.getKeyPair());
 		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
 		venueUser.secrets().store("GOOGLE_OAUTH", "resolved-from-store", encKey);
 
@@ -158,9 +158,10 @@ public class OAuthTest {
 
 	@Test
 	void testOAuthConfigMicrosoftEndpoints() {
-		OAuthConfig ms = OAuthConfig.microsoft("cid", "csecret", "https://venue.example.com");
+		OAuthConfig ms = OAuthConfig.microsoft("cid", "csecret", "https://venue.example.com", "11111111-1111-1111-1111-111111111111");
 		assertEquals("microsoft", ms.name);
-		assertNull(ms.issuer, "Microsoft issuer should be null (varies by tenant)");
+		assertEquals("https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0", ms.issuer);
+		assertThrows(IllegalArgumentException.class, () -> OAuthConfig.microsoft("cid", "secret", "https://venue.example.com", "common"));
 		assertNotNull(ms.jwksUri);
 		assertEquals("https://venue.example.com/auth/microsoft/callback", ms.redirectUri);
 	}
@@ -170,15 +171,15 @@ public class OAuthTest {
 		OAuthConfig gh = OAuthConfig.github("cid", "csecret", "https://venue.example.com");
 		assertEquals("github", gh.name);
 		assertNull(gh.jwksUri, "GitHub doesn't issue JWTs");
-		assertNull(gh.issuer);
+		assertEquals("https://github.com", gh.issuer);
 		assertEquals("https://venue.example.com/auth/github/callback", gh.redirectUri);
-		assertTrue(gh.scope.contains("user:email"));
+		assertEquals("read:user", gh.scope);
 	}
 
 	@Test
 	void testLoginRedirectUrl() {
 		OAuthConfig google = OAuthConfig.google("my-client-id", "secret", "https://venue.example.com");
-		String url = google.getAuthUrl();
+		String url = google.getAuthUrl("state", new com.nimbusds.oauth2.sdk.pkce.CodeVerifier(), new com.nimbusds.openid.connect.sdk.Nonce());
 		assertTrue(url.startsWith("https://accounts.google.com/o/oauth2/v2/auth?"));
 		assertTrue(url.contains("client_id=my-client-id"));
 		assertTrue(url.contains("redirect_uri="));
@@ -203,13 +204,10 @@ public class OAuthTest {
 
 	@Test
 	void testUserIdentityToUserId() {
-		// Test email-based ID derivation
-		LoginProviders.UserIdentity id1 = new LoginProviders.UserIdentity("sub123", "alice@gmail.com", "Alice");
-		assertEquals("alice_gmail_com", id1.toUserId());
-
-		// Test sub-based fallback when no email
-		LoginProviders.UserIdentity id2 = new LoginProviders.UserIdentity("sub456", null, "Bob");
-		assertEquals("sub456", id2.toUserId());
+		var original = new LoginProviders.UserIdentity("https://issuer.example", "subject", "old@example.com", "Old");
+		var changed = new LoginProviders.UserIdentity("https://issuer.example", "subject", "new@example.com", "New");
+		assertEquals(original.toUserId(), changed.toUserId());
+		assertFalse(original.toUserId().equals(new LoginProviders.UserIdentity("https://other.example", "subject", "old@example.com", "Old").toUserId()));
 	}
 
 	@Test
@@ -338,38 +336,20 @@ public class OAuthTest {
 
 	@Test
 	void testLoginRedirectAllowList() {
-		// The venue's own origin is always allowed; configured origins extend it.
-		AMap<AString, ACell> authConfig = Maps.of(
-			Config.OAUTH, Maps.of("google", Maps.of(
-				Config.CLIENT_ID, "cid", Config.CLIENT_SECRET, "secret")),
-			Config.LOGIN_REDIRECT_ORIGINS, Vectors.of(
-				Strings.create("https://app.example.com"),
-				Strings.create("HTTP://Other.example:8080/ignored/path"),
-				Strings.create("not a url")));
-		LoginProviders lp = new LoginProviders(engine, authConfig);
-
-		// Allowed: a path on the venue, the venue's own origin, a configured origin.
+		LoginProviders lp = new LoginProviders(engine, Maps.of(Config.LOGIN_REDIRECT_URIS,
+			Vectors.of("https://app.example.com/cb", "http://localhost:3000/cb")));
 		assertNull(lp.checkRedirect(null));
-		assertNull(lp.checkRedirect("/app/callback?x=1"));
-		assertNull(lp.checkRedirect(engine.config().getBaseUrl() + "/cb"));
 		assertNull(lp.checkRedirect("https://app.example.com/cb"));
-		assertNull(lp.checkRedirect("https://APP.example.com:443/cb"));
-		assertNull(lp.checkRedirect("http://other.example:8080/cb"));
-
-		// Refused: anything that would carry the session token elsewhere.
-		String reason = lp.checkRedirect("https://evil.example/");
-		assertNotNull(reason);
-		assertTrue(reason.startsWith(LoginProviders.REDIRECT_REFUSED), reason);
-		assertNotNull(lp.checkRedirect("//evil.example/"));
-		assertNotNull(lp.checkRedirect("/\\evil.example/"));
-		assertNotNull(lp.checkRedirect("https://app.example.com.evil.example/"));
-		assertNotNull(lp.checkRedirect("https://app.example.com:8443/"));
-		assertNotNull(lp.checkRedirect("javascript:alert(1)"));
-		assertNotNull(lp.checkRedirect("ftp://app.example.com/"));
-
-		// Without configuration only the venue's own origin remains.
-		LoginProviders bare = new LoginProviders(engine, null);
-		assertNull(bare.checkRedirect("/"));
-		assertNotNull(bare.checkRedirect("https://app.example.com/cb"));
+		assertNull(lp.checkRedirect("http://localhost:3000/cb"));
+		for (String uri : new String[] {"https://app.example.com/other", "https://app.example.com/cb?next=evil",
+			"https://APP.example.com/cb", "/", "//evil.example", "https://app.example.com.evil/cb"}) {
+			assertEquals(LoginProviders.REDIRECT_REFUSED, lp.checkRedirect(uri));
+		}
+		assertThrows(IllegalArgumentException.class, () -> new LoginProviders(engine,
+			Maps.of(Config.LOGIN_REDIRECT_ORIGINS, Vectors.of("https://app.example.com"))));
+		for (String uri : new String[] {"http://app.example.com/cb", "https://app.example/cb?x=1", "https://user@app.example/cb", "https://app.example/cb#f"}) {
+			assertThrows(IllegalArgumentException.class, () -> new LoginProviders(engine,
+				Maps.of(Config.LOGIN_REDIRECT_URIS, Vectors.of(uri))));
+		}
 	}
 }

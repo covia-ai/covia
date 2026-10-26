@@ -3,7 +3,7 @@
   <parent>
     <groupId>ai.covia</groupId>
     <artifactId>covia</artifactId>
-    <version>0.9.11</version>
+    <version>0.10.0</version>
   </parent>
   <artifactId>workbench</artifactId>
   <name>Covia Workbench</name>
@@ -11,7 +11,7 @@
 
   <properties>
     <flatlaf.version>3.7.2</flatlaf.version>
-    <commonmark.version>0.30.1</commonmark.version>
+    <covia.module.name>covia.workbench</covia.module.name>
   </properties>
   
   <dependencies>

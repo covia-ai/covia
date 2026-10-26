@@ -3,6 +3,11 @@ name: Deploy to EC2
 # Deploys the published image to the EC2 venue host. The image itself is
 # built and pushed by publish-docker.yml — this workflow only pulls and
 # (re)starts the container, after a successful publish or on manual dispatch.
+#
+# No SSH (security#12): the job assumes the covia-deploy-venue-3 IAM role
+# over GitHub OIDC (trusted for covia-ai/covia on develop only, allowed only
+# to run AWS-RunShellScript on this instance) and runs deploy/ec2/deploy.sh
+# on the host through SSM Run Command.
 
 on:
   workflow_run:
@@ -27,116 +32,54 @@ jobs:
         )
       }}
     permissions:
-      packages: read
+      contents: read
+      id-token: write   # OIDC token for the AWS role; no stored AWS keys
+    env:
+      INSTANCE_ID: i-0ba252844d8787529
+      # The commit whose image was published (manual runs: the dispatched commit)
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
     steps:
-    - name: Deploy to EC2
-      uses: appleboy/ssh-action@v1
-      env:
-        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        host: ${{ secrets.EC2_HOST }}
-        username: ${{ secrets.EC2_USER }}
-        key: ${{ secrets.EC2_SSH_KEY }}
-        envs: GHCR_TOKEN
-        script: |
-          # Authenticate to GHCR
-          echo $GHCR_TOKEN | docker login ghcr.io -u github --password-stdin
+        ref: ${{ env.DEPLOY_SHA }}
 
-          # Pull latest image
-          docker pull ghcr.io/covia-ai/covia:latest
+    - name: Assume the venue-3 deploy role (OIDC)
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: arn:aws:iam::731322152283:role/covia-deploy-venue-3
+        aws-region: us-east-1
 
-          # Stop legacy systemd service if still present
-          sudo systemctl stop covia-venue.service 2>/dev/null || true
+    - name: Deploy to EC2 via SSM Run Command
+      run: |
+        # Ship the script base64-encoded so SSM passes it through unaltered.
+        script=$(base64 -w0 deploy/ec2/deploy.sh)
+        params=$(jq -nc --arg c "echo $script | base64 -d | bash" \
+          '{commands: [$c], executionTimeout: ["900"]}')
+        command_id=$(aws ssm send-command \
+          --instance-ids "$INSTANCE_ID" \
+          --document-name AWS-RunShellScript \
+          --comment "deploy-ec2 ${DEPLOY_SHA:0:8}" \
+          --timeout-seconds 120 \
+          --parameters "$params" \
+          --query Command.CommandId --output text)
+        echo "SSM command: $command_id"
 
-          # Stop and remove existing container (by name, then any container still using port 8080)
-          docker stop covia-venue 2>/dev/null || true
-          docker rm covia-venue 2>/dev/null || true
-          docker ps -q --filter publish=8080 | xargs -r docker stop
-          docker ps -aq --filter publish=8080 | xargs -r docker rm
+        # Poll until the command finishes (the script itself waits for health).
+        status=Pending
+        for i in $(seq 1 120); do
+          status=$(aws ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
+          case "$status" in Success|Failed|Cancelled|TimedOut|Cancelling) break ;; esac
+          sleep 5
+        done
 
-          # Ensure data directory exists with correct config (preserve existing etch store)
-          mkdir -p /home/ec2-user/covia-data
-          if [ ! -f /home/ec2-user/covia-data/config.json ]; then
-            printf '{"venues":[{"name":"Covia Venue (EC2)","hostname":"venue-3.covia.ai","port":8080,"store":"/data/venue.etch","trustedProxies":["loopback","172.16.0.0/12"],"mcp":{"enabled":true}}]}\n' \
-              > /home/ec2-user/covia-data/config.json
-          fi
-          # The venue sits behind nginx on this host and sees it through the
-          # Docker bridge: it must take the client address from X-Forwarded-For,
-          # or every caller shares one rate-limit bucket and one authentication
-          # budget (covia#539). Reconcile the persisted config, leaving any
-          # operator-set value alone.
-          sudo python3 - <<'PY'
-          import json
-          from pathlib import Path
+        aws ssm get-command-invocation --command-id "$command_id" \
+          --instance-id "$INSTANCE_ID" --query StandardOutputContent --output text
+        aws ssm get-command-invocation --command-id "$command_id" \
+          --instance-id "$INSTANCE_ID" --query StandardErrorContent --output text >&2
 
-          path = Path("/home/ec2-user/covia-data/config.json")
-          config = json.loads(path.read_text(encoding="utf-8"))
-          for venue in config.get("venues", []):
-              venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
-          temporary = path.with_suffix(".json.tmp")
-          temporary.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-          temporary.replace(path)
-          PY
-          # Container runs as UID 1001 (appuser) — grant write access to data dir
-          sudo chown -R 1001:1001 /home/ec2-user/covia-data
-
-          # Run new container. The image's ENTRYPOINT already invokes java and
-          # forwards CMD as arguments to MainVenue (see Dockerfile) — CMD must
-          # be just the config path, not a full java command line, or the
-          # entrypoint double-invokes java and MainVenue receives "java" as
-          # its config path instead of the real one.
-          #
-          # Publish on loopback only: nginx terminates TLS and proxies to
-          # localhost:8080. A bare -p 8080:8080 binds 0.0.0.0, and Docker's
-          # iptables rules bypass host firewalls, leaving the security group
-          # as the only thing keeping the plain-HTTP port off the internet.
-          docker run -d \
-            --name covia-venue \
-            --stop-timeout 30 \
-            -p 127.0.0.1:8080:8080 \
-            -v /home/ec2-user/covia-data:/data \
-            -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
-            --log-driver=awslogs \
-            --log-opt awslogs-region=ap-southeast-1 \
-            --log-opt awslogs-group=/covia/venue \
-            --log-opt awslogs-stream=docker-covia-venue \
-            --log-opt awslogs-create-group=true \
-            --restart unless-stopped \
-            --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
-            --health-interval=30s \
-            --health-timeout=5s \
-            --health-start-period=15s \
-            --health-retries=3 \
-            ghcr.io/covia-ai/covia:latest \
-            /data/config.json
-
-          # Wait for the health check to settle; fail the deploy rather than
-          # leaving a crash-looping container behind a green checkmark.
-          status="starting"
-          # Cover the full health window: 15s start period + three 30s
-          # intervals + check time, with a final boundary inspection.
-          for i in $(seq 1 25); do
-            status=$(docker inspect --format='{{.State.Health.Status}}' covia-venue 2>/dev/null || echo "unknown")
-            echo "Health status: $status"
-            [ "$status" = "healthy" ] && break
-            [ "$status" = "unhealthy" ] && break
-            [ "$i" -lt 25 ] && sleep 5
-          done
-          if [ "$status" != "healthy" ]; then
-            echo "::error::covia-venue did not become healthy — deploy failed"
-            docker logs --tail 80 covia-venue
-            exit 1
-          fi
-
-          # Prove the public path still works now the port is loopback-only:
-          # HTTPS through nginx on this host, pinned to the local interface.
-          if ! curl -sf --max-time 10 --resolve venue-3.covia.ai:443:127.0.0.1 \
-              https://venue-3.covia.ai/api/v1/status > /dev/null; then
-            echo "::error::venue is healthy but unreachable through nginx: check proxy_pass targets 127.0.0.1:8080"
-            sudo nginx -T 2>/dev/null | grep -n proxy_pass || true
-            exit 1
-          fi
-
-          # Prune old images
-          docker image prune -f
+        if [ "$status" != "Success" ]; then
+          echo "::error::venue-3 deploy finished with SSM status $status"
+          exit 1
+        fi

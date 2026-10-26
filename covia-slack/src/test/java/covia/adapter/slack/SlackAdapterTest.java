@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static covia.adapter.slack.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -14,10 +13,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.messaging.*;
@@ -27,7 +26,6 @@ import covia.venue.*;
 import covia.venue.server.VenueServer;
 
 class SlackAdapterTest {
-	@TempDir Path temp;
 	static AMap<AString, ACell> spec() {
 		return Maps.of("token", "s/TOKEN", "signingSecret", "s/SIGNING", "user", OWNER, "appId", "A123", "teamId", "T123",
 			"botUserId", "UBOT", "allow", Vectors.of("UALICE"), "allowChannels", Vectors.of("C123", "D123"),
@@ -52,6 +50,8 @@ class SlackAdapterTest {
 			String status = f.run("bots", Maps.empty()).toString();
 			assertFalse(status.contains(TOKEN)); assertFalse(status.contains("SIGNING")); assertFalse(status.contains("UALICE"));
 			assertTrue(status.contains("/webhooks/slack/c-main"));
+			assertNotNull(f.engine.resolvePath(Strings.create("v/ops/slack/send"), f.engine.venueContext()));
+			assertNull(f.engine.resolvePath(Strings.create("v/ops/slack/download"), f.engine.venueContext()), "Slack ships no download operation");
 			assertThrows(IllegalArgumentException.class, () -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other")));
 			assertThrows(IllegalArgumentException.class, () -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "http://remote.example")));
 		}
@@ -114,6 +114,49 @@ class SlackAdapterTest {
 			assertEquals(200, f.webhook(payload("dm", dm)).status());
 			var dmReply = f.api.take(); assertEquals(Strings.create("DOTHER"), dmReply.body().get(Strings.intern("channel")));
 			assertNull(dmReply.body().get(Strings.intern("thread_ts")));
+		}
+	}
+	@Test void unmentionedRepliesContinueOnlyThreadsTheAgentHolds() throws Exception {
+		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create("test-agent"));
+		try (Fixture f = new Fixture(agentSpec)) {
+			FakeAgent agent = new FakeAgent(); agent.blocked = new CompletableFuture<>(); f.engine.registerAdapter(agent);
+			assertEquals(200, f.webhook(payload("root", event("1.1"))).status());
+			assertNotNull(agent.inputs.poll(5, TimeUnit.SECONDS));
+			// While the first turn is still running, an un-mentioned reply in its thread is held for that conversation.
+			var reply = Maps.of("type", "message", "channel_type", "channel", "channel", "C123", "user", "UALICE", "ts", "1.2", "thread_ts", "1.1", "text", "and then?");
+			assertEquals(200, f.webhook(payload("in-flight", reply)).status());
+			assertNotNull(f.bot().inbox().get("in-flight"));
+			agent.blocked.complete(Maps.of(Fields.SESSION_ID, "session-1", Fields.RESPONSE, "first"));
+			f.api.take(); f.api.take();
+			awaitStatus(f.bot(), "in-flight", WebhookInbox.COMPLETE);
+			var continued = agent.inputs.poll(5, TimeUnit.SECONDS);
+			assertEquals(Strings.create("session-1"), continued.get(Fields.SESSION_ID));
+			assertEquals(Strings.create("and then?"), RT.getIn(continued, Fields.MESSAGE, Fields.TEXT));
+			// With the session stored, later replies continue too, threaded under the root.
+			agent.blocked = null;
+			assertEquals(200, f.webhook(payload("later", reply.assoc(Strings.intern("ts"), Strings.create("1.3")))).status());
+			assertEquals(Strings.create("1.1"), f.api.take().body().get(Strings.intern("thread_ts")));
+			awaitStatus(f.bot(), "later", WebhookInbox.COMPLETE);
+			// The message copy of a mention is skipped; its app_mention copy runs it.
+			f.webhook(payload("mention-copy", reply.assoc(Strings.intern("ts"), Strings.create("1.4")).assoc(Fields.TEXT, Strings.create("<@UBOT> again"))));
+			// Elsewhere an un-mentioned message is ignored: a thread the agent never joined, a root
+			// message, a channel the binding does not allow, and a sender it does not admit.
+			f.webhook(payload("unjoined", reply.assoc(Strings.intern("thread_ts"), Strings.create("9.9")).assoc(Strings.intern("ts"), Strings.create("9.10"))));
+			f.webhook(payload("root-message", reply.dissoc(Strings.intern("thread_ts")).assoc(Strings.intern("ts"), Strings.create("1.5"))));
+			f.webhook(payload("other-channel", reply.assoc(Strings.intern("channel"), Strings.create("COTHER"))));
+			f.webhook(payload("stranger", reply.assoc(Strings.intern("user"), Strings.create("UMALLORY"))));
+			for (String id : new String[] {"mention-copy", "unjoined", "root-message", "other-channel", "stranger"}) assertNull(f.bot().inbox().get(id), id);
+			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
+		}
+	}
+	@Test void operationHandlersStillNeedAMentionInThreads() throws Exception {
+		try (Fixture f = new Fixture(spec())) {
+			assertEquals(200, f.webhook(payload("root", event("1.1"))).status());
+			f.api.take(); awaitStatus(f.bot(), "root", WebhookInbox.COMPLETE);
+			var reply = Maps.of("type", "message", "channel_type", "channel", "channel", "C123", "user", "UALICE", "ts", "1.2", "thread_ts", "1.1", "text", "and then?");
+			assertEquals(200, f.webhook(payload("reply", reply)).status());
+			assertNull(f.bot().inbox().get("reply"));
+			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
 		}
 	}
 	@Test void explicitSendsNeedOwnerAndChannelAuthorityAndCannotInjectMentions() throws Exception {
@@ -180,9 +223,9 @@ class SlackAdapterTest {
 			String root = "config/main/sessions/" + identity + "/" + version;
 			String sessionPath = root + "/" + ConversationSessions.segment(ConversationRouter.key(parsed.installationKey(), "C123", "1.1"));
 			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
-			assertEquals("w/adapters/slack/" + sessionPath, f.adapter.state().path(sessionPath));
-			assertEquals(Strings.create("session-1"), f.engine.resolvePath(Strings.create(f.adapter.state().path(sessionPath)), f.engine.venueContext()));
-			assertNull(f.engine.resolvePath(Strings.create(f.adapter.state().path(sessionPath)), RequestContext.of(OWNER)));
+			assertEquals(":adapters/slack/" + sessionPath, f.adapter.state().path(sessionPath));
+			assertEquals(Strings.create("session-1"), f.adapter.state().read(sessionPath));
+			assertNull(f.engine.resolvePath(Strings.create("w/adapters/slack/" + sessionPath), RequestContext.of(OWNER)));
 			assertNotNull(f.adapter.state().read("config/main/inbox/" + identity + "/" + Strings.create("first").getHash().toHexString()));
 			SlackAdapter restored = new SlackAdapter(); restored.retryMillis = 25; f.engine.registerAdapter(restored);
 			restored.handleWebhook("c-main", signed(payload("same-thread", event("1.2").assoc(Strings.intern("thread_ts"), Strings.create("1.1")))));
@@ -194,7 +237,7 @@ class SlackAdapterTest {
 	}
 	@Test void restartRecoversPendingAndDoesNotReplayUncertainSends() throws Exception {
 		try (FakeAPI api = new FakeAPI()) {
-			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, temp.resolve("slack.etch").toString(),
+			AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1", Config.STORE, storeDir("slack-restart").resolve("slack.etch").toString(),
 				Config.SEED, AKeyPair.createSeeded(9132).getSeed().toHexString(), Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Config.ADAPTERS, Maps.of(NAME, Maps.of("apiUrl", api.url(), "bots", Maps.of("main", spec()))));
 			SlackAdapter firstAdapter = new SlackAdapter(); firstAdapter.retryMillis = 25;
@@ -228,7 +271,10 @@ class SlackAdapterTest {
 			assertEquals(200, f.webhook(payload("new-policy", event("1.2"))).status());
 			assertEquals(Strings.create("new reply"), f.api.take().body().get(Fields.TEXT));
 			awaitStatus(f.bot(), "new-policy", WebhookInbox.COMPLETE);
-			awaitStatus(f.bot(), "old-policy", WebhookInbox.PENDING);
+			// Old work fails once, visibly, rather than waiting or running under the new policy.
+			awaitStatus(f.bot(), "old-policy", WebhookInbox.FAILED);
+			assertEquals(Strings.create(WebhookBot.RECONFIGURED), f.bot().inbox().get("old-policy").get(Fields.REASON));
+			assertEquals(CVMLong.ONE, f.bot().status().get(Strings.intern("failed")));
 			assertNull(f.api.sends.poll(150, TimeUnit.MILLISECONDS));
 		}
 	}
@@ -251,7 +297,7 @@ class SlackAdapterTest {
 			assertTrue(f.api.sends.isEmpty());
 		}
 	}
-	private static final class FakeAgent extends AAdapter {
+	static final class FakeAgent extends AAdapter {
 		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
 		final AtomicInteger sessions = new AtomicInteger();
 		volatile AString owner;

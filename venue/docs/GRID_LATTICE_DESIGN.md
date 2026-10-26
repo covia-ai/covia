@@ -1,5 +1,16 @@
 # Covia Grid Lattice Structure
 
+**Convex 0.8.18** separates storage cursors from component policy.
+`CoviaApplication` uses the upstream `LatticeApplication` adapter for
+`Covia.ROOT`, sharing its host's live cursor. `VenueState` binds a signed
+storage view and holds the venue value as a Convex `Timestamped` record: local
+edits stamp it, and incoming merges keep the newest without re-stamping. `Users` supplies lifecycle-guarded, stamped user views, and
+`User.recordCursor` supplies job/agent stamps. `WorkspaceRoot` exposes the existing
+`{updated, data}` envelopes. Use these accessors for writes: raw paths do not
+apply record policy or create missing containers. Bootstrap uses upstream
+`TransactionalComponent`; DLFS uses upstream `DLFSRegion`/`DLFSDrives`.
+
+
 Design document for the Covia venue-backed grid. Phases 0–2 are implemented (Phase 2 partially — per-user cursors done, capability enforcement pending); later phases are target state.
 
 ## Design Document — February 2026 (living document)
@@ -61,7 +72,7 @@ The lattice resolves implicit context based on the active session identity.
 
 ## 4. Namespaces
 
-Each top-level namespace is hardcoded in the lattice app definition. This is not user-configurable — the namespace typing defines mutation rules, integrity constraints, access control, and execution semantics. Under the hood, each namespace is a lattice cursor with specialised sub-keys that enforce these rules.
+Platform prefixes define mutation rules, integrity constraints, access control, and execution semantics. Some address stored records; others are virtual cursor views. The `x/` prefix lets adapters define their own user-visible shape without extending the core user record.
 
 ### 4.1 Namespace Summary
 
@@ -73,6 +84,13 @@ Each top-level namespace is hardcoded in the lattice app definition. This is not
 | Agents | `/g/` | Identity-bound mutations | Index | System |
 | Workspace | `/w/` | Freely mutable | Hashmap | User/Agent |
 | Secrets | `/s/` | Encrypted, capability-gated | Index | System |
+| Extensions | `/x/<adapter>/` | Adapter-defined; read-only by default | Virtual cursor view | Adapter |
+
+An extension route selects the active adapter's view for the addressed user.
+It is independent of private `:adapters/<name>` storage and exposes nothing
+unless the adapter opts in. Standard accessors and CRUD capabilities apply;
+writable views use the authoritative venue's atomic updates. See
+[ADAPTERS.md](ADAPTERS.md#user-visible-extension-routes) for the hook contract.
 
 ### 4.2 Storage Type Rationale
 
@@ -134,7 +152,7 @@ Lifecycle-managed execution records. Created by `invoke()`, transition through a
 
 **Lifecycle:** `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (terminal, sticky), plus the paused family `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED` (resume to `STARTED`).
 
-A job is stored as a single flat record at `/j/<id>` — `{status, op, input, output?, error?, caller, created, updated, ...}` — with the prior record embedded under `prev`, forming a structurally content-addressed state-history chain. Terminal states are **sticky**: the CAS update path refuses transitions out of a terminal state, so the terminal record's `output`/`error` never change (the record entry itself remains deletable and secret-redacted on every durable write).
+A job is stored as a single current-state record at `/j/<id>` — `{status, op, input, output?, error?, caller, created, updated, ...}`. Updates replace the state without retaining earlier versions. Legacy top-level `prev` links are ignored on reads and removed on the next write, without a startup scan. Terminal states are **sticky**: the CAS update path refuses transitions out of a terminal state, so the terminal record's `output`/`error` never change (the record entry itself remains deletable and secret-redacted on every durable write).
 
 ```json
 {
@@ -330,15 +348,14 @@ Mutable data space for agents and users. Persistent storage for user and agent d
 - Non-JSON structures will store and hash correctly but won't render nicely in UIs or chain through operations cleanly
 
 User-managed data may live at any writable path the user chooses, with
-operation-specific defaults such as `w/memory`. Framework adapters instead
-keep adapter-global durable state in the venue principal's well-known private
-subtree: `<venue-did>/w/adapters/<adapter>/`. Adapter-owned records associated
-with a user are conventionally keyed below `users/<did>/`; that association is
-not an access grant, and the adapter owns and validates the schema. Credentials
-never belong there: records hold `s/NAME` references and secret material stays
-in `/s/`. Public adapter declarations and facts remain separately discoverable
-under `v/adapters/<adapter>/`. The complete adapter storage and publication
-contract is in [ADAPTERS.md](ADAPTERS.md#private-state-and-user-managed-storage).
+operation-specific defaults such as `w/memory`. Adapter-owned state instead lives directly under the venue's
+`:adapters/<name>` region. Each adapter defines its own value and domain
+components; these share the running venue's atomic transaction boundary.
+Messaging uses `users/<did>` and `config/<name>` within its own state, but there
+is no universal adapter schema. Credentials remain in `/s/`. Public adapter
+declarations remain under `v/adapters/<name>/`. See [ADAPTERS.md](ADAPTERS.md)
+for owner-bound worker views, deletion hooks and lazy migration from the older
+venue-principal workspace layout.
 
 #### `/s/` — Secrets
 
@@ -964,6 +981,13 @@ For day-to-day operations, the venue works directly with its cursor. It does not
 
 ### A.2 Merge Semantics
 
+The signed venue value stores `:version` next to `:did` and `:timestamp`.
+It is the integer storage format version, not the software version or the LWW
+ordering stamp. Missing means legacy `0`. Initialization validates compatibility
+and applies ordered migrations atomically with their version changes, before
+bootstrap or workers. Version `1` permits lazy adapter-record migration without
+startup scans. See [Venue versions and migrations](PERSISTENCE.md#venue-versions-and-migrations).
+
 The venue **`:value` is a single navigable whole-value-LWW node.** It carries a
 wall-clock `:timestamp`, re-stamped on every write (never inflated — a stamp is
 real time, never a `+1` logical bump). On merge, the value with the newer
@@ -981,20 +1005,22 @@ current authoritative value. Merge sites must therefore place current local
 state in the `own` position. See covia#214 and Convex-Dev/convex#641 for the
 analysis.
 
-This is correct because a venue has a **single authoritative writer**: its signing
-key under `:grid → :venues → OwnerLattice → SignedLattice`. Every merge a venue
-performs — propagator merge-back, reload from the Etch store, replica restore — is
-therefore a *stale-vs-fresh snapshot of the same lineage*, never a reconciliation
-of independent concurrent writers. "Newest coherent snapshot wins" is the right
-CRDT for that; per-entry LWW would add no value and would resurrect deleted keys.
+This relies on a venue having **one authoritative running instance**, whose
+updates are atomically ordered. `OwnerLattice → SignedLattice` authenticates its
+snapshots; possession of the signing key does not prevent two processes from
+running. Deployment and failover must fence the previous writer. Supported
+reconciliation compares snapshots of that one lineage for backup, replication
+and recovery. Independently executing forks are outside this contract: choosing
+one snapshot discards the other's changes and cannot undo its external effects.
+Per-entry LWW cannot preserve arbitrary application invariants either.
 
-The **interior** of `:value` (`:assets`, `:storage`, `:did`, `:users`, `:schedule`,
+The **interior** of `:value` (`:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`,
 `:user-data → <DID> → {j, g, s, w, o, h, a}`) is structurally navigable but
 carries no independent merge semantics — the merge happens only at the `:value`
 root. Writes are stamped on the way up by a
 **stamp-on-write boundary** that sources its timestamp from the write clock on the
-`LatticeContext` (the convex `StampingLattice` / `StampedCursor`). The `w`/`o`/`h`
-user namespaces are `WrapperLattice` regions, stored as a `{updated, data}`
+`LatticeContext` (the convex `StampedCursor`). The `w`/`o`/`h`
+user namespaces are `WorkspaceRoot` regions, stored as a `{updated, data}`
 container whose `data` is the caller-visible value. The container is a **view
 boundary in the lattice**, not a path convention: navigating `w/foo` crosses it
 and reads or replaces `w.data.foo`. Changed writes preserve the physical
@@ -1074,18 +1100,28 @@ shared root through the signed owner boundary:
 startup: Engine → connected VenueState
 request A: component update job X → signed root
 request B: component update job Y → signed root
-publication: application.sync() → current root
+publication: application.host().sync() → current root
 ```
 
 Direct `updateAndGet` calls on sub-cursors remain atomic because they ultimately
-replace the shared application root with compare-and-swap. A short-lived child
-fork is reserved for cases such as bootstrap materialisation that must validate
-several writes before committing them together. That transaction forks only the
-venue-owned `w/global` workspace, not the whole venue. Because the JSON regions
-below the venue's LWW node define no merge, such a fork is a staging copy: the
-transaction commits by replaying its validated writes in one `updateAndGet` on
-the connected cursor. Request duration and persistence cadence are not
-transaction boundaries.
+replace the shared application root with compare-and-swap. Compound domain edits
+use upstream `TransactionalComponent.transact`: callbacks operate on isolated
+views of the same domain objects, and commit retries the domain operations if
+concurrent state changed. Exceptions discard the attempt. Bootstrap uses this
+contract over the venue-owned `w/global` workspace. No manual write replay or
+local transaction framework is involved. Request duration and persistence cadence
+are not transaction boundaries.
+
+**Venue execution and snapshot recovery are different operations.** A venue is
+an atomically updated running lattice application instance with one authoritative
+writer. LWW selects a complete venue snapshot for backup, replication and
+failover. It cannot generally merge independently executing forks: cross-component
+invariants, decisions and external outputs have no arbitrary conflict-free merge.
+`VenueState.fork().sync()` therefore selects a snapshot; it is not a way to commit
+concurrent work. Live operations use `transact`, which retries against the current
+state. Interior components, including adapters, have no independent publication
+policy. Failover must fence the old writer before activating its replacement;
+snapshot selection alone neither elects a leader nor reverses external effects.
 
 The timestamp is not a local sequence number. Local writes are not merged with
 the preceding local value: their successful atomic update order determines the
@@ -1096,18 +1132,20 @@ the venue keeps its own current authoritative value.
 ### A.4 Signing Strategy: Sign Connected Updates, Verify Early
 
 The venue's Ed25519 keypair signs each successful connected component mutation
-as it crosses the `SignedCursor` boundary. A bounded transaction fork accumulates
-private writes and produces one signature when the component commits it — a
-whole-venue `sync()`, or one replayed `updateAndGet` for a narrow fork.
+as it crosses the `SignedCursor` boundary. A transaction accumulates private
+writes and signs the completed venue value at commit. An uncontended changed
+transaction signs once; an unchanged transaction does not sign. Signing failure
+leaves live state unchanged. Rebinding restores editing policies on the draft,
+while commit targets bound storage so those policies are not applied twice.
 
 ```
 [Component mutation] → atomic cursor update → sign venue owner value
                                                |
-                              application.sync() publishes current root
+                              application.host().sync() publishes current root
 ```
 
 Signing and persistence are deliberately separate. Signing makes a successful
-state transition authoritative in memory; `application.sync()` publishes the
+state transition authoritative in memory; `application.host().sync()` publishes the
 current root and `application.flush()` supplies the physical durability barrier.
 This keeps Engine state coherent for local and embedded consumers without a
 second long-lived working copy.
@@ -1173,9 +1211,9 @@ multi-writer lattice joins.
 | `CASLattice<K,V>` | Content-addressed union merge |
 | `JSONLattice` | Structural navigation only — builds a container per key shape; recursive `path`; `merge` throws (merge belongs to the enclosing node, never per-key) |
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
-| `StampingLattice<V>` | Stamp-on-write boundary — inserts a `StampedCursor` that re-stamps a value on write, sourcing the timestamp from `LatticeContext`; delegates merge and navigation to an inner lattice |
+| `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
-| `WrapperLattice` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; navigation and merge are the inner JSON region's |
+| `WorkspaceRoot` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; merge remains at the enclosing venue |
 | `LatticeContext` | Live application policy for clock, signing and owner verification; installed once at the hosted root and resolved per logical write |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
@@ -1188,14 +1226,14 @@ legacy-compatible workspace envelope:
 | Definition | Type | Purpose |
 |------------|------|---------|
 | `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
-| `Covia.VENUE` | `StampingLattice` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
+| `Covia.VENUE` | `StampedCursor` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
 | `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
-| Venue interior | `KeyedLattice` (structural children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:user-data` — navigated structurally; merged only at `:value` |
-| `:schedule` | `StampingLattice` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
-| `:user-data → <DID>` | `MapLattice` → `StampingLattice` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
-| `j` / each Job | `IndexLattice` → `StampingLattice` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
-| `g` / each agent | `MapLattice` → `StampingLattice` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
+| Venue interior | `KeyedLattice` (structural children) | `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:user-data` — navigated structurally; merged only at `:value` |
+| `:schedule` | `StampedCursor` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
+| `:user-data → <DID>` | `MapLattice` → `StampedCursor` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
+| `j` / each Job | `IndexLattice` → `StampedCursor` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
+| `g` / each agent | `MapLattice` → `StampedCursor` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
 | `s` / `a` | `JSONLattice` | Plain structural navigation |
-| `w` / `o` / `h` | `WrapperLattice` | Existing `{updated, data}` container presented as its `data` |
+| `w` / `o` / `h` | `WorkspaceRoot` | Existing `{updated, data}` container presented as its `data` |
 | `:grid → :meta` | `CASLattice` | Shared content-addressed metadata (multi-writer union) |
 | `:dlfs` | `OwnerLattice` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |

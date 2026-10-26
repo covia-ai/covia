@@ -294,6 +294,37 @@ public class VenueStartupTest {
 		}
 	}
 
+	/**
+	 * VenueServer prepares with the start-up adapters, so a built-in adapter's
+	 * newer state refuses the start inside the venue's start-up transaction:
+	 * the venue's own 0 → 1 step and identity are discarded with it.
+	 */
+	@Test
+	public void launchRefusesNewerAdapterStateWithTheStoreUntouched() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		EtchStore store = EtchStore.createTemp("startup-newer-adapter");
+		java.io.File file = store.getFile();
+		CoviaApplication application = CoviaApplication.open(store, key);
+		application.venue(key.getAccountKey()).cursor().set(convex.core.data.Index.<convex.core.data.Keyword, ACell>none()
+			.assoc(covia.lattice.Covia.ADAPTERS, Maps.of("test", Maps.of("users", Maps.empty())))
+			.assoc(covia.lattice.Covia.ADAPTER_VERSIONS, Maps.of("test", 2L)));
+		application.host().sync();
+		application.host().flush();
+		ACell before = store.getRootData();
+
+		RuntimeException failure = assertThrows(RuntimeException.class,
+			() -> VenueServer.launch(config(key, 0), store, List.of(), null));
+		Throwable cause = failure;
+		while (cause != null && !(cause instanceof UnsupportedVersionException)) cause = cause.getCause();
+		UnsupportedVersionException refused = assertInstanceOf(UnsupportedVersionException.class, cause);
+		assertEquals("test", refused.adapter());
+		assertEquals(2, refused.stored());
+		assertEquals(1, refused.supported());
+		try (EtchStore reopened = EtchStore.create(file)) {
+			assertEquals(before, reopened.getRootData(), "the refused start wrote nothing");
+		}
+	}
+
 	@Test
 	public void failedWorkerActivationClosesAdapterAndStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
@@ -385,7 +416,7 @@ public class VenueStartupTest {
 				engine.close();
 			}
 			// Engine borrows the application/host/store, unlike VenueServer's adopted store.
-			application.flush();
+			application.host().flush();
 			Engine probe = new Engine(config, application, key).prepare();
 			try {
 				assertSame(probe, probe.launch());
@@ -415,7 +446,7 @@ public class VenueStartupTest {
 			} finally {
 				engine.close();
 			}
-			application.flush();
+			application.host().flush();
 		}
 	}
 
@@ -453,7 +484,7 @@ public class VenueStartupTest {
 			} finally {
 				engine.close();
 			}
-			application.flush();
+			application.host().flush();
 		}
 	}
 
@@ -480,7 +511,7 @@ public class VenueStartupTest {
 			} finally {
 				engine.close();
 			}
-			application.flush();
+			application.host().flush();
 		}
 	}
 

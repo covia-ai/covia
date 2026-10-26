@@ -19,7 +19,7 @@ The canonical adapter table lives in `venue/CLAUDE.md` ("Adapter Reference"). Gr
 | Agents | `agent`, `llmagent`, `goaltree`, `skills`, `hitl` |
 | Federation | `grid`, `ucan` |
 | Admin | `user`, `venue` (runtime adapter/module lifecycle) |
-| Modules (not in covia.jar) | `sql` (covia-sql), `python` (covia-python-adapter), `telegram` (covia-telegram), `discord` (covia-discord), `sonnylabs` (covia-sonnylabs), `claudecode` (covia-claude-code) |
+| Modules (not in covia.jar) | `sql` (covia-sql), `python` (covia-python-adapter), `telegram` (covia-telegram), `discord` (covia-discord), `sonnylabs` (covia-sonnylabs), `speech` (covia-speech), `claudecode` (covia-claude-code) |
 | Testing | `test` |
 
 **Kernel adapters** — `covia`, `agent`, `dlfs`, `hitl`, `http`, `file`, `grid`, `venue` — are adapters the standard venue commonly depends on. The marker is informational: venue-authorised configuration and module lifecycle operations may still replace, disable or remove them.
@@ -170,7 +170,7 @@ For changes that must survive restarts, edit the venue config instead (see `venu
 
 ## Writing a new adapter
 
-Follow the canonical developer contract in `venue/docs/ADAPTERS.md`: it covers `AAdapter` invocation, configuration validation, catalog and introspection publication, private `AdapterWorkspace` state versus user-managed storage, capability enforcement, lifecycle, tests, and optional module packaging. Ship it in `covia.jar` or as a module jar (`META-INF/services/covia.adapter.AAdapter`, shaded, `venue` provided-scope).
+Follow the canonical developer contract in `venue/docs/ADAPTERS.md`: it covers `AAdapter` invocation, configuration validation, catalog and introspection publication, private `AdapterState` state versus user-managed storage, capability enforcement, lifecycle, tests, and optional module packaging. Ship it in `covia.jar` or as a module jar (`META-INF/services/covia.adapter.AAdapter`, shaded, `venue` provided-scope).
 
 ## Troubleshooting
 

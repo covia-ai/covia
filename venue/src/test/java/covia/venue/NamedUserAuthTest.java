@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -179,6 +182,43 @@ public class NamedUserAuthTest {
 		AuthException e = assertThrows(AuthException.class,
 			() -> server.authenticator().authenticate(Strings.create(token)));
 		return e.getMessage();
+	}
+
+	@Test
+	void installationMembershipDoesNotAdmitItsUsers() throws Exception {
+		Engine engine = server.getEngine();
+		AKeyPair installKey = AKeyPair.generate();
+		AString installDID = UCAN.toDIDKey(installKey.getAccountKey());
+		AString userDID = Strings.create(installDID + ":u:alice");
+		engine.getVenueState().users().create(installDID);
+		String audience = engine.getDIDString().toString();
+		VenueAuth installAuth = VenueAuth.keyPair(installKey, audience);
+		VenueAuth userAuth = VenueAuth.namedKeyPair(installKey, userDID.toString(), audience, 300);
+		assertEquals(userDID, server.authenticator().authenticate(Strings.create(userAuth.mintToken())));
+		assertTrue(reason(namedToken(installKey, userDID, userDID, null))
+			.contains(VenueAuthenticator.Reason.AUDIENCE_REQUIRED));
+		try (HttpClient http = HttpClient.newHttpClient()) {
+			URI status = URI.create("http://localhost:" + server.port() + "/api/v1/status");
+			HttpRequest.Builder root = HttpRequest.newBuilder(status);
+			installAuth.apply(root);
+			assertEquals(200, http.send(root.build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+			HttpRequest.Builder child = HttpRequest.newBuilder(status);
+			userAuth.apply(child);
+			assertEquals(403, http.send(child.build(), HttpResponse.BodyHandlers.ofString()).statusCode(),
+				"valid child authentication must not borrow the installation's membership");
+			engine.getVenueState().users().create(userDID);
+			assertEquals(200, http.send(child.build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+		}
+		// Once independently admitted, bare paths use the child's own namespace.
+		AString path = Strings.create("w/installation-user");
+		client(installAuth).invokeAndWait(Strings.create("v/ops/covia/write"),
+			Maps.of(Fields.PATH, path, Fields.VALUE, "installation")).awaitResult(5000);
+		client(userAuth).invokeAndWait(Strings.create("v/ops/covia/write"),
+			Maps.of(Fields.PATH, path, Fields.VALUE, "child")).awaitResult(5000);
+		assertEquals(Strings.create("installation"), RT.getIn(client(installAuth)
+			.invokeAndWait(Strings.create("v/ops/covia/read"), Maps.of(Fields.PATH, path)).awaitResult(5000), Fields.VALUE));
+		assertEquals(Strings.create("child"), RT.getIn(client(userAuth)
+			.invokeAndWait(Strings.create("v/ops/covia/read"), Maps.of(Fields.PATH, path)).awaitResult(5000), Fields.VALUE));
 	}
 
 	@Test

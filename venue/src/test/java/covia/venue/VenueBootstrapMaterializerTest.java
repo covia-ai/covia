@@ -121,12 +121,18 @@ public class VenueBootstrapMaterializerTest {
 			Blob jobId = Blob.parse("0x0102");
 			User user = engine.getVenueState().users().ensure(did);
 			user.persistJob(jobId, Maps.of(Fields.STATUS, covia.grid.Status.PENDING));
+			engine.getVenueState().users().get(engine.getDIDString()).writeInternalPath(
+				new ACell[] {Strings.intern("w"), Strings.intern("global"), Strings.intern("concurrent")},
+				Strings.create("keep"));
 
 			adapter.allowCommit.countDown();
 			registration.get(5, TimeUnit.SECONDS);
 
 			assertNotNull(user.getJob(jobId),
 				"the workspace transaction must not replace an unrelated user update");
+			assertEquals(Strings.create("keep"), engine.resolvePath(
+				Strings.create("v/concurrent"), engine.venueContext()),
+				"a conflict inside the same workspace must retry against the current value");
 			assertNotNull(engine.resolvePath(
 				Strings.create("v/info/adapters/blocking-summary"), engine.venueContext()),
 				"the workspace transaction must still commit its catalog update");

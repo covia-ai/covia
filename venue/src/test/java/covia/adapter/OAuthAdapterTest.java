@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -36,6 +37,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -145,7 +147,7 @@ public class OAuthAdapterTest {
 		Engine.addDemoAssets(engine);
 		((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("localhost");
 		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
-		venueUser.secrets().store("FAKE_SECRET", "shh", SecretStore.deriveKey(engine.getKeyPair()));
+		venueUser.secrets().store("FAKE_SECRET", "shh", SecretStore.keys(engine.getKeyPair()));
 		return engine;
 	}
 
@@ -274,6 +276,47 @@ public class OAuthAdapterTest {
 				assertNotNull(info);
 				assertFalse(String.valueOf(info).contains("shh"));
 				assertNotNull(engine.resolvePath(Strings.create("v/skills/auth/oauth"), engine.venueContext()));
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	private static void connectFake(Engine engine, FakeProvider fake, RequestContext ctx) {
+		ACell started = ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake"), ctx));
+		Map<String, String> q = query(RT.getIn(started, "url").toString());
+		fake.expectedChallenge = q.get("code_challenge");
+		assertTrue(engine.findAdapter(OAuthAdapter.class).complete("fake", q.get("state"), "code-1", null, null).ok());
+	}
+
+	@Test
+	public void testConnectionTokenIsASecretUse() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				connectFake(engine, fake, alice);
+				AMap<AString, ACell> me = Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake");
+				AMap<AString, ACell> invokeAny = Maps.of(Capability.CAN, Strings.create("invoke"));
+
+				// An agent of Alice's with only invoke cannot send her token anywhere.
+				RequestContext invokeOnly = RequestContext.ofAgent(aliceDID, Strings.create("worker"))
+					.withCaps(Vectors.of(invokeAny));
+				String refused = failed(run(engine, "v/ops/http/get", me, invokeOnly));
+				assertTrue(refused.contains(Abilities.SECRET_USE.toString()), refused);
+
+				// A secret/use grant bound to a url prefix releases it there only.
+				RequestContext bound = RequestContext.ofAgent(aliceDID, Strings.create("worker"))
+					.withCaps(Vectors.of(invokeAny, Capability.create(Strings.create("s/oauth/fake"),
+						Abilities.SECRET_USE, Maps.of("url", fake.base() + "/api/"))));
+				assertEquals("Bearer access-1", RT.getIn(ok(run(engine, "v/ops/http/get", me, bound)), "body").toString());
+				String elsewhere = failed(run(engine, "v/ops/http/get",
+					Maps.of("url", fake.base() + "/token", "bearerSecret", "oauth/fake"), bound));
+				assertTrue(elsewhere.contains(Abilities.SECRET_USE.toString()), elsewhere);
+
+				// The owner uses their own connection as of right.
+				assertEquals("Bearer access-1", RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
 			} finally {
 				engine.close();
 			}

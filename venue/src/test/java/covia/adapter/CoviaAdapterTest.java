@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import covia.lattice.WorkspaceRoot;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -1472,8 +1473,8 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testDeepSetCreatesIntermediateMaps() {
-		ACell[] keys = CoviaAdapter.parseStringPath("w/a/b/c");
-		ACell result = CoviaAdapter.deepSet(null, keys, 2, Strings.create("leaf"));
+		ACell[] keys = WorkspaceRoot.parseStringPath("w/a/b/c");
+		ACell result = WorkspaceRoot.deepSet(null, keys, 2, Strings.create("leaf"));
 
 		// Should create {b: {c: "leaf"}}
 		assertNotNull(result);
@@ -1483,8 +1484,8 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeletePreservesSiblings() {
 		ACell root = Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2));
-		ACell[] keys = CoviaAdapter.parseStringPath("w/entry/x");
-		ACell result = CoviaAdapter.deepDelete(root, keys, 2);
+		ACell[] keys = WorkspaceRoot.parseStringPath("w/entry/x");
+		ACell result = WorkspaceRoot.deepDelete(root, keys, 2);
 
 		// y should remain, x should be gone
 		assertNotNull(result);
@@ -1495,9 +1496,9 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeleteMissingBranchIsExactNoOp() {
 		ACell root = Maps.of("present", Maps.of("value", CVMLong.ONE));
-		ACell[] keys = CoviaAdapter.parseStringPath("w/missing/leaf");
+		ACell[] keys = WorkspaceRoot.parseStringPath("w/missing/leaf");
 
-		ACell result = CoviaAdapter.deepDelete(root, keys, 1);
+		ACell result = WorkspaceRoot.deepDelete(root, keys, 1);
 
 		assertSame(root, result, "delete must not materialise a missing branch as null");
 	}
@@ -1964,7 +1965,7 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testParseStringPath() {
-		ACell[] keys = CoviaAdapter.parseStringPath("g/my-agent/timeline/3");
+		ACell[] keys = WorkspaceRoot.parseStringPath("g/my-agent/timeline/3");
 		assertEquals(4, keys.length);
 		assertEquals(Strings.create("g"), keys[0]);
 		assertEquals(Strings.create("my-agent"), keys[1]);
@@ -1975,9 +1976,9 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testParseEmptyPath() {
-		assertEquals(0, CoviaAdapter.parseStringPath("").length);
-		assertEquals(0, CoviaAdapter.parseStringPath(null).length);
-		assertEquals(0, CoviaAdapter.parseStringPath("/").length);
+		assertEquals(0, WorkspaceRoot.parseStringPath("").length);
+		assertEquals(0, WorkspaceRoot.parseStringPath(null).length);
+		assertEquals(0, WorkspaceRoot.parseStringPath("/").length);
 	}
 
 	// ========== Agent workspace (n/ prefix) ==========
@@ -2732,7 +2733,7 @@ public class CoviaAdapterTest {
 		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACell[] keys = CoviaAdapter.parseStringPath("c/draft");
+		ACell[] keys = WorkspaceRoot.parseStringPath("c/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
 		// The cursor sits at the session record; the keys name its scratch slot.
@@ -2741,8 +2742,6 @@ public class CoviaAdapterTest {
 		assertEquals(2, vns.remainingKeys().length);
 		// Scoped scratch must never mint a phantom session.
 		assertTrue(vns.requireExistingRecord());
-		assertNull(vns.recordTimestampKey(),
-			"the enclosing agent lattice stamps a session write");
 	}
 
 	@Test
@@ -2752,16 +2751,14 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx,
-			CoviaAdapter.parseStringPath("n/draft"));
+			WorkspaceRoot.parseStringPath("n/draft"));
 
 		assertNotNull(vns);
 		assertEquals(engine.getVenueState().users().get(ALICE.getUserDID())
-			.agent(agentId).getRecord(), vns.cursor().get());
+			.agent(agentId).getRecord(), vns.cursor().cursor().get());
 		assertArrayEquals(new ACell[] {Strings.intern("n"), Strings.intern("draft")},
 			vns.remainingKeys());
 		assertTrue(vns.requireExistingRecord());
-		assertEquals(Strings.intern("ts"), vns.recordTimestampKey(),
-			"a resolver positioned at the agent boundary must identify its record stamp");
 	}
 
 	@Test
@@ -2789,17 +2786,15 @@ public class CoviaAdapterTest {
 		user.persistJob(taskId, Maps.of(Fields.ID, taskId));
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACell[] keys = CoviaAdapter.parseStringPath("t/draft");
+		ACell[] keys = WorkspaceRoot.parseStringPath("t/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
 		assertEquals("temp", vns.remainingKeys()[0].toString());
 		assertEquals("draft", vns.remainingKeys()[1].toString());
 		assertTrue(vns.requireExistingRecord());
-		assertEquals(Fields.UPDATED, vns.recordTimestampKey(),
-			"a resolver positioned at the Job boundary must identify its record stamp");
 
 		// The cursor must be the FOCUSED TASK's Job record, not the transition Job's.
-		assertEquals(user.getJob(taskId), vns.cursor().get(),
+		assertEquals(user.getJob(taskId), vns.cursor().cursor().get(),
 			"t/ must resolve to the focused task Job");
 	}
 
@@ -2813,14 +2808,13 @@ public class CoviaAdapterTest {
 		user.persistJob(jobId, Maps.of(Fields.ID, jobId));
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACell[] keys = CoviaAdapter.parseStringPath("t/draft");
+		ACell[] keys = WorkspaceRoot.parseStringPath("t/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
 		assertEquals("temp", vns.remainingKeys()[0].toString());
 		assertTrue(vns.requireExistingRecord());
-		assertEquals(Fields.UPDATED, vns.recordTimestampKey());
 
-		assertEquals(user.getJob(jobId), vns.cursor().get(),
+		assertEquals(user.getJob(jobId), vns.cursor().cursor().get(),
 			"t/ must resolve to the current Job record");
 	}
 

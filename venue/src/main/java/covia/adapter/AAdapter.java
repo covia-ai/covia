@@ -18,14 +18,41 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
-import covia.venue.AdapterWorkspace;
+import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 public abstract class AAdapter {
+	public static final String LATTICE_READ_ONLY = "Adapter lattice view is read-only";
+
+	/**
+	 * Opt-in, user-visible lattice at x/adapterName. Return a connected cursor or
+	 * a pure projected snapshot, or null to expose nothing. Resolution must be
+	 * local and side-effect-free; never return the entire private adapter state
+	 * unless every field is intentionally visible to this user. Use the supplied
+	 * context's user DID for ownership and retain account lifecycle guards.
+	 * Views live for one operation/transaction and must not be cached.
+	 * The default is no route; exposed views are read-only unless opted in below.
+	 */
+	public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+		return null;
+	}
+
+	/**
+	 * Additional write/delete policy for a path relative to this adapter's view.
+	 * Ordinary CRUD capabilities are enforced by the router as well. Keep this
+	 * pure: it can run again during an atomic update. Writable views must commit
+	 * to their authoritative lattice state, not to a disposable snapshot.
+	 * Return null to allow, or a refusal reason that reaches the caller unchanged.
+	 * The adapter also owns value validation in its cursor write transformation.
+	 */
+	public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+		return LATTICE_READ_ONLY;
+	}
 
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
 	private static final int MAX_FAILURE_CHARS = 1024;
@@ -37,7 +64,7 @@ public abstract class AAdapter {
 	public static final ExecutorService VIRTUAL_EXECUTOR = ThreadUtils.getVirtualExecutor();
 
 	public Engine engine;
-	private AdapterWorkspace adapterWorkspace;
+	private AdapterState adapterState;
 	/** Explicit public operation declarations, independent of mutable catalogue bindings. */
 	private AMap<AString, AMap<AString, ACell>> operations = Maps.empty();
 	public static final String INVALID_OPERATION_NAME = "Operation name must not be blank";
@@ -100,7 +127,8 @@ public abstract class AAdapter {
 	 * needs to know to connect. Published when the adapter is materialised and
 	 * again after every {@link #configure} so it reflects the effective
 	 * configuration; keep it to facts that hold until the next reconfigure —
-	 * live state (counts, connections, sessions) belongs in an operation.
+	 * live state (counts, connections, sessions) belongs in an operation or
+	 * an explicit {@link #latticeView(RequestContext)}.
 	 *
 	 * <p>The framework keys {@code name}, {@code description}, {@code kernel},
 	 * {@code module} and {@code operations} are reserved and win over anything
@@ -121,7 +149,7 @@ public abstract class AAdapter {
 
 	public void install(Engine engine) {
 		this.engine=engine;
-		this.adapterWorkspace=engine.adapterWorkspace(getName());
+		this.adapterState=engine.adapterState(getName());
 		installAssets();
 	}
 
@@ -146,22 +174,127 @@ public abstract class AAdapter {
 		// Most adapters have no autonomous workers.
 	}
 
+	public static final String NO_STATE_MIGRATION = "Adapter '%s' has no state migration from version %d";
+
 	/**
-	 * Durable state owned by this adapter in the venue principal's private
-	 * workspace at {@code w/adapters/<name>/}. The returned handle is permanently
-	 * bound to both this adapter name and the venue identity; invocation contexts
-	 * cannot redirect it into a caller's workspace.
+	 * Version of the private state schema this adapter reads and writes at
+	 * {@code :adapters/<name>}. 0, the default, means the adapter does not
+	 * version its state. Raise it when the stored shape changes, and give the
+	 * step from the previous version in {@link #migrateState}. The venue records
+	 * the version each adapter's state has reached, so a step runs once per
+	 * venue. Stored state recorded at a version above this one is refused with a
+	 * {@link covia.venue.UnsupportedVersionException}.
+	 */
+	public long stateVersion() {
+		return 0;
+	}
+
+	/**
+	 * Migrates this adapter's state from {@code version} to {@code version + 1}.
+	 * Steps run in order from the recorded version to {@link #stateVersion()},
+	 * enabled or disabled, before {@link #configure}, install and any deletion
+	 * hook. A built-in or configured-module adapter migrates at launch, after the
+	 * venue's own steps, in the one transaction that opens the venue; an adapter
+	 * registered later migrates in its own transaction as it registers. The new
+	 * version is recorded with the steps. A venue holding no state for this
+	 * adapter records its version, lower or higher, without calling it.
+	 *
+	 * <p>Must be a pure function of its arguments: no I/O, no engine calls, no
+	 * clock, no runtime changes, no configuration. The transaction may run it
+	 * again or discard its result. Return the same cell when nothing changes.
+	 * Throw for a shape it does not recognise: the state and its version then
+	 * stay as they were, and the start or registration fails.</p>
+	 *
+	 * @param version the version {@code state} is at, below {@link #stateVersion()}
+	 * @param state this adapter's state at that version, never null
+	 * @return the state at {@code version + 1}
+	 */
+	public ACell migrateState(long version, ACell state) {
+		throw new IllegalStateException(NO_STATE_MIGRATION.formatted(getName(), version));
+	}
+
+	/**
+	 * This adapter's state migration rules as plain data, for
+	 * {@link covia.venue.VenueState#migrate(java.util.List)}: an embedder that
+	 * migrates a venue itself passes its adapters' rules with it.
+	 */
+	public final covia.venue.VenueState.AdapterMigration stateMigration() {
+		return new covia.venue.VenueState.AdapterMigration(getName(), stateVersion(), this::migrateState);
+	}
+
+	public static final String STATES_FOR_EVERY_VERSION = "Adapter '%s' is at state version %d: give its state at versions 0 to %d";
+	public static final String STEPS_MISS_CURRENT = "Adapter '%s' state from version %d does not reach its state at version %d";
+	public static final String STEP_FAILED = "Adapter '%s' state from version %d failed to migrate: %s";
+
+	/**
+	 * Checks this adapter's migration rules against its state at every version,
+	 * oldest first, for the adapter's own tests: from each older version, the
+	 * steps must reach the state given for {@link #stateVersion()}. An adapter
+	 * that raises its version without a state for the new version fails the
+	 * check, so its migration cannot go untested.
+	 *
+	 * @param statesByVersion this adapter's state at versions 0 to {@link #stateVersion()}
+	 * @return null when the rules hold; otherwise the reason they do not
+	 */
+	public final String checkStateMigration(java.util.List<? extends ACell> statesByVersion) {
+		long version = stateVersion();
+		if (statesByVersion.size() != version + 1) return STATES_FOR_EVERY_VERSION.formatted(getName(), version, version);
+		ACell current = statesByVersion.get((int) version);
+		for (int from = 0; from < version; from++) {
+			ACell state = statesByVersion.get(from);
+			try {
+				for (long v = from; v < version; v++) state = migrateState(v, state);
+			} catch (RuntimeException e) {
+				return STEP_FAILED.formatted(getName(), from, e.getMessage());
+			}
+			if (!java.util.Objects.equals(current, state)) return STEPS_MISS_CURRENT.formatted(getName(), from, version);
+		}
+		return null;
+	}
+
+	/**
+	 * Remove user-associated durable state in the venue deletion transaction.
+	 * Use only the supplied draft component: this callback may be retried and
+	 * must perform no I/O, runtime changes, or writes through the live engine.
+	 * Override when this adapter holds user associations: the framework does not
+	 * interpret its schema. Unloaded adapters retain pending cleanup until activation.
+	 * Called for disabled/uninstalled instances too; do not depend on install.
+	 */
+	public void deleteUserState(AString did, AdapterState state) {
+		// Default for adapters with no user-associated state.
+	}
+
+	/**
+	 * Stop user-owned workers and release external resources after deletion commits.
+	 * Must be idempotent; failures retain a durable retry marker and bar account
+	 * recreation. Previous user state is supplied on first deletion only, and is
+	 * null on recovery. Never use it to restore data. Called on disabled adapters
+	 * too; an instance that has never been installed has no runtime to clean up.
+	 */
+	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+		// Most adapters have no user-owned runtime resources.
+	}
+
+	/**
+	 * Durable component at {@code :adapters/<name>} within the venue value.
+	 * The adapter owns its shape and may bind typed domain components to its cursor.
 	 *
 	 * <p>User-managed content does not belong here. Adapters should accept an
 	 * ordinary caller-authorised path for that data (with a sane {@code w/...}
-	 * default). Credentials remain in {@code s/}; this workspace stores secret
+	 * default). Credentials remain in {@code s/}; this component stores secret
 	 * references only.</p>
 	 */
-	protected final AdapterWorkspace adapterWorkspace() {
-		AdapterWorkspace workspace=adapterWorkspace;
-		if (workspace==null) throw new IllegalStateException(
-			"Adapter workspace is unavailable before install: "+getName());
-		return workspace;
+	protected final AdapterState adapterState() {
+		AdapterState state=adapterState;
+		if (state==null) throw new IllegalStateException(
+			"Adapter state is unavailable before install: "+getName());
+		return state;
+	}
+
+	/** Capture this view once when creating a user-owned worker. */
+	protected final AdapterState adapterState(AString owner) {
+		adapterState(); // require installation
+		return engine.adapterState(getName(), java.util.Objects.requireNonNull(owner));
 	}
 
 	/**

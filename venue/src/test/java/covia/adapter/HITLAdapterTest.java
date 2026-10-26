@@ -2,6 +2,8 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.concurrent.TimeUnit;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -184,13 +186,157 @@ public class HITLAdapterTest {
 		assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
 			agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
 		TestEngine.awaitTimelineCount(agent, 1, 10000);
-		String conversation = RT.getIn(owner.agent("hitl-agent").getSession(sid),
-			Fields.FRAMES, CVMLong.ZERO, Strings.intern("conversation")).toString();
+		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
+			RT.getIn(owner.agent("hitl-agent").getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
 			"the human answer must arrive in the asking session: " + conversation);
 	}
 
+	@Test
+	public void resolutionAndSessionDeliveryRollbackTogetherAndSurviveRestart() throws Exception {
+		// TestTemp, not @TempDir: on Java 21 (no FFM mapper) a closed store's file
+		// stays mapped until GC, and Windows will not delete a mapped file.
+		var temp = covia.venue.TestTemp.dir("hitl-rollback");
+		AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
+			Config.STORE, temp.resolve("hitl.etch").toString(), Config.SEED, AKeyPair.createSeeded(7481).getSeed().toHexString());
+		AString owner = Strings.create("did:test:atomic-hitl");
+		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
+		var failAppend = new java.util.concurrent.atomic.AtomicBoolean(true);
+		var requestId = new java.util.concurrent.atomic.AtomicReference<AString>();
+		var wakes = new java.util.concurrent.atomic.AtomicInteger();
+		var first = covia.venue.server.VenueServer.launch(config);
+		try {
+			Engine e = first.getEngine();
+			Engine.addDemoAssets(e);
+			e.getVenueState().users().ensure(owner);
+			e.registerAdapter(new AgentAdapter() {
+				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
+						AString caller, AString job, ACell message) {
+					assertEquals(Status.COMPLETE, draft.get(owner).job(Blob.fromHex(requestId.get().toString())).getRecord().get(Fields.STATUS),
+						"the final Job result must be part of the same draft as the inbox and session");
+					if (failAppend.get()) {
+						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().get(owner).job(Blob.fromHex(requestId.get().toString())).getRecord().get(Fields.STATUS));
+						assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+						assertTrue(e.getVenueState().users().get(owner).agent("asker").getSessionPending(sid).isEmpty());
+					}
+					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
+					assertFalse(draft.get(owner).agent("asker").getPending().containsKey(Blob.fromHex(requestId.get().toString())),
+						"the draft must clear the completed wait before post-commit notifications");
+					if (failAppend.get()) throw new IllegalStateException("injected delivery failure");
+					return appended;
+				}
+				@Override public java.util.concurrent.CompletableFuture<ACell> wakeAgent(AString user, AString agent, boolean force) {
+					wakes.incrementAndGet(); return java.util.concurrent.CompletableFuture.completedFuture(null);
+				}
+			});
+			var ctx = RequestContext.of(owner);
+			e.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "asker", Fields.CONFIG,
+				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")), ctx).awaitResult(5000);
+			var agent = e.getVenueState().users().get(owner).agent("asker");
+			agent.ensureSession(sid, owner);
+			Job ask = e.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Atomic answer")
+				.ask(Hitl.approval("yes", "Continue?").required()).build(), RequestContext.ofAgent(owner, Strings.create("asker")).withSessionId(sid));
+			assertTrue(agent.getPending().containsKey(ask.getID()), "the agent request must own a durable wait");
+			requestId.set(Strings.create(ask.getID().toHexString()));
+			var answer = Hitl.answer(requestId.get().toString()).answer("yes", true).build();
+			assertThrows(JobFailedException.class, () -> e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000));
+			assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+			assertTrue(agent.getSessionPending(sid).isEmpty());
+			assertEquals(Status.INPUT_REQUIRED, ask.getStatus());
+			assertTrue(agent.getPending().containsKey(ask.getID()), "a rolled-back resolution must retain its wait");
+			failAppend.set(false);
+			wakes.set(0);
+			var responses = new java.util.ArrayList<java.util.concurrent.CompletableFuture<Boolean>>();
+			var failures = new java.util.concurrent.ConcurrentLinkedQueue<String>();
+			for (int n=0; n<6; n++) responses.add(java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+				try { e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000); return true; }
+				catch (JobFailedException expected) { failures.add(expected.getMessage()); return false; }
+			}));
+			int accepted = 0;
+			for (var response : responses) if (response.get(10, java.util.concurrent.TimeUnit.SECONDS)) accepted++;
+			assertEquals(1, accepted, failures.toString());
+			assertEquals(1, wakes.get());
+			assertEquals(1, agent.getSessionPending(sid).count());
+			assertNull(RT.getIn(agent.getSessionPending(sid).get(0), Fields.JOB_ID), "a resolved request must not make its independent message disposable");
+			assertEquals(Status.COMPLETE, ask.getStatus());
+		} finally { first.close(); }
+		var second = covia.venue.server.VenueServer.launch(config);
+		try {
+			var agent = second.getEngine().getVenueState().users().get(owner).agent("asker");
+			TestEngine.awaitTimelineCount(agent, 1, 10000);
+			assertTrue(agent.getSession(sid).toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
+			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+		} finally { second.close(); }
+	}
+
 	// ========== Token transport (COG-19): self-sovereign cross-venue tokens ==========
+
+	@Test
+	public void resolutionCommitsFinalJobBeforeFlushAndSurvivesRestart() throws Exception {
+		var key = AKeyPair.generate();
+		// TestTemp, not @TempDir: on Java 21 (no FFM mapper) a closed store's file
+		// stays mapped until GC, and Windows will not delete a mapped file.
+		var file = covia.venue.TestTemp.dir("hitl-resolved").resolve("resolved-hitl.etch").toFile();
+		class BarrierEngine extends Engine {
+			volatile boolean interruptCompletion;
+			BarrierEngine(convex.etch.EtchStore store) throws java.io.IOException {
+				super(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key);
+			}
+			@Override public void flush() {
+				super.flush();
+				// Fail after saving: all domain records must already agree.
+				if (interruptCompletion && !isClosing()) throw new IllegalStateException("interrupted after persistence");
+			}
+		}
+		Blob answered, rejected, expired;
+		String token = UcanTokens.grant(BOB_KP, BOB_DID.toString(), BOB_DID + "/w/invoices/", "crud/read", HOUR);
+		try (var store = convex.etch.EtchStore.create(file)) {
+			var first = new BarrierEngine(store);
+			first.start();
+			try {
+				Engine.addDemoAssets(first);
+				first.getVenueState().users().ensure(BOB_DID);
+				Job answer = first.jobs().invokeOperation("v/ops/hitl/request", tokenRequest(BOB_DID), BOB);
+				Job reject = first.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Reject me")
+					.ask(Hitl.approval("yes", "Continue?")).build(), BOB);
+				Job expire = first.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Expire me")
+					.ask(Hitl.approval("yes", "Continue?")).build(), BOB);
+				answered = answer.getID(); rejected = reject.getID(); expired = expire.getID();
+				first.interruptCompletion = true;
+				Job answering = first.jobs().invokeOperation("v/ops/hitl/respond", tokenAnswer(answered.toHexString(), token), BOB);
+				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
+				User owner = first.getVenueState().users().get(BOB_DID);
+				AString expiryId = Strings.create(expired.toHexString());
+				owner.putHitlRequest(expiryId, owner.getHitlRequest(expiryId).assoc(Hitl.EXPIRES, CVMLong.ZERO));
+				var expiring = java.util.concurrent.CompletableFuture.runAsync(() ->
+					((HITLAdapter) first.getAdapter("hitl")).rearmExpiries(), AAdapter.VIRTUAL_EXECUTOR);
+				for (Job pending : java.util.List.of(answer, reject, expire)) {
+					long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+					while (!pending.isFinished() && System.nanoTime() < deadline) Thread.sleep(10);
+					assertTrue(pending.isFinished(), "resolution includes the final Job record");
+				}
+				assertThrows(java.util.concurrent.ExecutionException.class, () -> answering.future().get(5, TimeUnit.SECONDS));
+				assertThrows(java.util.concurrent.ExecutionException.class, () -> expiring.get(5, TimeUnit.SECONDS));
+				assertEquals(Status.FAILED, answering.getStatus(), "flush failure is reported without indefinite recovery");
+				assertEquals(Status.COMPLETE, answer.getStatus());
+				assertEquals(Strings.create(token), RT.getIn(answer.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
+				assertFalse(owner.getHitlRequests().toString().contains(token), "h/ must never expose the signed token");
+			} finally { first.close(); }
+		}
+		try (var store = convex.etch.EtchStore.create(file)) {
+			var second = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
+			try {
+				Engine.addDemoAssets(second);
+				second.jobs().recoverJobs();
+				Job answer = second.jobs().getJob(answered, BOB);
+				assertEquals(Status.COMPLETE, answer.getStatus());
+				assertEquals(Strings.create(token), RT.getIn(answer.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
+				assertEquals(Status.FAILED, second.jobs().getJob(rejected, BOB).getStatus());
+				assertEquals(Strings.create(HITLAdapter.REQUEST_REJECTED + ": No"), second.jobs().getJob(rejected, BOB).getData().get(Fields.ERROR));
+				assertEquals(Strings.create(HITLAdapter.REQUEST_EXPIRED), second.jobs().getJob(expired, BOB).getData().get(Fields.ERROR));
+			} finally { second.close(); }
+		}
+	}
 
 	/** Builds a self-ask request carrying one token ask audienced to {@code aud}. */
 	private AMap<AString, ACell> tokenRequest(AString aud) {

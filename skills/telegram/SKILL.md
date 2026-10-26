@@ -8,7 +8,7 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <bot-name>"
 
 **Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first. Telegram support comes from the **covia-telegram** module (`telegram` adapter) — it is not in `covia.jar`; `setup` covers loading it.
 
-A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in the venue-private adapter workspace under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
+A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in the venue-private adapter state under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
 
 ## `setup <bot-name>` — Bring a bot up
 
@@ -54,7 +54,7 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
        Then tell it who is who as memory, not prompt surgery — as the bot's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Telegram @mikera (id 648055019) is Mike, my owner."}` (memory is per user and pinned into every turn; the template trusts such a note only when `via.from` matches it). The module states facts (`via`), the venue states who submitted (attribution note), memory states who they are.
      - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). Operation handlers receive the SDK-decoded Telegram shape; delivery receipts are retained privately. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
    - Leave `allow` empty for now; step 6 fills it. Do **not** set `"open": true` unless anyone on Telegram should be able to reach this handler (defensible for a bot whose operation is safe for strangers; dangerous for an agent with authority).
-   - Optional: `"parseMode": "Markdown"` for formatted replies, `"greeting": "…"` for `/start`.
+   - Optional: for an agent bot, `"replyOperation": "v/ops/telegram/format"` so the agent's Markdown arrives formatted (Telegram's own Markdown modes do not render a model's Markdown as written; the formatter's HTML parse mode wins over `parseMode`); `"greeting": "…"` for `/start`.
 
 5. **Check it came up:** `grid_run operation=v/ops/telegram/bots` → the bot should be `RUNNING` with its Telegram `username`. `PENDING` means it could not start — the `error` field says why (secret missing, bad token/401, API unreachable); it retries (2 s, then every 30 s), so fixing the cause is enough, no restart needed.
 
@@ -71,10 +71,15 @@ as the owner per attachment, with its descriptor plus `caption` and `via` contex
 Return an object: `{}` passes an attachment through; optional non-empty `text`
 supplies transcription/extraction. Structured output is retained under
 `attachment.result`; it cannot replace original file references or provider metadata.
-There is no implicit speech provider. `replyOperation` optionally takes
-`{response, via}` and returns a non-empty string or `{text: "formatted reply"}`.
+There is no implicit speech provider; with the speech module loaded,
+`"mediaOperation": "v/ops/speech/transcribe"` transcribes voice notes and passes
+other media through. `replyOperation` optionally takes
+`{response, via}` and returns a non-empty string or `{text: "formatted reply"}`,
+optionally with a `parse_mode` that wins over the bot's `parseMode`.
 Use it for application reply rendering; formatting failures never send raw
-application output as a fallback. Both hooks are normal operations without turn
+application output as a fallback. `v/ops/telegram/format` is the stock one:
+Markdown to Telegram HTML, returned with `parse_mode: "HTML"`; an application's
+own hook can call it after its own processing. Both hooks are normal operations without turn
 timeouts, persisted by runtime create and restored at boot. Operation handlers can use
 `telegram/download {bot?, file_id, destination?, fileName?}`. Both destination
 and fileName are optional: destination is a directory reference such as
@@ -96,11 +101,21 @@ in `params.media` and matching `files` entries. Downloads and total upload bytes
 are bounded to 20 MiB. No token-bearing file URLs or local filesystem paths are
 needed. Downloaded files remain after deleting the bot; the owner manages them.
 
-Durable receipts precede Telegram acknowledgement. Pending updates recover after
-restart; STARTED updates are never blindly replayed. `bots` reports `pendingUpdates`
-and `startedUpdates` (in flight or interrupted); inspect Jobs and errors for the
-latter. This is not exactly-once delivery. Topics keep separate sessions; albums
-retain their group ID but are processed as separate turns.
+Durable receipts precede Telegram acknowledgement. Local agent delivery atomically
+adds session input, saves the chat/session mapping and completes the receipt,
+then flushes before waking the agent. It does not wait for the turn or reply;
+later inputs can be delivered while the agent is working. Delivered input is not
+replayed because a reply failed. Completed receipts deduplicate for seven days.
+Each receipt is claimed before media download or preprocessing, with one attempt.
+A known admission failure becomes FAILED and the sender gets one "⚠️ Your message
+was not delivered" notice. FAILED updates are never retried or reported again;
+fix the cause and ask the sender to resend. Storage errors surface directly;
+already committed input remains admitted even if its flush fails.
+Commands, operation handlers, remote agent facades and old STARTED receipts retain
+their inspection-based recovery policy. `bots` reports `pendingUpdates`,
+`startedUpdates` and `failedUpdates`. Outbound replies have no durable outbox or
+automatic restart recovery. Topics keep separate sessions;
+albums retain their group ID but are processed as separate messages.
 
 ## `create <bot-name>` / `delete <bot-name>` — Manage your own bots
 
@@ -157,7 +172,7 @@ The module ships the `telegram` agent skill at `v/skills/adapters/telegram` (pre
 | Symptom | Cause / fix |
 |---------|-------------|
 | `v/info/adapters/telegram` missing | Module not loaded — step 3; check the venue log for a module load error. |
-| Bot `PENDING`, error *token secret … not found* | Store the secret as the bot's user (or in the venue store); it retries automatically. |
+| Bot `PENDING`, error *token secret … not found* | Store the secret as the bot's user (an operator-declared bot also checks the venue store); it retries automatically. |
 | Bot `PENDING`, error *401 Unauthorized* | Wrong token — copy it again from @BotFather. |
 | Messages get *Not authorised* | Add the id/username to `allow` (or `open: true`), re-apply config. |
 | Bot silent in a group | An allow-listed bot converses only in private chats (by design). For an open bot: BotFather privacy mode: `/setprivacy` → Disable, or mention the bot / use commands. |
@@ -168,5 +183,5 @@ The module ships the `telegram` agent skill at `v/skills/adapters/telegram` (pre
 | Bot replies *⚠️ … Agent is suspended* (after a *Transition failed* notice) | The agent tripped on an internal error and the framework suspended it (persisted — survives restarts). Fix the cause if there is one, then `agent_resume agentId=<id>` (`v/ops/agent/resume`); the bot works again at once. |
 | `send` fails with *Access denied* | Caller is not the bot's user; use that identity or a `telegram/send` delegation. |
 | Replies stop after `adapter/disable` | By design — a disabled adapter is offline; Telegram redelivers the backlog on enable. |
-| Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back from the venue-private `w/adapters/telegram` state; if one did not, the venue log says why it was skipped. |
+| Bot vanished after restart | A config bot added with `adapter/configure` is not persisted — put it in the venue config. Created bots do come back from the venue-private `:adapters/telegram` state; if one did not, the venue log says why it was skipped. |
 | `create` fails with *Capability denied* | Your scope lacks `telegram/manage` — on a public dev venue that means the public scope is read-only; use a config with `auth.public.caps: unrestricted` or authenticate. |

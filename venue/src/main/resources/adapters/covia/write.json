@@ -1,6 +1,6 @@
 {
 	"name": "Write Lattice Data",
-	"description": "Write a value to a writable lattice path (w/, o/, n/, t/). Examples: w/enrichments/INV-001 (persist a work product), o/my-pipeline (pin an operation for grid_run). Intermediate maps are created on demand. Writing null stores a null value (present, distinct from absent) — use covia_delete to remove an entry. Use structured values (objects/arrays) rather than serialised strings.",
+	"description": "Write a value to a writable lattice path (w/, o/, n/, c/, t/, or adapter-permitted x/<adapter>/...). Examples: w/enrichments/INV-001 (persist a work product), o/my-pipeline (pin an operation for grid_run). Intermediate maps are created on demand. Writing null stores a null value (present, distinct from absent) — use covia_delete to remove an entry. Use structured values (objects/arrays) rather than serialised strings.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:write",
@@ -11,7 +11,7 @@
 			"properties": {
 				"path": {
 					"type": "string",
-					"description": "Writable lattice path. Must start with one of: 'w/' (workspace), 'o/' (operation pins), 'n/' (agent scope), 't/' (job temp — only while working on a task or inside a job; not available in a plain chat turn). Deep paths create intermediate maps."
+					"description": "Writable lattice path. Must start with one of: 'w/' (workspace), 'o/' (operation pins), 'n/' (agent scope), 'c/' (session scope), 'x/<adapter>/' (only where the adapter permits), 't/' (job temp — only while working on a task or inside a job; not available in a plain chat turn). Deep paths create intermediate maps."
 				},
 				"value": {
 					"description": "The value to store. Use structured values (objects/arrays/scalars) rather than serialised strings. Null stores a null value (present, distinct from absent); use covia_delete to remove an entry."

@@ -132,7 +132,9 @@ g/<agent>/
     <sid>/
       meta            — {parties, title?, created, updated, turns, tokens?}
       frames/0/
-        conversation  — vector of persisted turns and compacted segments
+        historyVersion — storage version (1)
+        history        — append-only turns and summary references
+        contextStart   — first position selected for model context
       pending         — messages queued for next transition (§5.5.2)
       c/              — session-scoped user scratch (the `c/` shorthand)
       summaries       — instruction → latest timestamped summary result (§5.1.2)
@@ -200,6 +202,8 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 | `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message it had already seen (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
+
+An agent may end a turn without a reply: a final message with nothing in it. That is an outcome, not a failure — the chat completes with an empty `response`, and the turn stays in the conversation as the agent's, so a later reader can see a message went unanswered. It is never sent back to a model as an empty message, which providers reject; the next inference simply sees the messages either side of it.
 
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
 
@@ -321,12 +325,19 @@ the saved result is already current.
 
 ### 5.2 Agent-safe retrospective operations
 
+This section describes the current operations. The common history foundation
+for [#597](https://github.com/covia-ai/covia/issues/597) is specified in
+[AGENT_CONTEXT.md §1.3](./AGENT_CONTEXT.md#13-append-only-history-and-active-context-597):
+append-only retained history, a separate active context selection, pure
+rendering and the remaining design for complete policy-aware navigation. Full execution replay and
+historical execution checkpoints are not required.
+
 | Op | Purpose |
 |----|---------|
 | `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
 | `agent:sessionRead` | Read a bounded safe transcript projection; `archiveDepth` optionally opens nested compaction records before applying the bounds |
 | `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
-| `agent:compactSession` | Replace an idle session's visible history with owner-supplied assistant memory while retaining the exact old vector under the compaction record |
+| `agent:compactSession` | Select owner-supplied assistant memory for an idle session while retaining the covered history |
 | `agent:reloadContext` | Clear an idle session's materialised provider prefix so the next inference rebuilds current prompt/tools/pinned context; conversation and loads stay exact |
 | `agent:deleteSession` | Permanently remove a session (owner management surface; audit-sensitive) |
 
@@ -334,7 +345,7 @@ The retrospective operations have two explicit modes. From an agent execution co
 
 The projection contains completed user/final-assistant turns and, by default, compacted summaries. `archiveDepth` opens at most that many nested compaction records and then applies the same safe projection and response bounds. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are never exposed by this operation. Both turn count and total content are bounded, including a single oversized turn.
 
-`agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. The old immutable conversation vector becomes the segment's `items`, provenance is stamped on that segment, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the segment normally. The in-band `compact` harness tool applies the same representation from either built-in LLM runtime.
+`agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. Versioned frames append a summary with `historyRange` coverage and advance `contextStart`; legacy frames retain the replaced vector under `items`. Provenance is stamped on the summary, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the summary normally. The in-band `compact` harness tool applies the same transform from either built-in LLM runtime.
 
 `agent:reloadContext` is the explicit same-config refresh operation. It requires
 agent-write authority and a quiescent session, and delegates entirely to the
@@ -345,12 +356,64 @@ projection to refresh.
 
 Trusted venue modules may register an `AgentAdapter.SessionVisibilityPolicy`. Policies compose by intersection: any veto hides the session, and policy failure hides it as well. This gives applications a narrow private-conversation rule without duplicating transcript rendering or granting agents raw session-tree access.
 
+#### 5.2.1 Embedded callers and storage compatibility
+
+Storage migration must preserve existing caller behaviour. Embedded Java hosts
+can call these existing functions directly; no new REST endpoint is required.
+
+| Existing need | Supported accessor / replacement |
+|---------------|----------------------------------|
+| Read `frame.conversation`, including nested summary `items`, for an existing inspector, export or archive walker | `GoalTreeContext.archivedConversation(frame)` |
+| Read the selected entries for current model context, leaving summaries unexpanded | `GoalTreeContext.activeConversation(frame)` |
+| Render selected entries as native messages and summary memory | `ConversationRenderer.renderFull(frame, dialect)` |
+| Preserve the current bounded, completed-cycle retrospective projection | `ConversationRenderer.historical(frame, maxTurns, maxChars, archiveDepth)` |
+| Append stored turns without knowing the frame format | `GoalTreeContext.appendTurn(frame, turn)` / `appendTurns(frame, turns)` |
+| Read a session transcript through the TypeScript SDK | `(await agent.getSession(id)).conversation`, or `await agent.transcript(id)` |
+
+For example, replace a direct `frame.get(AgentState.KEY_CONVERSATION)` read with:
+
+```java
+AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
+```
+
+For a legacy frame this returns its original vector. For a versioned frame it
+reconstructs the equivalent nested shape from backward summary ranges. Existing
+walkers of `{summary, turns, items}` can continue unchanged, including callers
+that select only archived turns or inspect summaries separately. Both formats
+retain entry order, provenance, structured content, tool exchanges and the
+unfinished tail. Missing conversations return null; an existing empty
+conversation returns an empty vector. Invalid formats throw instead of silently
+selecting a different history. Child frames remain separate: choose the frame
+whose conversation the caller needs.
+
+`history(frame)` is a storage accessor, **not** a drop-in transcript replacement:
+legacy frames still contain nested archives, while versioned histories include
+both original entries and their summaries. `activeConversation(frame)` likewise
+does not recreate `items` for an existing archive walker. Use
+`archivedConversation(frame)` for that compatibility contract. It performs no
+writes, source refresh or cached-prefix changes and imposes no archive-depth cap.
+
+These raw accessors do not authorise reads or filter content for a recipient.
+Existing hosts retain their access checks, private-session exclusions, audience
+rules and output budgets. Do not replace a filtered agent-facing view with a
+raw accessor. `AgentState.KEY_CONVERSATION` remains available for legacy data,
+but new frames no longer store that field. Clients reading raw lattice paths
+must update before venue migration; the TypeScript SDK's transcript accessor
+already handles both formats. General history navigation remains tracked in
+[#597](https://github.com/covia-ai/covia/issues/597), and the broader owner view
+in [#461](https://github.com/covia-ai/covia/issues/461).
+
+`ConversationHistory` is also available as a **preview Java API** for explicit
+frame-history range reads; see [AGENT_CONTEXT.md §1.3](./AGENT_CONTEXT.md#13-append-only-history-and-active-context-597).
+Its API is not yet stable, and adopting it is not required for existing caller
+compatibility. It adds no REST surface and does not change the operations above.
+
 ### 5.3 Discovery via standard lattice ops
 
 ```
 covia_list  path=g/Assistant/sessions                       — all sessions
 covia_read  path=g/Assistant/sessions/<sid>/meta            — one session's metadata
-covia_slice path=g/Assistant/sessions/<sid>/frames/0/conversation limit=20 — recent stored entries
+covia_read  path=g/Assistant/sessions/<sid>/frames/0        — frame record (check its storage format)
 ```
 
 These generic operations remain the owner/operator inspection surface and require the corresponding lattice capabilities. Agent configurations should receive the exact `agent:sessions` / `agent:sessionRead` invoke capabilities instead of broad `g/<agent>/sessions` read access.
@@ -477,7 +540,7 @@ output: ACell           — the response value (or null), appended to frames[0].
 
 If the return value is non-null, the framework appends it as the terminal turn in `frames[0].conversation`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
 
-**Stored history and model context.** The session retains and replays the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. Existing turns remain byte-identical and in order until explicit compaction or reset replaces them. Tool calls therefore stay paired with their results, and a later inference extends the previous provider-shaped prefix instead of rebuilding a shorter projection of it.
+**Stored history and model context.** The session retains and replays the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. Existing history turns remain byte-identical and in order; compaction appends a summary and changes the active context selection. Tool calls therefore stay paired with their results, and a later inference extends the previous provider-shaped prefix instead of rebuilding a shorter projection of it.
 
 **State updates during a transition.** All routed by RequestContext scoped to `(agent, session, task?)`:
 

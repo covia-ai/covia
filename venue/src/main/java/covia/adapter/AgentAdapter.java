@@ -49,6 +49,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Admission;
 import covia.venue.AgentState;
+import covia.venue.SessionState;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
 import covia.venue.Engine;
@@ -110,6 +111,13 @@ public class AgentAdapter extends AAdapter {
 	public static final String QUERY_UNKNOWN_SESSION = "Unknown sessionId";
 	/** Optional agent-adapter code: a supplied session does not exist. */
 	public static final String UNKNOWN_SESSION_CODE = "agent:unknown-session";
+	public static final String SUSPENDED_CODE = "agent:suspended";
+	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
+	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
+	public static final String TRANSITION_CANCELLED = "Transition cancelled";
+	public static final String SUSPENDED_REFUSAL = "Agent '%s' is suspended%s; %s";
+	public static final String SUSPENDED_RESUME_ADVICE = "fix the cause, then use agent:resume";
+	public static final String SUSPENDED_ASK_ADVICE = "ask whoever stopped the agent before using agent:resume";
 	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
 	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
@@ -144,6 +152,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_TOOLS            = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS    = Strings.intern("defaultTools");
 	private static final AString K_CAPS             = Strings.intern("caps");
+	private static final AString K_PUBLIC           = Strings.intern("public");
+	private static final AString K_UNRESTRICTED     = Strings.intern("unrestricted");
 	private static final AString K_CONTEXT          = Strings.intern("context");
 	private static final AString K_OUTPUTS          = Strings.intern("outputs");
 	private static final AString K_RESPONSE_FORMAT  = Strings.intern("responseFormat");
@@ -168,6 +178,7 @@ public class AgentAdapter extends AAdapter {
 	 * RequestContext held in {@link #outputContexts}; raw bearer UCANs are never
 	 * written into agent state. */
 	private static final AString K_OUTPUT_CONTEXT   = Strings.intern("outputContext");
+	private static final AString K_CONTEXT_USER     = Strings.intern("user");
 	private static final AString K_CONTEXT_CAPS     = Strings.intern("caps");
 	private static final AString K_CONTEXT_AGENT_ID = Strings.intern("agentId");
 	private static final AString K_CONTEXT_JOB_ID   = Strings.intern("jobId");
@@ -307,11 +318,91 @@ public class AgentAdapter extends AAdapter {
 		return new AgentTarget(resolved.ownerDID(), resolved.user(), agentId, resolved.resource());
 	}
 
+	/** Whether this recipient can join an atomic local session handoff. */
+	public boolean supportsSessionDelivery(RequestContext ctx, AString ref) {
+		AgentTarget target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
+		AgentState agent = getAgent(target.ownerDID(), target.agentId());
+		return agent != null && !externalAgents().isExternal(agent);
+	}
+
+	public static final String DELIVERY_AGENT_MISSING = "Agent '%s' was not found or is terminated";
+	public static final String DELIVERY_AGENT_SUSPENDED = "Agent '%s' is suspended; resume it with agent:resume";
+
+	/** Null when the agent can take a delivered message now; otherwise why it cannot
+	 * (missing, terminated, suspended, or not admitting this caller). Checking first
+	 * keeps a refused delivery from minting a failed chat Job per attempt. */
+	public String sessionDeliveryRefusal(RequestContext ctx, AString ref) {
+		AgentTarget target;
+		try {
+			target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
+		} catch (covia.exception.AuthException | IllegalArgumentException refused) {
+			return describeFailure(refused);
+		}
+		AgentState agent = getAgent(target.ownerDID(), target.agentId());
+		if (agent == null) return DELIVERY_AGENT_MISSING.formatted(target.agentId());
+		if (AgentState.SUSPENDED.equals(agent.getStatus())) return DELIVERY_AGENT_SUSPENDED.formatted(target.agentId());
+		return null;
+	}
+
+	/** Admit local input atomically, then flush before waking. Storage failures
+	 * propagate to the caller; the committed state remains available for inspection. */
+	public Job deliverSession(ACell input, RequestContext ctx) {
+		java.util.Objects.requireNonNull(ctx.getSessionDelivery());
+		Job job = engine.jobs().invokeOperation("v/ops/agent/chat", input, ctx);
+		if (CVMBool.TRUE.equals(job.getData().get(DELIVERY_ACCEPTED)) || Status.COMPLETE.equals(job.getStatus())) {
+			engine.flush();
+			AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, Abilities.AGENT_MESSAGE, false);
+			AgentState agent = getAgent(target.ownerDID(), target.agentId());
+			if (agent != null && hasWork(agent)) wakeAgent(target.ownerDID(), target.agentId(), true);
+		}
+		return job;
+	}
+
 	private AgentTarget resolveAgentTarget(RequestContext ctx, ACell input,
 			AString field, AString ability, boolean createOwner) {
 		AString ref = RT.ensureString(RT.getIn(input, field));
 		if (ref == null) throw new IllegalArgumentException(field + " is required");
 		return resolveAgentTarget(ctx, ref, ability, createOwner);
+	}
+
+	/**
+	 * Refuses a config that confers authority its author does not hold (see
+	 * {@link Engine#requireConferrable}): the agent's own {@code caps}, absent
+	 * meaning unrestricted; the right to talk to it for whoever {@code accepts}
+	 * admits; and a public A2A interaction scope, {@code a2a.caps}. An update
+	 * re-checks only what it changes from {@code previous}, so editing anything
+	 * else needs no more than {@code agent/write}.
+	 */
+	private void requireConferrable(RequestContext ctx, AgentTarget target,
+			AMap<AString, ACell> config, AMap<AString, ACell> previous) {
+		AString owner = target.ownerDID();
+		if (previous == null || changed(config, previous, K_CAPS)) {
+			engine.requireConferrable(ctx, owner, RT.ensureVector(config.get(K_CAPS)));
+		}
+		AVector<ACell> talk = Vectors.of(
+			Capability.create(target.address(), Abilities.AGENT_REQUEST),
+			Capability.create(target.address(), Abilities.AGENT_MESSAGE));
+		ACell accepts = config.get(Fields.ACCEPTS);
+		boolean admitsOthers = accepts != null && !Admission.OWNER.equals(accepts)
+			&& !(accepts instanceof AVector<?> entries && entries.isEmpty());
+		if (admitsOthers && (previous == null || changed(config, previous, Fields.ACCEPTS))) {
+			engine.requireConferrable(ctx, owner, talk);
+		}
+		AMap<AString, ACell> a2a = RT.ensureMap(config.get(Fields.A2A));
+		ACell a2aCaps = (a2a == null) ? null : a2a.get(K_CAPS);
+		boolean publicInteraction = a2aCaps != null && CVMBool.TRUE.equals(a2a.get(K_PUBLIC));
+		if (publicInteraction && (previous == null || changed(config, previous, Fields.A2A))) {
+			engine.requireConferrable(ctx, owner, talk);
+			if (K_UNRESTRICTED.equals(a2aCaps)) {
+				engine.requireConferrable(ctx, owner, null);
+			} else if (a2aCaps instanceof AVector<?>) {
+				engine.requireConferrable(ctx, owner, RT.ensureVector(a2aCaps));
+			}
+		}
+	}
+
+	private static boolean changed(AMap<AString, ACell> config, AMap<AString, ACell> previous, AString key) {
+		return !java.util.Objects.equals(config.get(key), (previous == null) ? null : previous.get(key));
 	}
 
 	private static AMap<AString, ACell> identify(AgentTarget target, AMap<AString, ACell> result) {
@@ -734,6 +825,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> config = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
 			if (config == null) config = Maps.empty();
 			validateComposedConfig(config);
+			requireConferrable(ctx, target, config, null);
 			AgentState created = user.createAgent(agentId, config,
 				RT.getIn(input, AgentState.KEY_STATE), definition);
 			if (created == null) throw new IllegalArgumentException("Agent already exists: " + agentId);
@@ -852,6 +944,7 @@ public class AgentAdapter extends AAdapter {
 			job.fail(describeFailure(e));
 			return;
 		}
+		requireConferrable(ctx, target, config, null);
 
 		AgentState agent = user.createAgent(agentId, config, initialState);
 		if (agent == null) {
@@ -866,7 +959,7 @@ public class AgentAdapter extends AAdapter {
 		// Advisory only: surface anything that looks misconfigured but doesn't
 		// warrant failing create (#205). Emitted as a vector so several checks can
 		// contribute; omitted entirely when clean.
-		AVector<ACell> warnings = collectCreateWarnings(config, ctx);
+		AVector<ACell> warnings = collectConfigWarnings(config, ctx);
 		if (!warnings.isEmpty()) {
 			result = result.assoc(Fields.WARNINGS, warnings);
 			for (long i = 0; i < warnings.count(); i++) {
@@ -879,7 +972,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Collects non-fatal create-time advisories for a resolved config. Each entry
+	 * Collects non-fatal create/update advisories for a resolved config. Each entry
 	 * is a human-readable message string; the vector is empty when nothing is
 	 * flagged. New sanity checks append here — the result field ({@code warnings})
 	 * is already a list, so adding one is additive.
@@ -888,7 +981,7 @@ public class AgentAdapter extends AAdapter {
 	 * describes the field generically rather than listing these, so a new check
 	 * needs no schema change — and cannot silently fall out of step with one.</p>
 	 */
-	private AVector<ACell> collectCreateWarnings(AMap<AString, ACell> config, RequestContext ctx) {
+	private AVector<ACell> collectConfigWarnings(AMap<AString, ACell> config, RequestContext ctx) {
 		AVector<ACell> warnings = Vectors.empty();
 		AString toolWarn = toolCapabilityWarning(config, ctx);
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
@@ -1340,6 +1433,8 @@ public class AgentAdapter extends AAdapter {
 			job.fail(describeFailure(e));
 			return;
 		}
+		// The fork's authority is conferred by the forker, in the target's namespace.
+		requireConferrable(ctx, targetTarget, forkConfig, null);
 
 		ACell sourceState = sourceRecord.get(AgentState.KEY_STATE);
 		AVector<ACell> sourceTimeline = null;
@@ -1550,9 +1645,13 @@ public class AgentAdapter extends AAdapter {
 			Fields.DELIVERED,  CVMBool.TRUE)));
 	}
 
+	public static final String DELIVERY_JOB_UNAVAILABLE = "Session delivery Job is no longer active";
+	public static final AString DELIVERY_ACCEPTED = Strings.intern("deliveryAccepted");
+	public static final String LOCAL_DELIVERY_REQUIRED = "Atomic session delivery requires a local agent";
+
 	/**
 	 * agent:chat — synchronous request for the agent's next response on a
-	 * session. Reserves a per-session chat slot, appends the message to the
+	 * session. Registers a response waiter, appends the message to the
 	 * session's pending vector, wakes the agent, and leaves the Job in
 	 * STARTED state. The framework's run loop completes the Job from the
 	 * transition's {@code response} value once the agent runs (see
@@ -1570,10 +1669,9 @@ public class AgentAdapter extends AAdapter {
 	 *   <li>{@code sessionId} present + unknown → fail</li>
 	 * </ul>
 	 *
-	 * <p>Only one chat may be in flight per session at a time. A second
-	 * {@code agent:chat} on a session whose slot is already reserved fails
-	 * fast — callers should wait for the first to complete or use
-	 * {@code agent:message} for queued conversational sends.</p>
+	 * <p>Several chats may await the same session. Each cycle completes the
+	 * waiters whose input it consumed. A trusted SessionDelivery participant
+	 * can commit delivery bookkeeping with intake, before the agent wakes.</p>
 	 */
 	private void handleChat(Job job, ACell input, RequestContext ctx) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
@@ -1586,6 +1684,10 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
+		if (ctx.getSessionDelivery() != null && externalAgents().isExternal(agent)) {
+			job.fail(LOCAL_DELIVERY_REQUIRED);
+			return;
+		}
 		if (externalTurn(job, ctx, target, agent, "chat", input)) return;
 
 		SessionSpec session = resolveSessionForChat(job, input);
@@ -1616,8 +1718,22 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent,
 			Fields.JOB_ID,     jobIdHex);
-		AgentState.SessionIntake intake = agent.appendSessionPending(sid,
-			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+		// Local delivery includes provenance in the admission transaction below.
+		if (ctx.getSessionDelivery() == null) job.updateData(job.getData().assoc(Fields.AGENT_ID, agentId)
+			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sidHex));
+		AgentState.SessionIntake intake;
+		try {
+			intake = appendChatInput(job, agent, target, session, envelope, ctx, sidHex, jobIdHex);
+		} catch (Throwable failure) {
+			chatsRef.remove(jobRef.getID(), jobRef);
+			throw failure;
+		}
+		if (intake == null) {
+			// A duplicate delivery must neither append a second input nor await a reply.
+			chatsRef.remove(jobRef.getID(), jobRef);
+			job.completeWith(Maps.of(Fields.SESSION_ID, sidHex));
+			return;
+		}
 		if (intake != AgentState.SessionIntake.APPLIED) {
 			chatsRef.remove(jobRef.getID(), jobRef);
 			if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
@@ -1630,19 +1746,56 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Record the (possibly just-minted) sessionId on the job so a caller
-		// finding this job failed after a venue restart knows which session to
-		// re-engage (recovery never re-executes intake, #214). Mirrors
-		// handleRequest.
-		job.updateData(job.getData()
-			.assoc(Fields.AGENT_ID, agentId)
-			.assoc(Fields.ADDRESS, target.address())
-			.assoc(Fields.SESSION_ID, sidHex));
+		if (ctx.getSessionDelivery() != null) {
+			return; // deliverSession owns the durability barrier and wake outside Job dispatch.
+		}
 
 		// Each accepted chat guarantees a processing attempt, so bypass the
 		// optional-work launch gate.
 		wakeAgent(target.ownerDID(), agentId, true);
 	}
+
+	/** The common VenueState root contains the agent and adapter-owned receipts.
+	 * Native transactions publish the input, receipt and session mapping together. */
+	private AgentState.SessionIntake appendChatInput(Job job, AgentState agent, AgentTarget target,
+			SessionSpec session, ACell envelope, RequestContext ctx, AString sid, AString jobId) {
+		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
+			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
+		var result = new java.util.concurrent.atomic.AtomicReference<AgentState.SessionIntake>();
+		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
+		try {
+			engine.getVenueState().transact(draft -> {
+				notification.set(null);
+				var owner = draft.users().get(target.ownerDID());
+				var current = owner == null ? null : owner.agent(target.agentId());
+				if (current == null || AgentState.SUSPENDED.equals(current.getStatus())
+						|| AgentState.TERMINATED.equals(current.getStatus())) {
+					result.set(AgentState.SessionIntake.MISSING);
+					return;
+				}
+				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
+					session.loads(), envelope, !session.supplied());
+				result.set(intake);
+				if (intake == AgentState.SessionIntake.APPLIED
+						&& !ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
+				if (intake == AgentState.SessionIntake.APPLIED) {
+					Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft.users(), data ->
+						data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
+							.assoc(Fields.SESSION_ID, sid).assoc(DELIVERY_ACCEPTED, CVMBool.TRUE));
+					if (changed == null) throw new IllegalStateException(DELIVERY_JOB_UNAVAILABLE);
+					notification.set(changed);
+				}
+			});
+		} catch (DuplicateSessionDelivery duplicate) {
+			// Discard the private draft, including its speculative session append.
+			return null;
+		}
+		if (notification.get() != null) notification.get().run();
+		return result.get();
+	}
+
+	@SuppressWarnings("serial")
+	private static final class DuplicateSessionDelivery extends RuntimeException { }
 
 	/**
 	 * Runs an independent transition against a conversation snapshot. The query
@@ -1674,9 +1827,9 @@ public class AgentAdapter extends AAdapter {
 			job.fail(SUMMARISE_INVALID_INSTRUCTION);
 			return;
 		}
-		AMap<AString, ACell> cached = AgentState.sessionSummary(snapshot.session(), instruction);
+		AMap<AString, ACell> cached = SessionState.sessionSummary(snapshot.session(), instruction);
 		boolean includeSteps = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_STEPS));
-		if (AgentState.summaryCovers(cached, AgentState.sessionTurnCount(snapshot.session()))) {
+		if (SessionState.summaryCovers(cached, SessionState.sessionTurnCount(snapshot.session()))) {
 			job.start(() -> job.completeWith(cached));
 			return;
 		}
@@ -1909,6 +2062,8 @@ public class AgentAdapter extends AAdapter {
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(AgentState.KEY_ERROR);
 		if (error != null) summary = summary.assoc(AgentState.KEY_ERROR, error);
+		ACell suspension = record.get(AgentState.KEY_SUSPENSION);
+		if (suspension != null) summary = summary.assoc(AgentState.KEY_SUSPENSION, suspension);
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> config = (record.get(AgentState.KEY_CONFIG) instanceof AMap<?, ?> m)
 			? (AMap<AString, ACell>) m : null;
@@ -2115,6 +2270,8 @@ public class AgentAdapter extends AAdapter {
 						Fields.TASKS, CVMLong.create(taskCount));
 					ACell error = record.get(AgentState.KEY_ERROR);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
+					ACell suspension = record.get(AgentState.KEY_SUSPENSION);
+					if (suspension != null) summary = summary.assoc(AgentState.KEY_SUSPENSION, suspension);
 					agents = agents.conj(summary);
 				}
 			}
@@ -2368,6 +2525,7 @@ public class AgentAdapter extends AAdapter {
 			User user = target.user();
 			AgentState agent = (user != null) ? user.agent(agentId) : null;
 			if (agent == null || !agent.exists()) {
+				if (remove && emptyEntry(user, agentId)) continue; // nothing to halt; removal clears it
 				job.fail("Agent not found: " + target.address() + " (no agents were deleted)");
 				return;
 			}
@@ -2438,6 +2596,16 @@ public class AgentAdapter extends AAdapter {
 		return new DeleteRequest(ids, true);
 	}
 
+	/**
+	 * Whether {@code g/<id>} is present but holds nothing: what deleting an
+	 * agent left behind before deletion removed the key. Only removal can
+	 * clear it, there being no agent to halt.
+	 */
+	private static boolean emptyEntry(User user, AString agentId) {
+		AMap<AString, ACell> agents = (user != null) ? user.getAgents() : null;
+		return agents != null && agents.containsKey(agentId) && agents.get(agentId) == null;
+	}
+
 	/** Shared single-agent deletion semantics used by both wire shapes. */
 	private AMap<AString, ACell> deleteOneAgent(Job job, AgentTarget target,
 			RequestContext ctx, boolean remove) {
@@ -2445,6 +2613,10 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = target.agentId();
 		AgentState agent = user.agent(agentId);
 		if (agent == null || !agent.exists()) {
+			if (remove && emptyEntry(user, agentId)) {
+				user.removeAgent(agentId);
+				return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
+			}
 			job.fail("Agent disappeared during deletion: " + agentId);
 			return null;
 		}
@@ -2472,16 +2644,26 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 
-		agent.setStatus(AgentState.SUSPENDED);
+		ACell reason = RT.getIn(input, Fields.REASON);
+		if (reason != null && !(reason instanceof AString)) {
+			throw new IllegalArgumentException(SUSPEND_REASON_INVALID);
+		}
+		AMap<AString, ACell> stopped = agent.suspend(ctx.getCallerDID(), (AString) reason);
+		if (stopped == null) {
+			job.fail(SUSPEND_AGENT_GONE);
+			return;
+		}
 		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
-		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED, null);
 
 		// Cancel any active transition so the agent stops promptly (the token
 		// stops the transition thread itself; cancel unblocks the run loop)
 		cancelActiveTransition(target.key());
+		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED,
+			AgentState.suspensionDetail(stopped));
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(identify(target, Maps.of(Fields.STATUS, AgentState.SUSPENDED)));
+		job.completeWith(identify(target, Maps.of(Fields.STATUS, AgentState.SUSPENDED,
+			AgentState.KEY_SUSPENSION, stopped.get(AgentState.KEY_SUSPENSION))));
 	}
 
 	private void handleResume(Job job, ACell input, RequestContext ctx) {
@@ -2553,6 +2735,7 @@ public class AgentAdapter extends AAdapter {
 				job.fail(describeFailure(e));
 				return;
 			}
+			requireConferrable(ctx, target, newConfig, agent.getConfig());
 		}
 		// Config's single home is record.config (#144), and loads live on the
 		// context scope chain (#142) — see handleCreate.
@@ -2572,8 +2755,7 @@ public class AgentAdapter extends AAdapter {
 			K_RUNNING, CVMBool.create(running));
 		AVector<ACell> warnings = Vectors.empty();
 		if (newConfig != null) {
-			AString contextOpWarn = unclassifiedContextOperationsWarning(newConfig, ctx);
-			if (contextOpWarn != null) warnings = warnings.conj(contextOpWarn);
+			warnings = collectConfigWarnings(newConfig, ctx);
 		}
 		if (running && newConfig != null && newConfig.containsKey(K_CAPS)) {
 			// Honest about authority: the transition in flight keeps the caps it
@@ -2736,7 +2918,7 @@ public class AgentAdapter extends AAdapter {
 		AString title = (AString) titleValue;
 		if (title != null && title.toString().isBlank()) title = null;
 
-		if (!agent.setSessionTitle(sid, title)) {
+		if (!agent.session(sid).setTitle(title)) {
 			job.fail("Session not found: " + sidHex);
 			return;
 		}
@@ -2777,7 +2959,7 @@ public class AgentAdapter extends AAdapter {
 			K_CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
 			Fields.CALLER, ctx.getCallerDID(),
 			Fields.JOB_ID, Strings.create(job.getID().toHexString()));
-		boolean applied = agent.updateQuiescentSessionFrames(sid, frames -> {
+		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
 			long live = GoalTreeContext.countLiveTurns(root);
@@ -2832,7 +3014,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> frame = RT.ensureMap(existingFrames.get(i));
 			if (frame != null && GoalTreeContext.reloadContext(frame) != frame) clearable++;
 		}
-		boolean applied = agent.updateQuiescentSessionFrames(sid, frames -> {
+		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
 			AVector<ACell> updated = frames;
 			for (long i = 0; i < frames.count(); i++) {
 				AMap<AString, ACell> frame = RT.ensureMap(frames.get(i));
@@ -3126,8 +3308,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Captures identity, cap ceiling and execution scopes without bearer UCANs. */
-	private static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
-		AMap<AString, ACell> snapshot = Maps.of(Fields.CALLER, ctx.getCallerDID());
+	static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
+		AMap<AString, ACell> snapshot = Maps.of(Fields.CALLER, ctx.getCallerDID(), K_CONTEXT_USER, ctx.getUserDID());
 		if (ctx.getCaps() != null) snapshot = snapshot.assoc(K_CONTEXT_CAPS, ctx.getCaps());
 		if (ctx.getAgentId() != null) snapshot = snapshot.assoc(K_CONTEXT_AGENT_ID, ctx.getAgentId());
 		if (ctx.getJobId() != null) snapshot = snapshot.assoc(K_CONTEXT_JOB_ID, ctx.getJobId());
@@ -3142,7 +3324,7 @@ public class AgentAdapter extends AAdapter {
 	 * reconstructed: raw bearer credentials are never persisted.
 	 */
 	@SuppressWarnings("unchecked")
-	private static RequestContext restoreOutputContext(ACell snapshotCell) {
+	static RequestContext restoreOutputContext(ACell snapshotCell) {
 		if (!(snapshotCell instanceof AMap<?, ?> raw)) return null;
 		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
 		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
@@ -3152,6 +3334,14 @@ public class AgentAdapter extends AAdapter {
 			AVector<ACell> caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
 			if (caps == null) return null;
 			ctx = ctx.withCaps(caps);
+		}
+		// Legacy snapshots implicitly used the caller's namespace. New snapshots
+		// bind local execution IDs explicitly; changing the owner must retain the
+		// proof-only boundary (bearer credentials are deliberately not restored).
+		if (snapshot.containsKey(K_CONTEXT_USER)) {
+			AString owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
+			if (owner == null) return null;
+			ctx = ctx.onBehalfOf(owner);
 		}
 		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
 		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
@@ -3460,15 +3650,21 @@ public class AgentAdapter extends AAdapter {
 		return mine;
 	}
 
-	/**
-	 * Venue-mediated delivery to a known agent session. The caller has already
-	 * authorised and verified the event (for example a completed HITL request),
-	 * so this method performs no public admission decision: it appends one
-	 * provenance-bearing envelope and wakes the ordinary run loop.
-	 */
+	/** Venue-mediated delivery to an already authorized local session. */
 	public boolean deliverSessionMessage(AString ownerDID, AString agentId, Blob sessionId,
 			AString caller, AString jobId, ACell message) {
-		AgentState agent = getAgent(ownerDID, agentId);
+		if (!appendSessionMessage(engine.getVenueState().users(), ownerDID, agentId, sessionId, caller, jobId, message)) return false;
+		engine.flush();
+		wakeAgent(ownerDID, agentId, true);
+		return true;
+	}
+
+	/** Append to a known local session using the supplied component, including a
+	 * transaction draft. The caller owns authorization and flush/wake after commit. */
+	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
+			AString caller, AString jobId, ACell message) {
+		var owner = users.get(ownerDID);
+		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
@@ -3477,9 +3673,7 @@ public class AgentAdapter extends AAdapter {
 		if (jobId != null) envelope = envelope.assoc(Fields.JOB_ID, jobId);
 		AgentState.SessionIntake intake = agent.appendSessionPending(
 			sessionId, caller, null, envelope, false);
-		if (intake != AgentState.SessionIntake.APPLIED) return false;
-		wakeAgent(ownerDID, agentId, true);
-		return true;
+		return intake == AgentState.SessionIntake.APPLIED;
 	}
 
 	/** Overload: non-forced wake (used by message delivery / resume auto-wake). */
@@ -3766,8 +3960,7 @@ public class AgentAdapter extends AAdapter {
 					transitionResult = transitionFuture.join();
 				} catch (java.util.concurrent.CancellationException ce) {
 					transitionCancelled = true;
-					transitionResult = Maps.of(Fields.ERROR,
-						Strings.create("Transition cancelled"));
+					transitionResult = null; // handled separately from transition failures below
 				} catch (java.util.concurrent.CompletionException e) {
 					Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 					// A failure that carries its cycle record (#392) still
@@ -3804,29 +3997,22 @@ public class AgentAdapter extends AAdapter {
 				// recreated agent under the same id (#202). Settle per initiator
 				// and exit; the finally-block re-check handles any new work.
 				if (transitionCancelled) {
-					cycle.end(Maps.of(
-						Fields.ERROR, Strings.create("Transition cancelled"),
-						Fields.CANCELLED, CVMBool.TRUE));
-					AString statusNow = agent.getStatus();
-					if (AgentState.SUSPENDED.equals(statusNow)) {
-						// agent:suspend stopped this cycle — record the cause,
-						// drop the queue and fail queued callers, exactly as the
-						// error path settled a suspend-cancel before (#88).
-						AString errStr = Strings.create("Transition cancelled");
-						Index<Blob, ACell> tasksAtCancel = agent.getTasks();
-						agent.suspendAndDrain(errStr);
-						engine.agentEvents().status(ownerDID, agentId, AgentState.SUSPENDED, errStr);
-						failQueuedTasks(tasksAtCancel, errStr.toString());
-						failAllPendingForAgent(ownerDID, agentId, errStr.toString());
-						// Settle the session's cycle claim: an administrative
-						// stop is not a crash — the session must not register
-						// as interrupted work (no auto-resume), and the claim
-						// release fences any zombie writes from the stopped
-						// transition thread.
-						if (pickedSessionBlob != null) {
-							agent.clearSessionCycle(pickedSessionBlob);
-						}
+					AString detail = Strings.create(TRANSITION_CANCELLED);
+					AMap<AString, ACell> entry = Maps.of(
+						K_START, CVMLong.create(startTs), K_END, CVMLong.create(System.currentTimeMillis()),
+						Fields.OP, transitionOp, Fields.RESULT, detail, Fields.CANCELLED, CVMBool.TRUE);
+					if (pickedSession != null) entry = entry.assoc(Fields.SESSION_ID, pickedSession);
+					if (formattedTasks != null && !formattedTasks.isEmpty()) entry = entry.assoc(Fields.TASKS, formattedTasks);
+					AMap<AString, ACell> stopped = agent.finishSuspendedCycle(entry, pickedSessionBlob);
+					if (stopped != null) {
+						AString cause = AgentState.suspensionDetail(stopped);
+						if (cause != null) detail = cause;
+						@SuppressWarnings("unchecked")
+						Index<Blob, ACell> tasksAtCancel = (Index<Blob, ACell>) stopped.get(AgentState.KEY_TASKS);
+						failQueuedTasks(tasksAtCancel, detail.toString());
+						failAllPendingForAgent(ownerDID, agentId, detail.toString());
 					}
+					cycle.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
 					// TERMINATED / removed / replaced: agent:delete has already
 					// settled the record and notified the queued callers.
 					break;
@@ -4132,7 +4318,7 @@ public class AgentAdapter extends AAdapter {
 				boolean hasExisting = pickedRecord != null
 					&& pickedRecord.get(Fields.WAKE_TIME) instanceof CVMLong;
 				if (requestedWake > 0 || hasExisting) {
-					agent.setThreadWakeTime(scheduler, callerDID,
+					scheduler.setThreadWakeTime(callerDID, agent,
 						pickedKind, pickedThreadId, requestedWake);
 				}
 			}
@@ -4602,8 +4788,11 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Stop loops after the account tombstone has atomically removed their state. */
+	@Override
 	@SuppressWarnings("unchecked")
-	public void stopDeletedUser(AString did, AMap<AString, ACell> removedAgents) {
+	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+		if (engine == null) return;
+		AMap<AString, ACell> removedAgents = RT.ensureMap(RT.getIn(previousUser, covia.lattice.Namespace.G));
 		HashSet<AgentKey> keys = new HashSet<>(runningLoops.keySet());
 		keys.addAll(activeChats.keySet());
 		keys.addAll(deferredCompletions.keySet());
@@ -4757,7 +4946,7 @@ public class AgentAdapter extends AAdapter {
 				ACell rawJob = user.getJob(jobId);
 				if (!(rawJob instanceof AMap<?, ?> map)
 						|| Job.isFinished((AMap<AString, ACell>) map)) {
-					agent.removeSessionPendingJob(sid, jobId);
+					agent.session(sid).removePendingJob(jobId);
 				}
 			}
 		}
@@ -4784,12 +4973,14 @@ public class AgentAdapter extends AAdapter {
 	 * @return true if the agent was suspended and the Job has been failed
 	 */
 	private boolean failIfSuspended(Job job, AgentState agent, AString agentId) {
-		if (!AgentState.SUSPENDED.equals(agent.getStatus())) return false;
-		AString error = agent.getError();
-		StringBuilder sb = new StringBuilder("Agent '").append(agentId).append("' is suspended");
-		if (error != null) sb.append(": ").append(conciseDetail(error, 512));
-		sb.append("; fix the cause, then use agent:resume");
-		job.fail(sb.toString());
+		AMap<AString, ACell> record = agent.getRecord();
+		if (record == null || !AgentState.SUSPENDED.equals(record.get(Fields.STATUS))) return false;
+		AString stop = AgentState.suspensionDetail(record);
+		ACell error = record.get(AgentState.KEY_ERROR);
+		String detail = stop != null ? ": " + stop
+			: error != null ? ": " + conciseDetail(error, 512) : "";
+		job.fail(SUSPENDED_CODE, SUSPENDED_REFUSAL.formatted(agentId, detail,
+			stop != null ? SUSPENDED_ASK_ADVICE : SUSPENDED_RESUME_ADVICE));
 		return true;
 	}
 

@@ -65,12 +65,11 @@ An agent lives at `:user-data → <owner-DID> → "g" → <agent-id>`.
 
 ```
 signed venue :value
-  → StampingLattice (:timestamp)
-  → whole-value LWW
+  → Timestamped venue record (:timestamp, whole-value LWW)
   → typed venue interior
       :user-data → MapLattice (DID → stamped user record)
         "g" → MapLattice (agent-id → stamped agent record)
-          <agent-id> → StampingLattice (ts) → JSONLattice
+          <agent-id> → stamped cursor (ts) → JSONLattice
 ```
 
 The inner agent component supplies typed navigation and maintains `ts` when a
@@ -95,6 +94,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `timeline` | vector | Append-only log of cycle records (§2.4), one per cycle whose transition ran — the complete record of each cycle's exchange with the model. |
 | `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
+| `suspension` | map? | Deliberate stop: `{by: <actual caller DID>, reason?: <up to 512 characters>, ts: <epoch millis>}`. Set by `agent:suspend`, separate from faults; cleared on resume. |
 
 All fields are framework-managed except `state`, which is owned by the transition
 function. CAD3 structural sharing means the timeline (which only appends) shares
@@ -285,7 +285,7 @@ stale; startup clears it before scheduling durable work.
 |--------|---------|----------|-------------------|
 | `SLEEPING` | Durable runnable/idle state. | `wakeAgent` may start a live attempt. | All except config mutation while a live attempt exists. |
 | `RUNNING` | Persisted dirty marker: an attempt was launched. The hosting venue validates it against the live launcher slot. | Running when the matching slot is live; otherwise stale until startup cleanup. | Task/session appends are allowed. `agent:update` applies to future transitions; a started transition keeps its fire-time config. |
-| `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; failed tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
+| `SUSPENDED` | Deliberately stopped (`suspension`) or last run failed (`error`). Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; interrupted tasks are drained. | Not running. Resume via `tryResume` to keep the record, or delete it with `remove:true` before creating a replacement. | All. |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None. Remove the record explicitly with `agent:delete remove:true` before reusing the ID. |
 
 **Durable state transitions** are documented in §4: `create` (→SLEEPING), a
@@ -312,7 +312,8 @@ one event on the venue's `AgentEvents` bus (`engine.agentEvents()`), and the
 same ordered stream is served over REST at `GET /api/v1/agents/{id}/sse`.
 Everything else — `agent:info`, `agent:context`, `agent:step`, the timeline —
 is post-hoc; this is the one live surface, and it carries nothing the
-timeline entry does not keep.
+timeline entry does not keep, except the progress a running operation
+reports, which is only ever the current state of work in flight.
 
 | Event | When | Payload |
 |-------|------|---------|
@@ -322,6 +323,7 @@ timeline entry does not keep.
 | `inference:start` | A model call is starting on an assembled prompt | `op`, `model?`, `messages`, `tools` (counts), `bytes`, `budget` |
 | `inference:end` | The call returned, or failed | `ms`, `content?`, `toolCalls?: [{id, name}]`, `tokens?`, `model?` — or `ms`, `error` |
 | `tool:start` | A tool call is being dispatched | `id`, `name`, `activityLabel` (operation metadata → asset name → raw tool name), `detail: {input}` |
+| `tool:progress` | The operation the call invoked published `progress` on its Job — each change once, before the call's `tool:result` | `id`, `name`, `message?` (the operation's own line for a person), `detail: {progress}` (the whole `{message, data?}` record, JOBS.md) |
 | `tool:result` | The call finished | `id`, `name`, `ms`, `isError?`, `detail: {result}` |
 | `cycle:end` | The merge committed — timeline entry and session turns are persisted | `ms`, `response?` \| `error?`, `tokens?`, `timeline` (index of the entry), `detail: {turns?}`; a cycle stopped by suspend/delete carries `error` and `cancelled` |
 | `run:end` | The run loop exited | `run`, `status` (the rest state reached), `cycles` |
@@ -340,7 +342,11 @@ cancellation token, and the transition opens its `CycleRecord` on it (§2.4).
 Activity is attributed to exactly the cycle that made it; a transition run
 outside a run loop — a direct `llmagent:chat`, `agent:step` — has no handle
 and emits nothing. Calls fenced after a terminal tool request never ran and
-are not announced.
+are not announced. An operation a call invokes is correlated the same way:
+the call is its thread's running call while it dispatches, and the Job it
+invokes is watched from creation, before its adapter starts, until the call
+has its result — so none of the operation's progress is missed and none
+follows the result.
 
 **Authority and display.** The stream is owner-level, the same authority as
 `GET /agents/{id}`: it carries what the completed timeline entry exposes,
@@ -370,6 +376,17 @@ the agent's `status` events (a suspension or termination is why a conversation
 stopped); run boundaries and other sessions' cycles are omitted, and `seq`
 keeps its gaps. The initial REST frame echoes the filter. Session lifecycle
 events (created, deleted, message queued, turn appended) are not emitted.
+
+**Guards.** The tap watches; a guard decides. An embedding host registers one
+with `engine.toolGuards().add(guard)` to see each operation call an agent is
+about to make — owner, agent, session, tool name, operation, input — and
+return null to let it run or a reason to refuse it. A refused call never runs:
+its tool result is `Error: <reason>`, as for a capability denial, and its
+`tool:result` follows the `tool:start` already announced. A guard may block
+while it decides (holding a risky call while someone is asked), but runs
+within the call's own `toolCallTimeoutMs`; one that times out or throws
+refuses. Harness tools are never guarded. With no guard registered a check
+costs nothing.
 
 ---
 
@@ -923,12 +940,20 @@ the response visible to callers without querying agent state separately.
 | Operation | Trigger | Effect | Allowed status | New status |
 |-----------|---------|--------|----------------|------------|
 | **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged. | RUNNING (internal) | SUSPENDED |
-| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
-| **Suspend (manual)** | `agent:suspend` | Set status → SUSPENDED with caller-supplied reason. Stops the agent from being woken. | SLEEPING | SUSPENDED |
+| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error` and `suspension`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
+| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`; latest stop replaces previous actor/reason. Cancel an active transition, recording the stop on its timeline and notifying waiting callers. | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
 | **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
 | **Cancel task** | `agent:cancelTask` | Remove a pending task from the agent's `tasks` index. Does not affect the run loop directly. | any except TERMINATED | unchanged |
 | **Delete** | `agent:delete` | Accepts exactly one `agentId` or an exact `agentIds` list (maximum 100; no prefixes/wildcards). One Job halts each named agent. Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove each lattice slot, making unreachable storage eligible for Etch GC. The full list is validated before deletion starts. | any | TERMINATED (or absent) |
 | **Fork** | `agent:fork` | Create a NEW agent at a different `agentId` from this one's config + optional state + optional timeline. The source is untouched and the target slot must be empty. | source must not be TERMINATED | new agent SLEEPING |
+
+`agent:info`, the REST agent summary, and `agent:list` expose `suspension`.
+Clients distinguish a deliberate stop by that field, never by error wording.
+Legacy records without it remain unclassified. New requests/chats to a
+suspended agent fail with `errorCode: "agent:suspended"`; their message names
+the stop and advises asking the stopping caller, or retains fault-recovery
+advice for an ordinary failure. `by` is `ctx.getCallerDID()`, including through
+sudo; an intermediary is not relabelled as the agent on whose behalf it acted.
 
 **All mutations are atomic.** Each operation is a single compare-and-swap
 on the agent's lattice cell, so concurrent operations against the same

@@ -23,15 +23,14 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
-import covia.lattice.Covia;
+import convex.lattice.cursor.Root;
 
 /**
  * Verifies the Engine's periodic-flush contract.
  *
  * <p>The Engine's persistence sweep runs every {@code SWEEP_INTERVAL_MS} (100 ms)
- * and triggers a propagator sync each tick. Independently, the sweep is
- * supposed to invoke {@link PersistenceHandler#flush()} every
+ * and triggers a host sync each tick. Independently, the sweep is
+ * supposed to invoke {@link convex.lattice.LatticeHost#flush()} every
  * {@link Engine#FLUSH_INTERVAL_MS} so unclean shutdown can lose at most that
  * many ms of writes. This test confirms:</p>
  *
@@ -42,7 +41,7 @@ import covia.lattice.Covia;
  *   <li>Closing the Engine triggers a final flush regardless of timer state.</li>
  * </ul>
  *
- * <p>Uses a counting {@link PersistenceHandler} so the test never has to
+ * <p>Uses a counting memory store so the test never has to
  * touch a real Etch file — the contract under test is purely about WHEN
  * the handler's {@code flush()} is invoked.</p>
  */
@@ -80,19 +79,20 @@ public class EngineFlushSweepTest {
 	 * Counting handler — records every persist + flush call, with a hook so
 	 * tests can capture the value at the moment of flush if needed.
 	 */
-	private static final class CountingHandler implements PersistenceHandler {
+	private static final class CountingStore extends convex.core.store.MemoryStore {
 		final AtomicInteger persistCount = new AtomicInteger();
 		final AtomicInteger flushCount = new AtomicInteger();
 		final AtomicReference<ACell> lastPersisted = new AtomicReference<>();
 
 		@Override
-		public void persist(ACell value) {
+		public <T extends ACell> convex.core.data.Ref<T> setRootData(T value) {
 			persistCount.incrementAndGet();
 			lastPersisted.set(value);
+			return super.setRootData(value);
 		}
 
 		@Override
-		public void flush() throws IOException {
+		public void flush() {
 			flushCount.incrementAndGet();
 		}
 	}
@@ -106,9 +106,9 @@ public class EngineFlushSweepTest {
 		);
 	}
 
-	private static Engine engineWith(CountingHandler handler) throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-		return new Engine(testConfig(), cursor, AKeyPair.generate(), handler).start();
+	private static Engine engineWith(CountingStore handler) throws Exception {
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		return new Engine(testConfig(), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, handler)), AKeyPair.generate()).start();
 	}
 
 	private static void sleep(long ms) throws InterruptedException {
@@ -139,7 +139,7 @@ public class EngineFlushSweepTest {
 	// ========================================================================
 	@Test
 	public void testSweepInvokesFlush() throws Exception {
-		CountingHandler handler = new CountingHandler();
+		CountingStore handler = new CountingStore();
 		Engine engine = engineWith(handler);
 		try {
 			int flushes = pollUntil(handler.flushCount, 1, 10_000);
@@ -162,7 +162,7 @@ public class EngineFlushSweepTest {
 	// ========================================================================
 	@Test
 	public void testExplicitFlushAdvancesTimer() throws Exception {
-		CountingHandler handler = new CountingHandler();
+		CountingStore handler = new CountingStore();
 		Engine engine = engineWith(handler);
 		try {
 			engine.flush();
@@ -185,7 +185,7 @@ public class EngineFlushSweepTest {
 	// ========================================================================
 	@Test
 	public void testCloseRunsFinalFlush() throws Exception {
-		CountingHandler handler = new CountingHandler();
+		CountingStore handler = new CountingStore();
 		Engine engine = engineWith(handler);
 		// Close immediately — too soon for a sweep flush to have fired.
 		int before = handler.flushCount.get();
@@ -195,23 +195,14 @@ public class EngineFlushSweepTest {
 			"close() must invoke a final handler.flush(), got before=" + before + " after=" + after);
 	}
 
-	// ========================================================================
-	// Test 4 — NOOP handler does not spin up the sweep daemon
-	// ========================================================================
 	@Test
-	public void testNoopHandlerSkipsSweepFlush() throws Exception {
-		// Use a counting wrapper that delegates to NOOP semantics for persist
-		// but records flushes — except startup receives the canonical
-		// NOOP, so the wrapper isn't seen by Engine. Instead we just verify
-		// that starting a NOOP-handler engine doesn't throw and closes
-		// cleanly. The branch tested here is the `persistHandler == NOOP`
-		// guard in Engine.start(); behavioural verification of the
-		// "no sweep thread" path is covered by the existing
-		// EnginePersistenceTest suite.
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-		Engine engine = new Engine(testConfig(), cursor, AKeyPair.generate(), PersistenceHandler.NOOP).start();
-		// engine.flush() on a NOOP-handler engine must still work and not throw.
-		engine.flush();
-		engine.close();
+	public void testEphemeralApplicationNeedsNoSweep() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		Engine engine = new Engine(testConfig(), CoviaApplication.create(key), key).start();
+		try {
+			engine.flush();
+		} finally {
+			engine.close();
+		}
 	}
 }

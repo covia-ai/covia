@@ -18,7 +18,8 @@ import convex.auth.jwt.JWT;
  * with the provided key pair and contains:
  * <ul>
  *   <li>{@code sub} — normally the key's {@code did:key}, or a stable named
- *       DID whose venue-owned authentication record admits this key</li>
+	 *       DID whose venue-owned authentication record admits this key, or
+	 *       an identity nested below the signing key's DID</li>
  *   <li>{@code iss} — same as {@code sub} (self-issued)</li>
  *   <li>{@code aud} — the target venue's DID, when configured (RECOMMENDED:
  *       binds the token to one venue, so a captured JWT cannot be replayed at
@@ -60,8 +61,9 @@ class KeyPairAuth extends VenueAuth {
 
 	/**
 	 * Creates a key-pair authenticator whose stable subject may differ from the
-	 * signing key's {@code did:key}. The target venue must have registered this
-	 * public key as an authentication method for the asserted subject.
+	 * signing key's {@code did:key}. A local named user requires a registered
+	 * authentication key; an identity nested below the signing key's DID does not.
+	 * Authentication alone grants neither user admission nor parent authority.
 	 */
 	KeyPairAuth(AKeyPair keyPair, String subject, long tokenLifetime, String audience) {
 		if (keyPair == null) {

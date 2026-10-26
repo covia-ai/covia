@@ -5,11 +5,15 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.11</version>
+		<version>0.10.0</version>
 	</parent>
 	<artifactId>venue</artifactId>
 	<name>Covia Venue</name>
 	<description>Covia venue server runtime: the grid node that hosts operations, agents, assets, and the REST/MCP/A2A APIs.</description>
+
+	<properties>
+		<covia.module.name>covia.venue</covia.module.name>
+	</properties>
 
 	<build>
 		<plugins>
@@ -71,6 +75,20 @@
 	</build>
 
 	<dependencies>
+		<!-- Standard external-login protocol validation and PKCE. Convex remains
+		     the venue credential and lattice implementation. -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>oauth2-oidc-sdk</artifactId>
+			<version>11.38.2</version>
+			<exclusions>
+				<!-- json-smart's older ASM must not override Jetty's ASM family. -->
+				<exclusion>
+					<groupId>org.ow2.asm</groupId>
+					<artifactId>asm</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
 		<!-- Covia deps -->
 		<dependency>
 			<groupId>ai.covia</groupId>
@@ -111,7 +129,12 @@
 			<artifactId>convex-restapi</artifactId>
 			<version>${convex.version}</version>
 		</dependency>
-		
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-p2p</artifactId>
+			<version>${convex.version}</version>
+		</dependency>
+
 		<!-- Testing -->
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>

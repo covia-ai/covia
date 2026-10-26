@@ -19,12 +19,15 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.ATransformCursor;
 import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
 import covia.venue.AgentState;
+import covia.venue.AdapterState;
 import covia.venue.api.A2ACodec;
 
 public class TestAdapter extends AAdapter {
@@ -33,6 +36,77 @@ public class TestAdapter extends AAdapter {
 
 	/** Shared body used by the skill-adoption test fixture and its mock LLM. */
 	public static final String SKILL_LLM_BODY = "Use covia_read on w/probe.";
+
+	public static final String SCRATCH_ONLY = "Only x/test/scratch accepts writes";
+	private static final AString K_EXECUTION = Strings.intern("execution");
+	private static final AString K_CONTEXT = Strings.intern("context");
+	private static final AString K_SAMPLES = Strings.intern("samples");
+	private static final AString K_SCRATCH = Strings.intern("scratch");
+	private static final AString K_USERS = Strings.intern("users");
+	private static final AString K_USER = Strings.intern("user");
+	private static final AString K_VENUE = Strings.intern("venue");
+	private static final AString K_LATTICE = Strings.intern("lattice");
+	private static final AMap<AString, ACell> LATTICE_INFO = Maps.of(
+		"path", "x/test",
+		"context", "Read-only caller, user, venue and execution scope; no credentials or proofs",
+		"samples", "Read-only nested maps, vectors, Unicode text and stored nulls",
+		"scratch", "Per-user persistent scratch; write, append, copy and delete are allowed here only");
+	private static final AMap<AString, ACell> SAMPLES = Maps.of(
+		"text", "Hello, lattice!\nUnicode: café 🌍",
+		"numbers", Vectors.of(0L, 1L, 2L, 3L, 5L, 8L),
+		"record", Maps.of("name", "sample", "enabled", true, "tags", Vectors.of("demo", "lattice")),
+		"null", null, "emptyMap", Maps.empty(), "emptyVector", Vectors.empty());
+
+	@Override public AMap<AString, ACell> info() {
+		return Maps.of(K_LATTICE, LATTICE_INFO);
+	}
+
+	/**
+	 * Version 1 is version 0's shape, {@code users/<did>/scratch}, unchanged.
+	 * The test adapter versions its state so every venue, and the
+	 * release-written fixtures, run adapter state migration at start-up.
+	 */
+	@Override public long stateVersion() {
+		return 1;
+	}
+
+	@Override public ACell migrateState(long version, ACell state) {
+		if (version == 0) return state;
+		return super.migrateState(version, state);
+	}
+
+	/** A small connected view: diagnostics are computed, only scratch is persisted. */
+	@Override public AForkableCursor<ACell> latticeView(RequestContext ctx) {
+		RequestContext.ExecutionScope scope = ctx.getExecutionScope();
+		AMap<AString, ACell> context = Maps.of(
+			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
+			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
+				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
+		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
+			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID());
+		return new ATransformCursor<ACell, ACell>(scratch) {
+			@Override protected ACell view(ACell stored) {
+				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);
+				AMap<AString, ACell> record = RT.ensureMap(stored);
+				return record != null && record.containsKey(K_SCRATCH)
+					? result.assoc(K_SCRATCH, record.get(K_SCRATCH)) : result;
+			}
+			@Override protected ACell write(ACell current, ACell value) {
+				AMap<AString, ACell> record = RT.ensureMap(value);
+				return record != null && record.containsKey(K_SCRATCH)
+					? Maps.of(K_SCRATCH, record.get(K_SCRATCH)) : null;
+			}
+		};
+	}
+
+	@Override public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+		// Replacing/deleting the view root could otherwise bypass read-only children.
+		return path.length > 0 && K_SCRATCH.equals(path[0]) ? null : SCRATCH_ONLY;
+	}
+
+	@Override public void deleteUserState(AString did, AdapterState state) {
+		state.delete(state.userPath(did, ""));
+	}
 
     /**
      * Test-only sink: the {@code capturectx} op records the {@link RequestContext}
@@ -234,6 +308,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
+			installTestAsset("progress",     BASE+"progressop.json");
 			installTestAsset("error",        BASE+"failop.json");
 			installTestAsset("chat",         BASE+"chatop.json");
 			installTestAsset("pause",        BASE+"pauseop.json");
@@ -267,6 +342,18 @@ public class TestAdapter extends AAdapter {
             // Delay: needs Job for caller DID propagation to sub-invocation
 			job.setStatus(Status.STARTED);
             handleDelay(job, ctx, input);
+        } else if ("progress".equals(subOp)) {
+            // Reports progress from its own thread as a long-running operation
+            // does — two steps, the second published twice — then completes,
+            // or with {hold: true} keeps running until it is sent "done".
+            job.setStatus(Status.STARTED);
+            boolean hold = RT.bool(RT.getIn(input, "hold"));
+            VIRTUAL_EXECUTOR.submit(() -> {
+                for (String step : new String[] {"step 1", "step 2", "step 2"}) {
+                    job.progress(step, Maps.of("step", step));
+                }
+                if (!hold) job.completeWith(Maps.of("done", Strings.create("all steps")));
+            });
         } else if ("never".equals(subOp)) {
             // Never completes. Run the default one-shot path (starts the
             // never-completing future and wires the cancel hook), then register
@@ -340,6 +427,8 @@ public class TestAdapter extends AAdapter {
 				ACell op = RT.getIn(input, Fields.OPERATION);
 				ACell opInput = RT.getIn(input, Fields.INPUT);
 				CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
+				// On JDK 25 before 25.0.3 (JDK-8370887) this virtual-thread sleep
+				// can overrun by tens of seconds.
 				Thread.sleep(delay.longValue());
 				ACell result = engine.jobs().invokeInternal(RT.ensureString(op), opInput, ctx).join();
 				job.completeWith(result);
@@ -572,6 +661,10 @@ public class TestAdapter extends AAdapter {
 					Maps.of("id", "call_echo_two", "name", "test_echo",
 						"arguments", "{\"echo\":\"two\"}")));
 		}
+		if (model != null && "no-reply-test".equals(model.toString())) {
+			// Ends the turn having said nothing, as a model may.
+			return Maps.of("role", Strings.create("assistant"));
+		}
         String text = "(no user message)";
         ACell messagesCell = RT.getIn(input, "messages");
         if (messagesCell instanceof AVector) {
@@ -649,7 +742,10 @@ public class TestAdapter extends AAdapter {
             // through the agent tool loop while keeping the L3 provider fully
             // deterministic. LangChain's provider boundary has separate tests
             // for its provider-only JSON rendering.
-            if (lastUserMsg.contains("issue-334-read")) {
+            if (lastUserMsg.contains("progress-relay")) {
+                toolName = "v/test/ops/progress";
+                arguments = "{}";
+            } else if (lastUserMsg.contains("issue-334-read")) {
                 toolName = "covia_read";
                 arguments = "{\"path\":\"w/issue-334/signals\"}";
             } else if (lastUserMsg.contains("issue-334-list")) {

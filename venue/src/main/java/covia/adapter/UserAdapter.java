@@ -3,10 +3,15 @@ package covia.adapter;
 import java.util.concurrent.CompletableFuture;
 
 import convex.auth.did.DID;
+import convex.core.crypto.AKeyPair;
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.AccountKey;
+import convex.core.data.Blob;
+import convex.core.data.Blobs;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -18,9 +23,12 @@ import covia.api.Fields;
 import covia.venue.Audit;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
+import covia.venue.UserExports;
 import covia.venue.Users;
+import covia.venue.VenueJob;
 
 /**
  * Venue user registration and discovery operations.
@@ -39,6 +47,16 @@ public class UserAdapter extends AAdapter {
 	private static final AString TOTAL = Strings.intern("total");
 	private static final AString ADDED = Strings.intern("added");
 	private static final AString REVOKED = Strings.intern("revoked");
+	private static final AString EXPORT = Strings.intern("export");
+	private static final AString ACCOUNT_KEY = Strings.intern("accountKey");
+	private static final AString SECRETS = Strings.intern("secrets");
+
+	public static final String EXPORT_DIRECT_ONLY = "User export requires a direct run with no recorded job, agent or session context";
+	public static final String EXPORT_DEFINITION_REQUIRED = "User export requires the published operation definition";
+	public static final String INVALID_ACCOUNT_KEY = "accountKey must be a 32-byte Ed25519 public key";
+	public static final String INVALID_SECRETS = "secrets must be a boolean";
+	public static final String SEED_REF_REQUIRED = "seed must be a secret reference (s/NAME or <did>/s/NAME), never a raw seed";
+	public static final String INVALID_SEED = "seed must name a secret holding a 32-byte hexadecimal Ed25519 seed";
 
 	@Override
 	public String getName() {
@@ -57,6 +75,9 @@ public class UserAdapter extends AAdapter {
 		installSkill("admin/users", "/skills/users.json");
 		installAsset("user/create", "/adapters/user/create.json");
 		installAsset("user/delete", "/adapters/user/delete.json");
+		installAsset("user/export", "/adapters/user/export.json");
+		installAsset("user/import", "/adapters/user/import.json");
+		installAsset("user/clone", "/adapters/user/clone.json");
 		installAsset("user/sudo", "/adapters/user/sudo.json");
 		installAsset("user/info", "/adapters/user/info.json");
 		installAsset("user/list", "/adapters/user/list.json");
@@ -73,6 +94,9 @@ public class UserAdapter extends AAdapter {
 		String event = switch (subOperation) {
 			case "create" -> Audit.USER_CREATE;
 			case "delete" -> Audit.USER_DELETE;
+			case "export" -> Audit.USER_EXPORT;
+			case "import" -> Audit.USER_IMPORT;
+			case "clone" -> Audit.USER_CLONE;
 			case "sudo" -> Audit.USER_SUDO;
 			case "authentication-add" -> Audit.KEY_ADD;
 			case "authentication-revoke" -> Audit.KEY_REVOKE;
@@ -85,6 +109,9 @@ public class UserAdapter extends AAdapter {
 			result = CompletableFuture.completedFuture(switch (subOperation) {
 				case "create" -> create(ctx, input);
 				case "delete" -> engine.deleteUser(ctx, requireDID(RT.ensureString(RT.getIn(input, Fields.DID))));
+				case "export" -> export(ctx, meta, input);
+				case "import" -> importUser(ctx, input);
+				case "clone" -> cloneUser(ctx, input);
 				case "info" -> info(ctx, input);
 				case "list" -> list(ctx);
 				case "authentication-add" -> authenticationAdd(ctx, input);
@@ -98,7 +125,7 @@ public class UserAdapter extends AAdapter {
 		}
 		if (event != null && engine.audit().enabled()) {
 			// The target user, the key, and for sudo the operation run — never its input.
-			Object target = RT.getIn(input, Fields.DID);
+			Object target = RT.getIn(input, "clone".equals(subOperation) ? Fields.TO : Fields.DID);
 			Object key = RT.getIn(input, Fields.KEY);
 			Object operation = "sudo".equals(subOperation) ? RT.getIn(input, Fields.OPERATION) : null;
 			result.whenComplete((r, t) -> engine.audit().event(event,
@@ -176,6 +203,70 @@ public class UserAdapter extends AAdapter {
 			CREATED, CVMBool.create(created));
 	}
 
+	/**
+	 * A user's whole state as one value. Its result is never recorded: a
+	 * recorded job would hold a copy of the user in the caller's own namespace,
+	 * and the next export would carry it again.
+	 */
+	private ACell export(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
+				|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
+				|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXPORT_DIRECT_ONLY);
+		// A caller-controlled output schema could put the state in validation logs.
+		if (!getOperations().get(EXPORT).get(Fields.OPERATION).equals(meta.get(Fields.OPERATION))) {
+			throw new AuthException(EXPORT_DEFINITION_REQUIRED);
+		}
+		AString did = requireDID(targetDID(ctx, input));
+		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_EXPORT);
+		ACell secrets = RT.getIn(input, SECRETS);
+		if (secrets != null && !(secrets instanceof CVMBool)) throw new IllegalArgumentException(INVALID_SECRETS);
+		AccountKey recipient = null;
+		ACell suppliedKey = RT.getIn(input, ACCOUNT_KEY);
+		if (suppliedKey != null) {
+			ABlob key = Blobs.parse(suppliedKey);
+			if (key == null || key.count() != AccountKey.LENGTH) throw new IllegalArgumentException(INVALID_ACCOUNT_KEY);
+			recipient = AccountKey.create(key);
+		}
+		Blob export = new UserExports(engine).exportUser(did, recipient, !CVMBool.FALSE.equals(secrets));
+		// Hex, as JSON carries it: the published output is a string, and import reads either form.
+		return Maps.of(Fields.DID, did, Fields.VERSION, UserExports.VERSION,
+			EXPORT, Strings.create("0x" + export.toHexString()));
+	}
+
+	/**
+	 * Fills an account from an export. Venue authority only: a user importing
+	 * into their own account would find it already holding the import's job.
+	 */
+	private ACell importUser(RequestContext ctx, ACell input) {
+		AString did = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
+		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
+		ABlob export = Blobs.parse(RT.getIn(input, EXPORT));
+		if (export == null) throw new IllegalArgumentException(UserExports.NOT_AN_EXPORT);
+		boolean created = new UserExports(engine).importUser(export, did, seed(ctx, input));
+		return Maps.of(Fields.DID, did, CREATED, CVMBool.create(created));
+	}
+
+	private ACell cloneUser(RequestContext ctx, ACell input) {
+		AString from = requireDID(RT.ensureString(RT.getIn(input, Fields.FROM)));
+		AString to = requireDID(RT.ensureString(RT.getIn(input, Fields.TO)));
+		requireSelfOrVenueUserAuthority(ctx, from, Abilities.USER_EXPORT);
+		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
+		boolean created = new UserExports(engine).cloneUser(from, to);
+		return Maps.of(Fields.FROM, from, Fields.TO, to, CREATED, CVMBool.create(created));
+	}
+
+	/** The key pair named by the optional {@code seed} secret reference. */
+	private AKeyPair seed(RequestContext ctx, ACell input) {
+		ACell supplied = RT.getIn(input, Fields.SEED);
+		if (supplied == null) return null;
+		AString ref = RT.ensureString(supplied);
+		if (ref == null || !Engine.isSecretRef(ref.toString())) throw new IllegalArgumentException(SEED_REF_REQUIRED);
+		String value = engine.resolveSecret(ref.toString(), ctx);
+		ABlob seed = (value == null) ? null : Blobs.parse(value);
+		if (seed == null || seed.count() != AKeyPair.SEED_LENGTH) throw new IllegalArgumentException(INVALID_SEED);
+		return AKeyPair.create(seed.toFlatBlob());
+	}
+
 	/** Job-free REST reads (#255) call this directly, reusing the same
 	 *  capability checks as the {@code user:info} operation. */
 	public ACell info(RequestContext ctx, ACell input) {
@@ -230,7 +321,7 @@ public class UserAdapter extends AAdapter {
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		if (key == null) throw new IllegalArgumentException("key is required");
 		boolean directVenue = engine.getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getAgentId() == null;
+			&& ctx.getExecutionScope().agentId() == null;
 		boolean revoked = engine.getAuth().revokeAuthenticationKey(
 			id, key, ctx.getCallerDID(), directVenue);
 		engine.flush();
@@ -286,7 +377,7 @@ public class UserAdapter extends AAdapter {
 	}
 
 	private void requireSelfOrVenueUserAuthority(RequestContext ctx, AString did, AString ability) {
-		if (did.equals(ctx.getCallerDID()) && ctx.getAgentId() == null) return;
+		if (did.equals(ctx.getCallerDID()) && ctx.getExecutionScope().agentId() == null) return;
 		requireVenueUserAuthority(ctx, ability);
 	}
 

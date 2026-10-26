@@ -108,6 +108,8 @@ public class MCPAdapter extends AAdapter {
 						if (serverUrl == null) {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
+						// The caller may name the server: the same outbound policy as http.
+						engine.requireSafeUrl(serverUrl.toString());
 
 						// Bridged form (#80): when the OPERATION metadata pins the
 						// remote tool, the op's declared input IS the tool's own
@@ -153,6 +155,7 @@ public class MCPAdapter extends AAdapter {
 						if (serverUrl == null) {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
+						engine.requireSafeUrl(serverUrl.toString());
 
 						// Get API access token, if provided
 						AString token = RT.getIn(input, Fields.TOKEN);
@@ -614,7 +617,7 @@ public class MCPAdapter extends AAdapter {
 		}
 		String path = requireToolPath(input);
 		boolean venuePath = path.startsWith("v/");
-		if (venuePath) engine.requireAuthority(ctx, Abilities.V_MCP, Abilities.MCP_MANAGE);
+		if (venuePath) requireVenueManage(ctx);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
 		engine.requireSafeUrl(url.toString());
@@ -775,7 +778,7 @@ public class MCPAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	ACell refreshPath(RequestContext ctx, String path) {
 		boolean venuePath = path.startsWith("v/");
-		if (venuePath) engine.requireAuthority(ctx, Abilities.V_MCP, Abilities.MCP_MANAGE);
+		if (venuePath) requireVenueManage(ctx);
 		RequestContext writeCtx = venuePath ? engine.venueContext() : ctx;
 
 		ACell root = readLattice(writeCtx, path);
@@ -1021,13 +1024,20 @@ public class MCPAdapter extends AAdapter {
 		return name.toString();
 	}
 
-	/** Venue scope requires the {@code mcp/manage} ability on {@code v/mcp} —
-	 *  denied under the public grant scope, grantable by cap. User scope is the
-	 *  default and needs nothing beyond invoking the op. */
+	/** Venue scope is venue administration (see {@link #requireVenueManage}).
+	 *  User scope is the default and needs nothing beyond invoking the op. */
 	private boolean isVenueScope(RequestContext ctx, ACell input) {
 		boolean venueScope = SCOPE_VENUE.equals(RT.ensureString(RT.getIn(input, K_SCOPE)));
-		if (venueScope) engine.requireAuthority(ctx, Abilities.V_MCP, Abilities.MCP_MANAGE);
+		if (venueScope) requireVenueManage(ctx);
 		return venueScope;
+	}
+
+	/** Venue-side targets are written as the venue into the shared catalog, so a
+	 *  null capability scope is not enough: the caller must be the venue itself
+	 *  or present a venue-issued {@code mcp/manage} delegation over
+	 *  {@code <venue DID>/v/mcp}. */
+	private void requireVenueManage(RequestContext ctx) {
+		engine.requireVenueAuthority(ctx, Abilities.V_MCP.toString(), Abilities.MCP_MANAGE);
 	}
 
 	private static String opsRoot(boolean venueScope, String name) {

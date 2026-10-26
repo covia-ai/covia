@@ -17,8 +17,8 @@ import convex.core.lang.RT;
 /**
  * The user record's framework-owned {@code meta} slot (see
  * GRID_LATTICE_DESIGN.md §"User meta record"): {@code meta.created} minted on
- * the record's first write, {@code meta.updated} auto-bumped by the
- * {@code StampingLattice} boundary on EVERY deep write anywhere in the user's
+ * the record's first write, {@code meta.updated} auto-bumped by the user
+ * record's stamped cursor ({@code Covia.stampUserMeta}) on EVERY deep write anywhere in the user's
  * subtree — the activity signal for future identity-lifecycle (TTL) policy.
  * No application code writes these fields; the lattice layer does.
  */
@@ -88,7 +88,7 @@ public class UserMetaStampTest {
 		// user-level stamp (StampedCursor deep-write re-stamp). Fresh wrapper
 		// after the clock advance, as real per-access derivation gives.
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("frame-agent");
-		assertTrue(agent.updateSessionFrames(sid, null,
+		assertTrue(agent.session(sid).updateFrames(null,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("x")))));
 		assertTrue(metaField("updated") > before,
 			"a deep frame write must bump meta.updated");

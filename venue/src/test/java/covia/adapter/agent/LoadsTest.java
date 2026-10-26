@@ -334,7 +334,7 @@ public class LoadsTest {
 		Loads.Snapshot second = resolve(loads);
 		AMap<AString, ACell> changed = GoalTreeContext.applyObservations(
 			frame, second.observations(), 2L);
-		String history = all(RT.ensureVector(changed.get(GoalTreeContext.K_CONVERSATION)));
+		String history = all(GoalTreeContext.activeConversation(changed));
 		assertTrue(history.contains("WATCHED-SKILL-ONE"), history);
 		assertTrue(history.contains("WATCHED-SKILL-TWO"), history);
 	}

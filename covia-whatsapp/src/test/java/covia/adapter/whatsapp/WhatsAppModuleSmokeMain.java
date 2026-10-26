@@ -61,10 +61,12 @@ public final class WhatsAppModuleSmokeMain {
 				AAdapter adapter = engine.getAdapter(PROVIDER);
 				check(adapter != null && adapter.getClass().getClassLoader() instanceof ModuleClassLoader, "Module did not load in isolation");
 				check(adapter instanceof WebhookHandler, "Not a webhook receiver");
-				for (String path : new String[]{"v/ops/" + PROVIDER + "/send", "v/ops/" + PROVIDER + "/create",
+				for (String path : new String[]{"v/ops/" + PROVIDER + "/send", "v/ops/" + PROVIDER + "/download", "v/ops/" + PROVIDER + "/create",
 					"v/ops/" + PROVIDER + "/delete", "v/ops/" + PROVIDER + "/bots", "v/skills/adapters/" + PROVIDER, "v/adapters/" + PROVIDER + "/info"}) {
 					check(engine.resolvePath(Strings.create(path), engine.venueContext()) != null, "Missing " + path);
 				}
+				// Relay bindings are served by the same adapter, across the module boundary.
+				check(adapter instanceof covia.adapter.relay.RelayHandler, "Not a relay handler");
 				URI endpoint = URI.create("http://127.0.0.1:" + server.port() + "/webhooks/" + PROVIDER + "/c-main");
 				var challenge = client.send(HttpRequest.newBuilder(URI.create(endpoint + "?hub.mode=subscribe&hub.verify_token=verify%2Btoken&hub.challenge=challenge%2B%F0%9F%90%A6"))
 					.timeout(Duration.ofSeconds(5)).GET().build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

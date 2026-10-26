@@ -200,6 +200,16 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
 - **Ungated alternatives win first**: a covering local grant without a gate,
   or a complete delegated proof path without gates, authorises outright.
   An ungated leaf does not erase a gate on its parent.
+- **Bound to the grantor**: a bare gate reference means the grantor's
+  operation, as a bare `with` does: in a token it binds to that link's issuer
+  (`o/gate` → `<iss>/o/gate`, per hop), in an agent's `config.caps` to its
+  owner. Venue catalog (`v/…`), content-hash and DID-URL references are
+  absolute. A bare gate in a link that cannot be rewritten (a JWT-string
+  parent) names no one's gate and fails closed. The presenter cannot
+  substitute its own.
+- **Named, not read**: naming a gate is consent to run it as a gate check.
+  Its definition is resolved without a read check, so a grantor's private gate
+  works for a presenter who cannot read it.
 - **Fail-closed, always**: gate op fails → denied with the gate's reason;
   gate unresolvable, times out (30s), no evaluator in scope, or an unknown /
   malformed constraint → denied. Never fail-open.
@@ -595,6 +605,14 @@ history, venue-wide events and schema-validation logs. Transient results
 cannot be fetched through public job-status APIs. HTTP run responses use
 `Cache-Control: private, no-store`.
 
+After authorization, a missing secret fails with `SecretAdapter.SECRET_UNAVAILABLE`;
+an unreadable key version, corrupt ciphertext or malformed record fails with
+`SecretAdapter.SECRET_DECRYPT_FAILED`. Decryption failures expose no underlying
+exception or secret value. `secret:set` uses the atomic store-if-absent operation
+and refuses collisions with `SecretAdapter.SECRET_EXISTS` unless `overwrite:true`
+is supplied. Java callers can compare against these constants without embedding
+message wording or listing names before attempting a write.
+
 With `recordReadOnlyOperations:true`, ordinary extraction fails closed. An
 explicit private run is possible only if the venue enables private jobs; it
 must still meet every owner/direct-call restriction. Audit logging, when
@@ -720,9 +738,13 @@ The nesting is recoverable by parsing (`Principals.userOf`), and
 `Authority.of(did)` uses it, so reconstructing a context from a stored DID is
 lossless — a scheduled event or capability gate that replays as
 `<owner>:g:<agent>` still resolves the owner's namespace. That parse is
-therefore load-bearing for authorisation, which is why a user identity may
-never be agent-shaped: `Engine.admitUser` rejects one at the authentication
-boundary.
+therefore load-bearing for authorisation, which is why an admitted user may
+never be agent-shaped: `Engine.admitUser` rejects one at the admission
+boundary. A bearer may authenticate a nested agent identity on an identity-only
+route (AUTH.md section 5.2), but it establishes no local execution relationship.
+`AuthMiddleware.callerContext` keeps that full subject as both actor and
+namespace with an empty capability scope, so the name grants no owner access.
+Explicit authorization is required to act within another namespace.
 
 Being a sub-principal is **proximity, not permission**.
 `ctx.relationTo(target)` classifies a target as `SELF`, `OWNER`, `SAME_USER`
@@ -769,6 +791,20 @@ This is why the guards are pinned to identity. An agent with no `config.caps`
 holds a `null` scope, which the `authorityCovers` fast path treats as
 unrestricted; a scope-based defence would therefore be absent on exactly the
 agent that most needs bounding.
+
+**Conferring:** attenuation only. Creating or reconfiguring an agent mints no
+token, but it hands authority on, so the caller may confer only what it holds
+(`Engine.requireConferrable`). `agent:create`, `agent:update` and `agent:fork`
+refuse a config whose `caps` the caller's own authority does not cover, one
+capability at a time; an absent `caps` is unrestricted, so only a caller
+unrestricted in that namespace may leave it out. The same holds for `accepts`,
+which confers `agent/request` and `agent/message` on the agent, and for a public
+`a2a.caps`. An agent may therefore create sub-agents, never more capable ones,
+and a delegated `agent/create` or `agent/write` confers nothing beyond the
+delegation. An update re-checks only the fields it changes. A direct
+`llmagent:chat` or `goaltree:chat` whose input `config.caps` would replace the
+caller's scope follows the same rule.
+
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.
 

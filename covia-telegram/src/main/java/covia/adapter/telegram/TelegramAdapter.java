@@ -29,11 +29,11 @@ import covia.venue.RequestContext;
  * <p><b>Bots</b> are declared under {@code adapters.telegram.bots.<name>}
  * (see {@link BotSpec}) by the operator, or created at runtime by a user with
  * {@code telegram:create} (acting as that user, recorded at
- * {@code w/adapters/telegram/users/<did>/bots/<name>} in the venue's private
- * adapter workspace and re-armed at boot;
+ * {@code :adapters/telegram/users/<did>/bots/<name>} in the venue's private
+ * adapter state and re-armed at boot;
  * {@code telegram:delete} removes them). Each runs as its {@code user} with one
  * <b>inbound handler</b>: an agent — one {@code agent:chat} session per
- * Telegram chat, persisted in the same private adapter workspace so
+ * Telegram chat, persisted in the same private adapter state so
  * conversations survive restarts — or an operation,
  * invoked per update with the Telegram {@code Update} exactly as sent
  * (snake_case, {@code message}/{@code callback_query}/… nested as Telegram
@@ -73,6 +73,11 @@ import covia.venue.RequestContext;
  *   <li>{@code telegram:bots} — status of the caller's bots (all bots for the
  *       venue identity), with {@code managed: config | runtime}. Tokens are
  *       never returned.</li>
+ *   <li>{@code telegram:format} — Markdown, as a model writes it, to the HTML
+ *       Telegram accepts ({@link TelegramMarkdown}). A pure, read-only
+ *       conversion with no bot involved: an agent bot uses it as its
+ *       {@code replyOperation}, whose {@code parse_mode} the reply then takes,
+ *       and an application's own reply hook calls it after its own processing.</li>
  * </ul>
  *
  * <p>Tokens are {@code s/NAME} secret references resolved in the bot user's
@@ -139,6 +144,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		installAsset("telegram/create", "/adapters/telegram/create.json");
 		installAsset("telegram/delete", "/adapters/telegram/delete.json");
 		installAsset("telegram/bots", "/adapters/telegram/bots.json");
+		installAsset("telegram/format", "/adapters/telegram/format.json");
 		// The skills travel with the capability: ordinary Telegram use stays
 		// lightweight, while the parent reveals bot-management authority on demand.
 		installSkill("adapters/telegram", "/adapters/telegram/skill.json");
@@ -154,7 +160,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	public boolean configure(AMap<AString, ACell> config, boolean strict) {
 		if (config == null) config = Maps.empty();
 		if (config.containsKey(K_STATE_PATH)) {
-			throw new IllegalArgumentException("adapters.telegram.statePath is fixed at w/adapters/telegram");
+			throw new IllegalArgumentException("adapters.telegram.statePath is fixed at :adapters/telegram");
 		}
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
@@ -225,8 +231,8 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		}
 	}
 
-	String resolveToken(BotSpec spec) {
-		return resolveCredential(spec.tokenRef(), spec.userDID(engine));
+	String resolveToken(BotRunner runner) {
+		return resolveCredential(runner.spec().tokenRef(), runner);
 	}
 
 	/** Test hooks retain the provider tests' restart simulation. */
@@ -247,8 +253,45 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 			case "create" -> CompletableFuture.supplyAsync(() -> handleCreate(ctx, input), VIRTUAL_EXECUTOR);
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
 			case "bots" -> CompletableFuture.supplyAsync(() -> handleBots(ctx), VIRTUAL_EXECUTOR);
+			case "format" -> CompletableFuture.supplyAsync(() -> handleFormat(input), VIRTUAL_EXECUTOR);
 			default -> throw new UnsupportedOperationException("Unsupported telegram operation: " + subOp);
 		};
+	}
+
+	/** Where {@code telegram:format} reads its Markdown, before {@code text} and the
+	 *  reply hook's {@code response}. */
+	static final AString K_MARKDOWN = Strings.intern("markdown");
+	/** {@code telegram:format} given nothing to convert. */
+	public static final String NOTHING_TO_FORMAT =
+		"format expects markdown or text, or a reply hook's {response, via}";
+
+	/**
+	 * {@code telegram:format}: Markdown to Telegram HTML ({@link TelegramMarkdown}).
+	 * Takes {@code {markdown}} (or, when that is absent or blank, {@code {text}}), a
+	 * bare string from a Java caller, or the reply hook's own
+	 * input {@code {response, via}}, whose response is read as the adapter reads
+	 * any agent reply ({@link ConversationRouter#responseText}). Returns
+	 * {@code {text, parse_mode: "HTML"}}: as a reply hook's result, the reply is
+	 * {@code text}, sent under that {@code parse_mode} whatever the bot's own.
+	 */
+	static ACell handleFormat(ACell input) {
+		String markdown = formatSource(input);
+		if (markdown == null || markdown.isBlank()) throw new IllegalArgumentException(NOTHING_TO_FORMAT);
+		String html = TelegramMarkdown.toHtml(markdown);
+		// Markdown that renders to nothing (an empty link, say) is sent as its own text.
+		if (html.isBlank()) html = TelegramMarkdown.escape(markdown.strip());
+		return Maps.of(Fields.TEXT, Strings.create(html),
+			Strings.create(K_PARSE_MODE_PARAM), Strings.create(TelegramMarkdown.PARSE_MODE));
+	}
+
+	private static String formatSource(ACell input) {
+		if (input instanceof AString s) return s.toString();
+		AMap<AString, ACell> in = RT.ensureMap(input);
+		if (in == null) return null;
+		if (in.get(K_MARKDOWN) instanceof AString s && !s.toString().isBlank()) return s.toString();
+		if (in.get(Fields.TEXT) instanceof AString s && !s.toString().isBlank()) return s.toString();
+		if (in.containsKey(Fields.RESPONSE)) return ConversationRouter.responseText(in.get(Fields.RESPONSE));
+		return null;
 	}
 
 	/**
@@ -352,9 +395,9 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override
 	protected void deleteRuntimeState(RequestContext ctx, String name) {
-		state().delete(userStatePath(ctx.getUserDID(), "resolved/" + name));
-		state().delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
-		state().delete(userStatePath(ctx.getUserDID(), "files/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "resolved/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
+		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "files/" + name));
 		deleteLegacyPath(ctx, LEGACY_REGISTRY_PATH + "/" + name);
 		deleteLegacyPath(ctx, BotRunner.legacySessionsPath(name));
 	}

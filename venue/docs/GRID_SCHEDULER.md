@@ -15,11 +15,20 @@ per-thread `AgentScheduler` that predated this service has been retired.
 ## 1. Entities
 
 - **Scheduled event** — a deferred invocation, one-shot or recurring:
-  `{ time, id, operation, input, owner, proofs, repeat?, track?, lastFired?, lastJob? }`.
+  `{ time, id, operation, input, owner, by, created, proofs, actor?, description?, repeat?, track?, lastFired?, lastJob? }`.
   - `time` — absolute wall-clock millis at which the event is next due.
   - `operation` — a grid operation reference (asset id or operation path).
   - `input` — the cell passed to that operation when it fires.
-  - `owner` — the DID that scheduled it; the identity the operation runs as.
+  - `owner` — the user DID that owns it: the namespace it runs in and the key
+    for `list`, `cancel` and `trigger`.
+  - `by` — the DID of the caller that scheduled it, always recorded: the
+    owner's own, or that of an agent or delegate acting for them. Attribution
+    only; it repeats `actor` for an agent.
+  - `actor` — the agent sub-principal that scheduled it, when not the owner;
+    the event fires as `actor` when set, otherwise as `owner`.
+  - `created` — wall-clock millis at which it was scheduled.
+  - `description` — optional caller-written display text saying what the event
+    is for, at most 500 characters. Never interpreted.
   - `proofs` — the UCAN proof(s) the owner presented when scheduling, captured so
     firing runs with **exactly** that authority and cannot escalate (§5).
   - `repeat` — optional recurrence spec; absent ⇒ one-shot. It is an object so
@@ -62,7 +71,8 @@ The `:schedule` value is a single extensible `{ updated, events, ... }` map:
 
 ```
 events = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
-         value = { op, input, owner, time, proofs?, caps?, repeat?, track?, lastFired?, lastJob? }
+         value = { op, input, owner, by, time, created, actor?, description?, proofs?, caps?,
+                   repeat?, track?, lastFired?, lastJob? }
 updated = wall-clock stamp of the last mutation
 ```
 
@@ -188,7 +198,10 @@ catch-up is a future concern).
 
 Every event records the `owner` DID taken from the `RequestContext` at schedule
 time. `cancel`, `trigger`, `inspect`, and `list` are restricted to the owner
-(reusing the venue's access control).
+(reusing the venue's access control). Sharing the owner's namespace is
+proximity, not permission: a capability-scoped agent or delegate reaches only
+the events it scheduled itself (its `actor`). Scheduled events are not a
+capability resource, so no caps extend that reach.
 
 A scheduled event is a *deferred* invocation, and at fire time the owner is not
 present to supply credentials. The venue must **not** fire the operation under
@@ -225,15 +238,23 @@ operations, described by intent:
   (relative), with an operation reference and its input; returns a handle.
   Optional `repeat: {every: <millis>}` makes it recurring (with neither `time`
   nor `after`, the first fire is one interval from now); optional `track`
-  chooses durable or transient fires (§7).
+  chooses durable or transient fires (§7); optional `description` (a string
+  of at most 500 characters, refused otherwise) says what the event is for.
 - **cancel** — remove an event by handle.
 - **trigger** — fire an event now by handle, ahead of its time — the
   early-execution / test hook. A one-shot event is consumed; a recurring event
   stays scheduled at its unchanged next due time.
 - **list** — the caller's pending events, in time order: each
-  `{handle, op, time, track}` plus `repeat`, `lastFired` and `lastJob` where
-  present. `track` is the effective tracking the next fire will use, after
-  venue policy.
+  `{handle, op, time, track}` plus `by`, `input`, `description`, `created`,
+  `repeat`, `lastFired` and `lastJob` where present. `track` is the effective
+  tracking the next fire will use, after venue policy. `input` is shown as a
+  job record would hold it: the fields the operation declares in
+  `secretFields` are hidden, resolved as a job record's `op` is, and `input`
+  is withheld when the operation no longer resolves, since its secret fields
+  are then unknown. The stored input is untouched, because firing replays it.
+  Captured `proofs` and `caps` are authority, not description, and are never
+  listed. Events stored before `by`, `created` and `description` were
+  recorded list without them.
 
 All operations are scoped to the caller's identity. Scheduling is itself an
 operation, so an agent can schedule future work (including waking itself) as a
@@ -289,13 +310,16 @@ Job, but `track:true` does the same with one Job per fire instead of two.
 
 ## 8. Agent wake as a consumer
 
-The agent wake path maps onto this service without the scheduler knowing what an
-agent is (the agent-side details are in [SCHEDULER.md](./SCHEDULER.md)):
+The agent wake path uses ordinary scheduled operations; its runtime entry point
+coordinates the venue transaction and timer (agent-side details are in
+[SCHEDULER.md](./SCHEDULER.md)):
 
 - A session or task carries its own `wakeTime` on the agent record — the
   authoritative per-thread "this thread wants to wake at T" marker.
-- `AgentState.setThreadWakeTime` writes that field, then `rescheduleWake`
-  re-derives the agent's **single** scheduled event at the *earliest* unfired
+- `Scheduler.setThreadWakeTime` commits the intent, event and handle in one
+  `VenueState` transaction, then arms the timer from committed state.
+  `AgentState.setThreadWakeTime` itself is a data-only mutation, safe on drafts.
+  The venue re-derives the agent's **single** scheduled event at the *earliest* unfired
   `wakeTime` across all its threads. The event fires `agent:trigger {agentId,
   force:false, wait:false}` with `track:false` stated explicitly — a wake is
   machinery, not user work, so the venue's `trackJobs` default does not turn
@@ -307,7 +331,7 @@ agent is (the agent-side details are in [SCHEDULER.md](./SCHEDULER.md)):
   loop runs iff there is work (`hasWork` = session pending or tasks); it processes
   what's due, and the post-cycle `setThreadWakeTime` re-arms for the next earliest
   or clears `wakeHandle` if none remain.
-- On boot, `Engine.rebuildSchedulerFromLattice` calls `rescheduleWake` per agent,
+- On boot, `Engine.rebuildSchedulerFromLattice` calls `Scheduler.rescheduleAgentWake` per agent,
   idempotently re-deriving each agent's event from the authoritative per-thread
   `wakeTime`s (healing any stale handle).
 

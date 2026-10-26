@@ -1,8 +1,6 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
-import convex.core.data.AString;
-import convex.lattice.cursor.ALatticeCursor;
 import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
@@ -34,6 +32,11 @@ public interface NamespaceResolver {
 	 */
 	ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
 
+	/** Resolve for a particular CRUD ability; existing resolvers retain their policy. */
+	default ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys, convex.core.data.AString ability) {
+		return resolve(ctx, adapter, keys);
+	}
+
 	/** Whether this namespace accepts writes (static, applies to all callers). */
 	boolean isWritable();
 
@@ -51,27 +54,19 @@ public interface NamespaceResolver {
 
 	/**
 	 * Result of namespace resolution: a cursor positioned at the record that
-	 * holds the namespace, and the keys to navigate from there. The first
-	 * remaining key names the namespace container within that record (e.g.
-	 * {@code n} for {@code n/}, {@code temp} for {@code t/}, {@code c} for
-	 * {@code c/}), so every resolved path has the same shape as a physical
-	 * {@code w/...} path and the adapter needs one navigation rule.
+	 * holds the namespace, and the keys to navigate from there. Physical user
+	 * paths cross their namespace envelope; unwrapped virtual views navigate
+	 * their value directly. Extension views can expose any value, including a
+	 * vector or scalar root. Empty remaining keys address the exposed root.
 	 *
 	 * @param requireExistingRecord the record at {@code cursor} must already exist — a
 	 *        write never materialises it (a session's scratch must not mint a
 	 *        phantom session); reads of a missing record are simply absent
-	 * @param recordTimestampKey optional timestamp field to ratchet when the cursor
-	 *        is positioned exactly at a stamped record boundary
 	 */
-	record ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys,
-			boolean requireExistingRecord, AString recordTimestampKey) {
-		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys) {
-			this(cursor, remainingKeys, false, null);
-		}
-
-		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys,
-				boolean requireExistingRecord) {
-			this(cursor, remainingKeys, requireExistingRecord, null);
+	record ResolvedNamespace(WorkspaceRoot cursor, ACell[] remainingKeys,
+			boolean requireExistingRecord) {
+		ResolvedNamespace(WorkspaceRoot cursor, ACell[] remainingKeys) {
+			this(cursor, remainingKeys, false);
 		}
 	}
 }

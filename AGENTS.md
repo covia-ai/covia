@@ -34,13 +34,15 @@ covia/                          # ai.covia:covia (parent POM)
 ├── covia-discord/              # Discord bot venue module (Gateway inbound + REST outbound;
 │                               #   agents/operations, discord:send; shaded "module" jar)
 ├── covia-whatsapp/             # WhatsApp Cloud API venue module (signed webhook intake,
-│                               #   agents/operations, whatsapp:send; shaded "module" jar)
-├── covia-slack/                # Slack Events API venue module (signed webhook intake,
-│                               #   agents/operations, slack:send; shaded "module" jar)
+│                               #   agents/operations/relay, whatsapp:send; shaded "module" jar)
+├── covia-slack/                # Slack venue module (signed Events API webhooks or Socket
+│                               #   Mode, agents/operations/relay, slack:send; shaded "module" jar)
 ├── covia-sonnylabs/            # SonnyLabs prompt-injection scanning venue module
 │                               #   (POST /v1/scans; shaded "module" jar)
 ├── covia-documents/            # PDF/Office text extraction venue module (PDFBox, POI;
 │                               #   file:read mode "extract"; shaded "module" jar)
+├── covia-speech/               # Speech venue module: transcribe and speak in-process (sherpa-onnx) or
+│                               #   over an OpenAI-compatible audio API, an engine per direction; shaded "module" jar
 ├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
 │                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
 ├── workbench/                  # Shared Swing components/utilities and a REPL demo
@@ -56,6 +58,7 @@ covia/                          # ai.covia:covia (parent POM)
 │   ├── workspace/              #   Browse/read/write lattice data
 │   ├── secret/                 #   Manage API keys and credentials
 │   ├── telegram/               #   Connect a venue to Telegram (bots → agents, send, allow-list)
+│   ├── slack/                  #   Connect a venue to Slack (Socket Mode or Events API → agents, send)
 │   ├── federation/             #   Cross-venue grid operations
 │   ├── hitl/                   #   Human-in-the-Loop requests (send, respond, teach agents, test)
 │   └── ucan/                   #   Capability token management
@@ -67,9 +70,12 @@ covia/                          # ai.covia:covia (parent POM)
 
 ## Requirements
 
-- **Java 21+** (JDK; the published Docker image runs on Java 25)
+- **Java 21+** (JDK; the published Docker image runs on Java 25). Not JDK 25
+  before 25.0.3: JDK-8370887 makes virtual-thread timeouts fire tens of seconds
+  late, so jobs stall and tests fail intermittently. The build warns on one, and
+  CI fails (`-Dcovia.jdk.check=ERROR`); run tests on JDK 21–24 or 25.0.3+
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.17**
+- **Convex 0.8.18**
 
 ## Build & Run
 
@@ -109,13 +115,13 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.17 | Lattice platform, immutable data, cryptography |
-| Javalin | 7.2.3 | HTTP server with OpenAPI/Swagger/ReDoc |
+| Convex | 0.8.18 | Lattice platform, immutable data, cryptography |
+| Javalin | 7.2.4 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
-| MCP SDK | 2.0.1 | Model Context Protocol |
+| MCP SDK | 2.1.0 | Model Context Protocol |
 | A2A | 1.4.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.20/1.6.5 | Logging |
+| SLF4J/Logback | 2.0.20/1.6.6 | Logging |
 
 ## Architecture Overview
 
@@ -132,11 +138,11 @@ Engine (core state, adapters, assets, content, identity)
     ├── Content Storage   (lattice / file / memory)
     └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
-Adapter Layer (34 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
+Adapter Layer (35 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
     ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file, archive
     ├── Execution:     langchain (LLMs), mcp, http, convex, crypto, jvm, schema, json, orchestrator, scheduler
     ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox), project (WBS tree; skills only so far)
-    ├── Federation:    grid (run/invoke/jobStatus), a2a, remoteagent, ucan (granting surface, COG-17)
+    ├── Federation:    grid (run/invoke/jobStatus), a2a, remoteagent, p2p (Convex P2P node, opt-in), ucan (granting surface, COG-17)
     ├── Admin:         user (registration), auth, venue (runtime adapter/module lifecycle), oauth (connected accounts), connections
     └── Testing:       test (echo, delay, never, chat, pause, ...)
 ```
@@ -165,6 +171,18 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 
 ## Development Conventions
 
+- **Venue execution:** A venue is an atomically updated running lattice application
+  instance. Compose live changes through component updates and transactions.
+  Whole-venue LWW is snapshot selection for backup, replication and failover;
+  it cannot generally merge arbitrary forked executions or their external effects.
+  Failover must fence the previous authoritative writer. Adapter-owned components
+  live under `:adapters`, not user/venue `w`; each adapter owns its schema.
+
+- **Upstream first:** Before adding a fix or abstraction, inspect the dependency's
+  existing APIs and fixes at the version we use. Prefer upstream functionality
+  over local workarounds. If the required capability is missing, request an
+  upstream improvement rather than implementing a competing workaround in Covia.
+
 Workbench's shared `covia.gui.markdown` and `covia.gui.components` packages use
 the JDK and CommonMark only. Hosts supply appearance, layout and link actions;
 do not introduce application colours, fonts, look-and-feel setup or venue calls.
@@ -187,7 +205,7 @@ and venue dependencies are optional for consumers of the library.
 
 The canonical authoring and system contract is
 **`venue/docs/ADAPTERS.md`**. It covers `AAdapter`, configuration hooks,
-catalog publication, `AdapterWorkspace`, capability enforcement, lifecycle,
+catalog publication, `AdapterState`, capability enforcement, lifecycle,
 optional module packaging, and required tests.
 
 Operation metadata examples and rules are in `venue/docs/ADAPTERS.md` and

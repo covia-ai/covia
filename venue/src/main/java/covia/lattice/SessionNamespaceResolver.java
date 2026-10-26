@@ -4,7 +4,7 @@ import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Strings;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.adapter.CoviaAdapter;
 import covia.exception.WrongScopeException;
 import covia.venue.RequestContext;
@@ -39,11 +39,11 @@ public class SessionNamespaceResolver implements NamespaceResolver {
 				"Cannot use 'c/' prefix outside session scope (requires agentId and sessionId on RequestContext)");
 		}
 
-		ALatticeCursor<ACell> sessionCursor = adapter.ensureUserCursor(ctx)
-			.path(Namespace.G, agentId, K_SESSIONS, sessionId);
+		AForkableCursor<ACell> sessionCursor = adapter.ensureUser(ctx)
+			.recordCursor(Namespace.G, agentId).path(K_SESSIONS, sessionId);
 		ACell[] rewritten = keys.clone();
 		rewritten[0] = K_C;
-		return new ResolvedNamespace(sessionCursor, rewritten, true);
+		return new ResolvedNamespace(new WorkspaceRoot(sessionCursor, adapter.engine.getLatticeContext(), false), rewritten, true);
 	}
 
 	@Override

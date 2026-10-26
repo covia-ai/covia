@@ -62,7 +62,8 @@ public final class SlackModuleSmokeMain {
 				check(adapter != null && adapter.getClass().getClassLoader() instanceof ModuleClassLoader, "Module did not load in isolation");
 				check(adapter instanceof WebhookHandler, "Not a webhook receiver");
 				for (String path : new String[]{"v/ops/" + PROVIDER + "/send", "v/ops/" + PROVIDER + "/create",
-					"v/ops/" + PROVIDER + "/delete", "v/ops/" + PROVIDER + "/bots", "v/skills/adapters/" + PROVIDER, "v/adapters/" + PROVIDER + "/info"}) {
+					"v/ops/" + PROVIDER + "/delete", "v/ops/" + PROVIDER + "/bots", "v/skills/adapters/" + PROVIDER, "v/skills/adapters/" + PROVIDER + "-bot-management",
+					"v/agents/templates/" + PROVIDER, "v/adapters/" + PROVIDER + "/info"}) {
 					check(engine.resolvePath(Strings.create(path), engine.venueContext()) != null, "Missing " + path);
 				}
 				URI endpoint = URI.create("http://127.0.0.1:" + server.port() + "/webhooks/" + PROVIDER + "/c-main");

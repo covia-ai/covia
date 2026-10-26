@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,10 +18,11 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.venue.AgentState.ThreadKind;
 
 /**
- * Unit test for {@link AgentState#setThreadWakeTime} and the per-agent-earliest
+ * Unit test for {@link Scheduler#setThreadWakeTime} and the per-agent-earliest
  * model it drives (GRID_SCHEDULER.md §8). Per-thread {@code wakeTime} stays
  * authoritative on the lattice; the agent holds at most one {@code agent:wake}
  * event in the venue grid scheduler, armed at the earliest of them. Assertions
@@ -52,12 +54,12 @@ public class AgentStateThreadWakeTest {
 
 	@SuppressWarnings("unchecked")
 	private static long timeOf(ACell event) {
-		return ((CVMLong) ((AMap<AString, ACell>) event).get(Scheduler.K_TIME)).longValue();
+		return ((CVMLong) ((AMap<AString, ACell>) event).get(ScheduleState.K_TIME)).longValue();
 	}
 
 	@SuppressWarnings("unchecked")
 	private static AString opOf(ACell event) {
-		return (AString) ((AMap<AString, ACell>) event).get(Scheduler.K_OP);
+		return (AString) ((AMap<AString, ACell>) event).get(ScheduleState.K_OP);
 	}
 
 	private Blob makeSession(String hex) {
@@ -78,7 +80,7 @@ public class AgentStateThreadWakeTest {
 		Blob sid = makeSession("aa");
 		long target = System.currentTimeMillis() + FAR;
 
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sid, target);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sid, target);
 
 		// Lattice: session record carries wakeTime.
 		ACell wt = sessionRecord(sid).get(Fields.WAKE_TIME);
@@ -100,7 +102,7 @@ public class AgentStateThreadWakeTest {
 		agent.addTask(taskId, Maps.empty());
 		long target = System.currentTimeMillis() + FAR;
 
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.TASK, taskId, target);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.TASK, taskId, target);
 
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> taskRec = (AMap<AString, ACell>) agent.getTasks().get(taskId);
@@ -119,8 +121,8 @@ public class AgentStateThreadWakeTest {
 		long first = System.currentTimeMillis() + FAR;
 		long second = first + FAR;
 
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sid, first);
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sid, second);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sid, first);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sid, second);
 
 		// Lattice reflects the later write; still exactly one armed event, at the new time.
 		assertEquals(second, ((CVMLong) sessionRecord(sid).get(Fields.WAKE_TIME)).longValue());
@@ -139,8 +141,8 @@ public class AgentStateThreadWakeTest {
 		long earlier = now + FAR;
 		long later   = now + FAR * 2;
 
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sidA, earlier);
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sidB, later);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sidA, earlier);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sidB, later);
 
 		// One event for the agent, armed at the earliest of the two threads.
 		AVector<ACell> events = wakeEvents();
@@ -148,7 +150,7 @@ public class AgentStateThreadWakeTest {
 		assertEquals(earlier, timeOf(events.get(0)));
 
 		// Clearing the earlier thread re-arms at the next earliest (the later one).
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sidA, 0);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sidA, 0);
 		assertNull(sessionRecord(sidA).get(Fields.WAKE_TIME));
 		AVector<ACell> after = wakeEvents();
 		assertEquals(1, after.count());
@@ -160,11 +162,11 @@ public class AgentStateThreadWakeTest {
 	@Test
 	public void testClearRemovesFieldAndEvent() {
 		Blob sid = makeSession("dd");
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sid,
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sid,
 			System.currentTimeMillis() + FAR);
 		assertEquals(1, wakeEvents().count());
 
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sid, 0);
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sid, 0);
 
 		assertNull(sessionRecord(sid).get(Fields.WAKE_TIME),
 			"wakeTime should be dissoc'd from the session record");
@@ -176,7 +178,7 @@ public class AgentStateThreadWakeTest {
 	@Test
 	public void testMissingSessionIsNoop() {
 		Blob sid = Blob.fromHex("ee"); // never ensureSession'd
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.SESSION, sid,
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.SESSION, sid,
 			System.currentTimeMillis() + FAR);
 
 		assertNull(agent.getSessions().get(sid));
@@ -186,7 +188,7 @@ public class AgentStateThreadWakeTest {
 	@Test
 	public void testMissingTaskIsNoop() {
 		Blob taskId = Blob.fromHex("ff"); // never addTask'd
-		agent.setThreadWakeTime(sched(), userDid, ThreadKind.TASK, taskId,
+		sched().setThreadWakeTime(userDid, agent, ThreadKind.TASK, taskId,
 			System.currentTimeMillis() + FAR);
 
 		assertNull(agent.getTasks().get(taskId));
@@ -194,6 +196,22 @@ public class AgentStateThreadWakeTest {
 	}
 
 	// ========== Engine wiring sanity ==========
+
+	@Test
+	public void testOldAgentCannotScheduleForRecreatedAccount() {
+		Blob sid = makeSession("aa");
+		var venue = engine.getVenueState();
+		venue.deleteUser(userDid, userDid);
+		venue.users().finishDeletion(userDid);
+		venue.users().create(userDid);
+		var replacement = venue.users().get(userDid).ensureAgent(agent.getAgentId(), Maps.empty(), null);
+		replacement.ensureSession(sid, userDid);
+		var failure = assertThrows(AuthException.class, () -> sched().setThreadWakeTime(
+			userDid, agent, ThreadKind.SESSION, sid, System.currentTimeMillis() + FAR));
+		assertEquals(Users.ACCOUNT_DELETED, failure.getMessage());
+		assertNull(replacement.getSession(sid).get(Fields.WAKE_TIME));
+		assertEquals(0, wakeEvents().count());
+	}
 
 	@Test
 	public void testEngineExposesGridScheduler() {

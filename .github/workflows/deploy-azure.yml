@@ -3,6 +3,11 @@ name: Deploy to Azure
 # Deploys the published image to the Azure venue VM. The image itself is
 # built and pushed by publish-docker.yml — this workflow only pulls and
 # (re)starts the container, after a successful publish or on manual dispatch.
+#
+# No SSH (security#12): the job signs in as the covia-deploy-venue-4 managed
+# identity over GitHub OIDC (federated for covia-ai/covia on develop only,
+# allowed only to read covia-venue-vm and run commands on it) and runs
+# deploy/azure/deploy.sh on the VM through az vm run-command.
 
 on:
   workflow_run:
@@ -27,111 +32,41 @@ jobs:
         )
       }}
     permissions:
-      packages: read
+      contents: read
+      id-token: write   # OIDC token for the managed identity; no stored secret
+    env:
+      RESOURCE_GROUP: covia-venue-rg
+      VM_NAME: covia-venue-vm
+      # The commit whose image was published (manual runs: the dispatched commit)
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
     steps:
-    - name: Deploy to Azure VM
-      uses: appleboy/ssh-action@v1
-      env:
-        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        host: ${{ secrets.AZURE_VM_HOST }}
-        username: ${{ secrets.AZURE_VM_USER }}
-        key: ${{ secrets.AZURE_VM_SSH_KEY }}
-        envs: GHCR_TOKEN
-        script: |
-          # Authenticate to GHCR
-          echo $GHCR_TOKEN | docker login ghcr.io -u github --password-stdin
+        ref: ${{ env.DEPLOY_SHA }}
 
-          # Pull latest image
-          docker pull ghcr.io/covia-ai/covia:latest
+    - name: Sign in as the venue-4 deploy identity (OIDC)
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: 703489f7-5392-4c0c-ac29-14c12cb227d5
+        tenant-id: 2b3e3ae4-33a0-473e-9283-73e450dcb8fa
+        subscription-id: 4b38d6c0-d585-4c94-ba56-9605ef329acb
 
-          # Ensure config exists (venues array format)
-          mkdir -p /home/azureuser/covia-data
-          if [ ! -f /home/azureuser/covia-data/config.json ]; then
-            cat > /home/azureuser/covia-data/config.json <<'CONF'
-          {
-            "venues": [
-              {
-                "name": "Covia Venue (Azure)",
-                "hostname": "venue-4.covia.ai",
-                "store": "/data/venue.etch",
-                "trustedProxies": ["loopback", "172.16.0.0/12"],
-                "mcp": {}
-              }
-            ]
-          }
-          CONF
-          fi
-          # The venue sits behind nginx on this host and sees it through the
-          # Docker bridge: it must take the client address from X-Forwarded-For,
-          # or every caller shares one rate-limit bucket and one authentication
-          # budget (covia#539). Reconcile the persisted config, leaving any
-          # operator-set value alone.
-          sudo python3 - <<'PY'
-          import json
-          from pathlib import Path
+    - name: Deploy to Azure VM via run-command
+      run: |
+        # Ship the script base64-encoded so run-command passes it through
+        # unaltered. run-command reports success whatever the script's exit
+        # code, so the wrapper prints a result marker for the job to check.
+        script=$(base64 -w0 deploy/azure/deploy.sh)
+        output=$(az vm run-command invoke \
+          --resource-group "$RESOURCE_GROUP" \
+          --name "$VM_NAME" \
+          --command-id RunShellScript \
+          --scripts "if echo $script | base64 -d | bash; then echo COVIA_DEPLOY_RESULT=ok; else echo COVIA_DEPLOY_RESULT=failed; fi" \
+          --query 'value[0].message' --output tsv --only-show-errors)
+        echo "$output"
 
-          path = Path("/home/azureuser/covia-data/config.json")
-          config = json.loads(path.read_text(encoding="utf-8"))
-          for venue in config.get("venues", []):
-              venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
-          temporary = path.with_suffix(".json.tmp")
-          temporary.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-          temporary.replace(path)
-          PY
-          sudo chown -R 1001:1001 /home/azureuser/covia-data
-
-          # Stop and remove existing container
-          docker stop covia-venue 2>/dev/null || true
-          docker rm covia-venue 2>/dev/null || true
-
-          # Run new container. The image's ENTRYPOINT already invokes java and
-          # forwards CMD as arguments to MainVenue (see Dockerfile) — CMD must
-          # be just the config path, not a full java command line, or the
-          # entrypoint double-invokes java and MainVenue receives "java" as
-          # its config path instead of the real one.
-          #
-          # Publish on loopback only: nginx terminates TLS and proxies to
-          # 127.0.0.1:8080. A bare -p 8080:8080 binds 0.0.0.0, and Docker's
-          # iptables rules bypass host firewalls such as ufw.
-          #
-          # Rotate the json-file container log (Docker's default is unbounded):
-          # at most 5 x 50 MB before the oldest is dropped.
-          docker run -d \
-            --name covia-venue \
-            --stop-timeout 30 \
-            -p 127.0.0.1:8080:8080 \
-            -v /home/azureuser/covia-data:/data \
-            -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
-            --log-opt max-size=50m \
-            --log-opt max-file=5 \
-            --restart unless-stopped \
-            --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
-            --health-interval=30s \
-            --health-timeout=5s \
-            --health-start-period=15s \
-            --health-retries=3 \
-            ghcr.io/covia-ai/covia:latest \
-            /data/config.json
-
-          # Wait for the health check to settle; fail the deploy rather than
-          # leaving a crash-looping container behind a green checkmark.
-          status="starting"
-          # Cover the full health window: 15s start period + three 30s
-          # intervals + check time, with a final boundary inspection.
-          for i in $(seq 1 25); do
-            status=$(docker inspect --format='{{.State.Health.Status}}' covia-venue 2>/dev/null || echo "unknown")
-            echo "Health status: $status"
-            [ "$status" = "healthy" ] && break
-            [ "$status" = "unhealthy" ] && break
-            [ "$i" -lt 25 ] && sleep 5
-          done
-          if [ "$status" != "healthy" ]; then
-            echo "::error::covia-venue did not become healthy — deploy failed"
-            docker logs --tail 80 covia-venue
-            exit 1
-          fi
-
-          # Prune old images
-          docker image prune -f
+        if ! grep -qx 'COVIA_DEPLOY_RESULT=ok' <<<"$output"; then
+          echo "::error::venue-4 deploy failed (deploy ${DEPLOY_SHA:0:8})"
+          exit 1
+        fi

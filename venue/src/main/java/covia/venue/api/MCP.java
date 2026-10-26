@@ -7,8 +7,11 @@ import static convex.restapi.mcp.McpProtocol.*;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
@@ -26,16 +29,20 @@ import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.json.JSONReader;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
+import convex.restapi.handler.RequestBody;
 import convex.restapi.mcp.McpProtocol;
 import convex.restapi.mcp.McpServer;
 import convex.restapi.mcp.McpSession;
 import convex.restapi.mcp.SseConnection;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Engine;
+import covia.venue.JobManager;
 import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
@@ -51,15 +58,62 @@ import jakarta.servlet.http.HttpServletResponse;
  * use the venue's dynamic adapter/asset registry.</p>
  *
  * <p>Adds SSE session handling for server-to-client job notifications.</p>
+ *
+ * <h3>How long a tool call waits</h3>
+ * <p>MCP leaves timeouts to the sender of a request: the client stops waiting
+ * when it chooses and says so with {@code notifications/cancelled}, and a
+ * dropped connection is not a cancellation (Lifecycle → Timeouts; Transports →
+ * Streamable HTTP). So the venue waits for a tool's job as long as the caller
+ * does, within limits that keep waiting from being a way to tie the venue
+ * up:</p>
+ * <ul>
+ *   <li>a ceiling, {@code mcp.toolCallTimeout} (ms, default an hour) for an
+ *       authenticated caller and {@code mcp.anonymousToolCallTimeout} (default
+ *       two minutes) for an anonymous one. Past it the call ends with the job's
+ *       id, so the result can still be collected with {@code grid_job_result};
+ *       the job itself runs on.</li>
+ *   <li>at most {@code mcp.maxConcurrentToolCalls} (default 16) calls in
+ *       progress per caller.</li>
+ *   <li>when the client accepts {@code text/event-stream}, a call still running
+ *       after {@code mcp.keepAliveInterval} (ms, default 15 s) is answered as an
+ *       SSE stream that carries a progress notification (with the request's
+ *       {@code progressToken}) or a comment at that interval, so a caller that
+ *       has gone is noticed and no longer waited for.</li>
+ * </ul>
  */
 public class MCP extends McpServer {
 
 	public static final Logger log = LoggerFactory.getLogger(MCP.class);
 
+	/** Tool metadata key for the operation reference used by this venue's dispatcher. */
+	public static final AString TOOL_OPERATION = Strings.intern("ai.covia/operation");
+	private static final AString K_META = Strings.intern("_meta");
+
 	private final Venue venue;
 
-	/** Default timeout for MCP tool calls (120 seconds) */
-	private static final long TOOL_CALL_TIMEOUT_MS = 120_000;
+	/** The longest an authenticated caller's tool call waits before it is given the job to collect instead. */
+	private final long toolCallTimeoutMs;
+
+	/** The same for an anonymous caller, on a venue that admits them. */
+	private final long anonymousToolCallTimeoutMs;
+
+	/** How often a long call's SSE stream shows the caller it is still being worked on. */
+	private final long keepAliveMs;
+
+	/** Tool calls one caller may have in progress at once. */
+	private final int maxConcurrentToolCalls;
+
+	/** Tool calls in progress, by caller. */
+	private final ConcurrentHashMap<AString, AtomicInteger> callsInFlight = new ConcurrentHashMap<>();
+
+	/** Calls a {@code notifications/cancelled} may cancel, by {@link #cancelKey}. */
+	private final ConcurrentHashMap<String, CompletableFuture<ACell>> cancellable = new ConcurrentHashMap<>();
+
+	/** Completes when {@link #close()} begins, so calls still waiting end at once. */
+	private final CompletableFuture<Void> closed = new CompletableFuture<>();
+
+	/** Every anonymous caller counts as one caller for {@link #maxConcurrentToolCalls}. */
+	private static final AString ANONYMOUS = Strings.intern("anonymous");
 
 	/** Active MCP sessions, keyed by session ID */
 	private final ConcurrentHashMap<String, McpSession> sessions = new ConcurrentHashMap<>();
@@ -136,6 +190,16 @@ public class MCP extends McpServer {
 		this.includePathPrefixes = readIncludePathPrefixes(mcpConfig);
 		this.authRequired = engine().config().isMCPAuthRequired();
 		this.allowedDids = engine().config().getMCPAllowedDids();
+		this.toolCallTimeoutMs = readPositive(mcpConfig, "toolCallTimeout", 3_600_000);
+		this.anonymousToolCallTimeoutMs = readPositive(mcpConfig, "anonymousToolCallTimeout", 120_000);
+		this.keepAliveMs = readPositive(mcpConfig, "keepAliveInterval", 15_000);
+		this.maxConcurrentToolCalls = (int) readPositive(mcpConfig, "maxConcurrentToolCalls", 16);
+	}
+
+	/** A positive whole number from the MCP config, else the default. */
+	private static long readPositive(AMap<AString, ACell> mcpConfig, String key, long dflt) {
+		ACell raw = (mcpConfig == null) ? null : mcpConfig.get(Strings.create(key));
+		return (raw instanceof convex.core.data.prim.CVMLong l && l.longValue() > 0) ? l.longValue() : dflt;
 	}
 
 	private static java.util.List<String> readIncludePathPrefixes(AMap<AString, ACell> mcpConfig) {
@@ -369,7 +433,8 @@ public class MCP extends McpServer {
 			try {
 				AMap<AString, ACell> meta = engine().resolveAsset(opRef).meta();
 				AMap<AString, ACell> tool = buildToolEntry(toolName, meta);
-				if (tool != null) toolsVector = toolsVector.conj(tool);
+				if (tool != null) toolsVector = toolsVector.conj(
+					tool.assoc(K_META, Maps.of(TOOL_OPERATION, opRef)));
 			} catch (Exception e) {
 				log.warn("Error resolving registered MCP tool {} ({}): {}",
 					toolName, opRef, e.getMessage());
@@ -479,8 +544,98 @@ public class MCP extends McpServer {
 		}
 	}
 
+	// ==================== POST: tool calls that wait, and cancellation ====================
+
+	/**
+	 * A single {@code tools/call} is answered here, so that a long one can
+	 * become an SSE stream; so is {@code notifications/cancelled}, which the
+	 * base only acknowledges. Everything else, batches included, is the base's.
+	 */
+	@Override
+	protected void handlePost(Context ctx) {
+		AMap<?, ?> request = singleRequest(ctx);
+		if (request != null) {
+			String method = getMethodName(request);
+			if (isNotification(request)) {
+				if ("notifications/cancelled".equals(method)) {
+					cancelled(ctx, request);
+					ctx.status(202).contentType(ContentTypes.JSON);
+					return;
+				}
+			} else if ("tools/call".equals(method)) {
+				streamedToolCall(ctx, request);
+				return;
+			}
+		}
+		super.handlePost(ctx);
+	}
+
+	/** The body if it is one JSON-RPC object; a batch, or anything unreadable, is left to the base. */
+	private static AMap<?, ?> singleRequest(Context ctx) {
+		try {
+			ACell body = JSONReader.read(RequestBody.boundedInputStream(ctx)); // the body is cached: the base reads it again
+			return (body instanceof AMap<?, ?> map) ? map : null;
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	private void streamedToolCall(Context ctx, AMap<?, ?> request) {
+		ACell id = request.get(FIELD_ID);
+		ACell params = request.get(FIELD_PARAMS);
+		String accept = ctx.header("Accept");
+		ToolStream stream = (accept != null && accept.contains("text/event-stream"))
+			? new ToolStream(ctx, RT.getIn(params, "_meta", "progressToken")) : null;
+		AMap<AString, ACell> response = callTool(params, ctx, stream, id);
+		if (response == null) return; // the caller left; its job runs on
+		response = maybeAttachId(response, id);
+		if (stream != null && stream.started()) {
+			stream.send(response);
+		} else {
+			// As the base answers: JSON unless the client takes nothing but SSE.
+			McpProtocol.sendResponse(ctx, response, acceptsEventStream(ctx));
+		}
+	}
+
+	/** Cancels the caller's own call that a {@code notifications/cancelled} names, if it is still waiting. */
+	private void cancelled(Context ctx, AMap<?, ?> notification) {
+		ACell requestId = RT.getIn(notification.get(FIELD_PARAMS), "requestId");
+		if (requestId == null) return;
+		CompletableFuture<ACell> call = cancellable.get(cancelKey(callerKey(ctx), ctx, requestId));
+		if (call != null) call.cancel(true); // and its job with it
+	}
+
+	/** A call is the caller's, in its MCP session, by its request id. */
+	private static String cancelKey(AString caller, Context ctx, ACell requestId) {
+		return caller + " " + ctx.header(HEADER_SESSION_ID) + " " + JSON.print(requestId);
+	}
+
+	/**
+	 * Whether the request presented a credential. An unauthenticated one is
+	 * still given the venue's public DID as its caller, so the DID alone does
+	 * not say.
+	 */
+	private static boolean authenticated(Context ctx) {
+		return ctx != null && AuthMiddleware.getAuthenticatedIdentity(ctx) != null;
+	}
+
+	/** The caller a request counts against: its DID if authenticated, else the one anonymous caller. */
+	private static AString callerKey(Context ctx) {
+		AString did = authenticated(ctx) ? AuthMiddleware.getCallerDID(ctx) : null;
+		return (did != null) ? did : ANONYMOUS;
+	}
+
 	@Override
 	protected AMap<AString, ACell> toolCall(ACell paramsCell) {
+		// A call in a batch: answered in the batch's response, so it cannot stream.
+		return callTool(paramsCell, McpServer.getCurrentContext(), null, null);
+	}
+
+	/**
+	 * Runs a tool and waits for it as long as the caller does (see the class
+	 * notes). Null when the caller has gone, so there is nothing to answer.
+	 */
+	private AMap<AString, ACell> callTool(ACell paramsCell, Context ctx, ToolStream stream, ACell requestId) {
 		AMap<AString, ACell> params = RT.ensureMap(paramsCell);
 		if (params == null) return protocolError(-32602, "params must be an object");
 
@@ -489,7 +644,6 @@ public class MCP extends McpServer {
 			AString opRef = (toolName != null) ? registry().get(sanitiseToolName(toolName)) : null;
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opRef != null) {
-				Context ctx = McpServer.getCurrentContext();
 				RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 				// Authentication selected the caller before dispatch. The `ucans`
@@ -509,16 +663,141 @@ public class MCP extends McpServer {
 					arguments = coerceJsonStringArgs(arguments, opRef);
 				}
 
-				ACell result = engine().jobs().runToolOperation(opRef, arguments, rctx)
-					.get(TOOL_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-				// Scalar (non-map) results render as an MCP text result in the
-				// protocol layer (Convex 0.8.9) — no covia-side wrapping needed.
-				return toolSuccess(result);
+				AString caller = callerKey(ctx);
+				AtomicInteger inFlight = callsInFlight.computeIfAbsent(caller, k -> new AtomicInteger());
+				if (inFlight.incrementAndGet() > maxConcurrentToolCalls) {
+					inFlight.decrementAndGet();
+					return toolError("Too many tool calls in progress (at most " + maxConcurrentToolCalls
+						+ " at once); wait for one to finish");
+				}
+				String cancelKey = (requestId == null || ctx == null) ? null : cancelKey(caller, ctx, requestId);
+				JobManager.Run run = null;
+				try {
+					run = engine().jobs().startToolOperation(opRef, arguments, rctx);
+					if (cancelKey != null) cancellable.put(cancelKey, run.result());
+					return await(run, authenticated(ctx) ? toolCallTimeoutMs : anonymousToolCallTimeoutMs, stream);
+				} finally {
+					inFlight.decrementAndGet();
+					if (cancelKey != null && run != null) cancellable.remove(cancelKey, run.result());
+				}
 			} else {
 				return protocolError(-32602, "Unknown tool: " + toolName);
 			}
 		} catch (Exception e) {
-			return toolError(e.getMessage());
+			return toolError(messageOf(e));
+		}
+	}
+
+	/**
+	 * Waits for a tool's result for up to {@code limitMs}, keeping a stream
+	 * alive meanwhile. Null if the caller goes; past the limit, or when the
+	 * venue closes, the job to collect the result from instead.
+	 */
+	private AMap<AString, ACell> await(JobManager.Run run, long limitMs, ToolStream stream) throws InterruptedException {
+		CompletableFuture<ACell> result = run.result();
+		CompletableFuture<Object> resultOrClose = CompletableFuture.anyOf(result, closed);
+		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(limitMs);
+		while (!result.isDone()) {
+			long left = deadline - System.nanoTime();
+			if (left <= 0) return stillRunning(run, "it has not finished within " + limitMs / 1000 + "s");
+			try {
+				resultOrClose.get(Math.min(left, TimeUnit.MILLISECONDS.toNanos(keepAliveMs)), TimeUnit.NANOSECONDS);
+			} catch (TimeoutException e) {
+				if (stream != null && !stream.keepAlive(doing(run))) return null;
+				continue;
+			} catch (ExecutionException | java.util.concurrent.CancellationException e) {
+				// the result failed or was cancelled: reported below
+			}
+			if (!result.isDone()) return stillRunning(run, "the venue is shutting down");
+		}
+		try {
+			// Scalar (non-map) results render as an MCP text result in the
+			// protocol layer (Convex 0.8.9) — no covia-side wrapping needed.
+			return toolSuccess(result.join());
+		} catch (java.util.concurrent.CancellationException e) {
+			return toolError("Cancelled");
+		} catch (java.util.concurrent.CompletionException e) {
+			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+			return toolError(cause.toString()); // as a failed get() has always said it
+		}
+	}
+
+	/** What a running call's work is doing now, as its job's progress says; null when it says nothing. */
+	private static String doing(JobManager.Run run) {
+		return (run.job() == null) ? null : Job.progressMessage(run.job().getData().get(Fields.PROGRESS));
+	}
+
+	/** A call that stopped waiting, with where its result will be. */
+	private static AMap<AString, ACell> stillRunning(JobManager.Run run, String why) {
+		String id = (run.job() == null) ? null : run.job().getID().toHexString();
+		String message = "Still running: " + why + ". " + ((id == null)
+			? "It left no job to collect the result from."
+			: "Collect the result with grid_job_result {\"id\": \"" + id + "\"}, or see how it is going with grid_job_status.");
+		return protocolResult(buildMcpResult(Maps.of("message", message, "status", "running", "id", id), true));
+	}
+
+	/** An exception's message, never null: a bare toolError(null) tells the caller nothing. */
+	private static String messageOf(Throwable e) {
+		return (e.getMessage() != null) ? e.getMessage() : e.toString();
+	}
+
+	/**
+	 * A long tool call's response as an SSE stream, opened only when the call
+	 * outlasts one keep-alive interval, so a quick call is answered as before.
+	 */
+	private static final class ToolStream {
+		private final Context ctx;
+		private final ACell progressToken;
+		private java.io.OutputStream out;
+		private boolean gone;
+		private long progress;
+
+		ToolStream(Context ctx, ACell progressToken) {
+			this.ctx = ctx;
+			this.progressToken = progressToken;
+		}
+
+		boolean started() {
+			return out != null && !gone;
+		}
+
+		/**
+		 * A progress notification, if the caller asked for them, else a comment.
+		 * It says what the work is doing — {@code doing}, the job's progress
+		 * message, when there is one. False once the caller has gone.
+		 */
+		boolean keepAlive(String doing) {
+			String message = (doing != null && !doing.isBlank()) ? doing : "Still working";
+			return write((progressToken != null)
+				? formatSseEvent(Maps.of("jsonrpc", "2.0", "method", "notifications/progress",
+					"params", Maps.of("progressToken", progressToken, "progress", ++progress, "message", message)))
+				: ": still working\n\n");
+		}
+
+		void send(AMap<AString, ACell> response) {
+			write(formatSseEvent(response));
+		}
+
+		private boolean write(String event) {
+			if (gone) return false;
+			try {
+				HttpServletResponse res = ctx.res();
+				if (out == null) {
+					res.setStatus(200);
+					res.setContentType("text/event-stream");
+					res.setCharacterEncoding("UTF-8");
+					res.setHeader("Cache-Control", "no-cache");
+					res.setHeader("X-Accel-Buffering", "no");
+					out = res.getOutputStream();
+				}
+				out.write(event.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+				out.flush();
+				res.flushBuffer();
+				return true;
+			} catch (IOException | RuntimeException e) {
+				gone = true;
+				return false;
+			}
 		}
 	}
 
@@ -577,6 +856,7 @@ public class MCP extends McpServer {
 	 */
 	public void close() {
 		closing = true;
+		closed.complete(null); // calls still waiting give their callers the job instead
 		for (McpSession session : sessions.values()) session.close();
 		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
 		while (activeStreams.get() > 0 && System.nanoTime() < deadline) {

@@ -50,6 +50,7 @@ public class OAuthProviderTest {
 	private VenueServer server;
 	private String base;
 	private final HttpClient http = HttpClient.newHttpClient();
+	private final HttpClient noRedirects = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
 	private final SecureRandom random = new SecureRandom();
 
 	// The resource owner: an authenticated venue user with a venue-signed bearer.
@@ -93,7 +94,7 @@ public class OAuthProviderTest {
 			"exp", nowSecs + 3600), engine.getKeyPair()).toString();
 		// The confidential client's secret lives in the venue identity's store.
 		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
-		venueUser.secrets().store("WEBAPP_SECRET", "web-app-secret", SecretStore.deriveKey(engine.getKeyPair()));
+		venueUser.secrets().store("WEBAPP_SECRET", "web-app-secret", SecretStore.keys(engine.getKeyPair()));
 	}
 
 	@AfterAll
@@ -104,8 +105,7 @@ public class OAuthProviderTest {
 	// ========== helpers ==========
 
 	private HttpResponse<String> get(String path, String bearer, boolean follow) throws Exception {
-		HttpClient client = follow ? http
-			: HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
+		HttpClient client = follow ? http : noRedirects;
 		HttpRequest.Builder b = HttpRequest.newBuilder().uri(URI.create(base + path)).GET();
 		if (bearer != null) b.header("Authorization", "Bearer " + bearer);
 		return client.send(b.build(), HttpResponse.BodyHandlers.ofString());

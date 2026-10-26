@@ -37,7 +37,13 @@ public class MainVenue {
 	@SuppressWarnings("unchecked")
 	public static void main(String[] args) throws Exception {
 		configureLogging(null);
-		
+		// JDK-8370887: on JDK 25 before 25.0.3, virtual-thread and
+		// CompletableFuture timeouts can fire tens of seconds late.
+		Runtime.Version jdk = Runtime.version();
+		if (jdk.feature() == 25 && jdk.update() < 3) {
+			log.warn("JDK {} has JDK-8370887: timeouts can fire tens of seconds late; run the venue on JDK 25.0.3 or later", jdk);
+		}
+
 		AMap<AString,ACell> config=null;
 		
 		// First argument is config file path, if specified
@@ -101,13 +107,14 @@ public class MainVenue {
 
 		// On JVM shutdown (e.g. `docker stop` → SIGTERM) flush each venue's
 		// accumulated state before the process exits. Registered on Convex's
-		// shared, priority-ordered Shutdown registry at a priority BELOW SERVER,
-		// so the venue's high-level flush — final root publication + fsync via
-		// the idempotent Engine.close() — runs before Convex's own NodeServer
-		// persist (SERVER) and Etch flush (ETCH). Deliberately not a second
+		// shared, priority-ordered Shutdown registry at SERVICE, the slot for
+		// services, so the venue's final root publication + fsync via the
+		// idempotent Engine.close() completes before Convex closes its servers
+		// (SERVER) and Etch files (ETCH). NodeServer saves nothing on close, so
+		// this flush is the venue's last save. Deliberately not a second
 		// Runtime.addShutdownHook: that would run concurrently with Convex's
 		// shutdown and race the store close/flush.
-		Shutdown.addHook(Shutdown.SERVER - 10, () -> {
+		Shutdown.addHook(Shutdown.SERVICE, () -> {
 			log.info("Shutdown signal received — flushing {} venue(s)", servers.size());
 			for (VenueServer server: servers) {
 				try {
@@ -120,8 +127,8 @@ public class MainVenue {
 		});
 
 		// Desktop presence: a tray icon per venue with Open / Close / Exit —
-		// best-effort; headless or unsupported desktops (and COVIA_NO_TRAY=1)
-		// run without one. Tray logs why when it installs nothing.
+		// best-effort; headless or unsupported desktops, COVIA_NO_TRAY=1 and any
+		// venue with "tray": false run without one. Tray logs why when it installs nothing.
 		Tray.install(servers);
 
 		// A predecessor only considers this JVM started after all configured venues

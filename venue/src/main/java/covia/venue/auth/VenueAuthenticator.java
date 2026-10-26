@@ -1,11 +1,11 @@
 package covia.venue.auth;
 
 import java.nio.charset.StandardCharsets;
-import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +20,8 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.AccountKey;
 import convex.core.data.Blob;
+import convex.core.data.Maps;
+import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -48,17 +50,30 @@ public final class VenueAuthenticator {
 
 	private static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	private static final String VENUE_USER_ATTR = "callerDID";
+	private static final String AUTH_RESULT_ATTR = "covia.authResult";
 
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
-	private static final AString EMAIL = Fields.EMAIL;
 	private static final AString ISS = Strings.intern("iss");
 	private static final AString AUD = Strings.intern("aud");
 	private static final AString EXP = Strings.intern("exp");
 	private static final AString NBF = Strings.intern("nbf");
 
+	// Method identifiers and payload schemas belong to the verifiers, not
+	// AuthResult. New trusted methods can use their own ids and detail maps.
+	public static final AString KEY = Strings.intern("key");
+	public static final AString UCAN_METHOD = Strings.intern("ucan");
+	public static final AString OIDC = Strings.intern("oidc");
+	public static final AString KEY_JWT = Strings.intern("keyJwt");
+	public static final AString UCAN_BEARER = Strings.intern("ucanBearer");
+	public static final AString VENUE_JWT = Strings.intern("venueJwt");
+	public static final AString PROVIDER_TOKEN = Strings.intern("providerToken");
+	static final AString SIGNING_IDENTITY = Strings.intern("signingIdentity");
+	static final AString PROVIDER = Strings.intern("provider");
+
 	/** Clock-skew leeway for JWT temporal bounds, in seconds. */
 	private static final long CLOCK_SKEW_SECONDS = 60;
+	private static final Pattern IDENTITY_SEGMENT = Pattern.compile("[A-Za-z0-9._-]+");
 
 	/**
 	 * Prefixes on a 401 message, naming which credential shape the verifier
@@ -71,6 +86,7 @@ public final class VenueAuthenticator {
 	public static final String PROVIDER_TOKEN_REJECTED_PREFIX = "Provider token rejected: ";
 	/** For a token no verifier claims, or that does not parse at all. */
 	public static final String TOKEN_REJECTED_PREFIX = "Token rejected: ";
+	public static final String RESULT_REQUIRED = "result is required";
 
 	private final AccountKey venueKey;
 	private final AString venueDID;
@@ -80,13 +96,10 @@ public final class VenueAuthenticator {
 	private final Set<String> acceptedAudienceStrings;
 	private final Set<AString> acceptedAudiences;
 	private final Engine engine;
+	private final AuthMethods methods;
 	/** Bearer credentials must expire ({@code auth.requireExp}); a cap on how far ahead, 0 = none ({@code auth.maxTokenLifetime}). */
 	private final boolean requireExp;
 	private final long maxLifetimeSeconds;
-
-	private record VerifiedPrincipal(
-			AString authenticatedIdentity,
-			AString venueUserDID) {}
 
 	/**
 	 * One verifier's answer for a token it has claimed: the principal, or the
@@ -96,9 +109,13 @@ public final class VenueAuthenticator {
 	 * and a human-readable reason when it does not, and the reason bubbles
 	 * unchanged into the 401.
 	 */
-	private record Verdict(VerifiedPrincipal principal, String reason) {
-		static Verdict ok(AString authenticatedIdentity, AString venueUserDID) {
-			return new Verdict(new VerifiedPrincipal(authenticatedIdentity, venueUserDID), null);
+	private record Verdict(AuthResult principal, String reason) {
+		static Verdict ok(AString authenticatedIdentity, AString venueUserDID,
+				AString credentialType, Long expiresAt, AString method, AMap<AString, ACell> details) {
+			return new Verdict(new AuthResult(venueUserDID, authenticatedIdentity,
+				new AuthResult.Credential(credentialType, null, expiresAt),
+				new AuthResult.Authentication(method, null, null, Sets.empty(), details),
+				null, null), null);
 		}
 
 		static Verdict fail(String reason) {
@@ -111,13 +128,20 @@ public final class VenueAuthenticator {
 	 * this instance from {@code VenueServer.authenticator()}.
 	 */
 	public VenueAuthenticator(Engine engine) {
+		this(engine, null);
+	}
+
+	/** Internal provider seam, also allowing verifier tests with a local JWKS. */
+	VenueAuthenticator(Engine engine, Map<String, OAuthConfig> providers) {
 		if (engine == null) throw new IllegalArgumentException("engine is required");
 		this.engine = engine;
+		this.methods = new AuthMethods(engine);
 		this.venueKey = engine.getAccountKey();
 		this.venueDID = engine.getDIDString();
 		this.venueAuth = engine.getAuth();
-		this.externalProviders = venueAuth.getLoginProviders().hasProviders()
-			? venueAuth.getLoginProviders().getProviders() : null;
+		this.externalProviders = providers != null ? Map.copyOf(providers)
+			: venueAuth.getLoginProviders().hasProviders()
+				? venueAuth.getLoginProviders().getProviders() : null;
 		this.audiencePolicy = venueAuth.getAudiencePolicy();
 		this.requireExp = engine.config().isRequireExp();
 		this.maxLifetimeSeconds = engine.config().getMaxTokenLifetime();
@@ -150,7 +174,7 @@ public final class VenueAuthenticator {
 	 *         valid, incorrectly audienced, or otherwise not accepted
 	 */
 	public AString authenticate(AString token) throws AuthException {
-		return verify(token).venueUserDID();
+		return verify(token).userDID();
 	}
 
 	/**
@@ -163,9 +187,9 @@ public final class VenueAuthenticator {
 	 */
 	public AString authenticate(Context context, AString token) throws AuthException {
 		if (context == null) throw new IllegalArgumentException("context is required");
-		VerifiedPrincipal principal = verify(token);
-		bindIdentity(context, principal.authenticatedIdentity(), principal.venueUserDID());
-		return principal.venueUserDID();
+		AuthResult principal = verify(token);
+		bindResult(context, principal);
+		return principal.userDID();
 	}
 
 	/**
@@ -173,6 +197,12 @@ public final class VenueAuthenticator {
 	 * This is attribution only: it does not verify credentials or admit a user.
 	 */
 	public void bindIdentity(Context context, AString authenticatedIdentity,
+			AString venueUserDID) {
+		setRequestIdentity(context, authenticatedIdentity, venueUserDID);
+	}
+
+	/** Shared identity-only binding for the legacy middleware and embedder APIs. */
+	public static void setRequestIdentity(Context context, AString authenticatedIdentity,
 			AString venueUserDID) {
 		if (context == null) throw new IllegalArgumentException("context is required");
 		if (authenticatedIdentity == null) {
@@ -183,6 +213,23 @@ public final class VenueAuthenticator {
 		}
 		context.attribute(AUTHENTICATED_IDENTITY_ATTR, authenticatedIdentity);
 		context.attribute(VENUE_USER_ATTR, venueUserDID);
+		// Rebinding even the same identity must discard earlier credential evidence.
+		context.attribute(AUTH_RESULT_ATTR, AuthResult.identity(authenticatedIdentity, venueUserDID));
+	}
+
+	/**
+	 * Binds a result established by trusted host verification. Not a client
+	 * deserialisation API; does not verify, admit, or grant authority.
+	 */
+	public void bindResult(Context context, AuthResult result) {
+		if (result == null) throw new IllegalArgumentException(RESULT_REQUIRED);
+		setRequestIdentity(context, result.authenticatedIdentity(), result.userDID());
+		context.attribute(AUTH_RESULT_ATTR, result);
+	}
+
+	/** Returns request authentication evidence, or null when none is bound. */
+	public AuthResult authenticationResult(Context context) {
+		return context.attribute(AUTH_RESULT_ATTR);
 	}
 
 	/** Returns the identity directly proven by the request credential. */
@@ -221,6 +268,8 @@ public final class VenueAuthenticator {
 		public static final String EXPIRED = "token expired at ";
 		public static final String NOT_YET_VALID = "token not valid before ";
 		public static final String MISSING_EXP = "missing exp: this venue requires bearer credentials to expire (auth.requireExp)";
+		public static final String MALFORMED_EXP = "malformed exp: expected an integer Unix timestamp";
+		public static final String MALFORMED_NBF = "malformed nbf: expected an integer Unix timestamp";
 		public static final String NON_EXPIRING = "non-expiring credential: this venue requires bearer credentials to expire (auth.requireExp)";
 		public static final String LIFETIME_EXCEEDS = "token expires further ahead than this venue allows (auth.maxTokenLifetime): ";
 		public static final String AUDIENCE_REQUIRED = "audience (aud) is required but absent";
@@ -231,7 +280,7 @@ public final class VenueAuthenticator {
 		public static final String KID_NOT_OF_SUBJECT = "is a key of ";
 		public static final String KID_NOT_A_KEY = "is not a Multikey-encoded Ed25519 public key";
 		public static final String WRONG_KEY_FOR_SUBJECT = "but the subject is ";
-		public static final String WRONG_KEY_HINT = ": a did:key subject signs with its own key";
+		public static final String WRONG_KEY_HINT = ": a did:key subject must name the signing key or a valid identity nested below it";
 		public static final String SIGNATURE_FAILS = "signature does not verify for ";
 		public static final String SIGNATURE_FAILS_PER_DID_DOCUMENT = " (per its DID document)";
 		public static final String DID_METHOD_FAILURE = "could not verify, through its DID method, the subject ";
@@ -247,11 +296,8 @@ public final class VenueAuthenticator {
 		public static final String NO_PROVIDERS = "no external identity provider is configured on this venue";
 		public static final String MISSING_PROVIDER_KID = "missing kid header: a provider token names its signing key in kid";
 		public static final String NO_PROVIDER_FOR_KEY = "no configured identity provider publishes signing key ";
-		public static final String PROVIDER_SIGNATURE_FAILS = "signature does not verify against the key published by ";
-		public static final String PROVIDER_CLAIMS_MISMATCH = "token issuer or audience does not match provider ";
-		public static final String PROVIDER_KEYS_UNAVAILABLE = "could not fetch the signing keys of ";
-		public static final String NO_EMAIL_CLAIM = "provider token carries no email claim";
-		public static final String NO_USER_FOR_EMAIL = "no venue user is linked to ";
+		public static final String PROVIDER_CLAIMS_MISMATCH = "provider ID token validation failed for ";
+		public static final String NO_PROVIDER_BINDING = "no venue user is bound to this provider issuer and subject";
 
 		private Reason() {}
 	}
@@ -268,11 +314,60 @@ public final class VenueAuthenticator {
 	 * whether its signature verifies for the key it asserts. Checks that depend
 	 * on venue state — key status, audience, user records — run after the
 	 * signature, and their wording never says whether a named account exists
-	 * (AUTH.md §11): on the named-user path the signature proves possession of
-	 * the key {@code kid} names, which anyone can mint, so an unknown user and
+	 * (AUTH.md §11): on the named-user path the signature authenticates a
+	 * statement by the key {@code kid} names, so an unknown user and
 	 * an unregistered key read the same.</p>
+	 *
+	 * @return verified identities and established evidence, without retaining
+	 *         the credential or admitting a user
+	 * @throws AuthException if the credential is not accepted
 	 */
-	private VerifiedPrincipal verify(AString token) {
+	public AuthResult verify(AString token) {
+		JWT parsed = parseCredential(token);
+		AString method = methodFor(parsed);
+		return method == null ? methods.verifyLegacy(token) : verify(method, token);
+	}
+
+	private AString methodFor(JWT parsed) {
+		AMap<AString, ACell> claims = parsed.getClaims();
+		if (claims.containsKey(UCAN.ATT)) return UCAN_METHOD;
+		if ("RS256".equals(parsed.getAlgorithm())) return OIDC;
+		if (venueDID.equals(RT.ensureString(claims.get(ISS)))) return null;
+		if (RT.ensureString(claims.get(SUB)) != null) return KEY;
+		throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.UNRECOGNISED
+			+ printable(parsed.getAlgorithm()) + Reason.UNRECOGNISED_HINT);
+	}
+
+	/** Verify transient method-owned Convex input without HTTP or a recorded job. */
+	public AuthResult verify(AString method, ACell input) {
+		return methods.verify(method, input);
+	}
+
+	/** Validate explicit bindings once all host adapters have been installed. */
+	public void validateMethods() { methods.validate(); }
+
+	/** Trusted built-in adapter contributions; no new cryptographic implementation. */
+	public Map<AString, AuthenticationMethods.Verifier> builtInMethods() {
+		return Map.of(KEY_JWT, builtIn(KEY), UCAN_BEARER, builtIn(UCAN_METHOD),
+			PROVIDER_TOKEN, builtIn(OIDC));
+	}
+
+	private AuthenticationMethods.Verifier builtIn(AString origin) {
+		return (method, input) -> {
+			AuthResult result = verifyOriginal(input, origin);
+			AuthResult.Authentication event = result.authentication();
+			return new AuthResult(result.userDID(), result.authenticatedIdentity(), result.credential(),
+				new AuthResult.Authentication(method, event.binding(), event.authenticatedAt(),
+					event.properties(), event.details()), result.proof(), result.sessionId());
+		};
+	}
+
+	/** Trusted compatibility verifier; the dispatch layer controls its availability. */
+	public AuthResult verifyLegacyCredential(ACell input) {
+		return verifyOriginal(input, null);
+	}
+
+	private static JWT parseCredential(AString token) {
 		if (token == null || token.toString().isBlank()) {
 			throw new AuthException("Authentication required");
 		}
@@ -280,26 +375,30 @@ public final class VenueAuthenticator {
 		if (parsed == null) throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.UNPARSEABLE);
 		AMap<AString, ACell> claims = parsed.getClaims();
 		if (claims == null) throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.MISSING_CLAIMS);
+		return parsed;
+	}
+
+	private AuthResult verifyOriginal(ACell input, AString origin) {
+		AString token = RT.ensureString(input);
+		JWT parsed = parseCredential(token);
+		AMap<AString, ACell> claims = parsed.getClaims();
+		if (!java.util.Objects.equals(origin, methodFor(parsed))) throw new AuthException(AuthMethods.INVALID_RESULT);
 
 		String prefix;
 		Verdict verdict;
 		try {
-			AString iss = RT.ensureString(claims.get(ISS));
-			if (claims.containsKey(UCAN.ATT)) {
+			if (UCAN_METHOD.equals(origin)) {
 				prefix = UCAN_REJECTED_PREFIX;
 				verdict = verifyUCAN(token);
-			} else if ("RS256".equals(parsed.getAlgorithm())) {
+			} else if (OIDC.equals(origin)) {
 				prefix = PROVIDER_TOKEN_REJECTED_PREFIX;
 				verdict = verifyExternalProvider(parsed, claims);
-			} else if (venueDID.equals(iss)) {
+			} else if (origin == null) {
 				prefix = VENUE_TOKEN_REJECTED_PREFIX;
 				verdict = verifyVenueSigned(token);
-			} else if (RT.ensureString(claims.get(SUB)) != null) {
+			} else {
 				prefix = SELF_ISSUED_REJECTED_PREFIX;
 				verdict = verifySelfIssued(token, parsed, claims);
-			} else {
-				throw new AuthException(TOKEN_REJECTED_PREFIX + Reason.UNRECOGNISED
-					+ printable(parsed.getAlgorithm()) + Reason.UNRECOGNISED_HINT);
 			}
 		} catch (AuthException e) {
 			throw e;
@@ -338,11 +437,13 @@ public final class VenueAuthenticator {
 		if (capabilities == null || !capabilities.isEmpty()) return Verdict.fail(Reason.NON_EMPTY_ATT);
 		String audience = audienceProblem(token.getAudience());
 		if (audience != null) return Verdict.fail(audience);
-		return Verdict.ok(issuer, issuer);
+		return Verdict.ok(issuer, issuer, UCAN_BEARER, exp,
+			UCAN_METHOD, Maps.of(ISS, issuer, AUD, token.getAudience()));
 	}
 
 	/**
-	 * An EdDSA token whose subject issued it: a self-certifying {@code did:key},
+	 * An EdDSA token whose subject issued it: a self-certifying {@code did:key}
+	 * or an identity nested below it ({@code did:key:<key>:u:<name>:g:<agent>}),
 	 * a venue-managed named user signing with a registered key, or any other
 	 * DID verified through its method resolver.
 	 */
@@ -356,10 +457,11 @@ public final class VenueAuthenticator {
 		long now = System.currentTimeMillis() / 1000;
 
 		if (subject.startsWith("did:key:")) {
-			// Self-certifying: the subject is its own key, so kid must name it.
+			// Self-certifying key, or an identity in that key's exact namespace.
+			// Only the subject becomes the caller; it inherits no signer authority.
 			KeyRef key = signingKeyOf(parsed, sub);
 			if (key.reason() != null) return Verdict.fail(key.reason());
-			if (!sub.equals(key.did())) {
+			if (!sub.equals(key.did()) && !isNestedIdentity(sub, key.did())) {
 				return Verdict.fail("kid names key " + key.did() + " " + Reason.WRONG_KEY_FOR_SUBJECT + sub
 					+ Reason.WRONG_KEY_HINT);
 			}
@@ -372,7 +474,7 @@ public final class VenueAuthenticator {
 			if (when != null) return Verdict.fail(when);
 			String audience = audienceProblem(claims.get(AUD));
 			if (audience != null) return Verdict.fail(audience);
-			return Verdict.ok(key.did(), sub);
+			return keyResult(key.did(), sub, claims);
 		}
 
 		AString userId = engine.managedUserName(sub);
@@ -402,7 +504,7 @@ public final class VenueAuthenticator {
 			if (when != null) return Verdict.fail(when);
 			String audience = audienceProblem(claims.get(AUD));
 			if (audience != null) return Verdict.fail(audience);
-			return Verdict.ok(key.did(), sub);
+			return keyResult(key.did(), sub, claims);
 		}
 
 		// A non-local DID is authenticated by its method resolver. No caller in
@@ -431,7 +533,7 @@ public final class VenueAuthenticator {
 		if (when != null) return Verdict.fail(when);
 		String audience = audienceProblem(claims.get(AUD));
 		if (audience != null) return Verdict.fail(audience);
-		return Verdict.ok(sub, sub);
+		return keyResult(sub, sub, claims);
 	}
 
 	/** A token this venue issued (a login session), signed with its own key. */
@@ -450,46 +552,33 @@ public final class VenueAuthenticator {
 		} catch (RuntimeException e) {
 			return Verdict.fail(Reason.MALFORMED_SUBJECT + sub);
 		}
-		return Verdict.ok(sub, sub);
+		// A venue signature identifies the credential issuer, not the login
+		// method. Legacy login and OAuth-issued JWTs share this verifier.
+		return Verdict.ok(sub, sub, VENUE_JWT, expiryMetadata(claims),
+			null, null);
 	}
 
-	/**
-	 * An RS256 ID token from a configured external provider, mapped to the
-	 * venue user linked to its email. The email is the caller's own (the
-	 * provider vouched for it), so "no venue user is linked" is theirs to hear.
-	 */
+	/** Provider credentials share the browser verifier and stable issuer/subject lookup. */
 	private Verdict verifyExternalProvider(JWT parsed, AMap<AString, ACell> claims) {
 		if (externalProviders == null) return Verdict.fail(Reason.NO_PROVIDERS);
 		String kid = parsed.getKeyID();
 		if (kid == null) return Verdict.fail(Reason.MISSING_PROVIDER_KID);
 		String reason = Reason.NO_PROVIDER_FOR_KEY + kid;
-		for (Map.Entry<String, OAuthConfig> e : externalProviders.entrySet()) {
-			String name = e.getKey();
-			OAuthConfig provider = e.getValue();
+		for (var entry : externalProviders.entrySet()) {
+			OAuthConfig provider = entry.getValue();
 			if (provider.jwksUri == null) continue;
 			try {
-				RSAPublicKey key = JWKSClient.getKey(provider.jwksUri, kid);
-				if (key == null) continue;
-				if (!parsed.verifyRS256(key)) {
-					reason = Reason.PROVIDER_SIGNATURE_FAILS + name;
-					continue;
-				}
-				if (!parsed.validateClaims(provider.issuer, provider.clientId)) {
-					reason = Reason.PROVIDER_CLAIMS_MISMATCH + name;
-					continue;
-				}
+				var verified = provider.validateIdToken(parsed.getRaw().toString(), null);
+				String subject = verified.getSubject().getValue();
+				AString did = LoginProviders.findIdentity(engine.getAuth(), provider.issuer, subject);
+				if (did == null) return Verdict.fail(Reason.NO_PROVIDER_BINDING);
+				engine.getVenueState().users().requireNotDeleted(did);
+				return Verdict.ok(Strings.create(subject), did, PROVIDER_TOKEN, expiryMetadata(claims), OIDC,
+					Maps.of(PROVIDER, entry.getKey(), ISS, provider.issuer, SUB, subject));
 			} catch (Exception ex) {
-				// Same rule: the caller learns which step failed, the log why.
-				log.debug("Provider {} key lookup failed", name, ex);
-				reason = Reason.PROVIDER_KEYS_UNAVAILABLE + name;
-				continue;
+				log.debug("Provider {} validation failed ({})", entry.getKey(), ex.getClass().getSimpleName());
+				reason = Reason.PROVIDER_CLAIMS_MISMATCH + entry.getKey();
 			}
-			AString email = RT.ensureString(claims.get(EMAIL));
-			if (email == null) return Verdict.fail(Reason.NO_EMAIL_CLAIM);
-			AString venueUserDID = findUserDIDByEmail(email);
-			if (venueUserDID == null) return Verdict.fail(Reason.NO_USER_FOR_EMAIL + email);
-			AString subject = RT.ensureString(claims.get(SUB));
-			return Verdict.ok(subject != null ? subject : email, venueUserDID);
 		}
 		return Verdict.fail(reason);
 	}
@@ -497,6 +586,36 @@ public final class VenueAuthenticator {
 	// ------------------------------------------------------------- the checks
 	// Each returns null when it passes and the reason when it does not, the
 	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
+
+	/** Whether a subject uses valid nested segments below the exact signing identity.
+	 * Shared by authentication and issuance; this establishes no permissions. */
+	public static boolean isNestedIdentity(AString subject, AString signingIdentity) {
+		String prefix = signingIdentity + ":";
+		String value = subject.toString();
+		if (!value.startsWith(prefix)) return false;
+		// Validate each segment independently: arbitrary depth without a recursive
+		// regex, and the same character set as venue-managed usernames.
+		for (String segment : value.substring(prefix.length()).split(":", -1)) {
+			if (!IDENTITY_SEGMENT.matcher(segment).matches()) return false;
+		}
+		return true;
+	}
+
+	private static Verdict keyResult(AString signingIdentity, AString userDID,
+			AMap<AString, ACell> claims) {
+		return Verdict.ok(signingIdentity, userDID, KEY_JWT,
+			expiryMetadata(claims), KEY, Maps.of(SIGNING_IDENTITY, signingIdentity));
+	}
+
+	/**
+	 * Conservative projection after the existing verifier's temporal checks.
+	 * Phase 1 does not change acceptance or round fractional provider expiry.
+	 * Provider iat is checked for token validity but deliberately not projected
+	 * as common event/issuance evidence during this consolidation.
+	 */
+	private static Long expiryMetadata(AMap<AString, ACell> claims) {
+		return claims.get(EXP) instanceof CVMLong exp ? exp.longValue() : null;
+	}
 
 	/**
 	 * Null when the token is within its exp / nbf bounds (with clock-skew
@@ -506,13 +625,15 @@ public final class VenueAuthenticator {
 	String temporalProblem(AMap<AString, ACell> claims, long now) {
 		CVMLong exp = RT.ensureLong(claims.get(EXP));
 		if (exp == null) {
+			if (claims.get(EXP) != null) return Reason.MALFORMED_EXP;
 			if (requireExp) return Reason.MISSING_EXP;
 		} else {
 			String bound = expiryProblem(exp.longValue(), now);
 			if (bound != null) return bound;
 		}
 		CVMLong nbf = RT.ensureLong(claims.get(NBF));
-		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) {
+		if (nbf == null && claims.get(NBF) != null) return Reason.MALFORMED_NBF;
+		if (nbf != null && nbf.longValue() > now && now < nbf.longValue() - CLOCK_SKEW_SECONDS) {
 			return Reason.NOT_YET_VALID + instant(nbf.longValue()) + " (now " + instant(now) + ")";
 		}
 		return null;
@@ -520,7 +641,8 @@ public final class VenueAuthenticator {
 
 	/** Null when an expiry is neither past nor further ahead than the venue's cap; otherwise why not. */
 	private String expiryProblem(long exp, long now) {
-		if (now > exp + CLOCK_SKEW_SECONDS) {
+		// Compare to the host clock, not exp + skew (which can overflow).
+		if (exp < now - CLOCK_SKEW_SECONDS) {
 			return Reason.EXPIRED + instant(exp) + " (now " + instant(now) + ")";
 		}
 		if (maxLifetimeSeconds > 0 && exp - now > maxLifetimeSeconds) {
@@ -596,18 +718,5 @@ public final class VenueAuthenticator {
 
 	private static String printable(Object value) {
 		return (value == null) ? "none" : "\"" + value + "\"";
-	}
-
-	private AString findUserDIDByEmail(AString email) {
-		AMap<AString, AMap<AString, ACell>> users = venueAuth.getUsers();
-		if (users == null) return null;
-		for (var entry : users.entrySet()) {
-			AMap<AString, ACell> record = entry.getValue();
-			if (email.equals(record.get(EMAIL))) {
-				AString did = RT.ensureString(record.get(Fields.DID));
-				if (did != null) return did;
-			}
-		}
-		return null;
 	}
 }

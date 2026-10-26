@@ -5,11 +5,15 @@
   <parent>
     <groupId>ai.covia</groupId>
     <artifactId>covia</artifactId>
-    <version>0.9.11</version>
+    <version>0.10.0</version>
   </parent>
   <artifactId>covia-core</artifactId>
   <name>Covia Core</name>
   <description>Covia grid client library and shared abstractions: assets, operations, jobs, venue client, auth.</description>
+
+  <properties>
+    <covia.module.name>covia.core</covia.module.name>
+  </properties>
 
   <dependencies>
 		<!-- Convex / Lattice Tech -->

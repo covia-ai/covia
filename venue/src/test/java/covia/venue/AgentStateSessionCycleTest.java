@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,12 +25,13 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.adapter.agent.GoalTreeContext;
 
 /**
  * Unit tests for the session cycle-epoch primitives (lattice-resident frames,
- * Stage A): {@link AgentState#beginSessionCycle},
- * {@link AgentState#presentSessionCycleInput},
- * {@link AgentState#updateSessionFrames} (epoch-fenced), the shared
+ * Stage A): {@link SessionState#beginCycle},
+ * {@link SessionState#presentCycleInput},
+ * {@link SessionState#updateFrames} (epoch-fenced), the shared
  * root-turn-append/pending-drain helpers, the {@code inCycle} clear inside
  * {@link AgentState#mergeRunResult}, and the rule that {@code inCycle} is a
  * write fence rather than durable queued work.
@@ -68,10 +70,122 @@ public class AgentStateSessionCycleTest {
 	private AVector<ACell> rootConversation() {
 		AMap<AString, ACell> session = agent.getSession(sid);
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
-		return RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		return covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 	}
 
 	// ========== beginSessionCycle ==========
+	private AVector<ACell> seedLegacyHistory() {
+		AMap<AString, ACell> old = Maps.of("description", "legacy", "conversation",
+			Vectors.of(GoalTreeContext.createSegment("summary", Vectors.of(turn("old"))), turn("live")));
+		AVector<ACell> frames = Vectors.of(old);
+		AMap<AString, ACell> session = agent.getSession(sid).assoc(Fields.FRAMES, frames);
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
+		return frames;
+	}
+
+	@Test
+	public void invalidCompletionRollsBackAgentAndSessionTogether() {
+		Blob task = Blob.fromHex("01");
+		agent.addTaskInSession(sid, userDid, null, task, Maps.of("input", "work"));
+		agent.session(sid).appendPending(envelope("pending"));
+		agent.session(sid).beginCycle(EPOCH_A, null, 0);
+		ACell before = agent.getRecord();
+		assertThrows(IllegalArgumentException.class, () -> agent.mergeRunResult(
+			null, Maps.of("changed", true), Maps.of(task.toHexString(), "done"),
+			Maps.of("event", "complete"), sid, Vectors.of(turn("response")), 1,
+			Vectors.of(CVMLong.ONE), Maps.of(Fields.TOTAL, 10)));
+		assertEquals(before, agent.getRecord(), "frame validation must roll back tasks, state and timeline too");
+	}
+
+	@Test
+	public void externalCompletionIsClaimedIdempotentAndComposable() {
+		Blob job = Blob.fromHex("01");
+		Blob other = Blob.fromHex("02");
+		assertTrue(agent.claimExternalTurn(sid, job, userDid, Strings.create("request"), false));
+		assertTrue(agent.claimExternalTurn(sid, job, userDid, Strings.create("repeated"), false));
+		assertFalse(agent.claimExternalTurn(sid, other, userDid, Strings.create("competing"), false));
+		assertEquals(1, SessionState.sessionTurnCount(agent.getSession(sid)));
+		ACell claimed = agent.getRecord();
+		agent.session(sid).finishExternalTurn(other, null, Strings.create("wrong job"));
+		assertEquals(claimed, agent.getRecord());
+		assertThrows(IllegalStateException.class, () -> agent.transact(draft -> {
+			draft.session(sid).finishExternalTurn(job, Strings.create("remote"), Strings.create("response"));
+			draft.setStatus(AgentState.SUSPENDED);
+			throw new IllegalStateException();
+		}));
+		assertEquals(claimed, agent.getRecord());
+		agent.session(sid).finishExternalTurn(job, Strings.create("remote"), Strings.create("response"));
+		assertEquals(2, SessionState.sessionTurnCount(agent.getSession(sid)));
+		assertEquals(Strings.create("remote"), RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.SESSION_ID));
+		ACell finished = agent.getRecord();
+		agent.session(sid).finishExternalTurn(job, null, Strings.create("duplicate response"));
+		assertEquals(finished, agent.getRecord());
+		agent.removeSession(sid);
+		agent.session(sid).finishExternalTurn(job, null, Strings.create("late response"));
+		assertNull(agent.getSession(sid));
+	}
+
+	@Test
+	public void migrationIsIdempotentAndRequiresIdleMatchingSnapshot() {
+		AVector<ACell> legacy = seedLegacyHistory();
+		ACell meta = agent.getSession(sid).get(Strings.intern("meta"));
+		assertFalse(agent.session(sid).migrateHistory(Vectors.empty()));
+		assertTrue(agent.session(sid).migrateHistory(legacy));
+		AVector<ACell> current = RT.ensureVector(agent.getSession(sid).get(Fields.FRAMES));
+		assertEquals(GoalTreeContext.activeConversation(RT.ensureMap(legacy.get(0))),
+			GoalTreeContext.archivedConversation(RT.ensureMap(current.get(0))));
+		assertEquals(meta, agent.getSession(sid).get(Strings.intern("meta")));
+		assertTrue(agent.session(sid).migrateHistory(current));
+		assertFalse(agent.session(sid).migrateHistory(legacy));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
+		assertFalse(agent.session(sid).migrateHistory(current));
+	}
+
+	@Test
+	public void failedMigrationPreservesEveryFramePendingInputAndEpoch() {
+		AVector<ACell> legacy = seedLegacyHistory();
+		AMap<AString, ACell> unsupported = Maps.of("historyVersion", 2L, "history", Vectors.empty(), "contextStart", 0L);
+		AVector<ACell> frames = legacy.conj(unsupported);
+		AMap<AString, ACell> before = agent.getSession(sid).assoc(Fields.FRAMES, frames)
+			.assoc(Strings.intern("pending"), Vectors.of(envelope("waiting")));
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, before)));
+		assertThrows(IllegalArgumentException.class, () -> agent.session(sid).migrateHistory(frames));
+		assertEquals(before, agent.getSession(sid));
+		assertThrows(IllegalArgumentException.class,
+			() -> agent.session(sid).beginCycle(EPOCH_B, Vectors.of(turn("new")), 1));
+		assertEquals(before, agent.getSession(sid));
+	}
+
+	@Test
+	public void cycleMigrationAndCompactionCountOnlyNewTurnsAndRejectStaleReplacement() {
+		seedLegacyHistory();
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, Vectors.of(turn("new")), 0));
+		assertEquals(CVMLong.ONE, RT.getIn(agent.getSession(sid), "meta", "turns"));
+		AVector<ACell> snapshot = RT.ensureVector(agent.getSession(sid).get(Fields.FRAMES));
+		assertTrue(agent.session(sid).updateFrames(EPOCH_A, frames -> frames.assoc(0,
+			GoalTreeContext.compactFrame(GoalTreeContext.appendTurn(RT.ensureMap(frames.get(0)), turn("later")), "all"))));
+		assertEquals(CVMLong.create(2), RT.getIn(agent.getSession(sid), "meta", "turns"));
+		AMap<AString, ACell> saved = agent.getSession(sid);
+		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(IllegalArgumentException.class,
+			() -> agent.session(sid).updateFrames(EPOCH_A, frames -> snapshot)).getMessage());
+		assertEquals(saved, agent.getSession(sid));
+		assertThrows(IllegalArgumentException.class,
+			() -> agent.session(sid).updateFrames(EPOCH_A, frames -> Vectors.empty()));
+		AMap<AString, ACell> record = agent.getRecord();
+		assertThrows(IllegalArgumentException.class,
+			() -> agent.mergeRunResult(null, null, null, Maps.empty(), sid, null, 0, snapshot, null));
+		assertEquals(record, agent.getRecord(), "stale cycle completion must not publish even its timeline entry");
+	}
+
+	@Test
+	public void malformedFramesCannotBeResetByMigrationOrAppend() {
+		AMap<AString, ACell> session = agent.getSession(sid).assoc(Fields.FRAMES, Strings.create("damaged"));
+		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, session)));
+		assertEquals(AgentState.INVALID_SESSION_FRAMES, assertThrows(IllegalArgumentException.class,
+			() -> agent.session(sid).migrateHistory(Vectors.empty())).getMessage());
+		assertThrows(IllegalArgumentException.class, () -> agent.session(sid).appendRootTurn(null, turn("new")));
+		assertEquals(session, agent.getSession(sid));
+	}
 
 	@Test
 	public void cacheTtlMeasurementsAccumulateInSessionWithoutInventingMissingUsage() {
@@ -118,7 +232,7 @@ public class AgentStateSessionCycleTest {
 		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS,
 			agent.getSessions().assoc(legacySid, legacySession)));
 
-		assertTrue(agent.beginSessionCycle(legacySid, EPOCH_A, null, 0));
+		assertTrue(agent.session(legacySid).beginCycle(EPOCH_A, null, 0));
 		AMap<AString, ACell> migrated = agent.getSession(legacySid);
 		assertNull(migrated.get(Fields.LOADS));
 		AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(migrated,
@@ -137,7 +251,7 @@ public class AgentStateSessionCycleTest {
 		agent.appendSessionPending(sid, envelope("m3"));
 
 		AVector<ACell> turns = Vectors.of(turn("m1"), turn("m2"));
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, turns, 2));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, turns, 2));
 
 		// All three effects landed together
 		assertEquals(EPOCH_A, agent.getSessionCycleEpoch(sid), "epoch claimed");
@@ -155,7 +269,7 @@ public class AgentStateSessionCycleTest {
 	public void testBeginCycleMissingSessionIsNoOp() {
 		Blob unknown = Blob.fromHex("ffffffffffffffffffffffffffffffff");
 		long tsBefore = agent.getTs();
-		assertFalse(agent.beginSessionCycle(unknown, EPOCH_A, Vectors.of(turn("x")), 1));
+		assertFalse(agent.session(unknown).beginCycle(EPOCH_A, Vectors.of(turn("x")), 1));
 		assertEquals(tsBefore, agent.getTs(), "no-op must not bump the record ts");
 	}
 
@@ -163,19 +277,19 @@ public class AgentStateSessionCycleTest {
 	public void testStaleEpochOverwrittenByNewCycle() {
 		// A stale claim (crash remnant) is the normal resume case — a fresh
 		// cycle overwrites it, after which the old epoch's writes are fenced.
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_B, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_B, null, 0));
 		assertEquals(EPOCH_B, agent.getSessionCycleEpoch(sid));
 	}
 
 	@Test
 	public void testInputPresentationCannotDrainAfterCycleIsSuperseded() {
 		agent.appendSessionPending(sid, envelope("m1"));
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_B, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_B, null, 0));
 
-		assertFalse(agent.presentSessionCycleInput(
-			sid, EPOCH_A, Vectors.of(turn("m1")), 1));
+		assertFalse(agent.session(
+			sid).presentCycleInput(EPOCH_A, Vectors.of(turn("m1")), 1));
 		assertEquals(0, rootConversation().count());
 		assertEquals(1, agent.getSessionPending(sid).count());
 		assertEquals(EPOCH_B, agent.getSessionCycleEpoch(sid));
@@ -185,8 +299,8 @@ public class AgentStateSessionCycleTest {
 
 	@Test
 	public void testUpdateSessionFramesAppliesUnderOwnEpoch() {
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
-		assertTrue(agent.updateSessionFrames(sid, EPOCH_A,
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).updateFrames(EPOCH_A,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("child")))));
 		AMap<AString, ACell> session = agent.getSession(sid);
 		assertEquals(2, RT.ensureVector(session.get(AgentState.KEY_FRAMES)).count(),
@@ -195,35 +309,35 @@ public class AgentStateSessionCycleTest {
 
 	@Test
 	public void testUpdateSessionFramesFencedByEpoch() {
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
 		AMap<AString, ACell> before = agent.getSession(sid);
 
 		// A superseded cycle (wrong epoch) must be rejected with no write —
 		// this is the zombie-writer fence (I1).
-		assertFalse(agent.updateSessionFrames(sid, EPOCH_B,
+		assertFalse(agent.session(sid).updateFrames(EPOCH_B,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("zombie")))));
 		assertEquals(before, agent.getSession(sid), "fenced write must leave the session untouched");
 	}
 
 	@Test
 	public void testUpdateSessionFramesRejectedAfterMergeClearsEpoch() {
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
 		mergeMinimalCycle();
-		assertFalse(agent.updateSessionFrames(sid, EPOCH_A, frames -> frames.conj(turn("late"))),
+		assertFalse(agent.session(sid).updateFrames(EPOCH_A, frames -> frames.conj(turn("late"))),
 			"a completed cycle's epoch is cleared — its writes must be fenced");
 	}
 
 	@Test
 	public void testUpdateSessionFramesMissingSessionReturnsFalse() {
 		Blob unknown = Blob.fromHex("ffffffffffffffffffffffffffffffff");
-		assertFalse(agent.updateSessionFrames(unknown, null, frames -> frames.conj(turn("x"))));
+		assertFalse(agent.session(unknown).updateFrames(null, frames -> frames.conj(turn("x"))));
 	}
 
 	@Test
 	public void testUpdateSessionFramesNoChangeSkipsTsBump() {
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
 		long tsBefore = agent.getTs();
-		assertTrue(agent.updateSessionFrames(sid, EPOCH_A, frames -> frames),
+		assertTrue(agent.session(sid).updateFrames(EPOCH_A, frames -> frames),
 			"identity update applies (returns true) without writing");
 		assertEquals(tsBefore, agent.getTs(), "no-change update must not bump the record ts");
 	}
@@ -232,7 +346,7 @@ public class AgentStateSessionCycleTest {
 
 	@Test
 	public void testMergeClearsInCycle() {
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
 		assertEquals(EPOCH_A, agent.getSessionCycleEpoch(sid));
 		mergeMinimalCycle();
 		assertNull(agent.getSessionCycleEpoch(sid),
@@ -246,7 +360,7 @@ public class AgentStateSessionCycleTest {
 		// Drain everything: the epoch remains only as a live write fence. It is
 		// not a durable instruction to resume the interrupted execution.
 		agent.appendSessionPending(sid, envelope("m1"));
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, Vectors.of(turn("m1")), 1));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, Vectors.of(turn("m1")), 1));
 		assertEquals(0, agent.getSessionPending(sid).count());
 
 		assertFalse(agent.hasSessionPending(), "inCycle must not count as queued work");
@@ -263,7 +377,7 @@ public class AgentStateSessionCycleTest {
 	public void testConcurrentIntakeAndFrameWritesLoseNothing() throws Exception {
 		final int MESSAGES = 200;
 		final int FRAME_WRITES = 200;
-		assertTrue(agent.beginSessionCycle(sid, EPOCH_A, null, 0));
+		assertTrue(agent.session(sid).beginCycle(EPOCH_A, null, 0));
 
 		Thread intake = new Thread(() -> {
 			for (int i = 0; i < MESSAGES; i++) {
@@ -274,7 +388,7 @@ public class AgentStateSessionCycleTest {
 		List<Boolean> results = new ArrayList<>();
 		for (int i = 0; i < FRAME_WRITES; i++) {
 			final int n = i;
-			results.add(agent.updateSessionFrames(sid, EPOCH_A,
+			results.add(agent.session(sid).updateFrames(EPOCH_A,
 				frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("f" + n)))));
 		}
 		intake.join(10_000);

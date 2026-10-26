@@ -165,10 +165,11 @@ public class AAdapterInstallTest {
 		captured.start();
 		log.addAppender(captured);
 		// The test logback config keeps the root at ERROR; the adapter logger
-		// must admit WARN for the appender to see the event.
+		// must admit WARN for the appender to see the event. Detach from the
+		// console first, so a parallel test's WARN is never printed meanwhile.
 		ch.qos.logback.classic.Level previous = log.getLevel();
-		log.setLevel(ch.qos.logback.classic.Level.WARN);
 		log.setAdditive(false); // captured by the list appender only, never printed
+		log.setLevel(ch.qos.logback.classic.Level.WARN);
 		try {
 			// A string input: warned, but published — an operation is not a tool.
 			assertNotNull(adapter.installAsset("probe/stringy", op("probe:stringy",

@@ -16,6 +16,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only token: no job here writes back to the repo. upload-artifact uses
+# the runner's artifact token, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -23,17 +28,22 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+    # JDK 25 before 25.0.3 has JDK-8370887 (timeouts fire tens of seconds late,
+    # so tests fail intermittently). check-latest fetches the newest 25 rather
+    # than whatever the runner image cached, and -Dcovia.jdk.check=ERROR below
+    # fails the build if an affected JDK ever slips through.
     - name: Set up JDK 25
-      uses: actions/setup-java@v6
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
       with:
         java-version: '25'
         distribution: 'temurin'
+        check-latest: true
         cache: 'maven'
 
     - name: Set up CPython 3.13
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: '3.13'
 
@@ -48,7 +58,7 @@ jobs:
       # tests that fork real JVMs): off in the local `mvn test` inner loop for
       # speed, but must gate every push. @IntegrationTest (external services:
       # network/Ollama) stays off — enable with -Dcovia.tests.integration=true.
-      run: mvn clean install -T 1C -Dcovia.tests.durability=true
+      run: mvn clean install -T 1C -Dcovia.tests.durability=true -Dcovia.jdk.check=ERROR
 
     - name: Verify optional module boundaries
       run: |
@@ -60,14 +70,15 @@ jobs:
         test -f covia-slack/target/covia-slack-*-module.jar
         test -f covia-sonnylabs/target/covia-sonnylabs-*-module.jar
         test -f covia-documents/target/covia-documents-*-module.jar
+        test -f covia-speech/target/covia-speech-*-module.jar
         test -f covia-claude-code/target/covia-claude-code-*-module.jar
-        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/|covia/adapter/telegram/|covia/adapter/discord/|covia/adapter/whatsapp/|covia/adapter/slack/|covia/adapter/sonnylabs/|covia/adapter/documents/|covia/adapter/claudecode/)'; then
+        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/|covia/adapter/telegram/|covia/adapter/discord/|covia/adapter/whatsapp/|covia/adapter/slack/|covia/adapter/sonnylabs/|covia/adapter/documents/|covia/adapter/speech/|covia/adapter/claudecode/)'; then
           echo "::error::Optional module classes leaked into covia.jar"
           exit 1
         fi
 
     - name: Share the tested jars with the snapshot and Docker publishers
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: reactor-jars
         path: |
@@ -81,10 +92,10 @@ jobs:
     timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Set up JDK 21
-      uses: actions/setup-java@v6
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
       with:
         java-version: '21'
         distribution: 'temurin'
@@ -94,4 +105,4 @@ jobs:
       run: >-
         mvn clean install -pl covia-python-adapter -am
         -Dtest=PythonRefTest,PythonRuntimeTest,PythonAdapterTest,EngineTest
-        -Dsurefire.failIfNoSpecifiedTests=false
+        -Dsurefire.failIfNoSpecifiedTests=false -Dcovia.jdk.check=ERROR

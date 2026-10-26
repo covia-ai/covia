@@ -1,12 +1,12 @@
 package covia.venue;
 
+import covia.lattice.WorkspaceRoot;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -52,10 +52,9 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
-import convex.lattice.fs.impl.DLFSLocal;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
@@ -106,7 +105,7 @@ public class Engine {
 
 	protected final Config config;
 
-	/** Hosted Covia application, or null for the legacy raw-cursor embedding path. */
+	/** Hosted Covia application: the single publication and persistence boundary. */
 	private final CoviaApplication application;
 
 	protected AKeyPair keyPair=AKeyPair.generate();
@@ -118,9 +117,10 @@ public class Engine {
 
 	/**
 	 * Venue lattice using Covia.ROOT structure see COG-004.
-	 * ALatticeCursor provides lattice-aware merge and sync semantics.
+	 * Components supply merge policy; the cursor supplies atomic updates and sync.
  	 */
-	protected ALatticeCursor<Index<Keyword,ACell>> lattice;
+	protected AForkableCursor<Index<Keyword,ACell>> lattice;
+	protected LatticeContext latticeContext = LatticeContext.EMPTY;
 
 	/** Venue state wrapper providing typed access to assets, jobs, and child cursors */
 	protected VenueState venueState;
@@ -152,6 +152,8 @@ public class Engine {
 	/** The live agent tap (#394): run-loop, cycle, inference, tool and status
 	 *  events for every agent hosted here. */
 	private final AgentEvents agentEvents = new AgentEvents();
+	/** Guards an embedding host registers on agents' tool calls. */
+	private final ToolGuards toolGuards = new ToolGuards();
 
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -210,12 +212,6 @@ public class Engine {
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
 	/**
-	 * Compatibility persistence callback for legacy raw-cursor embedders.
-	 * Hosted applications publish and flush through {@link CoviaApplication}.
-	 */
-	private final PersistenceHandler persistHandler;
-
-	/**
 	 * Background sweep daemon — periodically publishes the connected venue
 	 * state and invokes the store durability barrier. See
 	 * {@code venue/docs/PERSISTENCE.md}.
@@ -255,82 +251,24 @@ public class Engine {
 	private volatile long lastFlushMillis;
 
 	/**
-	 * Primary constructor: assembles an inert Engine around the caller's cursor.
-	 * Call {@link #launch()} for a complete venue, or {@link #start()} for a
-	 * manually assembled runtime. Generates a random venue key pair.
+	 * Assembles an inert runtime over a caller-owned application. The host must
+	 * restore its root first. Call launch() for a complete venue, or start() for
+	 * a manually assembled runtime. Close the engine before its host/store.
 	 */
-	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
-		this(config, cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
-	}
-
-	/**
-	 * Inert constructor with explicit key pair. Call {@link #launch()} before use.
-	 * Use when the venue identity must be
-	 * stable across restarts (same AccountKey = same OwnerLattice slot).
-	 *
-	 * <p>This raw-cursor overload is retained for compatibility. New hosted
-	 * integrations should construct a {@link CoviaApplication} from their
-	 * {@code RootComponent} and use the application constructor.</p>
-	 */
-	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair) throws IOException {
-		this(config, cursor, keyPair, PersistenceHandler.NOOP);
-	}
-
-	/**
-	 * Canonical inert constructor with persistence handler. Call {@link #launch()}
-	 * before use.
-	 *
-	 * <p>The handler is invoked synchronously by {@link #flush()} (and during
-	 * the close-time final flush) to make the venue's lattice value durable.
-	 * Pass {@link PersistenceHandler#NOOP} for in-memory venues.</p>
-	 */
-	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor,
-			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
-		this(new Config(config), null, cursor, keyPair, persistHandler);
-	}
-
-	/**
-	 * Canonical constructor for a caller that has already validated and resolved
-	 * its Config. VenueServer uses this to reuse the same instance without
-	 * validating twice (and duplicating unknown-field warnings).
-	 */
-	public Engine(Config config, ALatticeCursor<Index<Keyword,ACell>> cursor,
-			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
-		this(config, null, cursor, keyPair, persistHandler);
-	}
-
-	/**
-	 * Canonical hosted-application constructor. Publication and durability flow
-	 * through the application's {@code RootComponent}; the engine does not need
-	 * to know whether that host is local or networked.
-	 * The host must restore its root before construction. Call {@link #launch(Function)}
-	 * to assemble a complete venue without HTTP. The caller retains ownership of
-	 * the application, host and store, including on startup failure.
-	 */
-	public Engine(Config config, CoviaApplication application, AKeyPair keyPair)
-			throws IOException {
-		this(config, java.util.Objects.requireNonNull(application, "application"),
-			application.cursor(), keyPair, PersistenceHandler.NOOP);
-	}
-
-	/** Hosted-application constructor accepting the external JSON config form. */
-	public Engine(AMap<AString, ACell> config, CoviaApplication application,
-			AKeyPair keyPair) throws IOException {
-		this(new Config(config), application, keyPair);
-	}
-
-	private Engine(Config config, CoviaApplication application,
-			ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair,
-			PersistenceHandler persistHandler) throws IOException {
-		this.config=java.util.Objects.requireNonNull(config, "config");
-		this.application=application;
-		this.keyPair=keyPair;
+	public Engine(Config config, CoviaApplication application, AKeyPair keyPair) throws IOException {
+		this.config = java.util.Objects.requireNonNull(config, "config");
+		this.application = java.util.Objects.requireNonNull(application, "application");
+		this.keyPair = java.util.Objects.requireNonNull(keyPair, "keyPair");
 		validateDeclaredIdentity();
-		this.lattice=java.util.Objects.requireNonNull(cursor, "cursor");
-		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
+		this.lattice = application.cursor();
 		this.lastFlushMillis = System.currentTimeMillis();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
+	}
+
+	/** Accepts the external JSON configuration form. */
+	public Engine(AMap<AString, ACell> config, CoviaApplication application, AKeyPair keyPair) throws IOException {
+		this(new Config(config), application, keyPair);
 	}
 
 	/**
@@ -360,6 +298,7 @@ public class Engine {
 		}
 		lifecycle = Lifecycle.STARTING;
 		try {
+			resumeCoreUserDeletions();
 			// Reconcile wake handles while the alarm is still disarmed. Hosts
 			// prepare the catalog and recover Jobs before activating this engine.
 			rebuildSchedulerFromLattice();
@@ -497,10 +436,29 @@ public class Engine {
 	}
 
 	private Engine launchInternal(Function<Engine, ? extends CompletionStage<?>> beforeStart) throws IOException {
+		java.util.List<Modules.Discovered> modules = java.util.List.of();
+		boolean modulesHandedOver = false;
 		try {
 			checkLaunchCancellation();
-			prepare();
-			installDefaultAdapters(this);
+			java.util.List<AAdapter> builtIns;
+			synchronized (this) {
+				builtIns = launchBuiltIns;
+				if (launchModules != null) modules = launchModules;
+				launchBuiltIns = null;
+				launchModules = null;
+			}
+			if (builtIns == null) {
+				// Collect the start-up adapters first, so their state migrates in the
+				// venue's start-up transaction.
+				modules = Modules.discoverModules(config);
+				builtIns = builtInAdapters(modules);
+			}
+			// A no-op after prepareLaunch; after plain prepare, these adapters
+			// migrate one by one as they register.
+			prepare(startupAdapters(builtIns, modules));
+			registerBuiltIns(this, builtIns);
+			modulesHandedOver = true;
+			Modules.registerModules(this, modules);
 			materialiseBootstrapState();
 			provisionConfiguredSecrets();
 			seedMcpServers();
@@ -521,6 +479,7 @@ public class Engine {
 				}
 			}
 			checkLaunchCancellation();
+			new covia.venue.auth.AuthMethods(this).validate();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
 			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
@@ -548,6 +507,8 @@ public class Engine {
 			} finally {
 				if (interrupted) Thread.currentThread().interrupt();
 			}
+			// Modules discovered but never handed to the engine still hold open loaders.
+			if (!modulesHandedOver) Modules.close(modules, failure);
 			throw failure;
 		} finally {
 			synchronized (this) { launchInProgress = false; }
@@ -565,6 +526,57 @@ public class Engine {
 	 * @throws IOException if content storage cannot be initialised
 	 */
 	public synchronized Engine prepare() throws IOException {
+		return prepare(java.util.List.of());
+	}
+
+	/** Built-in adapters and opened modules collected by {@link #prepareLaunch()}, for launch to register. */
+	private java.util.List<AAdapter> launchBuiltIns;
+	private java.util.List<Modules.Discovered> launchModules;
+
+	/**
+	 * As {@link #prepare()}, for a host that prepares before calling
+	 * {@link #launch(Function)}, as {@code VenueServer} does. Collects the
+	 * built-in adapters and opens the configured modules now, so their state
+	 * migrates with the venue's own in the start-up transaction; launch then
+	 * registers those same adapters.
+	 *
+	 * @return this engine
+	 * @throws IOException if content storage cannot be initialised
+	 * @throws UnsupportedVersionException if the venue, or a start-up adapter's
+	 *         stored state, is at a newer version than this build; nothing is written
+	 */
+	public synchronized Engine prepareLaunch() throws IOException {
+		if (lifecycle != Lifecycle.NEW) return prepare();
+		java.util.List<Modules.Discovered> modules = Modules.discoverModules(config);
+		java.util.List<AAdapter> builtIns = builtInAdapters(modules);
+		try {
+			prepare(startupAdapters(builtIns, modules));
+		} catch (IOException | RuntimeException | Error failure) {
+			Modules.close(modules, failure);
+			throw failure;
+		}
+		launchBuiltIns = builtIns;
+		launchModules = modules;
+		return this;
+	}
+
+	/** Start-up adapters in registration order: built-ins, then each module's. */
+	private static java.util.List<AAdapter> startupAdapters(java.util.List<AAdapter> builtIns,
+			java.util.List<Modules.Discovered> modules) {
+		java.util.List<AAdapter> startup = new java.util.ArrayList<>(builtIns);
+		for (Modules.Discovered module : modules) startup.addAll(module.adapters());
+		return startup;
+	}
+
+	/**
+	 * As {@link #prepare()}, also migrating the state of adapters that will
+	 * register as the venue starts. Their steps run after the venue's own, in
+	 * the one transaction that opens the venue, so a refusal or failing step
+	 * leaves the store exactly as it was. Register the same instances afterwards.
+	 *
+	 * @param startup adapters to register once prepared, in registration order
+	 */
+	synchronized Engine prepare(java.util.List<AAdapter> startup) throws IOException {
 		if (lifecycle == Lifecycle.PREPARED || lifecycle == Lifecycle.STARTED) return this;
 		if (lifecycle != Lifecycle.NEW) {
 			throw new IllegalStateException("Engine cannot start from state " + lifecycle);
@@ -572,17 +584,25 @@ public class Engine {
 		lifecycle = Lifecycle.STARTING;
 		try {
 			// Set signing context only when active startup begins.
-			// Preserve host policy (future-skew checks, owner verification, custom
-			// clock) and override only Covia's signing capability.
-			LatticeContext ctx = this.lattice.getContext()
+			// Preserve application owner verification and clock policy, overriding
+			// only Covia's signing capability.
+			LatticeContext ctx = application.getContext()
 				.withSigningKey(this.keyPair);
-			this.lattice.setContext(ctx);
-			initialiseFromCursor();
+			this.latticeContext = ctx;
+			application.setContext(ctx);
+			// Authentication also serves manually assembled engines without a
+			// public operation catalogue. Its availability follows normal lifecycle.
+			AuthAdapter auth = new AuthAdapter();
+			java.util.List<AAdapter> migrating = new java.util.ArrayList<>();
+			migrating.add(auth);
+			migrating.addAll(startup);
+			initialiseFromCursor(migrating);
 
 			this.contentStorage = createStorage();
 			this.contentStorage.initialise();
 
 			bootstrapUsers();
+			registerAdapter(auth);
 			startPersistenceSweep();
 			lifecycle = Lifecycle.PREPARED;
 			return this;
@@ -641,7 +661,7 @@ public class Engine {
 			}
 			for (long i = 0; i < keys.count(); i++) {
 				AString key = RT.ensureString(keys.get(i));
-				Auth.requireValidAuthenticationKey(key);
+				AuthState.requireValidAuthenticationKey(key);
 				if (!declaredKeys.add(key)) {
 					throw new IllegalArgumentException(
 						"One authentication key cannot bootstrap two named users");
@@ -681,8 +701,7 @@ public class Engine {
 
 	private void startPersistenceSweep() {
 		// In-memory engines have nothing external to flush and get no daemon.
-		if (this.application != null && this.application.isEphemeral()) return;
-		if (this.application == null && this.persistHandler == PersistenceHandler.NOOP) return;
+		if (application.isEphemeral() || application.host().store() == null) return;
 		this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
 			Thread t = new Thread(r, "covia-persistence-sweep");
 			t.setDaemon(true);
@@ -744,7 +763,7 @@ public class Engine {
 			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
-			return venueState.storage();
+			return venueState.contentStorage();
 		}
 	}
 
@@ -756,10 +775,13 @@ public class Engine {
 	 * <p>The Engine keeps this state connected to the application root. A
 	 * successful component mutation therefore updates the venue's authoritative
 	 * in-memory state immediately. Components may still create a short-lived
-	 * {@link VenueState#fork()} when a bounded group of writes must commit or be
+	 * {@link VenueState#transact} when a bounded group of writes must commit or be
 	 * discarded together.</p>
+	 *
+	 * @param adapters adapters starting with the venue, whose state migrates in
+	 *        the same transaction as the venue's own steps
 	 */
-	protected void initialiseFromCursor() {
+	protected void initialiseFromCursor(java.util.List<AAdapter> adapters) {
 		// Identity guard (#208): booting an existing store with the wrong key
 		// would not fail — venues are keyed by AccountKey, so it would silently
 		// create a fresh empty venue entry alongside the real one, orphaning all
@@ -770,14 +792,15 @@ public class Engine {
 		// Keep the Engine's authoritative state connected to the application.
 		// Writes cross the signed owner boundary immediately; explicit forks are
 		// reserved for bounded component transactions.
-		VenueState connected = (application != null)
-			? application.venue(getAccountKey())
-			: VenueState.fromRoot(lattice, getAccountKey());
-		connected.initialise(getDIDString());
+		VenueState connected = application.venue(getAccountKey());
+		// Version validation and every start-up migration, the venue's and its
+		// adapters', precede every bootstrap write and worker, in one transaction.
+		connected.initialise(getDIDString(), migrationsOf(adapters));
+		migratedAtStart.addAll(adapters);
 		this.venueState = connected;
 
-		this.auth = new Auth(this, venueState, venueState.authCursor());
-		this.accessControl = new AccessControl();
+		this.auth = new Auth(this);
+		this.accessControl = new AccessControl(this);
 	}
 
 	/**
@@ -817,7 +840,7 @@ public class Engine {
 
 	/**
 	 * Publishes the Engine's connected venue state through the hosted application
-	 * boundary (or the legacy root cursor callback). This is a publication hint,
+	 * boundary. This is a publication hint,
 	 * not a transaction commit: successful mutations are already present in the
 	 * authoritative in-memory root.
 	 *
@@ -836,13 +859,10 @@ public class Engine {
 		publishApplicationRoot();
 	}
 
-	/** Publishes through the hosted application policy or the legacy root cursor. */
+	/** Publishes the application through its caller-owned host. */
 	private void publishApplicationRoot() {
-		if (application != null) {
-			application.sync();
-		} else {
-			lattice.sync();
-		}
+		application.sync();
+		application.host().sync();
 	}
 
 	// ========================================================================
@@ -877,23 +897,21 @@ public class Engine {
 
 	/**
 	 * Publishes the complete hosted root and invokes the host store's physical
-	 * durability barrier. Legacy raw-cursor embedders use their supplied
-	 * {@link PersistenceHandler} for the same boundary.
+	 * durability barrier.
 	 *
-	 * <p>Use sparingly — most writes don't need this. Default eventual
-	 * durability via the background sweep is fine for in-flight job state,
-	 * conversation history, etc. Use {@code flush()} for: job completion,
-	 * audit records, secret rotation, agent TERMINATED, OAuth login.</p>
+	 * <p>Use sparingly — most writes don't need this. The background sweep
+	 * publishes every {@code SWEEP_INTERVAL_MS} (100 ms), so a process crash
+	 * loses at most that much, and forces the store to disk every
+	 * {@code FLUSH_INTERVAL_MS} (10 s), which bounds the loss on a machine crash.
+	 * Commit state in transactions; call {@code flush()} where Covia promises
+	 * durability to someone outside: before acknowledging (an accepted job
+	 * handle, a webhook receipt, a login) and before an external effect that
+	 * must not be repeated after a crash. Each call does its own fsync.</p>
 	 */
 	public void flush() {
 		try {
-			if (application != null) {
-				application.sync();  // host publication selects the retained root
-				application.flush(); // physical durability barrier
-			} else {
-				persistHandler.persist(lattice.get());
-				persistHandler.flush();
-			}
+			publishApplicationRoot();
+			flushStore();
 		} catch (java.io.IOException e) {
 			throw new RuntimeException("flush failed", e);
 		}
@@ -901,11 +919,7 @@ public class Engine {
 	}
 
 	private void flushStore() throws IOException {
-		if (application != null) {
-			application.flush();
-		} else {
-			persistHandler.flush();
-		}
+		application.host().flush();
 	}
 
 	/**
@@ -975,6 +989,18 @@ public class Engine {
 			}
 		}
 		modules.clear();
+		// Modules opened by prepareLaunch that launch never registered.
+		if (launchModules != null) {
+			for (Modules.Discovered module : launchModules) {
+				try {
+					module.loader().close();
+				} catch (Exception e) {
+					recordCloseFailure(startupFailure, "Failed to close module classloader", e);
+				}
+			}
+			launchModules = null;
+			launchBuiltIns = null;
+		}
 
 		// Persistence sweep is acquired last, so it is stopped first.
 		ScheduledExecutorService sweepExecutor = persistenceSweep;
@@ -1097,45 +1123,73 @@ public class Engine {
 
 	/** Installs built-ins and configured modules without publishing the catalog. */
 	public static void installDefaultAdapters(Engine venue) {
-		venue.registerAdapter(new TestAdapter());
-		venue.registerAdapter(new HTTPAdapter());
-		venue.registerAdapter(new OAuthAdapter());
-		venue.registerAdapter(new JVMAdapter());
-		venue.registerAdapter(new ConnectionsAdapter());
-		venue.registerAdapter(new FileAdapter());
-		venue.registerAdapter(new covia.adapter.ArchiveAdapter());
-		venue.registerAdapter(new SchemaAdapter());
-		venue.registerAdapter(new JSONAdapter());
-		venue.registerAdapter(new Orchestrator());
-		venue.registerAdapter(new MCPAdapter());
-		venue.registerAdapter(new LangChainAdapter());
-		venue.registerAdapter(new CoviaAdapter());
-		venue.registerAdapter(new covia.adapter.UserMemoryAdapter());
-		venue.registerAdapter(new covia.adapter.SkillsAdapter());
-		venue.registerAdapter(new AssetAdapter());
-		venue.registerAdapter(new GridAdapter());
-		venue.registerAdapter(new covia.adapter.A2AAdapter());
-		venue.registerAdapter(new covia.adapter.RemoteAgentAdapter());
-		venue.registerAdapter(new ConvexAdapter());
-		venue.registerAdapter(new covia.adapter.CryptoAdapter());
-		venue.registerAdapter(new AgentAdapter());
-		venue.registerAdapter(new SecretAdapter());
-		venue.registerAdapter(new covia.adapter.SchedulerAdapter());
-		venue.registerAdapter(new AuthAdapter());
-		venue.registerAdapter(new UserAdapter());
-		venue.registerAdapter(new UCANAdapter());
-		venue.registerAdapter(new DLFSAdapter());
-		venue.registerAdapter(new VaultAdapter());
-		venue.registerAdapter(new LLMAgentAdapter());
-		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
-		venue.registerAdapter(new covia.adapter.HITLAdapter());
-		venue.registerAdapter(new covia.adapter.ProjectAdapter());
-		venue.registerAdapter(new covia.adapter.VenueAdapter());
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone
 		// else's. Fail-fast on any load error — explicit config is explicit
 		// intent.
-		Modules.loadModules(venue);
+		java.util.List<Modules.Discovered> modules = Modules.discoverModules(venue.config());
+		try {
+			registerBuiltIns(venue, builtInAdapters(modules));
+		} catch (RuntimeException | Error failure) {
+			Modules.close(modules, failure);
+			throw failure;
+		}
+		Modules.registerModules(venue, modules);
+	}
+
+	/**
+	 * The built-in adapters less any a discovered module replaces by name. That
+	 * built-in never registers, so it cannot refuse the module's newer state.
+	 */
+	private static java.util.List<AAdapter> builtInAdapters(java.util.List<Modules.Discovered> modules) {
+		java.util.Set<String> replaced = Modules.adapterNames(modules);
+		java.util.List<AAdapter> builtIns = builtInAdapters();
+		builtIns.removeIf(adapter -> replaced.contains(adapter.getName()));
+		return builtIns;
+	}
+
+	/** New instances of the built-in adapters, in registration order; auth registers in prepare. */
+	static java.util.List<AAdapter> builtInAdapters() {
+		return new java.util.ArrayList<>(java.util.List.of(
+			new TestAdapter(),
+			new HTTPAdapter(),
+			new OAuthAdapter(),
+			new JVMAdapter(),
+			new ConnectionsAdapter(),
+			new FileAdapter(),
+			new covia.adapter.ArchiveAdapter(),
+			new SchemaAdapter(),
+			new JSONAdapter(),
+			new Orchestrator(),
+			new MCPAdapter(),
+			new LangChainAdapter(),
+			new CoviaAdapter(),
+			new covia.adapter.UserMemoryAdapter(),
+			new covia.adapter.SkillsAdapter(),
+			new AssetAdapter(),
+			new GridAdapter(),
+			new covia.adapter.A2AAdapter(),
+			new covia.adapter.RemoteAgentAdapter(),
+			new covia.adapter.P2PAdapter(),
+			new ConvexAdapter(),
+			new covia.adapter.CryptoAdapter(),
+			new AgentAdapter(),
+			new SecretAdapter(),
+			new covia.adapter.SchedulerAdapter(),
+			new UserAdapter(),
+			new UCANAdapter(),
+			new DLFSAdapter(),
+			new VaultAdapter(),
+			new LLMAgentAdapter(),
+			new covia.adapter.agent.GoalTreeAdapter(),
+			new covia.adapter.HITLAdapter(),
+			new covia.adapter.ProjectAdapter(),
+			new covia.adapter.VenueAdapter()));
+	}
+
+	private static void registerBuiltIns(Engine venue, java.util.List<AAdapter> builtIns) {
+		for (AAdapter adapter : builtIns) venue.registerAdapter(adapter);
+		if (venue.getRegisteredAdapter("auth") == null) venue.registerAdapter(new AuthAdapter());
 	}
 
 	/**
@@ -1263,38 +1317,104 @@ public class Engine {
 	 * catalog has been published, an active registration is materialised
 	 * immediately.
 	 *
+	 * <p>First, enabled or not, the adapter's state is migrated to its
+	 * {@link AAdapter#stateVersion()}, unless the venue's start-up transaction
+	 * already migrated it. Requires a prepared engine.</p>
+	 *
 	 * @param adapter The adapter instance to register
+	 * @throws UnsupportedVersionException if the adapter's state is recorded at
+	 *         a newer version than it supports; nothing is registered or written
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
+		if (venueState == null) throw new IllegalStateException(ADAPTER_BEFORE_PREPARE);
+		// Adapters collected at start-up were migrated in the venue's start-up transaction.
+		if (!migratedAtStart.remove(adapter)) migrateAdapterState(adapter);
 		String name = adapter.getName();
 		AAdapter previous = adapters.get(name);
 		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
-		if (CVMBool.FALSE.equals(cfg.get(Config.ENABLED))) {
-			if (previous != null && adapters.get(name) == previous && catalogPublished) {
-				VenueBootstrapMaterializer.dematerialiseAdapter(this, previous);
-			}
-			adapters.remove(name);
-			adapterRegistrationOrder.remove(name);
+		boolean disabled = CVMBool.FALSE.equals(cfg.get(Config.ENABLED));
+		if (disabled || !adapter.configure(cfg, config.isStrictConfig())) {
+			retractAdapter(name);
 			disabledAdapters.put(name, adapter);
 			if (previous != null) adapterRegistryVersion.incrementAndGet();
 			closeReplacedAdapter(previous);
-			log.info("Adapter '{}' is disabled by configuration", name);
-			return;
-		}
-		if (!adapter.configure(cfg, config.isStrictConfig())) {
-			if (previous != null && adapters.get(name) == previous && catalogPublished) {
-				VenueBootstrapMaterializer.dematerialiseAdapter(this, previous);
-			}
-			adapters.remove(name);
-			adapterRegistrationOrder.remove(name);
-			disabledAdapters.put(name, adapter);
-			if (previous != null) adapterRegistryVersion.incrementAndGet();
-			closeReplacedAdapter(previous);
-			log.info("Adapter '{}' declined its configuration and is disabled", name);
+			log.info("Adapter '{}' disabled: {}", name, disabled ? "configuration" : "configuration declined");
 			return;
 		}
 		activate(adapter, previous);
+	}
+
+	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
+
+	/** Start-up adapters whose state the venue's start-up transaction migrated, until they register. */
+	private final java.util.Set<AAdapter> migratedAtStart =
+		java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+	/** An adapter's state migration rules, as plain data for {@link VenueState}. */
+	static VenueState.AdapterMigration migrationOf(AAdapter adapter) {
+		return adapter.stateMigration();
+	}
+
+	/**
+	 * Migrates the venue and every installed adapter's state, enabled or
+	 * disabled, in one venue transaction. Callable at any time on a prepared or
+	 * started engine: migration is not only a start-up event. Writes made while
+	 * it runs are kept, and current state is not rewritten. An adapter installed
+	 * afterwards migrates as it registers.
+	 *
+	 * @throws UnsupportedVersionException if the venue, or an installed
+	 *         adapter's stored state, is at a newer version than supported;
+	 *         nothing is written
+	 */
+	public synchronized void migrate() {
+		if (venueState == null) throw new IllegalStateException(MIGRATE_BEFORE_PREPARE);
+		java.util.List<AAdapter> installed = new java.util.ArrayList<>();
+		for (String name : adapterRegistrationOrder) {
+			AAdapter adapter = adapters.get(name);
+			if (adapter != null) installed.add(adapter);
+		}
+		installed.addAll(disabledAdapters.values());
+		venueState.migrate(migrationsOf(installed));
+	}
+
+	public static final String MIGRATE_BEFORE_PREPARE = "A venue is migrated once the engine is prepared";
+
+	/**
+	 * The migration rules of adapters starting with the venue, in registration
+	 * order. A later adapter of the same name replaces an earlier one, so only
+	 * its rules apply.
+	 */
+	private static java.util.List<VenueState.AdapterMigration> migrationsOf(java.util.List<AAdapter> adapters) {
+		java.util.LinkedHashMap<String, VenueState.AdapterMigration> byName = new java.util.LinkedHashMap<>();
+		for (AAdapter adapter : adapters) {
+			byName.remove(adapter.getName());
+			byName.put(adapter.getName(), migrationOf(adapter));
+		}
+		return java.util.List.copyOf(byName.values());
+	}
+
+	/**
+	 * Brings a later-registered adapter's state to the version it supports, in
+	 * its own venue transaction. Current state is not rewritten.
+	 */
+	private void migrateAdapterState(AAdapter adapter) {
+		VenueState.AdapterMigration migration = migrationOf(adapter);
+		long before = venueState.adapterVersion(migration.name());
+		venueState.migrateAdapter(migration);
+		if (before != migration.supported()) {
+			log.info("Adapter '{}' state now at version {}", migration.name(), migration.supported());
+		}
+	}
+
+	/** Withdraw live publication and dispatch under the engine monitor. */
+	private AAdapter retractAdapter(String name) {
+		AAdapter adapter = adapters.get(name);
+		if (adapter == null) return null;
+		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, adapter);
+		adapters.remove(name);
+		adapterRegistrationOrder.remove(name);
+		return adapter;
 	}
 
 	/** Install (once) and publish an adapter. Caller holds the engine monitor. */
@@ -1303,6 +1423,7 @@ public class Engine {
 		boolean previousActive = previous != null && adapters.get(name) == previous;
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
+		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
 		if (catalogPublished) {
 			if (previous == null) {
 				VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
@@ -1316,6 +1437,7 @@ public class Engine {
 		adapterRegistrationOrder.add(name);
 		adapterRegistryVersion.incrementAndGet();
 		try {
+			resumeAdapterUserDeletions(adapter);
 			if (isStarted()) adapter.start();
 		} catch (RuntimeException | Error failure) {
 			// A failed worker start must not leave a dispatchable partial adapter,
@@ -1389,9 +1511,7 @@ public class Engine {
 			if (disabledAdapters.containsKey(name)) return false;
 			throw new IllegalArgumentException("Unknown adapter: " + name);
 		}
-		if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, adapter);
-		adapters.remove(name);
-		adapterRegistrationOrder.remove(name);
+		retractAdapter(name);
 		disabledAdapters.put(name, adapter);
 		adapterRegistryVersion.incrementAndGet();
 		log.info("Disabled adapter: {}", name);
@@ -1418,7 +1538,6 @@ public class Engine {
 			throw new IllegalStateException("Adapter '" + name + "' declined its configuration");
 		}
 		activate(adapter, null);
-		disabledAdapters.remove(name);
 		return true;
 	}
 
@@ -1441,6 +1560,8 @@ public class Engine {
 			throw new IllegalArgumentException("Adapter '" + name + "' rejected the configuration");
 		}
 		runtimeAdapterConfig.put(name, cfg);
+		// Authentication finishing under the previous configuration must retry.
+		adapterRegistryVersion.incrementAndGet();
 		// The adapter's published facts (AAdapter.info) follow its effective config.
 		if (catalogPublished && adapters.containsKey(name)) {
 			VenueBootstrapMaterializer.materialiseAdapterInfo(this, adapter);
@@ -1500,9 +1621,7 @@ public class Engine {
 	public synchronized AAdapter removeAdapter(String name) {
 		AAdapter removed = adapters.get(name);
 		if (removed != null) {
-			if (catalogPublished) VenueBootstrapMaterializer.dematerialiseAdapter(this, removed);
-			adapters.remove(name);
-			adapterRegistrationOrder.remove(name);
+			retractAdapter(name);
 			adapterRegistryVersion.incrementAndGet();
 		} else {
 			removed = disabledAdapters.remove(name);
@@ -1808,10 +1927,10 @@ public class Engine {
 		if (ref.startsWith(NS_DID)) {
 			DIDURL didURL = DIDURL.create(ref.toString());
 			ownerDID = Strings.create(didURL.getDID().toString());
-			pathKeys = CoviaAdapter.parseStringPath(didURL.getPath());
+			pathKeys = WorkspaceRoot.parseStringPath(didURL.getPath());
 		} else {
 			ownerDID = ctx.getUserDID();
-			pathKeys = CoviaAdapter.parseStringPath(stripLeadingSlash(ref).toString());
+			pathKeys = WorkspaceRoot.parseStringPath(stripLeadingSlash(ref).toString());
 		}
 
 		if (pathKeys.length == 0) {
@@ -1831,10 +1950,61 @@ public class Engine {
 		return new UserPathTarget(parsed.ownerDID(), user, parsed.pathKeys(), parsed.resource());
 	}
 
+	/** Opening of every refusal to read a referenced path the caller may not read. */
+	public static final String READ_DENIED = "Read denied: ";
+
 	/**
-	 * Pure single-step path navigation. Returns the literal value at the
+	 * The standard read of a reference a caller supplies: {@link #requireReadable}
+	 * then {@link #resolvePathUnchecked}.
+	 *
+	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
+	 */
+	public ACell resolvePath(AString ref, RequestContext ctx) {
+		requireReadable(ctx, ref);
+		return resolvePathUnchecked(ref, ctx);
+	}
+
+	/**
+	 * The read check of {@link #resolvePath}. A physical user path, bare or
+	 * DID-qualified, and a DID-qualified asset reference on this venue need read
+	 * authority ({@link #requireMetadataRead}: {@code crud/read}, or
+	 * {@code asset/read} for a content hash), so another user's needs a grant and
+	 * a capability scope must cover the caller's own. A bare hash names the
+	 * caller's own store, then the venue catalog. The virtual namespaces
+	 * ({@code v/}, {@code n/}, {@code t/}, {@code c/}) apply their resolvers' own
+	 * policy, and a remote DID URL is never read here.
+	 *
+	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
+	 */
+	public void requireReadable(RequestContext ctx, AString ref) {
+		if (ref == null) return;
+		AString resource = ref.startsWith(NS_DID) ? ref : stripLeadingSlash(ref);
+		boolean checked;
+		try {
+			checked = ref.startsWith(NS_DID)
+				? isLocalDIDResource(ref)
+				: isPhysicalUserNamespace(WorkspaceRoot.parseStringPath(resource.toString()));
+		} catch (IllegalArgumentException malformed) {
+			return;   // navigation rejects the same path
+		}
+		if (!checked) return;
+		try {
+			requireMetadataRead(ctx, resource);
+		} catch (covia.exception.AuthException e) {
+			throw new covia.exception.AuthException(READ_DENIED + ref + " — " + e.getMessage());
+		}
+	}
+
+	/**
+	 * Engine-internal navigation, <b>with no access check</b>: {@code ctx} only
+	 * selects whose namespace a bare path means and confers no authority. A
+	 * caller MUST apply the protection its read needs first, or read only what
+	 * it owns (framework state, the venue's own catalog). A reference a caller
+	 * supplies goes through {@link #resolvePath}.
+	 *
+	 * <p>Pure single-step path navigation. Returns the literal value at the
 	 * resolved local lattice cell. Does NOT chase references, follow
-	 * indirections, or interpret the value in any way.
+	 * indirections, or interpret the value in any way.</p>
 	 *
 	 * <p>Accepted input forms:</p>
 	 * <ul>
@@ -1853,10 +2023,10 @@ public class Engine {
 	 * resolvePath itself never touches the network.</p>
 	 *
 	 * @param ref Reference string
-	 * @param ctx Request context (caller identity for /o/ and workspace navigation)
+	 * @param ctx Request context: whose namespace a bare path means, not authority
 	 * @return Literal value at the resolved location, or null
 	 */
-	public ACell resolvePath(AString ref, RequestContext ctx) {
+	public ACell resolvePathUnchecked(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
 
 		// 1. Bare hex hash → look up in CAS
@@ -1886,6 +2056,10 @@ public class Engine {
 				target = resolveUserPath(ctx, ref, false);
 			} catch (IllegalArgumentException e) {
 				return null;
+			}
+			if (covia.adapter.CoviaAdapter.isExtensionPath(target.pathKeys())) {
+				var adapter = (covia.adapter.CoviaAdapter) getAdapter("covia");
+				return adapter == null ? null : adapter.readExtensionNamespace(ctx, target.ownerDID(), target.pathKeys());
 			}
 			if (!isPhysicalUserNamespace(target.pathKeys())) return null;
 			return readUserPathValue(target);
@@ -1952,19 +2126,35 @@ public class Engine {
 	 * aggregate callers that resolve many refs (tool/context assembly) catch it
 	 * and degrade visibly.</p>
 	 *
+	 * <p>The read is checked as by {@link #resolvePath}: naming another user's
+	 * definition does not make it readable, nor invocable.</p>
+	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ namespace scoping)
 	 * @return Resolved Asset, or null if genuinely not resolvable as an asset
 	 * @throws covia.exception.RemoteFetchException on operational remote-fetch failure
 	 */
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, true);
+	}
+
+	/**
+	 * Engine-internal {@link #resolveAsset}, <b>with no access check</b>, as
+	 * {@link #resolvePathUnchecked}: {@code ctx} selects a namespace and confers no
+	 * authority. A caller MUST apply the protection its read needs first.
+	 */
+	public Asset resolveAssetUnchecked(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, false);
+	}
+
+	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked) {
 		if (ref == null) return null;
 
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no
 		// venue — execution, if any, is local. See resolveDIDURL.
 		if (ref.startsWith(NS_DID)) {
-			Asset asset = resolveDIDURL(ref, ctx);
+			Asset asset = resolveDIDURL(ref, ctx, checked);
 			if (asset != null) return asset;
 			// Fall through — DID URL might be unresolvable but other forms
 			// could match (rare; defensive).
@@ -1974,7 +2164,7 @@ public class Engine {
 		// an "operation" field can be interpreted as callable Assets;
 		// other map shapes (and strings, vectors, scalars) resolve as raw
 		// data but are not callable as operations.
-		ACell value = resolvePath(ref, ctx);
+		ACell value = checked ? resolvePath(ref, ctx) : resolvePathUnchecked(ref, ctx);
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> map = (AMap<AString, ACell>) value;
@@ -2025,7 +2215,7 @@ public class Engine {
 		// nothing — none of which throw). Anything that throws is a real failure —
 		// an abnormal navigation error, or a lower-level store fault — and it
 		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
+		return user.workspaceRoot().read(pathKeys);
 	}
 
 	/**
@@ -2044,7 +2234,7 @@ public class Engine {
 		// remote, which made did:key:<this-venue>/v/... impossible to resolve and
 		// made a did:web self-reference perform an unnecessary network fetch.
 		if (!isVenueIdentity(r.didString())) return null;
-		ACell value = resolvePath(Strings.create(r.name()), ctx);
+		ACell value = resolvePathUnchecked(Strings.create(r.name()), ctx);
 		return (value instanceof AMap) ? Asset.fromMeta(value) : null;
 	}
 
@@ -2062,7 +2252,7 @@ public class Engine {
 	 * @return Resolved Asset, or null if not resolvable
 	 */
 	public Asset resolveAsset(AString ref) {
-		return resolveAsset(ref, venueContext());
+		return resolveAssetUnchecked(ref, venueContext());
 	}
 
 	/**
@@ -2137,6 +2327,10 @@ public class Engine {
 	 * other resolution forms or surface a clean error.</p>
 	 */
 	private Asset resolveDIDURL(AString ref, RequestContext ctx) {
+		return resolveDIDURL(ref, ctx, true);
+	}
+
+	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null) return null;
 		if (r.name() != null) {
@@ -2149,7 +2343,7 @@ public class Engine {
 			// Definition resolution precedes adapter dispatch, so it must enforce
 			// the private /a/ read itself. A later invoke capability is a separate
 			// right and cannot retroactively authorise this lookup.
-			requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+			if (checked) requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
 			return local;
 		}
 		return "web".equals(r.method()) ? fetchRemoteAsset(r.didString(), r.hash()) : null;
@@ -2553,7 +2747,8 @@ public class Engine {
 			record = getAssetRecord(hash, owner);
 			if (record != null) meta = record.get(AssetStore.POS_META);
 		} else {
-			ACell value = resolvePath(ref, ctx);
+			// Checked above: content reads take asset/read on the reference.
+			ACell value = resolvePathUnchecked(ref, ctx);
 			if (value instanceof AString s) {
 				// A lattice binding may point at any content reference, not just an
 				// asset hash. Re-enter the universal resolver so file://, DLFS, DID,
@@ -2855,13 +3050,17 @@ public class Engine {
 	}
 
 	/**
-	 * Returns a durable venue-principal workspace scoped to one adapter at
-	 * {@code w/adapters/<name>/}. Trusted adapter code uses this for private,
+	 * Returns a durable component scoped to one adapter at
+	 * {@code :adapters/<name>} in the venue value. Trusted adapter code uses this for private,
 	 * schema-owned operational state; user-managed storage continues to use
 	 * caller-selected paths through ordinary operations.
 	 */
-	public AdapterWorkspace adapterWorkspace(String adapterName) {
-		return new AdapterWorkspace(this, adapterName);
+	public AdapterState adapterState(String adapterName) {
+		return venueState.adapterState(adapterName);
+	}
+
+	public AdapterState adapterState(String adapterName, AString owner) {
+		return venueState.adapterState(adapterName, owner);
 	}
 
 	/**
@@ -3086,7 +3285,9 @@ public class Engine {
 	}
 
 	public static final String PROTECTED_USER = "The venue and public principals cannot be deleted";
-	private final Object userDeletionLock = new Object();
+	private final java.util.concurrent.locks.ReentrantLock userDeletionLock = new java.util.concurrent.locks.ReentrantLock();
+	public static final String USER_DELETION_IN_PROGRESS = "User deletion is in progress; retry adapter activation";
+	public static final String USER_DELETION_PENDING = "User access revoked; cleanup is pending unavailable adapters";
 
 	/** Operator account deletion, with no implicit self-service authority. */
 	public ACell deleteUser(RequestContext ctx, AString did) {
@@ -3095,25 +3296,81 @@ public class Engine {
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
 			throw new IllegalArgumentException(PROTECTED_USER);
 		}
-		synchronized (userDeletionLock) {
+		userDeletionLock.lock();
+		try {
 			return eraseUser(ctx, did);
+		} finally {
+			userDeletionLock.unlock();
 		}
 	}
 
 	private ACell eraseUser(RequestContext ctx, AString did) {
+		java.util.Map<String, AAdapter> registered;
+		synchronized (this) {
+			registered = new java.util.LinkedHashMap<>(disabledAdapters);
+			registered.putAll(adapters);
+		}
+		java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups = new java.util.LinkedHashMap<>();
+		registered.forEach((name, adapter) -> cleanups.put(name, state -> adapter.deleteUserState(did, state)));
 		VenueState.DeletedUser deleted;
 		synchronized (getAuth()) {
-			deleted = venueState.deleteUser(did, ctx.getCallerDID());
+			deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
 		}
-		// The durable tombstone closes admission first. Repeating deletion also
-		// retries runtime cleanup after an interrupted earlier request.
-		jobs().cancelUserJobs(did, ctx.getJob());
-		if (getAdapter("agent") instanceof covia.adapter.AgentAdapter agent) agent.stopDeletedUser(did, deleted.agents());
-		gridScheduler().cancelUser(did);
-		venueState.users().finishDeletion(did);
+		// Persist revocation and retry evidence before invoking external effects.
 		flush();
+		RuntimeException failure = null;
+		try {
+			finishCoreUserDeletion(did, ctx.getJob());
+		} catch (RuntimeException e) { failure = e; }
+		for (AAdapter adapter : registered.values()) {
+			if (!venueState.pendingUserDeletions(adapter.getName()).containsKey(did)) continue;
+			try {
+				adapter.onUserDeleted(did, deleted.previousUser());
+				venueState.finishUserDeletion(adapter.getName(), did, deleted.tombstone());
+			} catch (RuntimeException e) {
+				if (failure == null) failure = e; else failure.addSuppressed(e);
+			}
+		}
+		flush();
+		if (failure != null) throw failure;
+		if (venueState.users().isDeleting(did)) {
+			throw new IllegalStateException(USER_DELETION_PENDING);
+		}
 		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
 		return deleted.tombstone();
+	}
+
+	private void finishCoreUserDeletion(AString did, covia.grid.Job deletingJob) {
+		ACell tombstone = venueState.pendingUserDeletions("_venue").get(did);
+		if (tombstone == null) return;
+		jobs().cancelUserJobs(did, deletingJob);
+		gridScheduler().cancelUser(did);
+		venueState.finishUserDeletion("_venue", did, tombstone);
+	}
+
+	private void resumeCoreUserDeletions() {
+		AMap<AString, ACell> pending = venueState.pendingUserDeletions("_venue");
+		for (AString did : pending.keySet()) finishCoreUserDeletion(did, null);
+		if (!pending.isEmpty()) flush();
+	}
+
+	/** Activation holds the registry monitor: never wait for a deletion that needs it. */
+	private void resumeAdapterUserDeletions(AAdapter adapter) {
+		if (!userDeletionLock.tryLock()) throw new IllegalStateException(USER_DELETION_IN_PROGRESS);
+		try {
+			String name = adapter.getName();
+			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
+			for (var entry : pending.entrySet()) {
+				AString did = entry.getKey();
+				venueState.transact(draft -> adapter.deleteUserState(did, draft.adapterState(name)));
+				flush();
+				adapter.onUserDeleted(did, null);
+				venueState.finishUserDeletion(name, did, entry.getValue());
+			}
+			if (!pending.isEmpty()) flush();
+		} finally {
+			userDeletionLock.unlock();
+		}
 	}
 
 	/**
@@ -3123,10 +3380,11 @@ public class Engine {
 	 * load-bearing: {@code Principals.userOf} resolves it to the owner's
 	 * namespace. Admitting such a DID as a user in its own right would therefore
 	 * hand its bearer the namespace of whoever the prefix names. Agents are
-	 * minted by the venue as sub-principals of an existing account — they are
-	 * never registered, never authenticate, and so must never reach a user
-	 * record. Keeping that invariant at the admission boundary is what makes the
-	 * name safe to parse everywhere else.</p>
+	 * minted by the venue as sub-principals of an existing account, never
+	 * registered as users. A credential may authenticate an agent-shaped subject
+	 * on an identity-only route, but that does not admit a user or establish a
+	 * local owner relationship. This admission guard keeps such subjects out of
+	 * native user routes and records.</p>
 	 *
 	 * <p>Self-issued subjects may use any installed DID method, so this check is
 	 * an intentional method-independent admission invariant rather than an
@@ -3245,24 +3503,28 @@ public class Engine {
 		return agent;
 	}
 
-	/**
-	 * Gets the root lattice cursor. Used by adapters that need access to
-	 * top-level lattice regions (e.g. DLFSAdapter for the :dlfs region).
-	 */
-	public ALatticeCursor<Index<Keyword, ACell>> getRootCursor() {
+	/** Signing and live write-clock policy supplied to venue components. */
+	public LatticeContext getLatticeContext() {
+		return latticeContext;
+	}
+
+	/** Gets the live root cursor for top-level lattice regions. */
+	public AForkableCursor<Index<Keyword, ACell>> getRootCursor() {
 		return lattice;
 	}
 
 	/**
-	 * Connects a DLFS drive to the hosted lattice, enabling incremental blob
+	 * Connects an owner's DLFS drives to the hosted lattice, enabling incremental blob
 	 * persistence when this engine has a store-backed application host.
 	 *
-	 * <p>Legacy raw-cursor embedders have no store policy available here and
-	 * retain the heap-backed behaviour of the two-argument Convex API.</p>
+	 * <p>Hosts without a store retain heap-backed behaviour.</p>
 	 */
-	public DLFSLocal connectDLFSDrive(ALatticeCursor<?> parent, AString driveName) {
-		if (application == null) return DLFS.connect(parent, driveName);
-		return DLFS.connect(parent, driveName, application.hostStore());
+	public convex.dlfs.DLFSDrives getDLFSDrives(AKeyPair ownerKey) {
+		var region = convex.dlfs.DLFSRegion.connect(
+			convex.lattice.LatticeComponent.resolve(lattice, Covia.ROOT, Covia.DLFS),
+			application.hostStore(), ownerKey::signData,
+			latticeContext::currentTimestamp);
+		return region.drives(ownerKey.getAccountKey());
 	}
 
 	public AString getName() {
@@ -3293,7 +3555,7 @@ public class Engine {
 		long total = 0;
 		for (var entry : userData.entrySet()) {
 			User user = getVenueState().users().get((AString) entry.getKey());
-			if (user != null) total += user.getJobs().count();
+			if (user != null) total += user.countJobs();
 		}
 		return total;
 	}
@@ -3326,6 +3588,15 @@ public class Engine {
 	}
 
 	/**
+	 * The guards on agents' tool calls: an in-process host registers one to
+	 * pass or refuse each operation call before it runs. See AGENT_LOOP.md §2.6.
+	 * @return ToolGuards instance
+	 */
+	public ToolGuards toolGuards() {
+		return toolGuards;
+	}
+
+	/**
 	 * Re-derives every agent's single {@code agent:wake} event from the
 	 * authoritative per-thread {@code wakeTime} fields in the lattice. Called
 	 * once during {@link #start()}: the {@code :schedule} index already
@@ -3349,7 +3620,7 @@ public class Engine {
 				if (!(agentEntry.getValue() instanceof AMap)) continue;
 				AgentState agent = user.agent(agentId);
 				if (agent == null) continue;
-				if (agent.rescheduleWake(gridScheduler, userDid)) count++;
+				if (gridScheduler.rescheduleAgentWake(userDid, agentId)) count++;
 			}
 		}
 		if (count > 0) {
@@ -3550,10 +3821,66 @@ public class Engine {
 	 * capability seam.</p>
 	 */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability) {
+		requireResourceAccess(ctx, resource, ability, null);
+	}
+
+	/** As above for a use that sends the resource's value to {@code destination}. */
+	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (isLocalDIDResource(resource)) {
-			requireLocalAccess(ctx, resource, ability);
+			requireLocalAccess(ctx, resource, ability, destination);
 		} else {
-			requireAuthority(ctx, resource, ability);
+			requireAuthority(ctx, resource, ability, destination);
+		}
+	}
+
+	/** Opening of every {@link #requireConferrable} denial. */
+	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller does not hold";
+
+	/**
+	 * Attenuation where authority is handed on: may {@code ctx} confer {@code scope}
+	 * on a principal acting in {@code ownerDID}'s namespace, such as an agent's
+	 * {@code config.caps}? Each conferred capability must be covered by the
+	 * caller's own authority, so conferring only ever narrows: an agent may
+	 * create a sub-agent, never one more capable than itself.
+	 *
+	 * <p>A {@code null} scope is unrestricted, so only a caller unrestricted in that
+	 * namespace may confer it. A bare resource names {@code ownerDID}'s namespace, as
+	 * it will when the scope is used, and an empty one covers any resource. A
+	 * capability's {@code nb.url} is the destination its use is checked against;
+	 * other caveats only narrow it further.</p>
+	 *
+	 * @throws AuthException naming the first capability the caller cannot confer
+	 */
+	public void requireConferrable(RequestContext ctx, AString ownerDID, AVector<ACell> scope) {
+		if (scope == null) {
+			requireConferred(ctx, ownerDID, null, Capability.TOP, null);
+			return;
+		}
+		for (long i = 0; i < scope.count(); i++) {
+			AMap<AString, ACell> cap = RT.ensureMap(scope.get(i));
+			AString can = (cap == null) ? null : RT.ensureString(cap.get(Capability.CAN));
+			if (can == null) throw new AuthException(CONFERRAL_DENIED + ": capability " + i + " names no ability");
+			requireConferred(ctx, ownerDID, RT.ensureString(cap.get(Capability.WITH)), can,
+				RT.ensureString(RT.getIn(cap, Capability.NB, Fields.URL)));
+		}
+	}
+
+	private void requireConferred(RequestContext ctx, AString ownerDID, AString with, AString can,
+			AString destination) {
+		String resource = (with == null) ? "" : with.toString();
+		while (resource.startsWith("/")) resource = resource.substring(1);
+		try {
+			if (!resource.isEmpty()) {
+				requireResourceAccess(ctx, Strings.create(
+					covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID)), can, destination);
+			} else if (ownerDID.equals(ctx.getUserDID())) {
+				requireAuthority(ctx, (AString) null, can, destination);   // only a match-any grant covers
+			} else {
+				requireLocalAccess(ctx, ownerDID, can, destination);       // the whole other namespace
+			}
+		} catch (AuthException e) {
+			throw new AuthException(CONFERRAL_DENIED + ": " + can + " on "
+				+ (resource.isEmpty() ? "(any)" : resource) + " — " + e.getMessage());
 		}
 	}
 
@@ -3723,6 +4050,9 @@ public class Engine {
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
 	}
 
+	/** Opening of every {@link #requireVenueAuthority} denial. */
+	public static final String VENUE_AUTHORITY_DENIED = "Venue administration denied";
+
 	/**
 	 * Venue-administration gate. Administrative operations (user provisioning,
 	 * adapter and module lifecycle) are venue-owned: a null capability scope is
@@ -3737,10 +4067,10 @@ public class Engine {
 	 */
 	public void requireVenueAuthority(RequestContext ctx, String resource, AString ability) {
 		AString caller = (ctx != null) ? ctx.getCallerDID() : null;
-		if (getDIDString().equals(caller) && ctx.getAgentId() == null) return;
+		if (getDIDString().equals(caller) && ctx.getExecutionScope().agentId() == null) return;
 		AString full = Strings.create(getDIDString() + "/" + resource);
 		if (crossUserAllows(ctx, full, ability)) return;
-		throw new covia.exception.AuthException("Venue administration denied: requires " + ability
+		throw new covia.exception.AuthException(VENUE_AUTHORITY_DENIED + ": requires " + ability
 			+ " on " + full + " from the venue (call as the venue or present "
 			+ "a venue-issued delegation)");
 	}
@@ -3853,7 +4183,7 @@ public class Engine {
 		if (user == null) return isVenuePrincipal(userDID) ? environmentSecret(name) : null;
 		AString value;
 		try {
-			value = user.secrets().decrypt(Strings.create(name), SecretStore.deriveKey(keyPair));
+			value = user.secrets().decrypt(Strings.create(name), SecretStore.keys(keyPair));
 		} catch (Exception e) {
 			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
 			// both to null masked #91-class identity/key misconfigurations as
@@ -3898,7 +4228,7 @@ public class Engine {
 
 		AString venueDID = getDIDString();
 		AString publicDID = Strings.create(venueDID.toString() + ":public");
-		byte[] encKey = SecretStore.deriveKey(keyPair);
+		SecretStore.Keys secretKeys = SecretStore.keys(keyPair);
 
 		int total = 0;
 		for (long i = 0; i < secrets.count(); i++) {
@@ -3941,7 +4271,7 @@ public class Engine {
 					continue;
 				}
 				try {
-					user.secrets().store(name, value, encKey);
+					user.secrets().store(name, value, secretKeys);
 					provisioned++;
 				} catch (Exception e) {
 					log.warn("Failed to provision secret '{}' for user '{}': {}",

@@ -524,6 +524,27 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
+	public void testATurnThatEndedWithoutAReplyIsNotSentBack() {
+		// The agent let the first message pass; the next request carries both
+		// messages and no empty assistant turn, which Anthropic would reject.
+		var canonical = Vectors.of(
+			Maps.of("role", "user", "content", "So I was thinking we could"),
+			Maps.of("role", "assistant", "content", ""),
+			Maps.of("role", "user", "content", "book the trip for Friday"),
+			Maps.of("role", "assistant", "content", "  \n"),
+			Maps.of("role", "user", "content", "and the hotel."));
+
+		List<ChatMessage> converted = LangChainAdapter.toChatMessages(canonical);
+		assertEquals(3, converted.size());
+		for (ChatMessage m : converted) assertInstanceOf(UserMessage.class, m);
+		List<AnthropicMessage> wire = AnthropicMapper.toAnthropicMessages(converted);
+		for (AnthropicMessage m : wire) {
+			assertEquals(AnthropicRole.USER, m.role, "no assistant turn without content reaches the provider");
+			assertFalse(m.content.isEmpty());
+		}
+	}
+
+	@Test
 	public void testAnthropicWireMapperGroupsParallelToolResultsBeforeFollowingEvent() {
 		var canonical = Vectors.of(
 			Maps.of("role", "assistant", "content", "", "toolCalls", Vectors.of(
@@ -2287,7 +2308,7 @@ public class LangChainAdapterTest {
 			var callerKP = convex.core.crypto.AKeyPair.generate();
 			AString callerDID = convex.auth.ucan.UCAN.toDIDKey(callerKP.getAccountKey());
 			RequestContext caller = RequestContext.of(callerDID);
-			byte[] encKey = covia.venue.SecretStore.deriveKey(engine.getKeyPair());
+			covia.venue.SecretStore.Keys encKey = covia.venue.SecretStore.keys(engine.getKeyPair());
 			engine.getVenueState().users().ensure(callerDID).secrets().store("MY_TOKEN", "caller-token", encKey);
 			engine.getVenueState().users().ensure(engine.getDIDString()).secrets()
 				.store("ANTHROPIC_API_KEY", "venue-key", encKey);

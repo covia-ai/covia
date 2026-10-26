@@ -1,0 +1,32 @@
+{
+  "name": "Clone user",
+  "description": "Copy one user's whole stored state into another account on this venue, as stored and sharing structure: workspace, agents and their sessions, jobs, assets, operations, HITL inbox and secrets. Secrets that are keys are copied too, so the clone reaches whatever they unlock; the DLFS drive key among them means the clone reads and writes the source's drives. The target is registered when absent and must otherwise hold no user state; its agents' wakes are re-armed. Refused while the source has a job not yet finished or an agent task outstanding. Requires venue-issued user/import on <venueDID>/users, and user/export there unless the source is the caller.",
+  "operation": {
+    "adapter": "user:clone",
+    "readOnly": false,
+    "input": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Exact DID of the user to copy"
+        },
+        "to": {
+          "type": "string",
+          "description": "Exact DID of the account to fill"
+        }
+      },
+      "required": ["from", "to"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "created": { "type": "boolean", "description": "True when the clone registered the target" }
+      },
+      "required": ["from", "to", "created"]
+    }
+  }
+}

@@ -76,6 +76,30 @@ public class AgentOutputPathFederationTest {
 	}
 
 	@Test
+	public void outputContextRecoveryKeepsTheNamespaceAndExecutionOwner() {
+		AString caller = Strings.create("did:key:zCaller");
+		AString owner = Strings.create("did:key:zOwner");
+		AString agent = Strings.create("worker");
+		RequestContext context = RequestContext.of(caller).onBehalfOf(owner)
+			.withAgentId(agent).withSessionId(Blob.fromHex("1234"));
+		RequestContext restored = AgentAdapter.restoreOutputContext(AgentAdapter.snapshotOutputContext(context));
+		assertEquals(caller, restored.getCallerDID());
+		assertEquals(owner, restored.getUserDID());
+		assertEquals(context.getExecutionScope(), restored.getExecutionScope());
+		assertNull(restored.getProofs());
+		assertThrows(covia.exception.AuthException.class,
+			() -> restored.requireCapability("w/output", "crud/write"));
+
+		// Old snapshots retain their caller-relative interpretation without a scan
+		// or rewrite. A malformed explicit owner cannot use that fallback.
+		RequestContext legacy = AgentAdapter.restoreOutputContext(Maps.of(
+			Fields.CALLER, caller, Fields.AGENT_ID, agent));
+		assertEquals(caller, legacy.getExecutionScope().ownerDID());
+		assertEquals(agent, legacy.getAgentId());
+		assertNull(AgentAdapter.restoreOutputContext(Maps.of(Fields.CALLER, caller, "user", null)));
+	}
+
+	@Test
 	public void managedUserPathRoutesByVenueDid() {
 		AString path = Strings.create(
 			"did:web:remote.example:u:alice:g:manager/w/pipeline/out");

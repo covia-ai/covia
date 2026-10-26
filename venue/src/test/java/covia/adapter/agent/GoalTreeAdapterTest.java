@@ -435,7 +435,7 @@ public class GoalTreeAdapterTest {
 		ACell output = adapter.processGoal(null, ALICE, input);
 		assertEquals("complete after truncation retry", RT.getIn(output, Fields.RESPONSE).toString());
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		assertNotNull(conversation);
 		assertTrue(conversation.toString().contains("output token limit"));
 		assertFalse(conversation.toString().contains("partial_call"),
@@ -612,7 +612,7 @@ public class GoalTreeAdapterTest {
 		assertEquals("42", RT.ensureString(RT.getIn(output, Fields.RESPONSE, "answer")).toString());
 
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
-		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conv = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		java.util.Set<String> resultIds = new java.util.HashSet<>();
 		long callTurn = -1;
 		ACell finalTurn = conv.get(conv.count() - 1);
@@ -828,7 +828,7 @@ public class GoalTreeAdapterTest {
 			"a mutating sibling after fail must not execute");
 
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
-		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conv = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		long callTurn = -1;
 		for (long i = 0; i < conv.count(); i++) {
 			if (RT.getIn(conv.get(i), "toolCalls") != null) callTurn = i;
@@ -855,7 +855,7 @@ public class GoalTreeAdapterTest {
 
 		assertEquals("BATCH_RECOVERED", RT.getIn(output, Fields.RESPONSE).toString());
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
-		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conv = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		long callTurn = -1;
 		for (long i = 0; i < conv.count(); i++) {
 			if (RT.getIn(conv.get(i), "toolCalls") != null) callTurn = i;
@@ -880,7 +880,7 @@ public class GoalTreeAdapterTest {
 
 		assertEquals("BATCH_RECOVERED", RT.getIn(output, Fields.RESPONSE).toString());
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
-		AVector<ACell> conv = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conv = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		java.util.Set<String> ids = new java.util.HashSet<>();
 		for (long i = 0; i < conv.count(); i++) {
 			if ("tool".equals(String.valueOf(RT.getIn(conv.get(i), "role")))) {
@@ -1300,7 +1300,7 @@ public class GoalTreeAdapterTest {
 		AMap<AString, ACell> root1 = (AMap<AString, ACell>) frames1.get(0);
 		AString rootDesc = RT.ensureString(root1.get(Strings.intern("description")));
 		@SuppressWarnings("unchecked")
-		AVector<ACell> conv1 = (AVector<ACell>) root1.get(Strings.intern("conversation"));
+		AVector<ACell> conv1 = GoalTreeContext.activeConversation(root1);
 		assertNotNull(conv1);
 		long conv1Count = conv1.count();
 		assertTrue(conv1Count >= 1,
@@ -1329,7 +1329,7 @@ public class GoalTreeAdapterTest {
 		assertEquals(rootDesc, RT.ensureString(root2.get(Strings.intern("description"))),
 			"root frame description must be preserved across transitions");
 		@SuppressWarnings("unchecked")
-		AVector<ACell> conv2 = (AVector<ACell>) root2.get(Strings.intern("conversation"));
+		AVector<ACell> conv2 = GoalTreeContext.activeConversation(root2);
 		long conv2Count = conv2.count();
 		assertTrue(conv2Count > conv1Count,
 			"conversation must grow after turn 2: " + conv1Count + " -> " + conv2Count);
@@ -1368,7 +1368,7 @@ public class GoalTreeAdapterTest {
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> root3 = (AMap<AString, ACell>) frames3.get(0);
 		@SuppressWarnings("unchecked")
-		AVector<ACell> conv3 = (AVector<ACell>) root3.get(Strings.intern("conversation"));
+		AVector<ACell> conv3 = GoalTreeContext.activeConversation(root3);
 		assertTrue(conv3.count() > conv2Count,
 			"conversation must grow after turn 3: " + conv2Count + " -> " + conv3.count());
 		assertEquals(1, countTurnsMatching(conv3, "turn one"));
@@ -1386,8 +1386,7 @@ public class GoalTreeAdapterTest {
 			AgentState.KEY_CONFIG, oldConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "first turn"))));
 		AVector<ACell> firstFrames = RT.ensureVector(RT.getIn(first, Fields.FRAMES));
-		AVector<ACell> firstTurns = RT.ensureVector(RT.getIn(
-			firstFrames.get(0), GoalTreeContext.K_CONVERSATION));
+		AVector<ACell> firstTurns = GoalTreeContext.activeConversation(RT.ensureMap(firstFrames.get(0)));
 		assertTrue(RT.getIn(firstFrames.get(0), GoalTreeContext.K_RENDERED_CONTEXT,
 			"messages", 0, "content").toString().contains("OLD_GOAL_IDENTITY"));
 
@@ -1404,8 +1403,7 @@ public class GoalTreeAdapterTest {
 			"messages", 0, "content").toString().contains("NEW_GOAL_IDENTITY"));
 		assertEquals(newConfig, RT.getIn(root,
 			GoalTreeContext.K_RENDERED_CONTEXT, "sourceConfig"));
-		AVector<ACell> secondTurns = RT.ensureVector(
-			RT.getIn(root, GoalTreeContext.K_CONVERSATION));
+		AVector<ACell> secondTurns = GoalTreeContext.activeConversation(RT.ensureMap(root));
 		assertEquals(firstTurns, secondTurns.slice(0, firstTurns.count()),
 			"config-owned context changes; prior rendered turns do not");
 	}

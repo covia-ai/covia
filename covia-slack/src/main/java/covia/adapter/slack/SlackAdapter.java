@@ -11,21 +11,27 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.messaging.AWebhookMessagingAdapter;
 import covia.adapter.messaging.ConversationRouter;
+import covia.adapter.messaging.MessagingConnection;
 import covia.adapter.messaging.MessagingHttp;
 import covia.adapter.messaging.MessagingSettings;
+import covia.adapter.messaging.SharedConnections;
 import covia.adapter.messaging.WebhookBot;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
 
-/** Optional Slack Events API module for DMs and explicitly admitted channel mentions. */
+/** Optional Slack Events API and Socket Mode module for DMs and explicitly admitted channel mentions. */
 public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	public static final String NAME = "slack";
 	public static final int MAX_TEXT = 4000;
 	public static final String API_ERROR = "Slack rejected the message";
 	public static final String INVALID_RESPONSE = "Slack did not return a message timestamp; delivery may be uncertain";
+	public static final String CONNECTION_REFUSED = "Slack did not open a Socket Mode connection";
+	/** Socket Mode ping cadence; a connection silent for two intervals is replaced. */
+	public volatile long keepaliveMillis = 30_000;
+	private final SharedConnections<BotSpec> sockets = new SharedConnections<>();
 	@Override public String getName() { return NAME; }
-	@Override public String getDescription() { return "Slack text messages, direct conversations and channel mentions through signed Events API callbacks."; }
+	@Override public String getDescription() { return "Slack text messages, direct conversations and channel mentions through signed Events API callbacks or Socket Mode."; }
 	@Override protected String defaultApiUrl() { return "https://slack.com/api"; }
 	@Override protected BotSpec parseBot(String name, ACell settings, boolean strict) { return BotSpec.parse(name, settings, strict); }
 	@Override protected WebhookResponse receive(WebhookBot<BotSpec> bot, WebhookRequest request) {
@@ -38,39 +44,65 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		if (secret == null || secret.isBlank()) return WebhookResponse.text(503, UNAVAILABLE);
 		if (!WebhookSignatures.verify(secret, request.header("X-Slack-Signature"), "v0=", "v0:" + timestamp + ":", request.body())) return WebhookResponse.text(401, UNAUTHORIZED);
 		var payload = json(request);
-		String type = MessagingSettings.required(payload, "type");
 		// Slack's signed URL challenge does not contain installation IDs.
-		if (type.equals("url_verification")) return WebhookResponse.text(200, MessagingSettings.required(payload, "challenge"));
-		if (!type.equals("event_callback")) return WebhookResponse.text(200, "");
+		if ("url_verification".equals(MessagingSettings.required(payload, "type"))) return WebhookResponse.text(200, MessagingSettings.required(payload, "challenge"));
+		return admit(bot, payload) ? WebhookResponse.text(200, "") : WebhookResponse.text(403, UNAUTHORIZED);
+	}
+	/**
+	 * Admission and durable acceptance of one Events API payload from either
+	 * transport, after it has authenticated. False when it belongs to another
+	 * installation; ignored events are admitted without effect.
+	 */
+	boolean admit(WebhookBot<BotSpec> bot, AMap<AString, ACell> payload) {
+		if (!"event_callback".equals(MessagingSettings.required(payload, "type"))) return true;
 		if (!bot.spec().appId().equals(MessagingSettings.required(payload, "api_app_id"))
-			|| !bot.spec().teamId().equals(MessagingSettings.required(payload, "team_id")) || !authorizedInstallation(bot.spec(), payload)) return WebhookResponse.text(403, UNAUTHORIZED);
+			|| !bot.spec().teamId().equals(MessagingSettings.required(payload, "team_id")) || !authorizedInstallation(bot.spec(), payload)) return false;
 		var event = MessagingSettings.object(payload.get(MessagingSettings.key("event")));
 		String eventType = MessagingSettings.required(event, "type");
-		if (!eventType.equals("message") && !eventType.equals("app_mention")) return WebhookResponse.text(200, "");
+		if (!eventType.equals("message") && !eventType.equals("app_mention")) return true;
 		// Edits/deletes, bot messages and self echoes do not start conversations.
-		if (event.get(MessagingSettings.key("subtype")) != null || event.get(MessagingSettings.key("bot_id")) != null) return WebhookResponse.text(200, "");
+		if (event.get(MessagingSettings.key("subtype")) != null || event.get(MessagingSettings.key("bot_id")) != null) return true;
 		String user = MessagingSettings.optional(event, "user");
-		if (!bot.spec().allowsUser(user) || bot.spec().botUserId().equals(user)) return WebhookResponse.text(200, "");
+		if (!bot.spec().allowsUser(user) || bot.spec().botUserId().equals(user)) return true;
 		String channel = MessagingSettings.id(event, "channel", BotSpec.CHANNEL_ID);
 		boolean dm = "im".equals(MessagingSettings.optional(event, "channel_type")) && channel.startsWith("D");
-		// Subscribe to message.im and app_mention. Other channel message subscriptions
-		// are ignored so the same mention cannot execute twice under two event IDs.
-		if (!(dm && eventType.equals("message")) && !(eventType.equals("app_mention") && !channel.startsWith("D") && bot.spec().allowsChannel(channel))) return WebhookResponse.text(200, "");
-		String ts = MessagingSettings.id(event, "ts", BotSpec.TIMESTAMP);
+		boolean channelTurn = !channel.startsWith("D") && bot.spec().allowsChannel(channel);
 		String thread = MessagingSettings.optional(event, "thread_ts");
 		if (thread != null) MessagingSettings.id(event, "thread_ts", BotSpec.TIMESTAMP);
+		// DMs arrive as message.im and channel mentions as app_mention. With message.channels
+		// (or message.groups) subscribed, a reply in a thread the agent already holds continues
+		// without a mention. A message that does mention the bot also arrives as app_mention
+		// under another event ID; only that copy runs, so one message never executes twice.
+		boolean continuation = eventType.equals("message") && channelTurn && thread != null
+			&& !String.valueOf(event.get(MessagingSettings.key("text"))).contains("<@" + bot.spec().botUserId() + ">")
+			&& bot.holdsConversation(ConversationRouter.key(bot.spec().installationKey(), channel, thread));
+		if (!(dm && eventType.equals("message")) && !(eventType.equals("app_mention") && channelTurn) && !continuation) return true;
+		String ts = MessagingSettings.id(event, "ts", BotSpec.TIMESTAMP);
 		if (!dm && thread == null) thread = ts;
 		String text = MessagingSettings.required(event, "text");
 		if (eventType.equals("app_mention")) text = text.replace("<@" + bot.spec().botUserId() + ">", "").strip();
-		if (text.isBlank()) return WebhookResponse.text(200, "");
+		if (text.isBlank()) return true;
 		String id = MessagingSettings.required(payload, "event_id");
 		var via = Maps.of("channel", NAME, "bot", bot.spec().name(), "from", user, "chat", channel,
 			"message_id", ts, "event_id", id, "team", bot.spec().teamId(), "thread", thread,
-			"access", MessagingSettings.bool(bot.spec().settings(), "open", false) ? "open" : "allow");
+			"access", bot.spec().admitsAnySender() ? "open" : "allow");
 		bot.accept(id, Maps.of("conversation", ConversationRouter.key(bot.spec().installationKey(), channel, thread == null ? "" : thread),
 			"text", text, "channel", channel, "thread", thread, "via", via,
 			"input", Maps.of("event_id", id, "team_id", bot.spec().teamId(), "api_app_id", bot.spec().appId(), "event", event)));
-		return WebhookResponse.text(200, "");
+		return true;
+	}
+	/**
+	 * Bindings resolving to one app token share its connection, since Slack
+	 * balances an app's events across all of them. Each connection uses a fresh
+	 * single-use URL authorised by that token.
+	 */
+	@Override protected MessagingConnection openConnection(WebhookBot<BotSpec> bot) throws Exception {
+		return sockets.lease(bot, bot.credential(BotSpec.APP_TOKEN), (token, members) -> {
+			ACell opened = MessagingHttp.post(apiUrl() + "/apps.connections.open", token, Maps.empty());
+			AString url = RT.ensureString(RT.getIn(opened, MessagingSettings.key("url")));
+			if (!CVMBool.TRUE.equals(RT.getIn(opened, MessagingSettings.key("ok"))) || url == null) throw new IllegalStateException(CONNECTION_REFUSED);
+			return SocketModeConnection.open(this, members, MessagingHttp.socket(url.toString()));
+		});
 	}
 	private static boolean authorizedInstallation(BotSpec spec, AMap<AString, ACell> payload) {
 		AVector<ACell> auths = RT.ensureVector(payload.get(MessagingSettings.key("authorizations")));
@@ -98,13 +130,15 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	@Override protected void sendReply(WebhookBot<BotSpec> bot, AMap<AString, ACell> event, String text) {
 		deliver(bot, MessagingSettings.required(event, "channel"), truncate(text, MAX_TEXT), MessagingSettings.optional(event, "thread"));
 	}
+	@Override protected int maxText() { return MAX_TEXT; }
 	private ACell deliver(WebhookBot<BotSpec> bot, String channel, String text, String thread) {
 		bot.requireReady();
 		text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 		AMap<AString, ACell> body = Maps.of("channel", channel, "text", text, "mrkdwn", false, "parse", "none", "link_names", false,
 			"unfurl_links", false, "unfurl_media", false);
 		if (thread != null) body = body.assoc(MessagingSettings.key("thread_ts"), convex.core.data.Strings.create(thread));
-		ACell result = MessagingHttp.post(apiUrl() + "/chat.postMessage", bot.credential("token"), body);
+		String url = apiUrl() + "/chat.postMessage";
+		ACell result = MessagingHttp.post(url, bot.credential("token", url), body);
 		if (!CVMBool.TRUE.equals(RT.getIn(result, MessagingSettings.key("ok")))) throw new IllegalStateException(API_ERROR);
 		if (RT.ensureString(RT.getIn(result, MessagingSettings.key("ts"))) == null) throw new IllegalStateException(INVALID_RESPONSE);
 		return result;

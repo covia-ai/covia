@@ -47,7 +47,9 @@ public class SecretAdapter extends AAdapter {
 	public static final String EXTRACT_DIRECT_ONLY = "Secret extraction requires a direct owner run with no recorded job, agent or session context";
 	public static final String EXTRACT_DEFINITION_REQUIRED = "Secret extraction requires the published operation definition";
 	public static final String EXTRACT_NOT_PUBLIC = "The public principal's secrets are provisioned by the operator: they can be used under a grant, never extracted";
-	public static final String SECRET_UNAVAILABLE = "Secret is missing or cannot be decrypted";
+	public static final String SECRET_EXISTS = "Secret already exists; pass overwrite:true to replace it";
+	public static final String SECRET_UNAVAILABLE = "Secret does not exist";
+	public static final String SECRET_DECRYPT_FAILED = "Secret cannot be decrypted";
 
 	@Override
 	public String getName() {
@@ -158,7 +160,7 @@ public class SecretAdapter extends AAdapter {
 		AString name = name(input);
 		try {
 			if (!(ctx.getJob() instanceof VenueJob job) || !job.isDirectRun()
-					|| ctx.getAgentId() != null || ctx.getSessionId() != null || ctx.getTaskId() != null
+					|| ctx.getExecutionScope().agentId() != null || ctx.getExecutionScope().sessionId() != null || ctx.getExecutionScope().taskId() != null
 					|| !ctx.getCallerDID().equals(ctx.getUserDID())) throw new AuthException(EXTRACT_DIRECT_ONLY);
 			// Anonymous callers act as the public principal, whose store holds the
 			// operator's shared keys. Even unrestricted public access never reads them out.
@@ -172,8 +174,8 @@ public class SecretAdapter extends AAdapter {
 			User user = engine.getVenueState().users().get(ctx.getUserDID());
 			AString value;
 			try {
-				value = user == null ? null : user.secrets().decrypt(name, SecretStore.deriveKey(engine.getKeyPair()));
-			} catch (RuntimeException e) { throw new IllegalStateException(SECRET_UNAVAILABLE); }
+				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
+			} catch (RuntimeException e) { throw new IllegalStateException(SECRET_DECRYPT_FAILED); }
 			if (value == null) throw new IllegalStateException(SECRET_UNAVAILABLE);
 			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
 			return Maps.of(Fields.NAME, name, Fields.VALUE, value);
@@ -216,12 +218,11 @@ public class SecretAdapter extends AAdapter {
 		// Secrets live in the user's store; an agent writes into its owner's,
 		// gated above by secret/write in its capability scope.
 		User user = engine.getVenueState().users().ensure(ctx.getUserDID());
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys keys = SecretStore.keys(engine.getKeyPair());
 		if (overwrite) {
-			user.secrets().store(name, value, encKey);
-		} else if (!user.secrets().storeIfAbsent(name, value, encKey)) {
-			throw new IllegalArgumentException("Secret s/" + name
-				+ " already exists; pass overwrite:true to replace it");
+			user.secrets().store(name, value, keys);
+		} else if (!user.secrets().storeIfAbsent(name, value, keys)) {
+			throw new IllegalArgumentException(SECRET_EXISTS);
 		}
 		// The name only, never the value.
 		engine.audit().event(covia.venue.Audit.SECRET_WRITE, covia.venue.Audit.K_DID, ctx.getCallerDID(),

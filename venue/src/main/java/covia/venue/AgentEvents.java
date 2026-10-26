@@ -84,6 +84,12 @@ public final class AgentEvents {
 	public static final AString TOOL_START = Strings.intern("tool:start");
 	/** A tool call finished. {@code {id, name, ms, isError?, depth?, detail: {result}}} */
 	public static final AString TOOL_RESULT = Strings.intern("tool:result");
+	/** A running tool call's operation published progress on its Job — Claude
+	 *  Code's latest step, say — each change once, between the call's
+	 *  {@code tool:start} and its {@code tool:result}. {@code message} is the
+	 *  operation's own line for a person; the whole record rides under detail.
+	 *  {@code {id, name, message?, depth?, detail: {progress}}} */
+	public static final AString TOOL_PROGRESS = Strings.intern("tool:progress");
 	/** The agent's persisted status changed. {@code {status, error?}} */
 	public static final AString STATUS = Strings.intern("status");
 
@@ -380,6 +386,21 @@ public final class AgentEvents {
 			AMap<AString, ACell> detail = Maps.empty();
 			if (input != null) detail = detail.assoc(Fields.INPUT, input);
 			emit(TOOL_START, depth(m.assoc(Fields.DETAIL, detail), depth));
+		}
+
+		/**
+		 * A running tool call's operation published {@code progress} on its Job
+		 * ({@link Fields#PROGRESS}). Its message — the operation's own line for
+		 * a person — sits at the top level, as an activity label does; the
+		 * whole record rides under {@code detail}, as the call's input and
+		 * result do.
+		 */
+		public void toolProgress(AString id, String name, ACell progress, int depth) {
+			AMap<AString, ACell> m = Maps.of(Fields.NAME, Strings.create(name));
+			if (id != null) m = m.assoc(Fields.ID, id);
+			String message = covia.grid.Job.progressMessage(progress);
+			if (message != null) m = m.assoc(Fields.MESSAGE, Strings.create(message));
+			emit(TOOL_PROGRESS, depth(m.assoc(Fields.DETAIL, Maps.of(Fields.PROGRESS, progress)), depth));
 		}
 
 		/** A tool call finished; its result rides under {@code detail}. */

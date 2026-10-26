@@ -3,7 +3,6 @@ package covia.venue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Consumer;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -16,25 +15,21 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
-import convex.lattice.cursor.ALatticeCursor;
-import convex.lattice.cursor.Cursors;
+import java.util.function.Consumer;
+import covia.lattice.WorkspaceRoot;
 import covia.adapter.AAdapter;
-import covia.adapter.CoviaAdapter;
 import covia.api.Fields;
-import covia.lattice.Covia;
 
 /**
  * Materialises venue-owned bootstrap state as one native lattice transaction.
  *
- * <p>All catalog and {@code v/info} writes are staged against a child fork of
- * the venue-owned {@code w/global} workspace using the canonical cursor path
- * writer, and validated there. A successful run then replays the staged writes
- * in one atomic update of the Engine's connected workspace cursor; a failure
- * simply discards the fork. No operation dispatch, Job records, or parallel
- * catalog model is involved.</p>
+ * <p>The {@link WorkspaceRoot} transaction supplies a private draft of the
+ * venue-owned {@code w/global} workspace, retries conflicts and commits atomically.
+ * Catalog and introspection writes are validated against that draft; an exception
+ * discards the entire attempt. No operation dispatch or Job records are involved.</p>
  *
-	 * <p>Besides the complete bootstrap snapshot, the same machinery publishes
-	 * and updates <em>single</em> adapters and modules for the runtime adapter
+ * <p>Besides the complete bootstrap snapshot, the same machinery publishes
+ * and updates <em>single</em> adapters and modules for the runtime adapter
  * lifecycle ({@link Engine#enableAdapter}, {@link Engine#disableAdapter},
  * {@link Modules#load}, {@link Modules#unload}) — each change is one atomic
  * commit, so the catalog never shows a half-applied adapter.</p>
@@ -53,71 +48,69 @@ final class VenueBootstrapMaterializer {
 	private static final AString K_SHA256 = Strings.intern("sha256");
 
 	private final Engine engine;
-	/** The connected venue-owned {@code w/global} cursor: the commit target. */
-	private final ALatticeCursor<ACell> workspace;
-	/** Private staging copy of {@link #workspace}: every write and validation read runs here. */
-	private final ALatticeCursor<ACell> workspaceFork;
-	/** The staged writes, in order, replayed against the connected cursor at commit. */
-	private final List<Consumer<ALatticeCursor<ACell>>> staged = new ArrayList<>();
+	/** Live workspace or the callback-confined transaction draft. */
+	private final WorkspaceRoot workspace;
 	private final List<String> adapterNames;
 	private final long startedAt;
 
-	private VenueBootstrapMaterializer(Engine engine) {
+	private VenueBootstrapMaterializer(Engine engine, WorkspaceRoot draft, List<String> adapterNames, long startedAt) {
 		this.engine = engine;
-		ALatticeCursor<ACell> venueUserCursor =
-			engine.getVenueState().users().ensure(engine.getDIDString()).cursor();
-		this.workspace = Covia.child(venueUserCursor, K_W).path(K_GLOBAL);
-		this.workspaceFork = workspace.fork();
-		this.adapterNames = engine.getAdapterNamesInRegistrationOrder();
-		this.startedAt = System.currentTimeMillis();
+		this.workspace = draft;
+		this.adapterNames = adapterNames;
+		this.startedAt = startedAt;
+	}
+
+	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
+		var user = engine.getVenueState().users().ensure(engine.getDIDString());
+		var workspace = new WorkspaceRoot(user.workspaceRoot().child(K_W)
+			.withDefault(Maps.empty()).path(K_GLOBAL), engine.getLatticeContext(), false);
+		var names = engine.getAdapterNamesInRegistrationOrder();
+		long started = System.currentTimeMillis();
+		workspace.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
 	}
 
 	/** Materialises catalog and venue information, then commits them together. */
 	static void materialiseBootstrapState(Engine engine) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.writeAdapterCatalog();
-		materializer.writeVenueInformation();
-		materializer.publish();
+		materialise(engine, materializer -> {
+			materializer.writeAdapterCatalog();
+			materializer.writeVenueInformation();
+		});
 		covia.adapter.agent.Skills.validateVenueLibrary(engine);
 	}
 
-	/** Backward-compatible catalog-only entry point, committed as one fork sync. */
+	/** Backward-compatible catalog-only entry point, committed as one transaction. */
 	static void materialiseAdapterCatalog(Engine engine) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.writeAdapterCatalog();
-		materializer.publish();
+		materialise(engine, VenueBootstrapMaterializer::writeAdapterCatalog);
 		covia.adapter.agent.Skills.validateVenueLibrary(engine);
 	}
 
-	/** Backward-compatible venue-info-only entry point, committed as one fork sync. */
+	/** Backward-compatible venue-info-only entry point, committed as one transaction. */
 	static void materialiseVenueInformation(Engine engine) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.writeVenueInformation();
-		materializer.publish();
+		materialise(engine, VenueBootstrapMaterializer::writeVenueInformation);
 	}
 
 	/**
 	 * Incrementally publishes ONE adapter after the bootstrap snapshot exists —
 	 * the runtime {@code enable} / module-load path. Its catalog declarations
-	 * and {@code v/info/adapters/<name>} summary land in one fork sync. A
+	 * and {@code v/info/adapters/<name>} summary land in one transaction.
 	 * Existing catalog paths are deliberately replaced: reaching this method
 	 * is already an operator-authorised registration decision, and the most
 	 * recently registered adapter wins.
 	 */
 	static void materialiseAdapter(Engine engine, AAdapter adapter) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.writeAdapterDeclarations(adapter);
-		materializer.writeAdapterOwnedRecords(adapter);
-		materializer.publish();
+		materialise(engine, materializer -> {
+			materializer.writeAdapterDeclarations(adapter);
+			materializer.writeAdapterOwnedRecords(adapter);
+		});
 	}
 
 	/** Atomically replaces one adapter's declarations and introspection. */
 	static void replaceAdapter(Engine engine, AAdapter previous, AAdapter replacement) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.deleteVenuePath(ADAPTERS_ROOT + previous.getName());
-		materializer.writeAdapterDeclarations(replacement);
-		materializer.writeAdapterOwnedRecords(replacement);
-		materializer.publish();
+		materialise(engine, materializer -> {
+			materializer.deleteVenuePath(ADAPTERS_ROOT + previous.getName());
+			materializer.writeAdapterDeclarations(replacement);
+			materializer.writeAdapterOwnedRecords(replacement);
+		});
 	}
 
 	/**
@@ -127,28 +120,28 @@ final class VenueBootstrapMaterializer {
 	 * deleted explicitly by the operator.
 	 */
 	static void dematerialiseAdapter(Engine engine, AAdapter adapter) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.deleteVenuePath("v/info/adapters/" + adapter.getName());
-		materializer.deleteVenuePath(ADAPTERS_ROOT + adapter.getName());
-		materializer.publish();
+		materialise(engine, materializer -> {
+			materializer.deleteVenuePath("v/info/adapters/" + adapter.getName());
+			materializer.deleteVenuePath(ADAPTERS_ROOT + adapter.getName());
+		});
 	}
 
 	/** Publishes (or refreshes) one module's {@code v/info/modules/<name>} entry. */
 	static void materialiseModule(Engine engine, Modules.LoadedModule module) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.writeAndValidateVenuePath(
-			"v/info/modules/" + module.name(), moduleSummary(module));
-		materializer.publish();
+		materialise(engine, materializer -> {
+			materializer.writeAndValidateVenuePath(
+				"v/info/modules/" + module.name(), moduleSummary(module));
+		});
 	}
 
 	/** Retracts one module's {@code v/info/modules/<name>} entry. */
 	static void dematerialiseModule(Engine engine, String moduleName) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.deleteVenuePath("v/info/modules/" + moduleName);
-		materializer.publish();
+		materialise(engine, materializer -> {
+			materializer.deleteVenuePath("v/info/modules/" + moduleName);
+		});
 	}
 
-	/** Writes every adapter declaration through ordinary cursors on the child fork. */
+	/** Writes every adapter declaration through ordinary cursors on the transaction draft. */
 	private void writeAdapterCatalog() {
 		// v/adapters/<name>/ is the adapter-owned subtree (ops/skills/templates
 		// mirrored here, info and config added by writeVenueInformation). Reset it
@@ -250,7 +243,7 @@ final class VenueBootstrapMaterializer {
 		}
 	}
 
-	/** Writes the complete introspection snapshot into the same child fork. */
+	/** Writes the complete introspection snapshot into the same transaction draft. */
 	private void writeVenueInformation() {
 		AString name = engine.config().getName();
 		if (name != null) writeAndValidateVenuePath("v/info/name", name);
@@ -272,7 +265,7 @@ final class VenueBootstrapMaterializer {
 		writeAndValidateVenuePath("v/info/protocols", protocols);
 
 		// Adapter summaries are a complete bootstrap-owned snapshot. Reset this
-		// subtree on the transaction fork so adapters removed since the previous
+		// subtree on the transaction draft so adapters removed since the previous
 		// boot cannot leave stale introspection entries.
 		writeAndValidateVenuePath("v/info/adapters", Maps.empty());
 		// Each adapter's info (mirrored at v/adapters/<name>/info) and config.
@@ -323,9 +316,9 @@ final class VenueBootstrapMaterializer {
 	 * configuration. Catalog declarations are untouched.
 	 */
 	static void materialiseAdapterInfo(Engine engine, AAdapter adapter) {
-		VenueBootstrapMaterializer materializer = new VenueBootstrapMaterializer(engine);
-		materializer.writeAdapterOwnedRecords(adapter);
-		materializer.publish();
+		materialise(engine, materializer -> {
+			materializer.writeAdapterOwnedRecords(adapter);
+		});
 	}
 
 	static AMap<AString, ACell> moduleSummary(Modules.LoadedModule module) {
@@ -339,10 +332,10 @@ final class VenueBootstrapMaterializer {
 		return summary;
 	}
 
-	/** Stages a write on the fork, then verifies the staged view immediately. */
+	/** Writes to the draft, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
 		ACell[] keys = toWorkspacePath(virtualPath);
-		stage(cursor -> CoviaAdapter.writePathToCursor(cursor, keys, value));
+		workspace.write(keys, value);
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {
 			throw new IllegalStateException(
@@ -351,53 +344,28 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return CoviaAdapter.readPath(workspaceFork, toWorkspacePath(virtualPath));
+		return workspace.read(toWorkspacePath(virtualPath));
 	}
 
-	/** Stages a delete on the fork, then verifies the path is gone. */
+	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
 		ACell[] keys = toWorkspacePath(virtualPath);
-		stage(cursor -> CoviaAdapter.deletePathFromCursor(cursor, keys));
+		workspace.delete(keys);
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
 		}
 	}
 
-	/** Rewrites caller-visible v/x to x relative to the forked w/global root. */
+	/** Rewrites caller-visible v/x to x relative to the transactional w/global root. */
 	private static ACell[] toWorkspacePath(String virtualPath) {
-		ACell[] virtualKeys = CoviaAdapter.parseStringPath(virtualPath);
+		ACell[] virtualKeys = WorkspaceRoot.parseStringPath(virtualPath);
 		if (virtualKeys.length < 2 || !"v".equals(virtualKeys[0].toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}
 		ACell[] workspaceKeys = new ACell[virtualKeys.length - 1];
 		System.arraycopy(virtualKeys, 1, workspaceKeys, 0, workspaceKeys.length);
 		return workspaceKeys;
-	}
-
-	/** Applies one write to the staging fork now and records it for the commit replay. */
-	private void stage(Consumer<ALatticeCursor<ACell>> write) {
-		write.accept(workspaceFork);
-		staged.add(write);
-	}
-
-	/**
-	 * The only commit point: the staged writes are replayed in one atomic
-	 * update of the connected {@code w/global} cursor, so they become visible
-	 * together and a concurrent unrelated write to the workspace survives.
-	 *
-	 * <p>The fork is never synced. {@code w/global} lies inside the venue's
-	 * whole-value LWW node, where the JSON lattice defines no merge, so a fork
-	 * sync cannot reconcile a parent that has moved since the fork. The replay
-	 * is a pure function of the current value and is safe under CAS retry.</p>
-	 */
-	private void publish() {
-		if (staged.isEmpty()) return;
-		workspace.updateAndGet(current -> {
-			ALatticeCursor<ACell> scratch = Cursors.createLattice(workspace.getLattice(), current);
-			for (Consumer<ALatticeCursor<ACell>> write : staged) write.accept(scratch);
-			return scratch.get();
-		});
 	}
 
 }

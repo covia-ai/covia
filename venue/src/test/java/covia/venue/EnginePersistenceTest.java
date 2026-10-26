@@ -61,6 +61,193 @@ import covia.test.DurabilityTest;
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
 @DurabilityTest
 public class EnginePersistenceTest {
+	@Test
+	public void unsupportedVenueVersionLeavesStoreUntouched() throws Exception {
+		File file = newTempEtch();
+		AKeyPair key = AKeyPair.createSeeded(614);
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), key.getSeed().toHexString());
+		long future = VenueState.CURRENT_VERSION + 1;
+		ACell before;
+		try (var store = convex.etch.EtchStore.create(file)) {
+			CoviaApplication application = CoviaApplication.open(store, key);
+			VenueState venue = application.venue(key.getAccountKey());
+			venue.initialise(Strings.create("did:test:future"));
+			venue.cursor().path(Covia.VERSION).set(convex.core.data.prim.CVMLong.create(future));
+			application.host().sync();
+			application.host().flush();
+			before = store.getRootData();
+		}
+		var error = assertThrows(RuntimeException.class, () -> VenueServer.launch(config));
+		var cause = org.junit.jupiter.api.Assertions.assertInstanceOf(IllegalStateException.class, error.getCause());
+		assertEquals(VenueState.UNSUPPORTED_VERSION.formatted(future, VenueState.CURRENT_VERSION), cause.getMessage());
+		try (var store = convex.etch.EtchStore.create(file)) {
+			assertEquals(before, store.getRootData());
+		}
+	}
+
+	@Test
+	public void legacyAdapterStateMovesLazilyAndDoesNotReturnAfterReopen() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(612).getSeed().toHexString());
+		var oldPath = covia.lattice.WorkspaceRoot.parseStringPath("w/adapters/unloaded-test");
+		ACell value = convex.core.data.Vectors.of("adapter-defined", Maps.of("nested", 42L));
+		VenueServer server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			engine.getVenueState().users().ensure(engine.getDIDString()).writeInternalPath(oldPath, value);
+			engine.getVenueState().cursor().updateAndGet(v -> RT.ensureMap(v).dissoc(Covia.VERSION));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			User host = engine.getVenueState().users().get(engine.getDIDString());
+			assertEquals(value, host.readInternalPath(oldPath), "startup leaves unloaded adapter state alone");
+			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
+			assertNull(RT.getIn(engine.getVenueState().get(), Covia.ADAPTERS, Strings.create("unloaded-test")));
+			assertEquals(value, engine.adapterState("unloaded-test").get());
+			assertNull(host.readInternalPath(oldPath));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			assertEquals(value, engine.adapterState("unloaded-test").get(), "exact migrated value survives reopening");
+			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
+			assertNull(engine.getVenueState().users().get(engine.getDIDString()).readInternalPath(oldPath));
+			engine.adapterState("unloaded-test").set(null);
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			assertNull(server.getEngine().adapterState("unloaded-test").get(), "deleted state cannot resurrect from the old location");
+		} finally { server.close(); }
+	}
+
+	@Test
+	public void legacyDeletionQueueRecoversThroughAdapterOwnedCleanup() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(613).getSeed().toHexString());
+		var oldState = covia.lattice.WorkspaceRoot.parseStringPath("w/adapters/cleanup-test");
+		var oldQueue = covia.lattice.WorkspaceRoot.parseStringPath("w/user-deletions");
+		ACell value = Maps.of("custom", Maps.of(ALICE_DID, "old association"));
+		VenueServer server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			VenueState venue = engine.getVenueState();
+			venue.users().create(ALICE_DID);
+			var deleted = venue.deleteUser(ALICE_DID, engine.getDIDString());
+			User host = venue.users().ensure(engine.getDIDString());
+			host.writeInternalPath(oldState, value);
+			host.writeInternalPath(oldQueue, Maps.of("cleanup-test", Maps.of(ALICE_DID, deleted.tombstone())));
+			venue.cursor().updateAndGet(v -> RT.ensureMap(v).dissoc(Covia.VERSION));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			VenueState venue = engine.getVenueState();
+			User host = venue.users().get(engine.getDIDString());
+			assertEquals(value, host.readInternalPath(oldState));
+			assertEquals(VenueState.CURRENT_VERSION, venue.version());
+			assertNull(host.readInternalPath(oldQueue), "recovery moves the pending index, without scanning adapter values");
+			assertNotNull(venue.pendingUserDeletions("cleanup-test").get(ALICE_DID));
+			assertThrows(covia.exception.AuthException.class, () -> venue.users().create(ALICE_DID));
+			var adapter = new AdapterUserDeletionTest.Probe();
+			engine.registerAdapter(adapter);
+			assertEquals(1, adapter.stopped);
+			assertNull(host.readInternalPath(oldState));
+			assertNull(engine.adapterState("cleanup-test").read("custom/" + ALICE_DID));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			assertTrue(engine.getVenueState().pendingUserDeletions("cleanup-test").isEmpty());
+			assertTrue(engine.getVenueState().users().create(ALICE_DID));
+			assertNull(engine.adapterState("cleanup-test").read("custom/" + ALICE_DID));
+		} finally { server.close(); }
+	}
+
+	@Test
+	public void adapterDeletionRetriesSurviveStoreReopen() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(609).getSeed().toHexString());
+		VenueServer server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			engine.getVenueState().users().create(ALICE_DID);
+			var adapter = new AdapterUserDeletionTest.Probe();
+			engine.registerAdapter(adapter);
+			var state = engine.adapterState(adapter.getName());
+			state.write(state.userPath(ALICE_DID, "bots/old"), Maps.of("token", "s/old"));
+			adapter.failStop = true;
+			assertThrows(IllegalStateException.class, () -> engine.deleteUser(engine.venueContext(), ALICE_DID));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			assertTrue(engine.getVenueState().users().isDeleted(ALICE_DID));
+			assertThrows(covia.exception.AuthException.class, () -> engine.getVenueState().users().create(ALICE_DID));
+			var adapter = new AdapterUserDeletionTest.Probe();
+			var state = engine.adapterState(adapter.getName());
+			assertNull(state.read(state.userPath(ALICE_DID, "")));
+			engine.registerAdapter(adapter);
+			assertEquals(1, adapter.stopped);
+			assertTrue(adapter.started);
+			assertTrue(engine.getVenueState().pendingUserDeletions(adapter.getName()).isEmpty());
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			var adapter = new AdapterUserDeletionTest.Probe();
+			engine.registerAdapter(adapter);
+			assertEquals(0, adapter.stopped, "completed cleanup is not repeated on ordinary startup");
+			assertTrue(engine.getVenueState().users().create(ALICE_DID));
+			assertNull(engine.adapterState(adapter.getName()).read("users/" + ALICE_DID));
+		} finally { server.close(); }
+	}
+
+	@Test
+	public void legacyJobChainsMigrateLazilyAcrossReopens() throws Exception {
+		File file = newTempEtch();
+		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(611).getSeed().toHexString());
+		var id = convex.core.data.Blob.fromHex("61106110611061106110611061106110");
+		AString prev = Strings.intern("prev");
+		AMap<AString, ACell> current = Maps.of(Fields.ID, id, Fields.CALLER, ALICE_DID,
+			Fields.STATUS, covia.grid.Status.COMPLETE, Fields.OUTPUT, "kept", Fields.UPDATED, 123L);
+		var legacy = current.assoc(prev, Maps.of(Fields.STATUS, covia.grid.Status.STARTED));
+		VenueServer server = VenueServer.launch(config);
+		try {
+			User user = server.getEngine().getVenueState().users().ensure(ALICE_DID);
+			user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<convex.core.data.Blob, ACell>none().assoc(id, legacy));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			Engine engine = server.getEngine();
+			User user = engine.getVenueState().users().get(ALICE_DID);
+			var storage = user.cursor().path(covia.lattice.Namespace.J, id);
+			assertEquals(legacy, storage.get(), "startup does not rewrite terminal jobs");
+			assertEquals(current, engine.jobs().getJobData(id, RequestContext.of(ALICE_DID)));
+			assertEquals(current, engine.resolvePath(Strings.create("j/" + id.toHexString()), RequestContext.of(ALICE_DID)));
+			assertEquals(legacy, storage.get(), "reading the reopened record is pure");
+			user.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "after-reopen"));
+			assertNull(RT.getIn(storage.get(), prev));
+		} finally { server.close(); }
+
+		server = VenueServer.launch(config);
+		try {
+			var user = server.getEngine().getVenueState().users().get(ALICE_DID);
+			var stored = RT.ensureMap(user.cursor().path(covia.lattice.Namespace.J, id).get());
+			assertNull(stored.get(prev));
+			assertEquals(current.get(Fields.OUTPUT), stored.get(Fields.OUTPUT));
+			assertEquals(current.get(Fields.STATUS), stored.get(Fields.STATUS));
+			assertEquals(convex.core.data.Vectors.of(Maps.of(Fields.MESSAGE_ID, "after-reopen")), stored.get(Fields.HISTORY));
+		} finally { server.close(); }
+	}
 
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlicePersistTest");
 	private static final AString BOB_DID   = Strings.create("did:key:z6MkBobPersistTest");

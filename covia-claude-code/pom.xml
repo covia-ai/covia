@@ -5,12 +5,16 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.11</version>
+		<version>0.10.0</version>
 	</parent>
 	<artifactId>covia-claude-code</artifactId>
 
 	<name>Covia Claude Code Module</name>
 	<description>Claude Code adapter for Covia venues — lets agents and jobs drive the Claude Code CLI in operator-authorised project directories: one-shot runs, long-lived resumable sessions, and a bounded pool of live processes. Packaged as a loadable venue module (the shaded -module.jar), not part of covia.jar.</description>
+
+	<properties>
+		<covia.module.name>covia.claude.code</covia.module.name>
+	</properties>
 
 	<dependencies>
 		<!-- The venue SPI — provided by the loading venue, never bundled -->
@@ -31,6 +35,12 @@
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
 			<version>${junit.version}</version>
 			<scope>test</scope>
 		</dependency>

@@ -12,10 +12,9 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.crypto.AKeyPair;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.exception.RateLimitException;
 import covia.grid.Job;
-import covia.lattice.Covia;
 
 /**
  * Concurrent-job cap: per-caller admission control on top-level invokes.
@@ -131,19 +130,19 @@ public class JobConcurrencyCapTest {
 				Config.ENABLED, true,
 				Strings.create("maxConcurrentJobsPerUser"), 1L,
 				Strings.create("blockMs"), 0L));
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = caller("did:key:zAliceRecoveredCap");
 		Job paused;
 
-		Engine first = new Engine(config, cursor, keyPair).start();
+		Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		Engine.addDemoAssets(first);
 		paused = never(first, alice);
 		first.jobs().pauseJob(paused.getID(), alice);
 		first.syncState();
 		first.close();
 
-		Engine second = new Engine(config, cursor, keyPair).start();
+		Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

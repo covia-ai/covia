@@ -5,13 +5,14 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.11</version>
+		<version>0.10.0</version>
 	</parent>
 	<artifactId>covia-discord</artifactId>
 	<name>Covia Discord Module</name>
 	<description>Discord bot adapter for Covia venues, packaged as an optional loadable venue module.</description>
 	<properties>
 		<jda.version>6.7.0</jda.version>
+		<covia.module.name>covia.discord</covia.module.name>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -27,6 +28,10 @@
 		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version><scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId><artifactId>junit-platform-launcher</artifactId>
 			<version>${junit.version}</version><scope>test</scope>
 		</dependency>
 	</dependencies>
@@ -52,6 +57,11 @@
 					<exclude>world.convex:convex-dlfs</exclude><exclude>world.convex:convex-java</exclude>
 					<exclude>world.convex:convex-restapi</exclude><exclude>org.slf4j:*</exclude>
 					<exclude>ch.qos.logback:*</exclude>
+					<!-- Libraries covia.jar already ships come from the venue, so the module never carries a second copy of a venue package. -->
+					<exclude>org.jetbrains.kotlin:*</exclude><exclude>org.jetbrains:annotations</exclude>
+					<exclude>com.fasterxml.jackson.core:*</exclude><exclude>com.google.code.gson:*</exclude>
+					<exclude>com.google.protobuf:*</exclude><exclude>com.google.errorprone:*</exclude>
+					<exclude>com.google.code.findbugs:*</exclude>
 				</excludes></artifactSet>
 				<filters><filter><artifact>*:*</artifact><excludes>
 					<exclude>module-info.class</exclude><exclude>META-INF/*.SF</exclude>

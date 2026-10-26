@@ -36,7 +36,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
@@ -77,9 +77,10 @@ public class EngineTest {
 		final TrackingStorage storage = new TrackingStorage();
 		final boolean failAfterSchedulerStart;
 
-		LifecycleTestEngine(RootLatticeCursor<Index<Keyword, ACell>> cursor,
+		LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor,
 				boolean failAfterSchedulerStart) throws IOException {
-			super(null, cursor);
+			super(new Config(null), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)),
+				convex.core.crypto.AKeyPair.generate());
 			this.failAfterSchedulerStart = failAfterSchedulerStart;
 		}
 
@@ -161,7 +162,7 @@ public class EngineTest {
 
 	@Test
 	public void testConstructionIsInertAndCloseMirrorsStart() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
 
 		assertFalse(engine.isStarted());
@@ -183,9 +184,10 @@ public class EngineTest {
 
 	@Test
 	public void testConnectedVenueStateUsesAtomicLocalWriteOrderAtSameTimestamp() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-		cursor.setContext(cursor.getContext().withTimestamp(CVMLong.create(1_000L)));
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+
 		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
+		engine.latticeContext = convex.lattice.LatticeContext.EMPTY.withTimestamp(CVMLong.create(1_000L));
 		AString did = Strings.create("did:test:connected-engine-state");
 		Blob jobId = Blob.parse("0x0001");
 
@@ -210,7 +212,7 @@ public class EngineTest {
 
 	@Test
 	public void testFailedStartRollsBackAcquiredResources() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, true);
 
 		IllegalStateException failure = assertThrows(IllegalStateException.class, engine::start);
@@ -502,7 +504,7 @@ public class EngineTest {
 	@Test
 	public void testResolveSecret() {
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		alice.secrets().store("OPENAI_API_KEY", "sk-test-123", encKey);
 
 		RequestContext ctx = RequestContext.of(ALICE_DID);
@@ -513,7 +515,7 @@ public class EngineTest {
 	@Test
 	public void testResolveSecretWithPrefix() {
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		alice.secrets().store("MY_KEY", "secret-value", encKey);
 
 		RequestContext ctx = RequestContext.of(ALICE_DID);
@@ -537,7 +539,7 @@ public class EngineTest {
 
 	@Test
 	public void testResolveSecretUserIsolation() {
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
 		alice.secrets().store("MY_KEY", "alice-secret", encKey);
@@ -610,7 +612,7 @@ public class EngineTest {
 
 			// Pre-existing user-set value is overwritten by config
 			User pub = e.getVenueState().users().ensure(publicDID);
-			byte[] encKey = SecretStore.deriveKey(e.getKeyPair());
+			SecretStore.Keys encKey = SecretStore.keys(e.getKeyPair());
 			pub.secrets().store("KEY1", "from-runtime", encKey);
 			assertEquals("from-runtime", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
 
@@ -714,7 +716,7 @@ public class EngineTest {
 		assertEquals(Strings.create("MY_KEY"), RT.getIn(result, "name"));
 
 		User alice = venue.getVenueState().users().get(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		assertEquals("my-secret-value", alice.secrets().decrypt("MY_KEY", encKey).toString());
 
 		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), aliceCtx);
@@ -724,7 +726,7 @@ public class EngineTest {
 	@Test
 	public void testSecretExtractAlwaysDenied() {
 		User alice = venue.getVenueState().users().ensure(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		alice.secrets().store("STOLEN_KEY", "do-not-leak", encKey);
 
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);

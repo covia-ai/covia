@@ -51,7 +51,7 @@
 						"MarkdownV2",
 						"HTML"
 					],
-					"description": "Reply formatting; omit for plain text"
+					"description": "Reply formatting; omit for plain text. An agent writes Markdown, which none of these modes renders as written: use replyOperation v/ops/telegram/format instead, whose HTML the reply then uses"
 				},
 				"greeting": {
 					"type": "string",
@@ -63,7 +63,7 @@
 				},
 				"replyOperation": {
 					"type": "string",
-					"description": "Optional agent-only reply formatter. Invoked as the bot owner with {response, via}; return a non-empty string or {text: non-empty string}. Formats the Telegram reply without changing the stored agent response. Errors do not fall back to sending the unformatted response."
+					"description": "Optional agent-only reply formatter. Invoked as the bot owner with {response, via}; return a non-empty string or {text: non-empty string, parse_mode?}; a parse_mode returned wins over parseMode. Formats the Telegram reply without changing the stored agent response. Errors do not fall back to sending the unformatted response. v/ops/telegram/format turns an agent's Markdown into Telegram HTML."
 				}
 			},
 			"required": [

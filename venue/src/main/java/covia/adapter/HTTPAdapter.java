@@ -91,9 +91,14 @@ public class HTTPAdapter extends AAdapter {
 	private static final Set<String> CREDENTIAL_HEADERS = Set.of("authorization", "proxy-authorization", "cookie");
 	private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "DELETE", "PATCH");
 
-	// Instance-level HttpClient for reuse across requests. Redirects are
-	// followed by the adapter, never by the client, so every hop is guarded.
-	private final HttpClient httpClient;
+	// One HttpClient shared by every venue in the process: each client holds a
+	// selector thread for its lifetime, so one per adapter accumulates them.
+	// Redirects are followed by the adapter, never by the client, so every hop
+	// is guarded.
+	private static final HttpClient httpClient = HttpClient.newBuilder()
+		.connectTimeout(Duration.ofSeconds(10))
+		.followRedirects(HttpClient.Redirect.NEVER)
+		.build();
 
 	/** Hosts an embedding host allowed programmatically (bypass SSRF checks). */
 	private final Set<String> allowList = new HashSet<>();
@@ -107,16 +112,6 @@ public class HTTPAdapter extends AAdapter {
 
 	private volatile String userAgent = defaultUserAgent();
 	private volatile int maxRedirects = DEFAULT_MAX_REDIRECTS;
-
-	/**
-	 * Constructor initializes the HttpClient with optimal settings
-	 */
-	public HTTPAdapter() {
-		this.httpClient = HttpClient.newBuilder()
-			.connectTimeout(Duration.ofSeconds(10))
-			.followRedirects(HttpClient.Redirect.NEVER)
-			.build();
-	}
 
 	/** The User-Agent sent when a caller supplies none: the venue's own. */
 	public static String defaultUserAgent() {
@@ -244,6 +239,9 @@ public class HTTPAdapter extends AAdapter {
 		validateURL(uri);
 	}
 
+	/** Opening of the refusal for a URL that resolves to a private or internal address. */
+	public static final String PRIVATE_ADDRESS = "URL targets a private/internal address: ";
+
 	/**
 	 * Validates a URL for SSRF safety. Blocks private/internal network addresses
 	 * by default. Allow list entries bypass SSRF checks; block list is checked first.
@@ -277,7 +275,7 @@ public class HTTPAdapter extends AAdapter {
 						|| addr.isLinkLocalAddress()
 						|| addr.isAnyLocalAddress()) {
 					throw new IllegalArgumentException(
-						"URL targets a private/internal address: " + host
+						PRIVATE_ADDRESS + host
 						+ " (resolved to " + addr.getHostAddress() + ")"
 						+ ". Add to allowList if this is intentional.");
 				}
@@ -506,7 +504,7 @@ public class HTTPAdapter extends AAdapter {
 				}
 				String ref = bearerSecret.toString();
 				String bearer = ref.startsWith(TokenSource.PREFIX)
-					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()))
+					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()), finalUrl)
 					: resolveSecret(bearerSecret, ctx, "bearerSecret", finalUrl);
 				putHeader(outHeaders, "Authorization", "Bearer " + bearer);
 			}
@@ -634,15 +632,16 @@ public class HTTPAdapter extends AAdapter {
 		return (AMap<AString, ACell>) map;
 	}
 
-	/** {@code bearerSecret: "oauth/<provider>"} — a fresh access token for the caller's connected account. */
-	private String connectionToken(RequestContext ctx, String provider) {
+	/** {@code bearerSecret: "oauth/<provider>"} — a fresh access token for the caller's connected account,
+	 *  released for a request to {@code destination}. */
+	private String connectionToken(RequestContext ctx, String provider, String destination) {
 		TokenSource source = (engine != null) ? engine.findAdapter(TokenSource.class) : null;
 		if (source == null) {
 			throw new IllegalStateException("bearerSecret \"oauth/" + provider
 				+ "\" needs the oauth adapter, which is not registered on this venue");
 		}
 		try {
-			return source.accessToken(ctx, provider);
+			return source.accessToken(ctx, provider, destination);
 		} catch (IOException e) {
 			throw new IllegalArgumentException("Could not obtain an access token for " + provider + ": " + e.getMessage());
 		}

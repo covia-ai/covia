@@ -206,6 +206,44 @@ naming the store's real owner: venues are keyed by AccountKey, so a wrong key
 would otherwise silently create a fresh empty venue and orphan the existing
 data. Never commit keystore passwords; use env vars or gitignored dev configs.
 
+### Secret store keys
+
+The per-user secret stores (`s/`) are encrypted with AES-256-GCM under a key
+derived from the identity seed, so a venue that keeps its seed reads its
+secrets after a restart and no other venue can. Each secret records the key
+version that encrypted it (`keyVersion`):
+
+| Version | Key | Use |
+|---------|-----|-----|
+| 2 | HKDF-SHA256 (RFC 5869) of the seed, no salt, info `covia/secret-store/v2` | every write |
+| 1 | SHA-256 of the seed | read only: secrets with no `keyVersion` |
+
+- The info label separates the secrets key from every other use of the seed,
+  such as signing as the venue.
+- A version 1 secret migrates to version 2 on its next write; reading it does
+  not rewrite it.
+- `keyVersion` identifies the derivation scheme, not a key generation. Two
+  different identity seeds both produce version 2 keys, and the record does
+  not currently identify which seed encrypted it. Holding both seeds alone
+  is therefore not a complete rotation protocol.
+- The secrets key is independent of the Etch store key: on an encrypted store,
+  secrets are encrypted twice, under different keys.
+- Changing the seed strands every secret. Re-encrypting under a new identity
+  key belongs with identity key rotation, which does not exist yet.
+- Venue lattice state is also owned by the identity's public key. Keeping a
+  `did:web` name unchanged does not migrate that ownership: startup rejects a
+  key that does not own the existing venue state. Rotation must coordinate
+  signed-state ownership and secret re-encryption (#535, #582).
+- A venue older than 0.10.0 cannot read version 2 secrets: rolled back, it
+  loses the secrets written since the upgrade until it is upgraded again.
+  Configured secrets recover, as startup rewrites them.
+
+An embedder may use `SecretStore` directly, passing
+`SecretStore.keys(engine.getKeyPair())` to `store`, `storeIfAbsent` and
+`decrypt`, or the `secret` operations (`set`, `list`, `delete`, `extract`).
+The deprecated `SecretStore.deriveKey` returns the version 1 key, which reads
+version 1 secrets only.
+
 ## Production profile
 
 The defaults suit a venue on a developer's machine. A venue other people reach
@@ -419,9 +457,18 @@ Venue** (status page in the browser — double-click does the same), **Close
 Venue** (that venue; the process exits when the last one closes) and **Exit**
 (all venues). Close/Exit run the full shutdown flush, same as SIGTERM.
 
-Strictly best-effort — headless JVMs (Docker, CI, servers) and unsupported
-desktops run without an icon, and a tray failure never takes a venue down.
-Set `COVIA_NO_TRAY=1` to suppress it explicitly. See `covia.venue.Tray`.
+Headless JVMs (Docker, CI, servers) and unsupported desktops run without an
+icon. A Java exception from the tray never takes a venue down, but a crash in
+the JDK's native AWT code ends the whole process. This has happened on
+Windows when the PC woke from Modern Standby: AWT re-reads the display
+devices on wake and its native code failed with an access violation. No JDK
+fix is known.
+
+So run long-running or unattended venues without a tray. A Socket Mode bot
+on a laptop is one. Set `"tray": false` on a venue, or `COVIA_NO_TRAY=1` in the
+environment. Either is checked before any AWT class loads. `"tray": false` on
+any venue in a process keeps the tray out of the whole process, since every
+venue in it shares the crash. See `covia.venue.Tray`.
 
 ## Process restart and executable upgrade
 
@@ -603,7 +650,7 @@ without HTTP through `Engine.launch(...)` or `Engine.launchAsync(...)`:
 
 ```java
 // The host must restore its root before connecting the application.
-CoviaApplication application = CoviaApplication.connect(host.getRootComponent());
+CoviaApplication application = CoviaApplication.connect(host);
 Engine engine = new Engine(config, application, keyPair);
 CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
     backend.bind(prepared);
@@ -886,6 +933,48 @@ check or, for a `did:web` subject, an outbound fetch (#539).
 }
 ```
 
+## Authentication method implementations (`auth.methods`)
+
+An explicit `auth.methods` object selects trusted authentication implementations
+from installed adapters. For example, to accept existing key and UCAN bearers:
+
+```json
+{
+  "auth": {
+    "methods": {
+      "key": { "adapter": "auth", "implementation": "keyJwt" },
+      "ucan": { "adapter": "auth", "implementation": "ucanBearer" }
+    }
+  }
+}
+```
+
+The built-in `auth` adapter also contributes `providerToken` for the `oidc`
+method. Its existing provider configuration remains under `auth.oauth` during
+this compatibility phase. Custom adapters own their protocol settings under
+`adapters.<name>` and implement `AuthenticationMethods`; a public operation
+asset cannot register a verifier. Omit `implementation` only for an adapter
+contributing exactly one implementation. References never load or enable code.
+
+The explicit object is the whole selection: `{}` selects no methods. Omitting
+`auth.methods` preserves existing defaults, including legacy venue JWTs.
+**Any explicit selection rejects those legacy JWTs**, whose originating login
+method is unknown; existing browser-login JWTs cannot satisfy a method allowlist.
+This setting does not change public/anonymous access, admission or capabilities.
+
+Invalid shapes, unknown adapters/selectors and ambiguous references fail startup.
+Host-installed adapters may be supplied in the pre-start hook. Disabling or
+removing an adapter immediately withdraws its verifiers; enabling it restores
+valid references. Verifications overlapping an adapter registry/configuration
+change are rejected and may be retried. Successful reconfiguration invalidates
+in-flight verification; rejected configuration leaves the old settings intact.
+Bindings themselves are startup configuration, with no separate runtime registry.
+
+`VenueAuthenticator.verify(methodId, input)` accepts transient Convex values
+for custom methods. Automatic HTTP bearer classification still selects `key`,
+`ucan` or `oidc`; custom transports choose a method explicitly. The extension
+does not yet add new ceremonies, assurance policy or revocable sessions.
+
 ## Bearer expiry (`auth.requireExp`, `auth.maxTokenLifetime`)
 
 ```json
@@ -965,6 +1054,44 @@ It deliberately does not advertise a fictional `authorization_servers`
 entry. A future OAuth bridge can add that standard field without changing the
 discovery URLs.
 
+## MCP tool calls: how long they wait
+
+MCP leaves timeouts to the sender: a client waits as long as it chooses and
+ends a call with `notifications/cancelled`; a dropped connection is not a
+cancellation. So the venue waits for a tool's job as long as the caller does,
+within limits that keep waiting from tying the venue up:
+
+```json
+{
+  "mcp": {
+    "toolCallTimeout": 3600000,
+    "anonymousToolCallTimeout": 120000,
+    "keepAliveInterval": 15000,
+    "maxConcurrentToolCalls": 16
+  }
+}
+```
+
+- `toolCallTimeout` (ms, default an hour) is the most an authenticated caller
+  waits; `anonymousToolCallTimeout` (default two minutes) the most an
+  unauthenticated one does. Past it the call ends as an error result whose
+  `structuredContent` is `{status: "running", id, message}`: the job runs on,
+  and `grid_job_result` with that `id` collects its result.
+- `maxConcurrentToolCalls` (default 16) is how many calls one caller may have
+  in progress; every anonymous caller counts as one. A call over it is refused
+  with a message saying so.
+- A single `tools/call` from a client that accepts `text/event-stream` and is
+  still running after `keepAliveInterval` (ms, default 15 s) is answered as an
+  SSE stream. It carries `notifications/progress` at that interval when the
+  request's `_meta.progressToken` asks for them — their message the job's
+  progress when it reports any (JOBS.md), else "Still working" — which lets the client reset
+  its own timeout, and an SSE comment otherwise. A write that fails means the
+  caller has gone: the venue stops waiting, frees its place and leaves the job
+  running. A quicker call is answered as plain JSON, as before; a call inside a
+  batch is answered in the batch and cannot stream.
+- `notifications/cancelled` with a call's `requestId`, from the caller that
+  made it in the same MCP session, cancels the call and its job.
+
 ## User registration (`users`)
 
 Authentication proves control of a DID; it does not create a venue account.
@@ -1020,7 +1147,14 @@ Deletion cancels accepted jobs, stops agents, removes queued schedules, and
 atomically removes the user's namespace and login profile/aliases. A small
 tombstone records the DID, deletion time and actor; public-key revocations
 remain without profile fields or key labels. Repeating deletion while the
-account is absent is idempotent. An interrupted cleanup can be retried.
+account is absent is idempotent. Adapter hooks remove their user-associated state
+in the same transaction and then stop their workers (including disabled messaging bots). An unloaded adapter
+retains a pending cleanup entry until its implementation is available; the venue
+does not guess its schema. An interrupted cleanup can be retried with the same
+delete operation; unavailable adapters reconcile before their next activation.
+Cleanup failure is reported with access already revoked, and account recreation
+remains blocked until all cleanup completes. See
+[adapter deletion hooks](ADAPTERS.md#user-deletion-hooks).
 
 The tombstone is **not a permanent registration ban**. Explicit `user:create`,
 automatic admission when `users.autoCreate` is enabled, and existing trusted
@@ -1440,6 +1574,9 @@ the user opens; the callback exchanges the code (PKCE, one-time state bound
 to the caller) and stores the grant. `http:get` / `http:post` with
 `bearerSecret: "oauth/<provider>"` then attach a fresh access token —
 refreshed when expired — that never reaches a model or a job record.
+Attaching it is a use of the secret `s/oauth/<provider>`: a capability-scoped
+caller such as an agent needs `secret/use` on it, and an `nb.url` caveat
+limits where it is sent.
 `oauth:status` lists connections without tokens; `oauth:disconnect` revokes
 where the provider supports it and forgets the grant. Providers and default
 scopes are published at `v/info/adapters/oauth`; the `v/skills/auth/oauth`
@@ -1452,55 +1589,90 @@ seven-day refresh tokens.
 
 ## Login with an external provider (`auth.oauth`)
 
-Sign-in via Google, Microsoft or GitHub. This is the third and last thing named
-"oauth" in this file, and the one users see: `adapters.oauth` lets an agent act
-on a user's data at a provider, `auth.oauth.provider` makes the venue issue its
-own tokens, and `auth.oauth` — here — lets a person prove who they are with an
-account they already have.
+Sign-in via Google, Microsoft or GitHub. This is separate from outbound
+connected accounts (`adapters.oauth`) and the venue authorization server
+(`auth.oauth.provider`).
 
 ```json
 {
+  "baseUrl": "https://venue.example.com",
   "auth": {
+    "loginRedirectUris": ["https://app.example.com/callback"],
     "oauth": {
-      "google":    { "clientId": "1234-abcd.apps.googleusercontent.com", "clientSecret": "s/GOOGLE_LOGIN" },
-      "microsoft": { "clientId": "...", "clientSecret": "s/MICROSOFT_LOGIN" },
-      "github":    { "clientId": "...", "clientSecret": "s/GITHUB_LOGIN" }
+      "google": { "clientId": "1234-abcd.apps.googleusercontent.com", "clientSecret": "s/GOOGLE_LOGIN" },
+      "microsoft": { "clientId": "...", "clientSecret": "s/MICROSOFT_LOGIN", "tenantId": "11111111-1111-1111-1111-111111111111" },
+      "github": { "clientId": "...", "clientSecret": "s/GITHUB_LOGIN" }
     }
   }
 }
 ```
 
-- `<provider>` — one of `google`, `microsoft`, `github`. Configure only the ones
-  you want; any other key here is rejected under `strictConfig`, and warned
-  about otherwise.
-- `clientId` / `clientSecret` — both are required, and supplying one without
-  the other fails startup with `must provide both clientId and clientSecret`.
-  `clientSecret` may be an
-  `s/NAME` reference to a secret in the venue's own store (preferred, so the
-  literal never sits in the config file) or the literal secret itself. A
-  reference is resolved at the token exchange, so the secret must be set before
-  the first login, not before startup.
+Configure only the providers you use. Each needs both `clientId` and
+`clientSecret`. An `s/NAME` secret-store reference is preferred; existing literal
+secrets remain accepted. Secret references resolve at token exchange, so the
+secret must exist before the first login. Microsoft requires an explicit tenant
+UUID; `common`/`organizations` and implicit admission of arbitrary tenants are
+not supported. The tenant determines both the endpoints and expected issuer.
 
-**Nothing is served until at least one provider is configured.** `/login` and
-`/auth/{provider}` are registered only when a provider registers successfully;
-until then both 404 and clients see no sign-in options at all — which is the
-expected state of a venue that has not configured any provider, not a fault.
+Register `<baseUrl>/auth/<provider>/callback` with the provider. `baseUrl` must
+use HTTPS; HTTP is allowed only on loopback for development. `/login`,
+`/auth/{provider}`, callbacks and `POST /auth/exchange` are registered only when
+at least one provider is configured.
 
-The redirect URI is derived, not configured: `<baseUrl>/auth/<provider>/callback`,
-using the venue's `baseUrl`. That exact string must be registered with the
-provider, so a wrong `baseUrl` fails at the callback rather than at discovery.
+The venue uses authorization code + S256 PKCE for all three providers, with an
+independent random, single-use state bound to an HttpOnly, SameSite=Lax browser
+cookie (Secure and `__Host-` prefixed on HTTPS). OIDC callbacks also require the
+original nonce and a valid signed ID token; a rejected or missing ID token never
+falls back to user-info. Google and Microsoft share the Nimbus OIDC validator
+with direct provider-token authentication. GitHub uses its numeric user ID and
+does not assert verified email from its `/user` response.
 
-Clients discover providers by fetching `/login` and reading its `/auth/<provider>`
-links. A caller may pass `?redirect_uri=` to `/auth/<provider>` to be returned to
-its own callback once login completes; the value is carried through the provider
-round trip in the OAuth `state`.
+**Frontend handoff:**
 
-The `redirect_uri` is checked at login and again at the callback (the OAuth
-`state` that carries it is unsigned): it must be a path on the venue (`/app`)
-or an absolute URL whose origin is the venue's own `baseUrl` origin or one
-listed in `auth.loginRedirectOrigins`, an array of origins such as
-`["https://app.example.com"]`. Anything else is refused with 400, so a crafted
-link cannot send a user's session token to another host.
+1. Generate a PKCE verifier and corresponding S256 challenge, and a fresh client
+   state. Keep the verifier and state private to the initiating client.
+2. Navigate to `/auth/<provider>?redirect_uri=...&state=...&code_challenge=...&code_challenge_method=S256`.
+   The destination must exactly match an entry in `auth.loginRedirectUris`.
+   Entries are absolute HTTPS URLs (HTTP only on loopback), with no query,
+   fragment or user-info. No origin-wide or implicit same-venue allowance exists.
+3. The callback redirects to that destination with `code` and the original
+   client `state`. Validate state before exchanging the code.
+4. POST form-encoded `code`, `code_verifier` and the identical `redirect_uri` to
+   `/auth/exchange`. The response is the existing `{token, did}` JSON shape.
+   A cross-origin browser client needs the normal configured CORS access;
+   a frontend backend may perform the exchange instead. The code expires after
+   60 seconds and every exchange attempt consumes it.
+
+Without a frontend destination, the browser-bound callback returns the same
+JSON directly. Credentials never appear in redirect URLs. Responses are
+`Cache-Control: no-store`; clients must not persist bearers in browser local
+storage. The browser cookie is only login-transaction binding: it does not
+authenticate later API requests. Transactions expire after five minutes; both
+transactions and handoff codes are bounded, process-local and lost on restart.
+A multi-node deployment must route a transaction and its exchange to the same
+node. These are not replicated or managed auth sessions.
+
+**Identity and migration:** new external accounts use a stable lattice record
+key derived from the canonical `(issuer, subject)` pair. The method-owned
+`externalIdentity` map stores `{provider, iss, sub}` on the account record;
+email/name are mutable metadata, and only explicitly verified OIDC email is
+retained. Changing email preserves the venue DID. Another issuer or subject
+with the same email creates a separate account, never an automatic link.
+Existing email-based records are not migrated automatically. Potential legacy
+matches require independently authenticated owner/operator confirmation before
+an identity binding can be installed; no self-service linking/migration endpoint
+is implemented yet. Ambiguous bindings fail closed.
+
+**Compatibility changes:** replace `auth.loginRedirectOrigins` with exact
+`auth.loginRedirectUris` (the old option fails startup), configure the Microsoft
+tenant, and update frontend clients from `?token=...` to the code exchange above.
+Direct provider tokens must contain required OIDC claims and match an existing
+issuer/subject binding; email-only matching is removed. The current issued
+credential is still a venue JWT with no central session revocation or assurance
+policy. `LoginProviders.issueCredential` is the narrow future integration point;
+#297 tracks managed sessions and evidence policy, and #298 retains explicit
+linking/migration and multi-tenant login work. Explicit `auth.methods` selection
+still rejects these legacy venue JWTs of unknown originating method.
 
 ## OAuth authorization server (`auth.oauth.provider`)
 
@@ -1691,8 +1863,11 @@ fully (vanished tools deleted); `{path}` refreshes curated tools in place —
 schemas/annotations update, name/description untouched, vanished tools
 **reported in `missing`, never deleted**. Exactly one of `name`/`path`.
 
-Destination paths under the caller's own `o/` need nothing extra; venue-side
-targets (`v/ops/...` or `scope: "venue"`) require the `mcp/manage` ability.
+Destination paths under the caller's own `o/` need nothing extra. Venue-side
+targets (`v/ops/...` or `scope: "venue"`) are written as the venue, so they
+are venue administration: call as the venue, or present a venue-issued
+`mcp/manage` delegation over `<venue DID>/v/mcp`. A user's own unrestricted
+authority is not enough.
 Server URLs pass the same SSRF validation (and operator allow/block lists) as
 the http adapter. `auth` should be a secret reference (`s/<name>`, stored via
 `v/ops/secret/set`; bare refs are stored DID-qualified to the registrar) —
@@ -1831,9 +2006,38 @@ over venue-local convex-db databases (per-user, lattice-backed, created on
 first use; ONE instance = one store, per-user isolation via the `database=`
 param) and operator-registered JDBC connections
 (`adapters.sql.databases.<name>`, passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
-`sql/<db>` × `sql/query`|`sql/execute`. The module ships its own `sql`
+`sql/<db>` × `sql/query`|`sql/execute`. `sql/query` never changes data:
+convex-db statements must parse as a single query, and other drivers run the
+query in a read-only transaction that is always rolled back. PostgreSQL and
+MySQL refuse writes in that transaction; for a driver that ignores read-only,
+statements that commit on their own (DDL on some databases, non-transactional
+tables) are not undone, so register such a database with a read-only database
+user. The module ships its own `sql`
 agent skill from its jar (materialises at `v/skills/data/sql` exactly when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
+
+Registered databases are shared: every signed-in user may query them and,
+unless the entry sets `readOnly: true`, change them with `sql/execute`.
+`readOnly` refuses `sql/execute` for every caller, the venue included, before a
+connection opens; `sql/query` is unaffected. Venue-local databases have no such
+flag.
+
+```json
+{
+  "adapters": {
+    "sql": {
+      "databases": {
+        "reports": {
+          "url": "jdbc:postgresql://db.internal/reports",
+          "user": "covia",
+          "password": "s/REPORTS_DB_PASSWORD",
+          "readOnly": true
+        }
+      }
+    }
+  }
+}
+```
 
 ### SonnyLabs prompt scanning (covia-sonnylabs)
 
@@ -1924,6 +2128,170 @@ text formats (returned as themselves). The venue skill `v/skills/data/documents`
 teaches agents to read documents in slices and to treat a scanned PDF as
 unreadable rather than empty.
 
+### Speech (covia-speech)
+
+The optional **covia-speech** module turns audio into text and text into audio
+through an OpenAI-compatible audio API: OpenAI by default, or any server that
+speaks the same `/audio/transcriptions` and `/audio/speech` endpoints. Point it
+at a local server on loopback, such as speaches or LocalAI, and no audio leaves
+the venue's machine; a server that only transcribes keeps `transcribe` local but
+cannot `speak`. The module can also do both inside the venue itself
+([below](#local-transcription-and-speech-inside-the-venue)), and each direction
+may use its own engine: what is said can be transcribed on this machine whatever
+speaks.
+
+```json
+{
+  "modules": ["modules/covia-speech-<version>-module.jar"],
+  "adapters": {
+    "speech": {
+      "baseUrl": "https://api.openai.com/v1",
+      "transcribeModel": "whisper-1",
+      "speakModel": "tts-1",
+      "voice": "alloy",
+      "timeoutMillis": 120000
+    }
+  }
+}
+```
+
+- `engine` — what transcribes: `openai` (default, the API at `baseUrl`) or `local`.
+- `speakEngine` — what speaks: `openai` or `local`; by default the same as `engine`.
+- `baseUrl` — the API root; HTTPS, or plain HTTP only on loopback. Never a caller input.
+- `apiKey` — optional `s/NAME` reference to an operator-held key, resolved from the
+  venue's own store and used for every caller. Without it each caller's own
+  `s/<keyName>` is used when it exists, and no key at all when it does not, which
+  a local server accepts.
+- `keyName` — the caller secret name used then (default `OPENAI_API_KEY`, the
+  name the `langchain` operations use).
+- `transcribeModel`, `speakModel`, `voice` — defaults a caller may override per call.
+
+Operations:
+
+- `v/ops/speech/transcribe {ref, mediaType?, language?, prompt?, model?}` reads
+  audio at a reference with the caller's own authority (at most 20 MiB) and
+  returns `{text, language?, seconds?, model, engine, ms}`. Silence returns no
+  `text`. A caller that already holds the audio, such as an app recording a
+  microphone, gives it as base64 `bytes` with its `mediaType` instead of a
+  `ref`, and it is stored nowhere. Raw PCM is `mediaType: "audio/L16"` (16-bit little-endian mono, 16 kHz
+  unless `sampleRate` or a `rate=` parameter says otherwise) and travels as WAV.
+  Anything that is not audio returns `{}`, so the operation is a ready-made
+  `mediaOperation` for Telegram and WhatsApp agent bindings: a voice note's
+  transcript becomes its attachment's `text`.
+- `v/ops/speech/speak {text, voice?, model?, format?, speed?, instructions?,
+  language?, destination?, fileName?}` synthesises up to 4,096 characters and
+  stores the audio without overwriting anything, by default as Ogg/Opus (a voice
+  note; WAV from the local engine) in the caller's private DLFS `speech` drive; a
+  `destination` directory is written with the caller's authority. It returns
+  `{ref, mediaType, size, fileName, format, voice, model, engine}`; Telegram's
+  `sendVoice` takes an Ogg/Opus ref.
+- `v/ops/speech/say {text, voice?, model?, format?, speed?, instructions?,
+  language?}` synthesises the same way and returns the audio inline as base64
+  `{bytes, size, mediaType, format, voice, model, engine}`, for an app that plays
+  it at once. It is a read: nothing is stored, and run as a result (not invoked
+  as a tracked Job) it leaves no job record of the words or the audio.
+- `v/ops/speech/engines {}` lists the engines, the one that transcribes first
+  and then the one that speaks when it is another: whether each is local,
+  `transcribes` and `speaks`, its models and default voice, and whether a key
+  resolves for the caller, without endpoints or keys.
+- `v/ops/speech/prepare {for?}` gets an engine ready before any audio or text is
+  in hand, for an app that asks its owner first: the local engine fetches the
+  model to transcribe with (or, with `for: "speak"`, to speak with) and its
+  libraries, which can take minutes while `engines` shows the progress. It
+  returns what `engines` does; a remote engine needs nothing.
+- `v/ops/speech/listen {sampleRate?}` and `v/ops/speech/hear {id, bytes?, end?}`
+  are live dictation, on the local engine only, for an app that shows the words
+  while someone is still speaking. `listen` opens one and returns its `id`;
+  each `hear` gives it more raw PCM (half a second or so) and returns
+  `{settled, partial, text, quiet?}`: the words up to the last pause, decoded
+  once and kept, then those still being spoken, decoded again as they grow,
+  and the seconds since speech was last heard, for an app that ends on a long
+  pause. With `end` the rest settles, a short last word such as a lone "go"
+  heard together with the stretch before it, and the dictation closes. Only its
+  caller may feed it, one left unfed for two minutes is dropped, and nothing is
+  stored.
+
+A transcript lives in the operation's Job like any other result. Provider
+failures fail the Job; nothing is retried.
+
+#### Local transcription and speech inside the venue
+
+`"engine": "local"` transcribes, and `"speakEngine": "local"` speaks, inside the
+venue's own JVM with sherpa-onnx, so neither audio nor text leaves the machine
+and no server is needed. With `engine: "local"` alone the local engine does
+both; set `speakEngine: "openai"` to keep transcription here and have a provider
+speak, or `engine: "openai"` with `speakEngine: "local"` for the other way about.
+It runs on glibc Linux (x64, arm64), macOS (Apple Silicon, Intel) and Windows
+x64; not on musl systems such as the Alpine Docker image, where `engines` says
+so.
+
+```json
+{
+  "adapters": {
+    "speech": {
+      "engine": "local",
+      "local": {
+        "transcribeModel": "parakeet-tdt-v3",
+        "speakModel": "vits-ljs",
+        "voice": "0",
+        "nativePath": "/opt/covia/speech-natives",
+        "prefetch": true
+      }
+    }
+  }
+}
+```
+
+- `transcribeModel` — `parakeet-tdt-v3` (default; 25 European languages, about
+  670 MB), `parakeet-tdt-v2` (English), `moonshine-base` or `moonshine-tiny`
+  (English, smaller). The venue fetches the model once, file by file at a pinned
+  revision and SHA-256, the first time it is needed (or at start with
+  `prefetch: true`); `engines` shows the progress. Only the configured model runs.
+- `speakModel` — the voice. Neither needs espeak-ng data, so nothing is unpacked
+  and nothing under the GPL is loaded. Fetched the same way, when first needed or
+  on `prepare {for: "speak"}`; `engines` shows it as `voiceModel` and `voiceState`.
+  - `vits-ljs` (default; English, one voice, about 115 MB, Apache-2.0). It says
+    the words of its lexicon, and sherpa-onnx would drop any other without a
+    sound, so the venue first makes the text sayable: numbers, currency and
+    common symbols become words and accents fold; a Latin word the lexicon lacks
+    is spelled letter by letter and named in the result's `spelled`; anything
+    else fails the request, naming it. Nothing is passed over quietly.
+  - `supertonic-3` (31 languages, several voices, about 145 MB). It reads text
+    as characters, so it says any word, faster and better than `vits-ljs`; its
+    model is OpenRAIL-M, an open licence with use-based restrictions that pass
+    to anyone using it.
+- `voice` — the default voice, a number from 0; a caller may name another per
+  call. A caller's `language` (default `en`) tells `supertonic-3` what language
+  the text is in; `vits-ljs` speaks English only.
+- `nativePath` — a directory holding sherpa-onnx 1.13.8's native libraries for the
+  platform (`onnxruntime` and `sherpa-onnx-jni`), installed by the operator or
+  embedder; signed copies are fine. Alternatively `fetchNatives: true` lets the
+  venue download sherpa-onnx's own build for the platform, pinned by SHA-256. A venue
+  fetches no native code unless told to.
+- `cacheDir` — where models and fetched libraries live; by default `cache/speech`
+  beside a persistent store, otherwise `~/.covia/cache/speech`.
+- `threads` — decoding threads, 1–16 (default half the cores, 2–4).
+
+Run the venue with `--enable-native-access=ALL-UNNAMED` (as for the Python
+module); without it Java 24 and later print a warning when the libraries load,
+and `engines` reports `nativeAccess: false`. A note longer than 30 seconds is
+split on its pauses; notes over 10 minutes are refused. WAV, raw PCM and Ogg/Opus
+voice notes are read; other formats are refused. The model is loaded when first
+used, takes about 1 GB of memory outside the Java heap, decodes one note at a
+time, and is released after 5 minutes unused. The voice speaks 16-bit mono WAV
+at its own rate (22.05 kHz for `vits-ljs`, 44.1 kHz for `supertonic-3`) and nothing else, so `speak` and `say` default to
+`wav` here and refuse other formats; it is loaded and released the same way, and
+shares the one native thread with transcription, so one waits for the other.
+
+Credits: sherpa-onnx (Apache-2.0; its Java API is vendored in the module with its
+licence), ONNX Runtime (MIT), Silero VAD (MIT), Concentus (BSD), Parakeet TDT
+(CC-BY-4.0, NVIDIA), Moonshine (MIT, Useful Sensors), VITS LJSpeech (Apache-2.0
+as published for sherpa-onnx; VITS is MIT, LJSpeech public domain, its lexicon
+from the CMU Pronouncing Dictionary, BSD), Supertonic (model
+OpenRAIL-M, Supertone: open use with use-based restrictions that pass to anyone
+using it). The models are fetched by the venue from Hugging Face, not
+distributed with Covia.
+
 ### Telegram bots (covia-telegram)
 
 The **covia-telegram** module (`telegram` adapter) runs operator-declared
@@ -1966,8 +2334,10 @@ Per bot:
 
 - `token` — the token from @BotFather, as an `s/NAME` secret reference
   (resolved in the bot user's store, then the venue's; a literal is accepted
-  but never logged or listed). A bot whose secret is absent parks as
-  `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
+  but never logged or listed). Only operator-declared bots fall back to the
+  venue's store: a bot created with `telegram:create` resolves its creator's
+  secrets, and another principal's only under a `secret/use` grant. A bot
+  whose secret is absent parks as `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
   up without a restart.
 - `user` — the DID the bot acts as; every invocation runs with that user's
   full authority, so it should be the owner of the agent it routes to.
@@ -1976,7 +2346,7 @@ Per bot:
   agents are owned by.
 - `agent` **or** `operation` — the **inbound handler**. With `agent`, each
   Telegram chat (or forum topic) is one `agent:chat` session, persisted at
-  `<venue-did>/w/adapters/telegram/config/<bot>/sessions/<chatId>` so
+  `:adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
   receives each turn as `{text, via: {channel: "telegram", bot, access:
   "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
@@ -2003,7 +2373,9 @@ Per bot:
   Images reach the LLM as asset-reference image blocks; the agent needs
   `crud/read` on the referenced DLFS files and a vision-capable model.
   Other media remains available by protected reference. No speech provider,
-  document extraction or video understanding is enabled implicitly.
+  document extraction or video understanding is enabled implicitly; with the
+  speech module loaded, `mediaOperation: "v/ops/speech/transcribe"` transcribes
+  voice notes and passes everything else through.
   Operation bots retain the SDK-decoded Telegram update shape and can call
   `telegram/download` explicitly. Telegram update fields unknown to the SDK
   may be absent. Jobs remain the execution record; a private inbox records
@@ -2011,8 +2383,10 @@ Per bot:
 - `reply` — for an `operation` handler: `true` (default: the result
   rendered as text — a string as-is, a map's
   `text`/`response`/`content`/`message`/`result`, else pretty JSON),
-  `false` (never reply), or a fixed acknowledgement string. Agent
-  conversations always reply. Handler failures are always reported to the
+  `false` (never reply), or a fixed acknowledgement string; a result with
+  no text sends nothing. Agent conversations reply with the agent's answer,
+  and send nothing when it ended its turn without one. Handler failures are
+  always reported to the
   sender.
 - `allow` — Telegram user ids and/or `@usernames` permitted to talk to the
   bot. **Fail-closed**: with no `allow` and no `open: true`, everyone is
@@ -2020,7 +2394,9 @@ Per bot:
   add it). `open: true` admits anyone — appropriate only for a bot whose
   target is safe for the public.
 - `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
-  plain text. Markup Telegram rejects is resent as plain text.
+  plain text. Markup Telegram rejects is resent as plain text. None of the
+  three renders an agent's Markdown as written; for an agent bot use
+  `replyOperation: "v/ops/telegram/format"`, whose `HTML` the reply then uses.
 - `greeting` — the `/start` reply (default names the agent and venue).
 - `mediaOperation` — optional, agent bots only. Runs once per downloaded
   attachment as the bot owner. Input is the attachment descriptor plus
@@ -2034,12 +2410,18 @@ Per bot:
   `{}` for photos and documents. Malformed results and processing failures
   fail the turn visibly rather than silently dropping the attachment.
 - `replyOperation` — optional, agent bots only. Takes `{response, via}` after
-  the agent completes and returns a non-empty string or `{text: "..."}`.
+  the agent completes and returns a non-empty string or `{text: "..."}`,
+  optionally with `parse_mode`, which then wins over `parseMode`.
   This is the application's place to render structured responses or remove
   internal UI notation for Telegram. The stored agent response is unchanged.
   Formatting failure reports an error; it never sends the raw response as a
   fallback. Normal Telegram text splitting, formatting and topic replies
-  still apply afterwards.
+  still apply afterwards. `v/ops/telegram/format` is the stock formatter:
+  it turns the agent's Markdown into Telegram HTML (headings as bold lines,
+  lists as bullet lines, tables as a monospaced block, raw HTML shown as
+  text) and returns `parse_mode: "HTML"`, so naming it is the whole setup.
+  An application with its own hook calls it after its own processing and
+  returns its text and `parse_mode`.
 
 Both hooks invoke ordinary Covia operation references as the bot owner, with
 normal Jobs, secret resolution and capability checks, and no turn timeout.
@@ -2064,7 +2446,7 @@ Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 greeting?, mediaOperation?, replyOperation?}` makes a bot that acts as the caller (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
 records it at
-`<venue-did>/w/adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
+`:adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
 and re-arms it on every venue start or module load; `v/ops/telegram/delete
 {name}` stops and removes it (record and sessions). Both are gated on
 `<caller>/telegram/<name>` × `telegram/manage`. Config-declared bots stay
@@ -2088,10 +2470,13 @@ and anyone else needs a delegation from that user; `v/ops/telegram/call
 parameters (`sendPhoto`/`sendDocument` by `file_id` or URL, `editMessageText`,
 `deleteMessage`, `answerCallbackQuery`, `getChat`, …; `getUpdates`,
 `setWebhook`, `deleteWebhook`, `logOut`, `close` are refused as the venue's
-own update loop owns them) — gated on `telegram/call`; and
+own update loop owns them) — gated on `telegram/call`;
 `v/ops/telegram/bots` — the caller's bots
 with state (`STARTING`, `PENDING`, `RUNNING`, `STOPPED`), Telegram username,
-last error and counters, tokens never included. The module ships a lightweight
+last error and counters, tokens never included; and `v/ops/telegram/format
+{markdown}` — Markdown to Telegram HTML with `parse_mode: "HTML"`, read-only
+and ungated, as it touches no bot. Refused HTML is resent as the plain text
+it shows, never as its markup. The module ships a lightweight
 `telegram` agent skill (`v/skills/adapters/telegram`) for ordinary messaging
 and status. It reveals `telegram-bot-management` only when an agent needs to
 create, repair or delete a user-owned bot; that child in turn reveals the
@@ -2133,12 +2518,33 @@ Accepted updates are flushed through `WebhookInbox` before advancing the poll
 acknowledgement. Pending receipts resume in update order at startup/re-enable;
 completed receipts deduplicate redelivery and are retained for seven days.
 Receipts are private and scoped to the Covia owner and Telegram bot account.
-`telegram:bots` reports `pendingUpdates` and `startedUpdates`. STARTED includes
-in-flight work and interrupted/failed work: inspect the Jobs and bot error before
-recovery. Started work is never automatically replayed, and this does **not**
-promise exactly-once execution or delivery. Reattaching to interrupted Jobs and
-reconciling an uncertain Telegram send remain follow-up work. Removing a runtime
-bot removes its receipts, but downloaded files remain in its owner's DLFS drive.
+For local agent routes, delivery is one native lattice transaction: append the
+input to the session, save the chat-to-session mapping, and complete the receipt
+with its session and Job IDs. The venue flushes before waking the agent. A
+receipt therefore means **input delivered**, independently of turn completion,
+reply formatting or Telegram sending. Later inputs can enter the same session
+while the agent is working. Duplicate admission rolls back its entire draft;
+queued input survives a restart before wake and is processed by agent recovery.
+
+`telegram:bots` reports `pendingUpdates`, `startedUpdates` and `failedUpdates`.
+Workers claim a receipt as STARTED before media download or preprocessing.
+Each message gets one attempt. A known admission failure becomes FAILED with
+`reason` and `lastError`; the sender receives one "not delivered" notice. FAILED
+receipts are never retried or reported again, including after restart. A failed
+flush propagates directly and does not undo already committed admission.
+Interrupted STARTED work remains for inspection; it is not replayed automatically.
+A suspended agent is checked before dispatch, so it gets no failed chat Job.
+Commands, operation handlers and remote agent facades retain the
+STARTED/COMPLETE protocol: STARTED includes in-flight and uncertain interrupted
+work and is not replayed automatically. Old STARTED receipts also remain for
+inspection. Completed receipts are retained for seven days, so deduplication is
+bounded by that retention window.
+
+Outbound replies are separate best-effort continuations. A formatting or send
+failure is reported without reopening the inbound receipt. Reply continuations
+are not a durable outbox: a process interruption can lose an unsent reply, and
+uncertain sends still need reconciliation. Removing a runtime bot removes its
+receipts, but downloaded files remain in its owner's DLFS drive.
 Store durability follows the venue configuration (temporary venues remain
 ephemeral). Media albums retain `media_group_id` but each message is a separate
 turn; `/new` resets only the current topic. `via` also includes topic and reply
@@ -2180,7 +2586,7 @@ DMs and direct mentions alone are not a substitute for enabling it when the
 bot is expected to process guild text.
 
 Each bot has exactly one `agent` or `operation` handler. Agent conversations
-persist under `<venue-did>/w/adapters/discord/config/<bot>/sessions/<channelId>`
+persist under `:adapters/discord/config/<bot>/sessions/<channelId>`
 and receive
 `{text, via: {channel: "discord", bot, access, from, chat, guild?,
 message_id}, attachments}`. Operation handlers receive a normalized Discord
@@ -2202,7 +2608,7 @@ OAuth, absolute, and traversal routes are refused. HTTP 429 responses honor
 Discord's `retry_after` once. `discord:bots` reports state/counters without
 tokens. Runtime `discord:create` requires an `s/NAME` token reference and
 persists at
-`<venue-did>/w/adapters/discord/users/<caller-did>/bots/<name>`;
+`:adapters/discord/users/<caller-did>/bots/<name>`;
 `discord:delete` removes it and its sessions. The adapter owns this private,
 fixed schema; tokens remain in `s/`, and user-managed content is not moved
 into it. These require `discord/manage`. The module also publishes
@@ -2212,28 +2618,37 @@ into it. These require `discord/manage`. The module also publishes
 
 The optional **covia-whatsapp** and **covia-slack** modules use signed HTTP
 callbacks at `/webhooks/<adapter>/<binding>`, with shared durable intake,
-ownership gates and conversation sessions. Both publish `send`, `create`,
-`delete` and `bots` operations and module-owned agent skills.
+ownership gates and conversation sessions. Slack can instead receive events
+over Socket Mode, which needs no public URL. Both publish `send`, `create`,
+`delete` and `bots` operations and module-owned agent skills; WhatsApp also
+publishes `download`, which saves a received message's media by its media id.
 
 - [WhatsApp setup](../../covia-whatsapp/README.md): Cloud API phone-number
   bindings, Meta verification/signatures, numeric sender admission and text replies.
 - [Slack setup](../../covia-slack/README.md): workspace-installed apps, signed
-  Events API DMs/channel mentions, separate sender/channel admission and threads.
+  Events API or Socket Mode DMs/channel mentions, separate sender/channel
+  admission and threads.
 
 Configure `adapters.<provider>.bots` with an owner and exactly one `agent` or
 `operation`. All credentials must be `s/NAME` references. `apiUrl` is an
 operator-only endpoint override (HTTPS, or HTTP on loopback for testing),
 never an operation parameter or public setting. `bots` returns the exact
-callback path; config bindings use `c-<name>`, runtime bindings an opaque
-owner-specific name. Runtime creation infers the owner from the caller and
-requires `<provider>/manage`; sends require `<provider>/send` on the binding.
+callback path, or the connection state for a Socket Mode binding; config
+bindings use `c-<name>`, runtime bindings an opaque owner-specific name. Runtime creation infers the owner from the caller and
+requires `<provider>/manage`; sends require `<provider>/send` on the binding,
+and WhatsApp downloads `whatsapp/download`.
 
 Both fail closed on empty admission lists, acknowledge only after durable
 acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
 started receipts require inspection after an interruption and are never
-blindly replayed. The linked guides describe configuration changes, retention
-and supported provider features. These modules do not install OAuth flows,
-Slack Socket Mode, media handling or WhatsApp templates.
+blindly replayed. Local agent input, receipt and session mapping commit together;
+COMPLETE means delivered, not replied. Handoffs are attempted once. Missing,
+suspended, terminated or refusing agents fail without a chat Job. Failed or
+reconfigured receipts become FAILED and remain in the `failed` count.
+Storage failures are reported directly without background retries.
+The linked guides describe configuration changes, retention
+and supported provider features. These modules do not install OAuth flows or
+WhatsApp templates; Slack handles no media.
 
 ### Claude Code (covia-claude-code)
 
@@ -2318,8 +2733,8 @@ Operations:
   as one Job. Completes with `{result, structured?, session, project,
   subtype, isError, turns, costUsd, durationMs, model, permissionDenials}`.
   Pass `session` (from a previous result) to continue that conversation.
-  While running, the job carries `progress {toolCalls, lastTool, text,
-  session, model}`. A turn Claude Code reports as an error (`error_max_turns`,
+  While it runs, the job's progress is its latest step, with `{toolCalls,
+  lastTool, text, session, model}` as detail. A turn Claude Code reports as an error (`error_max_turns`,
   `error_max_budget_usd`, `error_during_execution`) **fails** the Job with
   the reason and the session id to resume. `project` may be omitted when the
   caller can use exactly one project or `session` names a known one.
@@ -2544,6 +2959,54 @@ caller-owned `s/NAME` SecretStore reference and support card-declared API-key
 and HTTP-Bearer schemes. UCAN authority is not relayed over A2A; use native Grid
 operations for Covia-to-Covia authority and identity. All outbound URLs pass
 the HTTP adapter's SSRF checks and operator allow/block lists.
+
+## P2P network (`adapters.p2p`)
+
+```json
+{
+  "adapters": {
+    "p2p": {
+      "join": true,
+      "peers": [
+        { "did": "did:key:z6Mk...", "address": "peers.example.com:18888" }
+      ]
+    }
+  }
+}
+```
+
+Runs a Convex P2P node inside the venue (`convex-p2p`). Off by default: with
+`join` absent or false no node starts, no port opens and `p2p/peers` reports
+`joined: false`. The node uses the venue's key, so its identity on the network
+is the venue's key-derived `did:key`; it publishes the venue's `name` and any
+declared `did` in its signed identity record, where peers list the declared
+DID as `alsoKnownAs` (a claim, not a verified identity). It keeps its own
+in-memory store and serves only the network's node and identity records, so
+no venue state is replicated.
+
+- `join` — run the node.
+- `peers` — bootstrap nodes dialled at start, each `{did, address}` with a
+  `did:key` and `host:port`. Convex keeps redialling them.
+- `port` — listen for inbound connections. Without it the node only dials
+  out, which suits a venue behind NAT; peers then reach it over its own
+  connection. `0` takes any free port. The listener binds every interface,
+  over plain TCP; nodes authenticate each other by key.
+- `url` — the address peers should dial, e.g. `tcp://venue.example.com:18888`;
+  needs `port`. Loopback and private addresses are refused unless
+  `allowPrivateURL` is true.
+- `pollMs` — the longest a connection change waits to raise an event
+  (default 1000). Changes to what nodes publish raise one as soon as they
+  replicate.
+
+The node dials nodes it learns about from its peers, as Convex P2P does.
+`p2p/peers` (read-only) lists them with whether each is connected and how it
+is reached; `p2p/connect` connects to one more for the life of the node, not
+across restarts. Connection state is the venue's own and is never published:
+what a node shares is only its signed records. The adapter is network
+infrastructure; social follows belong to the social layer, not here. Both are venue-owned: they need `p2p/read` or `p2p/manage`
+on `<venue DID>/p2p`. An embedding host subscribes to peer changes with
+`engine.findAdapter(P2PAdapter.class).subscribe(listener)`. Disabling the
+adapter takes the node offline; reconfiguring it restarts the node.
 
 ## Secrets bootstrap
 

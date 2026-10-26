@@ -50,7 +50,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 
 	@Override public boolean configure(AMap<AString,ACell> config,boolean strict){
 		if(config==null)config=Maps.empty();
-		if(config.containsKey(K_STATE_PATH))throw new IllegalArgumentException("adapters.discord.statePath is fixed at w/adapters/discord");
+		if(config.containsKey(K_STATE_PATH))throw new IllegalArgumentException("adapters.discord.statePath is fixed at :adapters/discord");
 		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new IllegalArgumentException("adapters.discord: unknown setting "+k);}
 		String url=DEFAULT_API_URL; ACell u=config.get(K_API_URL);
 		if(u!=null){if(!(u instanceof AString s)||s.isEmpty())throw new IllegalArgumentException("adapters.discord.apiUrl must be a non-empty string");url=s.toString();if(!url.startsWith("http://")&&!url.startsWith("https://"))throw new IllegalArgumentException("adapters.discord.apiUrl must be an http(s) URL");url=url.replaceAll("/+$","");}
@@ -61,7 +61,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	@Override protected BotSpec parseBot(String name,ACell settings,boolean strict){return BotSpec.parse(name,settings,strict);}
 	@Override protected BotRunner newBot(BotSpec spec,Managed managed){return new BotRunner(this,spec,apiUrl,managed);}
 	@Override protected boolean configurationMatches(BotRunner runner){return apiUrl.equals(runner.apiUrl);}
-	String resolveToken(BotSpec spec){return resolveCredential(spec.tokenRef(),spec.userDID(engine));}
+	String resolveToken(BotRunner runner){return resolveCredential(runner.spec().tokenRef(),runner);}
 	BotRunner runnerForTest(String name){return runner(name);}
 	BotRunner runnerForTest(AString owner,String name){return runner(owner,name);}
 	void forgetForTest(AString owner,String name){forgetRuntimeBot(owner,name);}

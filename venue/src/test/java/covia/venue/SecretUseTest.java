@@ -35,7 +35,7 @@ import covia.lattice.CapabilityGate;
  */
 public class SecretUseTest {
 	private static Engine engine;
-	private static byte[] encKey;
+	private static SecretStore.Keys encKey;
 
 	@BeforeAll
 	static void start() {
@@ -43,7 +43,7 @@ public class SecretUseTest {
 		engine = Engine.createTemp(Maps.of(Config.HOSTNAME, Strings.create("secrets.test.covia.example")));
 		Engine.addDemoAssets(engine);
 		((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("localhost");
-		encKey = SecretStore.deriveKey(engine.getKeyPair());
+		encKey = SecretStore.keys(engine.getKeyPair());
 	}
 
 	@AfterAll
@@ -187,7 +187,7 @@ public class SecretUseTest {
 		try {
 			AString sharedPublic = Strings.create(shared.getDIDString() + ":public");
 			shared.getVenueState().users().ensure(sharedPublic).secrets()
-				.store("OPERATOR_KEY", "operator-key", SecretStore.deriveKey(shared.getKeyPair()));
+				.store("OPERATOR_KEY", "operator-key", SecretStore.keys(shared.getKeyPair()));
 			String ref = sharedPublic + "/s/OPERATOR_KEY";
 			assertEquals("operator-key", shared.resolveSecret(ref, RequestContext.of(aliceDID), provider));
 			assertThrows(AuthException.class,

@@ -65,7 +65,7 @@ public final class ExternalAgents {
 		if (job.isFinished()) return;
 		if (!agent.claimExternalTurn(sid, job.getID(), caller.getCallerDID(), content, !supplied))
 			throw new IllegalStateException(SESSION_BUSY);
-		if (job.isFinished()) { agent.finishExternalTurn(sid, job.getID(), null, null); return; }
+		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {
 			ACell remoteSession = RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.SESSION_ID);
 			var invocation = adapter.agentInvocation(operation, definition, content, remoteSession);
@@ -82,7 +82,7 @@ public final class ExternalAgents {
 			else job.setStatus(Status.STARTED);
 			prepared.start();
 		} catch (RuntimeException | Error e) {
-			agent.finishExternalTurn(sid, job.getID(), null, null);
+			agent.session(sid).finishExternalTurn(job.getID(), null, null);
 			throw e;
 		}
 	}
@@ -94,7 +94,7 @@ public final class ExternalAgents {
 				if (j.isFinished()) {
 					if (!settled.compareAndSet(false, true)) return;
 					ACell response = Status.COMPLETE.equals(j.getStatus()) ? adapter.agentOutput(j) : null;
-					agent.finishExternalTurn(sid, parent.getID(), adapter.agentSession(j), response);
+					agent.session(sid).finishExternalTurn(parent.getID(), adapter.agentSession(j), response);
 					if (Status.COMPLETE.equals(j.getStatus())) {
 						AMap<AString, ACell> data = parent.getData();
 						AMap<AString, ACell> result = Maps.of(Fields.AGENT_ID, data.get(Fields.AGENT_ID),
@@ -110,16 +110,14 @@ public final class ExternalAgents {
 					} else if (Status.CANCELLED.equals(j.getStatus())) parent.cancel();
 					else parent.fail(j.getErrorMessage() == null ? MISSING_CHILD : j.getErrorMessage());
 				} else {
-					parent.update(d -> {
-						AMap<AString, ACell> next = d.assoc(Fields.STATUS,
-							Status.PENDING.equals(j.getStatus()) ? Status.STARTED : j.getStatus());
-						ACell progress = j.getData().get(ARemoteAgentAdapter.PROGRESS);
-						return progress == null ? next.dissoc(ARemoteAgentAdapter.PROGRESS)
-							: next.assoc(ARemoteAgentAdapter.PROGRESS, progress);
-					});
+					// The child's status is the parent's to record, when it changes;
+					// its progress is only shown, never recorded.
+					AString status = Status.PENDING.equals(j.getStatus()) ? Status.STARTED : j.getStatus();
+					parent.update(d -> status.equals(d.get(Fields.STATUS)) ? null : d.assoc(Fields.STATUS, status));
+					parent.setProgress(j.getData().get(Fields.PROGRESS));
 				}
 			} catch (RuntimeException failure) {
-				agent.finishExternalTurn(sid, parent.getID(), null, null);
+				agent.session(sid).finishExternalTurn(parent.getID(), null, null);
 				parent.fail(failure);
 			}
 		};
@@ -139,7 +137,7 @@ public final class ExternalAgents {
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), RequestContext.of(owner));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);
-			if (agent != null) agent.finishExternalTurn(Job.parseID(job.getData().get(Fields.SESSION_ID)), job.getID(), null, null);
+			if (agent != null) agent.session(Job.parseID(job.getData().get(Fields.SESSION_ID))).finishExternalTurn(job.getID(), null, null);
 			return true;
 		}
 		attach(job, child, agent, Job.parseID(job.getData().get(Fields.SESSION_ID)),
@@ -152,7 +150,7 @@ public final class ExternalAgents {
 		for (var entry : agent.getSessions().entrySet()) {
 			ACell id = RT.getIn(entry.getValue(), AgentState.KEY_EXTERNAL, Fields.JOB_ID);
 			if (id != null && engine.jobs().getJob(Job.parseID(id)) == null)
-				agent.finishExternalTurn(entry.getKey(), Job.parseID(id), null, null);
+				agent.session(entry.getKey()).finishExternalTurn(Job.parseID(id), null, null);
 		}
 	}
 

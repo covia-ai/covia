@@ -15,22 +15,19 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiPredicate;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AccountKey;
 import convex.core.data.AVector;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ALatticeCursor;
+import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
@@ -254,6 +251,130 @@ public class DLFSAdapterTest {
 		);
 	}
 
+	/** #589: the root save must not restore a drive deleted after it took its snapshot. */
+	@Test
+	public void testDriveDeleteSurvivesSaveInFlight() throws Exception {
+		var key = AKeyPair.generate();
+		var application = CoviaApplication.create(key);
+		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			Files.writeString(drive.getPath("/old.txt"), "must stay deleted");
+			var kept = adapter.getDriveForIdentity(ALICE_DID.toString(), "kept");
+			Files.writeString(kept.getPath("/keep.txt"), "keep");
+			var root = isolated.getRootCursor();
+			CountDownLatch saving = new CountDownLatch(1);
+			CountDownLatch release = new CountDownLatch(1);
+			var save = java.util.concurrent.CompletableFuture.runAsync(() -> application.host().sync(snapshot -> {
+				saving.countDown();
+				try {
+					assertTrue(release.await(5, TimeUnit.SECONDS));
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError(e);
+				}
+				return snapshot;
+			}));
+			try {
+				assertTrue(saving.await(5, TimeUnit.SECONDS));
+				isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "deleted"),
+					RequestContext.of(ALICE_DID)).awaitResult(5000);
+				assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
+			} finally {
+				release.countDown();
+				save.get(5, TimeUnit.SECONDS);
+			}
+			assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()),
+				"stale root save must not resurrect the tree");
+			assertEquals("keep", Files.readString(kept.getPath("/keep.txt")));
+			assertEquals(convex.core.data.Vectors.of("kept"), RT.getIn(
+				adapter.listDrives(RequestContext.of(ALICE_DID)), "drives"));
+			var deleted = root.get();
+			var recreated = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			Files.writeString(recreated.getPath("/new.txt"), "new");
+			application.merge(deleted);
+			assertEquals("new", Files.readString(recreated.getPath("/new.txt")));
+			assertFalse(Files.exists(recreated.getPath("/old.txt")));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testDriveDeletionWinsOlderSnapshot() throws Exception {
+		var key = AKeyPair.generate();
+		var application = CoviaApplication.create(key);
+		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
+		application.setContext(new LatticeContext() {
+			@Override public convex.core.data.prim.CVMLong getTimestamp() {
+				return convex.core.data.prim.CVMLong.create(time.get());
+			}
+		}.withSigningKey(key));
+		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "legacy");
+			Files.writeString(drive.getPath("/old.txt"), "legacy content");
+			var root = isolated.getRootCursor();
+			var legacy = root.get();
+			assertEquals("legacy content", Files.readString(drive.getPath("/old.txt")));
+			// A strictly newer deletion wins in either merge direction; equal times
+			// deliberately keep the local operand in Convex (covered by the save race).
+			time.incrementAndGet();
+			isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
+			var deleted = root.get();
+			assertEquals(deleted.get(Covia.DLFS), Covia.ROOT.merge(isolated.getLatticeContext(), legacy, deleted).get(Covia.DLFS));
+			application.merge(legacy);
+			assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testIndependentFileEditsStillMerge() throws Exception {
+		var key = AKeyPair.generate();
+		var application = CoviaApplication.create(key);
+		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "shared");
+			var root = isolated.getRootCursor();
+			var base = root.get();
+			Files.writeString(drive.getPath("/left.txt"), "left");
+			var left = root.get();
+			root.set(base);
+			Files.writeString(drive.getPath("/right.txt"), "right");
+			// The owner signs the merged map, retaining both independently edited files.
+			AKeyPair dlfsKey = AKeyPair.create(convex.core.data.Blob.fromHex(isolated.getVenueState().users().get(ALICE_DID).secrets()
+				.decrypt("DLFS_KEY", covia.venue.SecretStore.keys(isolated.getKeyPair())).toString()));
+			convex.dlfs.DLFSRegion.connect(root.path(Covia.DLFS), null,
+				dlfsKey::signData, isolated.getLatticeContext()::currentTimestamp)
+				.merge(convex.core.lang.RT.getIn(left, Covia.DLFS));
+			assertEquals("left", Files.readString(drive.getPath("/left.txt")));
+			assertEquals("right", Files.readString(drive.getPath("/right.txt")));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
+	public void testUpstreamRejectedDriveNamesAreNotCreated() throws Exception {
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		for (String name : new String[] {".", "..", " padded ", "x".repeat(129)}) {
+			var error = assertThrows(IllegalArgumentException.class,
+				() -> adapter.getDriveForIdentity(ALICE_DID.toString(), name));
+			assertEquals(DLFSAdapter.INVALID_DRIVE_NAME, error.getMessage());
+		}
+		assertEquals(0, RT.ensureVector(RT.getIn(adapter.listDrives(RequestContext.of(ALICE_DID)),
+			"drives")).count());
+	}
+
 	@Test
 	public void testDeleteDrive() {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "test-remove"));
@@ -261,8 +382,10 @@ public class DLFSAdapterTest {
 
 		ACell result = run("v/ops/dlfs/delete-drive", Maps.of("name", "test-remove"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
+		assertEquals(0, RT.ensureVector(RT.getIn(
+			run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
 
-		// Drive tombstoned on lattice — re-accessing creates a fresh empty drive
+		// Re-accessing creates a fresh empty drive.
 		result = run("v/ops/dlfs/list", Maps.of("drive", "test-remove"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertEquals(0, entries.count(), "Deleted drive should be empty when re-accessed");
@@ -275,36 +398,24 @@ public class DLFSAdapterTest {
 		run("v/ops/dlfs/write", Maps.of("drive", "sync-test", "path", "hello.txt", "content", "sync check"));
 
 		// Verify the root cursor has DLFS data
-		ALatticeCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
+		AForkableCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
 		ACell dlfsRegion = root.get().get(Covia.DLFS);
 		assertNotNull(dlfsRegion, "Root cursor should have :dlfs region after DLFS write");
 	}
 
 	@Test
-	public void testDLFSSyncReachesRootOnSyncCallback() {
-		// Hook an onSync callback on the root cursor (simulates NodeServer propagator)
-		ALatticeCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
-		AtomicInteger syncCount = new AtomicInteger();
-		if (root instanceof convex.lattice.cursor.RootLatticeCursor<?> rlc) {
-			rlc.onSync(value -> { syncCount.incrementAndGet(); return value; });
-		} else {
-			fail("Engine root cursor should be a RootLatticeCursor, was: " + root.getClass().getName());
-		}
-
-		// Write via adapter
-		run("v/ops/dlfs/write", Maps.of("drive", "sync-cb-test", "path", "test.txt", "content", "callback check"));
-
-		// Adapter write alone shouldn't trigger onSync
-		int beforeSync = syncCount.get();
-
-		// Now get the drive and sync it (simulates what syncDrive() in WebDAV does)
-		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
-		var drive = dlfs.getDriveForIdentity(ALICE_DID.toString(), "sync-cb-test");
-		drive.sync();
-
-		assertTrue(syncCount.get() > beforeSync,
-			"DLFSLocal.sync() should trigger root cursor onSync callback, " +
-			"but syncCount went from " + beforeSync + " to " + syncCount.get());
+	public void testDLFSWritesPublishThroughHost() throws Exception {
+		var key = AKeyPair.generate();
+		var application = CoviaApplication.create(key);
+		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		try {
+			Engine.addDemoAssets(isolated);
+			DLFSAdapter dlfs = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = dlfs.getDriveForIdentity(ALICE_DID.toString(), "publish");
+			Files.writeString(drive.getPath("/test.txt"), "host publication");
+			isolated.flush();
+			assertEquals(application.cursor().get(), application.host().store().getRootData());
+		} finally { isolated.close(); }
 	}
 
 	/** Regression for covia#387 / convex#703: a stale sync callback carrying a
@@ -312,8 +423,9 @@ public class DLFSAdapterTest {
 	 * drive view. */
 	@Test
 	public void testRecreateSurvivesConcurrentStaleSync() throws Exception {
-		Engine isolated = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		var key = AKeyPair.generate();
+		var application = CoviaApplication.create(key);
+		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
 		CountDownLatch syncEntered = new CountDownLatch(1);
 		CountDownLatch releaseSync = new CountDownLatch(1);
 		AtomicBoolean blockNextSync = new AtomicBoolean();
@@ -329,8 +441,7 @@ public class DLFSAdapterTest {
 			Files.delete(file);
 
 			var root = isolated.getRootCursor();
-			assertInstanceOf(convex.lattice.cursor.RootLatticeCursor.class, root);
-			((convex.lattice.cursor.RootLatticeCursor<?>) root).onSync(value -> {
+			application.host().attachPublisher(value -> {
 				if (blockNextSync.compareAndSet(true, false)) {
 					syncEntered.countDown();
 					try {
@@ -369,42 +480,33 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
-	public void testLongLivedDriveUsesCurrentVenueClock() throws Exception {
-		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
-		var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "live-clock");
-		long before = drive.getCursor().getContext().currentTimestamp().longValue();
-		Thread.sleep(3);
-		long after = drive.getCursor().getContext().currentTimestamp().longValue();
-		assertTrue(after > before, "long-lived drive timestamp must advance with the venue clock");
-	}
-
-	@Test
-	public void testDriveSignerOverridePreservesHostPolicy() throws Exception {
+	@SuppressWarnings("unchecked")
+	public void testLongLivedDriveUsesCurrentVenueClockAndOwnerKey() throws Exception {
 		AKeyPair venueKey = AKeyPair.generate();
+		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
 		CoviaApplication application = CoviaApplication.create(venueKey);
-		BiPredicate<ACell, AccountKey> ownerVerifier = (owner, signer) -> false;
-		application.cursor().setContext(LatticeContext.EMPTY
-			.withOwnerVerifier(ownerVerifier)
-			.withMaxFutureTimestampSkew(1234)
-			.withSigningKey(venueKey));
-
-		Engine isolated = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)),
-				application, venueKey).start();
+		application.setContext(new LatticeContext() {
+			@Override public convex.core.data.prim.CVMLong getTimestamp() {
+				return convex.core.data.prim.CVMLong.create(time.get());
+			}
+		}.withSigningKey(venueKey));
+		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, venueKey).start();
 		try {
 			Engine.addDemoAssets(isolated);
-			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			LatticeContext driveContext = adapter.getDriveForIdentity(
-				TestEngine.uniqueDID("dlfs-host-policy").toString(), "policy")
-				.getCursor().getContext();
-
-			assertSame(ownerVerifier, driveContext.getOwnerVerifier());
-			assertEquals(1234, driveContext.getMaxFutureTimestampSkew(-1));
-			assertNotEquals(venueKey.getAccountKey(),
-				driveContext.getSigningKey().getAccountKey());
-		} finally {
-			isolated.close();
-		}
+			var adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
+			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "clock");
+			Files.writeString(drive.getPath("/first"), "first");
+			long before = Files.getLastModifiedTime(drive.getPath("/first")).toMillis();
+			time.addAndGet(100);
+			Files.writeString(drive.getPath("/second"), "second");
+			assertEquals(before + 100, Files.getLastModifiedTime(drive.getPath("/second")).toMillis());
+			var owners = (AMap<ACell, ACell>) application.cursor().get().get(Covia.DLFS);
+			var entry = owners.entryAt(0);
+			var signed = (convex.core.data.SignedData<?>) entry.getValue();
+			assertEquals(entry.getKey(), signed.getAccountKey());
+			assertNotEquals(venueKey.getAccountKey(), signed.getAccountKey());
+			assertTrue(signed.checkSignature());
+		} finally { isolated.close(); }
 	}
 
 	@Test

@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.9.11</version>
+		<version>0.10.0</version>
 	</parent>
 	<artifactId>covia-telegram</artifactId>
 
@@ -14,6 +14,7 @@
 
 	<properties>
 		<telegram.version>10.3.0</telegram.version>
+		<covia.module.name>covia.telegram</covia.module.name>
 	</properties>
 
 	<dependencies>
@@ -33,6 +34,25 @@
 			<version>${telegram.version}</version>
 		</dependency>
 
+		<!-- CommonMark parses an agent's Markdown reply for telegram:format
+		     (Markdown to Telegram HTML), with GFM tables and strikethrough;
+		     shaded into the module jar like the client above. -->
+		<dependency>
+			<groupId>org.commonmark</groupId>
+			<artifactId>commonmark</artifactId>
+			<version>${commonmark.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.commonmark</groupId>
+			<artifactId>commonmark-ext-gfm-tables</artifactId>
+			<version>${commonmark.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.commonmark</groupId>
+			<artifactId>commonmark-ext-gfm-strikethrough</artifactId>
+			<version>${commonmark.version}</version>
+		</dependency>
+
 		<!-- Testing -->
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
@@ -43,6 +63,12 @@
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
 			<version>${junit.version}</version>
 			<scope>test</scope>
 		</dependency>
@@ -103,6 +129,12 @@
 									<!-- Logging resolves parent-first from the venue -->
 									<exclude>org.slf4j:*</exclude>
 									<exclude>ch.qos.logback:*</exclude>
+									<!-- Libraries covia.jar already ships come from the venue, so
+									     the module never carries a second copy of a venue package. -->
+									<exclude>org.jetbrains.kotlin:*</exclude>
+									<exclude>org.jetbrains:annotations</exclude>
+									<exclude>com.google.code.gson:*</exclude>
+									<exclude>com.google.errorprone:*</exclude>
 								</excludes>
 							</artifactSet>
 							<filters>

@@ -163,9 +163,12 @@ public class AgentAdapterTest {
 		RequestContext delegated = RequestContext.of(delegateDID)
 			.withProofs(Vectors.of(grant.toMap()));
 
+		// The delegate names caps it holds: it may not create an unrestricted agent
+		// in the owner's namespace.
 		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, address,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
+					"caps", Vectors.of(Capability.create(address, Capability.CRUD_READ)))),
 			delegated).awaitResult(5000);
 		assertEquals(address, RT.getIn(created, Fields.ADDRESS));
 
@@ -180,6 +183,8 @@ public class AgentAdapterTest {
 		ACell suspended = engine.jobs().invokeOperation("v/ops/agent/suspend",
 			Maps.of(Fields.AGENT_ID, address), delegated).awaitResult(5000);
 		assertEquals(AgentState.SUSPENDED, RT.getIn(suspended, Fields.STATUS));
+		assertEquals(delegateDID, RT.getIn(suspended, AgentState.KEY_SUSPENSION, AgentState.SUSPENSION_BY),
+			"the actual caller stopped the agent, not its namespace owner");
 		assertNotNull(engine.getVenueState().users().get(ownerDID).agent("delegated-agent"));
 		User delegate = engine.getVenueState().users().get(delegateDID);
 		assertTrue(delegate == null || delegate.agent("delegated-agent") == null,
@@ -863,6 +868,27 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testUpdateSharesCreateWarningsForMergedConfig() {
+		RequestContext caller = RequestContext.of(ALICE_DID);
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "update-warnings",
+			Fields.CONFIG, Maps.of("operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai", "tools", Vectors.of("v/ops/nope"))),
+			caller).awaitResult(5000);
+		ACell expected = RT.getIn(created, Fields.WARNINGS);
+		assertNotNull(expected);
+		ACell updated = engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "update-warnings", Fields.CONFIG, Maps.of("temperature", 0.5)),
+			caller).awaitResult(5000);
+		assertEquals(expected, RT.getIn(updated, Fields.WARNINGS),
+			"updating another field must still report inherited configuration problems");
+		ACell repaired = engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(
+			Fields.AGENT_ID, "update-warnings", Fields.CONFIG, Maps.of("tools", Vectors.empty())),
+			caller).awaitResult(5000);
+		assertNull(RT.getIn(repaired, Fields.WARNINGS), "repairing the config clears its advisory");
+	}
+
+	@Test
 	public void testConfiguredToolWithoutMetadataReadIsVisibleEverywhere() {
 		String toolPath = "w/ops/risk/issue-limit";
 		AMap<AString, ACell> operation = Maps.of(
@@ -1174,8 +1200,7 @@ public class AgentAdapterTest {
 			assertNull(RT.getIn(inferences.get(1), Fields.TOOLS),
 				runtime + " emitted a per-inference tools delta");
 			ACell session = agent.getSessions().entrySet().iterator().next().getValue();
-			assertTrue(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO,
-				Strings.intern("conversation")).toString().contains("toolAddition"),
+			assertTrue(GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(session, Fields.FRAMES, CVMLong.ZERO))).toString().contains("toolAddition"),
 				runtime + " did not persist appended tool state");
 			AMap<AString, ACell> loads = RT.ensureMap(RT.getIn(session, Fields.LOADS));
 			if (loads == null) loads = RT.ensureMap(
@@ -1334,7 +1359,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(
 			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell last = conversation.get(conversation.count() - 1);
 		assertEquals("assistant", RT.getIn(last, "role").toString());
 		assertEquals(RT.getIn(second, Fields.REPLY, Fields.TOKENS), RT.getIn(last, Fields.TOKENS));
@@ -2329,7 +2354,7 @@ public class AgentAdapterTest {
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		assertNotNull(frames, "Session must have frames");
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 		assertNotNull(history, "Root frame must have a conversation vector");
 		assertEquals(2, history.count(),
 			"Chat cycle appends user turn (chat message) + assistant turn");
@@ -2378,8 +2403,7 @@ public class AgentAdapterTest {
 			.agent("tool-history-agent");
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sid.toString()));
 		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
-		AVector<ACell> conversation = RT.ensureVector(
-			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		assertEquals(4, conversation.count(),
 			"user + assistant(tool call) + tool result + final assistant: "
 				+ convex.core.util.JSON.toString(conversation));
@@ -2412,8 +2436,7 @@ public class AgentAdapterTest {
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("caller-agent");
 		AVector<ACell> frames = (AVector<ACell>) agent.getSession(Blob.fromHex(sidHex.toString()))
 			.get(AgentState.KEY_FRAMES);
-		AVector<ACell> history = (AVector<ACell>) ((AMap<AString, ACell>) frames.get(0))
-			.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 
 		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) history.get(0);
 		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER),
@@ -2460,7 +2483,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(sid);
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 		assertEquals(2, history.count(),
 			"Picked task + response cycle appends two turns (user, assistant)");
 
@@ -2515,7 +2538,7 @@ public class AgentAdapterTest {
 			AMap<AString, ACell> session = (AMap<AString, ACell>) entry.getValue();
 			AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-			AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+			AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 			assertEquals(1, history.count(),
 				"failed inference retains the presented input for audit");
 			assertEquals(AgentState.ROLE_USER,
@@ -2553,7 +2576,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> history = GoalTreeContext.activeConversation(rootFrame);
 		assertEquals(4, history.count(),
 			"Two chat cycles: each appends user+assistant = 4 turns total");
 
@@ -2602,7 +2625,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 		assertEquals(Strings.EMPTY, root.get(AgentState.KEY_DESCRIPTION),
 			"Root frame description starts empty");
-		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 		assertNotNull(conv, "Root frame must carry a conversation vector");
 		assertEquals(0, conv.count(), "Fresh root frame conversation is empty");
 	}
@@ -2632,7 +2655,7 @@ public class AgentAdapterTest {
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		assertEquals(1, frames.count(), "No subgoal — stack depth is 1");
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 
 		assertEquals(2, conv.count(),
 			"Chat cycle appends user turn + assistant turn to root frame conversation");
@@ -2676,7 +2699,7 @@ public class AgentAdapterTest {
 
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+		AVector<ACell> conv = GoalTreeContext.activeConversation(root);
 
 		assertEquals(4, conv.count(), "Two chat cycles append 4 turns total");
 		assertEquals(Strings.create("one"), RT.getIn(conv.get(0), AgentState.K_CONTENT));
@@ -3487,6 +3510,88 @@ public class AgentAdapterTest {
 
 	// ========== #201 / #202 — suspended / deleted agents must not hang callers ==========
 
+	@Test
+	public void testDeliberateSuspensionIsTypedAndClearedOnResume() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString id = Strings.create("deliberate-stop");
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")), ctx).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(id);
+		String longReason = "r".repeat(600);
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, id, Fields.REASON, longReason), ctx).awaitResult(5000);
+		ACell stop = RT.getIn(result, AgentState.KEY_SUSPENSION);
+		assertEquals(ALICE_DID, RT.getIn(stop, AgentState.SUSPENSION_BY));
+		assertEquals(Strings.create(longReason.substring(0, AgentState.MAX_SUSPEND_REASON_LENGTH)),
+			RT.getIn(stop, Fields.REASON));
+		assertInstanceOf(CVMLong.class, RT.getIn(stop, Fields.TS));
+		assertNull(agent.getError());
+		assertEquals(stop, RT.getIn(engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000), AgentState.KEY_SUSPENSION));
+		ACell listed = engine.jobs().invokeOperation("v/ops/agent/list", Maps.empty(), ctx).awaitResult(5000);
+		assertEquals(stop, RT.getIn(listed, "agents", CVMLong.ZERO, AgentState.KEY_SUSPENSION));
+		for (String op : new String[] {"request", "chat"}) {
+			Job refused = engine.jobs().invokeOperation("v/ops/agent/" + op,
+				Maps.of(Fields.AGENT_ID, id, Fields.INPUT, Maps.empty(), Fields.MESSAGE, "hello"), ctx);
+			assertThrows(covia.exception.JobFailedException.class, () -> refused.awaitResult(5000));
+			assertEquals(AgentAdapter.SUSPENDED_CODE, refused.getErrorCode());
+			assertEquals(AgentAdapter.SUSPENDED_REFUSAL.formatted(id,
+				": " + AgentState.suspensionDetail(agent.getRecord()), AgentAdapter.SUSPENDED_ASK_ADVICE),
+				refused.getErrorMessage());
+		}
+		// Latest stop wins, including removal of the previous optional reason.
+		engine.jobs().invokeOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000);
+		assertNull(RT.getIn(agent.getRecord(), AgentState.KEY_SUSPENSION, Fields.REASON));
+		engine.jobs().invokeOperation("v/ops/agent/resume",
+			Maps.of(Fields.AGENT_ID, id, Fields.AUTO_WAKE, false), ctx).awaitResult(5000);
+		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION));
+		assertNull(agent.getError());
+		assertEquals(AgentState.SLEEPING, agent.getStatus());
+	}
+
+	@Test
+	public void testDeliberateStopSettlesActiveChatAndQueuedTask() throws Exception {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString id = Strings.create("stop-active-chat");
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(id);
+		var started = new CompletableFuture<Void>();
+		var events = new java.util.concurrent.CopyOnWriteArrayList<covia.venue.AgentEvents.Event>();
+		try (var subscription = engine.agentEvents().subscribe(ALICE_DID, id, event -> {
+			events.add(event);
+			if (covia.venue.AgentEvents.CYCLE_START.equals(event.type())) started.complete(null);
+		})) {
+			Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "wait"), ctx);
+			started.get(5, java.util.concurrent.TimeUnit.SECONDS);
+			Job queued = engine.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, id, Fields.INPUT, Maps.of("q", "queued")), ctx);
+			engine.jobs().invokeOperation("v/ops/agent/suspend",
+				Maps.of(Fields.AGENT_ID, id, Fields.REASON, "Owner is reviewing this agent"), ctx).awaitResult(5000);
+			assertEquals(AgentState.SUSPENDED, awaitFinished(agent));
+			AString detail = AgentState.suspensionDetail(agent.getRecord());
+			for (Job caller : new Job[] {chat, queued}) {
+				assertThrows(covia.exception.JobFailedException.class, () -> caller.awaitResult(5000));
+				assertEquals(detail.toString(), caller.getErrorMessage());
+			}
+			assertNull(agent.getError(), "a deliberate cancellation is not a fault");
+			assertEquals(0, agent.getTasks().count());
+			assertEquals(1, agent.getTimeline().count());
+			ACell entry = agent.getTimeline().get(0);
+			assertEquals(CVMBool.TRUE, RT.getIn(entry, Fields.CANCELLED));
+			assertEquals(detail, RT.getIn(entry, Fields.RESULT));
+			assertEquals(agent.getRecord().get(AgentState.KEY_SUSPENSION), RT.getIn(entry, AgentState.KEY_SUSPENSION));
+			for (var session : agent.getSessions().entrySet()) {
+				assertNull(RT.getIn(session.getValue(), AgentState.KEY_IN_CYCLE));
+			}
+			assertTrue(events.stream().anyMatch(e -> covia.venue.AgentEvents.STATUS.equals(e.type())
+				&& detail.equals(e.data().get(Fields.ERROR))));
+			assertTrue(events.stream().anyMatch(e -> covia.venue.AgentEvents.CYCLE_END.equals(e.type())
+				&& detail.equals(e.data().get(Fields.ERROR))));
+		}
+	}
+
 	/**
 	 * A request to a SUSPENDED agent must fail fast with the suspension cause
 	 * and the remedy in the message — not sit STARTED indefinitely (#201).
@@ -3688,7 +3793,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		assertNotNull(frames, "session must carry frames");
-		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		int failureTurns = 0;
 		for (long i = 0; i < conversation.count(); i++) {
 			ACell turn = conversation.get(i);
@@ -4890,6 +4995,32 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("rem-agent");
 		assertNull(agent, "Agent record should be removed");
+		// Gone, not a key left holding null: a raw listing of g/ no longer names it.
+		assertFalse(user.getAgents().containsKey(Strings.create("rem-agent")), "no key left behind in g/");
+		ACell listed = engine.jobs().invokeOperation("v/ops/covia/list", Maps.of(Fields.PATH, "g"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertFalse(String.valueOf(RT.getIn(listed, "keys")).contains("rem-agent"), "covia:list of g/: " + listed);
+	}
+
+	@Test
+	public void testRemoveClearsAnEntryAnOlderDeleteLeftHoldingNothing() {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "stale-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		// What deleting did before it removed the key: null written at g/<id>.
+		user.cursor().path(covia.lattice.Namespace.G, Strings.create("stale-agent")).set(null);
+		assertTrue(user.getAgents().containsKey(Strings.create("stale-agent")));
+
+		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "stale-agent"), RequestContext.of(ALICE_DID)).awaitResult(5000),
+			"without remove there is no agent to terminate");
+		assertTrue(user.getAgents().containsKey(Strings.create("stale-agent")), "so nothing changes");
+
+		ACell removed = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "stale-agent", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(removed, Fields.REMOVED));
+		assertFalse(user.getAgents().containsKey(Strings.create("stale-agent")), "the empty entry is gone");
 	}
 
 	@Test
@@ -5995,6 +6126,7 @@ public class AgentAdapterTest {
 		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
 			"agent must be SUSPENDED after a transition error");
 		assertNotNull(agent.getError(), "SUSPENDED agent must record the error");
+		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION), "a fault has no deliberate-stop provenance");
 		assertEquals(0, agent.getTasks().count(),
 			"task queue must be drained on fail-fast (no retry on resume)");
 
@@ -6433,8 +6565,7 @@ public class AgentAdapterTest {
 		Blob sid = Blob.fromHex(sidHex.toString());
 		AMap<AString, ACell> beforeRoot = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		AVector<ACell> before = RT.ensureVector(
-			beforeRoot.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> before = GoalTreeContext.activeConversation(beforeRoot);
 		assertEquals(4, before.count());
 		assertNotNull(beforeRoot.get(Strings.intern("renderedContext")));
 
@@ -6447,12 +6578,11 @@ public class AgentAdapterTest {
 
 		AMap<AString, ACell> compactedRoot = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		AVector<ACell> compacted = RT.ensureVector(
-			compactedRoot.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> compacted = GoalTreeContext.activeConversation(compactedRoot);
 		assertEquals(1, compacted.count());
 		AMap<AString, ACell> archive = RT.ensureMap(compacted.get(0));
 		assertTrue(GoalTreeContext.isSegment(archive));
-		assertEquals(before, RT.ensureVector(archive.get(Strings.intern("items"))),
+		assertEquals(before, RT.getIn(GoalTreeContext.archivedConversation(compactedRoot).get(0), "items"),
 			"the archive retains the exact replaced vector");
 		assertEquals(Strings.create(compact.getID().toHexString()), archive.get(Fields.JOB_ID));
 		assertEquals(ALICE_DID, archive.get(Fields.CALLER));
@@ -6478,8 +6608,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
 				Fields.MESSAGE, "third"), alice).awaitResult(5000);
-		AVector<ACell> appended = RT.ensureVector(RT.getIn(
-			agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO, AgentState.KEY_CONVERSATION));
+		AVector<ACell> appended = GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
 		assertEquals(3, appended.count(), "archive + new user + new assistant");
 		assertEquals(archive, appended.get(0), "future turns append after the sealed archive");
 	}
@@ -6502,8 +6631,7 @@ public class AgentAdapterTest {
 			.agent("reload-context-agent");
 		AMap<AString, ACell> beforeRoot = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
-		AVector<ACell> conversation = RT.ensureVector(
-			beforeRoot.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> conversation = GoalTreeContext.activeConversation(beforeRoot);
 		assertTrue(RT.getIn(beforeRoot, "renderedContext", "messages", 0, "content")
 			.toString().contains("OLD_IDENTITY"));
 
@@ -6529,8 +6657,7 @@ public class AgentAdapterTest {
 			.toString().contains("NEW_IDENTITY"));
 		assertEquals("NEW_IDENTITY",
 			RT.getIn(rebuilt, "renderedContext", "sourceConfig", "systemPrompt").toString());
-		AVector<ACell> rebuiltConversation = RT.ensureVector(
-			rebuilt.get(AgentState.KEY_CONVERSATION));
+		AVector<ACell> rebuiltConversation = GoalTreeContext.activeConversation(rebuilt);
 		assertEquals(conversation, rebuiltConversation.slice(0, conversation.count()),
 			"config re-render keeps all prior session turns verbatim");
 
@@ -6542,7 +6669,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> cleared = RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		assertNull(RT.getIn(cleared, "renderedContext"));
-		assertEquals(rebuiltConversation, cleared.get(AgentState.KEY_CONVERSATION),
+		assertEquals(rebuiltConversation, GoalTreeContext.activeConversation(cleared),
 			"reload changes only the materialised prefix");
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",
@@ -6705,11 +6832,14 @@ public class AgentAdapterTest {
 				Strings.create("can"), Strings.create("agent/create")),
 			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
 				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ)));
+		// A scoped creator confers only caps it holds.
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-unreadable-source-agent",
 			Fields.CONFIG, Maps.of(
 				"operation", "v/ops/llmagent/chat",
-				"skillsets", Vectors.of(Strings.create("w/other-place"))));
+				"skillsets", Vectors.of(Strings.create("w/other-place")),
+				"caps", Vectors.of(convex.auth.ucan.Capability.create(
+					Strings.create("w/skills"), convex.auth.ucan.Capability.CRUD_READ))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, scoped).awaitResult(5000);
 
@@ -6736,7 +6866,9 @@ public class AgentAdapterTest {
 			Fields.AGENT_ID, "skills-readable-source-agent",
 			Fields.CONFIG, Maps.of(
 				"operation", "v/ops/llmagent/chat",
-				"skillsets", Vectors.of(Strings.create("v/skills/root"))));
+				"skillsets", Vectors.of(Strings.create("v/skills/root")),
+				"caps", Vectors.of(convex.auth.ucan.Capability.create(
+					Strings.create("v/skills"), convex.auth.ucan.Capability.CRUD_READ))));
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create", input, scoped).awaitResult(5000);
 		assertNull(RT.getIn(result, Fields.WARNINGS), String.valueOf(result));
@@ -6911,9 +7043,9 @@ public class AgentAdapterTest {
 		AVector<ACell> conversation = Vectors.empty();
 		for (ACell turn : turns) conversation = conversation.conj(turn);
 		final AVector<ACell> stored = conversation;
-		assertTrue(agent.updateSessionFrames(sid, null, frames -> {
+		assertTrue(agent.session(sid).updateFrames(null, frames -> {
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-			return frames.assoc(0, root.assoc(AgentState.KEY_CONVERSATION, stored));
+			return frames.assoc(0, GoalTreeContext.appendTurns(root, stored));
 		}));
 	}
 }

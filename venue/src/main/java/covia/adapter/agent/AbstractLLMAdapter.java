@@ -32,6 +32,7 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.ToolGuards;
 
 /**
  * Common base for LLM-backed agent adapters (Level 2 in the three-level architecture).
@@ -193,6 +194,35 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static RequestContext capsContext(AMap<AString, ACell> config, RequestContext ctx) {
 		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
 		return (caps != null) ? ctx.withCaps(caps) : ctx;
+	}
+
+	/**
+	 * {@link #capsContext} for a transition's input config, which its caller
+	 * supplies: the caps it names replace the caller's scope, so the caller must
+	 * hold each of them ({@link covia.venue.Engine#requireConferrable}). An agent
+	 * running under the caps its own record holds confers nothing: they were
+	 * checked against their author when written, and are not re-checked against
+	 * the agent, which holds none of that author's grants.
+	 */
+	protected RequestContext conferredCapsContext(AMap<AString, ACell> config, AString agentId,
+			RequestContext ctx) {
+		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
+		// No engine only in adapters constructed directly by unit tests (as requireInvoke).
+		if (caps != null && engine != null && !isOwnRecordScope(ctx, agentId, caps)) {
+			engine.requireConferrable(ctx, ctx.getUserDID(), caps);
+		}
+		return capsContext(config, ctx);
+	}
+
+	/** Whether the caller is agent {@code agentId} itself and {@code caps} are its stored caps. */
+	private boolean isOwnRecordScope(RequestContext ctx, AString agentId, AVector<ACell> caps) {
+		AString owner = ctx.getUserDID();
+		if (agentId == null || owner == null
+				|| !covia.grid.Principals.agentDID(owner, agentId).equals(ctx.getCallerDID())) {
+			return false;
+		}
+		AgentState agent = engine.getAgent(owner, agentId);
+		return agent != null && caps.equals(RT.getIn(agent.getConfig(), K_CAPS));
 	}
 
 	/**
@@ -901,7 +931,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			AString operation, RequestContext ctx, long timeoutMs) {
 		// Capability enforcement happens at the operation's own enforcement point
 		// under the agent's grant scope carried on ctx — no name-keyed gate here.
+		// The host's guards come first: a call they refuse never runs.
 		if (operation != null) {
+			String refused = guard(toolName, operation, input, ctx, timeoutMs);
+			if (refused != null) return Strings.create("Error: " + refused);
 			return invokeOperation(operation, input, ctx, timeoutMs);
 		}
 
@@ -916,7 +949,17 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		}
 
 		// Fall through to grid dispatch
-		return invokeOperation(Strings.create(toolName), input, ctx, timeoutMs);
+		AString named = Strings.create(toolName);
+		String refused = guard(toolName, named, input, ctx, timeoutMs);
+		if (refused != null) return Strings.create("Error: " + refused);
+		return invokeOperation(named, input, ctx, timeoutMs);
+	}
+
+	/** The host's tool guards on this call: null to run it, else why not. */
+	private String guard(String toolName, AString operation, ACell input, RequestContext ctx, long timeoutMs) {
+		ToolGuards.Call call = new ToolGuards.Call(ctx.getUserDID(), ctx.getAgentId(), ctx.getSessionId(),
+			toolName, operation, input);
+		return engine.toolGuards().check(call, timeoutMs);
 	}
 
 	/**
@@ -969,13 +1012,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * level); {@link #dispatchTool} has additionally checked the call against
 	 * the agent's own config caps. Times out via
 	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so a
-	 * stuck downstream op cannot hang the agent loop forever.
+	 * stuck downstream op cannot hang the agent loop forever. Inside a cycle
+	 * with a live tap, the progress the operation publishes while it runs is
+	 * announced against the tool call that invoked it.
 	 */
 	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
 		// Internal dispatch preserves types exactly — no coercion here. Tool
 		// arguments were already normalised once at the LLM wire boundary
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
 		// surfaces from the op's own validation (#89).
+		ToolCycleEngine.ProgressRelay relay = ToolCycleEngine.relayForRunningCall();
 		try {
 			// HITL is naturally longer-lived than a model turn. Its operation
 			// already owns a durable Job, so a sessioned agent receives that handle
@@ -993,13 +1039,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
 				return receipt;
 			}
-			ACell result = engine.jobs().invokeInternal(operation, input, ctx)
+			ACell result = engine.jobs().invokeInternal(operation, input, ctx,
+					(relay != null) ? relay::watch : null)
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
 			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
 		} catch (Exception e) {
 			return Strings.create("Error: " + unwrap(e).getMessage());
+		} finally {
+			if (relay != null) relay.close();
 		}
 	}
 

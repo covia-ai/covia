@@ -402,7 +402,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				GoalTreeContext.describeTransitionInput(null, null, null)));
 		}
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(0);
-		if (RT.ensureVector(activeFrame.get(GoalTreeContext.K_CONVERSATION)).isEmpty()) {
+		if (GoalTreeContext.activeConversation(activeFrame).isEmpty()) {
 			AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
 			if (goalMsg != null) activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
 		}
@@ -597,7 +597,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Authority, palette and the cycle's Spec. Harness tool names in
 		// config.tools are skipped by the palette — they're resolved separately
 		// by resolveHarnessTools / buildTypedRootHarnessTools.
-		RequestContext capsCtx = capsContext(recordConfig, ctx).withAgentId(agentId);
+		RequestContext capsCtx = conferredCapsContext(recordConfig, agentId, ctx).withAgentId(agentId);
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		boolean cachePrefix = promptCaching(profile, l3Config);
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
@@ -1023,7 +1023,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				"Frame stack no longer holds frame " + frameIndex + " — cycle superseded"), frames);
 		}
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
-		if (RT.ensureVector(activeFrame.get(GoalTreeContext.K_CONVERSATION)).isEmpty()) {
+		if (GoalTreeContext.activeConversation(activeFrame).isEmpty()) {
 			AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
 			if (goalMsg != null) {
 				activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
@@ -1242,10 +1242,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.forFrame(frameL3Config, (frameTools.frameIndex > 0) ? CHILD_FRAME_NOTICE : null)
 			.withFrames(stack);
 		if (frameTools.compacted) base = base.afterCompaction(stack);
+		ACell task = root ? frameTools.cycle.tasks().message() : null;
+		// The root of a conversation is answered by its final message, as the flat
+		// runtime is; a subgoal has its own notice, a task its message, and typed
+		// outputs complete() as well.
+		boolean replying = root && task == null && frameTools.cycle.typedRootHarnessTools() == null;
 		ContextAssembler.Spec inference = base
 			.withLoads(loads, concatTools(fixedTools, loads.tools()))
-			.withNotice(notice)
-			.withTask(root ? frameTools.cycle.tasks().message() : null);
+			.withNotice(ContextAssembler.withReplyNotice(notice, replying))
+			.withTask(task);
 		if (!frameTools.store.observe(frameTools.frameIndex,
 				ContextAssembler.observations(inference, loads),
 				convex.core.util.Utils.getCurrentTimestamp())) return null;

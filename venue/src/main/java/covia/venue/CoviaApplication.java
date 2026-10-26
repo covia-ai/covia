@@ -9,32 +9,41 @@ import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
-import convex.lattice.ALatticeApplication;
+import convex.lattice.LatticeApplication;
 import convex.lattice.LatticeContext;
-import convex.lattice.RootComponent;
+import convex.lattice.LatticeHost;
 import covia.lattice.Covia;
 
 /**
  * Hosted application component for the complete Covia lattice.
  *
  * <p>This is the root-level composition point between a generic lattice host
- * ({@link RootComponent}) and Covia's path-specific domain components. It owns
+ * ({@link LatticeHost}) and Covia's path-specific domain components. It owns
  * neither the host nor its store lifecycle.</p>
+ *
+ * <p>Each running venue uses one authoritative connected state and atomic
+ * transactions. Whole-venue LWW selects recovery/replication snapshots; it cannot
+ * reconcile the state or external effects of independently running forks.</p>
  */
 public final class CoviaApplication
-		extends ALatticeApplication<Index<Keyword, ACell>> {
+		extends LatticeApplication<Index<Keyword, ACell>> {
 
 	private final boolean ephemeral;
+	private final LatticeHost<Index<Keyword, ACell>> host;
 
-	private CoviaApplication(RootComponent<Index<Keyword, ACell>> host,
+	private CoviaApplication(LatticeHost<Index<Keyword, ACell>> host,
 			boolean ephemeral) {
-		super(host);
+		// Use the live-cursor constructor. The host-based constructor creates a
+		// private working copy, which would split Engine's authoritative state.
+		super(Covia.ROOT, host.cursor());
+		this.host = host;
 		this.ephemeral = ephemeral;
+		host.addApplication(this);
 	}
 
 	/** Connects Covia to an existing local or NodeServer-hosted root. */
 	public static CoviaApplication connect(
-			RootComponent<Index<Keyword, ACell>> host) {
+			LatticeHost<Index<Keyword, ACell>> host) {
 		return new CoviaApplication(host, false);
 	}
 
@@ -43,10 +52,11 @@ public final class CoviaApplication
 		if (keyPair == null) {
 			throw new IllegalArgumentException("Venue key pair must not be null");
 		}
-		RootComponent<Index<Keyword, ACell>> root =
-			RootComponent.create(Covia.ROOT, new MemoryStore());
-		root.cursor().setContext(LatticeContext.create(null, keyPair));
-		return new CoviaApplication(root, true);
+		LatticeHost<Index<Keyword, ACell>> root =
+			LatticeHost.create(Index.none(), new MemoryStore());
+		var application = new CoviaApplication(root, true);
+		application.setContext(LatticeContext.create(null, keyPair));
+		return application;
 	}
 
 	/**
@@ -58,10 +68,11 @@ public final class CoviaApplication
 		if (keyPair == null) {
 			throw new IllegalArgumentException("Venue key pair must not be null");
 		}
-		RootComponent<Index<Keyword, ACell>> root =
-			RootComponent.open(Covia.ROOT, store);
-		root.cursor().setContext(LatticeContext.create(null, keyPair));
-		return connect(root);
+		LatticeHost<Index<Keyword, ACell>> root =
+			LatticeHost.open(Index.none(), store);
+		var application = connect(root);
+		application.setContext(LatticeContext.create(null, keyPair));
+		return application;
 	}
 
 	/** Returns the component for one owner-signed venue record. */
@@ -71,7 +82,12 @@ public final class CoviaApplication
 
 	/** Returns the caller-owned host store for internal adapter integration. */
 	AStore hostStore() {
-		return host().store();
+		return host.store();
+	}
+
+	/** Host-owned persistence and durability boundary. */
+	public LatticeHost<Index<Keyword, ACell>> host() {
+		return host;
 	}
 
 	/** Whether this application was created as an in-memory ephemeral host. */

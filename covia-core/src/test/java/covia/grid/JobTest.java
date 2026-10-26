@@ -25,6 +25,37 @@ import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 
 public class JobTest {
+	private static final AString LEGACY_PREV = Strings.intern("prev");
+
+	@Test void repeatedUpdatesKeepOnlyCurrentState() {
+		AMap<AString, ACell> initial = Maps.of(Fields.STATUS, Status.STARTED, Fields.OUTPUT, "a");
+		Job job = Job.create(initial);
+		for (int i = 0; i < 10_000; i++) {
+			job.update(d -> d.assoc(Fields.OUTPUT, Strings.create("b")));
+			job.updateData(initial);
+		}
+		assertEquals(initial, job.getData());
+		assertEquals(convex.core.util.JSON.toString(initial), convex.core.util.JSON.toString(job.getData()));
+		job.cancel();
+		job.recordCancellation(Maps.of("outcome", "stopped"));
+		assertFalse(job.getData().containsKey(LEGACY_PREV));
+	}
+
+	@Test void legacyChainsAreDiscardedWithoutWalkingOrChangingPayloads() {
+		AMap<AString, ACell> payload = Maps.of(LEGACY_PREV, "application data");
+		AMap<AString, ACell> current = Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, payload);
+		AMap<AString, ACell> legacy = current;
+		for (int i = 0; i < 10_000; i++) legacy = current.assoc(LEGACY_PREV, legacy);
+		Job job = Job.create(legacy);
+		assertEquals(current, job.getData());
+		assertEquals(payload, job.awaitResult());
+		assertSame(current, Job.currentState(current), "normalisation is a no-op for current records");
+		assertEquals(current, Job.currentState(current.assoc(LEGACY_PREV, Strings.create("unreadable old data"))));
+		Job running = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		running.updateData(legacy);
+		assertEquals(current, running.getData());
+		assertEquals(payload, running.awaitResult());
+	}
 
 	@Test void cancellationEvidenceDoesNotReopenOrFinishTheJobAgain() {
 		var finishes = new java.util.concurrent.atomic.AtomicInteger();
@@ -53,6 +84,47 @@ public class JobTest {
 		assertEquals(1, finishes.get());
 		assertEquals(1, hooks.get());
 		assertEquals(2, notifications.get());
+	}
+
+	@Test void progressIsTheJobsCurrentStateNotItsHistory() {
+		var notifications = new java.util.concurrent.atomic.AtomicInteger();
+		var observed = new java.util.concurrent.atomic.AtomicInteger();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+			@Override protected void onProgress(AMap<AString, ACell> data) { observed.incrementAndGet(); }
+		};
+		job.subscribe(j -> notifications.incrementAndGet());
+
+		assertTrue(job.progress("Reading the files", null));
+		assertEquals(Maps.of(Fields.MESSAGE, Strings.create("Reading the files")), job.getData().get(Fields.PROGRESS),
+			"no data, no data entry");
+		assertFalse(job.progress("Reading the files", null), "the same progress again changes nothing");
+		ACell detail = Maps.of("lastTool", "Bash: run the tests");
+		assertTrue(job.progress("Running the tests", detail));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
+		assertEquals(detail, Job.progressData(job.getData().get(Fields.PROGRESS)));
+		assertNull(job.getData().get(LEGACY_PREV));
+		assertEquals(2, notifications.get());
+		assertEquals(2, observed.get());
+
+		// Progress is part of the record: a lifecycle change carries it on.
+		job.update(d -> d.assoc(Fields.OUTPUT, Strings.create("partial")));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
+
+		job.completeWith(Strings.create("done"));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)),
+			"the finished record keeps the last progress");
+		assertFalse(job.progress("too late", null));
+		assertEquals("Running the tests", Job.progressMessage(job.getData().get(Fields.PROGRESS)));
+	}
+
+	@Test void progressReadsHoweverItWasWritten() {
+		assertEquals("plain", Job.progressMessage(Strings.create("plain")));
+		assertNull(Job.progressData(Strings.create("plain")));
+		ACell flat = Maps.of("lastTool", "Bash: ls", "toolCalls", 3L);
+		assertNull(Job.progressMessage(flat));
+		assertEquals(flat, Job.progressData(flat), "a map without a message is all detail");
+		assertNull(Job.progressMessage(convex.core.data.prim.CVMLong.create(40)));
+		assertNull(Job.progressData(null));
 	}
 
 	@Test

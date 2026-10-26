@@ -1,0 +1,25 @@
+{
+  "name": "Prepare speech",
+  "description": "Gets the venue's speech engine ready before any audio or text is in hand: to transcribe (the default) or, with for: speak, to speak. The local engine fetches that direction's pinned model and its native libraries once, if they are not yet on this machine, and loads the libraries; that can take minutes, and speech:engines reports the download's progress meanwhile. A remote engine needs nothing. Returns the engines as speech:engines reports them.",
+  "operation": {
+    "adapter": "speech:prepare",
+    "readOnly": true,
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "for": {
+          "type": "string",
+          "enum": ["transcribe", "speak"],
+          "description": "Which direction to get ready; transcribe by default."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "engines": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

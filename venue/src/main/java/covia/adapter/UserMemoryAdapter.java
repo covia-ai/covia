@@ -3,7 +3,9 @@ package covia.adapter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +40,12 @@ import covia.venue.RequestContext;
  * in GetMine-ai/demo#134). Per-user DID scoping comes from the {@code covia:*}
  * ops for free; this adapter holds no identity logic.</p>
  *
+ * <p>Each mutation is a read, an edit and a whole-value write, so two at once
+ * would compute from the same read and the second would silently drop the
+ * first: an agent's parallel tool calls run concurrently. Mutations by one
+ * caller are therefore serialised, which also makes the {@code n} each one
+ * returns the position it actually took.</p>
+ *
  * <h3>Numbering</h3>
  * <p>Display numbers are 1-based positions in the vector. {@code update}/{@code forget}
  * take {@code n} and resolve it against the current list order — the same order
@@ -69,6 +77,9 @@ public class UserMemoryAdapter extends AAdapter {
 	private static final AString K_REMEMBERED = Strings.intern("remembered");
 	private static final AString K_FORGOTTEN  = Strings.intern("forgotten");
 	private static final AString K_UPDATED_OK = Strings.intern("updated");
+
+	/** One lock per caller DID: its mutations read, edit and write back without interleaving. */
+	private final ConcurrentHashMap<AString, ReentrantLock> locks = new ConcurrentHashMap<>();
 
 	@Override
 	public String getName() {
@@ -108,9 +119,9 @@ public class UserMemoryAdapter extends AAdapter {
 		try {
 			return switch (command) {
 				case "recall"   -> CompletableFuture.completedFuture(handleRecall(ctx, input));
-				case "remember" -> CompletableFuture.completedFuture(handleRemember(ctx, input));
-				case "update"   -> CompletableFuture.completedFuture(handleUpdate(ctx, input));
-				case "forget"   -> CompletableFuture.completedFuture(handleForget(ctx, input));
+				case "remember" -> CompletableFuture.completedFuture(mutate(ctx, () -> handleRemember(ctx, input)));
+				case "update"   -> CompletableFuture.completedFuture(mutate(ctx, () -> handleUpdate(ctx, input)));
+				case "forget"   -> CompletableFuture.completedFuture(mutate(ctx, () -> handleForget(ctx, input)));
 				default -> CompletableFuture.failedFuture(new RuntimeException(
 					"memory requires command: recall | remember | update | forget"));
 			};
@@ -217,6 +228,17 @@ public class UserMemoryAdapter extends AAdapter {
 	}
 
 	// ========== helpers ==========
+
+	/** Runs a read-edit-write mutation holding the caller's lock (a lock, not a monitor: tools run on virtual threads). */
+	private ACell mutate(RequestContext ctx, java.util.function.Supplier<ACell> mutation) {
+		ReentrantLock lock = locks.computeIfAbsent(ctx.getCallerDID(), k -> new ReentrantLock());
+		lock.lock();
+		try {
+			return mutation.get();
+		} finally {
+			lock.unlock();
+		}
+	}
 
 	private static String path(ACell input) {
 		AString p = RT.ensureString(RT.getIn(input, "path"));

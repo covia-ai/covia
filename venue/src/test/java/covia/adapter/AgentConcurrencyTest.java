@@ -205,6 +205,28 @@ public class AgentConcurrencyTest {
 	}
 
 	@Test
+	public void testDeliberateStopSurvivesLateFaultAndCancellationDoesNotUndoResume() {
+		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent("stop-race", Maps.empty(), null);
+		agent.suspend(ALICE_DID, Strings.create("review"));
+		ACell stop = agent.getRecord().get(AgentState.KEY_SUSPENSION);
+		agent.suspend(Strings.create("late failure"));
+		agent.suspendAndDrain(Strings.create("late failed cycle"));
+		assertEquals(stop, agent.getRecord().get(AgentState.KEY_SUSPENSION));
+		assertNull(agent.getError());
+		assertTrue(agent.tryResume());
+		assertNull(agent.finishSuspendedCycle(Maps.of(Fields.CANCELLED, true), null));
+		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertTrue(agent.getTimeline().isEmpty());
+		agent.suspend(Strings.create("new fault after resume"));
+		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION));
+		assertEquals(Strings.create("new fault after resume"), agent.getError());
+		agent.setStatus(AgentState.TERMINATED);
+		assertNull(agent.suspend(ALICE_DID, Strings.create("too late")));
+		assertEquals(AgentState.TERMINATED, agent.getStatus());
+	}
+
+	@Test
 	public void testTakeTaskHasExactlyOneConcurrentWinner() throws Exception {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);

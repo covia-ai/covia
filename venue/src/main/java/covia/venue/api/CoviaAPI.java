@@ -213,7 +213,7 @@ public class CoviaAPI extends ACoviaAPI {
 		AMap<AString,ACell> stats = engine().getStats();
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		stats = stats.assoc(Strings.intern("userJobs"),
-			RT.cvm(engine().jobs().getJobs(rctx).count()));
+			RT.cvm(engine().jobs().countJobs(rctx)));
 		result=result.assoc(STATS_FIELD,stats);
 
 		// Curated admission-policy fields (#255) — safe to state to any caller,
@@ -596,7 +596,8 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Any other lattice address — resolve via the universal resolver (the same
 		// path invoke and covia:read use) and interpret the value as metadata.
-		ACell value = engine().resolvePath(refStr, ctx);
+		// Read checked above (asset/read).
+		ACell value = engine().resolvePathUnchecked(refStr, ctx);
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) value;
@@ -605,7 +606,7 @@ public class CoviaAPI extends ACoviaAPI {
 		// Remote / named DID-URL bindings aren't in the local lattice — fetch the
 		// hash-verified definition from the publishing venue.
 		if (ref.startsWith("did:")) {
-			return engine().resolveAsset(refStr, ctx);
+			return engine().resolveAssetUnchecked(refStr, ctx);
 		}
 		return null;
 	}
@@ -771,10 +772,10 @@ public class CoviaAPI extends ACoviaAPI {
 			// enforce their native capability; asset/lattice refs enforce asset/read
 			// inside Engine.resolveContent. Metadata is resolved separately only for
 			// content.contentType / fileName headers; a provider ref may have no
-			// asset metadata at all.
-			AMap<AString,ACell> meta = RT.ensureMap(engine().resolvePath(ref, rctx));
+			// asset metadata at all. Content resolution checks access first.
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine().resolveContent(ref, rctx);
+			AMap<AString,ACell> meta = RT.ensureMap(engine().resolvePathUnchecked(ref, rctx));
 			if (resolved==null) {
 				if (meta==null) buildError(ctx,404,"Asset not found: "+id);
 				else if (!meta.containsKey(Fields.CONTENT)) buildError(ctx,404,"Asset metadata does not specify any content object: "+id);
@@ -2003,9 +2004,10 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.GET,
 			tags = { "Covia" },
 			summary = "List the authenticated caller's pending scheduled events, each "
-				+ "{handle, op, time, track, repeat?, lastFired?, lastJob?}, ordered by next fire time "
-				+ "(job-free, #369). Includes events queued by the caller's agents. Read lastJob "
-				+ "via /jobs/{id} for a tracked recurring event's most recent outcome.",
+				+ "{handle, op, time, track, by?, input?, description?, created?, repeat?, lastFired?, "
+				+ "lastJob?}, ordered by next fire time (job-free, #369). Includes events queued by the "
+				+ "caller's agents; input hides the operation's secret fields as job records do. Read "
+				+ "lastJob via /jobs/{id} for a tracked recurring event's most recent outcome.",
 			operationId = "getSchedules")
 	protected void getSchedules(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);

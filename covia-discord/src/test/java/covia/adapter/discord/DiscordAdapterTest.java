@@ -35,6 +35,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.adapter.messaging.MessagingText;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -116,13 +117,14 @@ class DiscordAdapterTest {
 
 	@Test void catalogStatusSkillAndTemplateAreInstalled(){
 		ACell status=run(OWNER,"v/ops/discord/bots",Maps.empty());assertTrue(status.toString().contains("RUNNING"));assertFalse(status.toString().contains("literal-test-token"));
+		assertEquals(Vectors.of("alice"),RT.getIn(RT.getIn(status,"bots",0),"allow"),"the owner sees who may message the bot");
 		ACell skill=engine.resolvePath(Strings.create("v/skills/adapters/discord"),engine.venueContext());assertNotNull(skill);
 		assertTrue(String.valueOf(RT.getIn(skill,"skill","tools")).contains("v/ops/discord/send"),"the module's own skill, not the venue's Discord connection skill (#510)");
 		ACell template=engine.resolvePath(Strings.create("v/agents/templates/discord"),engine.venueContext());assertNotNull(template);
 		ACell cfg=RT.getIn(template,"agent","config");
 		assertEquals(Vectors.of((ACell)Strings.create("w/skills"),Strings.create("v/skills/root")),RT.getIn(cfg,"skillsets"));
 		assertNull(RT.getIn(cfg,"skills"));
-		assertEquals(List.of("abc","def"),BotRunner.split("abc def",3));
+		assertEquals(List.of("abc","def"),MessagingText.split("abc def",3));
 	}
 
 	@Test void runtimeBotsRequireSecretReferencesAndCanBeDeleted() throws Exception {
@@ -131,15 +133,53 @@ class DiscordAdapterTest {
 		run(OWNER,"v/ops/discord/create",Maps.of("name","created","token","s/DISCORD_CREATED","operation","v/test/ops/echo","open",true));
 		for(int i=0;i<100&&!gateway.sinks.containsKey("created-token");i++)Thread.sleep(20);
 		assertTrue(gateway.sinks.containsKey("created-token"));
-		String recordPath=adapter.runtimeBotPath(OWNER,"created");
-		ACell record=engine.resolvePath(Strings.create(recordPath),engine.venueContext());
+		String recordPath=adapter.userStatePath(OWNER,"bots/created");
+		ACell record=adapter.state().read(recordPath);
 		assertNotNull(record);assertEquals(Strings.create("s/DISCORD_CREATED"),RT.getIn(record,"token"));assertEquals(null,RT.getIn(record,"user"));
-		assertEquals(null,engine.resolvePath(Strings.create(recordPath),RequestContext.of(OWNER)));
+		assertEquals(null,engine.resolvePath(Strings.create("w/adapters/discord/"+recordPath),RequestContext.of(OWNER)));
 		adapter.forgetForTest(OWNER,"created");assertEquals(null,adapter.runnerForTest(OWNER,"created"));
 		adapter.rearmForTest();assertNotNull(adapter.runnerForTest(OWNER,"created"));
 		ACell deleted=run(OWNER,"v/ops/discord/delete",Maps.of("name","created"));assertEquals(CVMBool.TRUE,RT.getIn(deleted,"deleted"));
 		assertFalse(gateway.sinks.containsKey("created-token"));
-		assertEquals(null,engine.resolvePath(Strings.create(recordPath),engine.venueContext()));
+		assertEquals(null,adapter.state().read(recordPath));
+	}
+
+	@Test void localAgentAcceptsAnotherMessageWhileThinking() throws Exception {
+		var response = new java.util.concurrent.CompletableFuture<ACell>();
+		var entered = new java.util.concurrent.CountDownLatch(1);
+		engine.registerAdapter(new covia.adapter.AAdapter() {
+			@Override public String getName() { return "discord-held"; }
+			@Override public String getDescription() { return "Held model"; }
+			@Override protected void installAssets() { installAsset("discord-held/llm", Maps.of("operation", Maps.of("adapter", "discord-held:llm"))); }
+			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString,ACell> meta, ACell input) {
+				entered.countDown(); return response;
+			}
+		});
+		run(OWNER,"v/ops/agent/create",Maps.of(Fields.AGENT_ID,"discord-agent",Fields.CONFIG,
+			Maps.of(Fields.OPERATION,"v/ops/llmagent/chat","llmOperation","v/ops/discord-held/llm")));
+		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_AGENT","value","agent-token"));
+		try {
+			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","open",true));
+			for(int n=0;n<100&&!gateway.sinks.containsKey("agent-token");n++) Thread.sleep(20);
+			var sink=gateway.sinks.get("agent-token"); assertNotNull(sink);
+			sink.accept(message("first","agent-channel","alice","first input",true,false));
+			assertTrue(entered.await(10,TimeUnit.SECONDS));
+			var agent=engine.getVenueState().users().get(OWNER).agent("discord-agent");
+			var sid=agent.getSessions().entryAt(0).getKey();
+			sink.accept(message("second","agent-channel","alice","second input",true,false));
+			long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
+			while(!agent.getSessionPending(sid).toString().contains("second input")&&System.nanoTime()<deadline) Thread.sleep(10);
+			assertTrue(agent.getSessionPending(sid).toString().contains("second input"));
+			assertEquals(1,agent.getSessions().count());
+			assertFalse(response.isDone());
+			assertTrue(api.requests.isEmpty());
+			run(OWNER,"v/ops/discord/delete",Maps.of("name","agent-bot"));
+			response.complete(Maps.of("role","assistant","content","late reply"));
+			assertNull(api.requests.poll(300,TimeUnit.MILLISECONDS),"stopped bindings must not send late replies");
+		} finally {
+			response.complete(Maps.of("role","assistant","content","cleanup"));
+			if(adapter.runnerForTest(OWNER,"agent-bot")!=null) run(OWNER,"v/ops/discord/delete",Maps.of("name","agent-bot"));
+		}
 	}
 
 	private static InboundMessage message(String id,String channel,String username,String text,boolean dm,boolean mention){return new InboundMessage(id,channel,dm?"PRIVATE":"TEXT",dm?username:"general",dm?null:"guild-1",dm?null:"Test Guild","42",username,username,text,dm,mention,Vectors.empty());}

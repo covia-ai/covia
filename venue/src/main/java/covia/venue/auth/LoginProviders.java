@@ -6,550 +6,389 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.security.interfaces.RSAPublicKey;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.LongSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.nimbusds.oauth2.sdk.id.State;
+import com.nimbusds.oauth2.sdk.pkce.CodeChallenge;
+import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod;
+import com.nimbusds.oauth2.sdk.pkce.CodeVerifier;
+import com.nimbusds.openid.connect.sdk.Nonce;
+
+import convex.auth.jwt.JWT;
+import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.auth.jwt.JWT;
-import convex.core.crypto.Hashing;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import io.javalin.http.Context;
 
-/**
- * OAuth-based login for Covia venues.
- *
- * <p>Supports Google, Microsoft, and GitHub OAuth providers.
- * Configuration is read from the "oauth" section within the venue's
- * "auth" config. After successful OAuth, creates/updates the user in the
- * lattice-backed user database and issues a venue-signed EdDSA JWT.
- *
- * <p>Created and owned by {@link covia.venue.Auth}.
- *
- * @see covia.venue.Auth
+/** External login transport. Provider ceremonies stay here; persistent identities are lattice data.
+ * Temporary transactions are process-local, bounded and single-use, not authentication sessions.
  */
 public class LoginProviders {
-
 	private static final Logger log = LoggerFactory.getLogger(LoginProviders.class);
+	private static final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+	static final long TRANSACTION_TTL = 300_000;
+	static final long EXCHANGE_TTL = 60_000;
+	private static final int MAX_PENDING = 10_000;
+	// Method-owned payload, not protocol fields on the core identity/evidence shape.
+	public static final AString EXTERNAL_IDENTITY = Strings.intern("externalIdentity");
+	private static final AString ISS = Strings.intern("iss");
+	private static final AString SUB = Strings.intern("sub");
+	public static final String UNKNOWN_PROVIDER = "Unsupported or unconfigured provider";
+	public static final String INVALID_TRANSACTION = "Invalid or expired login transaction";
+	public static final String INVALID_EXCHANGE = "Invalid or expired login exchange";
+	public static final String INVALID_LOGIN = "Provider login failed";
+	public static final String PKCE_REQUIRED = "A redirect login requires S256 code_challenge and client state";
+	public static final String REDIRECT_REFUSED = "redirect_uri must exactly match auth.loginRedirectUris";
+	public static final String TOO_MANY_PENDING = "Too many pending logins";
+	public static final String LEGACY_IDENTITY = "Existing account needs independently authenticated identity-link confirmation";
+	public static final String IDENTITY_CONFLICT = "External identity conflicts with an existing account";
+	public static final String INVALID_REDIRECT_CONFIG = "auth.loginRedirectUris must contain exact HTTPS URLs (HTTP only on loopback), without query, fragment or user-info";
+	public static final String LEGACY_REDIRECT_CONFIG = "Replace auth.loginRedirectOrigins with exact auth.loginRedirectUris";
+	public static final String HTTPS_REQUIRED = "External login requires an HTTPS baseUrl (HTTP only on loopback)";
 
 	private final Engine engine;
 	private final Map<String, OAuthConfig> providers;
-	private final Set<String> redirectOrigins;
+	private final Set<String> redirectUris;
+	private final LongSupplier clock;
+	private final String cookieName;
+	private final boolean secureCookie;
+	private final Map<String, Transaction> transactions = new HashMap<>();
+	private final Map<String, Exchange> exchanges = new HashMap<>();
 
-	private static final HttpClient client = HttpClient.newBuilder()
-		.connectTimeout(Duration.ofSeconds(10))
-		.build();
+	private record Transaction(String provider, String browser, CodeVerifier verifier, Nonce nonce,
+			String redirect, String challenge, String clientState, long expiresAt) {}
+	private record Exchange(AString userDID, UserIdentity identity, String redirect, String challenge, long expiresAt) {}
 
-	/**
-	 * Create LoginProviders from auth config.
-	 * Reads the "oauth" sub-section and registers configured providers.
-	 * The base URL for redirect URIs is derived from the venue config
-	 * via {@link Config#getBaseUrl()}.
-	 *
-	 * @param engine The venue engine
-	 * @param authConfig The "auth" config section, or null if not configured
-	 */
 	public LoginProviders(Engine engine, AMap<AString, ACell> authConfig) {
+		this(engine, authConfig, configuredProviders(engine, authConfig), System::currentTimeMillis);
+	}
+
+	// Explicit clock and provider endpoints allow real HTTP contract tests without external accounts.
+	LoginProviders(Engine engine, AMap<AString, ACell> authConfig, Map<String, OAuthConfig> providers, LongSupplier clock) {
 		this.engine = engine;
-		this.providers = new HashMap<>();
-		this.redirectOrigins = redirectOrigins(engine.config().getBaseUrl(), authConfig);
-
-		if (authConfig == null) return;
-
-		AMap<AString, ACell> oauthConfig = RT.ensureMap(authConfig.get(Config.OAUTH));
-		if (oauthConfig == null) return;
-
-		String base = engine.config().getBaseUrl();
-
-		registerProvider("google", oauthConfig, base, OAuthConfig::google);
-		registerProvider("microsoft", oauthConfig, base, OAuthConfig::microsoft);
-		registerProvider("github", oauthConfig, base, OAuthConfig::github);
-	}
-
-	private void registerProvider(String name, AMap<AString, ACell> oauthConfig, String baseUrl,
-			ProviderFactory factory) {
-		AMap<AString, ACell> providerConfig = RT.ensureMap(oauthConfig.get(Strings.create(name)));
-		if (providerConfig == null) return;
-
-		AString clientId = RT.ensureString(providerConfig.get(Config.CLIENT_ID));
-		AString clientSecret = RT.ensureString(providerConfig.get(Config.CLIENT_SECRET));
-		// A half-filled block never reaches here: Config.validateAuth rejects
-		// clientId-without-clientSecret (and vice versa) at construction, so
-		// this is the both-absent case — the provider is simply not configured.
-		if (clientId == null || clientSecret == null) return;
-
-		OAuthConfig cfg = factory.create(clientId.toString(), clientSecret.toString(), baseUrl);
-		providers.put(name, cfg);
-		log.info("Registered OAuth provider: {}{}", name,
-			isSecretRef(cfg.clientSecret) ? " (clientSecret via " + cfg.clientSecret + ")" : "");
-	}
-
-	/** Whether a configured clientSecret is an {@code s/NAME} store reference rather than a literal. */
-	private static boolean isSecretRef(String value) {
-		return Engine.isSecretRef(value);
-	}
-
-	/**
-	 * The provider's client secret, resolving an {@code s/NAME} reference against
-	 * the venue's own secret store.
-	 *
-	 * <p>{@code adapters.oauth} requires the reference form and rejects literals
-	 * outright; login config predates that and is read literally, so a deployment
-	 * had to keep the plaintext secret in its config file. Both forms are accepted
-	 * here — the reference is preferred, the literal stays working — and resolution
-	 * is deferred to the token exchange because the secret store is not populated
-	 * when providers are registered at startup.
-	 */
-	String resolveClientSecret(OAuthConfig provider) {
-		String configured = provider.clientSecret;
-		if (!isSecretRef(configured)) return configured;
-
-		String secret = engine.resolveSecret(configured, engine.venueContext());
-		if (secret == null) {
-			throw new IllegalStateException("auth.oauth." + provider.name + ".clientSecret references "
-				+ configured + ", which is not set in the venue's secret store");
+		this.providers = Map.copyOf(providers);
+		this.clock = clock;
+		this.redirectUris = redirectUris(authConfig);
+		URI base = URI.create(engine.config().getBaseUrl());
+		secureCookie = "https".equals(base.getScheme());
+		if (!providers.isEmpty() && !secureCookie && !("http".equals(base.getScheme()) && isLoopback(base.getHost()))) {
+			throw new IllegalArgumentException(HTTPS_REQUIRED);
 		}
+		cookieName = secureCookie ? "__Host-covia-login" : "covia-login";
+	}
+
+	private static Map<String, OAuthConfig> configuredProviders(Engine engine, AMap<AString, ACell> authConfig) {
+		Map<String, OAuthConfig> result = new HashMap<>();
+		AMap<AString, ACell> oauth = authConfig == null ? null : RT.ensureMap(authConfig.get(Config.OAUTH));
+		if (oauth == null) return result;
+		String base = engine.config().getBaseUrl();
+		for (String name : Set.of("google", "microsoft", "github")) {
+			AMap<AString, ACell> config = RT.ensureMap(oauth.get(Strings.intern(name)));
+			if (config == null) continue;
+			String id = str(config, Config.CLIENT_ID), secret = str(config, Config.CLIENT_SECRET);
+			if (id == null || secret == null) continue;
+			OAuthConfig provider = switch (name) {
+				case "google" -> OAuthConfig.google(id, secret, base);
+				case "microsoft" -> OAuthConfig.microsoft(id, secret, base, str(config, Strings.intern("tenantId")));
+				default -> OAuthConfig.github(id, secret, base);
+			};
+			result.put(name, provider);
+		}
+		return result;
+	}
+
+	String resolveClientSecret(OAuthConfig provider) {
+		if (!Engine.isSecretRef(provider.clientSecret)) return provider.clientSecret;
+		String secret = engine.resolveSecret(provider.clientSecret, engine.venueContext());
+		if (secret == null) throw new IllegalStateException("auth.oauth." + provider.name
+				+ ".clientSecret references " + provider.clientSecret + ", which is not set in the venue's secret store");
 		return secret;
 	}
 
-	@FunctionalInterface
-	interface ProviderFactory {
-		OAuthConfig create(String clientId, String clientSecret, String baseUrl);
-	}
-
-	/** Whether any providers are configured */
-	public boolean hasProviders() {
-		return !providers.isEmpty();
-	}
-
-	/** Get the configured providers (unmodifiable) */
-	public Map<String, OAuthConfig> getProviders() {
-		return Collections.unmodifiableMap(providers);
-	}
-
-	// ========== Route handlers ==========
+	public boolean hasProviders() { return !providers.isEmpty(); }
+	public Map<String, OAuthConfig> getProviders() { return providers; }
 
 	public void handleLogin(Context ctx) {
-		String providerName = ctx.pathParam("provider");
-		OAuthConfig provider = providers.get(providerName);
-		if (provider == null) {
-			ctx.status(400).result("Unsupported or unconfigured provider: " + providerName);
-			return;
+		privateResponse(ctx);
+		OAuthConfig provider = providers.get(ctx.pathParam("provider"));
+		if (provider == null) { fail(ctx, UNKNOWN_PROVIDER); return; }
+		String redirect = ctx.queryParam("redirect_uri");
+		String refused = checkRedirect(redirect);
+		if (refused != null) { fail(ctx, refused); return; }
+		String challenge = ctx.queryParam("code_challenge"), clientState = ctx.queryParam("state");
+		if (redirect != null && (!"S256".equals(ctx.queryParam("code_challenge_method"))
+				|| challenge == null || !challenge.matches("[A-Za-z0-9_-]{43}")
+				|| clientState == null || clientState.isBlank() || clientState.length() > 512)) {
+			fail(ctx, PKCE_REQUIRED); return;
 		}
+		String browser = ctx.cookie(cookieName);
+		if (browser == null || !browser.matches("[A-Za-z0-9_-]{43}")) browser = new State(32).getValue();
+		String state = new State(32).getValue();
+		Transaction transaction = new Transaction(provider.name, browser, new CodeVerifier(), new Nonce(32),
+				redirect, challenge, clientState, clock.getAsLong() + TRANSACTION_TTL);
+		synchronized (this) {
+			prune();
+			if (transactions.size() >= MAX_PENDING) { ctx.status(503).result(TOO_MANY_PENDING); return; }
+			transactions.put(state, transaction);
+		}
+		ctx.header("Set-Cookie", cookieName + "=" + browser + "; Path=/; Max-Age=300; HttpOnly; SameSite=Lax"
+				+ (secureCookie ? "; Secure" : ""));
+		ctx.redirect(provider.getAuthUrl(state, transaction.verifier(), transaction.nonce()));
+	}
 
-		String redirectUri = ctx.queryParam("redirect_uri");
-		if (redirectUri != null) {
-			String refused = checkRedirect(redirectUri);
-			if (refused != null) {
-				ctx.status(400).result(refused);
-				return;
+	public void handleCallback(Context ctx) {
+		privateResponse(ctx);
+		Transaction transaction;
+		synchronized (this) {
+			prune();
+			String state = ctx.queryParam("state");
+			transaction = transactions.get(state);
+			if (transaction == null || !transaction.provider().equals(ctx.pathParam("provider"))
+					|| !transaction.browser().equals(ctx.cookie(cookieName))) {
+				fail(ctx, INVALID_TRANSACTION); return;
 			}
-			// Encode redirect_uri into OAuth state as base64 JSON
-			String stateJson = "{\"redirect_uri\":\"" + redirectUri.replace("\"", "\\\"") + "\"}";
-			String state = Base64.getUrlEncoder().withoutPadding()
-				.encodeToString(stateJson.getBytes(StandardCharsets.UTF_8));
-			ctx.redirect(provider.getAuthUrl(state));
-		} else {
-			ctx.redirect(provider.getAuthUrl());
+			transactions.remove(state); // Consume before any network request, including errors.
 		}
+		OAuthConfig provider = providers.get(transaction.provider());
+		String code = ctx.queryParam("code");
+		if (provider == null || code == null || code.isBlank() || ctx.queryParam("error") != null) {
+			fail(ctx, INVALID_LOGIN); return;
+		}
+		try {
+			Map<String, Object> tokens = exchangeCode(provider, code, transaction.verifier());
+			UserIdentity identity;
+			if (provider.jwksUri != null) {
+				Object raw = tokens.get("id_token");
+				if (!(raw instanceof String idToken)) { fail(ctx, INVALID_LOGIN); return; }
+				var verified = provider.validateIdToken(idToken, transaction.nonce());
+				Map<String, Object> claims = verified.toJSONObject();
+				identity = new UserIdentity(provider.issuer, verified.getSubject().getValue(),
+						Boolean.TRUE.equals(claims.get("email_verified")) ? string(claims.get("email")) : null,
+						string(claims.get("name")));
+			} else {
+				// OAuth-only providers use their own stable subject API. An invalid OIDC token never falls back here.
+				identity = fetchUserInfo(provider, string(tokens.get("access_token")));
+			}
+			AString did = provisionIdentity(provider.name, identity);
+			engine.flush();
+			engine.audit().event(covia.venue.Audit.LOGIN, "provider", provider.name,
+					covia.venue.Audit.K_DID, did,
+					covia.venue.Audit.K_IP, engine.config().getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For")));
+			if (transaction.redirect() == null) {
+				issueCredential(ctx, did, identity.email());
+			} else {
+				String exchangeCode = new State(32).getValue();
+				synchronized (this) {
+					prune();
+					if (exchanges.size() >= MAX_PENDING) { ctx.status(503).result(TOO_MANY_PENDING); return; }
+					exchanges.put(exchangeCode, new Exchange(did, identity, transaction.redirect(),
+							transaction.challenge(), clock.getAsLong() + EXCHANGE_TTL));
+				}
+				ctx.redirect(transaction.redirect() + "?code=" + enc(exchangeCode) + "&state=" + enc(transaction.clientState()));
+			}
+		} catch (Exception e) {
+			// Never send provider responses, claims or credentials back as diagnostic text.
+			log.debug("External login failed for {} ({})", provider.name, e.getClass().getSimpleName());
+			fail(ctx, LEGACY_IDENTITY.equals(e.getMessage()) ? LEGACY_IDENTITY : INVALID_LOGIN);
+		}
+	}
+
+	/** Frontend handoff only. This is not the venue OAuth token endpoint or a managed session. */
+	public void handleExchange(Context ctx) {
+		privateResponse(ctx);
+		Exchange exchange;
+		synchronized (this) {
+			prune();
+			exchange = exchanges.remove(ctx.formParam("code"));
+		}
+		try {
+			if (exchange == null || ctx.formParam("code_verifier") == null
+					|| !exchange.redirect().equals(ctx.formParam("redirect_uri"))
+					|| !exchange.challenge().equals(CodeChallenge.compute(CodeChallengeMethod.S256,
+						new CodeVerifier(ctx.formParam("code_verifier"))).getValue())) {
+				fail(ctx, INVALID_EXCHANGE); return;
+			}
+			// A binding removed or rebound during the handoff cannot issue a credential.
+			if (!exchange.userDID().equals(findIdentity(engine.getAuth(), exchange.identity().issuer(), exchange.identity().sub()))) {
+				fail(ctx, INVALID_EXCHANGE); return;
+			}
+			issueCredential(ctx, exchange.userDID(), exchange.identity().email());
+		} catch (IllegalArgumentException | IllegalStateException | AuthException e) { fail(ctx, INVALID_EXCHANGE); }
+	}
+
+	/** Current credential delivery seam. Managed-session issuance and assurance remain unimplemented. */
+	private void issueCredential(Context ctx, AString did, String email) {
+		engine.getVenueState().users().requireNotDeleted(did);
+		long now = clock.getAsLong() / 1000;
+		AMap<AString, ACell> claims = venueClaims(engine.getDIDString(), did, email, now, now + engine.getAuth().getTokenExpiry());
+		AString token = JWT.signPublic(claims, engine.getKeyPair());
+		engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "venueJwt",
+				covia.venue.Audit.K_SUBJECT, did, covia.venue.Audit.K_EXP, claims.get(Strings.intern("exp")));
+		ctx.contentType("application/json").result(JSON.toString(Maps.of("token", token, "did", did)));
+	}
+
+	private void prune() {
+		long now = clock.getAsLong();
+		transactions.values().removeIf(t -> t.expiresAt() <= now);
+		exchanges.values().removeIf(e -> e.expiresAt() <= now);
+	}
+
+	private static void privateResponse(Context ctx) {
+		ctx.header("Cache-Control", "no-store").header("Pragma", "no-cache").header("Referrer-Policy", "no-referrer");
+	}
+	private static void fail(Context ctx, String reason) { ctx.status(400).result(reason); }
+	private static String enc(String s) { return URLEncoder.encode(s, StandardCharsets.UTF_8); }
+	private static String string(Object value) { return value instanceof String s ? s : null; }
+	private static String str(AMap<AString, ACell> map, AString key) {
+		return map.get(key) instanceof AString s ? s.toString() : null;
 	}
 
 	@SuppressWarnings("unchecked")
-	public void handleCallback(Context ctx) {
-		String providerName = ctx.pathParam("provider");
-		OAuthConfig provider = providers.get(providerName);
-		if (provider == null) {
-			ctx.status(400).result("Unsupported or unconfigured provider: " + providerName);
-			return;
-		}
+	private Map<String, Object> exchangeCode(OAuthConfig provider, String code, CodeVerifier verifier) throws Exception {
+		String body = "grant_type=authorization_code&code=" + enc(code) + "&client_id=" + enc(provider.clientId)
+				+ "&client_secret=" + enc(resolveClientSecret(provider)) + "&redirect_uri=" + enc(provider.redirectUri)
+				+ "&code_verifier=" + enc(verifier.getValue());
+		HttpRequest request = HttpRequest.newBuilder(URI.create(provider.tokenUrl))
+				.header("Content-Type", "application/x-www-form-urlencoded").header("Accept", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(body)).timeout(Duration.ofSeconds(30)).build();
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+		if (response.statusCode() != 200) throw new IllegalArgumentException(INVALID_LOGIN);
+		return (Map<String, Object>) JSON.jvm(response.body());
+	}
 
-		String code = ctx.queryParam("code");
-		if (code == null) {
-			ctx.status(400).result("Missing authorisation code");
-			return;
-		}
+	@SuppressWarnings("unchecked")
+	private UserIdentity fetchUserInfo(OAuthConfig provider, String token) throws Exception {
+		if (token == null) throw new IllegalArgumentException(INVALID_LOGIN);
+		HttpRequest request = HttpRequest.newBuilder(URI.create(provider.userInfoUrl))
+				.header("Authorization", "Bearer " + token).header("Accept", "application/json")
+				.GET().timeout(Duration.ofSeconds(30)).build();
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+		if (response.statusCode() != 200) throw new IllegalArgumentException(INVALID_LOGIN);
+		Map<String, Object> data = (Map<String, Object>) JSON.jvm(response.body());
+		// GitHub's numeric id is stable. Its /user email has no verified flag, so do not trust it as verified metadata.
+		Object id = data.get("id");
+		if (!(id instanceof Number) || ((Number) id).longValue() <= 0) throw new IllegalArgumentException(INVALID_LOGIN);
+		return new UserIdentity(provider.issuer, id.toString(), null, string(data.get("name")));
+	}
 
-		// Extract redirect_uri from OAuth state if present
-		String frontendRedirectUri = null;
-		String stateParam = ctx.queryParam("state");
-		if (stateParam != null) {
-			try {
-				String stateJson = new String(
-					Base64.getUrlDecoder().decode(stateParam), StandardCharsets.UTF_8);
-				@SuppressWarnings("unchecked")
-				Map<String, Object> stateMap = (Map<String, Object>) JSON.jvm(stateJson);
-				if (stateMap != null && stateMap.containsKey("redirect_uri")) {
-					frontendRedirectUri = stateMap.get("redirect_uri").toString();
+	record UserIdentity(String issuer, String sub, String email, String name) {
+		UserIdentity {
+			if (issuer == null || issuer.isBlank() || sub == null || sub.isBlank()) throw new IllegalArgumentException(INVALID_LOGIN);
+		}
+		AMap<AString, ACell> binding() { return Maps.of(ISS, issuer, SUB, sub); }
+		AString toUserId() { return Strings.create("external-" + Vectors.of(issuer, sub).getHash().toHexString()); }
+	}
+
+	/** Trusted provisioning; never selects or links a legacy account using email. */
+	AString provisionIdentity(String provider, UserIdentity identity) {
+		Auth auth = engine.getAuth();
+		synchronized (auth) {
+			AString existing = findIdentity(auth, identity.issuer(), identity.sub());
+			AString id = identity.toUserId();
+			if (existing != null) {
+				for (var entry : auth.getUsers().entrySet()) {
+					if (matches(entry.getValue(), identity.issuer(), identity.sub())) { id = entry.getKey(); break; }
 				}
-			} catch (Exception e) {
-				log.debug("Could not decode OAuth state parameter", e);
-			}
-		}
-		if (frontendRedirectUri != null) {
-			String refused = checkRedirect(frontendRedirectUri);
-			if (refused != null) {
-				ctx.status(400).result(refused);
-				return;
-			}
-		}
-
-		try {
-			// 1. Exchange code for tokens
-			Map<String, String> tokenData = exchangeCode(provider, code);
-			if (tokenData == null) {
-				ctx.status(500).result("Token exchange failed");
-				return;
-			}
-
-			String accessToken = tokenData.get("access_token");
-			String idToken = tokenData.get("id_token");
-
-			// 2. Extract user identity
-			UserIdentity identity = null;
-
-			// Try ID token validation first (Google, Microsoft)
-			if (idToken != null && provider.jwksUri != null) {
-				identity = validateIdToken(idToken, provider);
-			}
-
-			// Fall back to userinfo endpoint
-			if (identity == null && accessToken != null && provider.userInfoUrl != null) {
-				identity = fetchUserInfo(accessToken, provider);
-			}
-
-			if (identity == null) {
-				ctx.status(500).result("Could not determine user identity");
-				return;
-			}
-
-			// 3. Create or update user in lattice
-			AString userId = Strings.create(identity.toUserId());
-			AMap<AString, ACell> profile = Maps.empty();
-			if (identity.email != null) {
-				profile = profile.assoc(Fields.EMAIL, Strings.create(identity.email));
-			}
-			if (identity.name != null) {
-				profile = profile.assoc(Fields.NAME, Strings.create(identity.name));
-			}
-			profile = profile
-				.assoc(Fields.PROVIDER, Strings.create(providerName))
-				.assoc(Fields.PROVIDER_SUB, Strings.create(identity.sub));
-
-			// OAuth is a trusted venue provisioner. Managed usernames live under
-			// the venue's did:web namespace; the runtime account store still accepts
-			// arbitrary DIDs for self-sovereign identities provisioned elsewhere.
-			// Preserve an existing account DID across upgrades / hostname changes;
-			// only new managed users receive the current did:web-derived ID.
-			AMap<AString, ACell> userRecord = engine.getAuth().provisionLogin(userId, profile);
-			AString userDID = RT.ensureString(userRecord.get(Fields.DID));
-
-			// 4. Issue venue-signed EdDSA JWT
-			long nowSecs = System.currentTimeMillis() / 1000;
-			AMap<AString, ACell> claims = venueClaims(engine.getDIDString(), userDID,
-				identity.email, nowSecs, nowSecs + engine.getAuth().getTokenExpiry());
-			AString venueJwt = JWT.signPublic(claims, engine.getKeyPair());
-			// The provider and the user's DID — never the email (#448).
-			engine.audit().event(covia.venue.Audit.LOGIN, "provider", providerName,
-				covia.venue.Audit.K_DID, userDID,
-				covia.venue.Audit.K_IP, engine.config().getTrustedProxies().clientIp(ctx.ip(), ctx.header("X-Forwarded-For")));
-			engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "session",
-				covia.venue.Audit.K_SUBJECT, userDID, covia.venue.Audit.K_EXP, claims.get(Strings.intern("exp")));
-
-			// 5. Return JWT to client
-			if (frontendRedirectUri != null) {
-				// Redirect back to frontend with token and DID as query params
-				String sep = frontendRedirectUri.contains("?") ? "&" : "?";
-				String redirectUrl = frontendRedirectUri + sep
-					+ "token=" + URLEncoder.encode(venueJwt.toString(), StandardCharsets.UTF_8)
-					+ "&did=" + URLEncoder.encode(userDID.toString(), StandardCharsets.UTF_8);
-				ctx.redirect(redirectUrl);
 			} else {
-				// Backward compatible: return JSON for API/CLI clients
-				AMap<AString, ACell> response = Maps.of(
-					"token", venueJwt,
-					"did", userDID
-				);
-				ctx.header("Content-type", "application/json");
-				ctx.result(JSON.toString(response));
+				if (auth.getUser(id) != null) throw new IllegalStateException(IDENTITY_CONFLICT);
+				for (var record : auth.getUsers().values()) {
+					if (record.get(EXTERNAL_IDENTITY) != null) continue;
+					if ((Strings.create(provider).equals(record.get(Fields.PROVIDER))
+							&& Strings.create(identity.sub()).equals(record.get(Fields.PROVIDER_SUB)))
+							|| (identity.email() != null && Strings.create(identity.email()).equals(record.get(Fields.EMAIL)))) {
+						throw new IllegalStateException(LEGACY_IDENTITY);
+					}
+				}
 			}
-
-		} catch (Exception e) {
-			log.error("OAuth callback error for {}", providerName, e);
-			ctx.status(500).result("OAuth callback failed: " + e.getMessage());
+			AMap<AString, ACell> profile = Maps.of(EXTERNAL_IDENTITY,
+					identity.binding().assoc(Fields.PROVIDER, Strings.create(provider)),
+					Fields.EMAIL, identity.email(), Fields.NAME, identity.name());
+			return RT.ensureString(auth.provisionLogin(id, profile).get(Fields.DID));
 		}
 	}
 
-	/**
-	 * Claims for the browser-facing venue credential. Provider profile data stays
-	 * in the venue's user record; only its stable pseudonym crosses the callback
-	 * URL inside the signed (but unencrypted) JWT.
-	 */
-	static AMap<AString, ACell> venueClaims(AString venueDID, AString userDID,
-			String email, long issuedAt, long expiresAt) {
-		AMap<AString, ACell> claims = Maps.of(
-			"sub", userDID,
-			"iss", venueDID,
-			"aud", venueDID,
-			"iat", issuedAt,
-			"exp", expiresAt);
+	/** Lookup only: direct bearer presentation cannot provision or link an account. */
+	public static AString findIdentity(Auth auth, String issuer, String subject) {
+		if (issuer == null || subject == null) return null;
+		AString found = null;
+		for (var record : auth.getUsers().values()) {
+			if (!matches(record, issuer, subject)) continue;
+			AString did = RT.ensureString(record.get(Fields.DID));
+			if (did == null || (found != null && !found.equals(did))) throw new IllegalStateException(IDENTITY_CONFLICT);
+			found = did;
+		}
+		return found;
+	}
+
+	private static boolean matches(AMap<AString, ACell> record, String issuer, String subject) {
+		AMap<AString, ACell> binding = RT.ensureMap(record.get(EXTERNAL_IDENTITY));
+		return binding != null && Strings.create(issuer).equals(binding.get(ISS)) && Strings.create(subject).equals(binding.get(SUB));
+	}
+
+	static AMap<AString, ACell> venueClaims(AString venueDID, AString userDID, String email, long issuedAt, long expiresAt) {
+		AMap<AString, ACell> claims = Maps.of("sub", userDID, "iss", venueDID, "aud", venueDID, "iat", issuedAt, "exp", expiresAt);
 		if (email != null) claims = claims.assoc(Fields.COVIA_UID, coviaUid(email));
 		return claims;
 	}
-
-	/** Lowercase first 16 hex characters of SHA-256(normalised email). */
 	static AString coviaUid(String email) {
-		byte[] normalised = email.trim().toLowerCase(java.util.Locale.ROOT)
-			.getBytes(StandardCharsets.UTF_8);
-		return Strings.create(Hashing.sha256(normalised).toHexString().substring(0, 16));
+		return Strings.create(Hashing.sha256(email.trim().toLowerCase(java.util.Locale.ROOT)
+				.getBytes(StandardCharsets.UTF_8)).toHexString().substring(0, 16));
 	}
 
-	/**
-	 * Render a simple login page listing configured providers.
-	 */
 	public String renderLoginPage() {
 		StringBuilder sb = new StringBuilder("<h1>Login</h1>");
 		for (String name : providers.keySet()) {
-			String label = name.substring(0, 1).toUpperCase() + name.substring(1);
-			sb.append("<a href='/auth/").append(name).append("'>Login with ").append(label).append("</a><br>");
+			sb.append("<a href='/auth/").append(name).append("'>Login with ")
+				.append(name.substring(0, 1).toUpperCase()).append(name.substring(1)).append("</a><br>");
 		}
-		if (providers.isEmpty()) {
-			sb.append("<p>No OAuth providers configured.</p>");
-		}
+		if (providers.isEmpty()) sb.append("<p>No OAuth providers configured.</p>");
 		return sb.toString();
 	}
 
-	// ========== Private helpers ==========
-
-	/**
-	 * Exchange an authorisation code for tokens.
-	 * Uses application/x-www-form-urlencoded as required by OAuth spec.
-	 */
-	@SuppressWarnings("unchecked")
-	private Map<String, String> exchangeCode(OAuthConfig provider, String code) {
-		try {
-			String body = "grant_type=authorization_code"
-				+ "&code=" + URLEncoder.encode(code, StandardCharsets.UTF_8)
-				+ "&client_id=" + URLEncoder.encode(provider.clientId, StandardCharsets.UTF_8)
-				+ "&client_secret=" + URLEncoder.encode(resolveClientSecret(provider), StandardCharsets.UTF_8)
-				+ "&redirect_uri=" + URLEncoder.encode(provider.redirectUri, StandardCharsets.UTF_8);
-
-			HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-				.uri(URI.create(provider.tokenUrl))
-				.header("Content-Type", "application/x-www-form-urlencoded")
-				.POST(HttpRequest.BodyPublishers.ofString(body))
-				.timeout(Duration.ofSeconds(30));
-
-			// GitHub requires Accept: application/json
-			if ("github".equals(provider.name)) {
-				reqBuilder.header("Accept", "application/json");
+	private static Set<String> redirectUris(AMap<AString, ACell> auth) {
+		if (auth == null) return Set.of();
+		if (auth.containsKey(Config.LOGIN_REDIRECT_ORIGINS)) throw new IllegalArgumentException(LEGACY_REDIRECT_CONFIG);
+		AVector<ACell> configured = RT.ensureVector(auth.get(Config.LOGIN_REDIRECT_URIS));
+		Set<String> result = new HashSet<>();
+		if (configured != null) for (ACell cell : configured) {
+			if (!(cell instanceof AString value)) throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG);
+			String text = value.toString();
+			URI uri;
+			try { uri = URI.create(text); } catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG); }
+			if (uri.getHost() == null || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
+					|| !("https".equals(uri.getScheme()) || ("http".equals(uri.getScheme())
+					&& isLoopback(uri.getHost())))) {
+				throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG);
 			}
-
-			HttpResponse<String> resp = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
-			if (resp.statusCode() != 200) {
-				log.warn("Token exchange failed: {} returned {}", provider.tokenUrl, resp.statusCode());
-				return null;
-			}
-
-			return (Map<String, String>) JSON.jvm(resp.body());
-		} catch (Exception e) {
-			log.error("Token exchange error", e);
-			return null;
+			result.add(text);
 		}
+		return Collections.unmodifiableSet(result);
 	}
-
-	/**
-	 * Validate an ID token (JWT) from an OAuth provider using their JWKS.
-	 */
-	private UserIdentity validateIdToken(String idToken, OAuthConfig provider) {
-		try {
-			AString jwtStr = Strings.create(idToken);
-			JWT parsed = JWT.parse(jwtStr);
-			if (parsed == null) return null;
-
-			// Look up the signing key from JWKS
-			String kid = parsed.getKeyID();
-			if (kid == null) return null;
-
-			RSAPublicKey key = JWKSClient.getKey(provider.jwksUri, kid);
-			if (key == null) return null;
-
-			// Verify signature
-			if (!parsed.verifyRS256(key)) return null;
-
-			// Validate claims (issuer may be null for Microsoft)
-			if (!parsed.validateClaims(provider.issuer, provider.clientId)) {
-				// Google may use issuer without https prefix
-				if (provider.issuer != null && !parsed.validateClaims("accounts.google.com", provider.clientId)) {
-					return null;
-				}
-			}
-
-			// Extract identity from claims
-			AMap<AString, ACell> claims = parsed.getClaims();
-			return new UserIdentity(
-				str(claims, "sub"),
-				str(claims, "email"),
-				str(claims, "name")
-			);
-		} catch (Exception e) {
-			log.debug("ID token validation failed", e);
-			return null;
-		}
+	private static boolean isLoopback(String host) {
+		return host != null && Set.of("localhost", "127.0.0.1", "[::1]").contains(host);
 	}
-
-	/**
-	 * Fetch user info from the provider's userinfo endpoint.
-	 * Fallback for providers that don't issue ID tokens (e.g. GitHub).
-	 */
-	@SuppressWarnings("unchecked")
-	private UserIdentity fetchUserInfo(String accessToken, OAuthConfig provider) {
-		try {
-			HttpRequest req = HttpRequest.newBuilder()
-				.uri(URI.create(provider.userInfoUrl))
-				.header("Authorization", "Bearer " + accessToken)
-				.GET()
-				.timeout(Duration.ofSeconds(30))
-				.build();
-
-			HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
-			if (resp.statusCode() != 200) {
-				log.warn("Userinfo fetch failed: {} returned {}", provider.userInfoUrl, resp.statusCode());
-				return null;
-			}
-
-			Map<String, Object> data = (Map<String, Object>) JSON.jvm(resp.body());
-			String sub = data.containsKey("sub") ? data.get("sub").toString() : null;
-			if (sub == null && data.containsKey("id")) {
-				sub = data.get("id").toString(); // GitHub uses "id" instead of "sub"
-			}
-			String email = data.containsKey("email") ? (String) data.get("email") : null;
-			String name = data.containsKey("name") ? (String) data.get("name") : null;
-
-			if (sub == null) return null;
-			return new UserIdentity(sub, email, name);
-		} catch (Exception e) {
-			log.debug("Userinfo fetch failed", e);
-			return null;
-		}
-	}
-
-	private static String str(AMap<AString, ACell> map, String key) {
-		AString v = RT.ensureString(map.get(Strings.create(key)));
-		return v != null ? v.toString() : null;
-	}
-
-	/**
-	 * Represents extracted user identity from OAuth provider.
-	 */
-	static class UserIdentity {
-		final String sub;
-		final String email;
-		final String name;
-
-		UserIdentity(String sub, String email, String name) {
-			this.sub = sub;
-			this.email = email;
-			this.name = name;
-		}
-
-		/**
-		 * Derive a user ID suitable for the venue user database.
-		 * Uses email if available, otherwise provider sub.
-		 */
-		String toUserId() {
-			if (email != null) {
-				// Sanitise email for use as ID: replace @ and . with _
-				return email.replace("@", "_").replace(".", "_");
-			}
-			return sub;
-		}
-	}
-
-	// ========== Login redirect allow-list ==========
-
-	/** Refusal for a {@code redirect_uri} outside the allowed origins. */
-	public static final String REDIRECT_REFUSED =
-		"redirect_uri must be a path on this venue or an absolute URL whose origin is the venue's "
-		+ "baseUrl or is listed in auth.loginRedirectOrigins";
-
-	/**
-	 * The origins a login may return the session token to: the venue's own
-	 * {@code baseUrl} origin plus {@code auth.loginRedirectOrigins}.
-	 */
-	private static Set<String> redirectOrigins(String baseUrl, AMap<AString, ACell> authConfig) {
-		Set<String> origins = new HashSet<>();
-		String own = originOf(baseUrl);
-		if (own != null) origins.add(own);
-		AVector<ACell> configured = (authConfig == null) ? null
-			: RT.ensureVector(authConfig.get(Config.LOGIN_REDIRECT_ORIGINS));
-		if (configured != null) {
-			for (long i = 0; i < configured.count(); i++) {
-				AString s = RT.ensureString(configured.get(i));
-				String origin = (s == null) ? null : originOf(s.toString());
-				if (origin == null) {
-					log.warn("auth.loginRedirectOrigins entry ignored (not an http(s) origin): {}", s);
-				} else {
-					origins.add(origin);
-				}
-			}
-		}
-		return Collections.unmodifiableSet(origins);
-	}
-
-	/** {@code scheme://host[:port]} of an absolute http(s) URL, lower-cased; null otherwise. */
-	static String originOf(String url) {
-		if (url == null) return null;
-		URI uri;
-		try {
-			uri = new URI(url.trim());
-		} catch (Exception e) {
-			return null;
-		}
-		String scheme = uri.getScheme(), host = uri.getHost();
-		if (scheme == null || host == null) return null;
-		scheme = scheme.toLowerCase(java.util.Locale.ROOT);
-		if (!scheme.equals("http") && !scheme.equals("https")) return null;
-		String origin = scheme + "://" + host.toLowerCase(java.util.Locale.ROOT);
-		int port = uri.getPort();
-		boolean standard = (port == -1) || (scheme.equals("http") && port == 80)
-			|| (scheme.equals("https") && port == 443);
-		return standard ? origin : origin + ":" + port;
-	}
-
-	/**
-	 * Checks a caller-supplied {@code redirect_uri}: null when it may receive
-	 * the login result, otherwise the reason it may not. A relative path on
-	 * this venue is always allowed; an absolute URL only when its origin is
-	 * the venue's own or a configured one. Checked at login and again at the
-	 * callback, because the OAuth {@code state} that carries it is unsigned.
-	 */
 	public String checkRedirect(String redirectUri) {
-		if (redirectUri == null) return null;
-		String uri = redirectUri.trim();
-		if (uri.startsWith("/")) {
-			// A path on this venue — but never a scheme-relative URL.
-			if (uri.startsWith("//") || uri.startsWith("/\\")) return REDIRECT_REFUSED + ": " + uri;
-			return null;
-		}
-		String origin = originOf(uri);
-		if (origin != null && redirectOrigins.contains(origin)) return null;
-		return REDIRECT_REFUSED + ": " + uri;
+		return redirectUri == null || redirectUris.contains(redirectUri) ? null : REDIRECT_REFUSED;
 	}
 }

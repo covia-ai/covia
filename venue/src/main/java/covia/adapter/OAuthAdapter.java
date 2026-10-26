@@ -35,6 +35,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -138,7 +139,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	private final ConcurrentHashMap<String, Pending> pending = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, Object> refreshLocks = new ConcurrentHashMap<>();
 	private final SecureRandom random = new SecureRandom();
-	private final HttpClient http = HttpClient.newBuilder()
+	/** Shared by every venue in the process: each client holds a selector thread for its lifetime. */
+	private static final HttpClient http = HttpClient.newBuilder()
 		.connectTimeout(Duration.ofSeconds(10))
 		.executor(VIRTUAL_EXECUTOR)
 		.build();
@@ -476,7 +478,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		AVector<ACell> out = Vectors.empty();
 		User user = engine.getVenueState().users().get(userDID);
 		if (user != null) {
-			byte[] key = SecretStore.deriveKey(engine.getKeyPair());
+			SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
 			AVector<AString> names = user.secrets().list();
 			for (long i = 0; i < names.count(); i++) {
 				String name = names.get(i).toString();
@@ -497,7 +499,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (name == null || name.isEmpty()) throw new IllegalArgumentException("provider is required");
 		String provider = name.toString();
 		User user = engine.getVenueState().users().get(userDID);
-		byte[] key = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
 		AMap<AString, ACell> grant = (user != null) ? grant(user, provider, key) : null;
 		if (grant == null) throw new IllegalArgumentException("Not connected to " + provider);
 		boolean revoked = false;
@@ -517,10 +519,13 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	// ========== TokenSource ==========
 
 	@Override
-	public String accessToken(RequestContext ctx, String provider) throws IOException {
+	public String accessToken(RequestContext ctx, String provider, String destination) throws IOException {
 		AString userDID = userOf(ctx, "oauth/" + provider);
+		// The same point-of-use check as any other secret reference.
+		engine.requireLocalAccess(ctx, Strings.create(userDID + "/s/" + GRANT_PREFIX + provider),
+			Abilities.SECRET_USE, (destination != null) ? Strings.create(destination) : null);
 		User user = engine.getVenueState().users().get(userDID);
-		byte[] key = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
 		AMap<AString, ACell> grant = (user != null) ? grant(user, provider, key) : null;
 		if (grant == null) {
 			throw new IllegalArgumentException("Not connected to " + provider + " — run oauth:connect and approve in the browser");
@@ -661,7 +666,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		String type = str(tokens, Strings.intern("token_type"));
 		if (type != null) grant = grant.assoc(G_TOKEN_TYPE, Strings.create(type));
 		User user = engine.getVenueState().users().ensure(userDID);
-		user.secrets().store(GRANT_PREFIX + p.name(), JSON.toString(grant), SecretStore.deriveKey(engine.getKeyPair()));
+		user.secrets().store(GRANT_PREFIX + p.name(), JSON.toString(grant), SecretStore.keys(engine.getKeyPair()));
 	}
 
 	private static long expiresAt(AMap<AString, ACell> tokens) {
@@ -669,7 +674,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return (in != null) ? System.currentTimeMillis() + in.longValue() * 1000 : 0;
 	}
 
-	private static AMap<AString, ACell> grant(User user, String provider, byte[] key) {
+	private static AMap<AString, ACell> grant(User user, String provider, SecretStore.Keys key) {
 		AString raw = user.secrets().decrypt(GRANT_PREFIX + provider, key);
 		if (raw == null) return null;
 		try {

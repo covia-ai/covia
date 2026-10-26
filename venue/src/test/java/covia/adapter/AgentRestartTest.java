@@ -19,11 +19,10 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.RootLatticeCursor;
+import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.Covia;
 import covia.venue.AgentState;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -59,7 +58,7 @@ public class AgentRestartTest {
 
 	@Test
 	public void requestSurvivesRestartAndCompletesAfterBoot() throws Exception {
-		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(ALICE);
 		String agentId = "survivor";
@@ -69,7 +68,7 @@ public class AgentRestartTest {
 		// Phase 1: hold the transition at a deterministic gate. Waiting only for
 		// RUNNING races the executor entering a fixed sleep under full-suite load.
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Engine first = new Engine(config(), cursor, keyPair).start();
+			Engine first = new Engine(config(), covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 			try {
 				Engine.addDemoAssets(first);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
@@ -97,7 +96,7 @@ public class AgentRestartTest {
 			// The persisted config still names the gate; let the recovered cycle
 			// cross it immediately rather than adding timing to phase 2.
 			gate.release();
-			Engine second = new Engine(config(), cursor, keyPair).start();
+			Engine second = new Engine(config(), covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
