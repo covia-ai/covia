@@ -117,6 +117,7 @@ class DiscordAdapterTest {
 
 	@Test void catalogStatusSkillAndTemplateAreInstalled(){
 		ACell status=run(OWNER,"v/ops/discord/bots",Maps.empty());assertTrue(status.toString().contains("RUNNING"));assertFalse(status.toString().contains("literal-test-token"));
+		assertEquals(Vectors.of("alice"),RT.getIn(RT.getIn(status,"bots",0),"allow"),"the owner sees who may message the bot");
 		ACell skill=engine.resolvePath(Strings.create("v/skills/adapters/discord"),engine.venueContext());assertNotNull(skill);
 		assertTrue(String.valueOf(RT.getIn(skill,"skill","tools")).contains("v/ops/discord/send"),"the module's own skill, not the venue's Discord connection skill (#510)");
 		ACell template=engine.resolvePath(Strings.create("v/agents/templates/discord"),engine.venueContext());assertNotNull(template);

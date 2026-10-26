@@ -15,10 +15,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
+import convex.core.data.AVector;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -64,7 +66,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	}
 	private void pending(String why){state=State.PENDING;error=why;log.warn("Discord bot '{}' not started: {} (will retry)",spec.name(),why);retry=adapter.scheduleRetry(this::tryStart,adapter.retryMillis);}
 	@Override public synchronized void stop(){stopped=true;if(retry!=null)retry.cancel(false);DiscordGateway g=gateway;gateway=null;token=null;http=null;if(g!=null)try{g.close();}catch(RuntimeException e){log.debug("Discord Gateway close failed",e);}state=State.STOPPED;}
-	@Override public AMap<AString,ACell> status(){AMap<AString,ACell> m=Maps.of(Fields.NAME,Strings.create(spec.name()),BotSpec.K_USER,Strings.create(spec.userRef()),K_TARGET,Strings.create(spec.target()),K_STATE,Strings.create(state.name()),K_MANAGED,Strings.create(managed.name().toLowerCase(Locale.ROOT)),K_RECEIVED,CVMLong.create(received.get()),K_SENT,CVMLong.create(sent.get()),K_FAILED,CVMLong.create(failed.get()));if(username!=null)m=m.assoc(K_USERNAME,Strings.create(username));if(botId!=null)m=m.assoc(K_BOT_ID,Strings.create(botId));if(error!=null)m=m.assoc(Fields.ERROR,Strings.create(error));return m;}
+	@Override public AMap<AString,ACell> status(){AMap<AString,ACell> m=Maps.of(Fields.NAME,Strings.create(spec.name()),BotSpec.K_USER,Strings.create(spec.userRef()),K_TARGET,Strings.create(spec.target()),K_STATE,Strings.create(state.name()),K_MANAGED,Strings.create(managed.name().toLowerCase(Locale.ROOT)),K_RECEIVED,CVMLong.create(received.get()),K_SENT,CVMLong.create(sent.get()),K_FAILED,CVMLong.create(failed.get()));if(username!=null)m=m.assoc(K_USERNAME,Strings.create(username));if(botId!=null)m=m.assoc(K_BOT_ID,Strings.create(botId));if(error!=null)m=m.assoc(Fields.ERROR,Strings.create(error));
+		// Who may message the bot: ids, then usernames, as the spec matches them.
+		AVector<ACell> allow=Vectors.empty();for(String id:spec.allowIds())allow=allow.conj(Strings.create(id));for(String n:spec.allowNames())allow=allow.conj(Strings.create(n));
+		return m.assoc(BotSpec.K_ALLOW,allow);}
 
 	private void receive(InboundMessage m){
 		if(stopped||!adapter.isActive())return;received.incrementAndGet();
