@@ -31,6 +31,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `VenueHTTP` streams content uploads and downloads instead of buffering them (#629).
   Downloaded content can be read once, as a stream or a blob; its size is unknown until
   read unless the venue sends a length.
+- A `claudecode:session` opened without a prompt takes no pool slot until its first turn.
 
 ### Security
 
@@ -38,6 +39,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   never returns a stored token's signature, so `secret/use` never yields possession.
 - Venue-local SQL databases are named `<userDID>/sql/<db>`: users whose DIDs differ
   only in punctuation no longer share databases. The public principal has none.
+- A Claude Code session resumes only in its own project: naming another project no
+  longer stops it, and a resume that never runs claims nothing.
 
 ### Migration
 

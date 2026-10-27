@@ -17,7 +17,7 @@
 				},
 				"session": {
 					"type": "string",
-					"description": "Resume an existing Claude Code session in this job"
+					"description": "Resume an existing Claude Code session in this job, from its first turn. A session resumes only in its own project."
 				},
 				"model": {
 					"type": "string",

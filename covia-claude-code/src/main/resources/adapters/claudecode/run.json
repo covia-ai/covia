@@ -17,7 +17,7 @@
 				},
 				"session": {
 					"type": "string",
-					"description": "Session id from a previous result — continue that conversation (Claude Code resumes it with full context, spawning a process if it is no longer warm)"
+					"description": "Session id from a previous result — continue that conversation (Claude Code resumes it with full context, spawning a process if it is no longer warm). A session resumes only in its own project."
 				},
 				"model": {
 					"type": "string",

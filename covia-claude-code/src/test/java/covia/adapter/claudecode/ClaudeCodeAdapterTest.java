@@ -415,6 +415,102 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(Status.FAILED, stop.getStatus());
 	}
 
+	/**
+	 * A session belongs to its project. A call naming another project is
+	 * gated on that project, so resuming the session there is refused before
+	 * anything happens to it: its process is not stopped and no turn runs.
+	 */
+	@Test
+	public void testAnotherProjectsSessionIsNeitherStoppedNorResumed() {
+		AMap<AString, ACell> first = run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "count"));
+		String session = str(first, "session");
+		long pid = pidOf(OWNER_CTX, session);
+
+		// OTHER may use gamma only. OWNER may use beta too: the rule is the session's, not the caller's.
+		Object[][] attempts = {
+			{OTHER_CTX, "v/ops/claudecode/run", "gamma"},
+			{OTHER_CTX, "v/ops/claudecode/session", "gamma"},
+			{OWNER_CTX, "v/ops/claudecode/run", "beta"}};
+		for (Object[] a : attempts) {
+			IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+				() -> engine.jobs().invokeOperation((String) a[1],
+					Maps.of("project", a[2], "session", session, "prompt", "count"), (RequestContext) a[0]));
+			assertTrue(refused.getMessage().contains(ClaudeCodeAdapter.SESSION_OF_ANOTHER_PROJECT), refused.getMessage());
+		}
+
+		AMap<AString, ACell> status = sessionStatus(OWNER_CTX, session);
+		assertEquals("alpha", str(status, "project"));
+		assertEquals(CVMBool.TRUE, status.get(ClaudeSession.K_LIVE));
+		assertEquals(pid, pidOf(OWNER_CTX, session), "the same process");
+		assertNull(sessionStatus(OTHER_CTX, session));
+		assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("session", session, "prompt", "count")), "result"),
+			"no turn ran elsewhere");
+	}
+
+	/**
+	 * A venue restarted knows no sessions, so a resume from another project
+	 * reaches Claude Code. One that never starts there, failed or still
+	 * waiting for its first prompt, must not keep the session from its own
+	 * project. Claude Code keeps the sessions of different directories apart;
+	 * the fake shares them, so here the waiting job's turn is what the
+	 * venue refuses.
+	 */
+	@Test
+	public void testResumeThatNeverStartedLeavesTheSessionToItsProject() throws Exception {
+		String missing = "22222222-0000-4000-8000-000000000000";
+		Job failed = awaitFinished(engine.jobs().invokeOperation("v/ops/claudecode/run",
+			Maps.of("project", "gamma", "session", missing, "prompt", "count"), OTHER_CTX));
+		assertEquals(Status.FAILED, failed.getStatus());
+		assertTrue(failed.getErrorMessage().contains("No conversation found"), failed.getErrorMessage());
+
+		// A session from before the restart, on disk with four turns behind it
+		String earlier = "33333333-0000-4000-8000-000000000000";
+		Files.writeString(stateDir.resolve("fake-claude-" + earlier + ".count"), "4");
+		Job waiting = engine.jobs().invokeOperation("v/ops/claudecode/session",
+			Maps.of("project", "gamma", "session", earlier), OTHER_CTX);
+		await(() -> Status.INPUT_REQUIRED.equals(waiting.getStatus()), 10_000);
+
+		await(() -> adapter.knownSessions().stream().noneMatch(s -> missing.equals(s.sessionId())), 5000);
+		Job own = awaitFinished(engine.jobs().invokeOperation("v/ops/claudecode/run",
+			Maps.of("project", "alpha", "session", missing, "prompt", "count"), OWNER_CTX));
+		assertTrue(own.getErrorMessage().contains("No conversation found"), own.getErrorMessage());
+		assertEquals("count: 5", str(run(OWNER_CTX, "v/ops/claudecode/run",
+			Maps.of("project", "alpha", "session", earlier, "prompt", "count")), "result"));
+
+		// Now the venue knows the session as alpha's, the waiting job's first turn is refused
+		engine.jobs().deliverMessage(waiting.getID(), Maps.of("content", "count"), OTHER_CTX);
+		awaitFinished(waiting);
+		assertEquals(Status.FAILED, waiting.getStatus());
+		assertTrue(waiting.getErrorMessage().contains(ClaudeCodeAdapter.SESSION_OF_ANOTHER_PROJECT), waiting.getErrorMessage());
+		assertEquals("count: 6", str(run(OWNER_CTX, "v/ops/claudecode/run", Maps.of("session", earlier, "prompt", "count")), "result"));
+	}
+
+	/** A resume cancelled while it waits for a pool slot gives up the session id, and the slot. */
+	@Test
+	public void testCancelledWaitingResumeReleasesSessionAndSlot() throws Exception {
+		stopAll();
+		assertTrue(adapter.configure(baseConfig.assoc(ClaudeCodeAdapter.K_MAX_SESSIONS, CVMLong.create(1)), true));
+		try {
+			Job busy = engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("project", "alpha", "prompt", "sleep 20000"), OWNER_CTX);
+			await(() -> adapter.knownSessions().stream().anyMatch(s -> s.state() == ClaudeSession.State.BUSY), 10_000);
+
+			String earlier = "44444444-0000-4000-8000-000000000000";
+			Files.writeString(stateDir.resolve("fake-claude-" + earlier + ".count"), "1");
+			Job waiting = engine.jobs().invokeOperation("v/ops/claudecode/run",
+				Maps.of("project", "gamma", "session", earlier, "prompt", "count"), OTHER_CTX);
+			await(() -> adapter.knownSessions().stream().anyMatch(s -> earlier.equals(s.sessionId())), 5000);
+			waiting.cancel();
+			await(() -> adapter.knownSessions().stream().noneMatch(s -> earlier.equals(s.sessionId())), 5000);
+
+			busy.cancel();
+			await(() -> liveTotal() == 0, 10_000);
+			assertEquals("count: 2", str(run(OWNER_CTX, "v/ops/claudecode/run",
+				Maps.of("project", "alpha", "session", earlier, "prompt", "count")), "result"));
+		} finally {
+			assertTrue(adapter.configure(baseConfig, true));
+		}
+	}
+
 	@Test
 	public void testBypassPermissionsOnlyWhereConfigured() {
 		Job denied = engine.jobs().invokeOperation("v/ops/claudecode/run",
@@ -615,6 +711,10 @@ public class ClaudeCodeAdapterTest {
 			if (session.equals(str(s, "session"))) return s;
 		}
 		return null;
+	}
+
+	private static long pidOf(RequestContext ctx, String session) {
+		return ((CVMLong) sessionStatus(ctx, session).get(ClaudeSession.K_PID)).longValue();
 	}
 
 	private static int liveInProject(String project) {

@@ -2728,6 +2728,13 @@ so a session outlives its process and is continued with `--resume`. A
 session's next turn — so a caller only ever sees a slightly slower reply,
 never lost context, even across a venue restart.
 
+A session belongs to the project it runs in, and resumes only there: once
+Claude Code has run a session, a call naming another project is refused and
+the session is left as it is. A resume that never runs (Claude Code does not
+find the session, or the call is cancelled first) claims nothing. Before the
+venue has seen a session, after a restart, only Claude Code keeps projects
+apart, and it does so by directory: two projects on one path share sessions.
+
 Operations:
 
 - `v/ops/claudecode/run {project?, prompt, session?, …options}` — one turn

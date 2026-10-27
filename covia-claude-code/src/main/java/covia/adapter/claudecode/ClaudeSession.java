@@ -132,6 +132,8 @@ final class ClaudeSession {
 	final long created = System.currentTimeMillis();
 
 	private volatile String sessionId;
+	/** Whether a process has announced {@link #sessionId}: until then a resume's id is only asked for. */
+	private volatile boolean announced;
 	private volatile String model;
 	private volatile State state = State.NEW;
 	private volatile long lastUsed = created;
@@ -156,6 +158,8 @@ final class ClaudeSession {
 
 	/** The Claude Code session id — known once the process has announced it (or from the start when resuming). */
 	String sessionId() { return sessionId; }
+	/** True once Claude Code has announced the session, so it runs in this project. */
+	boolean announced() { return announced; }
 	State state() { return state; }
 	boolean isLive() { return state == State.IDLE || state == State.BUSY; }
 	boolean isIdle() { return state == State.IDLE; }
@@ -367,7 +371,10 @@ final class ClaudeSession {
 			case "system" -> {
 				if ("init".equals(str(ev.get(J_SUBTYPE)))) {
 					String sid = str(ev.get(J_SESSION_ID));
-					if (sid != null) sessionId = sid;
+					if (sid != null) {
+						sessionId = sid;
+						announced = true;
+					}
 					String m = str(RT.getIn(ev, J_MODEL));
 					if (m != null) model = m;
 					adapter.onSessionAnnounced(this);
@@ -547,7 +554,10 @@ final class ClaudeSession {
 
 	/** Stop the process (the session stays resumable). Idempotent. */
 	synchronized void stop(String reason) {
+		boolean spawned = process != null;
 		stopLocked(reason);
+		// Without a process, no exit follows to tell the pool
+		if (!spawned) adapter.onSlotFreed(this);
 	}
 
 	private void stopLocked(String reason) {

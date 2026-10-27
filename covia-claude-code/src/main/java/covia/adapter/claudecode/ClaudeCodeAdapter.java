@@ -86,6 +86,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 
 	public static final String NAME = "claudecode";
 	public static final String MESSAGE_REQUIRED = "Claude Code message requires text";
+	/** Refusal to resume a session in a project other than its own, after the session id. */
+	static final String SESSION_OF_ANOTHER_PROJECT = "belongs to another project, and resumes only there";
 
 	static final AString K_COMMAND = Strings.intern("command");
 	static final AString K_ENV = RunOptions.ENV;
@@ -353,14 +355,25 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		String id = s.sessionId();
 		if (id == null) return;
 		synchronized (pool) {
+			// A forgotten resume that its session job runs again rejoins the pool
+			pool.add(s);
 			ClaudeSession prev = byId.put(id, s);
 			if (prev != null && prev != s) pool.remove(prev);
 		}
 	}
 
-	/** Called by a session whenever it frees or might free a slot (turn done, idle, process ended). */
+	/**
+	 * Called by a session whenever it frees or might free a slot (turn done,
+	 * idle, process ended, stopped). A resume that stopped before Claude Code
+	 * announced the session is forgotten: it never ran, so its project must
+	 * not keep the id from the project the session belongs to.
+	 */
 	void onSlotFreed(ClaudeSession s) {
 		synchronized (pool) {
+			if (s.state() == ClaudeSession.State.STOPPED && !s.announced() && s.sessionId() != null) {
+				byId.remove(s.sessionId(), s);
+				pool.remove(s);
+			}
 			pool.notifyAll();
 		}
 	}
@@ -630,22 +643,30 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	/**
 	 * The session for a plan: the known session when resuming with the same
 	 * settings; a fresh session object (resuming on disk if an id was given)
-	 * otherwise. Does not wait for a pool slot — see {@link #acquireSlot}.
+	 * otherwise. A session known in another project is refused, untouched:
+	 * the plan was gated on its own project, not the session's. Does not wait
+	 * for a pool slot — see {@link #acquireSlot}.
 	 */
 	private ClaudeSession resolveSession(RequestContext ctx, Plan plan) {
 		ClaudeSession s = null;
-		if (plan.resumeId() != null) {
-			synchronized (pool) { s = byId.get(plan.resumeId()); }
+		ClaudeSession restart = null;
+		synchronized (pool) {
+			if (plan.resumeId() != null) s = byId.get(plan.resumeId());
+			if (s != null && !s.project.name().equals(plan.project().name())) {
+				throw new IllegalArgumentException("Session " + plan.resumeId() + " " + SESSION_OF_ANOTHER_PROJECT);
+			}
 			if (s != null && (!s.project.equals(plan.project()) || !s.options.equals(plan.options()))) {
-				// Different settings: the process is restarted with the new flags; the conversation resumes.
-				s.stop("settings changed");
+				restart = s;
 				s = null;
 			}
+			if (s == null) {
+				s = new ClaudeSession(this, plan.project(), plan.options(), plan.resumeId(), ctx.getCallerDID());
+				register(s);
+			}
 		}
-		if (s == null) {
-			s = new ClaudeSession(this, plan.project(), plan.options(), plan.resumeId(), ctx.getCallerDID());
-			register(s);
-		}
+		// Different settings: the process is restarted with the new flags; the conversation resumes.
+		// Stopped outside the pool lock, as a session calls into the pool under its own.
+		if (restart != null) restart.stop("settings changed");
 		return s;
 	}
 
@@ -662,6 +683,12 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			return d;
 		});
 		if (job.isFinished()) return;
+		if (plan.prompt() == null) {
+			// A session opened without a first prompt waits for input. It claims
+			// no session, and no slot, until its first turn resolves one.
+			VIRTUAL_EXECUTOR.execute(() -> sj.awaitInput(Maps.of(K_PROJECT, Strings.create(plan.project().name()))));
+			return;
+		}
 		ClaudeSession session = resolveSession(ctx, plan);
 		turnBinding.session = session;
 		VIRTUAL_EXECUTOR.execute(() -> {
@@ -669,11 +696,6 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 				ClaudeSession s = session;
 				acquireSlot(job, s);
 				if (job.isFinished()) return;
-				if (plan.prompt() == null) {
-					// A session opened without a first prompt: wait for input.
-					sj.awaitInput(Maps.of(K_PROJECT, Strings.create(plan.project().name())));
-					return;
-				}
 				CompletableFuture<AMap<AString, ACell>> turn = s.submit(plan.prompt(),
 					progress -> publishProgress(job, progress.message(), progress.data()));
 				turnBinding.turn = turn;
@@ -736,7 +758,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			ClaudeSession s = session;
 			CompletableFuture<?> t = turn;
 			if (s != null && t != null) s.cancel(t);
-			if (this instanceof SessionJob && s != null) s.stop("session job cancelled");
+			// A session that never ran holds a slot, and a resume its id: release both
+			if (s != null && (this instanceof SessionJob || s.state() == ClaudeSession.State.NEW)) s.stop("session job cancelled");
 			synchronized (pool) { pool.notifyAll(); }
 		}
 	}
@@ -798,13 +821,17 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			if (!Status.STARTED.equals(job.getStatus())) job.setStatus(Status.STARTED);
 			VIRTUAL_EXECUTOR.execute(() -> {
 				try {
-					ClaudeSession s = session;
-					if (s == null) {
-						// Restored after a venue restart: resume the conversation on a fresh process.
-						ProjectSpec project = project(plan.project().name());
-						if (project == null) throw new IllegalStateException("Project '" + plan.project().name() + "' no longer exists");
-						s = resolveSession(ctx, new Plan(project, plan.options(), storedSession(), prompt));
-						session = s;
+					ClaudeSession s;
+					synchronized (this) {
+						s = session;
+						if (s == null) {
+							// Opened without a prompt, or restored after a venue restart: the first
+							// turn resolves the session, resuming the recorded one on a fresh process.
+							ProjectSpec project = project(plan.project().name());
+							if (project == null) throw new IllegalStateException("Project '" + plan.project().name() + "' no longer exists");
+							s = resolveSession(ctx, new Plan(project, plan.options(), storedSession(), prompt));
+							session = s;
+						}
 					}
 					acquireSlot(job, s);        // immediate when the process is still warm
 					if (job.isFinished()) return;
