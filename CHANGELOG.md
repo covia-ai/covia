@@ -17,6 +17,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   message's `text` or an agent request's `task`.
 - `AStorage.storeVerified`: stores content only if its SHA-256 is the given hash (#629).
 - `StreamContent`: one-shot content over a stream, such as an HTTP response body.
+- `ai.covia:venue` publishes a test jar (`tests` classifier) with its shared test support.
 
 ### Changed
 

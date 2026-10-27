@@ -1024,7 +1024,9 @@ resolution, and full metadata rules.
 Optional adapters should be separate Maven modules when operators may choose
 whether to install their dependency tree. A module:
 
-- depends on `venue` with `provided` scope;
+- depends on `venue` with `provided` scope, and may take the venue's test jar
+  (`<type>test-jar</type>`, `test` scope) for shared test support, such as
+  `TestTemp` for a store that must survive a restart;
 - shades only its own runtime dependencies into a `*-module.jar` written beside the slim jar (not attached, so Maven Central receives only the slim jar);
 - excludes Covia, Convex, SLF4J, and Logback platform classes;
 - excludes every library `covia.jar` already ships (Kotlin, Jackson, Gson,
