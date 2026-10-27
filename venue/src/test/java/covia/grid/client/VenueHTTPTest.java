@@ -265,6 +265,25 @@ public class VenueHTTPTest {
 		assertEquals(original, retrieved, "round-tripped bytes must match exactly");
 	}
 
+	@Test
+	public void oneShotStreamUploadsAndStreamsBack() throws Exception {
+		byte[] bytes = "sent as it is read, read as it arrives".getBytes();
+		Hash contentHash = Hashing.sha256(bytes);
+		Hash assetId = client.addAsset(Maps.of(
+			"name", Strings.create("one-shot-stream-content"),
+			"content", Maps.of("sha256", Strings.create(contentHash.toHexString()))))
+			.get(10, TimeUnit.SECONDS);
+
+		Hash stored = client.putAssetContent(client.getAsset(assetId),
+			new java.io.ByteArrayInputStream(bytes));
+		assertEquals(contentHash, stored);
+
+		AContent got = client.getContent(assetId.toHexString()).get(15, TimeUnit.SECONDS);
+		try (java.io.InputStream in = got.getInputStream()) {
+			assertEquals(Blob.wrap(bytes), Blob.wrap(in.readAllBytes()));
+		}
+	}
+
 	// ============================ Concurrency ===========================
 
 	@Test

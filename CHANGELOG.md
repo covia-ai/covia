@@ -23,6 +23,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   once migrated, so migration still leaves the model's input unchanged.
 - Retrospective projections mark a summary `compacted`, with the turns it stands for.
 - Session titles are the words of the first message rather than its JSON.
+- Content uploads to file storage stream to disk, checked against their hash as they
+  arrive; a failed or mismatched upload leaves nothing under the hash (#629).
+- `VenueHTTP` streams content uploads and downloads instead of buffering them (#629).
 
 ## [0.10.0] - 2026-10-26
 

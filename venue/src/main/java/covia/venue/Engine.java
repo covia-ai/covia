@@ -2497,6 +2497,10 @@ public class Engine {
 				content = handle.getContent();
 			}
 			if (content == null) return null;
+			// Interim (covia#629): the fetched content is held in memory, flat, to
+			// check its hash. With Convex's streaming blob writer and reader
+			// (Convex-Dev/convex#790) it would stream into the store, hashed as
+			// it arrives.
 			ABlob blob = content.getBlob().toFlatBlob();
 
 			ACell declared = RT.getIn(contentMeta, Fields.SHA256);
@@ -2859,6 +2863,9 @@ public class Engine {
 		}
 
 		if (declaredHash != null && (inline != null || ref != null)) {
+			// Interim (covia#629): checked by reading the content into memory.
+			// Convex's streaming reader (Convex-Dev/convex#790) would let it be
+			// hashed as it streams.
 			ABlob bytes = resolved.content().getBlob();
 			Hash actual = Hashing.sha256(bytes.getBytes());
 			if (!actual.equals(declaredHash)) {
@@ -2971,24 +2978,53 @@ public class Engine {
 			throw new IllegalArgumentException("Metadata does not have valid content hash");
 		}
 
-		// Read with size limit to prevent OOM from oversized uploads
+		// The storage checks the SHA-256 as the content streams in and stores
+		// nothing that does not match; the size limit is enforced as it reads.
 		long maxSize = config.getMaxContentSize();
-		byte[] data = is.readNBytes((int) Math.min(maxSize + 1, Integer.MAX_VALUE));
-		if (data.length > maxSize) {
-			throw new IllegalArgumentException("Content exceeds maximum size of " + maxSize + " bytes");
+		try {
+			contentStorage.storeVerified(expectedHash, new SizeLimitedStream(is, maxSize));
+		} catch (ContentTooLarge e) {
+			throw new IllegalArgumentException(CONTENT_TOO_LARGE + maxSize + " bytes");
 		}
-		Blob contentBlob = Blob.wrap(data);
-		Hash actualHash = Hashing.sha256(contentBlob.getBytes());
+		log.debug("Stored content with SHA256: "+expectedHash);
+		return expectedHash;
+	}
 
-		// Verify the actual hash matches the expected hash from metadata
-		if (!actualHash.equals(expectedHash)) {
-			throw new IllegalArgumentException("Content hash mismatch. Expected: " + expectedHash.toHexString() + ", Actual: " + actualHash.toHexString());
+	/** Refusal for an upload larger than the venue's {@code maxContentSize}. */
+	public static final String CONTENT_TOO_LARGE = "Content exceeds maximum size of ";
+
+	/** Raised by {@link SizeLimitedStream} when its limit is passed. */
+	private static final class ContentTooLarge extends IOException {
+		private static final long serialVersionUID = 1L;
+	}
+
+	/** Passes a stream through, failing with {@link ContentTooLarge} once more than {@code limit} bytes are read. */
+	private static final class SizeLimitedStream extends java.io.FilterInputStream {
+		private long remaining;
+
+		SizeLimitedStream(InputStream in, long limit) {
+			super(in);
+			this.remaining = limit;
 		}
 
-		// Store the content using the verified hash
-		contentStorage.store(actualHash, new ByteArrayInputStream(data));
-		log.debug("Stored content with SHA256: "+actualHash);
-		return actualHash;
+		@Override
+		public int read() throws IOException {
+			int b = super.read();
+			if (b >= 0) count(1);
+			return b;
+		}
+
+		@Override
+		public int read(byte[] buf, int off, int len) throws IOException {
+			int n = super.read(buf, off, len);
+			if (n > 0) count(n);
+			return n;
+		}
+
+		private void count(int n) throws ContentTooLarge {
+			remaining -= n;
+			if (remaining < 0) throw new ContentTooLarge();
+		}
 	}
 
 	private AMap<AString,ACell> STATUS_MAP=Maps.of(Fields.STATUS,Fields.OK);

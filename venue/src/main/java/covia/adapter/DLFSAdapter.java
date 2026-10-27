@@ -468,6 +468,11 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AuthorisedPath target = resolveAuthorisedPath(ctx, ref.toString(), Capability.CRUD_WRITE);
 		if (target == null) return false;
 		Path path = target.path();
+		// Interim (covia#629): a DLFS stream write is visible as it goes, so a
+		// failed or cancelled upload leaves a cut-off file under the real name.
+		// Convex's atomic conditional install (Convex-Dev/convex#790) would
+		// publish the file only on a clean end of stream, with createOnly
+		// checked at that moment.
 		try (java.io.OutputStream os = Files.newOutputStream(path, createOnly
 				? FileOperations.createOptions(path) : new java.nio.file.OpenOption[] {
 				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,

@@ -1,5 +1,6 @@
 package covia.venue.storage;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -9,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -212,6 +214,103 @@ public class FileStorageTest {
 
 		AContent content = storage.getContent(hash);
 		assertEquals(data2.length, content.getSize());
+	}
+
+	// ========== Verified, staged writes ==========
+
+	@Test
+	public void testStoreVerifiedStoresMatchingContent() throws IOException {
+		byte[] data = "verified content".getBytes();
+		Hash hash = Hashing.sha256(data);
+
+		storage.storeVerified(hash, new ByteArrayInputStream(data));
+
+		assertArrayEquals(data, read(storage, hash));
+		assertEquals(1, filesIn(tempDir), "only the content file remains, no staging file");
+	}
+
+	@Test
+	public void testStoreVerifiedRefusesMismatchAndKeepsExisting() throws IOException {
+		byte[] data = "the real content".getBytes();
+		Hash hash = Hashing.sha256(data);
+		storage.storeVerified(hash, new ByteArrayInputStream(data));
+
+		IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
+			storage.storeVerified(hash, new ByteArrayInputStream("impostor".getBytes())));
+		assertTrue(e.getMessage().startsWith(AStorage.HASH_MISMATCH), e.getMessage());
+
+		assertArrayEquals(data, read(storage, hash), "content already stored is untouched");
+		assertEquals(1, filesIn(tempDir), "the refused write leaves no staging file");
+	}
+
+	@Test
+	public void testFailedWriteLeavesNothingUnderTheHash() throws IOException {
+		byte[] data = "never completes".getBytes();
+		Hash hash = Hashing.sha256(data);
+
+		assertThrows(IOException.class, () -> storage.store(hash, failingAfter(data, 5)));
+
+		assertFalse(storage.exists(hash), "a cut-off write must not appear under the hash");
+		assertEquals(0, filesIn(tempDir), "the failed write leaves no staging file");
+	}
+
+	@Test
+	public void testGetContentStreamsFromFile() throws IOException {
+		byte[] data = "streamed back".getBytes();
+		Hash hash = Hashing.sha256(data);
+		storage.store(hash, new ByteArrayInputStream(data));
+
+		AContent content = storage.getContent(hash);
+		assertEquals(data.length, content.getSize());
+		try (InputStream in = content.getInputStream()) {
+			assertArrayEquals(data, in.readAllBytes());
+		}
+	}
+
+	@Test
+	public void testStoreVerifiedOnDLFS() throws IOException {
+		DLFileSystem dlfs = DLFS.createLocal();
+		Path storageDir = Files.createDirectory(dlfs.getRoot().resolve("verified"));
+		FileStorage dlfsStorage = new FileStorage(storageDir);
+
+		byte[] data = "verified on a drive".getBytes();
+		Hash hash = Hashing.sha256(data);
+		dlfsStorage.storeVerified(hash, new ByteArrayInputStream(data));
+		// A second verified write of the same content replaces it in place.
+		dlfsStorage.storeVerified(hash, new ByteArrayInputStream(data));
+
+		assertThrows(IllegalArgumentException.class, () ->
+			dlfsStorage.storeVerified(hash, new ByteArrayInputStream("impostor".getBytes())));
+		assertThrows(IOException.class, () -> dlfsStorage.store(hash, failingAfter(data, 5)));
+
+		assertArrayEquals(data, read(dlfsStorage, hash));
+		assertEquals(1, filesIn(storageDir), "only the content file remains on the drive");
+	}
+
+	private static byte[] read(FileStorage s, Hash hash) throws IOException {
+		try (InputStream in = s.getContent(hash).getInputStream()) {
+			return in.readAllBytes();
+		}
+	}
+
+	/** Every regular file in a directory, staging files included. */
+	private static long filesIn(Path dir) throws IOException {
+		try (var files = Files.list(dir)) {
+			return files.filter(Files::isRegularFile).count();
+		}
+	}
+
+	/** A stream that delivers {@code n} bytes of {@code data}, then fails. */
+	private static InputStream failingAfter(byte[] data, int n) {
+		return new InputStream() {
+			private int pos;
+
+			@Override
+			public int read() throws IOException {
+				if (pos >= n) throw new IOException("connection lost");
+				return data[pos++] & 0xff;
+			}
+		};
 	}
 
 	// ========== isInitialised ==========

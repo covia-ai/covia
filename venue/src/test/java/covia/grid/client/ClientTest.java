@@ -192,8 +192,7 @@ public class ClientTest {
 		
 		// Verify the content
 		assertNotNull(retrievedContent, "Retrieved content should not be null");
-		assertTrue(retrievedContent instanceof BlobContent, "Retrieved content should be BlobContent");
-		
+
 		// Verify the content matches
 		convex.core.data.ABlob retrievedBlob = retrievedContent.getBlob();
 		assertNotNull(retrievedBlob, "Retrieved blob should not be null");

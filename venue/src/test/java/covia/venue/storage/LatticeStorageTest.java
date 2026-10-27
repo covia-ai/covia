@@ -260,6 +260,22 @@ public class LatticeStorageTest {
 		assertFalse(storage.isInitialised());
 	}
 
+	// ========== Verified writes ==========
+
+	@Test
+	public void testStoreVerifiedStoresOnlyMatchingContent() throws IOException {
+		byte[] data = "verified".getBytes();
+		Hash hash = Hashing.sha256(data);
+
+		IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
+			storage.storeVerified(hash, new ByteArrayInputStream("impostor".getBytes())));
+		assertTrue(e.getMessage().startsWith(AStorage.HASH_MISMATCH), e.getMessage());
+		assertFalse(storage.exists(hash), "refused content is never stored");
+
+		storage.storeVerified(hash, new ByteArrayInputStream(data));
+		assertEquals(Blob.wrap(data), storage.getContent(hash).getBlob().toFlatBlob());
+	}
+
 	// ========== Misc ==========
 
 	@Test

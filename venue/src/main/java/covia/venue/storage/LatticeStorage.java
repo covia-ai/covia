@@ -112,6 +112,9 @@ public class LatticeStorage extends AStorage {
 			throw new IllegalArgumentException("InputStream cannot be null");
 		}
 
+		// Interim (covia#629): the whole content is held in memory. Convex's
+		// streaming blob writer (Convex-Dev/convex#790) would save chunks to the
+		// store as they arrive, leaving storeBlob as the single publishing step.
 		byte[] data = inputStream.readAllBytes();
 		ABlob blob = Blob.wrap(data);
 		storeBlob(hash, blob);

@@ -44,7 +44,7 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
-import covia.grid.impl.BlobContent;
+import covia.grid.impl.StreamContent;
 
 public class VenueHTTP extends Venue {
 
@@ -879,7 +879,7 @@ public class VenueHTTP extends Venue {
 		
 		HttpRequest req = bodyRequestBuilder("assets/" + h.toHexString() + "/content")
 			.header("Content-Type", "application/octet-stream")
-			.PUT(HttpRequest.BodyPublishers.ofByteArray(content.getBlob().getBytes()))
+			.PUT(contentBody(content))
 			.build();
 		
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
@@ -896,12 +896,49 @@ public class VenueHTTP extends Venue {
 				throw new ResponseException("Failed to add content: " + response.statusCode() + " - " + response.body(), response);
 			}
 		});
-	
+
 	}
-	
+
 	/**
-	 * Gets content for an asset using the GET API endpoint.
-	 * 
+	 * Streams content as a request body, with its length when known. Each send
+	 * reopens the content, so a rate-limited (429) retry resends it in full; a
+	 * one-shot {@link StreamContent} cannot be reopened, so its retry fails.
+	 */
+	private static HttpRequest.BodyPublisher contentBody(AContent content) {
+		HttpRequest.BodyPublisher body = HttpRequest.BodyPublishers.ofInputStream(() -> {
+			InputStream in = content.getInputStream();
+			if (in == null) throw new java.io.UncheckedIOException(new IOException("Content is not available"));
+			return in;
+		});
+		long size = content.getSize();
+		return (size > 0) ? HttpRequest.BodyPublishers.fromPublisher(body, size) : body;
+	}
+
+	/** A content response body, streamed rather than read into memory. */
+	private static AContent streamedContent(HttpResponse<InputStream> response) {
+		return StreamContent.of(response.body(),
+			response.headers().firstValueAsLong("Content-Length").orElse(-1));
+	}
+
+	/**
+	 * Reads the start of a failed response's body for its message, then closes
+	 * it so the connection is released.
+	 */
+	private static String errorBody(HttpResponse<InputStream> response) {
+		try (InputStream body = response.body()) {
+			return new String(body.readNBytes(ERROR_BODY_LIMIT), java.nio.charset.StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			return "";
+		}
+	}
+
+	/** How much of a failed content response's body is read for its message. */
+	private static final int ERROR_BODY_LIMIT = 4096;
+
+	/**
+	 * Gets content for an asset using the GET API endpoint. The content is
+	 * streamed: it can be read once, as a stream or as a blob.
+	 *
 	 * @param assetID The asset ID to get content for
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
@@ -910,19 +947,21 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 
-		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
+				errorBody(response);
 				throw new ResponseException("Content get failed with status: " + code
 					+ " -- asset reference: " + assetID);
 			}
-			return BlobContent.of(convex.core.data.Blob.wrap(response.body()));
+			return streamedContent(response);
 		});
 	}
 	
 	/**
-	 * Gets content for an asset using the GET API endpoint.
-	 * 
+	 * Gets content for an asset using the GET API endpoint. The content is
+	 * streamed: it can be read once, as a stream or as a blob.
+	 *
 	 * @param assetID The asset ID to get content for
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
@@ -932,31 +971,31 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 
-		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
+				errorBody(response);
 				throw new ResponseException("Content get failed with status: " +code+" -- asset ID: "+assetID);
 			}
-
-			byte[] data = response.body();
-			convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
-			return BlobContent.of(blob);
+			return streamedContent(response);
 		});
 	}
 
-	/** Fetches content explicitly from the connected venue's published catalog. */
+	/**
+	 * Fetches content explicitly from the connected venue's published catalog.
+	 * The content is streamed: it can be read once, as a stream or as a blob.
+	 */
 	public CompletableFuture<AContent> getVenueContent(Hash assetID) {
 		HttpRequest req = requestBuilder(
 			"assets/" + assetID.toHexString() + "/content?namespace=venue")
 			.GET().build();
-		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
 				throw new ResponseException("Venue content get failed with status: " +code
-					+" -- asset ID: "+assetID+" -- "
-					+new String(response.body(), java.nio.charset.StandardCharsets.UTF_8));
+					+" -- asset ID: "+assetID+" -- "+errorBody(response));
 			}
-			return BlobContent.of(convex.core.data.Blob.wrap(response.body()));
+			return streamedContent(response);
 		});
 	}
 	
@@ -1233,10 +1272,10 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public Hash putAssetContent(Asset asset, InputStream content) throws IOException {
-		byte[] data = content.readAllBytes();
-		convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
-		AContent acontent = BlobContent.of(blob);
-		return addContent(asset.getID().toHexString(), acontent).join();
+		// Sent as it is read. The stream cannot be replayed, so a rate-limited
+		// (429) upload fails rather than retrying; addContent with content that
+		// can be reopened (PathContent, BlobContent) retries.
+		return addContent(asset.getID().toHexString(), StreamContent.of(content, -1)).join();
 	}
 
 	@Override

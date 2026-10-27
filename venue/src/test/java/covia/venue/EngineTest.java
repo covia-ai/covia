@@ -758,7 +758,8 @@ public class EngineTest {
 	@Test
 	public void testDLFSStorageConfig() throws IOException {
 		AMap<AString, ACell> config = Maps.of(
-			Config.STORAGE, Maps.of(Config.CONTENT, Config.STORAGE_TYPE_DLFS)
+			Config.STORAGE, Maps.of(Config.CONTENT, Config.STORAGE_TYPE_DLFS),
+			Config.MAX_CONTENT_SIZE, 64
 		);
 
 		Engine dlfsVenue = Engine.createTemp(config);
@@ -786,6 +787,25 @@ public class EngineTest {
 				String retrievedContent = new String(retrievedStream.readAllBytes());
 				assertEquals(testContent, retrievedContent);
 			}
+
+			// Uploads stream into the store: the size limit and the hash are
+			// checked as the bytes arrive, and refused content is never stored.
+			byte[] tooLarge = new byte[65];
+			Hash tooLargeAsset = dlfsVenue.storeAsset(JSON.printPretty(Maps.of(
+				Fields.NAME, "too-large",
+				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256(tooLarge).toHexString()))), null);
+			IllegalArgumentException large = assertThrows(IllegalArgumentException.class, () ->
+				dlfsVenue.putContent(dlfsVenue.getMetaValue(tooLargeAsset), new ByteArrayInputStream(tooLarge)));
+			assertTrue(large.getMessage().startsWith(Engine.CONTENT_TOO_LARGE), large.getMessage());
+			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(tooLargeAsset)));
+
+			Hash mismatchAsset = dlfsVenue.storeAsset(JSON.printPretty(Maps.of(
+				Fields.NAME, "mismatched",
+				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256("declared".getBytes()).toHexString()))), null);
+			IllegalArgumentException mismatch = assertThrows(IllegalArgumentException.class, () ->
+				dlfsVenue.putContent(dlfsVenue.getMetaValue(mismatchAsset), new ByteArrayInputStream("sent".getBytes())));
+			assertTrue(mismatch.getMessage().startsWith(AStorage.HASH_MISMATCH), mismatch.getMessage());
+			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(mismatchAsset)));
 		} finally {
 			dlfsVenue.close();
 		}
