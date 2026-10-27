@@ -599,6 +599,77 @@ class CryptoAdapterTest {
 		}
 	}
 
+	@Test void storedTokenDecodeNeverReturnsItsBearerSignature() {
+		AString token = JWT.signPublic(Maps.of("sub", "stored"), identity);
+		String segment = token.toString().substring(token.toString().lastIndexOf('.') + 1);
+		String signature = Blob.wrap(JWT.parse(token).getSignatureBytes()).toHexString();
+		put("bearer", token.toString());
+		RequestContext owner = ctx;
+		String ref = owner.getUserDID() + "/s/bearer";
+		AKeyPair bob = AKeyPair.generate();
+		RequestContext other = RequestContext.of(UCAN.toDIDKey(bob.getAccountKey()));
+		engine.getVenueState().users().ensure(other.getUserDID());
+		UCAN grant = UCAN.create(identity, bob.getAccountKey(), System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(ref), Abilities.SECRET_USE)), Vectors.empty());
+		// The owner, the owner's agent (barred from extraction) and a grantee using it
+		for (RequestContext caller : new RequestContext[] {owner,
+				RequestContext.ofAgent(owner.getUserDID(), Strings.create("helper")),
+				other.withProofs(Vectors.of(grant.toMap()))}) {
+			ctx = caller;
+			ACell decoded = run("jwt-decode", Maps.of("tokenSecret", ref));
+			assertEquals(Strings.create("stored"), RT.getIn(decoded, "claims", "sub"));
+			assertNull(RT.getIn(decoded, "signature"));
+			Job job = job("jwt-decode", Maps.of("tokenSecret", ref));
+			job.awaitResult(5000);
+			assertFalse(job.getData().toString().contains(signature));
+			assertFalse(job.getData().toString().contains(segment));
+		}
+		ctx = owner;
+		assertNotNull(RT.getIn(run("jwt-decode", Maps.of("token", token)), "signature"),
+			"an inline token's signature is the caller's already");
+	}
+
+	@Test void deriveKeyNeverDerivesFromAnotherPrincipalsSecrets() {
+		put("phrase", PHRASE);
+		put("pass", "TREZOR");
+		RequestContext alice = ctx;
+		String phraseRef = alice.getUserDID() + "/s/phrase";
+		String passRef = alice.getUserDID() + "/s/pass";
+		AKeyPair bob = AKeyPair.generate();
+		ctx = RequestContext.of(UCAN.toDIDKey(bob.getAccountKey()));
+		put("own-phrase", PHRASE);
+		UCAN grant = UCAN.create(identity, bob.getAccountKey(), System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(phraseRef), Abilities.SECRET_USE),
+				Capability.create(Strings.create(passRef), Abilities.SECRET_USE)), Vectors.empty());
+		ctx = ctx.withProofs(Vectors.of(grant.toMap()));
+		// The grant is real: Bob may use Alice's phrase...
+		assertEquals(CVMBool.TRUE, RT.getIn(run("validate-mnemonic", Maps.of("mnemonic", phraseRef)), "valid"));
+		// ...but never hold a key derived from it, nor one that would let him guess her passphrase
+		assertEquals(CryptoAdapter.OWN_SECRETS_ONLY, failure("derive-key",
+			Maps.of("mnemonic", phraseRef, "name", "stolen")).getErrorMessage());
+		assertEquals(CryptoAdapter.OWN_SECRETS_ONLY, failure("derive-key",
+			Maps.of("mnemonic", "s/own-phrase", "passphraseSecret", passRef, "name", "guessable")).getErrorMessage());
+		assertNull(engine.resolveSecret("s/stolen", ctx));
+		assertNull(engine.resolveSecret("s/guessable", ctx));
+		run("derive-key", Maps.of("mnemonic", "s/own-phrase", "name", "mine"));
+		assertNotNull(engine.resolveSecret("s/mine", ctx));
+		// Alice names her own secrets in either form
+		ctx = alice;
+		run("derive-key", Maps.of("mnemonic", phraseRef, "passphraseSecret", passRef, "name", "hers"));
+		assertNotNull(engine.resolveSecret("s/hers", alice));
+	}
+
+	@Test void ownSecretMeansTheCallersStoreAndNeverThePublicOne() {
+		String own = ctx.getUserDID().toString();
+		assertTrue(engine.isOwnSecretRef("s/x", ctx));
+		assertTrue(engine.isOwnSecretRef("x", ctx));
+		assertTrue(engine.isOwnSecretRef(own + "/s/x", ctx));
+		assertTrue(engine.isOwnSecretRef(own + "/s/x", RequestContext.ofAgent(ctx.getUserDID(), Strings.create("helper"))));
+		assertFalse(engine.isOwnSecretRef(UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + "/s/x", ctx));
+		assertFalse(engine.isOwnSecretRef(own + "/w/y/s/x", ctx), "a path under a DID names no store");
+		assertFalse(engine.isOwnSecretRef("s/x", RequestContext.of(Strings.create(engine.getDIDString() + ":public"))));
+	}
+
 	@Test void discoveryMirrorsAndLifecycle() {
 		var adapter = engine.getAdapter("crypto");
 		assertEquals(13, adapter.getOperations().count());

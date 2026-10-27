@@ -15,7 +15,7 @@
         },
         "tokenSecret": {
           "type": "string",
-          "description": "Secret reference containing the compact JWT: s/NAME or <did>/s/NAME. Supply either token or tokenSecret."
+          "description": "Secret reference containing the compact JWT: s/NAME or <did>/s/NAME. Supply either token or tokenSecret. A stored token's signature is never returned."
         }
       },
       "oneOf": [
@@ -59,15 +59,14 @@
         },
         "signature": {
           "type": "string",
-          "description": "Native signature blob; JSON renders as 0x-prefixed hexadecimal. No signature verification is performed.",
+          "description": "Native signature blob; JSON renders as 0x-prefixed hexadecimal. No signature verification is performed. Absent for tokenSecret: a stored token's signature is its bearer credential.",
           "pattern": "^0x(?:[0-9a-f]{2})*$"
         }
       },
       "required": [
         "verified",
         "header",
-        "claims",
-        "signature"
+        "claims"
       ],
       "additionalProperties": false
     },

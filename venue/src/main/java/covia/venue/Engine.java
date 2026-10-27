@@ -4190,26 +4190,47 @@ public class Engine {
 	 */
 	public String resolveSecret(String secretRef, RequestContext ctx, String destination) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return null;
-		AString owner = ctx.getUserDID();
-		String name;
-		if (secretRef.startsWith("did:")) {
-			// <did>/s/NAME: the owner is the whole DID, never a path under one.
-			int idx = secretRef.indexOf("/s/");
-			if (idx < 0 || secretRef.lastIndexOf('/', idx - 1) >= 0) return null;
-			owner = Strings.create(secretRef.substring(0, idx));
-			name = secretRef.substring(idx + 3);
-		} else {
-			name = secretName(secretRef);
-		}
+		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		if (owner == null) return null;
+		String name = secretRef.startsWith("did:")
+			? secretRef.substring(secretRef.indexOf("/s/") + 3) : secretName(secretRef);
 		if (name.isEmpty() || name.indexOf('/') >= 0) return null;   // one secret name, as secret:set requires
-		// A user's own secrets are its own to use, and so its agents' (UCAN.md
-		// §5.1). The public principal's store is provisioned by the operator and
-		// nobody's own, so it needs a grant like any other principal's.
-		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) {
+		if (!isOwnSecret(owner, ctx)) {
 			requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
 				destination != null ? Strings.create(destination) : null);
 		}
 		return decryptSecret(owner, name);
+	}
+
+	/**
+	 * Whether {@code secretRef} names a secret in the caller's own store, which
+	 * the caller and its agents use without a grant. False for another
+	 * principal's store, the public store and a malformed reference. An
+	 * operation whose result would leave the caller holding material derived
+	 * from a secret accepts only the caller's own: a {@code secret/use} grant
+	 * is use without seeing the value, never possession.
+	 */
+	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
+		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
+		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		return owner != null && isOwnSecret(owner, ctx);
+	}
+
+	/** The DID whose store {@code secretRef} names: {@code caller} for the own
+	 *  forms, the whole DID of {@code <did>/s/NAME}; null when malformed. */
+	private static AString secretOwner(String secretRef, AString caller) {
+		if (!secretRef.startsWith("did:")) return caller;
+		// <did>/s/NAME: the owner is the whole DID, never a path under one.
+		int idx = secretRef.indexOf("/s/");
+		if (idx < 0 || secretRef.lastIndexOf('/', idx - 1) >= 0) return null;
+		return Strings.create(secretRef.substring(0, idx));
+	}
+
+	/** A user's own secrets are its own to use, and so its agents' (UCAN.md
+	 *  §5.1). The public principal's store is provisioned by the operator and
+	 *  nobody's own, so it needs a grant like any other principal's. */
+	private boolean isOwnSecret(AString owner, RequestContext ctx) {
+		return owner.equals(ctx.getUserDID()) && !isPublicPrincipal(owner);
 	}
 
 	/** One user's secret of one name, decrypted; null when the user or the secret

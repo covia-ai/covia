@@ -605,6 +605,11 @@ history, venue-wide events and schema-validation logs. Transient results
 cannot be fetched through public job-status APIs. HTTP run responses use
 `Cache-Control: private, no-store`.
 
+Crypto operations do not turn a use into possession either. `crypto:derive-key` reads only
+the caller's own secrets, because it stores the derived key where the caller
+can extract it. `crypto:jwt-decode` never returns a stored token's signature,
+which is its bearer credential.
+
 After authorization, a missing secret fails with `SecretAdapter.SECRET_UNAVAILABLE`;
 an unreadable key version, corrupt ciphertext or malformed record fails with
 `SecretAdapter.SECRET_DECRYPT_FAILED`. Decryption failures expose no underlying

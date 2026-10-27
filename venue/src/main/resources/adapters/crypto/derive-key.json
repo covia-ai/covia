@@ -10,11 +10,11 @@
       "properties": {
         "mnemonic": {
           "type": "string",
-          "description": "Secret reference holding an English BIP39 phrase. Full words required; case and whitespace are normalised. Never pass the phrase inline."
+          "description": "Reference to your own secret holding an English BIP39 phrase: s/NAME. Another principal's secret is refused, since the derived key is stored where you can extract it. Full words required; case and whitespace are normalised. Never pass the phrase inline."
         },
         "passphraseSecret": {
           "type": "string",
-          "description": "Optional secret reference for a BIP39 passphrase (NFKD-normalised); omitted means empty. Different passphrases produce different keys."
+          "description": "Optional reference to your own secret holding a BIP39 passphrase (NFKD-normalised); omitted means empty. Another principal's secret is refused. Different passphrases produce different keys."
         },
         "path": {
           "type": "string",

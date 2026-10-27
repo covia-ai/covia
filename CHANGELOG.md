@@ -31,6 +31,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   Downloaded content can be read once, as a stream or a blob; its size is unknown until
   read unless the venue sends a length.
 
+### Security
+
+- `crypto:derive-key` reads only the caller's own secrets, and `crypto:jwt-decode`
+  never returns a stored token's signature, so `secret/use` never yields possession.
+
 ## [0.10.0] - 2026-10-26
 
 ### Convex 0.8.18 lattice applications

@@ -34,6 +34,7 @@ import convex.core.data.prim.ANumeric;
 import convex.core.exceptions.BadFormatException;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -55,6 +56,7 @@ public class CryptoAdapter extends AAdapter {
 	public static final String INVALID_SIGNATURE = "Expected a 64-byte Ed25519 signature";
 	public static final String SECRET_REF_REQUIRED = "Expected an s/<name> or <did>/s/<name> secret reference";
 	public static final String SECRET_MISSING = "Referenced crypto secret is not available";
+	public static final String OWN_SECRETS_ONLY = "derive-key reads only the caller's own secrets: it stores the derived key where the caller can extract it";
 	public static final String INVALID_WORDS = "words must be one of 12, 15, 18, 21 or 24";
 	public static final String INVALID_MNEMONIC = "Invalid English BIP39 mnemonic: check word count, words and checksum";
 	public static final String INVALID_PATH = "Expected m or m/<index>/... with at most 255 indexes in 0..2147483647; apostrophes are optional, all indexes are hardened";
@@ -223,8 +225,11 @@ public class CryptoAdapter extends AAdapter {
 		JWT jwt = JWT.parse(jwtToken(ctx, input));
 		if (jwt == null) throw new IllegalArgumentException(INVALID_JWT);
 		// Decoding proves nothing about the signature, claims, or signing authority.
-		return Maps.of(VERIFIED, false, HEADER, jwt.getHeader(), CLAIMS, jwt.getClaims(),
-			SIGNATURE, Blob.wrap(jwt.getSignatureBytes()));
+		AMap<AString, ACell> decoded = Maps.of(VERIFIED, false, HEADER, jwt.getHeader(), CLAIMS, jwt.getClaims());
+		// A stored token's signature is its bearer credential: the token could be
+		// rebuilt from it, so a use of the secret never returns it.
+		if (((AMap<?, ?>) input).containsKey(TOKEN_SECRET)) return decoded;
+		return decoded.assoc(SIGNATURE, Blob.wrap(jwt.getSignatureBytes()));
 	}
 
 	private ACell jwtVerify(RequestContext ctx, ACell input) {
@@ -334,6 +339,11 @@ public class CryptoAdapter extends AAdapter {
 	}
 
 	private ACell deriveKey(RequestContext ctx, ACell input) {
+		// The derived key lands in the caller's store, where the caller may
+		// extract it. Another principal's mnemonic would yield its key material,
+		// and its passphrase could be guessed offline from the derived key.
+		requireOwnSecret(ctx, input, MNEMONIC);
+		if (RT.getIn(input, PASSPHRASE_SECRET) != null) requireOwnSecret(ctx, input, PASSPHRASE_SECRET);
 		AString path = text(input, PATH, DEFAULT_PATH);
 		int[] indexes = parsePath(path);
 		String phrase = mnemonic(ctx, input);
@@ -394,6 +404,14 @@ public class CryptoAdapter extends AAdapter {
 		if (value == null) throw new IllegalArgumentException(SECRET_MISSING);
 		if (value.length() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
 		return Strings.create(value);
+	}
+
+	private void requireOwnSecret(RequestContext ctx, ACell input, AString field) {
+		AString ref = text(input, field, null);
+		// A literal is left for secret() to refuse with its own reason.
+		if (Engine.isSecretRef(ref.toString()) && !engine.isOwnSecretRef(ref.toString(), ctx)) {
+			throw new AuthException(OWN_SECRETS_ONLY);
+		}
 	}
 
 	private AKeyPair keyPair(RequestContext ctx, ACell input) {
