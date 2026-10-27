@@ -45,7 +45,7 @@ public class TestServer {
 						// default and authenticated access are covered explicitly by
 						// PublicScopeTest.
 						Config.CAPS,Strings.create("unrestricted"))
-				)));
+				)), TestTemp.etch("test-server"));
 		PORT=SERVER.port();
 		BASE_URL="http://localhost:"+PORT;
 		ENGINE=SERVER.getEngine();

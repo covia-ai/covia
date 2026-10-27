@@ -2,6 +2,7 @@ package covia.venue;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,7 +23,8 @@ import convex.etch.EtchStore;
  * other test uses the shared {@link TestEngine} (Etch-backed, so Etch is still
  * exercised under the suite's load), an in-memory engine, or a server on
  * {@code Config.STORE "memory"}. A server with no store configured opens a
- * fresh temp Etch store, so a test server always names its store.
+ * fresh temp Etch store, so a test server always names its store or adopts
+ * one from here, as the shared {@link TestServer} does.
  *
  * <p>Not a JUnit {@code @TempDir}: on Java 21 (no FFM mapper) Etch cannot
  * unmap on close, so on Windows a closed store's file stays pinned until its
@@ -51,18 +53,26 @@ public final class TestTemp {
 	 * {@code EtchStore.create(store.getFile())}; files written beside it, such
 	 * as GC's successors, backups and restores, go in the same directory.
 	 */
-	public static EtchStore etch(String name) throws IOException {
-		return EtchStore.create(etchFile(name));
+	public static EtchStore etch(String name) {
+		try {
+			return EtchStore.create(etchFile(name));
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
 	}
 
 	/** The path of a new Etch store, not yet created, in a directory of its own. */
-	public static File etchFile(String name) throws IOException {
+	public static File etchFile(String name) {
 		return dir(name).resolve(name + ".etch").toFile();
 	}
 
 	/** A new directory, for a test's files other than a single store. */
-	public static Path dir(String name) throws IOException {
-		return Files.createDirectory(RUN.resolve(name + "-" + DIRS.incrementAndGet()));
+	public static Path dir(String name) {
+		try {
+			return Files.createDirectory(RUN.resolve(name + "-" + DIRS.incrementAndGet()));
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
 	}
 
 	/** Best-effort recursive delete, now rather than at exit. */

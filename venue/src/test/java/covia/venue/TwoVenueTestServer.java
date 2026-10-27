@@ -114,7 +114,7 @@ public class TwoVenueTestServer {
 					// secure read-only default and authenticated access.
 					Config.CAPS, Strings.create("unrestricted"))
 			)
-		));
+		), TestTemp.etch(hostname));
 	}
 
 	private static DIDVerifier fixedVerifier(String expectedDID, AccountKey key) {
