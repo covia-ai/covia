@@ -82,17 +82,21 @@ regenerating the baseline with a newer build. Each release line (0.9, 0.10, …)
 gets one fixture; every other migration step is tested on states built in
 tests ([MIGRATE.md](../../../../docs/MIGRATE.md#r7-step-by-step-testing)).
 
-For auditing a fixture's generator, download `covia.jar` and `covia.jar.sha256`
-from that fixture's release above, verify the checksum, then run:
+To make a new release line's fixture, or to audit an existing fixture's
+generator, download `covia.jar` and `covia.jar.sha256` from the release, check
+the jar against the checksum, then run:
 
 ```sh
 java -cp /path/to/<release>/covia.jar venue/src/test/java/covia/venue/VenueStoreFixture.java seed /absolute/path/to/NEW-baseline
 ```
 
 The generator itself checks that the jar is one of the published releases in
-`VenueStoreFixture.RELEASES`, and refuses an existing directory. It uses
-source-file mode so all venue classes come from that release.
-It verifies both users before and after an old-runtime restart. Timestamps and
+`VenueStoreFixture.RELEASES` (a new line's release is added there first), and
+refuses an existing directory. It uses source-file mode so all venue classes
+come from that release, and verifies both users before and after an
+old-runtime restart. It writes the store, its `manifest.json` and the fixture
+archive, `covia-<release>.zip`; a new line's archive is copied here and listed
+above. Timestamps and
 job/session IDs vary between generations; the manifest records those identifiers
 and the resulting store hash. A newly generated store is not byte-identical to
 the committed baseline and must not silently replace it.

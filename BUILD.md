@@ -41,16 +41,17 @@ persisted jobs, writes a fresh marker, and flushes before closing. The probe use
 a fixed public test seed and must never open a real venue store. No schema rewrite
 is intended by this migration; the rehearsal verifies actual cross-version reads.
 
-The repeatable API regression is `VenueStoreMigrationTest`. It starts from a
-checked-in store written by the published 0.9.11 jar, upgrades a copy, exercises
-authenticated operations and reopens it twice. It runs with the ordinary
-durability gate and requires no old jar or network download in CI:
+The repeatable API regression is `VenueStoreMigrationTest`. It starts from each
+checked-in store written by a published release jar, one per release line,
+upgrades a copy, exercises authenticated operations and reopens it twice. It
+runs with the ordinary durability gate and requires no old jar or network
+download in CI:
 
 ```sh
 mvn test -pl venue -am '-Dtest=VenueStoreMigrationTest' '-Dsurefire.failIfNoSpecifiedTests=false' '-Dcovia.tests.durability=true'
 ```
 
-Add `-Dcovia.migration.output=/absolute/path/to/NEW-directory` to retain the
+Add `-Dcovia.migration.output=/absolute/path/to/directory` to retain each
 upgraded store, report and a loopback launch config for manual API testing.
 See the [fixture guide](venue/src/test/resources/migrations/README.md) for
 contents, provenance, candidate-jar checks and generation instructions.

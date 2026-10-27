@@ -4,11 +4,14 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -237,6 +240,20 @@ public final class VenueStoreFixture {
 		}
 		manifest = manifest.assoc(Strings.create("storeSha256"), Strings.create(sha256(store)));
 		Files.writeString(directory.resolve("manifest.json"), JSON.toString(manifest), StandardCharsets.UTF_8);
-		System.out.println("FIXTURE OK " + directory + " sha256=" + sha256(store));
+		Path archive = archive(directory, release);
+		System.out.println("FIXTURE OK " + archive + " sha256=" + sha256(store));
+	}
+
+	/** The fixture archive, {@code covia-<release>.zip}: the manifest and the store, as the tests unpack it. */
+	private static Path archive(Path directory, String release) throws Exception {
+		Path archive = directory.resolve("covia-" + release + ".zip");
+		try (var out = new ZipOutputStream(Files.newOutputStream(archive, StandardOpenOption.CREATE_NEW))) {
+			for (String name : new String[] { "manifest.json", "venue.etch" }) {
+				out.putNextEntry(new ZipEntry(name));
+				Files.copy(directory.resolve(name), out);
+				out.closeEntry();
+			}
+		}
+		return archive;
 	}
 }
