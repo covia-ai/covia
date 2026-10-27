@@ -160,7 +160,7 @@ public class VenueStartupTest {
 	@Test
 	public void asyncHookCompletesBeforeRecoveryWorkersSchedulesAndListener() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-order");
+		EtchStore store = TestTemp.etch("startup-order");
 		CompletableFuture<Void> release = new CompletableFuture<>();
 		CompletableFuture<Engine> prepared = new CompletableFuture<>();
 		StartupAdapter adapter = new StartupAdapter();
@@ -213,7 +213,7 @@ public class VenueStartupTest {
 	@Test
 	public void queuedAgentRunsOnceWithConfigAndSkillsAppliedByAsyncHook() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-agent-config");
+		EtchStore store = TestTemp.etch("startup-agent-config");
 		AMap<AString, ACell> cfg = config(key, 0);
 		Engine seed = new Engine(cfg, CoviaApplication.open(store, key), key).prepare();
 		try {
@@ -273,7 +273,7 @@ public class VenueStartupTest {
 	@Test
 	public void failedHookPreservesCauseAndReleasesOwnedStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-failure");
+		EtchStore store = TestTemp.etch("startup-failure");
 		java.io.File file = store.getFile();
 		StartupAdapter adapter = new StartupAdapter();
 		AtomicReference<Job> hookJob = new AtomicReference<>();
@@ -302,7 +302,7 @@ public class VenueStartupTest {
 	@Test
 	public void launchRefusesNewerAdapterStateWithTheStoreUntouched() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-newer-adapter");
+		EtchStore store = TestTemp.etch("startup-newer-adapter");
 		java.io.File file = store.getFile();
 		CoviaApplication application = CoviaApplication.open(store, key);
 		application.venue(key.getAccountKey()).cursor().set(convex.core.data.Index.<convex.core.data.Keyword, ACell>none()
@@ -328,7 +328,7 @@ public class VenueStartupTest {
 	@Test
 	public void failedWorkerActivationClosesAdapterAndStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-worker-failure");
+		EtchStore store = TestTemp.etch("startup-worker-failure");
 		java.io.File file = store.getFile();
 		StartupAdapter adapter = new StartupAdapter();
 		adapter.failStart = true;
@@ -347,7 +347,7 @@ public class VenueStartupTest {
 	@Test
 	public void cancellationDuringHookClosesResourcesWithoutStartingWorkers() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		EtchStore store = EtchStore.createTemp("startup-cancel");
+		EtchStore store = TestTemp.etch("startup-cancel");
 		StartupAdapter adapter = new StartupAdapter();
 		CompletableFuture<Void> hook = new CompletableFuture<>();
 		CompletableFuture<Engine> prepared = new CompletableFuture<>();
@@ -375,7 +375,7 @@ public class VenueStartupTest {
 	@Test
 	public void embeddedLaunchUsesSharedRecoveryBeforeActivationAndKeepsHostStoreOpen() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-startup")) {
+		try (EtchStore store = TestTemp.etch("embedded-startup")) {
 			AMap<AString, ACell> config = config(key, 0);
 			CoviaApplication application = CoviaApplication.open(store, key);
 			Engine seed = new Engine(config, application, key).prepare();
@@ -430,7 +430,7 @@ public class VenueStartupTest {
 	@Test
 	public void embeddedLaunchFailureReleasesWorkersButKeepsCallerStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-failure")) {
+		try (EtchStore store = TestTemp.etch("embedded-failure")) {
 			CoviaApplication application = CoviaApplication.open(store, key);
 			Engine engine = new Engine(config(key, 0), application, key);
 			StartupAdapter adapter = new StartupAdapter();
@@ -453,7 +453,7 @@ public class VenueStartupTest {
 	@Test
 	public void failedEmbeddedActivationSuspendsRecoveredJobsBeforeClosingAdapters() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-recovered-failure")) {
+		try (EtchStore store = TestTemp.etch("embedded-recovered-failure")) {
 			CoviaApplication application = CoviaApplication.open(store, key);
 			Engine engine = new Engine(config(key, 0), application, key);
 			AtomicInteger suspended = new AtomicInteger();
@@ -491,7 +491,7 @@ public class VenueStartupTest {
 	@Test
 	public void cancellingEmbeddedLaunchReleasesHookWaitWithoutOwningHookOrStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-cancel")) {
+		try (EtchStore store = TestTemp.etch("embedded-cancel")) {
 			CoviaApplication application = CoviaApplication.open(store, key);
 			Engine engine = new Engine(config(key, 0), application, key);
 			StartupAdapter adapter = new StartupAdapter();
@@ -518,7 +518,7 @@ public class VenueStartupTest {
 	@Test
 	public void closingEmbeddedEngineReleasesPendingLaunch() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		try (EtchStore store = EtchStore.createTemp("embedded-close")) {
+		try (EtchStore store = TestTemp.etch("embedded-close")) {
 			Engine engine = new Engine(config(key, 0), CoviaApplication.open(store, key), key);
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
 			CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {

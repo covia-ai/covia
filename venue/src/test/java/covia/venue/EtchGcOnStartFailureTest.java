@@ -28,7 +28,7 @@ public class EtchGcOnStartFailureTest {
 	public void failedSweepBootsOnTheOriginalStore() throws Exception {
 		// A root whose children were never written: the sweep meets missing
 		// data, so the cycle must be cancelled and the original store kept.
-		File f = new File(TestTemp.dir("etch-gc-broken").toFile(), "venue.etch");
+		File f = TestTemp.etchFile("etch-gc-broken");
 		AVector<ACell> tree = Vectors.of(
 			Strings.create("left-" + "x".repeat(200)), Strings.create("right-" + "x".repeat(200)));
 		EtchStore broken = EtchStore.create(f);

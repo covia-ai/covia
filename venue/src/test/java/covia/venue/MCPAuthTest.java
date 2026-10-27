@@ -353,11 +353,7 @@ public class MCPAuthTest {
 
 	@Test
 	void rotationRevocationAndAuthenticatorHistorySurviveRestart() throws Exception {
-		// Not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
-		// close, so on Windows the store file stays pinned until the buffers are
-		// garbage-collected and @TempDir's mandatory cleanup fails the test.
-		// TestTemp deletes best-effort now and retries at JVM exit.
-		Path store = TestTemp.dir("mcp-auth").resolve("credential-lifecycle.etch");
+		Path store = TestTemp.etchFile("mcp-auth").toPath();
 		AKeyPair oldKey = AKeyPair.generate();
 		AKeyPair replacement = AKeyPair.generate();
 		AString oldKeyDid = UCAN.toDIDKey(oldKey.getAccountKey());

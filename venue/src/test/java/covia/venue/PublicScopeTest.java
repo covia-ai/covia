@@ -64,6 +64,7 @@ public class PublicScopeTest {
 	public void setup() {
 		secureServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, // ephemeral
+			Config.STORE, "memory",
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true)))); // default → read-only
@@ -181,7 +182,7 @@ public class PublicScopeTest {
 	@Test
 	public void publicStatusDoesNotDiscloseCustomCapabilityTargets() throws Exception {
 		String privateTarget = "did:example:private-owner/w/internal-ledger";
-		VenueServer custom = VenueServer.launch(Maps.of(Config.PORT, 0,
+		VenueServer custom = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true, "caps",
 				Vectors.of(Maps.of("with", privateTarget, "can", "data/read"))))));
 		try {

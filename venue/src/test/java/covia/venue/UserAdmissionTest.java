@@ -36,7 +36,7 @@ class UserAdmissionTest {
 	@Test
 	void httpAuthenticationDoesNotProvisionWhenAutoCreateIsOff() {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, 0));
+			Config.PORT, 0, Config.STORE, "memory"));
 		try {
 			AKeyPair keyPair = AKeyPair.generate();
 			AString did = UCAN.toDIDKey(keyPair.getAccountKey());
@@ -56,7 +56,7 @@ class UserAdmissionTest {
 
 	@Test
 	void admissionDenialHasStructuredBodyBeforeJobCreation() throws Exception {
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0));
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory"));
 		try {
 			AKeyPair keyPair = AKeyPair.generate();
 			AString did = UCAN.toDIDKey(keyPair.getAccountKey());

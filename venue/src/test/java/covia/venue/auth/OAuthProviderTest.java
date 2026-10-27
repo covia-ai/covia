@@ -61,7 +61,7 @@ public class OAuthProviderTest {
 	@BeforeAll
 	public void setup() throws Exception {
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),

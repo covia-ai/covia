@@ -62,14 +62,15 @@ public class TestEngine {
 	/**
 	 * The shared engine's store: a temp Etch store rather than memory, so
 	 * online GC can be exercised on it under the suite's own concurrent load
-	 * ({@code SharedEngineOnlineGcTest}, covia#452). Deleted on exit.
+	 * ({@code SharedEngineOnlineGcTest}, covia#452). A {@link TestTemp} store,
+	 * so GC's successor files are cleaned up with it.
 	 */
 	public static final convex.etch.EtchStore STORE;
 	private static volatile convex.etch.EtchStore collected;
 
 	static {
 		try {
-			STORE = convex.etch.EtchStore.createTemp("covia-test");
+			STORE = TestTemp.etch("covia-test");
 			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
 			ENGINE = new Engine(new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))),
 				CoviaApplication.open(STORE, keyPair), keyPair).start();

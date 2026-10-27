@@ -60,9 +60,7 @@ public class DLFSPersistenceTest {
 
 	@Test
 	public void testDLFSDataSurvivesRestart() throws Exception {
-		File etchFile = File.createTempFile("venue-test-", ".etch");
-		etchFile.delete(); // EtchStore.create needs non-existent file
-		etchFile.deleteOnExit();
+		File etchFile = TestTemp.etchFile("dlfs-persist");
 		AKeyPair venueKey = AKeyPair.generate();
 
 		// === Phase 1: Write data ===

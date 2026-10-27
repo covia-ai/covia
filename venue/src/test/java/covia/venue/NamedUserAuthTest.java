@@ -66,7 +66,7 @@ public class NamedUserAuthTest {
 		bobKeyDID = UCAN.toDIDKey(bobKey.getAccountKey());
 		rotationKeyDID = UCAN.toDIDKey(rotationKey.getAccountKey());
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, "named-auth.example",
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, false),

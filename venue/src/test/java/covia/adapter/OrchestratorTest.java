@@ -764,7 +764,7 @@ public class OrchestratorTest {
 	@Test
 	public void testStrictRemoteStepUsesRemoteOperationSchema() {
 		VenueServer remote = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.ZERO,
+			Config.PORT, CVMLong.ZERO, Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, CVMBool.TRUE,
@@ -814,7 +814,7 @@ public class OrchestratorTest {
 	@Test
 	public void testStrictRemoteStepRequiresMetadataReadBeforeInvocation() {
 		VenueServer remote = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.ZERO,
+			Config.PORT, CVMLong.ZERO, Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, CVMBool.TRUE,

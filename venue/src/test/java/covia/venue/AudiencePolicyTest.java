@@ -71,7 +71,7 @@ public class AudiencePolicyTest {
 		// The require venue also carries a public hostname, so it publishes a
 		// did:web alias (covia#167) — covering the alias-audience cases too.
 		requireServer = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
+			Strings.create("port"), 0, Config.STORE, "memory",
 			Config.HOSTNAME, Strings.create("venue-req.example.com"),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(

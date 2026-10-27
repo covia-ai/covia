@@ -27,7 +27,7 @@ public class RateLimitTest {
 	@Test
 	public void testConcurrentJobCap429() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
+			Strings.create("port"), 0, Config.STORE, "memory",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, true, Config.CAPS, Strings.create("unrestricted"))),
 			Config.RATE_LIMIT, Maps.of(

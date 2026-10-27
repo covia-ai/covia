@@ -78,9 +78,7 @@ public class VenueServerPersistenceTest {
 
 	@Test
 	public void testBootstrapFailureNeverPublishesAndReleasesOwnedResources() throws Exception {
-		File etchFile = File.createTempFile("venue-bootstrap-fail-", ".etch");
-		etchFile.delete();
-		etchFile.deleteOnExit();
+		File etchFile = TestTemp.etchFile("venue-bootstrap-fail");
 		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
 		String seed = AKeyPair.createSeeded(424242).getSeed().toHexString();
 
@@ -127,9 +125,7 @@ public class VenueServerPersistenceTest {
 	 */
 	@Test
 	public void testDLFSDataSurvivesVenueRestart() throws Exception {
-		File etchFile = File.createTempFile("venue-persist-", ".etch");
-		etchFile.delete();
-		etchFile.deleteOnExit();
+		File etchFile = TestTemp.etchFile("venue-persist");
 		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
 
 		AKeyPair venueKey = AKeyPair.createSeeded(999);
@@ -211,15 +207,10 @@ public class VenueServerPersistenceTest {
 	@SuppressWarnings("unchecked")
 	@Test
 	public void testRelaunchWithoutIdentityIsConfigError() throws Exception {
-		// Private directory: venue.key is written as a SIBLING of the store,
-		// so a bare %TEMP% store would share one venue.key with every other
-		// same-dir test.
-		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("venue-noid-");
-		dir.toFile().deleteOnExit();
-		String storePath = dir.resolve("venue.etch").toString().replace('\\', '/');
-		java.nio.file.Path keyFile = dir.resolve("venue.key");
-		keyFile.toFile().deleteOnExit();
-		dir.resolve("venue.etch").toFile().deleteOnExit();
+		// venue.key is written as a SIBLING of the store, in the store's own directory.
+		File etchFile = TestTemp.etchFile("venue-noid");
+		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
+		java.nio.file.Path keyFile = etchFile.toPath().resolveSibling("venue.key");
 
 		AMap<AString, ACell> config = (AMap<AString, ACell>) (AMap<?,?>) Maps.of(
 			Fields.NAME, Strings.create("No-Identity Venue"),
@@ -268,9 +259,7 @@ public class VenueServerPersistenceTest {
 	 */
 	@Test
 	public void testSyncReachesPropagatorThroughVenueServer() throws Exception {
-		File etchFile = File.createTempFile("venue-sync-", ".etch");
-		etchFile.delete();
-		etchFile.deleteOnExit();
+		File etchFile = TestTemp.etchFile("venue-sync");
 		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
 
 		AKeyPair venueKey = AKeyPair.createSeeded(888);

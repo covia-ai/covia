@@ -241,6 +241,10 @@ Adapter-owned state uses `AdapterState`; see
   — never a fresh Engine per test unless persistence/restart is under test
 - Cross-venue tests use the shared `TwoVenueTestServer` (static venues,
   per-test identities) — never spin venues per test
+- A test that needs an Etch store of its own (restart, recovery, GC, the root,
+  identity) gets it from `TestTemp.etch` or `TestTemp.etchFile`, never
+  `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server
+  names its store, `"memory"` unless persistence is under test
 - `mvn test -pl venue` runs the module; asset examples in
   `src/main/resources/asset-examples/`
 

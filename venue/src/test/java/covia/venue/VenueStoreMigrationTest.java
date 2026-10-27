@@ -31,12 +31,7 @@ import covia.venue.server.VenueServer;
 @DurabilityTest
 class VenueStoreMigrationTest {
 
-	/**
-	 * Optional retained output for manual testing; never reopen or overwrite an existing run.
-	 * Otherwise not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
-	 * close, so on Windows the store file stays pinned until the buffers are
-	 * garbage-collected and @TempDir's mandatory cleanup fails the test.
-	 */
+	/** Optional retained output for manual testing; never reopen or overwrite an existing run. */
 	private Path runDirectory() throws IOException {
 		String output = System.getProperty("covia.migration.output");
 		return output == null ? TestTemp.dir("store-migration") : Files.createDirectory(Path.of(output).toAbsolutePath());

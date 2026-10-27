@@ -157,10 +157,7 @@ public class HardKillPersistenceTest {
 	}
 
 	private static File newTempEtch() throws IOException {
-		File f = File.createTempFile("hardkill-", ".etch");
-		f.delete();
-		f.deleteOnExit();
-		return f;
+		return TestTemp.etchFile("hardkill");
 	}
 
 	/**

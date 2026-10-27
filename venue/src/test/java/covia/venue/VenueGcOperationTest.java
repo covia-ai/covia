@@ -218,7 +218,7 @@ public class VenueGcOperationTest {
 	@Test
 	void onlineRetentionInheritsConfigAndCanBeOverridden() throws Exception {
 		for (Boolean override : new Boolean[] {null, Boolean.FALSE, Boolean.TRUE}) {
-			File file = new File(TestTemp.dir("gc-retention-policy").toFile(), "venue.etch");
+			File file = TestTemp.etchFile("gc-retention-policy");
 			AMap<AString, ACell> cfg = config(file.getAbsolutePath()).assoc(Config.ETCH,
 				Maps.of("gc", Maps.of("retainSuperseded", override != Boolean.TRUE)));
 			VenueServer venue = VenueServer.launch(cfg);
@@ -282,7 +282,7 @@ public class VenueGcOperationTest {
 
 	@Test
 	public void collectsWhileServingThenAdoptsOnRelaunch() throws Exception {
-		File file = new File(TestTemp.dir("venue-gc-online").toFile(), "venue.etch");
+		File file = TestTemp.etchFile("venue-gc-online");
 		String storePath = file.getAbsolutePath().replace('\\', '/');
 		long garbage = EtchGcOnStartTest.addGarbage(file);
 

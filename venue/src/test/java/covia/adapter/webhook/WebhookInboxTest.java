@@ -90,11 +90,8 @@ class WebhookInboxTest {
 	}
 
 	@Test void receiptsSurviveVenueRestartAndKeepUncertainWorkSeparate() throws IOException {
-		// Not a JUnit @TempDir: on Java 21 (no FFM mapper) Etch cannot unmap on
-		// close, so on Windows the store file stays pinned until the buffers are
-		// garbage-collected and @TempDir's mandatory cleanup fails the test.
 		AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
-			Config.STORE, TestTemp.dir("webhook-inbox").resolve("webhooks.etch").toString(),
+			Config.STORE, TestTemp.etchFile("webhook-inbox").toString(),
 			Config.SEED, AKeyPair.createSeeded(1928).getSeed().toHexString());
 		VenueServer first = VenueServer.launch(config);
 		try {

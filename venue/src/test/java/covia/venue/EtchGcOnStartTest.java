@@ -49,10 +49,6 @@ public class EtchGcOnStartTest {
 		return cfg;
 	}
 
-	private static File storeFile(String prefix) throws Exception {
-		return new File(TestTemp.dir(prefix).toFile(), "venue.etch");
-	}
-
 	private static void write(VenueServer v, String path, ACell value) throws Exception {
 		v.getEngine().jobs().invokeInternal("v/ops/covia/write",
 			Maps.of(Fields.PATH, path, Fields.VALUE, value), RequestContext.of(USER))
@@ -92,7 +88,7 @@ public class EtchGcOnStartTest {
 
 	@Test
 	public void collectsAtStartupAndKeepsState() throws Exception {
-		File file = storeFile("etch-gc-onstart");
+		File file = TestTemp.etchFile("etch-gc-onstart");
 		String storePath = file.getAbsolutePath().replace('\\', '/');
 		long garbage = addGarbage(file);
 		AString value = Strings.create("survives collection");
@@ -141,7 +137,7 @@ public class EtchGcOnStartTest {
 
 	@Test
 	public void storeWithoutARootIsSkipped() throws Exception {
-		File f = storeFile("etch-gc-fresh");
+		File f = TestTemp.etchFile("etch-gc-fresh");
 		EtchStore store = EtchStore.create(f);
 		try {
 			assertSame(store, VenueServer.collectAtStartup(store, f, null),
@@ -154,7 +150,7 @@ public class EtchGcOnStartTest {
 
 	@Test
 	public void startupRetentionKeepsIndependentRecoveryName() throws Exception {
-		File file = storeFile("etch-gc-retained");
+		File file = TestTemp.etchFile("etch-gc-retained");
 		AMap<AString, ACell> cfg = config(file.getAbsolutePath(), false);
 		VenueServer original = VenueServer.launch(cfg);
 		try { write(original, "w/checkpoint", Strings.create("before")); }
@@ -196,7 +192,7 @@ public class EtchGcOnStartTest {
 
 	@Test
 	public void deletedProfileLeavesCollectedStoreAndStaysDeletedOnRestart() throws Exception {
-		File file = storeFile("user-erasure-gc");
+		File file = TestTemp.etchFile("user-erasure-gc");
 		String marker = "erased-" + java.util.UUID.randomUUID() + "@example.test";
 		AString id = Strings.create("erasure");
 		var key = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());

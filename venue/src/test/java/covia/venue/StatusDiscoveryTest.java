@@ -31,7 +31,7 @@ class StatusDiscoveryTest {
 	@BeforeAll
 	static void launch() {
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false))));
 	}
 

@@ -240,7 +240,7 @@ class AuthMethodsTest {
 	}
 
 	@Test void startupResolvesAfterHostHookAndBeforeServing() {
-		AMap<AString, ACell> cfg = config(fixtureBindings()).assoc(Config.STORE, Strings.create("temp"))
+		AMap<AString, ACell> cfg = config(fixtureBindings()).assoc(Config.STORE, Strings.create("memory"))
 			.assoc(Strings.intern("port"), convex.core.data.prim.CVMLong.ZERO);
 		assertThrows(IllegalArgumentException.class, () -> VenueServer.launch(cfg));
 		VenueServer server = VenueServer.launch(cfg, List.of(), engine -> {
@@ -253,7 +253,7 @@ class AuthMethodsTest {
 
 	@Test void hostCanReplaceDefaultAdapterBeforeReferenceValidation() {
 		AMap<AString, ACell> cfg = config(Maps.of(FIRST, reference("auth", FIRST)))
-			.assoc(Config.STORE, Strings.create("temp"))
+			.assoc(Config.STORE, Strings.create("memory"))
 			.assoc(Strings.intern("port"), convex.core.data.prim.CVMLong.ZERO);
 		VenueServer server = VenueServer.launch(cfg, List.of(), engine -> {
 			engine.registerAdapter(new Fixture(false) {

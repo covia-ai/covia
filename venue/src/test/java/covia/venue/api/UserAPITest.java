@@ -46,7 +46,7 @@ public class UserAPITest {
 	@BeforeAll
 	public void setup() throws Exception {
 		server = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
+			Strings.create("port"), 0, Config.STORE, "memory",
 			Config.HOSTNAME, Strings.create("test.covia.example")));
 		engine = server.getEngine();
 		port = server.port();

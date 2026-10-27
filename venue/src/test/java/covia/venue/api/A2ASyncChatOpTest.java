@@ -56,6 +56,7 @@ public class A2ASyncChatOpTest {
 	public void setup() {
 		server = VenueServer.launch(Maps.of(
 				Strings.create("port"), 0, // ephemeral
+				Config.STORE, "memory",
 				Fields.A2A, Maps.of(
 						Strings.create("defaultChatOp"), Strings.create("v/test/ops/echo")),
 				Config.AUTH, Maps.of(

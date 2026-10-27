@@ -51,7 +51,7 @@ public class AuthThrottleTest {
 	@BeforeAll
 	static void launch() {
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.TRUSTED_PROXIES, Vectors.of(Strings.create(TrustedProxies.LOOPBACK)),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true)),

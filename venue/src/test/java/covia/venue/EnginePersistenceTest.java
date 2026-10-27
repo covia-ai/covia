@@ -264,10 +264,7 @@ public class EnginePersistenceTest {
 	}
 
 	private static File newTempEtch() throws Exception {
-		File f = File.createTempFile("engine-persist-", ".etch");
-		f.delete();
-		f.deleteOnExit();
-		return f;
+		return TestTemp.etchFile("engine-persist");
 	}
 
 	/**

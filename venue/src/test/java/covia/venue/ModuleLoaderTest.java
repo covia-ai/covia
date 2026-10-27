@@ -204,7 +204,7 @@ public class ModuleLoaderTest {
 		AKeyPair key = AKeyPair.generate();
 		String record = "users/did:test:versioned-scratch";
 		AMap<AString, ACell> migrated = Maps.of("scratch", "kept", "migrated", 2L);
-		try (EtchStore store = EtchStore.createTemp("module-migration")) {
+		try (EtchStore store = TestTemp.etch("module-migration")) {
 			Engine built = new Engine(Maps.empty(), CoviaApplication.open(store, key), key).launch();
 			try {
 				assertEquals(1, built.getVenueState().adapterVersion("test"));

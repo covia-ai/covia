@@ -194,11 +194,8 @@ public class HITLAdapterTest {
 
 	@Test
 	public void resolutionAndSessionDeliveryRollbackTogetherAndSurviveRestart() throws Exception {
-		// TestTemp, not @TempDir: on Java 21 (no FFM mapper) a closed store's file
-		// stays mapped until GC, and Windows will not delete a mapped file.
-		var temp = covia.venue.TestTemp.dir("hitl-rollback");
 		AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
-			Config.STORE, temp.resolve("hitl.etch").toString(), Config.SEED, AKeyPair.createSeeded(7481).getSeed().toHexString());
+			Config.STORE, covia.venue.TestTemp.etchFile("hitl-rollback").toString(), Config.SEED, AKeyPair.createSeeded(7481).getSeed().toHexString());
 		AString owner = Strings.create("did:test:atomic-hitl");
 		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
 		var failAppend = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -274,9 +271,7 @@ public class HITLAdapterTest {
 	@Test
 	public void resolutionCommitsFinalJobBeforeFlushAndSurvivesRestart() throws Exception {
 		var key = AKeyPair.generate();
-		// TestTemp, not @TempDir: on Java 21 (no FFM mapper) a closed store's file
-		// stays mapped until GC, and Windows will not delete a mapped file.
-		var file = covia.venue.TestTemp.dir("hitl-resolved").resolve("resolved-hitl.etch").toFile();
+		var file = covia.venue.TestTemp.etchFile("hitl-resolved");
 		class BarrierEngine extends Engine {
 			volatile boolean interruptCompletion;
 			BarrierEngine(convex.etch.EtchStore store) throws java.io.IOException {

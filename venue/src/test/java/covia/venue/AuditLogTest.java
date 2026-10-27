@@ -90,7 +90,7 @@ public class AuditLogTest {
 
 	private static VenueServer launch(String hostname, boolean logging) {
 		return VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, Strings.create(hostname),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),
@@ -243,7 +243,7 @@ public class AuditLogTest {
 			direct.close();
 		}
 		VenueServer proxied = VenueServer.launch(Maps.of(
-			Config.PORT, 0, Config.HOSTNAME, Strings.create("rid-proxied.example"),
+			Config.PORT, 0, Config.STORE, "memory", Config.HOSTNAME, Strings.create("rid-proxied.example"),
 			Config.TRUSTED_PROXIES, Vectors.of(Strings.create(TrustedProxies.LOOPBACK))));
 		try {
 			assertEquals("edge-1234", get(proxied, "/api/v1/status", null, "edge-1234").headers()

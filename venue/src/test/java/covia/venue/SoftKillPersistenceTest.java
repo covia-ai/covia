@@ -82,17 +82,11 @@ public class SoftKillPersistenceTest {
 	}
 
 	/**
-	 * Allocates a unique etch file path under a per-test temp directory.
-	 * We use a directory rather than a flat temp file so we can verify
-	 * the venue did not splatter unexpected sibling files alongside the etch.
+	 * Allocates a unique etch file path in a directory of its own, so we can
+	 * verify the venue did not splatter unexpected sibling files alongside it.
 	 */
 	private static Path freshEtchPath(String testName) throws IOException {
-		// TestTemp: removed recursively at JVM exit (deleteOnExit on a directory
-		// only works once it is empty, and the etch inside kept it alive).
-		Path dir = TestTemp.dir("soft-kill-" + testName + "-");
-		Path etch = dir.resolve("venue.etch");
-		// EtchStore.create requires the file not to exist — don't create it ahead of time.
-		return etch;
+		return TestTemp.etchFile("soft-kill-" + testName).toPath();
 	}
 
 	private static void writeDLFS(VenueServer server, String drive, String path, String content) throws Exception {

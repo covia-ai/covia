@@ -701,7 +701,7 @@ public class AgentQueryTest {
 		java.io.File file;
 		ACell expected;
 		Blob jobId;
-		try (convex.etch.EtchStore store = convex.etch.EtchStore.createTemp("summarise-persist")) {
+		try (convex.etch.EtchStore store = covia.venue.TestTemp.etch("summarise-persist")) {
 			file = store.getFile();
 			engine = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
 			try {

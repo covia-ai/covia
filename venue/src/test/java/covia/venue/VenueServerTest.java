@@ -119,7 +119,7 @@ public class VenueServerTest {
 				return CompletableFuture.completedFuture(input);
 			}
 		}
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1"));
 		try {
 			Engine engine = server.getEngine();
@@ -149,7 +149,7 @@ public class VenueServerTest {
 
 	@Test
 	public void closingAVenueClosesTheHostItOpened() throws Exception {
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false))));
 		var host = server.getHost();
@@ -164,7 +164,7 @@ public class VenueServerTest {
 
 	@Test
 	public void adapterOperationDiscoveryRequiresAuthenticationOnPrivateVenues() throws Exception {
-		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0,
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, false))));
 		try {
@@ -180,7 +180,7 @@ public class VenueServerTest {
 	@Test
 	public void testOperatorRootPageRedirectKeepsBuiltInIndex() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.ROOT_PAGE, Maps.of(
 				Config.REDIRECT, Strings.create("https://operator.example/"))));
@@ -210,7 +210,7 @@ public class VenueServerTest {
 		Path page = tempDir.resolve("operator-index.html");
 		Files.writeString(page, "<!doctype html><title>Operator</title><h1>Mine</h1>");
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
 			Config.ROOT_PAGE, Maps.of(
 				Config.FILE, Strings.create(page.toString()))));
@@ -251,7 +251,7 @@ public class VenueServerTest {
 		String clientId = "oauth-client-id-marker";
 		String clientSecret = "oauth-client-secret-marker";
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
 			Config.NAME, "redaction-test-venue",
 			Config.AUTH, Maps.of(
@@ -316,7 +316,7 @@ public class VenueServerTest {
 	 */
 	@Test public void testLoopbackVenueAnswersPnaPreflight() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1")));
 		try {
 			HttpResponse<String> preflight = corsPreflight(server, "https://demo.example");
@@ -331,7 +331,7 @@ public class VenueServerTest {
 
 	@Test public void testCorsOriginListAndPreflight() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.CORS_ORIGINS, Vectors.of(
 				Strings.create("https://app.example"),
 				Strings.create("https://admin.example"))));
@@ -370,7 +370,7 @@ public class VenueServerTest {
 
 	@Test public void testCorsLoopbackIsLiteralAndAllowsAnyPort() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.CORS_ORIGINS, Strings.create("loopback")));
 		try {
 			for (String origin : new String[] {
@@ -415,7 +415,7 @@ public class VenueServerTest {
 			});
 		};
 		VenueServer server = VenueServer.launch(
-			Maps.of(Config.PORT, CVMLong.create(0), Config.AUTH, login), List.of(embedder));
+			Maps.of(Config.PORT, CVMLong.create(0), Config.STORE, "memory", Config.AUTH, login), List.of(embedder));
 		try {
 			// The venue's sign-in page carries the defaults.
 			HttpResponse<String> page = plainGet(server, "/login");
@@ -457,7 +457,7 @@ public class VenueServerTest {
 		}
 
 		VenueServer off = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.AUTH, login,
 			Config.SECURITY_HEADERS, CVMBool.FALSE));
 		try {
@@ -479,7 +479,7 @@ public class VenueServerTest {
 
 	@Test public void testCorsCanBeDisabledEntirely() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(
-			Config.PORT, CVMLong.create(0),
+			Config.PORT, CVMLong.create(0), Config.STORE, "memory",
 			Config.CORS_ORIGINS, CVMBool.FALSE));
 		try {
 			HttpResponse<String> response = corsGet(server, "https://app.example");
@@ -929,7 +929,7 @@ public class VenueServerTest {
 		org.junit.jupiter.api.Assumptions.assumeTrue(ipv6LoopbackAvailable(),
 			"no IPv6 loopback on this machine");
 		VenueServer server = VenueServer.launch(Maps.of(
-			Strings.create("port"), CVMLong.create(0),
+			Strings.create("port"), CVMLong.create(0), Config.STORE, "memory",
 			Strings.create("bindAddress"), Strings.create("127.0.0.1")));
 		try {
 			int port = server.port();

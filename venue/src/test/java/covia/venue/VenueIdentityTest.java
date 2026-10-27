@@ -61,7 +61,7 @@ public class VenueIdentityTest {
 		venueKey = AKeyPair.create(convex.core.data.Blob.fromHex(seed));
 		userKey = AKeyPair.generate();
 		server = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, HOST,
 			Config.DID, WEB_DID,
 			Config.SEED, Strings.create(seed),
@@ -131,7 +131,7 @@ public class VenueIdentityTest {
 		AString foreign = Strings.create("did:key:"
 			+ Multikey.encodePublicKey(AKeyPair.generate().getAccountKey()));
 		assertThrows(RuntimeException.class, () -> VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.SEED, Strings.create(seedHex(0x52)),
 			Config.DID, foreign)),
 			"a did:key identity pin must refuse a mismatched key pair");
@@ -144,7 +144,7 @@ public class VenueIdentityTest {
 		AString pinned = Strings.create("did:key:"
 			+ Multikey.encodePublicKey(kp.getAccountKey()));
 		VenueServer pinnedServer = VenueServer.launch(Maps.of(
-			Config.PORT, 0,
+			Config.PORT, 0, Config.STORE, "memory",
 			Config.SEED, Strings.create(seed),
 			Config.DID, pinned));
 		try {

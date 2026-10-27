@@ -121,7 +121,7 @@ public class GoalTreeCrashResumeTest {
 
 	@Test
 	public void testLegacyHistoryMigrationCompactionAndAppendSurviveStoreReopen() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-legacy-history");
 		java.io.File file = store.getFile();
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
@@ -195,7 +195,7 @@ public class GoalTreeCrashResumeTest {
 		// that fresh attempt then re-parks or completes is timing, not
 		// contract (AgentRestartTest covers the deterministic completing
 		// case); what matters here is that the restart never fails it.
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-restart");
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee31");
@@ -246,7 +246,7 @@ public class GoalTreeCrashResumeTest {
 
 	@Test
 	public void testCompletedMessageDoesNotMakeStaleCycleBootWork() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-stale-cycle");
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee32");
@@ -278,7 +278,7 @@ public class GoalTreeCrashResumeTest {
 
 	@Test
 	public void testFreshAttemptRepairsAnAbortedToolCall() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("goal-tree-aborted-tool");
 		AKeyPair keyPair = AKeyPair.generate();
 		AMap<AString, ACell> config = config(keyPair);
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee33");

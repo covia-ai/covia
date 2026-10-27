@@ -67,7 +67,7 @@ public class VenueRestartTest {
 	public void testRestartFromEtchStore() throws Exception {
 
 		// Use a single Etch store that survives across "restarts"
-		store = EtchStore.createTemp();
+		store = TestTemp.etch("venue-restart");
 
 		// Fixed DID so both engines use the same lattice path
 		AKeyPair kp = AKeyPair.generate();

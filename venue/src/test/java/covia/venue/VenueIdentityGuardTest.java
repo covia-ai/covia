@@ -75,7 +75,7 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void testWrongKeyOnExistingStoreFails() throws Exception {
-		EtchStore store = EtchStore.createTemp();
+		EtchStore store = TestTemp.etch("identity-wrong-key");
 		ownedStore = store;
 		AKeyPair kpA = AKeyPair.generate();
 		AKeyPair kpB = AKeyPair.generate();
@@ -123,10 +123,7 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void failedVenueServerIdentityGuardReleasesEtchFileLock() throws Exception {
-		Path dir = Files.createTempDirectory("venue-identity-rollback-");
-		Path storePath = dir.resolve("venue.etch");
-		dir.toFile().deleteOnExit();
-		storePath.toFile().deleteOnExit();
+		Path storePath = TestTemp.etchFile("identity-rollback").toPath();
 		AKeyPair owner = AKeyPair.createSeeded(20801);
 		AKeyPair wrong = AKeyPair.createSeeded(20802);
 
@@ -149,10 +146,7 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void peekKeysThenLaunchWithAdoptedStore() throws Exception {
-		Path dir = Files.createTempDirectory("venue-adopt-store-");
-		Path storePath = dir.resolve("venue.etch");
-		dir.toFile().deleteOnExit();
-		storePath.toFile().deleteOnExit();
+		Path storePath = TestTemp.etchFile("identity-adopt").toPath();
 		AKeyPair owner = AKeyPair.createSeeded(30701);
 
 		VenueServer initial = VenueServer.launch(serverConfig(storePath, owner));
@@ -172,10 +166,7 @@ public class VenueIdentityGuardTest {
 
 	@Test
 	public void failedLaunchClosesAdoptedStore() throws Exception {
-		Path dir = Files.createTempDirectory("venue-adopt-failure-");
-		Path storePath = dir.resolve("venue.etch");
-		dir.toFile().deleteOnExit();
-		storePath.toFile().deleteOnExit();
+		Path storePath = TestTemp.etchFile("identity-adopt-failure").toPath();
 		AKeyPair owner = AKeyPair.createSeeded(30702);
 		AKeyPair wrong = AKeyPair.createSeeded(30703);
 
