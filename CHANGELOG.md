@@ -41,10 +41,17 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   only in punctuation no longer share databases. The public principal has none.
 - A Claude Code session resumes only in its own project: naming another project no
   longer stops it, and a resume that never runs claims nothing.
+- Convex calls go to the operator's peer (`adapters.convex.peer`). Relaying to a peer
+  a call names is off by default (`adapters.convex.anyPeer`) and, when on, passes the
+  outbound guard.
+- A `did:web` document is fetched only from a host the outbound guard allows.
 
 ### Migration
 
 - Venue-local SQL databases from earlier versions are not carried over.
+- A call naming a Convex peer other than the venue's is refused unless
+  `adapters.convex.anyPeer` is set.
+- A `did:web` identity on a private network needs its host in `adapters.http.allowedHosts`.
 
 ## [0.10.0] - 2026-10-26
 

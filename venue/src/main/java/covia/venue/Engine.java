@@ -4124,21 +4124,37 @@ public class Engine {
 	}
 
 	/**
-	 * Outbound-target policy for every adapter that dials a caller-chosen URL
-	 * (an MCP server, an A2A peer, a model endpoint): the http adapter's SSRF
-	 * guard with the operator's allow and block lists, so no adapter can reach
-	 * what a direct HTTP call could not (#234). Fails closed when the http
-	 * adapter is absent.
+	 * Outbound-target policy for every caller-chosen URL the venue dials (an MCP
+	 * server, an A2A peer, a model endpoint, a did:web document): the http
+	 * adapter's SSRF guard with the operator's allow and block lists, so nothing
+	 * can reach what a direct HTTP call could not (#234). Fails closed when the
+	 * http adapter is absent.
 	 *
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
 	 * @throws IllegalStateException when the http adapter is not registered
 	 */
 	public void requireSafeUrl(String url) {
+		ssrfGuard().requireSafeUrl(url);
+	}
+
+	/**
+	 * {@link #requireSafeUrl} for a caller-chosen target that is a host rather
+	 * than a URL (a Convex peer): the same guard and lists, without the scheme.
+	 *
+	 * @param host Host name or address literal
+	 * @throws IllegalArgumentException naming the rule when the host is refused
+	 * @throws IllegalStateException when the http adapter is not registered
+	 */
+	public void requireSafeHost(String host) {
+		ssrfGuard().requireSafeHost(host);
+	}
+
+	private HTTPAdapter ssrfGuard() {
 		if (!(getAdapter("http") instanceof HTTPAdapter http)) {
 			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
 		}
-		http.requireSafeUrl(url);
+		return http;
 	}
 
 	// ========== Secret resolution ==========

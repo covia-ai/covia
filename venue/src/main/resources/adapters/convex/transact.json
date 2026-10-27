@@ -11,8 +11,7 @@
 			"properties": {
 				"peer": {
 					"type": "string",
-					"description": "Convex peer endpoint, e.g.: peer.convex.live:18888",
-					"default": "peer.convex.live:18888"
+					"description": "Convex peer endpoint (host:port, tcp:// or tls://). Omit it to use the venue's peer; another peer works only where the operator allows relaying."
 				},
 				"address": {
 					"type": "string",
@@ -47,8 +46,7 @@
 					"description": "Result of the query, as JSON (some type distinctions may be lost)."
 				}
 			}
-		},
-		"peer": "peer.convex.live:18888"
+		}
 	}
 }
 

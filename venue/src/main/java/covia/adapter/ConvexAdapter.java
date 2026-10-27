@@ -1,6 +1,10 @@
 package covia.adapter;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Function;
@@ -9,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.api.Convex;
+import convex.core.Constants;
 import convex.core.cpos.CPoSConstants;
 import convex.core.cvm.CVMEncoder;
 import convex.core.data.ACell;
@@ -31,8 +36,10 @@ import convex.core.Result;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.ASignature;
 import convex.core.cvm.Address;
+import convex.net.Transports;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -42,10 +49,38 @@ import covia.venue.RequestContext;
  * Provides network queries and transactions plus local CAD3 encoding, decoding,
  * Ed25519 key generation and signing. Private seeds remain in the caller's
  * encrypted secret store.
+ *
+ * <p><b>Peers.</b> Queries and transactions go to the operator's peer
+ * ({@code adapters.convex.peer}, default {@value #DEFAULT_PEER}). A call that
+ * names another peer, in its input or its operation's metadata, asks the venue
+ * to relay: refused unless the operator sets {@code adapters.convex.anyPeer},
+ * and then the peer's host passes the venue's outbound address guard
+ * ({@link Engine#requireSafeHost}).</p>
  */
 public class ConvexAdapter extends AAdapter {
 
 	private static final Logger log = LoggerFactory.getLogger(ConvexAdapter.class);
+
+	// Operator configuration keys (adapters.convex.*)
+	static final AString K_PEER = Fields.PEER;
+	static final AString K_ANY_PEER = Strings.intern("anyPeer");
+	private static final Set<AString> SETTINGS = Set.of(Config.ENABLED, K_PEER, K_ANY_PEER);
+
+	/** The peer a venue talks to when its operator names none. */
+	public static final String DEFAULT_PEER = "peer.convex.live:18888";
+
+	/** Why a call naming another peer is refused while relaying is off. */
+	public static final String OTHER_PEER =
+		"is not this venue's Convex peer, and the operator has not enabled relaying to other peers (adapters.convex.anyPeer)";
+
+	/** Why a peer value is refused before any policy applies. */
+	public static final String NOT_A_PEER = "must be a Convex peer endpoint: host:port, tcp://host:port or tls://host:port";
+
+	/** The operator's peer settings, replaced whole on every {@link #configure}. */
+	private record PeerPolicy(URI peer, boolean anyPeer) {}
+
+	private volatile PeerPolicy policy =
+		new PeerPolicy(peerEndpoint(Strings.create(DEFAULT_PEER), "adapters.convex.peer"), false);
 
 	/**
 	 * Backstop deadline for a Convex peer call (connect + query/transact). The
@@ -74,6 +109,27 @@ public class ConvexAdapter extends AAdapter {
 	@Override
 	public String getDescription() {
 		return "Convex network access, CAD3 data conversion, and secret-backed Ed25519 signing";
+	}
+
+	@Override
+	public boolean configure(AMap<AString, ACell> config, boolean strict) {
+		if (config == null) config = Maps.empty();
+		if (strict) {
+			for (long i = 0; i < config.count(); i++) {
+				AString key = config.entryAt(i).getKey();
+				if (!SETTINGS.contains(key)) {
+					throw new IllegalArgumentException("adapters.convex: unknown setting '" + key + "'");
+				}
+			}
+		}
+		ACell rawPeer = config.get(K_PEER);
+		URI peer = peerEndpoint((rawPeer != null) ? rawPeer : Strings.create(DEFAULT_PEER), "adapters.convex.peer");
+		ACell rawAny = config.get(K_ANY_PEER);
+		if (rawAny != null && !(rawAny instanceof CVMBool)) {
+			throw new IllegalArgumentException("adapters.convex.anyPeer must be a boolean, got: " + rawAny);
+		}
+		policy = new PeerPolicy(peer, CVMBool.TRUE.equals(rawAny));
+		return true;
 	}
 
 	@Override
@@ -289,8 +345,10 @@ public class ConvexAdapter extends AAdapter {
 			Function<Convex, CompletableFuture<ACell>> action) {
 
 		return CompletableFuture.supplyAsync(() -> {
+			// Outside the connect wrapper: a refusal is the venue's answer, not a connection failure
+			URI endpoint = permittedPeer(meta, input);
 			try {
-				return openConvexClient(meta, input);
+				return Convex.connect(endpoint);
 			} catch (Exception e) {
 				throw new CompletionException(
 						new JobFailedException("Failed to connect to Convex peer: " + e.getMessage()));
@@ -310,26 +368,55 @@ public class ConvexAdapter extends AAdapter {
 		.orTimeout(CONVEX_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 	}
 
-	private Convex openConvexClient(AMap<AString, ACell> meta, ACell input) throws Exception {
-		AString endpoint = locateEndpoint(meta, input);
-		if (endpoint == null) {
-			throw new JobFailedException("No Convex endpoint provided (expected in input or metadata)");
-		}
-		return Convex.connect(endpoint.toString());
+	/**
+	 * The peer this call may reach: the venue's own, unless the caller names
+	 * another in its input or in its operation's metadata (operations are
+	 * user-creatable assets, so both are the caller's choice). Another peer is a
+	 * relay, refused unless the operator sets {@code anyPeer}; then its host
+	 * passes the venue's outbound address guard like any caller-chosen target.
+	 */
+	private URI permittedPeer(AMap<AString, ACell> meta, ACell input) {
+		PeerPolicy p = policy;
+		ACell named = RT.getIn(input, Fields.PEER);
+		if (named == null && meta != null) named = RT.getIn(meta, Fields.OPERATION, Fields.PEER);
+		if (named == null) return p.peer();
+		URI target = peerEndpoint(named, "peer");
+		if (target.equals(p.peer())) return target;
+		if (!p.anyPeer()) throw new IllegalArgumentException("Peer " + target + " " + OTHER_PEER);
+		engine.requireSafeHost(target.getHost());
+		return target;
 	}
 
-	private AString locateEndpoint(AMap<AString, ACell> meta, ACell input) {
-		// Check input first
-		AString endpoint = RT.ensureString(RT.getIn(input, Fields.PEER));
-		if (endpoint != null) return endpoint;
-
-		// Then check metadata for default peer
-		if (meta != null) {
-			endpoint = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.PEER));
-			if (endpoint != null) return endpoint;
+	/**
+	 * A peer endpoint in one form, so two spellings of one peer compare equal:
+	 * scheme {@code tcp} or {@code tls} and an explicit port ({@link URI#equals}
+	 * ignores the case of scheme and host). Parsed by Convex's own
+	 * {@link Transports#endpoint}, without DNS.
+	 */
+	static URI peerEndpoint(ACell value, String field) {
+		AString text = RT.ensureString(value);
+		if (text == null) throw notAPeer(field, value);
+		URI uri;
+		try {
+			uri = Transports.endpoint(text.toString());
+		} catch (IllegalArgumentException e) {
+			throw notAPeer(field, value);
 		}
+		String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+		if (!scheme.equals("tcp") && !scheme.equals("tls")) throw notAPeer(field, value);
+		if ((uri.getRawPath() != null && !uri.getRawPath().isEmpty()) || uri.getRawQuery() != null) {
+			throw notAPeer(field, value);
+		}
+		int port = (uri.getPort() < 0) ? Constants.DEFAULT_PEER_PORT : uri.getPort();
+		try {
+			return new URI(scheme, null, uri.getHost(), port, null, null, null);
+		} catch (URISyntaxException e) {
+			throw notAPeer(field, value);
+		}
+	}
 
-		return null;
+	private static IllegalArgumentException notAPeer(String field, ACell value) {
+		return new IllegalArgumentException(field + " " + NOT_A_PEER + ", got: " + value);
 	}
 
 	private void closeQuietly(AutoCloseable closeable) {

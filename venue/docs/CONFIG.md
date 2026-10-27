@@ -925,7 +925,11 @@ check or, for a `did:web` subject, an outbound fetch (#539).
   authentications from one address wait up to `blockMs` for the one in
   flight, then shed with 429, so an address cannot fan out outbound DID
   resolution in parallel. Failed `did:web` resolutions are also remembered
-  for a minute, so a stream of bad tokens for one DID costs one fetch.
+  for a minute, so a stream of bad tokens for one DID costs one fetch. The
+  document's host is the token's choice, so it passes the outbound guard (see
+  `http.allowedHosts`): a `did:web` whose name resolves to a private address is
+  never fetched unless its host is allowed, and with the `http` adapter
+  disabled no remote `did:web` identity resolves.
 
 ```json
 {
@@ -1289,14 +1293,26 @@ Currently defined:
   none (default `Covia/<version> (+https://covia.ai)`); an explicit caller
   header always wins. Public APIs such as Wikipedia refuse anonymous clients.
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
-  always refused by, the SSRF guard that every outbound HTTP, MCP and A2A URL
-  passes. Block wins over allow. Loopback, private and link-local targets are
-  refused unless their host is allowed here. Both lists are published at
+  always refused by, the outbound (SSRF) guard. Every caller-chosen target
+  passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers and
+  `did:web` documents. Block wins over allow. Loopback, private and link-local
+  targets are refused unless their host is allowed here. A name is resolved
+  when it is checked and again when it is dialled, so a name whose answer
+  changes in between is not caught. The guard belongs to the `http` adapter:
+  with it disabled, every such target is refused. Both lists are published at
   `v/info/adapters/http`.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default
   `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop passes
   the SSRF guard, credentials are dropped on a change of origin, and a loop or
   a longer chain fails the request naming the chain.
+- `convex.peer` — the Convex peer that `convex:query` and `convex:transact` use
+  (default `peer.convex.live:18888`; `host:port`, `tcp://host:port` or
+  `tls://host:port`). It is the operator's choice, so it does not pass the
+  outbound guard: a local peer such as `localhost:18888` works.
+- `convex.anyPeer` — whether the venue relays to a peer a call names (default
+  `false`). Off, a call that names any other peer, in its input or in its
+  operation's metadata, is refused. On, the venue relays, and the peer's host
+  passes the outbound guard (see `http.allowedHosts`).
 - `hitl.maxGrantLifetimeSecs` — optional positive lifetime ceiling for grants
   minted after HITL approval. It is absent by default, so the venue imposes no
   maximum and permits an explicit `exp: null`. With a finite ceiling, null and

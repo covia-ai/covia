@@ -239,26 +239,30 @@ public class HTTPAdapter extends AAdapter {
 		validateURL(uri);
 	}
 
-	/** Opening of the refusal for a URL that resolves to a private or internal address. */
-	public static final String PRIVATE_ADDRESS = "URL targets a private/internal address: ";
+	/** Opening of the refusal for a host that resolves to a private or internal address. */
+	public static final String PRIVATE_ADDRESS = "Host resolves to a private/internal address: ";
+
+	/** Opening of the refusal for a host on a block list. */
+	public static final String BLOCKED_HOST = "Host is blocked: ";
 
 	/**
-	 * Validates a URL for SSRF safety. Blocks private/internal network addresses
-	 * by default. Allow list entries bypass SSRF checks; block list is checked first.
+	 * The host half of the guard, for outbound targets that are not URLs (a
+	 * Convex peer): the block list always wins, the allow list bypasses the
+	 * address check, and otherwise the host must resolve and none of its
+	 * addresses may be loopback, site-local, link-local or wildcard.
 	 *
-	 * @param uri URI to validate
-	 * @throws IllegalArgumentException if the URL targets a blocked or private address
+	 * @param host Host name or address literal
+	 * @throws IllegalArgumentException if the host is blocked, private or unresolvable
 	 */
-	private void validateURL(URI uri) {
-		String host = uri.getHost();
-		if (host == null) {
-			throw new IllegalArgumentException("URL has no host: " + uri);
+	public void requireSafeHost(String host) {
+		if (host == null || host.isEmpty()) {
+			throw new IllegalArgumentException("No host to check");
 		}
 		String lowerHost = host.toLowerCase(Locale.ROOT);
 
 		// Block list always wins
 		if (blockList.contains(lowerHost) || configuredBlock.contains(lowerHost)) {
-			throw new IllegalArgumentException("Host is blocked: " + host);
+			throw new IllegalArgumentException(BLOCKED_HOST + host);
 		}
 
 		// Allow list bypasses SSRF checks
@@ -277,12 +281,27 @@ public class HTTPAdapter extends AAdapter {
 					throw new IllegalArgumentException(
 						PRIVATE_ADDRESS + host
 						+ " (resolved to " + addr.getHostAddress() + ")"
-						+ ". Add to allowList if this is intentional.");
+						+ ". Add it to adapters.http.allowedHosts if this is intentional.");
 				}
 			}
 		} catch (UnknownHostException e) {
 			throw new IllegalArgumentException("Cannot resolve host: " + host);
 		}
+	}
+
+	/**
+	 * Validates a URL for SSRF safety: its host passes {@link #requireSafeHost}
+	 * and its scheme is http(s).
+	 *
+	 * @param uri URI to validate
+	 * @throws IllegalArgumentException if the URL targets a blocked or private address
+	 */
+	private void validateURL(URI uri) {
+		String host = uri.getHost();
+		if (host == null) {
+			throw new IllegalArgumentException("URL has no host: " + uri);
+		}
+		requireSafeHost(host);
 
 		// Block non-HTTP(S) schemes
 		String scheme = uri.getScheme();
