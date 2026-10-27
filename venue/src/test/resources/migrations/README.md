@@ -70,8 +70,9 @@ readability through HTTP on the selected jar.
 ## Provenance and regeneration
 
 Keep old fixture archives unchanged. Do not make a failing migration pass by
-regenerating the baseline with a newer build. Add new versioned fixtures when
-later persisted formats need coverage.
+regenerating the baseline with a newer build. Each release line (0.9, 0.10, …)
+gets one fixture; every other migration step is tested on states built in
+tests ([MIGRATE.md](../../../../docs/MIGRATE.md#r7-step-by-step-testing)).
 
 For auditing the 0.9.11 generator, download `covia.jar` and `covia.jar.sha256`
 from the release above, verify the checksum, then run:

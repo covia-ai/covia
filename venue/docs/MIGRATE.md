@@ -258,16 +258,23 @@ function. An embedder does such work itself, between steps or after them.
 
 ### R7. Step-by-step testing
 
-- **Fixtures by release.** Each release that changes a persisted format leaves
-  a fixture, written by that release's published jar and never regenerated, as
-  `covia-0.9.11.zip` is (see its
-  [README](../src/test/resources/migrations/README.md)). The next is the 0.10.0
-  store, at tag time. Between them, the fixtures hold every legacy form in the
-  table above. Today none holds Telegram's registry or session mappings, or
-  embedder data.
-- **The embedders' API.** A harness walks each fixture through the run one step
-  at a time, through the API embedders call. It has no stepping path of its
-  own.
+- **States built in tests.** Migration functions and steps are exercised on
+  venue states the tests build in each older shape, as `VenueMigrationTest`
+  and the adapters' migration tests do. Testing a step never needs a release
+  fixture.
+- **End to end.** One test takes a venue through every migration: from a state
+  it builds holding every older shape that Covia and the bundled adapters
+  still support, through each step in turn to the current version, with the
+  checks below after every step. A module adapter does the same for its own
+  forms in its own module.
+- **Fixtures by release line.** Each release line (0.9, 0.10, …) leaves one
+  fixture, written by a published jar of that line and never regenerated, as
+  `covia-0.9.11.zip` is for 0.9 (see its
+  [README](../src/test/resources/migrations/README.md)). 0.10's is next.
+  Fixtures are big, so only integration tests open them.
+- **The embedders' API.** A harness walks the end-to-end state and each fixture
+  through the run one step at a time, through the API embedders call. It has
+  no stepping path of its own.
 - **Checks after every step:**
   - the responsible code's version has advanced;
   - its eager parts are current in storage, not only on read;
@@ -276,7 +283,7 @@ function. An embedder does such work itself, between steps or after them.
   - every other responsible code's parts are the same cells as before the
     step;
   - applying the step again returns the same venue state;
-  - the fixture's data reads the same through the HTTP APIs, as
+  - the venue's data reads the same through the HTTP APIs, as
     `VenueStoreFixture.verifyUser` checks today.
 - **Interruption.** A run stopped after any batch, then run again, ends equal to
   an uninterrupted run (for secrets, equal in meaning, as under R3).
@@ -305,13 +312,13 @@ function. An embedder does such work itself, between steps or after them.
 - Every migration function has its own tests: a current part comes back as the
   same cell; a legacy part converts, and converting the result changes
   nothing; an unknown shape is refused with a reason.
-- On the 0.9.11 fixture (`VenueStoreMigrationTest`,
-  `migrations/covia-0.9.11.zip`), the run reaches the current version. With
-  every lazy part then migrated on demand, no legacy form is left: no `prev`,
-  no legacy frames or session `loads`, no `w/adapters`, and every secret at the
-  current key version.
-- The R7 harness walks the 0.9.11 fixture step by step, offline and live, with
-  every check passing, and runs in CI's durability gate.
+- The end-to-end test takes a venue holding every older shape to the current
+  version. With every lazy part then migrated on demand, no legacy form is
+  left: no `prev`, no legacy frames or session `loads`, no `w/adapters`, and
+  every secret at the current key version.
+- The R7 harness walks the end-to-end state step by step, offline and live,
+  with every check passing, in CI. Integration tests walk each release-line
+  fixture (`migrations/covia-0.9.11.zip`, then 0.10's) the same way.
 - An embedder can call Covia's check and run from its own migration path,
   before Covia's own start-up step changes anything, and run the harness on its
   own fixtures. Covia runs no embedder steps, and leaves the embedder's values
