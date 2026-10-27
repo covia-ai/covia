@@ -9,9 +9,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import java.util.zip.ZipInputStream;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.TestFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -27,18 +29,19 @@ import covia.grid.client.VenueHTTP;
 import covia.test.DurabilityTest;
 import covia.venue.server.VenueServer;
 
-/** An immutable release-written store, upgraded and exercised through real HTTP. */
+/** Each immutable release-written store, upgraded and exercised through real HTTP. */
 @DurabilityTest
 class VenueStoreMigrationTest {
 
-	/** Optional retained output for manual testing; never reopen or overwrite an existing run. */
-	private Path runDirectory() throws IOException {
+	/** Optional retained output for manual testing: a new directory per release; never reopen or overwrite an existing run. */
+	private static Path runDirectory(String release) throws IOException {
 		String output = System.getProperty("covia.migration.output");
-		return output == null ? TestTemp.dir("store-migration") : Files.createDirectory(Path.of(output).toAbsolutePath());
+		if (output == null) return TestTemp.dir("store-migration-" + release);
+		return Files.createDirectory(Files.createDirectories(Path.of(output).toAbsolutePath()).resolve(release));
 	}
 
-	private static AMap<AString, ACell> unpack(Path directory) throws Exception {
-		try (var input = VenueStoreMigrationTest.class.getResourceAsStream("/migrations/covia-0.9.11.zip")) {
+	private static AMap<AString, ACell> unpack(String fixture, Path directory) throws Exception {
+		try (var input = VenueStoreMigrationTest.class.getResourceAsStream("/migrations/" + fixture)) {
 			assertNotNull(input, "Committed release fixture missing; do not regenerate it with current code");
 			try (var archive = new ZipInputStream(input)) {
 				for (var entry = archive.getNextEntry(); entry != null; entry = archive.getNextEntry()) {
@@ -47,16 +50,22 @@ class VenueStoreMigrationTest {
 				}
 			}
 		}
+		String release = VenueUpgradeTest.release(fixture);
 		AMap<AString, ACell> manifest = RT.ensureMap(JSON.parse(Files.readString(directory.resolve("manifest.json"))));
-		assertEquals("0.9.11", text(manifest.get(Strings.create("coviaVersion"))));
-		assertEquals(RELEASE_SHA256, text(manifest.get(Strings.create("sourceJarSha256"))));
+		assertEquals(release, text(manifest.get(Strings.create("coviaVersion"))));
+		assertEquals(RELEASES.get(release), text(manifest.get(Strings.create("sourceJarSha256"))));
 		assertEquals(text(manifest.get(Strings.create("storeSha256"))), sha256(directory.resolve("venue.etch")));
 		return manifest;
 	}
 
-	@Test void releasedStoreSurvivesUpgradeApiMutationsAndRepeatedRestart() throws Exception {
-		Path directory = runDirectory();
-		AMap<AString, ACell> manifest = unpack(directory);
+	@TestFactory Stream<DynamicTest> releasedStoresSurviveUpgradeApiMutationsAndRepeatedRestart() throws Exception {
+		return VenueUpgradeTest.fixtures().stream().map(fixture -> DynamicTest.dynamicTest(fixture, () -> rehearse(fixture)));
+	}
+
+	private static void rehearse(String fixture) throws Exception {
+		String release = VenueUpgradeTest.release(fixture);
+		Path directory = runDirectory(release);
+		AMap<AString, ACell> manifest = unpack(fixture, directory);
 		Path store = directory.resolve("venue.etch");
 		ACell alice = RT.getIn(manifest, "users", 0);
 		ACell bob = RT.getIn(manifest, "users", 1);
@@ -71,10 +80,10 @@ class VenueStoreMigrationTest {
 			assertCurrentJobs(server, alice);
 			assertCurrentJobs(server, bob);
 			assertUserIsolation(server, alice, bob);
-			// The old private test adapter value moved, and its state reached the
-			// test adapter's version, in the venue's start-up transaction.
+			// The test adapter's scratch value is at x/, at the test adapter's
+			// version: 0.9.11's moved from w/adapters in the start-up transaction.
 			assertEquals(1, server.getEngine().getVenueState().adapterVersion("test"));
-			assertEquals(Maps.of("origin", "0.9.11"), read(client(server, "11"), "x/test/scratch"));
+			assertEquals(Maps.of("origin", release), read(client(server, "11"), "x/test/scratch"));
 			assertNull(read(client(server, "22"), "x/test/scratch"));
 			write(client(server, "11"), "x/test/scratch/updated", Strings.create("after-upgrade"));
 			updateUser(server, alice);
@@ -113,7 +122,7 @@ class VenueStoreMigrationTest {
 			server.close();
 		}
 		Files.writeString(directory.resolve("result.json"), JSON.toString(Maps.of(
-			"passed", true, "baseline", "0.9.11", "venueVersion", VenueState.CURRENT_VERSION,
+			"passed", true, "baseline", release, "venueVersion", VenueState.CURRENT_VERSION,
 			"candidateStatus", candidateStatus, "storeSha256", sha256(store), "checks", Vectors.of(
 				"upgrade", "HTTP reads/writes", "isolation", "conversations", "secrets", "DLFS", "jobs",
 				"adapter migration", "export/import/clone/delete", "two restarts"))), StandardCharsets.UTF_8);

@@ -269,8 +269,8 @@ function. An embedder does such work itself, between steps or after them.
   forms in its own module.
 - **Fixtures by release line.** Each release line (0.9, 0.10, …) leaves one
   fixture, written by a published jar of that line and never regenerated, as
-  `covia-0.9.11.zip` is for 0.9 (see its
-  [README](../src/test/resources/migrations/README.md)). 0.10's is next.
+  `covia-0.9.11.zip` is for 0.9 and `covia-0.10.0.zip` for 0.10 (see their
+  [README](../src/test/resources/migrations/README.md)).
   Fixtures are big, so only integration tests open them.
 - **The embedders' API.** A harness walks the end-to-end state and each fixture
   through the run one step at a time, through the API embedders call. It has
@@ -318,7 +318,8 @@ function. An embedder does such work itself, between steps or after them.
   every secret at the current key version.
 - The R7 harness walks the end-to-end state step by step, offline and live,
   with every check passing, in CI. Integration tests walk each release-line
-  fixture (`migrations/covia-0.9.11.zip`, then 0.10's) the same way.
+  fixture (`migrations/covia-0.9.11.zip`, `migrations/covia-0.10.0.zip`) the
+  same way.
 - An embedder can call Covia's check and run from its own migration path,
   before Covia's own start-up step changes anything, and run the harness on its
   own fixtures. Covia runs no embedder steps, and leaves the embedder's values

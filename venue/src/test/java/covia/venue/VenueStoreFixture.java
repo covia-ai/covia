@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -26,8 +27,9 @@ import covia.venue.server.VenueServer;
 
 /**
  * Seeds an authentic old-release store through authenticated HTTP APIs.
- * Deliberately uses only APIs present in 0.9.11, so Java source-file mode can
- * run this file against the released jar, without loading current venue code.
+ * Deliberately uses only APIs present in every release in {@link #RELEASES},
+ * so Java source-file mode can run this file against each released jar,
+ * without loading current venue code.
  * All identities/secrets are public test data. Bind only to loopback.
  */
 public final class VenueStoreFixture {
@@ -37,7 +39,10 @@ public final class VenueStoreFixture {
 	public static final String VENUE_SEED = "42".repeat(32);
 	public static final String FILE_TEXT = "Migration fixture: café, 日本語, 🌍\n".repeat(128);
 	public static final String ASSET_TEXT = "Immutable migration fixture content\n";
-	public static final String RELEASE_SHA256 = "c5975145ff860c2d6d893ecfa832cdb9a7e532d71929f06a4d9b335d47269530";
+	/** The published covia.jar SHA-256 of each release that wrote a fixture, one per release line. */
+	public static final Map<String, String> RELEASES = Map.of(
+		"0.9.11", "c5975145ff860c2d6d893ecfa832cdb9a7e532d71929f06a4d9b335d47269530",
+		"0.10.0", "f0f4a4f369ac22482e414d1c0e5d64bd345e58eaeaa064c0f0b86118321eefc1");
 
 	public static AKeyPair key(String hexByte) {
 		return AKeyPair.create(Blob.fromHex(hexByte.repeat(32)));
@@ -99,7 +104,7 @@ public final class VenueStoreFixture {
 			"emptyMap", Maps.empty(), "emptyVector", Vectors.empty());
 	}
 
-	private static AMap<AString, ACell> seedUser(VenueServer server, String name, String keyByte) throws Exception {
+	private static AMap<AString, ACell> seedUser(VenueServer server, String name, String keyByte, String release) throws Exception {
 		VenueHTTP client = client(server, keyByte);
 		String did = VenueAuth.keyPair(key(keyByte)).getDID();
 		write(client, "w/profile", profile(name));
@@ -114,7 +119,9 @@ public final class VenueStoreFixture {
 		Job job = client.invokeAndWait(Strings.create("v/test/ops/echo"), Maps.of("owner", name), 20_000);
 		equal(Maps.of("owner", name), job.awaitResult(20_000));
 		ACell jobRecord = client.getJobData(job.getID()).get(20, TimeUnit.SECONDS);
-		require(RT.getIn(jobRecord, "prev") != null, "Baseline must really contain pre-#611 job history");
+		// 0.9.11 wrote the pre-#611 history chain; 0.10.0 writes current state only.
+		boolean legacyJob = release.equals("0.9.11");
+		require((RT.getIn(jobRecord, "prev") != null) == legacyJob, "Job history must be in the form " + release + " wrote");
 		run(client, "agent/create", Maps.of("agentId", AGENT, "config", Maps.of(
 			"operation", "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm",
 			"tools", Vectors.of("v/test/ops/echo"), "systemPrompt", "Deterministic migration fixture")));
@@ -124,7 +131,7 @@ public final class VenueStoreFixture {
 		run(client, "agent/rename-session", Maps.of("agentId", AGENT, "sessionId", session, "title", "Baseline " + name));
 		return Maps.of("name", name, "keyByte", keyByte, "did", did,
 			"sessionId", session, "jobId", job.getID().toHexString(),
-			"assetRef", RT.getIn(asset, "ref"), "legacyJobHasPrev", true);
+			"assetRef", RT.getIn(asset, "ref"), "legacyJobHasPrev", legacyJob);
 	}
 
 	/** Read through public APIs, including decryption and conversation rendering. */
@@ -189,23 +196,33 @@ public final class VenueStoreFixture {
 		}
 		if (!args[0].equals("seed")) throw new IllegalArgumentException("Unknown fixture command: " + args[0]);
 		Path jar = Path.of(VenueServer.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-		equal(RELEASE_SHA256, sha256(jar));
+		String jarSha256 = sha256(jar);
+		String release = RELEASES.entrySet().stream().filter(e -> e.getValue().equals(jarSha256))
+			.map(Map.Entry::getKey).findFirst()
+			.orElseThrow(() -> new AssertionError("Not a published release jar: " + jar + " sha256=" + jarSha256));
 		Path directory = Path.of(args[1]).toAbsolutePath();
 		Files.createDirectory(directory);
 		Path store = directory.resolve("venue.etch");
 		AMap<AString, ACell> manifest;
 		VenueServer server = VenueServer.launch(config(store));
 		try {
-			ACell alice = seedUser(server, "alice", "11");
-			ACell bob = seedUser(server, "bob", "22");
-			// Exercise the actual legacy private-state route via the venue user.
-			// The test adapter owns this synthetic scratch value; no bot is started.
-			write(client(server, "42"), "w/adapters/test", Maps.of("users", Maps.of(
-				RT.getIn(alice, "did"), Maps.of("scratch", Maps.of("origin", "0.9.11")))));
+			ACell alice = seedUser(server, "alice", "11", release);
+			ACell bob = seedUser(server, "bob", "22", release);
+			// The test adapter owns a synthetic scratch value of Alice's; no bot is
+			// started. 0.9.11 kept it at the legacy w/adapters route, written via
+			// the venue user; 0.10.0 keeps it in the adapter's own state, at x/.
+			ACell scratch = Maps.of("origin", release);
+			if (release.equals("0.9.11")) {
+				write(client(server, "42"), "w/adapters/test", Maps.of("users", Maps.of(
+					RT.getIn(alice, "did"), Maps.of("scratch", scratch))));
+			} else {
+				write(client(server, "11"), "x/test/scratch", scratch);
+				equal(scratch, read(client(server, "11"), "x/test/scratch"));
+			}
 			verifyUser(server, alice, false);
 			verifyUser(server, bob, false);
-			manifest = Maps.of("fixtureVersion", 1L, "coviaVersion", "0.9.11",
-				"sourceJarSha256", RELEASE_SHA256, "venueSeed", VENUE_SEED,
+			manifest = Maps.of("fixtureVersion", 1L, "coviaVersion", release,
+				"sourceJarSha256", jarSha256, "venueSeed", VENUE_SEED,
 				"venueDID", server.getEngine().getDIDString(), "users", Vectors.of(alice, bob));
 			server.getEngine().flush();
 		} finally {

@@ -1,26 +1,34 @@
 # Release-written venue fixtures
 
-`covia-0.9.11.zip` contains a complete, cleanly closed Etch store and its
-`manifest.json`. It was written and reopened by the **published 0.9.11 jar**,
-not by current code with old-looking records inserted afterwards.
+Each archive here contains a complete, cleanly closed Etch store and its
+`manifest.json`, one per release line. Each was written and reopened by a
+**published release jar**, not by current code with old-looking records
+inserted afterwards.
 
-- Source: <https://github.com/covia-ai/covia/releases/tag/0.9.11>
-- Published jar SHA-256: `c5975145ff860c2d6d893ecfa832cdb9a7e532d71929f06a4d9b335d47269530`
-- Original store SHA-256: `834373255d9a54d2c66e2706219d940997e87578848b0cd7bdd9d1589fd564b6`
+- `covia-0.9.11.zip`, from <https://github.com/covia-ai/covia/releases/tag/0.9.11>
+  - Published jar SHA-256: `c5975145ff860c2d6d893ecfa832cdb9a7e532d71929f06a4d9b335d47269530`
+  - Original store SHA-256: `834373255d9a54d2c66e2706219d940997e87578848b0cd7bdd9d1589fd564b6`
+- `covia-0.10.0.zip`, from <https://github.com/covia-ai/covia/releases/tag/0.10.0>
+  - Published jar SHA-256: `f0f4a4f369ac22482e414d1c0e5d64bd345e58eaeaa064c0f0b86118321eefc1`
+  - Original store SHA-256: `e9d9c6fe5e427af1f43c3dea85c30f7973fba83234cbfb8af22a5b4628a7dee4`
 - Generator: `venue/src/test/java/covia/venue/VenueStoreFixture.java`
-- Test: `VenueStoreMigrationTest` (the existing durability gate includes it in CI).
+- Tests: `VenueUpgradeTest` opens every archive on every build;
+  `VenueStoreMigrationTest` adds HTTP use and restarts, in the durability gate
+  that CI runs.
 
-The identities, seeds and secrets are public test data. Never use this venue
+The identities, seeds and secrets are public test data. Never use these venues
 for real accounts. The generator and launch config bind to loopback and disable
 anonymous access.
 
 The corpus has Alice and Bob, each with a workspace containing nested values,
 Unicode, a stored null and empty containers; a callable user operation;
 encrypted secrets; a drive with text and binary files; a content-addressed
-asset; a completed job with the old `prev` chain; and a mock-LLM agent with a
-completed, titled session. Both users deliberately have the same agent name.
-The venue user also owns a synthetic test-adapter scratch value at the old
-`w/adapters/test` route, exercising lazy adapter-state migration without bots.
+asset; a completed job, which 0.9.11 wrote with the old `prev` chain; and a
+mock-LLM agent with a completed, titled session. Both users deliberately have
+the same agent name. Alice also has a synthetic test-adapter scratch value,
+with no bot started: 0.9.11's is at the old `w/adapters/test` route, written by
+the venue user, exercising adapter-state migration; 0.10.0's is in the test
+adapter's own state.
 
 ## Run
 
@@ -30,7 +38,7 @@ From the repository root:
 mvn test -pl venue -am '-Dtest=VenueStoreMigrationTest' '-Dsurefire.failIfNoSpecifiedTests=false' '-Dcovia.tests.durability=true'
 ```
 
-The test extracts a fresh copy, verifies its checksum, upgrades it, exercises
+For each archive, the test extracts a fresh copy, verifies its checksum, upgrades it, exercises
 authenticated HTTP APIs, and reopens it twice. No download or older runtime is
 needed to run the test. It also checks current-only job reads, account isolation,
 secret decryption/rewrite, conversation continuation, extension CRUD, and user
@@ -38,9 +46,9 @@ export/import/clone/delete. Provider services are replaced by the built-in test
 LLM. Existing crash tests cover abrupt termination separately; this test covers
 release-to-release migration and graceful restart.
 
-To retain a run, add `-Dcovia.migration.output=/absolute/path/to/NEW-directory`.
-Its parent must exist and the directory itself must not: the harness refuses
-to overwrite a previous run. It retains the upgraded `venue.etch`, original
+To retain a run, add `-Dcovia.migration.output=/absolute/path/to/directory`.
+Each fixture's run goes in a new sub-directory named for its release, and the
+harness refuses to overwrite a previous run. It retains the upgraded `venue.etch`, original
 manifest, a `result.json` report, and `venue.json` for a loopback venue on port
 18080. The manifest's store hash describes the original baseline; `result.json`
 records the upgraded store's hash. After building the current jar:
@@ -74,15 +82,16 @@ regenerating the baseline with a newer build. Each release line (0.9, 0.10, …)
 gets one fixture; every other migration step is tested on states built in
 tests ([MIGRATE.md](../../../../docs/MIGRATE.md#r7-step-by-step-testing)).
 
-For auditing the 0.9.11 generator, download `covia.jar` and `covia.jar.sha256`
-from the release above, verify the checksum, then run:
+For auditing a fixture's generator, download `covia.jar` and `covia.jar.sha256`
+from that fixture's release above, verify the checksum, then run:
 
 ```sh
-java -cp /path/to/0.9.11/covia.jar venue/src/test/java/covia/venue/VenueStoreFixture.java seed /absolute/path/to/NEW-baseline
+java -cp /path/to/<release>/covia.jar venue/src/test/java/covia/venue/VenueStoreFixture.java seed /absolute/path/to/NEW-baseline
 ```
 
-The generator itself checks the jar's published checksum and refuses an existing
-directory. It uses source-file mode so all venue classes come from that release.
+The generator itself checks that the jar is one of the published releases in
+`VenueStoreFixture.RELEASES`, and refuses an existing directory. It uses
+source-file mode so all venue classes come from that release.
 It verifies both users before and after an old-runtime restart. Timestamps and
 job/session IDs vary between generations; the manifest records those identifiers
 and the resulting store hash. A newly generated store is not byte-identical to

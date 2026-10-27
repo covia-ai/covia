@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 import java.util.zip.ZipInputStream;
@@ -41,16 +43,24 @@ class VenueUpgradeTest {
 	private static final AString K_HISTORY_VERSION = Strings.create("historyVersion");
 	private static final AString K_KEY_VERSION = Strings.create("keyVersion");
 
-	/** Every release fixture, oldest name first. */
+	/** Every release fixture, oldest release first: covia-0.9.11.zip before covia-0.10.0.zip. */
 	static List<String> fixtures() throws Exception {
 		Path dir = Path.of(VenueUpgradeTest.class.getResource("/migrations").toURI());
 		try (Stream<Path> files = Files.list(dir)) {
 			List<String> names = files.map(p -> p.getFileName().toString())
-				.filter(n -> n.endsWith(".zip")).sorted().toList();
+				.filter(n -> n.endsWith(".zip")).sorted(BY_RELEASE).toList();
 			assertFalse(names.isEmpty(), "no release fixtures found");
 			return names;
 		}
 	}
+
+	/** The release that wrote a fixture, from its name: covia-0.10.0.zip is 0.10.0's. */
+	static String release(String fixture) {
+		return fixture.substring("covia-".length(), fixture.length() - ".zip".length());
+	}
+
+	private static final Comparator<String> BY_RELEASE = Comparator.comparing(
+		fixture -> Arrays.stream(release(fixture).split("\\.")).mapToInt(Integer::parseInt).toArray(), Arrays::compare);
 
 	@TestFactory Stream<DynamicTest> releaseStoresUpgradeToTheCurrentSchema() throws Exception {
 		return fixtures().stream().map(fixture -> DynamicTest.dynamicTest(fixture,
