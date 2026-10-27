@@ -31,21 +31,21 @@ import covia.lattice.Covia;
 import covia.lattice.WorkspaceRoot;
 
 /**
- * The upgrade path as a unit test: every release-written store in
+ * The upgrade path in process: every release-written store in
  * {@code src/test/resources/migrations} opens with this build through the
  * launch path, and comes out at the current schema with its data readable.
- * One engine per fixture, no HTTP and no restart; the durability gate's
- * {@link VenueStoreMigrationTest} adds those. A new fixture is picked up by
- * adding its archive.
+ * One engine per fixture, no HTTP and no restart; {@link VenueStoreMigrationIT}
+ * adds those. A new fixture is picked up by adding its archive. Fixtures are
+ * big, so both are failsafe integration tests.
  */
-class VenueUpgradeTest {
+class VenueUpgradeIT {
 	private static final AString K_CONVERSATION = Strings.create("conversation");
 	private static final AString K_HISTORY_VERSION = Strings.create("historyVersion");
 	private static final AString K_KEY_VERSION = Strings.create("keyVersion");
 
 	/** Every release fixture, oldest release first: covia-0.9.11.zip before covia-0.10.0.zip. */
 	static List<String> fixtures() throws Exception {
-		Path dir = Path.of(VenueUpgradeTest.class.getResource("/migrations").toURI());
+		Path dir = Path.of(VenueUpgradeIT.class.getResource("/migrations").toURI());
 		try (Stream<Path> files = Files.list(dir)) {
 			List<String> names = files.map(p -> p.getFileName().toString())
 				.filter(n -> n.endsWith(".zip")).sorted(BY_RELEASE).toList();
@@ -159,7 +159,7 @@ class VenueUpgradeTest {
 	}
 
 	private static AMap<AString, ACell> unpack(String fixture, Path dir) throws Exception {
-		try (var input = VenueUpgradeTest.class.getResourceAsStream("/migrations/" + fixture);
+		try (var input = VenueUpgradeIT.class.getResourceAsStream("/migrations/" + fixture);
 				var archive = new ZipInputStream(input)) {
 			for (var entry = archive.getNextEntry(); entry != null; entry = archive.getNextEntry()) {
 				assertTrue(entry.getName().equals("venue.etch") || entry.getName().equals("manifest.json"), entry.getName());

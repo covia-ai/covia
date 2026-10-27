@@ -26,12 +26,14 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
-import covia.test.DurabilityTest;
 import covia.venue.server.VenueServer;
 
-/** Each immutable release-written store, upgraded and exercised through real HTTP. */
-@DurabilityTest
-class VenueStoreMigrationTest {
+/**
+ * Each immutable release-written store, upgraded and exercised through real
+ * HTTP. Fixtures are big, so the tests that open them are failsafe
+ * integration tests.
+ */
+class VenueStoreMigrationIT {
 
 	/** Optional retained output for manual testing: a new directory per release; never reopen or overwrite an existing run. */
 	private static Path runDirectory(String release) throws IOException {
@@ -41,7 +43,7 @@ class VenueStoreMigrationTest {
 	}
 
 	private static AMap<AString, ACell> unpack(String fixture, Path directory) throws Exception {
-		try (var input = VenueStoreMigrationTest.class.getResourceAsStream("/migrations/" + fixture)) {
+		try (var input = VenueStoreMigrationIT.class.getResourceAsStream("/migrations/" + fixture)) {
 			assertNotNull(input, "Committed release fixture missing; do not regenerate it with current code");
 			try (var archive = new ZipInputStream(input)) {
 				for (var entry = archive.getNextEntry(); entry != null; entry = archive.getNextEntry()) {
@@ -50,7 +52,7 @@ class VenueStoreMigrationTest {
 				}
 			}
 		}
-		String release = VenueUpgradeTest.release(fixture);
+		String release = VenueUpgradeIT.release(fixture);
 		AMap<AString, ACell> manifest = RT.ensureMap(JSON.parse(Files.readString(directory.resolve("manifest.json"))));
 		assertEquals(release, text(manifest.get(Strings.create("coviaVersion"))));
 		assertEquals(RELEASES.get(release), text(manifest.get(Strings.create("sourceJarSha256"))));
@@ -59,11 +61,11 @@ class VenueStoreMigrationTest {
 	}
 
 	@TestFactory Stream<DynamicTest> releasedStoresSurviveUpgradeApiMutationsAndRepeatedRestart() throws Exception {
-		return VenueUpgradeTest.fixtures().stream().map(fixture -> DynamicTest.dynamicTest(fixture, () -> rehearse(fixture)));
+		return VenueUpgradeIT.fixtures().stream().map(fixture -> DynamicTest.dynamicTest(fixture, () -> rehearse(fixture)));
 	}
 
 	private static void rehearse(String fixture) throws Exception {
-		String release = VenueUpgradeTest.release(fixture);
+		String release = VenueUpgradeIT.release(fixture);
 		Path directory = runDirectory(release);
 		AMap<AString, ACell> manifest = unpack(fixture, directory);
 		Path store = directory.resolve("venue.etch");

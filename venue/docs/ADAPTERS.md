@@ -464,7 +464,8 @@ modules, and adapters an operator or embedder adds all use the same hook.
   loading a module at runtime that raises its state version, disable the old
   instance first.
 - The built-in test adapter is at version 1, with version 0's shape unchanged,
-  so every venue and the release-written fixtures run this path.
+  so every venue, the 0.9.11 fixture and `VenueMigrationEndToEndTest` run this
+  path.
 
 ### User-visible extension routes
 

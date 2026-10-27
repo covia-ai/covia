@@ -245,6 +245,10 @@ Adapter-owned state uses `AdapterState`; see
   identity) gets it from `TestTemp.etch` or `TestTemp.etchFile`, never
   `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server
   names its store, `"memory"` unless persistence is under test
+- A test that opens a release-written store fixture (`src/test/resources/migrations`)
+  is a failsafe `*IT`, run by `mvn verify`; migration unit tests build their
+  older states in code (`docs/MIGRATE.md`, R7), and a new venue version or
+  older shape is seeded in `VenueMigrationEndToEndTest`
 - `mvn test -pl venue` runs the module; asset examples in
   `src/main/resources/asset-examples/`
 

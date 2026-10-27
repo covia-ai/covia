@@ -97,6 +97,14 @@ on a running venue or on a store before launch, and `Engine.migrate()` runs it
 with every installed adapter. That is the run for everything eager today; the
 lazy forms in the table above are not yet part of it.
 
+`VenueMigrationEndToEndTest` builds one venue at version 0 holding every form in
+the table except Telegram's, with each versioned bundled adapter's oldest
+state, and takes it to the current version in process. It checks the eager
+parts after the start-up transaction, and each lazy form after the venue next
+uses it. Until the run goes step by step, it checks the run as a whole. The
+release-written fixtures are opened only by `VenueUpgradeIT` and
+`VenueStoreMigrationIT`.
+
 ## Requirements
 
 ### R1. Upgrading a venue's version
@@ -262,16 +270,16 @@ function. An embedder does such work itself, between steps or after them.
   venue states the tests build in each older shape, as `VenueMigrationTest`
   and the adapters' migration tests do. Testing a step never needs a release
   fixture.
-- **End to end.** One test takes a venue through every migration: from a state
-  it builds holding every older shape that Covia and the bundled adapters
-  still support, through each step in turn to the current version, with the
-  checks below after every step. A module adapter does the same for its own
-  forms in its own module.
+- **End to end.** One in-process unit test takes a venue through every venue
+  version: from a state it builds holding every older shape that Covia and the
+  bundled adapters still support, through each step in turn to the current
+  version, with the checks below after every step. A module adapter does the
+  same for its own forms in its own module.
 - **Fixtures by release line.** Each release line (0.9, 0.10, …) leaves one
   fixture, written by a published jar of that line and never regenerated, as
   `covia-0.9.11.zip` is for 0.9 and `covia-0.10.0.zip` for 0.10 (see their
   [README](../src/test/resources/migrations/README.md)).
-  Fixtures are big, so only integration tests open them.
+  Fixtures are big, so only integration tests (failsafe `*IT`s) open them.
 - **The embedders' API.** A harness walks the end-to-end state and each fixture
   through the run one step at a time, through the API embedders call. It has
   no stepping path of its own.

@@ -12,9 +12,9 @@ inserted afterwards.
   - Published jar SHA-256: `f0f4a4f369ac22482e414d1c0e5d64bd345e58eaeaa064c0f0b86118321eefc1`
   - Original store SHA-256: `e9d9c6fe5e427af1f43c3dea85c30f7973fba83234cbfb8af22a5b4628a7dee4`
 - Generator: `venue/src/test/java/covia/venue/VenueStoreFixture.java`
-- Tests: `VenueUpgradeTest` opens every archive on every build;
-  `VenueStoreMigrationTest` adds HTTP use and restarts, in the durability gate
-  that CI runs.
+- Tests: `VenueUpgradeIT` opens every archive in process, and
+  `VenueStoreMigrationIT` adds HTTP use and restarts. Fixtures are big, so
+  both are failsafe integration tests: `mvn verify` runs them, and so does CI.
 
 The identities, seeds and secrets are public test data. Never use these venues
 for real accounts. The generator and launch config bind to loopback and disable
@@ -35,7 +35,7 @@ adapter's own state.
 From the repository root:
 
 ```sh
-mvn test -pl venue -am '-Dtest=VenueStoreMigrationTest' '-Dsurefire.failIfNoSpecifiedTests=false' '-Dcovia.tests.durability=true'
+mvn verify -pl venue -am '-Dit.test=VenueStoreMigrationIT' '-Dtest=none' '-Dsurefire.failIfNoSpecifiedTests=false'
 ```
 
 For each archive, the test extracts a fresh copy, verifies its checksum, upgrades it, exercises
