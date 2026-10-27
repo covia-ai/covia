@@ -17,6 +17,10 @@
 			<version>${project.version}</version><scope>provided</scope>
 		</dependency>
 		<dependency>
+			<groupId>ai.covia</groupId><artifactId>venue</artifactId>
+			<version>${project.version}</version><type>test-jar</type><scope>test</scope>
+		</dependency>
+		<dependency>
 			<groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter-api</artifactId>
 			<version>${junit.version}</version><scope>test</scope>
 		</dependency>

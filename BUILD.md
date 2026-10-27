@@ -389,8 +389,10 @@ packaging and publication.
 The reactor modules are published to Maven Central under the `ai.covia`
 groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
 `ai.covia:workbench` are ordinary library artifacts (along with the
-`ai.covia:covia` parent POM). The operator-facing `covia-python-adapter`,
-`covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
+`ai.covia:covia` parent POM). The venue also publishes its test jar
+(`venue-<version>-tests.jar`), which module tests take as a test-scoped
+dependency for shared test support such as `TestTemp`. The operator-facing
+`covia-python-adapter`, `covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`,
 `covia-sonnylabs`, `covia-documents`, `covia-speech` and
 `covia-claude-code` artifacts are loadable venue modules rather than dependencies of
 the standard venue. Their slim jars are published so an embedding host can

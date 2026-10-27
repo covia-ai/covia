@@ -31,6 +31,26 @@
 					</annotationProcessorPaths>
 				</configuration>
 			</plugin>
+			<!-- venue-<version>-tests.jar, so module tests share the venue's test
+			     support (TestTemp's Etch stores) rather than copying it. Its own
+			     module name keeps it apart from the main jar's. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>test-jar</id>
+						<goals><goal>test-jar</goal></goals>
+						<configuration>
+							<archive>
+								<manifestEntries>
+									<Automatic-Module-Name>${covia.module.name}.tests</Automatic-Module-Name>
+								</manifestEntries>
+							</archive>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
 			<plugin>
 				<artifactId>maven-assembly-plugin</artifactId>
 				<version>3.8.0</version>
