@@ -726,7 +726,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			job.fail(failure);
 			return;
 		}
-		// Finishing clears the turn's progress itself.
+		// The turn's last progress stays in the finished record (JOBS.md).
 		job.completeWith(res);
 	}
 

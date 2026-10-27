@@ -277,7 +277,8 @@ public class ClaudeCodeAdapterTest {
 		AMap<AString, ACell> res = RT.castMap(job.awaitResult(30_000));
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals("used a tool", str(res, "result"));
-		assertNull(job.getData().get(ClaudeCodeAdapter.K_PROGRESS), "progress cleared on completion");
+		assertEquals("used a tool", Job.progressMessage(job.getData().get(ClaudeCodeAdapter.K_PROGRESS)),
+			"the last progress stays in the finished record");
 	}
 
 	@Test
