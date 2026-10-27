@@ -45,7 +45,8 @@ import covia.venue.RequestContext;
  *
  * <ul>
  *   <li><b>Venue-local convex-db</b> (default): a lattice-backed database
- *       namespaced by caller DID, created on first use. Persistent when the
+ *       of the caller's own, {@code <userDID>/sql/<db>}, created on first
+ *       use. The venue's public principal has none. Persistent when the
  *       venue config sets {@code adapters.sql.path} (an Etch file);
  *       in-memory otherwise.</li>
  *   <li><b>Operator-registered connection</b>: an entry under venue config
@@ -99,6 +100,15 @@ public class SQLAdapter extends AAdapter {
 
 	/** Refusal of sql:execute on a database registered with {@code readOnly: true}, after its name. */
 	static final String READ_ONLY_DATABASE = "is read-only; use sql:query to read it";
+
+	/** Refusal of a venue-local database to the public principal, which every
+	 *  anonymous caller shares and so can own nothing. */
+	static final String PUBLIC_HAS_NO_DATABASES =
+		"Venue-local SQL databases belong to a signed-in user, and the public principal has none";
+
+	/** Refusal of a venue-local database to a principal whose name contains {@code /},
+	 *  after that name. No DID does. */
+	static final String UNNAMEABLE_OWNER = "cannot own venue-local SQL databases: its name contains '/'";
 
 	/** The parser convex-db's driver itself uses. */
 	private static final SqlParser.Config QUERY_PARSER = SqlParser.config()
@@ -290,7 +300,7 @@ public class SQLAdapter extends AAdapter {
 
 	/**
 	 * Resolves a database name. Operator-registered entries win; otherwise
-	 * the name is a venue-local convex-db database namespaced by caller DID
+	 * the name is the caller's venue-local convex-db database
 	 * (created on first use).
 	 */
 	private Database resolveDatabase(RequestContext ctx, String db) {
@@ -310,19 +320,35 @@ public class SQLAdapter extends AAdapter {
 
 		// Scoped to the USER: an agent shares its owner's venue-local database
 		// rather than getting a private one the owner cannot see.
-		AString caller = ctx.getUserDID();
-		if (caller == null) throw new JobFailedException(
+		AString user = ctx.getUserDID();
+		if (user == null) throw new JobFailedException(
 			"Venue-local SQL databases require an authenticated caller"
 			+ " — or register '" + db + "' under adapters.sql.databases in venue config");
-		String scoped = sanitise(caller.toString()) + "__" + db;
+		if (engine.isPublicPrincipal(user)) throw new JobFailedException(PUBLIC_HAS_NO_DATABASES);
+		String name = localName(user, db);
+		if (name == null) throw new JobFailedException(user + " " + UNNAMEABLE_OWNER);
 		// ONE convex-db instance for all venue-local databases, with per-user
-		// isolation via the database parameter inside it: one instance = one
-		// store, so a venue's local SQL state lives in a single Etch file.
+		// isolation by database name inside it: one instance = one store, so a
+		// venue's local SQL state lives in a single Etch file. The name goes as
+		// a connection property, so nothing in it is read as a URL parameter.
+		props.setProperty("database", name);
 		AString path = RT.ensureString(RT.getIn(cfg, "path"));
-		String url = (path != null)
-			? "jdbc:convex:file:" + path + ";database=" + scoped
-			: "jdbc:convex:mem:covia_sql;database=" + scoped;
+		String url = (path != null) ? "jdbc:convex:file:" + path : "jdbc:convex:mem:covia_sql";
 		return new Database(url, props);
+	}
+
+	/**
+	 * The name of a user's venue-local database within the venue's convex-db
+	 * store: {@code <userDID>/sql/<db>}, the resource a {@code sql/<db>}
+	 * capability names under that user. No two users or databases share a
+	 * name, as a database name never contains {@code /}. A resource's owner
+	 * is what precedes its first {@code /}, so a principal whose name
+	 * contains one owns none (null); no DID does.
+	 */
+	static String localName(AString user, String db) {
+		String owner = user.toString();
+		if (owner.indexOf('/') >= 0) return null;
+		return owner + "/sql/" + db;
 	}
 
 	/** Password entries should be secret references ({@code s/<name>}),
@@ -442,10 +468,6 @@ public class SQLAdapter extends AAdapter {
 		if (o instanceof java.math.BigDecimal bd) return CVMDouble.create(bd.doubleValue());
 		if (o instanceof byte[] b) return convex.core.data.Blob.wrap(b);
 		return Strings.create(String.valueOf(o));
-	}
-
-	private static String sanitise(String did) {
-		return did.replaceAll("[^A-Za-z0-9]", "_");
 	}
 
 	/** The most diagnosable message in a cause chain — Calcite wraps deeply. */

@@ -35,6 +35,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - `crypto:derive-key` reads only the caller's own secrets, and `crypto:jwt-decode`
   never returns a stored token's signature, so `secret/use` never yields possession.
+- Venue-local SQL databases are named `<userDID>/sql/<db>`: users whose DIDs differ
+  only in punctuation no longer share databases. The public principal has none.
+
+### Migration
+
+- Venue-local SQL databases from earlier versions are not carried over.
 
 ## [0.10.0] - 2026-10-26
 

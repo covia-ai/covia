@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.Set;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -21,6 +24,8 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import convex.db.ConvexDB;
+import convex.db.jdbc.ConvexDriver;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
@@ -36,8 +41,12 @@ import covia.venue.RequestContext;
 @Execution(ExecutionMode.SAME_THREAD)
 public class SQLAdapterTest {
 
+	private static final String EXECUTE = "v/ops/sql/execute";
+	private static final String QUERY = "v/ops/sql/query";
+
 	private static Engine engine;
 	private static Path sqliteFile;
+	private static Path storeDir;
 	private AString did;
 	private RequestContext ctx;
 
@@ -54,6 +63,7 @@ public class SQLAdapterTest {
 		// convex-db whose executeQuery runs a write before reporting that it
 		// returned no rows, as PostgreSQL's does.
 		sqliteFile = Files.createTempFile("covia-sql-test", ".db");
+		storeDir = Files.createTempDirectory("covia-sql-store");
 		AString sharedUrl = Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test");
 		AMap<AString, ACell> config = Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
@@ -76,6 +86,11 @@ public class SQLAdapterTest {
 	static void shutdown() throws IOException {
 		engine.close();
 		Files.deleteIfExists(sqliteFile);
+		// The driver keeps its stores open beyond the venues that used them
+		ConvexDriver.closeAll();
+		try (Stream<Path> walk = Files.walk(storeDir)) {
+			for (Path p : walk.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(p);
+		}
 	}
 
 	@BeforeEach
@@ -214,6 +229,132 @@ public class SQLAdapterTest {
 		}
 		assertRefused(attemptQuery("sharedro", "DELETE FROM ro_notes", null), "DELETE through sql:query");
 		assertEquals(before, query(ctx, "sharedro", "SELECT id, txt FROM ro_notes ORDER BY id", null, null));
+	}
+
+	// ========== Venue-local names ==========
+
+	/**
+	 * Principals that earlier versions put in one database: DIDs differing
+	 * only in punctuation, and DID and database pairs differing only in where
+	 * an underscore falls.
+	 */
+	private static final String[][] LOOKALIKES = {
+		{"did:web:venue.example:u:alice.smith", "mine"},
+		{"did:web:venue.example:u:alice_smith", "mine"},
+		{"did:web:venue.example:u:alice-smith", "mine"},
+		{"did:web:bob.example.com", "mine"},
+		{"did:web:bob-example.com", "mine"},
+		{"did:test:sql:split-", "x"},
+		{"did:test:sql:split", "_x"}};
+
+	@Test
+	public void testLookalikePrincipalsGetDatabasesOfTheirOwn() {
+		assertOwnRowsOnly(engine, LOOKALIKES);
+	}
+
+	/**
+	 * With {@code adapters.sql.path} every venue-local database lives in one
+	 * Etch file, named {@code <userDID>/sql/<db>}: the resource a
+	 * {@code sql/<db>} capability names under that user.
+	 */
+	@Test
+	public void testStoredDatabasesAreNamedByOwnerAndName() throws IOException {
+		Path file = storeDir.resolve("local.etch");
+		Engine fileBacked = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of(Strings.create("sql"), Maps.of(
+				Strings.create("path"), Strings.create(file.toString())))));
+		try {
+			fileBacked.registerAdapter(new SQLAdapter());
+			Engine.addDemoAssets(fileBacked);
+			assertOwnRowsOnly(fileBacked, LOOKALIKES);
+			ConvexDB store = ConvexDriver.instances.get("file:" + file.toFile().getCanonicalPath()).cdb;
+			Set<String> names = Set.of(store.getDatabaseNames());
+			for (String[] o : LOOKALIKES) {
+				assertTrue(names.contains(o[0] + "/sql/" + o[1]), names.toString());
+			}
+			assertEquals(LOOKALIKES.length, names.size(), names.toString());
+		} finally {
+			fileBacked.close();
+		}
+	}
+
+	@Test
+	public void testPublicPrincipalHasNoVenueLocalDatabase() {
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		for (RequestContext c : new RequestContext[] {
+				RequestContext.of(publicDID),
+				RequestContext.ofAgent(publicDID, Strings.create("helper"))}) {
+			for (Job job : new Job[] {
+					attempt(engine, EXECUTE, c, "mine", "CREATE TABLE marks (owner VARCHAR)"),
+					attempt(engine, QUERY, c, "mine", "SELECT owner FROM marks")}) {
+				assertEquals(Status.FAILED, job.getStatus());
+				assertTrue(job.getErrorMessage().contains(SQLAdapter.PUBLIC_HAS_NO_DATABASES), job.getErrorMessage());
+			}
+		}
+		// Registered databases are the operator's to share, the public principal included
+		exec(ctx, "shareddb", "CREATE TABLE notices (txt VARCHAR)");
+		exec(ctx, "shareddb", "INSERT INTO notices VALUES ('open to all')");
+		assertCompletes(attempt(engine, QUERY, RequestContext.of(publicDID), "shareddb", "SELECT txt FROM notices"));
+	}
+
+	/**
+	 * Read as a resource, the name of {@code did:test:sql:a/sql/b}'s database
+	 * {@code c} would be {@code did:test:sql:a}'s, so a principal named with a
+	 * {@code /} owns no database. No DID contains one.
+	 */
+	@Test
+	public void testPrincipalNamedWithSlashOwnsNoDatabase() {
+		Job job = attempt(engine, EXECUTE, RequestContext.of(Strings.create("did:test:sql:a/sql/b")),
+			"c", "CREATE TABLE marks (owner VARCHAR)");
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains(SQLAdapter.UNNAMEABLE_OWNER), job.getErrorMessage());
+	}
+
+	/** Databases belong to the user: an agent works in its owner's. */
+	@Test
+	public void testAgentWorksInItsOwnersDatabase() {
+		exec(ctx, "team", "CREATE TABLE notes (txt VARCHAR)");
+		exec(ctx, "team", "INSERT INTO notes VALUES ('from the owner')");
+		ACell out = query(RequestContext.ofAgent(did, Strings.create("helper")), "team", "SELECT txt FROM notes", null, null);
+		assertEquals("from the owner", RT.ensureVector(rows(out).get(0)).get(0).toString());
+	}
+
+	/** Each owner creates a table of the same name and puts its DID in it, then
+	 *  must read back exactly that one row. */
+	private static void assertOwnRowsOnly(Engine e, String[][] owners) {
+		for (String[] o : owners) {
+			RequestContext c = RequestContext.of(Strings.create(o[0]));
+			assertCompletes(attempt(e, EXECUTE, c, o[1], "CREATE TABLE marks (owner VARCHAR)"));
+			assertCompletes(attempt(e, EXECUTE, c, o[1], "INSERT INTO marks VALUES (?)", Strings.create(o[0])));
+		}
+		for (String[] o : owners) {
+			Job read = attempt(e, QUERY, RequestContext.of(Strings.create(o[0])), o[1], "SELECT owner FROM marks");
+			assertCompletes(read);
+			AVector<ACell> rows = rows(read.getOutput());
+			assertEquals(1, rows.count(), o[0] + " reads " + rows);
+			assertEquals(o[0], RT.ensureVector(rows.get(0)).get(0).toString());
+		}
+	}
+
+	/** Runs an operation to its end, successful or not, for the caller to inspect. */
+	private static Job attempt(Engine e, String op, RequestContext c, String db, String statement, ACell... params) {
+		AMap<AString, ACell> input = Maps.of(
+			Strings.create("db"), Strings.create(db),
+			Strings.create("statement"), Strings.create(statement));
+		if (params.length > 0) input = input.assoc(Strings.create("params"), convex.core.data.Vectors.create(params));
+		Job job = e.jobs().invokeOperation(op, input, c);
+		try {
+			job.awaitResult(15000);
+		} catch (Exception ex) {
+			// the job's status and message say what happened
+		}
+		assertTrue(job.isFinished(), statement);
+		return job;
+	}
+
+	private static void assertCompletes(Job job) {
+		assertEquals(Status.COMPLETE, job.getStatus(), String.valueOf(job.getErrorMessage()));
 	}
 
 	// ========== Result bounds ==========

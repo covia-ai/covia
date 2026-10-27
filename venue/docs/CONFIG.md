@@ -2003,8 +2003,9 @@ earlier embed a build path, so compare their hash column by hand.
 
 First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
 over venue-local convex-db databases (per-user, lattice-backed, created on
-first use; ONE instance = one store, per-user isolation via the `database=`
-param) and operator-registered JDBC connections
+first use; ONE instance = one store, in which a user's database `<db>` is named
+`<userDID>/sql/<db>`, the resource its `sql/<db>` capability names; the public
+principal has none) and operator-registered JDBC connections
 (`adapters.sql.databases.<name>`, passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
 `sql/<db>` × `sql/query`|`sql/execute`. `sql/query` never changes data:
 convex-db statements must parse as a single query, and other drivers run the
