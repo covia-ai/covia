@@ -15,6 +15,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `from`/`to` read exactly the turns a summary names; `skip` and `older` page back.
 - `GoalTreeContext.turnText`: the words of a turn, from a string, a structured
   message's `text` or an agent request's `task`.
+- `AStorage.storeVerified`: stores content only if its SHA-256 is the given hash (#629).
+- `StreamContent`: one-shot content over a stream, such as an HTTP response body.
 
 ### Changed
 
@@ -26,6 +28,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Content uploads to file storage stream to disk, checked against their hash as they
   arrive; a failed or mismatched upload leaves nothing under the hash (#629).
 - `VenueHTTP` streams content uploads and downloads instead of buffering them (#629).
+  Downloaded content can be read once, as a stream or a blob; its size is unknown until
+  read unless the venue sends a length.
 
 ## [0.10.0] - 2026-10-26
 
