@@ -270,6 +270,54 @@ public class A2AAgentCardTest {
 	}
 
 	@Test
+	public void publicInteraction_runsWithOwnerAuthority_andReachesOwnerJobs() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
+		client.setTimeout(5000);
+		assertEquals(Status.COMPLETE, client.invokeAndWait(Strings.create("v/ops/covia/write"), Maps.of(
+				Fields.PATH, Strings.create("w/private-note"),
+				Fields.VALUE, Strings.create("alice only"))).getStatus());
+
+		// a2a.caps admits anonymous requests and grants nothing else: no read of w/.
+		String agentId = "Lender";
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create(agentId),
+				Fields.CONFIG, Maps.of(
+						Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+						"readPath", Strings.create("w/private-note"),
+						"a2a", Maps.of(
+								"public", CVMBool.TRUE,
+								"caps", Vectors.of(
+										Maps.of("with", Strings.create("g/" + agentId),
+												"can", covia.api.Abilities.AGENT_REQUEST),
+										Maps.of("with", Strings.create("v/ops/agent/request"),
+												"can", Strings.create("invoke")))))));
+		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
+		Task sent = extractTask(parse(post(endpoint, rpcEnvelope("lend", "SendMessage",
+				new MessageSendParams(userMessage("what is in your notes?"), null, null)), null)));
+		assertNotNull(sent);
+		awaitTask(endpoint, sent.id(), null, TaskState.TASK_STATE_COMPLETED);
+		HttpResponse<String> polled = post(endpoint,
+				rpcEnvelope("lend-get", "GetTask", new TaskQueryParams(sent.id(), null)), null);
+		assertTrue(polled.body().contains("alice only"),
+				"the anonymous sender read the owner's workspace through the run: " + polled.body());
+		assertEquals(ownerDid, TestServer.ENGINE.jobs()
+				.getJobData(Blob.fromHex(sent.id()), covia.venue.RequestContext.of(ownerDid)).get(Fields.CALLER),
+				"the task is recorded as the owner's own request, not the anonymous sender's");
+
+		// Public task calls run as the owner, so they accept any of the owner's job ids.
+		Job unrelated = client.invokeAndWait(Strings.create("v/test/ops/echo"),
+				Maps.of("note", Strings.create("not from this agent")));
+		Map<String, Object> reached = parse(post(endpoint, rpcEnvelope("reach", "GetTask",
+				new TaskQueryParams(unrelated.getID().toHexString(), null)), null));
+		assertNull(reached.get("error"), "an unrelated owner job is reachable: " + reached);
+		assertEquals(unrelated.getID().toHexString(), extractTask(reached).id());
+	}
+
+	@Test
 	public void taskAndContextContinuation_areDistinctAndIdempotent() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		AString ownerDid = didOf(kp);

@@ -366,6 +366,30 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testAdmittedRequestRunsWithTheOwnersAuthority() {
+		// Admission decides who may ask; the run that serves the request is the
+		// agent's own, bounded only by its config.caps. So it reads the owner's
+		// workspace for a caller who cannot read it directly.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		RequestContext bob = RequestContext.of(BOB_DID);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/private-note", Fields.VALUE, "alice only"), alice).awaitResult(5000);
+		AString address = createAgentAs(alice, "lends-authority", Vectors.of(BOB_DID));
+
+		Job direct = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/private-note"), bob);
+		assertThrows(covia.exception.JobFailedException.class, () -> direct.awaitResult(5000));
+
+		Job request = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, Maps.of("readPath", "w/private-note")), bob);
+		ACell result = request.awaitResult(5000);
+		assertEquals(Strings.create("alice only"), RT.getIn(result, Fields.OUTPUT, "completed"),
+			"the run served Bob with Alice's authority");
+		assertEquals(BOB_DID, engine.jobs().getJobData(request.getID(), bob).get(Fields.CALLER),
+			"the request stays attributed to the admitted caller");
+	}
+
+	@Test
 	public void testAdmissionMalformedPolicyIsRejectedAtAuthorTime() {
 		for (ACell bad : new ACell[] {Strings.create("everyone"), Vectors.of(Strings.create("bob")), CVMLong.create(42)}) {
 			Job create = engine.jobs().invokeOperation("v/ops/agent/create",

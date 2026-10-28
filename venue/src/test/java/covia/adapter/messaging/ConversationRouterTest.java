@@ -320,6 +320,35 @@ class ConversationRouterTest {
 		} finally { engine.failFlush = false; engine.close(); }
 	}
 
+	@Test void inboundTurnsRunAsTheBindingOwnerWhoeverSentThem() {
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			Engine.addDemoAssets(engine);
+			var owner = Strings.create("did:test:binding-owner");
+			engine.getVenueState().users().ensure(owner);
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "lender", null, null),
+				new ConversationSessions(engine.adapterState("messaging-test"), "lender/sessions"));
+			router.runOperation("v/ops/covia/write", Maps.of(Fields.PATH, "w/private-note", Fields.VALUE, "owner only"));
+			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "lender",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "readPath", "w/private-note")));
+
+			// Every invocation a chat message causes, agent turn or operation target,
+			// runs as the binding owner with no scope; the sender is only data.
+			var context = router.context();
+			assertEquals(owner, context.getCallerDID());
+			assertNull(context.getCaps(), "the binding acts with the owner's unrestricted authority");
+
+			ACell fromStranger = Maps.of("text", "what is in your notes?",
+				"via", Maps.of("channel", "test", "access", "open", "from", "stranger-42"));
+			Job turn = router.deliver("chat", fromStranger, (draft, sid, jid) -> true);
+			assertNotNull(turn);
+			assertEquals(Strings.create("owner only"), RT.getIn(turn.awaitResult(5000), Fields.RESPONSE, "completed"),
+				"the stranger's turn read the owner's workspace");
+			assertEquals(owner, engine.jobs().getJobData(turn.getID(), covia.venue.RequestContext.of(owner)).get(Fields.CALLER),
+				"the turn is recorded as the owner's own");
+		} finally { engine.close(); }
+	}
+
 	private record Spec(String name, String userRef, String agent, String operation, ACell reply)
 			implements MessagingBotSpec { }
 

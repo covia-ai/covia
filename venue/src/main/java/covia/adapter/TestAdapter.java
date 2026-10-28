@@ -507,6 +507,7 @@ public class TestAdapter extends AAdapter {
             }
         }
         AString readPath = RT.ensureString(RT.getIn(newInput, "readPath"));
+        if (readPath == null) readPath = RT.ensureString(RT.getIn(input, AgentState.KEY_CONFIG, "readPath"));
         if (readPath != null) {
             ACell read = ((CoviaAdapter) engine.getAdapter("covia"))
                 .handleRead(ctx, Maps.of(Fields.PATH, readPath));
