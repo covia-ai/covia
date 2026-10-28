@@ -2039,7 +2039,16 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		String id = ctx.pathParam("id");
 		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
-		AMap<AString, ACell> info = agent.agentInfo(rctx, Strings.create(id));
+		AMap<AString, ACell> info;
+		try {
+			info = agent.agentInfo(rctx, Strings.create(id));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+			return;
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		}
 		if (info == null) {
 			buildError(ctx, 404, "Agent not found: " + id);
 			return;
@@ -2239,6 +2248,9 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
+			return;
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
 			return;
 		}
 		String sessionParam = ctx.queryParam("sessionId");

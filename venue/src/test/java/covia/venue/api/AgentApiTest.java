@@ -186,6 +186,21 @@ public class AgentApiTest {
 			"anonymous cannot fetch the caller's agent by id");
 	}
 
+	/** An encoded id may name another owner's agent or no agent at all: either is
+	 *  the caller's error, answered as such, on the read and the stream alike. */
+	@Test
+	public void testForeignOrMalformedAgentIdIsRefused() throws Exception {
+		String foreign = java.net.URLEncoder.encode(callerDID + "/g/AgentAlpha",
+			java.nio.charset.StandardCharsets.UTF_8);
+		HttpResponse<String> read = get("agents/" + foreign, false);
+		assertEquals(403, read.statusCode(), read.body());
+		assertFalse(read.body().contains("dummy test agent"), read.body());
+		assertEquals(403, get("agents/" + foreign + "/sse", false).statusCode());
+
+		assertEquals(400, get("agents/a%2Fb", true).statusCode());
+		assertEquals(400, get("agents/a%2Fb/sse", true).statusCode());
+	}
+
 	@Test
 	public void testIncludeTerminated() throws Exception {
 		createAgent("AgentTerm");
