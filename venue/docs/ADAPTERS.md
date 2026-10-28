@@ -350,9 +350,13 @@ There are three separate concerns:
 2. **Adapter-owned state.** Each adapter has its own value at
    `:adapters/<name>` within the venue. `adapterState()` returns its lattice
    component; this is not a user workspace or a caller-addressable path.
-3. **Secrets.** Secret material remains in `s/`. Adapter records contain only
-   `s/NAME` references. Resolve secrets against their destination
-   (`engine.resolveSecret(ref, ctx, url)`) so URL-bound `secret/use` grants apply.
+3. **Secrets.** Credentials a user supplies remain in `s/`, and adapter records
+   refer to them only as `s/NAME` references. Resolve secrets against their
+   destination (`engine.resolveSecret(ref, ctx, url)`) so URL-bound
+   `secret/use` grants apply. Credentials an adapter obtains and rotates on a
+   user's behalf, such as OAuth grants, are its own state instead, sealed with
+   `SecretStore.seal` under the same keys: no secret operation then reaches
+   them, and the adapter gates their use with abilities of its own.
 
 `AdapterState` uses upstream `ALatticeComponent` and `TransactionalComponent`.
 The value may be any CAD3 cell: there is no mandatory map, user prefix,

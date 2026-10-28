@@ -202,6 +202,36 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 		return wrote.get();
 	}
 
+	/**
+	 * A value sealed as a stored secret is, under the same keys and key
+	 * versions, for a component other than this store to keep: credentials an
+	 * adapter obtains and rotates for a user, such as OAuth grants
+	 * (ADAPTERS.md). Opened with {@link #unseal}.
+	 *
+	 * @param plaintext Value to seal
+	 * @param keys The venue's secret store keys (from {@link #keys})
+	 * @return The sealed value: its ciphertext and key version
+	 */
+	public static AMap<AString, ACell> seal(AString plaintext, Keys keys) {
+		return Maps.of(ENCRYPTED_KEY, encrypt(plaintext, keys), KEY_VERSION_KEY, CURRENT_KEY_VERSION_CELL);
+	}
+
+	/**
+	 * Opens a value from {@link #seal} under the key of its version.
+	 *
+	 * @param sealed A sealed value, or null
+	 * @param keys The venue's secret store keys (from {@link #keys})
+	 * @return The plaintext, or null for null
+	 * @throws IllegalStateException with {@link #INVALID_RECORD} for a value that is
+	 * not sealed, or {@link #UNKNOWN_KEY_VERSION} for a key version this venue cannot derive
+	 */
+	@SuppressWarnings("unchecked")
+	public static AString unseal(ACell sealed, Keys keys) {
+		if (sealed == null) return null;
+		if (!(sealed instanceof AMap<?, ?> record)) throw new IllegalStateException(INVALID_RECORD);
+		return open((AMap<AString, ACell>) record, keys);
+	}
+
 	private static Blob encrypt(AString plaintext, Keys keys) {
 		byte[] bytes = plaintext.toString().getBytes(StandardCharsets.UTF_8);
 		return Blob.wrap(AESGCM.encrypt(keys.forVersion(CURRENT_KEY_VERSION), bytes));

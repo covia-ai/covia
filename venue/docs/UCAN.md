@@ -100,6 +100,7 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 | `did:key:zAlice.../o/` | All operations |
 | `did:key:zAlice.../g/helper` | Specific agent |
 | `did:key:zAlice.../s/api-key` | Specific secret |
+| `did:key:zAlice.../oauth/google` | Alice's connected Google account (`oauth/` for all of them) |
 | `did:key:zAlice.../dlfs/docs/` | All files on Alice's `docs` DLFS drive |
 | `did:key:zAlice.../dlfs/docs/reports/q1.md` | Specific file on that drive |
 
@@ -145,6 +146,10 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
 | `secret/use` | — | Use a secret's value in an operation without seeing it; bindable to a destination with `nb.url` |
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
+| `oauth` | every `oauth/*` | All connected-account operations |
+| `oauth/use` | — | Send a connected account's token in a request without seeing it; bindable to a destination with `nb.url` |
+| `oauth/connect` | — | Connect an account: whoever approves the returned URL becomes the connection |
+| `oauth/disconnect` | — | Disconnect an account, revoking its grant at the provider |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
 
@@ -646,6 +651,10 @@ references with `secret/use` instead.
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
+| `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
+| `oauth:status` | `{ with: "oauth/", can: "crud/read" }`, or `oauth/<provider>` for one provider |
+| `oauth:connect` | `{ with: "oauth/<provider>", can: "oauth/connect" }` |
+| `oauth:disconnect` | `{ with: "oauth/<provider>", can: "oauth/disconnect" }` |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
 | `agent:request` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |

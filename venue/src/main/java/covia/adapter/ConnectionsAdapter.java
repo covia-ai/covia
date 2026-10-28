@@ -28,9 +28,10 @@ import covia.venue.User;
  * connection state store.</p>
  *
  * <p>Transport and authority stay with their existing owners: HTTP executes
- * requests, OAuth owns grants, and the user's {@code s/} namespace owns
- * credentials. Status checks only whether named encrypted records exist; it
- * never resolves or decrypts a secret.</p>
+ * requests, the oauth adapter owns connected accounts, and the user's
+ * {@code s/} namespace owns the credentials a user supplies. Status checks
+ * only whether a named secret or connection exists; it never resolves or
+ * decrypts one.</p>
  */
 public class ConnectionsAdapter extends AAdapter {
 
@@ -273,6 +274,12 @@ public class ConnectionsAdapter extends AAdapter {
 	}
 
 	private CredentialPresence credentialPresence(AString userDID, String ref) {
+		// A connected account is the oauth adapter's to report, by presence only.
+		if (ref.startsWith(TokenSource.PREFIX)) {
+			TokenSource source = engine.findAdapter(TokenSource.class);
+			return (source != null && source.connected(userDID, ref.substring(TokenSource.PREFIX.length())))
+				? new CredentialPresence(true, "oauth") : CredentialPresence.missing();
+		}
 		String name = secretName(ref);
 		if (name == null) return CredentialPresence.missing();
 
@@ -282,11 +289,10 @@ public class ConnectionsAdapter extends AAdapter {
 			? new CredentialPresence(true, "user") : CredentialPresence.missing();
 	}
 
-	/** The secret-record name corresponding to an HTTP/OAuth credential ref. */
+	/** The secret-record name corresponding to an HTTP credential ref. */
 	private static String secretName(String ref) {
 		if (ref.startsWith("/s/")) return nonEmpty(ref.substring(3));
 		if (ref.startsWith("s/")) return nonEmpty(ref.substring(2));
-		if (ref.startsWith(TokenSource.PREFIX)) return nonEmpty(ref);
 		return null;
 	}
 

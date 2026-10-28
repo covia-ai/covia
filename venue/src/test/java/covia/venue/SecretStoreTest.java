@@ -52,6 +52,25 @@ public class SecretStoreTest {
 			"Decrypted value should match original plaintext");
 	}
 
+	// ========== Sealed values ==========
+
+	@Test
+	public void testSealedValueOpensOnlyUnderItsVenuesKeys() {
+		AKeyPair kp = AKeyPair.generate();
+		SecretStore.Keys keys = SecretStore.keys(kp);
+		AMap<AString, ACell> sealed = SecretStore.seal(Strings.create(SECRET_VALUE), keys);
+
+		assertFalse(sealed.toString().contains(SECRET_VALUE), "a sealed value carries no plaintext");
+		assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), sealed.get(KEY_VERSION));
+		assertEquals(SECRET_VALUE, SecretStore.unseal(sealed, keys).toString());
+		assertNull(SecretStore.unseal(null, keys));
+		assertThrows(RuntimeException.class, () -> SecretStore.unseal(sealed, SecretStore.keys(AKeyPair.generate())),
+			"another venue's keys open nothing");
+		IllegalStateException notSealed = assertThrows(IllegalStateException.class,
+			() -> SecretStore.unseal(Strings.create(SECRET_VALUE), keys));
+		assertEquals(SecretStore.INVALID_RECORD, notSealed.getMessage());
+	}
+
 	// ========== Multiple Secrets ==========
 
 	@Test

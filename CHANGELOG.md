@@ -32,6 +32,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   Downloaded content can be read once, as a stream or a blob; its size is unknown until
   read unless the venue sends a length.
 - A `claudecode:session` opened without a prompt takes no pool slot until its first turn.
+- Connected accounts no longer appear in `secret:list` or a user export.
 
 ### Security
 
@@ -45,6 +46,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   a call names is off by default (`adapters.convex.anyPeer`) and, when on, passes the
   outbound guard.
 - A `did:web` document is fetched only from a host the outbound guard allows.
+- OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
+  secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
+  `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.
+- A token refresh never brings back a disconnected account, and a callback for a
+  deleted account stores nothing.
 
 ### Migration
 
@@ -52,6 +58,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A call naming a Convex peer other than the venue's is refused unless
   `adapters.convex.anyPeer` is set.
 - A `did:web` identity on a private network needs its host in `adapters.http.allowedHosts`.
+- Connected accounts move out of the secret store on first access. A `secret/use`
+  grant on `s/oauth/<provider>` no longer covers one: grant `oauth/use` on
+  `oauth/<provider>`.
 
 ## [0.10.0] - 2026-10-26
 

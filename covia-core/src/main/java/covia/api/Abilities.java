@@ -24,6 +24,16 @@ public final class Abilities {
 	public static final AString SECRET_USE    = Strings.intern("secret/use");
 	/** Reveal plaintext to its owner through a direct, non-recorded call. */
 	public static final AString SECRET_EXTRACT = Strings.intern("secret/extract");
+	/** Send a connected account's access token in a request without seeing it
+	 *  ({@code <did>/oauth/<provider>}). A grant of it may be bound to a
+	 *  destination url prefix ({@code nb.url}). */
+	public static final AString OAUTH_USE     = Strings.intern("oauth/use");
+	/** Connect an account at a provider: whoever approves the returned URL
+	 *  becomes the connection ({@code <did>/oauth/<provider>}). */
+	public static final AString OAUTH_CONNECT = Strings.intern("oauth/connect");
+	/** Disconnect an account, revoking its grant at the provider
+	 *  ({@code <did>/oauth/<provider>}). */
+	public static final AString OAUTH_DISCONNECT = Strings.intern("oauth/disconnect");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");

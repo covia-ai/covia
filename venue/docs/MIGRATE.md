@@ -54,6 +54,7 @@ the test adapter versions its state so far.
 | Agent frames with `conversation`/`items` → `history` | Covia | When a session cycle begins | `GoalTreeContext.migrateFrames` |
 | Session `loads` → the root frame's | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |
 | Secrets at key version 1 (#535) | Covia | On that secret's next write | `SecretStore` |
+| Connected accounts as user secrets `oauth/<provider>` → `:adapters/oauth` connections | OAuth adapter | On that user's next use of their connections | `OAuthAdapter.moveLegacyGrants` |
 | Telegram session mappings, `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | On first read | `ConversationSessions` |
 | Telegram bot registry, `w/telegram/bots` | Telegram adapter | Read at start, filling missing bindings | `TelegramAdapter.rearmLegacyBots` |
 

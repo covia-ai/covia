@@ -55,6 +55,8 @@ class VenueMigrationEndToEndTest {
 	private static final AString PREV = Strings.create("prev");
 	private static final Blob JOB = Blob.fromHex("e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0");
 	private static final String SECRET = "E2E_SECRET";
+	/** A connected account as the oauth adapter once kept it: a user secret named oauth/<provider>. */
+	private static final String LEGACY_GRANT = "oauth/e2e";
 	private static final String AGENT = "migration-e2e-agent";
 	private static final Blob SESSION = Blob.fromHex("e2e1e2e1e2e1e2e1e2e1e2e1e2e1e2e1");
 	private static final AString HISTORY_VERSION = Strings.create("historyVersion");
@@ -96,6 +98,8 @@ class VenueMigrationEndToEndTest {
 			user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create(SECRET)).set(Maps.of(
 				"encrypted", Blob.wrap(AESGCM.encrypt(version1, "kept".getBytes(StandardCharsets.UTF_8))),
 				Fields.UPDATED, CVMLong.create(1000L)));
+			user.secrets().store(LEGACY_GRANT, "{\"provider\":\"e2e\",\"accessToken\":\"e2e-access\",\"expiresAt\":0,"
+				+ "\"obtained\":1,\"scope\":\"read\"}", SecretStore.keys(key));
 			// An agent session with a legacy root frame and session-level loads.
 			user.writeInternalPath(WorkspaceRoot.parseStringPath("w/notes"), Strings.create("session notes"));
 			user.writeInternalPath(WorkspaceRoot.parseStringPath("w/frame-notes"), Strings.create("frame notes"));
@@ -134,6 +138,7 @@ class VenueMigrationEndToEndTest {
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
 			assertEquals(legacyJob, venue.users().get(USER).cursor().path(Namespace.J, JOB).get());
+			assertTrue(venue.users().get(USER).secrets().exists(LEGACY_GRANT));
 
 			engine.launch();
 			RequestContext ctx = RequestContext.of(USER);
@@ -156,6 +161,12 @@ class VenueMigrationEndToEndTest {
 			user.secrets().store(SECRET, "rewritten", keys);
 			assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), RT.getIn(user.get(), Namespace.S, SECRET, "keyVersion"));
 			assertEquals("rewritten", user.secrets().decrypt(SECRET, keys).toString());
+
+			// A connected account kept as a secret moves to the oauth adapter's state on first use.
+			ACell connections = engine.jobs().invokeOperation("v/ops/oauth/status", Maps.empty(), ctx).awaitResult(5000);
+			assertEquals(Strings.create("e2e"), RT.getIn(connections, "connections", CVMLong.ZERO, "provider"));
+			assertFalse(user.secrets().exists(LEGACY_GRANT));
+			assertNotNull(venue.adapterState("oauth").read("users/" + USER + "/e2e"));
 
 			// The session's next cycle turns the legacy frame into versioned
 			// history and folds the session loads into the root frame.

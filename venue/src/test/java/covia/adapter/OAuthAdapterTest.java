@@ -2,8 +2,10 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -19,6 +21,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -65,12 +71,27 @@ public class OAuthAdapterTest {
 		final AtomicInteger issued = new AtomicInteger();
 		final List<Map<String, String>> tokenRequests = new CopyOnWriteArrayList<>();
 		final AtomicReference<Map<String, String>> revoked = new AtomicReference<>();
+		/** When set, a refresh signals its arrival and waits for release before answering. */
+		volatile CountDownLatch refreshArrived;
+		volatile CountDownLatch refreshRelease;
+		private final ExecutorService handlers = Executors.newVirtualThreadPerTaskExecutor();
 
 		FakeProvider() throws IOException {
 			server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+			// Concurrent handlers: a held refresh must not hold up a revocation
+			server.setExecutor(handlers);
 			server.createContext("/token", x -> {
 				Map<String, String> form = form(x);
 				tokenRequests.add(form);
+				CountDownLatch arrived = refreshArrived, release = refreshRelease;
+				if ("refresh_token".equals(form.get("grant_type")) && arrived != null && release != null) {
+					arrived.countDown();
+					try {
+						release.await(10, TimeUnit.SECONDS);   // a backstop: the test releases it at once
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
 				int status = 200;
 				String body;
 				if ("authorization_code".equals(form.get("grant_type"))) {
@@ -129,7 +150,10 @@ public class OAuthAdapterTest {
 			try (OutputStream os = x.getResponseBody()) { os.write(bytes); }
 		}
 
-		@Override public void close() { server.stop(0); }
+		@Override public void close() {
+			server.stop(0);
+			handlers.shutdownNow();
+		}
 	}
 
 	private static Engine engine(FakeProvider fake) {
@@ -289,8 +313,17 @@ public class OAuthAdapterTest {
 		assertTrue(engine.findAdapter(OAuthAdapter.class).complete("fake", q.get("state"), "code-1", null, null).ok());
 	}
 
+	private static final AMap<AString, ACell> INVOKE_ANY = Maps.of(Capability.CAN, Strings.create("invoke"));
+
+	/** An agent of {@code owner}'s that may invoke anything and holds {@code grants} besides. */
+	private static RequestContext agent(AString owner, AMap<?, ?>... grants) {
+		AVector<ACell> caps = Vectors.of(INVOKE_ANY);
+		for (AMap<?, ?> grant : grants) caps = caps.conj(grant);
+		return RequestContext.ofAgent(owner, Strings.create("worker")).withCaps(caps);
+	}
+
 	@Test
-	public void testConnectionTokenIsASecretUse() throws Exception {
+	public void testConnectionTokenIsAnOAuthUse() throws Exception {
 		try (FakeProvider fake = new FakeProvider()) {
 			Engine engine = engine(fake);
 			try {
@@ -298,25 +331,278 @@ public class OAuthAdapterTest {
 				RequestContext alice = RequestContext.of(aliceDID);
 				connectFake(engine, fake, alice);
 				AMap<AString, ACell> me = Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake");
-				AMap<AString, ACell> invokeAny = Maps.of(Capability.CAN, Strings.create("invoke"));
 
 				// An agent of Alice's with only invoke cannot send her token anywhere.
-				RequestContext invokeOnly = RequestContext.ofAgent(aliceDID, Strings.create("worker"))
-					.withCaps(Vectors.of(invokeAny));
-				String refused = failed(run(engine, "v/ops/http/get", me, invokeOnly));
-				assertTrue(refused.contains(Abilities.SECRET_USE.toString()), refused);
+				String refused = failed(run(engine, "v/ops/http/get", me, agent(aliceDID)));
+				assertTrue(refused.contains(Abilities.OAUTH_USE.toString()), refused);
 
-				// A secret/use grant bound to a url prefix releases it there only.
-				RequestContext bound = RequestContext.ofAgent(aliceDID, Strings.create("worker"))
-					.withCaps(Vectors.of(invokeAny, Capability.create(Strings.create("s/oauth/fake"),
-						Abilities.SECRET_USE, Maps.of("url", fake.base() + "/api/"))));
+				// A grant on the secret the connection once was covers nothing now.
+				String oldGrant = failed(run(engine, "v/ops/http/get", me, agent(aliceDID,
+					Capability.create(Strings.create("s/oauth/fake"), Abilities.SECRET_USE))));
+				assertTrue(oldGrant.contains(Abilities.OAUTH_USE.toString()), oldGrant);
+
+				// An oauth/use grant bound to a url prefix releases it there only.
+				RequestContext bound = agent(aliceDID, Capability.create(OAuthAdapter.resource("fake"),
+					Abilities.OAUTH_USE, Maps.of("url", fake.base() + "/api/")));
 				assertEquals("Bearer access-1", RT.getIn(ok(run(engine, "v/ops/http/get", me, bound)), "body").toString());
 				String elsewhere = failed(run(engine, "v/ops/http/get",
 					Maps.of("url", fake.base() + "/token", "bearerSecret", "oauth/fake"), bound));
-				assertTrue(elsewhere.contains(Abilities.SECRET_USE.toString()), elsewhere);
+				assertTrue(elsewhere.contains(Abilities.OAUTH_USE.toString()), elsewhere);
 
 				// The owner uses their own connection as of right.
 				assertEquals("Bearer access-1", RT.getIn(ok(run(engine, "v/ops/http/get", me, alice)), "body").toString());
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	@Test
+	public void testConnectionsAreTheAdaptersOwnState() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				OAuthAdapter adapter = engine.findAdapter(OAuthAdapter.class);
+				assertFalse(adapter.connected(aliceDID, "fake"));
+				connectFake(engine, fake, alice);
+
+				// Not in the user's secret store, where secret operations would reach it.
+				User user = engine.getVenueState().users().get(aliceDID);
+				assertFalse(user.secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
+				assertEquals(0, RT.ensureVector(RT.getIn(ok(run(engine, "v/ops/secret/list", Maps.empty(), alice)),
+					"names")).count());
+
+				// In the adapter's state, its tokens sealed.
+				ACell stored = engine.adapterState("oauth").read("users/" + aliceDID + "/fake");
+				assertNotNull(stored);
+				assertEquals(Strings.create("read"), RT.getIn(stored, "scope"));
+				assertFalse(stored.toString().contains("access-1"), stored.toString());
+				assertFalse(stored.toString().contains("refresh-1"), stored.toString());
+				assertTrue(adapter.connected(aliceDID, "fake"));
+				assertFalse(adapter.connected(aliceDID, "other"));
+				assertFalse(adapter.connected(aliceDID, "../fake"));
+
+				// Deleting the user deletes their connections.
+				engine.deleteUser(engine.venueContext(), aliceDID);
+				assertNull(engine.adapterState("oauth").read("users/" + aliceDID));
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	@Test
+	public void testRestrictedCallersNeedOAuthAbilities() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				connectFake(engine, fake, alice);
+				AMap<AString, ACell> fakeProvider = Maps.of("provider", "fake");
+
+				// Invoke alone reaches no connection: not its status, not a new one, not a disconnect.
+				RequestContext invokeOnly = agent(aliceDID);
+				assertTrue(failed(run(engine, "v/ops/oauth/status", Maps.empty(), invokeOnly))
+					.contains(Capability.CRUD_READ.toString()));
+				assertTrue(failed(run(engine, "v/ops/oauth/status", fakeProvider, invokeOnly))
+					.contains(Capability.CRUD_READ.toString()));
+				assertTrue(failed(run(engine, "v/ops/oauth/connect", fakeProvider, invokeOnly))
+					.contains(Abilities.OAUTH_CONNECT.toString()));
+				assertTrue(failed(run(engine, "v/ops/oauth/disconnect", fakeProvider, invokeOnly))
+					.contains(Abilities.OAUTH_DISCONNECT.toString()));
+				assertNull(fake.revoked.get(), "a refused disconnect revokes nothing");
+				assertEquals(1, connections(engine, alice).count());
+
+				// All of Alice's data is still not her accounts: crud reads them but cannot connect or disconnect.
+				RequestContext crud = agent(aliceDID, Capability.create(aliceDID, Strings.create("crud")));
+				assertEquals(1, connections(engine, crud).count());
+				assertTrue(failed(run(engine, "v/ops/oauth/connect", fakeProvider, crud))
+					.contains(Abilities.OAUTH_CONNECT.toString()));
+				assertTrue(failed(run(engine, "v/ops/oauth/disconnect", fakeProvider, crud))
+					.contains(Abilities.OAUTH_DISCONNECT.toString()));
+
+				// Reading one connection is not reading them all.
+				RequestContext readsFake = agent(aliceDID, Capability.create(OAuthAdapter.resource("fake"), Capability.CRUD_READ));
+				assertEquals(1, RT.ensureVector(RT.getIn(ok(run(engine, "v/ops/oauth/status", fakeProvider, readsFake)),
+					"connections")).count());
+				assertTrue(failed(run(engine, "v/ops/oauth/status", Maps.empty(), readsFake))
+					.contains(Capability.CRUD_READ.toString()));
+
+				// The abilities themselves: connect, then disconnect.
+				RequestContext connects = agent(aliceDID, Capability.create(OAuthAdapter.resource("fake"), Abilities.OAUTH_CONNECT));
+				assertNotNull(RT.getIn(ok(run(engine, "v/ops/oauth/connect", fakeProvider, connects)), "url"));
+				RequestContext disconnects = agent(aliceDID, Capability.create(OAuthAdapter.resource("fake"), Abilities.OAUTH_DISCONNECT));
+				assertEquals(CVMBool.TRUE, RT.getIn(ok(run(engine, "v/ops/oauth/disconnect", fakeProvider, disconnects)), "disconnected"));
+				assertEquals(0, connections(engine, alice).count());
+
+				// oauth proves every oauth ability.
+				connectFake(engine, fake, agent(aliceDID, Capability.create(OAuthAdapter.ALL_CONNECTIONS, Strings.create("oauth"))));
+				assertEquals(1, connections(engine, alice).count());
+
+				// The public principal, which signed-out callers share, holds no connections.
+				RequestContext signedOut = RequestContext.of(Strings.create(engine.getDIDString() + ":public"));
+				assertTrue(failed(run(engine, "v/ops/oauth/connect", fakeProvider, signedOut))
+					.contains(OAuthAdapter.PUBLIC_HAS_NO_CONNECTIONS));
+				assertTrue(failed(run(engine, "v/ops/oauth/status", Maps.empty(), signedOut))
+					.contains(OAuthAdapter.PUBLIC_HAS_NO_CONNECTIONS));
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	/** A grant as a venue before connections moved to adapter state kept it: a secret named oauth/<provider>. */
+	private static void storeLegacyGrant(Engine engine, AString did, String provider, String plaintext) {
+		engine.getVenueState().users().ensure(did).secrets().store(OAuthAdapter.LEGACY_GRANT_PREFIX + provider,
+			plaintext, SecretStore.keys(engine.getKeyPair()));
+	}
+
+	private static String legacyGrant(String accessToken) {
+		return "{\"provider\":\"fake\",\"accessToken\":\"" + accessToken + "\",\"refreshToken\":\"refresh-1\","
+			+ "\"expiresAt\":" + (System.currentTimeMillis() + 3_600_000) + ",\"obtained\":1,\"scope\":\"read\",\"tokenType\":\"Bearer\"}";
+	}
+
+	@Test
+	public void testLegacyGrantsMoveOnFirstAccess() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				storeLegacyGrant(engine, aliceDID, "fake", legacyGrant("legacy-access"));
+
+				// The first access moves it: a connection, in the adapter's state, gone from the secret store.
+				AVector<ACell> moved = connections(engine, alice);
+				assertEquals(1, moved.count(), moved.toString());
+				assertEquals(CVMBool.TRUE, RT.getIn(moved.get(0), "refreshable"));
+				User user = engine.getVenueState().users().get(aliceDID);
+				assertFalse(user.secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
+				ACell stored = engine.adapterState("oauth").read("users/" + aliceDID + "/fake");
+				assertFalse(stored.toString().contains("legacy-access"), stored.toString());
+				assertEquals("Bearer legacy-access", RT.getIn(ok(run(engine, "v/ops/http/get",
+					Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake"), alice)), "body").toString());
+
+				// A connection made since is kept over an older grant.
+				AString bobDID = Strings.create("did:test:oauth:bob");
+				RequestContext bob = RequestContext.of(bobDID);
+				connectFake(engine, fake, bob);
+				storeLegacyGrant(engine, bobDID, "fake", legacyGrant("legacy-access"));
+				String bobToken = RT.getIn(ok(run(engine, "v/ops/http/get",
+					Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake"), bob)), "body").toString();
+				assertNotEquals("Bearer legacy-access", bobToken);
+				assertFalse(engine.getVenueState().users().get(bobDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
+
+				// A grant that cannot be read is refused with a reason, and left where it was.
+				AString carolDID = Strings.create("did:test:oauth:carol");
+				storeLegacyGrant(engine, carolDID, "fake", "not a grant");
+				assertTrue(failed(run(engine, "v/ops/oauth/status", Maps.empty(), RequestContext.of(carolDID)))
+					.contains(OAuthAdapter.UNREADABLE_LEGACY_GRANT));
+				assertTrue(engine.getVenueState().users().get(carolDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	@Test
+	public void testLegacyGrantMoveIsAPureMigration() {
+		SecretStore.Keys keys = SecretStore.keys(convex.core.crypto.AKeyPair.generate());
+		AMap<AString, ACell> other = Maps.of("API_KEY", SecretStore.seal(Strings.create("k"), keys));
+		AString fake = Strings.create(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake");
+
+		// A current part comes back as the same cells.
+		AMap<AString, ACell> none = Maps.empty();
+		OAuthAdapter.LegacyMove current = OAuthAdapter.moveLegacyGrants(other, none, keys);
+		assertSame(other, current.secrets());
+		assertSame(none, current.connections());
+
+		// An older part converts, and converting it again changes nothing.
+		OAuthAdapter.LegacyMove moved = OAuthAdapter.moveLegacyGrants(
+			other.assoc(fake, SecretStore.seal(Strings.create(legacyGrant("legacy-access")), keys)), null, keys);
+		assertEquals(other, moved.secrets());
+		assertEquals(Strings.create("read"), RT.getIn(moved.connections(), "fake", "scope"));
+		assertFalse(moved.connections().toString().contains("legacy-access"), "the moved tokens are sealed");
+		OAuthAdapter.LegacyMove again = OAuthAdapter.moveLegacyGrants(moved.secrets(), moved.connections(), keys);
+		assertSame(moved.secrets(), again.secrets());
+		assertSame(moved.connections(), again.connections());
+
+		// A shape it does not recognise is refused.
+		IllegalStateException refused = assertThrows(IllegalStateException.class, () -> OAuthAdapter.moveLegacyGrants(
+			other.assoc(fake, SecretStore.seal(Strings.create("not a grant"), keys)), none, keys));
+		assertTrue(refused.getMessage().startsWith(OAuthAdapter.UNREADABLE_LEGACY_GRANT), refused.getMessage());
+	}
+
+	@Test
+	public void testRefreshNeverUndoesADisconnect() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				AMap<AString, ACell> me = Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake");
+				fake.expiresIn = 0;   // every token is due a refresh
+				connectFake(engine, fake, alice);
+
+				// A disconnect lands while a refresh is at the provider: the refresh must not bring it back.
+				// The call runs on its own thread: http resolves its bearer before the job is returned.
+				fake.refreshArrived = new CountDownLatch(1);
+				fake.refreshRelease = new CountDownLatch(1);
+				AtomicReference<Job> call = new AtomicReference<>();
+				Thread caller = Thread.startVirtualThread(() -> call.set(run(engine, "v/ops/http/get", me, alice)));
+				assertTrue(fake.refreshArrived.await(10, TimeUnit.SECONDS));
+				ok(run(engine, "v/ops/oauth/disconnect", Maps.of("provider", "fake"), alice));
+				fake.refreshRelease.countDown();
+				caller.join(10_000);
+				assertTrue(failed(call.get()).contains(OAuthAdapter.NOT_CONNECTED + "fake"), call.get().getErrorMessage());
+				assertEquals(0, connections(engine, alice).count());
+
+				// A connect while a refresh is at the provider wins too, and the call gets its token.
+				connectFake(engine, fake, alice);
+				fake.refreshArrived = new CountDownLatch(1);
+				fake.refreshRelease = new CountDownLatch(1);
+				caller = Thread.startVirtualThread(() -> call.set(run(engine, "v/ops/http/get", me, alice)));
+				assertTrue(fake.refreshArrived.await(10, TimeUnit.SECONDS));
+				CountDownLatch held = fake.refreshRelease;
+				fake.refreshArrived = null;
+				fake.refreshRelease = null;
+				connectFake(engine, fake, alice);
+				String newest = "Bearer access-" + fake.issued.get();
+				ACell stored = engine.adapterState("oauth").read("users/" + aliceDID + "/fake");
+				held.countDown();
+				caller.join(10_000);
+				assertEquals(newest, RT.getIn(ok(call.get()), "body").toString());
+				assertEquals(stored, engine.adapterState("oauth").read("users/" + aliceDID + "/fake"),
+					"the refresh did not overwrite the newer connection");
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	@Test
+	public void testCallbackForADeletedAccountStoresNothing() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				OAuthAdapter adapter = engine.findAdapter(OAuthAdapter.class);
+				AString bobDID = Strings.create("did:test:oauth:bob");
+				RequestContext bob = RequestContext.of(bobDID);
+				ACell started = ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake"), bob));
+				Map<String, String> q = query(RT.getIn(started, "url").toString());
+				fake.expectedChallenge = q.get("code_challenge");
+
+				// Bob's account is deleted, and a new one made under his DID, before the provider calls back.
+				engine.deleteUser(engine.venueContext(), bobDID);
+				engine.getVenueState().users().create(bobDID);
+
+				OAuthAdapter.Completion done = adapter.complete("fake", q.get("state"), "code-1", null, null);
+				assertFalse(done.ok());
+				assertEquals(OAuthAdapter.ACCOUNT_GONE, done.message());
+				assertEquals("refresh-1", fake.revoked.get().get("token"), "the tokens issued for it are revoked");
+				assertNull(engine.adapterState("oauth").read("users/" + bobDID), "nothing reaches the new account");
 			} finally {
 				engine.close();
 			}

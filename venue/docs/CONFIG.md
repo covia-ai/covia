@@ -1540,8 +1540,14 @@ The `oauth` adapter holds OAuth 2.0 grants on behalf of venue users so an
 agent can call a provider's API as the user — Gmail, Microsoft Graph, GitHub,
 anything that speaks OAuth 2.0. This is not login: login OAuth (`auth.oauth`)
 proves who a caller is; a *connection* is a grant to act on the user's data
-at a provider, obtained under the caller's venue identity and kept in that
-user's encrypted secret store under `oauth/<provider>`.
+at a provider, obtained under the caller's venue identity. Connections are the
+`oauth` adapter's own state, their tokens sealed under the venue's secret store
+keys; they are not in the user's secret store, so no secret operation lists,
+replaces, extracts or deletes them, and no operation returns a token. Grants an
+earlier venue kept there as `oauth/<provider>` move on first access; one that
+cannot be read is refused with a reason and left where it was. Deleting
+a user deletes their connections; their grants are not revoked at the provider.
+The public principal has none.
 
 ```json
 {
@@ -1587,16 +1593,25 @@ user's encrypted secret store under `oauth/<provider>`.
 
 Flow: `v/ops/oauth/connect {provider, scopes?, returnTo?}` returns the URL
 the user opens; the callback exchanges the code (PKCE, one-time state bound
-to the caller) and stores the grant. `http:get` / `http:post` with
-`bearerSecret: "oauth/<provider>"` then attach a fresh access token —
-refreshed when expired — that never reaches a model or a job record.
-Attaching it is a use of the secret `s/oauth/<provider>`: a capability-scoped
-caller such as an agent needs `secret/use` on it, and an `nb.url` caveat
-limits where it is sent.
-`oauth:status` lists connections without tokens; `oauth:disconnect` revokes
-where the provider supports it and forgets the grant. Providers and default
-scopes are published at `v/info/adapters/oauth`; the `v/skills/auth/oauth`
-skill teaches agents the flow.
+to the caller) and stores the grant. A callback for an account deleted since
+the connect began stores nothing and revokes what it was issued.
+`http:get` / `http:post` with `bearerSecret: "oauth/<provider>"` then attach a
+fresh access token — refreshed when expired — that never reaches a model or a
+job record. `oauth:status` lists connections without tokens;
+`oauth:disconnect` forgets the grant and revokes it where the provider
+supports it. A refresh in flight never brings back a disconnected grant or
+replaces a newer one. Providers and default scopes are published at
+`v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the
+flow.
+
+A connection is the resource `<did>/oauth/<provider>`, which its owner holds
+outright. A capability-scoped caller such as an agent needs, on it:
+
+- `oauth/use` to attach its token, which an `nb.url` caveat limits to a
+  destination;
+- `crud/read` for `oauth:status` (on `oauth/` to list them all);
+- `oauth/connect` and `oauth/disconnect`, which a `crud` grant does not cover;
+- or `oauth`, which covers all of these.
 
 Provider policy is the operator's problem, not the venue's: Google's Gmail
 scopes are *restricted*, so a production client needs Google's verification,

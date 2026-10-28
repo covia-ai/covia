@@ -19,6 +19,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -35,8 +36,11 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.auth.ucan.Capability;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
@@ -50,8 +54,20 @@ import covia.venue.User;
  * <p>This is not login. Login OAuth ({@code /auth/{provider}}) proves who a
  * caller is and mints a venue bearer; a <em>connection</em> is a grant to act
  * on a user's data at a provider — Gmail, Microsoft Graph, GitHub, anything
- * that speaks OAuth 2.0 — obtained under the caller's venue identity and stored
- * in that user's encrypted secret store under {@code oauth/<provider>}.</p>
+ * that speaks OAuth 2.0 — obtained under the caller's venue identity.</p>
+ *
+ * <p><b>Storage.</b> A connection is this adapter's own state, at
+ * {@code users/<did>/<provider>}: its provider, scope, expiry, when it was
+ * obtained and whether it refreshes in the clear, and its tokens sealed under
+ * the venue's secret store keys. It is not in the user's secret store: no
+ * secret operation reads, replaces or deletes it, and its tokens leave only
+ * through {@link #accessToken}, into a request. Grants an earlier venue kept in
+ * the secret store as {@code oauth/<provider>} move here on first access.</p>
+ *
+ * <p><b>Authority.</b> A connection is the resource {@code <did>/oauth/<provider>}:
+ * {@code crud/read} to see it in {@code oauth:status}, {@code oauth/connect},
+ * {@code oauth/disconnect}, and {@code oauth/use} to send its token, which an
+ * {@code nb.url} caveat binds to a destination. The owner holds them all.</p>
  *
  * <p><b>Flow.</b> {@code oauth:connect} mints a one-time {@code state} and a
  * PKCE verifier bound to the caller and returns the provider's authorisation
@@ -61,7 +77,7 @@ import covia.venue.User;
  * {@code http:*} with {@code bearerSecret: "oauth/<provider>"} resolves a
  * fresh access token through {@link TokenSource}, refreshing when expired;
  * {@code oauth:status} reports connections without tokens; {@code
- * oauth:disconnect} revokes at the provider and forgets the grant.</p>
+ * oauth:disconnect} forgets the grant and revokes it at the provider.</p>
  *
  * <p><b>Providers</b> are operator configuration ({@code adapters.oauth.providers}):
  * a client id, an {@code s/NAME} reference to the client secret (omit for a
@@ -76,8 +92,25 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	public static final String NAME = "oauth";
 
-	/** Secret-store name under which a user's grant for a provider is kept. */
-	public static final String GRANT_PREFIX = "oauth/";
+	/** The resource segment of a connection: {@code <did>/oauth/<provider>}. */
+	public static final String RESOURCE_PREFIX = "oauth/";
+
+	/** All of a user's connections, as a resource relative to the user. */
+	static final AString ALL_CONNECTIONS = Strings.intern(RESOURCE_PREFIX);
+
+	/** Secret-store name prefix of a grant kept by an earlier venue, moved on first access. */
+	static final String LEGACY_GRANT_PREFIX = "oauth/";
+
+	/** Refusal for the public principal, which signed-out callers share. */
+	public static final String PUBLIC_HAS_NO_CONNECTIONS =
+		"Connected accounts belong to a signed-in user, and the public principal has none";
+
+	/** A callback for an account deleted since its connect began. */
+	public static final String ACCOUNT_GONE =
+		"The account that started this connection no longer exists; nothing was connected";
+
+	/** Opening of the refusal for a provider the user has no connection to. */
+	public static final String NOT_CONNECTED = "Not connected to ";
 
 	static final long DEFAULT_PENDING_TTL_MILLIS = 10 * 60_000;
 	static final int MAX_PENDING = 10_000;
@@ -119,15 +152,18 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	static final AString G_SCOPE = K_SCOPE;
 	static final AString G_TOKEN_TYPE = Strings.intern("tokenType");
 	static final AString G_OBTAINED = K_OBTAINED;
+	/** A stored connection's tokens, sealed: {@code accessToken} and any {@code refreshToken}. */
+	static final AString C_TOKENS = Strings.intern("tokens");
 
 	/** One configured provider. */
 	record Provider(String name, String clientId, String clientSecretRef, String authorizationEndpoint,
 			String tokenEndpoint, String revocationEndpoint, List<String> scopes, boolean pkce,
 			Map<String, String> params, String redirectUri) {}
 
-	/** A connect awaiting the provider's callback. */
-	private record Pending(String provider, AString userDID, String verifier, List<String> scopes,
-			String returnTo, long expiresAt) {}
+	/** A connect awaiting the provider's callback, holding the connections of the
+	 *  account that started it: a callback after that account is deleted stores nothing. */
+	private record Pending(String provider, AString userDID, AdapterState connections, String verifier,
+			List<String> scopes, String returnTo, long expiresAt) {}
 
 	/** The outcome of a callback, for the route that renders it. */
 	public record Completion(boolean ok, String provider, String message, String returnTo) {}
@@ -355,10 +391,26 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return p;
 	}
 
-	private static AString userOf(RequestContext ctx, String op) {
+	/** A provider name an operation names, whether or not it is configured. */
+	private static String providerName(ACell input) {
+		AString name = RT.ensureString(RT.getIn(input, K_PROVIDER));
+		if (name == null || name.isEmpty()) throw new IllegalArgumentException("provider is required");
+		if (!PROVIDER_NAME.matcher(name.toString()).matches()) {
+			throw new IllegalArgumentException("provider names are lowercase letters, digits and dashes, got: " + name);
+		}
+		return name.toString();
+	}
+
+	/** The resource a connection to {@code provider} is, relative to its user. */
+	static AString resource(String provider) {
+		return Strings.create(RESOURCE_PREFIX + provider);
+	}
+
+	private AString userOf(RequestContext ctx, String op) {
 		if (ctx == null || ctx.isAnonymous() || ctx.getUserDID() == null) {
 			throw new IllegalArgumentException(op + " needs an authenticated caller — a connection belongs to a venue user");
 		}
+		if (engine.isPublicPrincipal(ctx.getUserDID())) throw new IllegalArgumentException(PUBLIC_HAS_NO_CONNECTIONS);
 		return ctx.getUserDID();
 	}
 
@@ -366,6 +418,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	private ACell handleConnect(RequestContext ctx, ACell input) {
 		AString userDID = userOf(ctx, "oauth:connect");
 		Provider p = providerFor(input);
+		engine.requireAuthority(ctx, resource(p.name()), Abilities.OAUTH_CONNECT);
 		List<String> scopes = p.scopes();
 		ACell scopesCell = RT.getIn(input, K_SCOPES);
 		if (scopesCell != null) {
@@ -385,10 +438,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (pending.size() >= MAX_PENDING) {
 			throw new IllegalStateException("Too many connections awaiting approval; try again later");
 		}
+		engine.getVenueState().users().ensure(userDID);
+		AdapterState connections = adapterState(userDID);
 		String state = randomToken(24);
 		String verifier = p.pkce() ? randomToken(32) : null;
 		long expiresAt = System.currentTimeMillis() + pendingTtlMillis;
-		pending.put(state, new Pending(p.name(), userDID, verifier, scopes, returnTo, expiresAt));
+		pending.put(state, new Pending(p.name(), userDID, connections, verifier, scopes, returnTo, expiresAt));
 
 		return Maps.of(
 			K_PROVIDER, Strings.create(p.name()),
@@ -460,60 +515,77 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (p == null) {
 			return new Completion(false, providerName, "Provider '" + providerName + "' is no longer configured", pend.returnTo());
 		}
+		AMap<AString, ACell> tokens;
 		try {
-			AMap<AString, ACell> tokens = exchange(p, code, pend.verifier());
-			storeGrant(pend.userDID(), p, tokens, pend.scopes());
-			return new Completion(true, providerName, "Connected to " + providerName, pend.returnTo());
+			tokens = exchange(p, code, pend.verifier());
 		} catch (Exception e) {
 			log.warn("OAuth token exchange with {} failed: {}", providerName, describeFailure(e));
 			return new Completion(false, providerName,
 				"Token exchange with " + providerName + " failed: " + describeFailure(e), pend.returnTo());
 		}
+		try {
+			storeGrant(pend, p, tokens);
+		} catch (AuthException gone) {
+			// Issued for an account deleted since the connect began: kept nowhere, so left live nowhere
+			if (p.revocationEndpoint() != null) {
+				String token = str(tokens, Strings.intern("refresh_token"));
+				revoke(p, (token != null) ? token : str(tokens, Strings.intern("access_token")));
+			}
+			return new Completion(false, providerName, ACCOUNT_GONE, pend.returnTo());
+		} catch (RuntimeException e) {
+			log.warn("Storing the {} connection failed: {}", providerName, describeFailure(e));
+			return new Completion(false, providerName,
+				"The connection to " + providerName + " could not be stored: " + describeFailure(e), pend.returnTo());
+		}
+		return new Completion(true, providerName, "Connected to " + providerName, pend.returnTo());
 	}
 
 	/** {@code oauth:status}: the caller's connections, without their tokens. */
 	private ACell handleStatus(RequestContext ctx, ACell input) {
 		AString userDID = userOf(ctx, "oauth:status");
-		AString only = RT.ensureString(RT.getIn(input, K_PROVIDER));
+		String only = (RT.getIn(input, K_PROVIDER) != null) ? providerName(input) : null;
+		engine.requireAuthority(ctx, (only != null) ? resource(only) : ALL_CONNECTIONS, Capability.CRUD_READ);
+		AdapterState state = connections(userDID);
+		AMap<AString, ACell> mine = RT.ensureMap(state.read(state.userPath(userDID, "")));
 		AVector<ACell> out = Vectors.empty();
-		User user = engine.getVenueState().users().get(userDID);
-		if (user != null) {
-			SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
-			AVector<AString> names = user.secrets().list();
-			for (long i = 0; i < names.count(); i++) {
-				String name = names.get(i).toString();
-				if (!name.startsWith(GRANT_PREFIX)) continue;
-				String provider = name.substring(GRANT_PREFIX.length());
-				if (only != null && !only.toString().equals(provider)) continue;
-				AMap<AString, ACell> grant = grant(user, provider, key);
-				if (grant != null) out = out.conj(summary(grant));
-			}
+		if (mine != null) for (var entry : mine.entrySet()) {
+			if (only != null && !only.equals(entry.getKey().toString())) continue;
+			AMap<AString, ACell> connection = RT.ensureMap(entry.getValue());
+			if (connection != null) out = out.conj(summary(connection));
 		}
 		return Maps.of(K_CONNECTIONS, out);
 	}
 
-	/** {@code oauth:disconnect}: revoke at the provider when it can, and forget the grant. */
+	/** {@code oauth:disconnect}: forget the grant, and revoke it at the provider when it can. */
 	private ACell handleDisconnect(RequestContext ctx, ACell input) throws IOException {
 		AString userDID = userOf(ctx, "oauth:disconnect");
-		AString name = RT.ensureString(RT.getIn(input, K_PROVIDER));
-		if (name == null || name.isEmpty()) throw new IllegalArgumentException("provider is required");
-		String provider = name.toString();
-		User user = engine.getVenueState().users().get(userDID);
-		SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
-		AMap<AString, ACell> grant = (user != null) ? grant(user, provider, key) : null;
-		if (grant == null) throw new IllegalArgumentException("Not connected to " + provider);
+		String provider = providerName(input);
+		engine.requireAuthority(ctx, resource(provider), Abilities.OAUTH_DISCONNECT);
+		AdapterState state = connections(userDID);
+		String path = state.userPath(userDID, provider);
+		// Taken in one step, so a refresh finishing meanwhile cannot write the grant back
+		AtomicReference<AMap<AString, ACell>> taken = new AtomicReference<>();
+		state.transact(draft -> {
+			taken.set(RT.ensureMap(draft.read(path)));
+			if (taken.get() != null) draft.delete(path);
+		});
+		if (taken.get() == null) throw new IllegalArgumentException(NOT_CONNECTED + provider);
 		boolean revoked = false;
 		Provider p = providers.get(provider);
 		if (p != null && p.revocationEndpoint() != null) {
-			String token = str(grant, G_REFRESH_TOKEN);
-			if (token == null) token = str(grant, G_ACCESS_TOKEN);
+			AMap<AString, ACell> tokens = tokens(taken.get());
+			String token = str(tokens, G_REFRESH_TOKEN);
+			if (token == null) token = str(tokens, G_ACCESS_TOKEN);
 			revoked = revoke(p, token);
 		}
-		user.secrets().delete(GRANT_PREFIX + provider);
 		return Maps.of(
 			K_PROVIDER, Strings.create(provider),
 			K_DISCONNECTED, CVMBool.TRUE,
 			K_REVOKED, CVMBool.create(revoked));
+	}
+
+	private static IllegalArgumentException notConnected(String provider) {
+		return new IllegalArgumentException(NOT_CONNECTED + provider + " — run oauth:connect and approve in the browser");
 	}
 
 	// ========== TokenSource ==========
@@ -521,23 +593,23 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	@Override
 	public String accessToken(RequestContext ctx, String provider, String destination) throws IOException {
 		AString userDID = userOf(ctx, "oauth/" + provider);
-		// The same point-of-use check as any other secret reference.
-		engine.requireLocalAccess(ctx, Strings.create(userDID + "/s/" + GRANT_PREFIX + provider),
-			Abilities.SECRET_USE, (destination != null) ? Strings.create(destination) : null);
-		User user = engine.getVenueState().users().get(userDID);
-		SecretStore.Keys key = SecretStore.keys(engine.getKeyPair());
-		AMap<AString, ACell> grant = (user != null) ? grant(user, provider, key) : null;
-		if (grant == null) {
-			throw new IllegalArgumentException("Not connected to " + provider + " — run oauth:connect and approve in the browser");
-		}
-		if (!expiring(grant)) return str(grant, G_ACCESS_TOKEN);
+		if (!PROVIDER_NAME.matcher(provider).matches()) throw notConnected(provider);
+		engine.requireAuthority(ctx, resource(provider), Abilities.OAUTH_USE,
+			(destination != null) ? Strings.create(destination) : null);
+		AdapterState state = connections(userDID);
+		String path = state.userPath(userDID, provider);
+		AMap<AString, ACell> connection = RT.ensureMap(state.read(path));
+		if (connection == null) throw notConnected(provider);
+		if (!expiring(connection)) return str(tokens(connection), G_ACCESS_TOKEN);
 
 		// One refresh per (user, provider) at a time; a second caller waits and reads the result.
 		Object lock = refreshLocks.computeIfAbsent(userDID + "|" + provider, k -> new Object());
 		synchronized (lock) {
-			grant = grant(user, provider, key);
-			if (grant != null && !expiring(grant)) return str(grant, G_ACCESS_TOKEN);
-			String refreshToken = (grant != null) ? str(grant, G_REFRESH_TOKEN) : null;
+			AMap<AString, ACell> current = RT.ensureMap(state.read(path));
+			if (current == null) throw notConnected(provider);
+			AMap<AString, ACell> tokens = tokens(current);
+			if (!expiring(current)) return str(tokens, G_ACCESS_TOKEN);
+			String refreshToken = str(tokens, G_REFRESH_TOKEN);
 			Provider p = providers.get(provider);
 			if (refreshToken == null || p == null) {
 				throw new IllegalArgumentException("The connection to " + provider
@@ -550,14 +622,30 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 				throw new IllegalArgumentException("The connection to " + provider
 					+ " could not be refreshed (" + describeFailure(e) + ") — reconnect with oauth:connect");
 			}
-			AMap<AString, ACell> updated = grant
-				.assoc(G_ACCESS_TOKEN, Strings.create(str(refreshed, Strings.intern("access_token"))))
-				.assoc(G_EXPIRES_AT, CVMLong.create(expiresAt(refreshed)));
+			AMap<AString, ACell> fresh = tokens
+				.assoc(G_ACCESS_TOKEN, Strings.create(str(refreshed, Strings.intern("access_token"))));
 			String newRefresh = str(refreshed, Strings.intern("refresh_token"));
-			if (newRefresh != null) updated = updated.assoc(G_REFRESH_TOKEN, Strings.create(newRefresh));
-			user.secrets().store(GRANT_PREFIX + provider, JSON.toString(updated), key);
-			return str(updated, G_ACCESS_TOKEN);
+			if (newRefresh != null) fresh = fresh.assoc(G_REFRESH_TOKEN, Strings.create(newRefresh));
+			AMap<AString, ACell> updated = withTokens(current, fresh)
+				.assoc(G_EXPIRES_AT, CVMLong.create(expiresAt(refreshed)));
+			// Written back only over the connection it refreshed: a disconnect or a new connect meanwhile wins
+			AtomicReference<ACell> seen = new AtomicReference<>();
+			state.transact(draft -> {
+				seen.set(draft.read(path));
+				if (current.equals(seen.get())) draft.write(path, updated);
+			});
+			if (current.equals(seen.get())) return str(fresh, G_ACCESS_TOKEN);
+			AMap<AString, ACell> replaced = RT.ensureMap(seen.get());
+			if (replaced == null) throw notConnected(provider);
+			return str(tokens(replaced), G_ACCESS_TOKEN);
 		}
+	}
+
+	@Override
+	public boolean connected(AString userDID, String provider) {
+		if (userDID == null || provider == null || !PROVIDER_NAME.matcher(provider).matches()) return false;
+		AdapterState state = connections(userDID);
+		return state.read(state.userPath(userDID, provider)) != null;
 	}
 
 	private static boolean expiring(AMap<AString, ACell> grant) {
@@ -651,9 +739,10 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		}
 	}
 
-	// ========== Grants ==========
+	// ========== Connections ==========
 
-	private void storeGrant(AString userDID, Provider p, AMap<AString, ACell> tokens, List<String> requested) {
+	/** Stores the grant a callback obtained, for the account that started the connect. */
+	private void storeGrant(Pending pend, Provider p, AMap<AString, ACell> tokens) {
 		AMap<AString, ACell> grant = Maps.of(
 			G_PROVIDER, Strings.create(p.name()),
 			G_ACCESS_TOKEN, Strings.create(str(tokens, Strings.intern("access_token"))),
@@ -662,11 +751,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		String refresh = str(tokens, Strings.intern("refresh_token"));
 		if (refresh != null) grant = grant.assoc(G_REFRESH_TOKEN, Strings.create(refresh));
 		String scope = str(tokens, Strings.intern("scope"));
-		grant = grant.assoc(G_SCOPE, Strings.create((scope != null) ? scope : String.join(" ", requested)));
+		grant = grant.assoc(G_SCOPE, Strings.create((scope != null) ? scope : String.join(" ", pend.scopes())));
 		String type = str(tokens, Strings.intern("token_type"));
 		if (type != null) grant = grant.assoc(G_TOKEN_TYPE, Strings.create(type));
-		User user = engine.getVenueState().users().ensure(userDID);
-		user.secrets().store(GRANT_PREFIX + p.name(), JSON.toString(grant), SecretStore.keys(engine.getKeyPair()));
+		AdapterState state = pend.connections();
+		state.write(state.userPath(pend.userDID(), p.name()), connection(grant));
 	}
 
 	private static long expiresAt(AMap<AString, ACell> tokens) {
@@ -674,24 +763,145 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return (in != null) ? System.currentTimeMillis() + in.longValue() * 1000 : 0;
 	}
 
-	private static AMap<AString, ACell> grant(User user, String provider, SecretStore.Keys key) {
-		AString raw = user.secrets().decrypt(GRANT_PREFIX + provider, key);
-		if (raw == null) return null;
+	/** A grant as stored: its facts in the clear, its tokens sealed. */
+	private AMap<AString, ACell> connection(AMap<AString, ACell> grant) {
+		return connection(grant, keys());
+	}
+
+	private static AMap<AString, ACell> connection(AMap<AString, ACell> grant, SecretStore.Keys keys) {
+		AMap<AString, ACell> tokens = Maps.of(G_ACCESS_TOKEN, grant.get(G_ACCESS_TOKEN));
+		if (grant.get(G_REFRESH_TOKEN) != null) tokens = tokens.assoc(G_REFRESH_TOKEN, grant.get(G_REFRESH_TOKEN));
+		return withTokens(grant.dissoc(G_ACCESS_TOKEN).dissoc(G_REFRESH_TOKEN), tokens, keys);
+	}
+
+	/** A stored connection holding {@code tokens}, sealed. */
+	private AMap<AString, ACell> withTokens(AMap<AString, ACell> connection, AMap<AString, ACell> tokens) {
+		return withTokens(connection, tokens, keys());
+	}
+
+	private static AMap<AString, ACell> withTokens(AMap<AString, ACell> connection, AMap<AString, ACell> tokens,
+			SecretStore.Keys keys) {
+		return connection
+			.assoc(K_REFRESHABLE, CVMBool.create(tokens.get(G_REFRESH_TOKEN) != null))
+			.assoc(C_TOKENS, SecretStore.seal(Strings.create(JSON.toString(tokens)), keys));
+	}
+
+	/** A stored connection's tokens, opened. */
+	private AMap<AString, ACell> tokens(AMap<AString, ACell> connection) {
+		AString raw = SecretStore.unseal(connection.get(C_TOKENS), keys());
+		AMap<AString, ACell> tokens = (raw != null) ? RT.ensureMap(JSON.parse(raw.toString())) : null;
+		if (tokens == null || str(tokens, G_ACCESS_TOKEN) == null) {
+			throw new IllegalStateException(SecretStore.INVALID_RECORD);
+		}
+		return tokens;
+	}
+
+	private SecretStore.Keys keys() {
+		return SecretStore.keys(engine.getKeyPair());
+	}
+
+	private static AMap<AString, ACell> summary(AMap<AString, ACell> connection) {
+		AMap<AString, ACell> out = Maps.of(
+			K_PROVIDER, connection.get(G_PROVIDER),
+			K_REFRESHABLE, CVMBool.create(CVMBool.TRUE.equals(connection.get(K_REFRESHABLE))));
+		if (connection.get(G_SCOPE) != null) out = out.assoc(K_SCOPE, connection.get(G_SCOPE));
+		if (connection.get(G_EXPIRES_AT) != null) out = out.assoc(K_EXPIRES_AT, connection.get(G_EXPIRES_AT));
+		if (connection.get(G_OBTAINED) != null) out = out.assoc(K_OBTAINED, connection.get(G_OBTAINED));
+		return out;
+	}
+
+	/**
+	 * The connections of one user, fenced to their account, after moving any
+	 * grants an earlier venue kept in their secret store.
+	 */
+	private AdapterState connections(AString userDID) {
+		AdapterState state = adapterState(userDID);
+		moveLegacyGrants(userDID, state);
+		return state;
+	}
+
+	/**
+	 * Converts on use the grants an earlier venue kept among a user's secrets
+	 * ({@link #moveLegacyGrants(AMap, AMap, SecretStore.Keys)}), in one venue
+	 * transaction with their removal from the secret store. Nothing else
+	 * addresses those names: secret names hold no {@code /}.
+	 */
+	private void moveLegacyGrants(AString userDID, AdapterState state) {
+		User user = engine.getVenueState().users().get(userDID);
+		if (user == null || !hasLegacyGrant(RT.ensureMap(user.secrets().cursor().get()))) return;
+		SecretStore.Keys keys = keys();
+		String path = state.userPath(userDID, "");
+		engine.getVenueState().transact(draft -> {
+			User owner = draft.users().get(userDID);
+			if (owner == null) return;
+			AdapterState mine = state.inVenue(draft);
+			AMap<AString, ACell> secrets = RT.ensureMap(owner.secrets().cursor().get());
+			AMap<AString, ACell> connections = RT.ensureMap(mine.read(path));
+			LegacyMove move = moveLegacyGrants(secrets, connections, keys);
+			if (move.secrets() == secrets) return;
+			owner.secrets().cursor().set(move.secrets());
+			mine.write(path, move.connections());
+		});
+	}
+
+	/** A user's secret records and connections after {@link #moveLegacyGrants(AMap, AMap, SecretStore.Keys)}. */
+	record LegacyMove(AMap<AString, ACell> secrets, AMap<AString, ACell> connections) {}
+
+	/** Refusal for a grant an earlier venue kept that cannot be read as one. */
+	public static final String UNREADABLE_LEGACY_GRANT =
+		"A connected account kept by an earlier venue is not a readable grant: ";
+
+	/**
+	 * Moves the grants an earlier venue kept among a user's secret records, as
+	 * {@code oauth/<provider>}, into their connections: a connection made since
+	 * is kept over the older grant. Pure: the venue's keys are passed in, and
+	 * with no such grant both maps come back as the same cells.
+	 *
+	 * @throws IllegalStateException with {@link #UNREADABLE_LEGACY_GRANT} for a
+	 * record that is not a readable grant, leaving every record as it was
+	 */
+	static LegacyMove moveLegacyGrants(AMap<AString, ACell> secrets, AMap<AString, ACell> connections,
+			SecretStore.Keys keys) {
+		if (!hasLegacyGrant(secrets)) return new LegacyMove(secrets, connections);
+		AMap<AString, ACell> remaining = secrets;
+		AMap<AString, ACell> moved = (connections != null) ? connections : Maps.empty();
+		for (var entry : secrets.entrySet()) {
+			String name = entry.getKey().toString();
+			if (!name.startsWith(LEGACY_GRANT_PREFIX)) continue;
+			String provider = name.substring(LEGACY_GRANT_PREFIX.length());
+			AMap<AString, ACell> grant = legacyGrant(entry.getValue(), keys);
+			if (grant == null || !PROVIDER_NAME.matcher(provider).matches()) {
+				throw new IllegalStateException(UNREADABLE_LEGACY_GRANT + name);
+			}
+			AString key = Strings.create(provider);
+			if (moved.get(key) == null) moved = moved.assoc(key, connection(grant, keys));
+			remaining = remaining.dissoc(entry.getKey());
+		}
+		return new LegacyMove(remaining, moved);
+	}
+
+	private static boolean hasLegacyGrant(AMap<AString, ACell> secrets) {
+		if (secrets == null) return false;
+		for (AString name : secrets.keySet()) {
+			if (name.toString().startsWith(LEGACY_GRANT_PREFIX)) return true;
+		}
+		return false;
+	}
+
+	/** A grant as an earlier venue stored it (JSON of the grant fields), or null when it is unreadable or holds no token. */
+	private static AMap<AString, ACell> legacyGrant(ACell record, SecretStore.Keys keys) {
 		try {
-			return RT.ensureMap(JSON.parse(raw.toString()));
-		} catch (Exception e) {
+			AString raw = SecretStore.unseal(record, keys);
+			AMap<AString, ACell> grant = (raw != null) ? RT.ensureMap(JSON.parse(raw.toString())) : null;
+			return (grant != null && str(grant, G_ACCESS_TOKEN) != null) ? grant : null;
+		} catch (RuntimeException e) {
 			return null;
 		}
 	}
 
-	private static AMap<AString, ACell> summary(AMap<AString, ACell> grant) {
-		AMap<AString, ACell> out = Maps.of(
-			K_PROVIDER, grant.get(G_PROVIDER),
-			K_REFRESHABLE, CVMBool.create(grant.get(G_REFRESH_TOKEN) != null));
-		if (grant.get(G_SCOPE) != null) out = out.assoc(K_SCOPE, grant.get(G_SCOPE));
-		if (grant.get(G_EXPIRES_AT) != null) out = out.assoc(K_EXPIRES_AT, grant.get(G_EXPIRES_AT));
-		if (grant.get(G_OBTAINED) != null) out = out.assoc(K_OBTAINED, grant.get(G_OBTAINED));
-		return out;
+	@Override
+	public void deleteUserState(AString did, AdapterState state) {
+		state.delete(state.userPath(did, ""));
 	}
 
 	// ========== Helpers ==========

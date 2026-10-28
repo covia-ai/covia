@@ -281,8 +281,9 @@ public abstract class AAdapter {
 	 *
 	 * <p>User-managed content does not belong here. Adapters should accept an
 	 * ordinary caller-authorised path for that data (with a sane {@code w/...}
-	 * default). Credentials remain in {@code s/}; this component stores secret
-	 * references only.</p>
+	 * default). Credentials a user supplies remain in {@code s/}, referred to
+	 * here as {@code s/NAME}; credentials the adapter obtains and rotates itself
+	 * belong here, sealed with {@link covia.venue.SecretStore#seal}.</p>
 	 */
 	protected final AdapterState adapterState() {
 		AdapterState state=adapterState;
