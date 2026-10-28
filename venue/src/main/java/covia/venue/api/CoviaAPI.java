@@ -33,6 +33,7 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.UserAdapter;
 import covia.adapter.DLFSAdapter;
+import covia.adapter.SecretAdapter;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -49,7 +50,6 @@ import covia.venue.AssetStore;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
-import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
@@ -2277,19 +2277,23 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "listSecrets")
 	protected void listSecrets(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString callerDID = rctx.getCallerDID();
-		if (callerDID == null) {
+		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
-
-		User user = engine().getVenueState().users().get(callerDID);
-		if (user == null) {
-			buildResult(ctx, 200, Maps.of(Fields.ITEMS, Strings.create("[]"), Fields.TOTAL, 0));
+		SecretAdapter secrets = (SecretAdapter) engine().getAdapter("secret");
+		if (secrets == null) {
+			buildError(ctx, 404, ADAPTER_NOT_ACTIVE + "secret");
 			return;
 		}
 
-		AVector<AString> names = user.secrets().list();
+		AVector<AString> names;
+		try {
+			names = secrets.listNames(rctx);
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+			return;
+		}
 		ArrayList<Object> items = new ArrayList<>();
 		for (long i = 0; i < names.count(); i++) {
 			items.add(names.get(i).toString());

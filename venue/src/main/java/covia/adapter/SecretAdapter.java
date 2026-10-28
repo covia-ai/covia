@@ -118,16 +118,24 @@ public class SecretAdapter extends AAdapter {
 		return Maps.of(Fields.NAME, name, Fields.STORED, CVMBool.TRUE);
 	}
 
-	private ACell handleList(RequestContext ctx, ACell input) {
+	/**
+	 * Names in the caller's secret store, behind {@code secret:list}'s own read
+	 * check. Shared by the operation and the job-free {@code GET /api/v1/secrets}.
+	 */
+	public AVector<AString> listNames(RequestContext ctx) {
 		engine.requireResourceAccess(ctx, Strings.create("s/"), Capability.CRUD_READ);
+		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		return user == null ? Vectors.empty() : user.secrets().list();
+	}
+
+	private ACell handleList(RequestContext ctx, ACell input) {
+		AVector<AString> names = listNames(ctx);
 		ACell filter = RT.getIn(input, K_PREFIX);
 		if (filter != null && !(filter instanceof AString)) throw new IllegalArgumentException(INVALID_PREFIX);
 		String prefix = filter == null ? "" : filter.toString();
 		long offset = pageNumber(input, Fields.OFFSET, 0, Long.MAX_VALUE);
 		long limit = pageNumber(input, Fields.LIMIT, 100, 1000);
 		if (limit == 0) throw new IllegalArgumentException(INVALID_PAGE);
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
-		AVector<AString> names = user == null ? Vectors.empty() : user.secrets().list();
 		AVector<AString> page = Vectors.empty();
 		long total = 0;
 		for (AString name : names) {
