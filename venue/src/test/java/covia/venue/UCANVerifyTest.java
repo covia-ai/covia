@@ -285,15 +285,4 @@ public class UCANVerifyTest {
 		assertEquals(engine.getDIDString(), RT.getIn(r, "aud"), "audienced to the venue");
 		assertEquals(0L, RT.ensureVector(RT.getIn(r, "att")).count(), "empty att — pure identity");
 	}
-
-	@Test
-	public void testRelayDelegationShape() {
-		String jwt = UcanTokens.relayDelegation(ALICE_KP, engine.getDIDString().toString(), 300,
-			ALICE_DID + "/w/", "crud/read");
-		ACell r = verify(Maps.of("token", jwt));
-		assertEquals(CVMBool.TRUE, RT.getIn(r, "valid"));
-		AVector<?> att = RT.ensureVector(RT.getIn(r, "att"));
-		assertEquals(2L, att.count(), "venue/relay authority + the substantive grant");
-		assertEquals(Strings.create(UcanTokens.VENUE_RELAY), RT.getIn(att.get(0), "can"));
-	}
 }

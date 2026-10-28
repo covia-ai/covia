@@ -47,7 +47,7 @@
             "caller",
             "venue"
           ],
-          "description": "Remote authentication, as for grid:run. Default anonymous. Caller requires a target-audienced identity credential; venue requires an explicit relay grant."
+          "description": "Remote authentication, as for grid:run. Default anonymous. Caller requires a target-audienced identity credential; venue is only for the venue itself."
         }
       },
       "required": [

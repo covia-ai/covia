@@ -320,10 +320,8 @@ public class UserAdapter extends AAdapter {
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		if (key == null) throw new IllegalArgumentException("key is required");
-		boolean directVenue = engine.getDIDString().equals(ctx.getCallerDID())
-			&& ctx.getExecutionScope().agentId() == null;
 		boolean revoked = engine.getAuth().revokeAuthenticationKey(
-			id, key, ctx.getCallerDID(), directVenue);
+			id, key, ctx.getCallerDID(), engine.isDirectVenue(ctx));
 		engine.flush();
 		return Maps.of(
 			Fields.DID, did,

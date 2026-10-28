@@ -22,7 +22,7 @@
 					"type": "string",
 					"enum": ["anonymous", "caller", "venue"],
 					"default": "anonymous",
-					"description": "Explicit remote authentication mode. caller requires a target-audienced empty-att identity credential; venue requires a venue/relay grant. UCAN grant presence never selects a mode."
+					"description": "Explicit remote authentication mode. caller requires a target-audienced empty-att identity credential; venue is only for the venue itself. UCAN grant presence never selects a mode."
 				}
 			},
 			"required": ["operation"]

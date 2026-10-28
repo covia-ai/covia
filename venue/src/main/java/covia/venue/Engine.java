@@ -4086,6 +4086,15 @@ public class Engine {
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
 	}
 
+	/**
+	 * Whether the request is the venue acting directly as itself: the venue's
+	 * own DID, not one of its agents. No delegation makes another caller this.
+	 */
+	public boolean isDirectVenue(RequestContext ctx) {
+		return ctx != null && getDIDString().equals(ctx.getCallerDID())
+			&& ctx.getExecutionScope().agentId() == null;
+	}
+
 	/** Opening of every {@link #requireVenueAuthority} denial. */
 	public static final String VENUE_AUTHORITY_DENIED = "Venue administration denied";
 
@@ -4102,8 +4111,7 @@ public class Engine {
 	 * @throws covia.exception.AuthException when the caller lacks the authority
 	 */
 	public void requireVenueAuthority(RequestContext ctx, String resource, AString ability) {
-		AString caller = (ctx != null) ? ctx.getCallerDID() : null;
-		if (getDIDString().equals(caller) && ctx.getExecutionScope().agentId() == null) return;
+		if (isDirectVenue(ctx)) return;
 		AString full = Strings.create(getDIDString() + "/" + resource);
 		if (crossUserAllows(ctx, full, ability)) return;
 		throw new covia.exception.AuthException(VENUE_AUTHORITY_DENIED + ": requires " + ability

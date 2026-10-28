@@ -424,7 +424,7 @@ grid:invoke {
 }
 ```
 `anonymous` is the default, `caller` requires a target-audienced empty-`att`
-credential, and `venue` requires a `venue/relay` grant. Credentials and grants
+credential, and `venue` is only for the venue itself. Credentials and grants
 are forwarded in their distinct channels, filtered to the selected principal.
 Grant presence never selects a mode. See §5.6.
 
@@ -1145,12 +1145,15 @@ the authentication channel. The three concerns never infer one another:
   `authenticateAs: "caller"` request causes the relay to install that credential
   in the target request's `Authorization` header. The target verifies the
   caller's own signature — zero trust in the relay.
-- **`venue/relay` delegation** — `authenticateAs: "venue"` is the separate
-  instruction to have the venue hop as itself. The caller must authorise that
-  request with `can: venue/relay` issued **by the caller**, audienced **to the
-  relaying venue**, and scoped to `with: <callerDID>`. Someone else's grant
-  cannot authorise this caller, preventing confused-deputy use. The same token
-  can carry substantive grants that the target independently verifies.
+- **Venue identity** — `authenticateAs: "venue"` has the venue hop as itself,
+  and only when the venue itself is the caller (`Engine.isDirectVenue`): not
+  its agents, and never by delegation. Whoever authenticates as a principal
+  holds all of its ambient standing — at the target, and at the venue itself
+  when the target is its own URL — so a right to it would amount to every
+  right the venue has. A user reaches what a target granted this venue
+  through capabilities instead: the venue re-delegates the specific grant, and
+  the user presents the chain with `authenticateAs: "caller"` (custodial users
+  through C3b attestation).
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context
@@ -1224,8 +1227,8 @@ land together, in order of dependency:
   composes the policy.
 - *Forward:* the grid wrapper relays the caller's authority per §5.6 — proofs
   filtered to the provably admissible; explicit `authenticateAs` selects
-  anonymous, caller-credential, or venue-credential authentication, with
-  `venue/relay` authorising only the last choice.
+  anonymous, caller-credential, or venue-credential authentication, the last
+  only for the venue itself.
 
 **C3b — Venue-attested (custodial).**
 - *Verify:* accept a root signed by a *remote* controlling venue for its

@@ -278,9 +278,6 @@ public class GridAdapter extends AAdapter {
 		return 0;
 	}
 
-	/** Ability authorising an explicit {@code authenticateAs:"venue"} request. */
-	static final AString RELAY_ABILITY = Strings.intern("venue/relay");
-
 	/**
 	 * Resolves the target venue for a grid op. The operation input explicitly
 	 * chooses authentication behaviour with {@code authenticateAs}; credentials
@@ -290,9 +287,9 @@ public class GridAdapter extends AAdapter {
 	 *   <li>{@code caller}: requires a target-audienced, empty-att identity
 	 *       credential from the caller; it travels in Authorization, while only
 	 *       non-empty grants audienced to that caller travel in {@code ucans}.</li>
-	 *   <li>{@code venue}: explicitly asks this venue to authenticate as itself;
-	 *       a caller-issued {@code venue/relay} grant must authorise that request.
-	 *       Only grants audienced to this venue are forwarded.</li>
+	 *   <li>{@code venue}: this venue authenticates as itself, and only when the
+	 *       venue itself is the caller; no grant lends it to anyone else. Only
+	 *       grants audienced to this venue are forwarded.</li>
 	 * </ul>
 	 * A local target carries the complete caller context because there is no
 	 * transport boundary at which to reconstruct it.
@@ -340,31 +337,6 @@ public class GridAdapter extends AAdapter {
 		return venue.invoke("v/ops/covia/write",
 				writeInput)
 			.thenCompose(Job::future);
-	}
-
-	/**
-	 * True when the caller has granted this venue permission to relay as itself.
-	 * This is an authorisation predicate only; callers must separately request
-	 * {@code authenticateAs:"venue"} in the grid operation input.
-	 */
-	static boolean hasRelayGrant(List<UCAN> tokens, AString caller, AString venueDID) {
-		if (tokens == null || caller == null) return false;
-		long now = System.currentTimeMillis() / 1000;
-		for (UCAN token : tokens) {
-			if (!caller.equals(token.getIssuer())) continue;      // grant must come from OUR caller
-			if (!venueDID.equals(token.getAudience())) continue;  // ...and be addressed to US
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-			AVector<ACell> att = token.getCapabilities();
-			if (att == null) continue;
-			for (long i = 0; i < att.count(); i++) {
-				AMap<AString, ACell> cap = RT.castMap(att.get(i));
-				if (cap == null) continue;
-				if (!caller.equals(RT.ensureString(cap.get(Capability.WITH)))) continue;
-				AString can = RT.ensureString(cap.get(Capability.CAN));
-				if (Capability.abilityCovers(can, RELAY_ABILITY)) return true;
-			}
-		}
-		return false;
 	}
 
 	/**

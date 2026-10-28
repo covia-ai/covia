@@ -34,8 +34,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `claudecode:session` opened without a prompt takes no pool slot until its first turn.
 - Connected accounts no longer appear in `secret:list` or a user export.
 
+### Removed
+
+- The `venue/relay` ability and `UcanTokens.relayDelegation`: users hop with
+  `authenticateAs: "caller"` and grants.
+
 ### Security
 
+- `authenticateAs: "venue"` is only for the venue itself. A user could have the venue
+  act as itself, at another venue or at itself as the operator.
 - `crypto:derive-key` reads only the caller's own secrets, and `crypto:jwt-decode`
   never returns a stored token's signature, so `secret/use` never yields possession.
 - Venue-local SQL databases are named `<userDID>/sql/<db>`: users whose DIDs differ
