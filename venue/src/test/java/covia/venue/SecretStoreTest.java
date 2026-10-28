@@ -416,7 +416,7 @@ public class SecretStoreTest {
 	// ========== Key Versions ==========
 
 	/** Writes a record exactly as a venue did before key versions existed. */
-	private static void storeVersion1(User user, String name, String plaintext, AKeyPair kp) {
+	static void storeVersion1(User user, String name, String plaintext, AKeyPair kp) {
 		byte[] v1 = Hashing.sha256(kp.getSeed().getBytes()).getBytes();
 		Blob encrypted = Blob.wrap(AESGCM.encrypt(v1, plaintext.getBytes(StandardCharsets.UTF_8)));
 		user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create(name)).set(Maps.of(

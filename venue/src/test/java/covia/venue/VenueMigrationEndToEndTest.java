@@ -2,16 +2,13 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
 import org.junit.jupiter.api.Test;
 
-import convex.core.crypto.AESGCM;
 import convex.core.crypto.AKeyPair;
-import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -94,10 +91,7 @@ class VenueMigrationEndToEndTest {
 				PREV, Maps.of(Fields.STATUS, Status.PENDING)));
 			user.cursor().path(Namespace.J).set(Index.<Blob, ACell>none().assoc(JOB, legacyJob));
 			// A secret encrypted under key version 1, before key versions were recorded.
-			byte[] version1 = Hashing.sha256(key.getSeed().getBytes()).getBytes();
-			user.secrets().cursor().withDefault(Maps.empty()).path(Strings.create(SECRET)).set(Maps.of(
-				"encrypted", Blob.wrap(AESGCM.encrypt(version1, "kept".getBytes(StandardCharsets.UTF_8))),
-				Fields.UPDATED, CVMLong.create(1000L)));
+			SecretStoreTest.storeVersion1(user, SECRET, "kept", key);
 			user.secrets().store(LEGACY_GRANT, "{\"provider\":\"e2e\",\"accessToken\":\"e2e-access\",\"expiresAt\":0,"
 				+ "\"obtained\":1,\"scope\":\"read\"}", SecretStore.keys(key));
 			// An agent session with a legacy root frame and session-level loads.

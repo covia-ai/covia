@@ -240,6 +240,18 @@ class UserExportsTest {
 	}
 
 	@Test
+	void aVersionOneSecretArrivesUnderTheCurrentKey() {
+		User user = fill(source);
+		SecretStoreTest.storeVersion1(user, "OLD_KEY", SECRET, engine.getKeyPair());
+		AKeyPair seal = AKeyPair.generate();
+		ABlob blob = export(source, ACCOUNT_KEY, seal.getAccountKey());
+		run("import", Maps.of(Fields.DID, target, EXPORT, blob, Fields.SEED, seedRef(seal)), venue);
+		User imported = engine.getVenueState().users().get(target);
+		assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), RT.getIn(imported.get(), Namespace.S, "OLD_KEY", "keyVersion"));
+		assertEquals(SECRET, imported.secrets().decrypt("OLD_KEY", KEYS).toString());
+	}
+
+	@Test
 	void refusesUnfinishedWork() {
 		User user = fill(source);
 		Blob running = Blob.fromHex("0b".repeat(16));

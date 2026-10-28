@@ -112,6 +112,46 @@ public class JobManagerTest {
 		assertEquals(CVMLong.ONE, RT.getIn(storage.get(), temp, "scratch"));
 	}
 
+	/**
+	 * Jobs an older build left unfinished, their earlier states chained under
+	 * prev, recover at start in their current shape: an interrupted job fails
+	 * without the chain, and a paused job is restored live and drops the chain
+	 * on its next write.
+	 */
+	@Test
+	public void legacyUnfinishedJobsRecoverInTheirCurrentShape() throws Exception {
+		convex.core.crypto.AKeyPair key = convex.core.crypto.AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(key);
+		Engine venue = new Engine(Maps.empty(), application, key);
+		try {
+			AString caller = Strings.create("did:test:legacy-unfinished");
+			AString prev = Strings.intern("prev");
+			Blob started = Blob.fromHex("61136113611361136113611361136113");
+			Blob paused = Blob.fromHex("61146114611461146114611461146114");
+			AMap<AString, ACell> chain = Maps.of(Fields.STATUS, Status.PENDING);
+			application.venue(key.getAccountKey()).users().ensure(caller).cursor().path(covia.lattice.Namespace.J)
+				.set(convex.core.data.Index.<Blob, ACell>none()
+					.assoc(started, Maps.of(Fields.ID, started, Fields.CALLER, caller, Fields.STATUS, Status.STARTED, prev, chain))
+					.assoc(paused, Maps.of(Fields.ID, paused, Fields.CALLER, caller, Fields.STATUS, Status.PAUSED, prev, chain)));
+
+			venue.launch();
+			RequestContext ctx = RequestContext.of(caller);
+			User user = venue.getVenueState().users().get(caller);
+			assertEquals(AAdapter.RESTARTED_DURING_EXECUTION, venue.jobs().getJob(started, ctx).getErrorMessage());
+			assertNull(RT.getIn(user.cursor().path(covia.lattice.Namespace.J, started).get(), prev));
+
+			Job restored = venue.jobs().getJob(paused);
+			assertEquals(Status.PAUSED, restored.getStatus(), "restored live");
+			assertNull(restored.getData().get(prev));
+			venue.jobs().cancelJob(paused, ctx);
+			AMap<AString, ACell> stored = RT.ensureMap(user.cursor().path(covia.lattice.Namespace.J, paused).get());
+			assertEquals(Status.CANCELLED, stored.get(Fields.STATUS));
+			assertNull(stored.get(prev));
+		} finally {
+			venue.close();
+		}
+	}
+
 	@Test
 	public void testSynchronousAdapterErrorsSettleDurableJobs() {
 		Engine eng = Engine.createTemp(null);

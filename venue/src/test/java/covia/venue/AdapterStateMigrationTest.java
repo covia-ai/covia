@@ -277,6 +277,27 @@ class AdapterStateMigrationTest {
 		}
 	}
 
+	@Test void anAdapterThisBuildLacksKeepsItsStateAndVersion() throws Exception {
+		AKeyPair key = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(key);
+		// The state and version of an adapter from a module this venue no longer loads.
+		application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
+			.assoc(Covia.ADAPTERS, Maps.of("absent", Vectors.of("module state")))
+			.assoc(Covia.ADAPTER_VERSIONS, Maps.of("absent", 7L)));
+		Engine engine = new Engine(Maps.empty(), application, key);
+		try {
+			engine.launch();
+			VenueState venue = engine.getVenueState();
+			assertEquals(7, venue.adapterVersion("absent"), "a start checks only the adapters it registers");
+			assertEquals(Vectors.of("module state"), venue.adapterState("absent").get());
+			engine.migrate();
+			assertEquals(7, venue.adapterVersion("absent"));
+			assertEquals(Vectors.of("module state"), venue.adapterState("absent").get());
+		} finally {
+			engine.close();
+		}
+	}
+
 	@Test void anAdapterChecksItsOwnMigrationRules() {
 		ACell v0 = Vectors.of("a");
 		ACell v1 = Maps.of("items", v0);
