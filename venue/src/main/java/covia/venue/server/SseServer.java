@@ -19,6 +19,7 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.venue.AgentEvents;
 import covia.venue.AgentState;
@@ -30,13 +31,19 @@ public class SseServer {
 
 	public static final Logger log=LoggerFactory.getLogger(SseServer.class);
 
+	/** Opening of the error frame that ends a job stream the caller can no longer read. */
+	public static final String JOB_NOT_FOUND = "Job not found: ";
+
+	/** One job-stream client and the context its reads are made under. */
+	private record JobClient(SseClient client, RequestContext rctx) {}
+
 	/** Per-job client subscriptions, keyed by the job's CANONICAL bare hex id
 	 *  ({@code Blob.toHexString()}) — the same form {@link #broadcastJobUpdate}
 	 *  is called with. Clients may subscribe with any parseable form
 	 *  ({@code 0x}-prefixed as the REST API renders ids, mixed case, …);
 	 *  keying by the raw path parameter broke every broadcast for
 	 *  {@code 0x}-form subscribers (#225). */
-	private final ConcurrentHashMap<String, Set<SseClient>> jobClients = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, Set<JobClient>> jobClients = new ConcurrentHashMap<>();
 
 	protected Engine engine;
 
@@ -74,8 +81,7 @@ public class SseServer {
 		AMap<AString, ACell> record = engine.jobs().getJobData(jobId, rctx);
 		if (record == null) {
 			// Vanished between the route check and here (e.g. deleted)
-			client.sendEvent("error", "{\"error\":\"Job not found: " + key + "\"}");
-			client.close();
+			sendNotFound(client, key);
 			return;
 		}
 		if (Job.isFinished(record)) {
@@ -85,21 +91,21 @@ public class SseServer {
 			return;
 		}
 
-		registerClient(key, client);
+		registerClient(key, new JobClient(client, rctx));
 		client.sendEvent("job-update", JSON.toString(record));
 	};
 
 	/**
 	 * Registers an SSE client to receive updates for a specific job.
 	 * @param jobId Canonical job ID (bare hex)
-	 * @param client SSE client
+	 * @param jc SSE client and the context it reads under
 	 */
-	public void registerClient(String jobId, SseClient client) {
-		Set<SseClient> clients = jobClients.computeIfAbsent(jobId,
+	private void registerClient(String jobId, JobClient jc) {
+		Set<JobClient> clients = jobClients.computeIfAbsent(jobId,
 				k -> ConcurrentHashMap.newKeySet());
-		clients.add(client);
-		client.onClose(() -> {
-			unregisterClient(jobId, client);
+		clients.add(jc);
+		jc.client().onClose(() -> {
+			unregisterClient(jobId, jc);
 		});
 		log.info("SSE client connected for job: {}", jobId);
 	}
@@ -107,12 +113,12 @@ public class SseServer {
 	/**
 	 * Unregisters an SSE client from a job's event stream.
 	 * @param jobId Canonical job ID (bare hex)
-	 * @param client SSE client
+	 * @param jc SSE client
 	 */
-	public void unregisterClient(String jobId, SseClient client) {
-		Set<SseClient> clients = jobClients.get(jobId);
+	private void unregisterClient(String jobId, JobClient jc) {
+		Set<JobClient> clients = jobClients.get(jobId);
 		if (clients != null) {
-			clients.remove(client);
+			clients.remove(jc);
 			if (clients.isEmpty()) {
 				jobClients.remove(jobId);
 			}
@@ -122,32 +128,49 @@ public class SseServer {
 
 	/**
 	 * Broadcasts a job update event to all SSE clients watching the given
-	 * job. On a terminal update the stream is closed after the frame — the
-	 * documented contract is "streams until the job reaches a terminal
-	 * state", and there will never be another frame to wait for.
+	 * job. Each frame is read afresh under the subscriber's own context, so a
+	 * stream carries what {@code GET /jobs/{id}} would show it now and ends
+	 * when that read would be refused: a deleted job, an expired proof. On a
+	 * terminal update the stream is closed after the frame — the documented
+	 * contract is "streams until the job reaches a terminal state", and there
+	 * will never be another frame to wait for.
 	 *
 	 * @param jobId Canonical job ID (bare hex, {@code Blob.toHexString()} form)
 	 * @param job Job with updated state
 	 */
 	public void broadcastJobUpdate(String jobId, Job job) {
-		Set<SseClient> clients = jobClients.get(jobId);
+		Set<JobClient> clients = jobClients.get(jobId);
 		if (clients == null || clients.isEmpty()) return;
 
-		boolean finished = job.isFinished();
-		for (SseClient client : clients) {
+		for (JobClient jc : clients) {
 			try {
-				sendJobEvent(client, job);
-				if (finished) client.close(); // onClose unregisters
+				AMap<AString, ACell> record = readableRecord(job.getID(), jc.rctx());
+				if (record == null) {
+					sendNotFound(jc.client(), jobId);
+					continue;
+				}
+				jc.client().sendEvent("job-update", JSON.toString(record));
+				if (Job.isFinished(record)) jc.client().close(); // onClose unregisters
 			} catch (Exception e) {
 				log.warn("Failed to send SSE event to client for job {}: {}", jobId, e.getMessage());
 			}
 		}
 	}
 
-	private void sendJobEvent(SseClient client, Job job) {
-		AMap<AString, ACell> data = job.getData();
-		String json = JSON.toString(data);
-		client.sendEvent("job-update", json);
+	/** The job record as {@code rctx} may read it now, or null when it may not. */
+	private AMap<AString, ACell> readableRecord(Blob jobId, RequestContext rctx) {
+		try {
+			return engine.jobs().getJobData(jobId, rctx);
+		} catch (AuthException e) {
+			return null;
+		}
+	}
+
+	/** Ends a stream whose job the caller cannot read, saying no more than a 404 would. */
+	private static void sendNotFound(SseClient client, String jobId) {
+		client.sendEvent("error", JSON.toString(Maps.of(Fields.ERROR,
+			Strings.create(JOB_NOT_FOUND + jobId))));
+		client.close();
 	}
 
 	// ========== Agent streams (#394) ==========
