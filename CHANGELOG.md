@@ -45,6 +45,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Convex calls go to the operator's peer (`adapters.convex.peer`). Relaying to a peer
   a call names is off by default (`adapters.convex.anyPeer`) and, when on, passes the
   outbound guard.
+- Deleting an account revokes its connected accounts at their providers.
+- The `sql` skill says a registered database name always means the shared connection.
 - A `did:web` document is fetched only from a host the outbound guard allows.
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and

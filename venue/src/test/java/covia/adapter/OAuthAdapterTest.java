@@ -71,6 +71,7 @@ public class OAuthAdapterTest {
 		final AtomicInteger issued = new AtomicInteger();
 		final List<Map<String, String>> tokenRequests = new CopyOnWriteArrayList<>();
 		final AtomicReference<Map<String, String>> revoked = new AtomicReference<>();
+		final List<String> revokedTokens = new CopyOnWriteArrayList<>();
 		/** When set, a refresh signals its arrival and waits for release before answering. */
 		volatile CountDownLatch refreshArrived;
 		volatile CountDownLatch refreshRelease;
@@ -114,6 +115,7 @@ public class OAuthAdapterTest {
 			});
 			server.createContext("/revoke", x -> {
 				revoked.set(form(x));
+				revokedTokens.add(revoked.get().get("token"));
 				respond(x, 200, "", "text/plain");
 			});
 			server.createContext("/api/me", x -> respond(x, 200,
@@ -461,7 +463,11 @@ public class OAuthAdapterTest {
 	}
 
 	private static String legacyGrant(String accessToken) {
-		return "{\"provider\":\"fake\",\"accessToken\":\"" + accessToken + "\",\"refreshToken\":\"refresh-1\","
+		return legacyGrant(accessToken, "refresh-1");
+	}
+
+	private static String legacyGrant(String accessToken, String refreshToken) {
+		return "{\"provider\":\"fake\",\"accessToken\":\"" + accessToken + "\",\"refreshToken\":\"" + refreshToken + "\","
 			+ "\"expiresAt\":" + (System.currentTimeMillis() + 3_600_000) + ",\"obtained\":1,\"scope\":\"read\",\"tokenType\":\"Bearer\"}";
 	}
 
@@ -603,6 +609,29 @@ public class OAuthAdapterTest {
 				assertEquals(OAuthAdapter.ACCOUNT_GONE, done.message());
 				assertEquals("refresh-1", fake.revoked.get().get("token"), "the tokens issued for it are revoked");
 				assertNull(engine.adapterState("oauth").read("users/" + bobDID), "nothing reaches the new account");
+			} finally {
+				engine.close();
+			}
+		}
+	}
+
+	@Test
+	public void testDeletingAnAccountRevokesItsGrants() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				connectFake(engine, fake, RequestContext.of(aliceDID));
+				engine.deleteUser(engine.venueContext(), aliceDID);
+				assertEquals(List.of("refresh-1"), fake.revokedTokens);
+				assertNull(engine.adapterState("oauth").read("users/" + aliceDID));
+				assertNull(engine.adapterState("oauth").read(OAuthAdapter.REVOCATIONS), "its tokens are not kept once revoked");
+
+				// A grant an earlier venue kept, never moved to the connections, is revoked too
+				AString carolDID = Strings.create("did:test:oauth:carol");
+				storeLegacyGrant(engine, carolDID, "fake", legacyGrant("legacy-access", "legacy-refresh"));
+				engine.deleteUser(engine.venueContext(), carolDID);
+				assertEquals(List.of("refresh-1", "legacy-refresh"), fake.revokedTokens);
 			} finally {
 				engine.close();
 			}

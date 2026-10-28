@@ -1600,7 +1600,9 @@ fresh access token — refreshed when expired — that never reaches a model or 
 job record. `oauth:status` lists connections without tokens;
 `oauth:disconnect` forgets the grant and revokes it where the provider
 supports it. A refresh in flight never brings back a disconnected grant or
-replaces a newer one. Providers and default scopes are published at
+replaces a newer one. Deleting an account (`user:delete`) revokes its grants
+the same way, once: a provider that refuses or cannot be reached keeps a grant
+the venue no longer holds. Providers and default scopes are published at
 `v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the
 flow.
 
@@ -2052,7 +2054,8 @@ Registered databases are shared: every signed-in user may query them and,
 unless the entry sets `readOnly: true`, change them with `sql/execute`.
 `readOnly` refuses `sql/execute` for every caller, the venue included, before a
 connection opens; `sql/query` is unaffected. Venue-local databases have no such
-flag.
+flag. A registered name always means the registered database: a user's
+venue-local database of that name is unreachable while the entry exists.
 
 ```json
 {

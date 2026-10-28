@@ -40,6 +40,7 @@ import convex.auth.ucan.Capability;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.lattice.Namespace;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -62,7 +63,8 @@ import covia.venue.User;
  * the venue's secret store keys. It is not in the user's secret store: no
  * secret operation reads, replaces or deletes it, and its tokens leave only
  * through {@link #accessToken}, into a request. Grants an earlier venue kept in
- * the secret store as {@code oauth/<provider>} move here on first access.</p>
+ * the secret store as {@code oauth/<provider>} move here on first access.
+ * Deleting an account revokes its grants at their providers.</p>
  *
  * <p><b>Authority.</b> A connection is the resource {@code <did>/oauth/<provider>}:
  * {@code crud/read} to see it in {@code oauth:status}, {@code oauth/connect},
@@ -154,6 +156,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	static final AString G_OBTAINED = K_OBTAINED;
 	/** A stored connection's tokens, sealed: {@code accessToken} and any {@code refreshToken}. */
 	static final AString C_TOKENS = Strings.intern("tokens");
+	/** Deleted users' sealed tokens, by DID then provider, until {@link #onUserDeleted} revokes them. */
+	static final String REVOCATIONS = "revocations";
 
 	/** One configured provider. */
 	record Provider(String name, String clientId, String clientSecretRef, String authorizationEndpoint,
@@ -527,10 +531,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			storeGrant(pend, p, tokens);
 		} catch (AuthException gone) {
 			// Issued for an account deleted since the connect began: kept nowhere, so left live nowhere
-			if (p.revocationEndpoint() != null) {
-				String token = str(tokens, Strings.intern("refresh_token"));
-				revoke(p, (token != null) ? token : str(tokens, Strings.intern("access_token")));
-			}
+			revokeGrant(p, str(tokens, Strings.intern("refresh_token")), str(tokens, Strings.intern("access_token")));
 			return new Completion(false, providerName, ACCOUNT_GONE, pend.returnTo());
 		} catch (RuntimeException e) {
 			log.warn("Storing the {} connection failed: {}", providerName, describeFailure(e));
@@ -570,14 +571,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			if (taken.get() != null) draft.delete(path);
 		});
 		if (taken.get() == null) throw new IllegalArgumentException(NOT_CONNECTED + provider);
-		boolean revoked = false;
-		Provider p = providers.get(provider);
-		if (p != null && p.revocationEndpoint() != null) {
-			AMap<AString, ACell> tokens = tokens(taken.get());
-			String token = str(tokens, G_REFRESH_TOKEN);
-			if (token == null) token = str(tokens, G_ACCESS_TOKEN);
-			revoked = revoke(p, token);
-		}
+		boolean revoked = revokeSealed(providers.get(provider), taken.get().get(C_TOKENS));
 		return Maps.of(
 			K_PROVIDER, Strings.create(provider),
 			K_DISCONNECTED, CVMBool.TRUE,
@@ -739,6 +733,20 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		}
 	}
 
+	/** Revokes a grant by its refresh token, which takes its access tokens with it, else by its access token;
+	 *  false when its provider is no longer configured or has no revocation endpoint. */
+	private boolean revokeGrant(Provider p, String refreshToken, String accessToken) {
+		if (p == null || p.revocationEndpoint() == null) return false;
+		return revoke(p, (refreshToken != null) ? refreshToken : accessToken);
+	}
+
+	/** Revokes the grant whose tokens a stored connection holds sealed. */
+	private boolean revokeSealed(Provider p, ACell sealed) {
+		if (p == null || p.revocationEndpoint() == null) return false;
+		AMap<AString, ACell> tokens = opened(sealed);
+		return revokeGrant(p, str(tokens, G_REFRESH_TOKEN), str(tokens, G_ACCESS_TOKEN));
+	}
+
 	// ========== Connections ==========
 
 	/** Stores the grant a callback obtained, for the account that started the connect. */
@@ -788,7 +796,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	/** A stored connection's tokens, opened. */
 	private AMap<AString, ACell> tokens(AMap<AString, ACell> connection) {
-		AString raw = SecretStore.unseal(connection.get(C_TOKENS), keys());
+		return opened(connection.get(C_TOKENS));
+	}
+
+	/** Tokens {@link #withTokens} sealed, opened. */
+	private AMap<AString, ACell> opened(ACell sealed) {
+		AString raw = SecretStore.unseal(sealed, keys());
 		AMap<AString, ACell> tokens = (raw != null) ? RT.ensureMap(JSON.parse(raw.toString())) : null;
 		if (tokens == null || str(tokens, G_ACCESS_TOKEN) == null) {
 			throw new IllegalStateException(SecretStore.INVALID_RECORD);
@@ -899,9 +912,63 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		}
 	}
 
+	/**
+	 * Erases a deleted user's connections, keeping only their sealed tokens,
+	 * outside them, for {@link #onUserDeleted} to revoke. An instance never
+	 * installed has no keys to open them with, so keeps nothing.
+	 */
 	@Override
 	public void deleteUserState(AString did, AdapterState state) {
-		state.delete(state.userPath(did, ""));
+		String path = state.userPath(did, "");
+		AMap<AString, ACell> mine = RT.ensureMap(state.read(path));
+		if (mine != null && engine != null) {
+			AMap<AString, ACell> all = RT.ensureMap(state.read(REVOCATIONS));
+			if (all == null) all = Maps.empty();
+			AMap<AString, ACell> theirs = RT.ensureMap(all.get(did));
+			if (theirs == null) theirs = Maps.empty();
+			for (var entry : mine.entrySet()) {
+				ACell sealed = RT.getIn(entry.getValue(), C_TOKENS);
+				if (sealed != null) theirs = theirs.assoc(entry.getKey(), sealed);
+			}
+			if (!theirs.isEmpty()) state.write(REVOCATIONS, all.assoc(did, theirs));
+		}
+		state.delete(path);
+	}
+
+	/**
+	 * Revokes a deleted user's grants at their providers, once and as
+	 * {@code oauth:disconnect} does: a provider that refuses or cannot be
+	 * reached keeps a grant the venue no longer holds. Grants an earlier venue
+	 * kept among their secrets, and never moved, are revoked too.
+	 */
+	@Override
+	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+		if (engine == null) return;
+		AtomicReference<AMap<AString, ACell>> taken = new AtomicReference<>();
+		adapterState().transact(draft -> {
+			AMap<AString, ACell> all = RT.ensureMap(draft.read(REVOCATIONS));
+			taken.set((all != null) ? RT.ensureMap(all.get(did)) : null);
+			if (taken.get() == null) return;
+			AMap<AString, ACell> rest = all.dissoc(did);
+			if (rest.isEmpty()) draft.delete(REVOCATIONS); else draft.write(REVOCATIONS, rest);
+		});
+		if (taken.get() != null) for (var entry : taken.get().entrySet()) {
+			try {
+				revokeSealed(providers.get(entry.getKey().toString()), entry.getValue());
+			} catch (RuntimeException e) {
+				log.warn("Could not revoke the deleted user {}'s {} connection: {}", did, entry.getKey(), describeFailure(e));
+			}
+		}
+		AMap<AString, ACell> secrets = (previousUser != null) ? RT.ensureMap(previousUser.get(Namespace.S)) : null;
+		if (!hasLegacyGrant(secrets)) return;
+		SecretStore.Keys keys = keys();
+		for (var entry : secrets.entrySet()) {
+			String name = entry.getKey().toString();
+			if (!name.startsWith(LEGACY_GRANT_PREFIX)) continue;
+			AMap<AString, ACell> grant = legacyGrant(entry.getValue(), keys);
+			if (grant != null) revokeGrant(providers.get(name.substring(LEGACY_GRANT_PREFIX.length())),
+				str(grant, G_REFRESH_TOKEN), str(grant, G_ACCESS_TOKEN));
+		}
 	}
 
 	// ========== Helpers ==========
