@@ -60,6 +60,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.
 - A token refresh never brings back a disconnected account, and a callback for a
   deleted account stores nothing.
+- `GET /api/v1/secrets` needs the read `secret:list` needs: a public scope without
+  `crud/read` on `s/` no longer lists the public store's secret names.
+- `GET /api/v1/operations/{name}` resolves the name as the caller, not as an
+  anonymous, unscoped context.
+- A job stream reads each frame as its subscriber and ends once `GET /jobs/{id}`
+  would refuse it, such as after the job's deletion or its proof's expiry.
+- `GET /api/v1/agents/{id}` answers a refused or malformed id with 403 or 400, not 500.
 
 ### Migration
 
