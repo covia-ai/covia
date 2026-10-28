@@ -1,351 +1,108 @@
 # Venue Migration
 
-Requirements for venue migration: bringing a venue's stored state to the
-schema this build supports (#621). These are requirements, not an agreed
-design: the questions at the end are open. Related: #620 (knowing before a
-start, typed refusal), #615 (`user:import`), #354 (store upgrade contract),
-#582 (0.10.0).
+Venue migration brings a venue's stored state to the schema this build
+supports. This document sets out who owns each part of that schema, the older
+shapes this build still reads, what remains to build (#624), and how
+migration is tested. Version numbers and how to add a venue step are in
+[PERSISTENCE.md](PERSISTENCE.md#venue-versions-and-migrations), adapter state
+versions in [ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration), and the
+calls an embedder makes in [EMBEDDING.md](EMBEDDING.md).
 
-MUST and MAY are used as in RFC 2119.
+## Principles
 
-## Need
+- **Each part of the schema has one owner.** Covia owns the venue value and
+  every user's jobs, agents, sessions and secrets. Each adapter owns its own
+  state and any legacy paths it once wrote, and migrates them with the adapter
+  inactive: no bots, no network. An embedder owns its own data and migrates it
+  itself, after Covia's migration returns. Covia never runs an embedder's
+  steps, and leaves the embedder's values as it found them.
+- **A build upgrades any older supported version.** Starting a venue migrates
+  it in one transaction, Covia's steps then those of the built-in and
+  configured-module adapters, before any other write: all of it commits or
+  none of it does. An adapter registered later migrates as it registers.
+  Migration is also a call, so an embedder can migrate a store before launch,
+  or a running venue at any time.
+- **A newer version is refused.** Stored state newer than the build, Covia's or
+  an adapter's, fails with `UnsupportedVersionException`, and nothing is
+  written.
+- **Migrations are pure functions.** A migration takes one part of the venue
+  state, such as a user's secrets, a job, a session or an adapter's state, to a
+  newer shape. It does no I/O and reads no clock; anything it needs, such as
+  the venue's keys, is passed in. A part already current comes back as the
+  same cell, so migrating again writes nothing. A shape it does not recognise
+  is refused with a reason. Start-up, conversion on use and `user:import` call
+  the same function.
+- **Some shapes convert lazily.** A version may still read an older shape and
+  convert it when the venue next uses it, which keeps start-up cheap. Readers
+  normalise the shape, so code beyond the reader sees only the current one. A
+  release that drops support for an older shape converts every part still in
+  it first.
+- **Migration only goes forward.** An older build cannot read upgraded values,
+  so a caller that may need to go back keeps the state from before the
+  upgrade (#354).
 
-1. It MUST be possible to upgrade a Covia venue's version.
-2. An embedder MUST be able to use venue migration as part of its own
-   migration.
-3. Venue migration MUST be structured as pure functions of venue or vault
-   state, so that they can be composed as each caller needs.
-4. Venue migration MAY migrate some values lazily. The version upgrade then
-   happens, and sub-components still in a supported older shape are migrated
-   on demand.
-5. Adapters MUST be able to define their own migration rules.
+## Older shapes this build reads
 
-The embedder drives. It calls Covia's check and Covia's run from its own
-migration path, then runs its own steps on top of them, in its own code. Covia
-never runs an embedder's migration steps. An embedder such as GetMine migrates
-its own data this way; how it does so is its own business and out of scope
-here. Venue migration only has to make it possible.
+The venue is at version 1. Each adapter records its own state version; only
+the test adapter versions its state so far.
 
-The version contract in
-[PERSISTENCE.md](PERSISTENCE.md#venue-versions-and-migrations), under which a
-venue version may permit transitional records, is lazy migration under need 4,
-and it stays.
+| Older shape | Owner | Converted | Where |
+|-------------|-------|-----------|-------|
+| `w/user-deletions` → `:user-deletions` (venue version 0 → 1) | Covia | At start-up | `VenueState.migrateInPlace` |
+| `w/adapters/<name>` → `:adapters/<name>` | Covia, for each adapter | At start-up for a versioned adapter, otherwise on first use | `VenueState.migrateLegacyState` |
+| Job `prev` chain (#611) | Covia | Ignored on read, dropped on the next write | `Job.currentState` |
+| Agent frames with `conversation`/`items` → `history` | Covia | When a session cycle begins | `GoalTreeContext.migrateFrames` |
+| Session `loads` → the root frame's | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |
+| Secrets at key version 1 (#535) | Covia | On that secret's next write | `SecretStore` |
+| Telegram session mappings, `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | On first read | `ConversationSessions` |
+| Telegram bot registry, `w/telegram/bots` | Telegram adapter | Read at start, filling missing bindings | `TelegramAdapter.rearmLegacyBots` |
 
-## Terms
+`user:import` (#615) applies Covia's migrations to an incoming user, and
+refuses an export newer than the build.
 
-- **Venue state**: a venue's lattice value, wherever it is held: in a running
-  venue, in a store no venue has open, or in an embedder's vault.
-- **Responsible code**: the code responsible for a part's schema and its
-  migration. Covia's venue code is responsible for the venue value and for
-  every user's jobs, agents, sessions and secrets. An adapter is responsible
-  for its own state and any legacy paths it once wrote. An embedder is
-  responsible for its own paths in user workspaces and under the venue's
-  identity, and migrates them itself.
-- **Part**: the unit a migration function converts. A part is likely to be a
-  specific lattice component or sub-component, such as a user's `SecretStore`,
-  `JobState` or `AgentState`, one session's `SessionState`, or one adapter's
-  `AdapterState`. It may be the whole venue (`VenueState`). A migration that
-  moves a value has a part spanning the source and the destination.
-- **Schema version**: an integer for Covia and for each adapter, recorded in
-  the venue state: for the venue as a whole and, where the responsible code
-  keeps per-user state, for each user. An embedder keeps its own versions in
-  its own data.
-- **Migration function**: a pure function from a part's value to that part in a
-  newer shape.
-- **Step**: the migration functions that take one responsible code from version
-  N to N + 1. Steps are the stages of a migration: the unit an embedder calls
-  and a test checks.
-- **Migration rules**: the ordered steps that a responsible code defines.
-- **Lazy part**: a part that a step leaves in an older shape the new version
-  still supports, to be migrated on demand.
-- **Run**: the ordered steps, Covia's and its adapters', that bring venue state
-  to the schema this build supports, and one application of them.
+## Still to build (#624)
 
-## Migrations on `develop`
+A store can keep the shapes converted on use indefinitely, so the code that
+reads them can never be removed, and nothing tells a caller whether any remain.
 
-The venue is at version 1, and most of its migrations are lazy.
+- **Convert on request.** Each shape above that converts on use becomes a
+  migration function that the migration call also applies, so one call leaves
+  no older shape, Covia's or a loaded adapter's. An adapter whose module is not
+  loaded cannot convert its own parts; the call reports that, rather than
+  treating the venue as current.
+- **Check.** The read-only check reports any older shapes left, as well as the
+  stored versions `VenueState.peekVersions` reads today.
 
-| Form | Responsible code | Eager or lazy | Where | How |
-|------|------------------|---------------|-------|-----|
-| Venue `:version` 0 → 1: `w/user-deletions` → `:user-deletions` | Covia | Eager, at start-up | `VenueState.migrateInPlace` | Transaction on a draft of the venue value |
-| `w/adapters/<name>` → `:adapters/<name>` | Covia, for each adapter | Lazy, on first access | `VenueState.migrateLegacyState` | Transaction moving one value between two paths |
-| Job `prev` chain (#611) | Covia | Lazy: ignored on read, dropped on the next write | `Job.currentState` | Static function over the record |
-| Legacy agent frames (`conversation`/`items`) → `history` (`historyVersion: 1`) | Covia | Lazy, when a session cycle begins | `GoalTreeContext.migrateFrames`, from `SessionState.beginCycle` | Static function over the frames |
-| Session `loads` folded into the root frame | Covia | Lazy, same place | `SessionState.migrateLegacySessionLoads` | Static function over the session |
-| Secrets at key version 1 (#535) | Covia | Lazy, on that secret's next write | `SecretStore` | No function; every write encrypts under the current key version |
-| Telegram session mappings, `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | Lazy, on first read | `ConversationSessions` legacy callbacks | Callbacks that copy from the old path, which keeps its entry until the mapping is removed |
-| Telegram bot registry, `w/telegram/bots` | Telegram adapter | Read at start; legacy records only fill missing bindings | `TelegramAdapter.rearmLegacyBots` | Reads through the engine |
+Open questions:
 
-Only the static functions are already close to the migration function
-contract (R3). The transactions, the callbacks and the engine reads need to
-become migration functions over a declared part.
+- Whether the check finds older shapes by scanning, or from a record kept as
+  they change, and so whether versions are also recorded for each user.
+- How long an older shape stays supported once it can be converted on request.
 
-Adapters can version their own state and migrate it step by step, enabled or
-not (`AAdapter.stateVersion`, `AAdapter.migrateState`; see
-[ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). At launch the venue's
-steps and those of the built-in and configured-module adapters run in one
-transaction, before any bootstrap write; an adapter registered later migrates
-in its own transaction. Only the test adapter versions its state so far
-(version 1, with version 0's shape), so every venue and the 0.9.11 fixture run
-adapter migration at start-up. `VenueState.peekVersions` reads the stored versions
-before a start, and a newer version is refused with an
-`UnsupportedVersionException`.
+## Testing
 
-Migration is a call, not only a start-up event. `VenueState.migrate(adapters)`
-runs the venue's eager steps and the given adapters' steps in one transaction,
-on a running venue or on a store before launch, and `Engine.migrate()` runs it
-with every installed adapter. That is the run for everything eager today; the
-lazy forms in the table above are not yet part of it.
-
-`VenueMigrationEndToEndTest` builds one venue at version 0 holding every form in
-the table except Telegram's, with each versioned bundled adapter's oldest
-state, and takes it to the current version in process. It checks the eager
-parts after the start-up transaction, and each lazy form after the venue next
-uses it. Until the run goes step by step, it checks the run as a whole. The
-release-written fixtures are opened only by `VenueUpgradeIT` and
-`VenueStoreMigrationIT`.
-
-## Requirements
-
-### R1. Upgrading a venue's version
-
-- Venue state records a schema version for Covia and for each adapter. Covia's
-  is the venue's `:version`.
-- A build upgrades venue state at any older supported version to its own by
-  applying the run.
-- Starting a venue on older state applies the run in one venue transaction,
-  before any bootstrap write: all of it commits, or none of it does. An
-  embedder that wants control applies the run itself first (R2).
-- A read-only check reports, for Covia and each adapter, the stored version
-  against the version this build supports, and any lazy parts still in an
-  older shape. It writes nothing, and can be called on a store before
-  `VenueServer.launch` (#620), so a caller knows whether a start will migrate
-  before it copies anything.
-- A stored version newer than the build's, Covia's or an adapter's, is refused
-  with a typed exception naming the responsible code, the stored version and
-  the supported version (#620). Nothing is written.
-- Applying the run again changes nothing.
-
-### R2. Use by an embedder
-
-- The run is an ordered list of steps. A caller can list the steps venue state
-  needs and apply them one at a time, or all at once. Applying the whole run is
-  a convenience over applying each step.
-- The Java API is the main route, for embedders in the same process. A
-  venue-owned operation is a second route, for callers outside it.
-- Steps apply offline, to venue state that no running venue holds, and live, to
-  a running venue. Live, writes made while steps apply are kept.
-- The embedder drives. The check and the run are calls it makes from its own
-  migration path. Neither takes embedder steps, and neither calls embedder
-  code.
-- The check and the run can both be reached before Covia's own start-up step
-  changes anything, so the embedder chooses when Covia's values move: it opens
-  the store, checks, and migrates the venue with its adapters before calling
-  `launch`, which then finds the state current.
-- Migration is not only a start-up event. When the embedder installs adapters
-  and then migrates the venue, those adapters' steps run with the venue's. An
-  embedder that installs adapters after start-up and migration can: each
-  migrates as it is installed.
-- The run applies Covia's steps first, then each adapter's (R5). An adapter's
-  functions see Covia's parts in their current shape. The embedder's own steps
-  run after the run returns, and see every part Covia and the adapters are
-  responsible for in its current shape.
-- The run leaves every value that neither Covia nor an adapter is responsible
-  for exactly as it found it: the embedder's own paths in user workspaces and
-  under the venue's identity, and the names of its secrets. Covia still owns
-  how secrets are encrypted and re-keyed.
-- Each step returns a report: the responsible code, the versions it went from
-  and to, the parts it converted, the parts it left lazy, and the parts it
-  refused, each with its reason. A refused part leaves that responsible code's
-  version where it was.
-- The caller gets the venue state before and after each step. A state it keeps
-  is a restore point that costs no copy of files. It stays readable, across
-  store GC and restarts, until the caller releases it. When to keep one, and
-  when to restore from it, is the embedder's decision (#354).
-
-A path an embedder might build from these, where nothing serves requests until
-the end:
-
-1. Check the store: Covia's values with Covia's check, its own data with its
-   own. If nothing is older, start as usual.
-2. Keep a restore point, or take a copy.
-3. Apply Covia's run, one step at a time or all together, checking the result
-   between steps and doing any work of its own that is not a migration
-   function. Migrate lazy parts on demand if it wants no older shapes left.
-4. Run its own steps, on top of Covia's.
-5. Verify the result by its own measures.
-6. Release the restore point, or go back to it.
-7. Serve.
-
-### R3. Pure, composable functions
-
-Every migration function is partial, idempotent and pure.
-
-- **Partial.** A migration function covers one part. It sees only that part's
-  value and the inputs it declares. It declares the paths it reads and writes,
-  and reaches nothing outside them. Only one responsible code migrates a given
-  part.
-- **Idempotent.** Applying it twice gives the same result as applying it once.
-  Given a part already in the current shape, it returns the same cell, so a
-  current part causes no write and no re-stamp.
-- **Pure.** No I/O, no lattice reads beyond its input, no clock. Anything else
-  it needs, such as the venue's `SecretStore.Keys` or a timestamp, is passed in.
-  Its only effect is its return value. Secret re-encryption is the one case
-  that needs randomness: `AESGCM` draws a fresh nonce, so the bytes differ each
-  time. There the result must decrypt to the same plaintext under
-  `SecretStore.CURRENT_KEY_VERSION`, and a record already at that version is
-  returned unchanged.
-- **Refuses unknown shapes.** A shape the function does not recognise is
-  refused with a reason, never passed through or reinterpreted.
-- **One definition for every caller.** An eager step, a lazy migration on
-  demand and `user:import` call the same function. No migration exists in two
-  copies.
-
-They compose:
-
-- Lifted to venue state, every migration function, every step and every run is
-  a pure function from venue state to venue state. A step is its functions
-  together, a run is its steps in order, and an embedder composes Covia's run
-  with its own steps.
-- **Batching belongs to the caller.** A function never decides how much is
-  committed together. At start-up the run is one transaction, all or nothing.
-  A live run, such as a walk over every record of a large user, is many part
-  migrations, committed in batches of whatever size the caller chooses. A
-  batch holds parts of at most one user, so no commit spans users. Run on a
-  fork of the venue state, the batches are all-or-nothing again when the
-  caller adopts the fork, provided no running venue writes in the meantime.
-- **Resume is a rerun.** An interrupted run starts again, and parts already
-  current are no-ops. A progress cursor may make that faster, but correctness
-  never depends on one.
-- **Concurrent writes are kept.** Live, each batch commits as a transaction
-  against the latest value. On a conflict the functions are applied again to
-  the new value, which purity makes safe.
-- **Functions are tested alone**, on fixture parts, without a venue.
-
-Work that needs a model, the network, files or a drive is not a migration
-function. An embedder does such work itself, between steps or after them.
-
-### R4. Lazy migration
-
-- A step declares each of its parts eager or lazy.
-- Applying a step converts its eager parts. The responsible code's version
-  advances once they are all converted.
-- A lazy part may stay in an older shape that the new version still supports.
-  It is migrated on demand: when the venue next uses it, or when a caller asks,
-  for one part or for all of them.
-- Readers normalise a lazy part through its migration function, so reading
-  code handles the current shape only.
-- A step that drops support for an older shape migrates every part still in
-  that shape: any lazy part in it becomes eager in that step.
-
-### R5. Adapter migration rules
-
-- An adapter defines migration rules for the parts it is responsible for: its
-  `AdapterState` and any legacy paths it once wrote. It has its own schema
-  version, in line with [ADAPTERS.md](ADAPTERS.md), which makes each adapter
-  responsible for its own schema.
-- Module adapters (shaded module jars) define rules the same way as built-in
-  adapters.
-- An adapter's migration functions can be used without activating the adapter:
-  no bots, no network, no polling.
-- An adapter's steps apply after Covia's, within the run.
-- Adapters are Covia's extension point, so an adapter an embedder or operator
-  adds defines its rules the same way as a built-in. Those rules cover the
-  adapter's own state only, never the embedder's other data.
-- An adapter whose module is not loaded cannot migrate its own parts. The run
-  reports it as incomplete rather than done, as `user:delete` does with
-  `Engine.USER_DELETION_PENDING`.
-
-### R6. `user:import`
-
-- `user:import` (#615) applies Covia's steps to the incoming user before writing
-  it. Adapter state is not part of an export. An export newer than the build
-  is refused with the typed exception from R1.
-- An embedder migrates its own paths in an imported user itself, after the
-  import returns, as it does after the run.
-
-### R7. Step-by-step testing
-
-- **States built in tests.** Migration functions and steps are exercised on
-  venue states the tests build in each older shape, as `VenueMigrationTest`
-  and the adapters' migration tests do. Testing a step never needs a release
-  fixture.
-- **End to end.** One in-process unit test takes a venue through every venue
-  version: from a state it builds holding every older shape that Covia and the
-  bundled adapters still support, through each step in turn to the current
-  version, with the checks below after every step. A module adapter does the
-  same for its own forms in its own module.
-- **Fixtures by release line.** Each release line (0.9, 0.10, …) leaves one
-  fixture, written by a published jar of that line and never regenerated, as
-  `covia-0.9.11.zip` is for 0.9 and `covia-0.10.0.zip` for 0.10 (see their
-  [README](../src/test/resources/migrations/README.md)).
-  Fixtures are big, so only integration tests (failsafe `*IT`s) open them.
-- **The embedders' API.** A harness walks the end-to-end state and each fixture
-  through the run one step at a time, through the API embedders call. It has
-  no stepping path of its own.
-- **Checks after every step:**
-  - the responsible code's version has advanced;
-  - its eager parts are current in storage, not only on read;
-  - its lazy parts are current or in a supported older shape, and migrating
-    them on demand gives the current shape;
-  - every other responsible code's parts are the same cells as before the
-    step;
-  - applying the step again returns the same venue state;
-  - the venue's data reads the same through the HTTP APIs, as
-    `VenueStoreFixture.verifyUser` checks today.
-- **Interruption.** A run stopped after any batch, then run again, ends equal to
-  an uninterrupted run (for secrets, equal in meaning, as under R3).
-- **Offline and live.** Both give equal results. Live, writes made during the
-  run are kept.
-- **For embedders.** The harness is published, so an embedder can walk its own
-  fixtures through Covia's run, then apply its own steps in its own code. A
-  failure in the run names the step and its responsible code, so it says
-  whose migration broke.
-- **Other values untouched.** After every step, values that neither Covia nor
-  an adapter is responsible for are the same cells as before the run.
-- **Kept runs.** On request a walk keeps each step's venue state and report,
-  as `-Dcovia.migration.output` keeps an upgraded store today.
+- **Built states.** Migration tests build their older states in code. A
+  migration function has tests of its own: a current part comes back as the
+  same cell, an older part converts and converting it again changes nothing,
+  and an unknown shape is refused. A module adapter tests its own shapes in its
+  own module, as `TelegramMigrationTest` does.
+- **End to end.** `VenueMigrationEndToEndTest` builds one venue at version 0
+  holding every shape in the table except Telegram's, with each versioned
+  bundled adapter's oldest state, and takes it to the current version in
+  process. It checks the start-up conversions after the start-up transaction,
+  each later conversion after the venue next uses the shape, and that
+  migrating again changes nothing. A new venue version or older shape is
+  seeded there, and the test fails until a new version's shapes are.
+- **Release-line fixtures.** Each release line (0.9, 0.10, …) leaves one store,
+  written by a published jar of that line and never regenerated:
+  `covia-0.9.11.zip` and `covia-0.10.0.zip` (see their
+  [README](../src/test/resources/migrations/README.md)). Fixtures are big, so
+  only the failsafe integration tests `VenueUpgradeIT` and
+  `VenueStoreMigrationIT` open them.
 
 ## Out of scope
 
-- How an embedder migrates its own data, beyond what venue migration must
-  allow it.
 - The Etch store format, which does not change.
-- DLFS node shapes. They are Convex's schema; Convex 0.8.18 reads both forms,
-  and embedders read drives through the file API.
-- Backup orchestration: #354 stands.
-
-## Acceptance
-
-- Every migration function has its own tests: a current part comes back as the
-  same cell; a legacy part converts, and converting the result changes
-  nothing; an unknown shape is refused with a reason.
-- The end-to-end test takes a venue holding every older shape to the current
-  version. With every lazy part then migrated on demand, no legacy form is
-  left: no `prev`, no legacy frames or session `loads`, no `w/adapters`, and
-  every secret at the current key version.
-- The R7 harness walks the end-to-end state step by step, offline and live,
-  with every check passing, in CI. Integration tests walk each release-line
-  fixture (`migrations/covia-0.9.11.zip`, `migrations/covia-0.10.0.zip`) the
-  same way.
-- An embedder can call Covia's check and run from its own migration path,
-  before Covia's own start-up step changes anything, and run the harness on its
-  own fixtures. Covia runs no embedder steps, and leaves the embedder's values
-  as it found them.
-- An adapter's migration rules apply with the adapter inactive.
-- A newer stored version is refused with the typed exception, for Covia and
-  for an adapter.
-- A kept restore point is still readable after a store GC and a restart.
-- PERSISTENCE.md describes schema versions for each responsible code, eager
-  and lazy parts, and venue migration.
-
-## Open questions
-
-- Where schema versions are recorded for each responsible code, and for each
-  user.
-- Whether the check finds lazy parts in older shapes by scanning, or from a
-  record kept as they change.
-- How long an older shape stays supported for lazy parts.
-- Who may invoke the venue-owned operation.
-- How the harness is published: as a test jar of `venue`, or as a module of its
-  own.
+- DLFS node shapes. They are Convex's schema, and Convex 0.8.18 reads both
+  forms.
+- Backups: #354.

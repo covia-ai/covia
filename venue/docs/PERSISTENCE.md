@@ -85,10 +85,9 @@ compatibility rejection and reopen behaviour. Do not bump this integer for an
 ordinary software release. Binaries predating version checks must still be
 excluded operationally from upgraded stores.
 
-[MIGRATE.md](MIGRATE.md) sets out requirements for venue migration (#621):
-pure migration functions that embedders compose into their own migration, with
-migration rules defined by adapters too. The transitional records this section
-permits are its lazy migration.
+[MIGRATE.md](MIGRATE.md) covers venue migration as a whole: who owns each part
+of the schema, the older shapes this build reads, and what remains to build
+(#624). The transitional records this section permits are the shapes it lists.
 
 ## Snapshot implementation contract
 

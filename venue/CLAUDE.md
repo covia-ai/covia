@@ -247,7 +247,7 @@ Adapter-owned state uses `AdapterState`; see
   names its store, `"memory"` unless persistence is under test
 - A test that opens a release-written store fixture (`src/test/resources/migrations`)
   is a failsafe `*IT`, run by `mvn verify`; migration unit tests build their
-  older states in code (`docs/MIGRATE.md`, R7), and a new venue version or
+  older states in code (`docs/MIGRATE.md`, Testing), and a new venue version or
   older shape is seeded in `VenueMigrationEndToEndTest`
 - `mvn test -pl venue` runs the module; asset examples in
   `src/main/resources/asset-examples/`
@@ -285,9 +285,9 @@ java -jar target/covia.jar [config.json]
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
-- `docs/MIGRATE.md` — venue migration requirements (#621): pure migration
-  functions per lattice component that embedders compose into their own
-  migration; adapter-defined migration rules; optional lazy migration
+- `docs/MIGRATE.md` — venue migration: who owns each part of the schema, the
+  older shapes this build reads and when each converts, what remains (#624),
+  and how migration is tested
 - `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
   `docs/GOAL_TREE.md` — agent architecture
 - `docs/READ_API.md` — job-free read surface
