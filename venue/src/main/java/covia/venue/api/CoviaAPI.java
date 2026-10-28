@@ -1579,8 +1579,12 @@ public class CoviaAPI extends ACoviaAPI {
 							example = "v/test/ops/echo") })
 	protected void getOperation(Context ctx) {
 		String name = ctx.pathParam("name");
+		// Resolved as the caller, like assets/<ref>: an encoded name may be any
+		// lattice path, so the read is the caller's to make, never the venue's.
+		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 		try {
-			Asset asset = venue.resolveAsset(name);
+			Asset asset = engine().resolveAsset(Strings.create(name), rctx);
 			if (asset == null) {
 				buildError(ctx, 404, "Operation not found: " + name);
 				return;
@@ -1601,8 +1605,10 @@ public class CoviaAPI extends ACoviaAPI {
 				if (output != null) result.put("output", output);
 			}
 			buildResult(ctx, 200, result);
-		} catch (IOException e) {
-			buildError(ctx, 500, "Error resolving operation: " + e.getMessage());
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (covia.exception.RemoteFetchException e) {
+			buildError(ctx, 502, e.getMessage());
 		}
 	}
 

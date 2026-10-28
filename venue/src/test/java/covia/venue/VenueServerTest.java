@@ -30,6 +30,7 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import org.junit.jupiter.api.io.TempDir;
 
 import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -50,6 +51,7 @@ import covia.exception.ResponseException;
 import covia.grid.AContent;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.grid.impl.BlobContent;
 import covia.venue.server.SecurityHeaders;
@@ -1009,6 +1011,37 @@ public class VenueServerTest {
 		ACell body = JSON.parse(resp.body());
 		assertNotNull(RT.getIn(body, "asset"),
 			"operations/{name} must return the resolved asset id for a slashed catalog name");
+	}
+
+	/**
+	 * An encoded name is any lattice path, so operations/{name} resolves it as
+	 * the caller, exactly like assets/{ref}: the caller's own o/ entry is found,
+	 * and another user's private entry is a denial rather than a server error.
+	 */
+	@Test
+	public void testOperationNameResolvesAsCaller() throws Exception {
+		VenueAuth alice = VenueAuth.keyPair(AKeyPair.generate(), venue.getDIDString().toString());
+		AString aliceDID = Strings.create(alice.getDID());
+		venue.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, "o/private-op",
+			Fields.VALUE, Maps.of("name", "Private op", "operation", Maps.of("adapter", "test:echo"))),
+			RequestContext.of(aliceDID)).awaitResult(5000);
+		VenueAuth bob = VenueAuth.keyPair(AKeyPair.generate(), venue.getDIDString().toString());
+
+		HttpResponse<String> own = getOperation("o/private-op", alice);
+		assertEquals(200, own.statusCode(), own.body());
+		assertNotNull(RT.getIn(JSON.parse(own.body()), "asset"), own.body());
+
+		HttpResponse<String> foreign = getOperation(aliceDID + "/o/private-op", bob);
+		assertEquals(403, foreign.statusCode(), foreign.body());
+		assertFalse(foreign.body().contains("test:echo"), foreign.body());
+	}
+
+	private HttpResponse<String> getOperation(String name, VenueAuth auth) throws Exception {
+		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
+		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/api/v1/operations/" + encoded))
+			.header("Authorization", "Bearer " + auth.mintToken())
+			.GET().timeout(Duration.ofSeconds(10)).build(), HttpResponse.BodyHandlers.ofString());
 	}
 
 	/**
