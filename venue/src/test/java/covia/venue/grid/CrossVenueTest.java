@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
+import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -360,6 +361,39 @@ public class CrossVenueTest {
 			Fields.INPUT, Maps.empty()), TwoVenueTestServer.ENGINE_A.venueContext());
 		assertEquals(Strings.create(TwoVenueTestServer.DID_A),
 			RT.getIn(hop.awaitResult(10_000), Fields.CALLER));
+	}
+
+	/**
+	 * A user reaches the venue's own resources at another venue through a grant
+	 * from the venue, as themselves: A keeps a document in its namespace at B,
+	 * issues Alice read on it, and Alice reads it at B.
+	 */
+	@Test
+	public void venueGrantReachesItsResourcesElsewhere() throws Exception {
+		TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(OP_GRID_RUN, Maps.of(
+			Fields.OPERATION, "v/ops/covia/write",
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "venue",
+			Fields.INPUT, Maps.of(Fields.PATH, "w/venue-share/doc", Fields.VALUE, "shared by A")),
+			TwoVenueTestServer.ENGINE_A.venueContext()).awaitResult(10_000);
+
+		AKeyPair aliceKP = AKeyPair.generate();
+		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
+		ACell issued = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation("v/ops/ucan/issue", Maps.of(
+			"aud", aliceDID,
+			"att", Vectors.of(Maps.of("with", "w/venue-share/", "can", Capability.CRUD_READ)),
+			"exp", (System.currentTimeMillis() / 1000) + 3600),
+			TwoVenueTestServer.ENGINE_A.venueContext()).awaitResult(10_000);
+
+		VenueHTTP aliceOnB = VenueHTTP.create(
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP));
+		aliceOnB.setUcans(java.util.List.of(RT.getIn(issued, "token").toString()));
+		Job read = aliceOnB.invokeAndWait(Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, TwoVenueTestServer.DID_A + "/w/venue-share/doc"));
+		assertEquals(Status.COMPLETE, read.getStatus(),
+			"a venue-issued grant should reach the venue's resources at B: "
+				+ RT.getIn(read.getData(), Fields.ERROR));
+		assertEquals(Strings.create("shared by A"), RT.getIn(read.getData(), Fields.OUTPUT, "value"));
 	}
 
 	/**

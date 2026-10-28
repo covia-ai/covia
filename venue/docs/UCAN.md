@@ -1150,10 +1150,11 @@ the authentication channel. The three concerns never infer one another:
   its agents, and never by delegation. Whoever authenticates as a principal
   holds all of its ambient standing — at the target, and at the venue itself
   when the target is its own URL — so a right to it would amount to every
-  right the venue has. A user reaches what a target granted this venue
-  through capabilities instead: the venue re-delegates the specific grant, and
-  the user presents the chain with `authenticateAs: "caller"` (custodial users
-  through C3b attestation).
+  right the venue has. A user reaches the venue's own resources at a target
+  through capabilities instead: a `ucan:issue` grant from the venue, presented
+  with `authenticateAs: "caller"` (custodial users through C3b attestation).
+  `ucan:issue` mints roots only, so a grant a target made to this venue cannot
+  yet be re-delegated to a user.
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context
