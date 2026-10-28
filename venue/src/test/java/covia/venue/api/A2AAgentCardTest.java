@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.AString;
@@ -358,6 +359,47 @@ public class A2AAgentCardTest {
 		assertEquals(403, post(endpoint, rpcEnvelope("carol", "SendMessage",
 				new MessageSendParams(userMessage("hello desk"), null, null)),
 				bearerFor(AKeyPair.generate())).statusCode());
+	}
+
+	@Test
+	public void ucanDelegateAsksThroughA2A() throws Exception {
+		AKeyPair ownerKp = AKeyPair.generate();
+		AString ownerDid = didOf(ownerKp);
+		AKeyPair carolKp = AKeyPair.generate();
+		AString carolDid = didOf(carolKp);
+		String carolJwt = bearerFor(carolKp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(ownerKp)));
+		client.setTimeout(5000);
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Delegated"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/echo"))));
+		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/Delegated";
+		Object env = rpcEnvelope("carol", "SendMessage",
+				new MessageSendParams(userMessage("hello delegated"), null, null));
+		assertEquals(403, post(endpoint, env, carolJwt).statusCode(), "no admission, no proof");
+
+		// The owner's agent/request grant, presented in X-Covia-Ucans, admits Carol.
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString proof = UCAN.createJWT(ownerKp, carolKp.getAccountKey(), exp,
+				Vectors.of(Capability.create(Strings.create(ownerDid + "/g/Delegated"),
+						covia.api.Abilities.AGENT_REQUEST)),
+				Vectors.empty());
+		HttpRequest request = HttpRequest.newBuilder(URI.create(BASE_URL + endpoint))
+				.header("Content-Type", "application/json")
+				.header("Authorization", "Bearer " + carolJwt)
+				.header(VenueHTTP.UCANS_HEADER, proof.toString())
+				.POST(HttpRequest.BodyPublishers.ofString(JsonUtil.OBJECT_MAPPER.toJson(env)))
+				.timeout(Duration.ofSeconds(10))
+				.build();
+		HttpResponse<String> asked = http.send(request, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, asked.statusCode(), asked.body());
+		Map<String, Object> parsed = parse(asked);
+		assertNull(parsed.get("error"), "the delegate is admitted: " + parsed);
+		assertEquals(carolDid, TestServer.ENGINE.jobs()
+				.getJobData(Blob.fromHex(extractTask(parsed).id()), covia.venue.RequestContext.of(carolDid))
+				.get(Fields.CALLER), "the request is the delegate's own");
 	}
 
 	@Test

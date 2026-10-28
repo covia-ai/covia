@@ -54,12 +54,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.
 - A token refresh never brings back a disconnected account, and a callback for a
   deleted account stores nothing.
-- A per-agent A2A request is the asker's own, not the owner's: its task calls reach
-  only the asker's tasks for that agent. The endpoint admits whoever `accepts` or a
-  UCAN admits, as every other way of asking does.
-- A capability scope bounds job and scheduled-event access for every context; only
-  an unscoped one is the owner outright. Anonymous callers can no longer cancel or
-  delete each other's jobs under a read-only public scope.
+- A per-agent A2A request is the asker's own, admitted by `accepts` or a UCAN, and
+  its task calls reach only the asker's tasks for that agent (#619).
+- A capability scope bounds job and scheduled-event access for every context.
 
 ### Migration
 
@@ -71,11 +68,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   grant on `s/oauth/<provider>` no longer covers one: grant `oauth/use` on
   `oauth/<provider>`.
 - The test adapter's state is at version 3, with two synthetic steps for migration tests.
-- A public agent's `a2a.caps` reads as `accepts: "anyone"` and bounds nothing.
-  Anonymous askers now need `auth.public.caps` to grant `invoke` on
-  `v/ops/agent/request` (and `v/ops/agent/message`); the read-only default does not.
-- An explicit `auth.public.caps` must grant `crud/read` on the public principal's
-  jobs (`j`) for anonymous callers to follow them.
+- A public agent's `a2a.caps` reads as `accepts: "anyone"`; beside a different
+  `accepts` it is refused.
+- Anonymous askers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
+  and `v/ops/agent/message`.
+- An explicit `auth.public.caps` needs `crud/read` on `j` for anonymous callers to
+  follow their jobs.
 
 ## [0.10.0] - 2026-10-26
 

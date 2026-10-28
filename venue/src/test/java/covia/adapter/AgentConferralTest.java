@@ -20,6 +20,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Admission;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -180,8 +181,8 @@ public class AgentConferralTest {
 	public void testOwnerConfersFreely() {
 		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "open",
 			Fields.CONFIG, config(null)
-				.assoc(Fields.ACCEPTS, Vectors.of(bob))
-				.assoc(Fields.A2A, Maps.of("public", true, "caps", "unrestricted"))), ALICE));
+				.assoc(Fields.ACCEPTS, Admission.ANYONE)
+				.assoc(Fields.A2A, Maps.of("public", true))), ALICE));
 		assertTrue(engine.crossUserAllows(BOB, Strings.create(alice + "/g/open"), Abilities.AGENT_REQUEST));
 	}
 

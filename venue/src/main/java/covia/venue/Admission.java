@@ -55,6 +55,10 @@ public final class Admission {
 	/** Every caller, the anonymous public principal included. */
 	public static final AString ANYONE = Strings.intern("anyone");
 
+	/** Why an older public {@code a2a.caps} cannot stand beside an {@code accepts} that says otherwise. */
+	public static final String A2A_CAPS_OVERRIDES_ACCEPTS =
+		"a2a.caps on a public agent admits anyone and would override accepts; remove a2a.caps and say who may ask in accepts";
+
 	private static final AString K_PUBLIC = Strings.intern("public");
 	private static final AString K_CAPS = Strings.intern("caps");
 
@@ -75,6 +79,22 @@ public final class Admission {
 			return ANYONE;
 		}
 		return config.get(Fields.ACCEPTS);
+	}
+
+	/**
+	 * What is wrong with an agent config's admission, or null when it is
+	 * well-formed: a malformed {@code accepts}, or an older public
+	 * {@code a2a.caps} beside an {@code accepts} it would silently override.
+	 */
+	public static String configProblem(AMap<AString, ACell> config) {
+		if (config == null) return null;
+		ACell accepts = config.get(Fields.ACCEPTS);
+		String malformed = problem(accepts);
+		if (malformed != null) return "accepts " + malformed;
+		if (accepts != null && !ANYONE.equals(accepts) && ANYONE.equals(policy(config))) {
+			return A2A_CAPS_OVERRIDES_ACCEPTS;
+		}
+		return null;
 	}
 
 	/**

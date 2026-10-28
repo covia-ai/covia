@@ -390,6 +390,28 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testOlderA2ACapsCannotSilentlyOverrideAccepts() {
+		// A public agent's a2a.caps reads as accepts "anyone", so an accepts beside
+		// it that says otherwise is refused rather than silently overridden.
+		AMap<AString, ACell> legacy = Maps.of(Fields.A2A, Maps.of("public", true, "caps", "unrestricted"));
+		Job both = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "legacy-both", Fields.CONFIG, legacy.assoc(Fields.ACCEPTS, Vectors.of(BOB_DID))),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> both.awaitResult(5000));
+		assertTrue(both.getErrorMessage().contains(Admission.A2A_CAPS_OVERRIDES_ACCEPTS), both.getErrorMessage());
+
+		Job created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "legacy-open", Fields.CONFIG, legacy), RequestContext.of(ALICE_DID));
+		created.awaitResult(5000);
+		Job narrowed = engine.jobs().invokeOperation("v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "legacy-open", Fields.CONFIG, Maps.of(Fields.ACCEPTS, Vectors.of(BOB_DID))),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> narrowed.awaitResult(5000));
+		assertTrue(narrowed.getErrorMessage().contains(Admission.A2A_CAPS_OVERRIDES_ACCEPTS),
+			narrowed.getErrorMessage());
+	}
+
+	@Test
 	public void testAdmissionMalformedPolicyIsRejectedAtAuthorTime() {
 		for (ACell bad : new ACell[] {Strings.create("everyone"), Vectors.of(Strings.create("bob")), CVMLong.create(42)}) {
 			Job create = engine.jobs().invokeOperation("v/ops/agent/create",

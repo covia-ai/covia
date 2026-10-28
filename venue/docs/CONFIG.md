@@ -2960,7 +2960,8 @@ no `invoke`, so anonymous askers are refused until the operator opts in.
 Every anonymous caller is that one principal, so they share its jobs: under a
 read-only scope any of them can read an anonymous task by its id, and none can
 cancel it. An older config with `a2a.caps` on a public agent reads as
-`accepts: "anyone"`; `a2a.caps` bounds nothing. Wire method names are
+`accepts: "anyone"`; `a2a.caps` bounds nothing, and beside an `accepts` that
+says otherwise it is refused at create and update. Wire method names are
 SDK-style (`SendMessage`, not `message/send`). The full addressing, discovery
 and publication model is in [A2A_AGENTS.md](./A2A_AGENTS.md), the
 implementation companion to COG-14; who may ask an agent and what it does then

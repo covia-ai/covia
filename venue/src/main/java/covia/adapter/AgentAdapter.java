@@ -5241,9 +5241,9 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects");
 		// Admission is security configuration: a policy that would fail closed at
 		// runtime must fail loudly here instead (#447).
-		String acceptsProblem = Admission.problem(config.get(Fields.ACCEPTS));
-		if (acceptsProblem != null) {
-			throw new IllegalArgumentException("config.accepts " + acceptsProblem);
+		String admissionProblem = Admission.configProblem(config);
+		if (admissionProblem != null) {
+			throw new IllegalArgumentException("config." + admissionProblem);
 		}
 		requireConfigType(config, K_CONTEXT, AVector.class, "an array of context entries");
 		requireConfigType(config, Fields.LOADS, AMap.class, "a map of path to load options");

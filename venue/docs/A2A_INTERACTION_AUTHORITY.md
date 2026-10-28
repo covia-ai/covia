@@ -45,7 +45,9 @@ author holds `agent/request` and `agent/message` on the agent
 
 `a2a: {public: true}` publishes the agent's card and admits nobody. An older
 config with `a2a.caps` on a public agent reads as `accepts: "anyone"`
-(`Admission.policy`); `a2a.caps` bounds nothing.
+(`Admission.policy`); `a2a.caps` bounds nothing. Beside an `accepts` that says
+otherwise it would silently override the owner's policy, so create and update
+refuse that config (`Admission.configProblem`).
 
 ## What the agent does then
 
