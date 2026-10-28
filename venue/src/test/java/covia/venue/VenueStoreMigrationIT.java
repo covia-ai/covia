@@ -84,7 +84,7 @@ class VenueStoreMigrationIT {
 			assertUserIsolation(server, alice, bob);
 			// The test adapter's scratch value is at x/, at the test adapter's
 			// version: 0.9.11's moved from w/adapters in the start-up transaction.
-			assertEquals(1, server.getEngine().getVenueState().adapterVersion("test"));
+			assertEquals(new covia.adapter.TestAdapter().stateVersion(), server.getEngine().getVenueState().adapterVersion("test"));
 			assertEquals(Maps.of("origin", release), read(client(server, "11"), "x/test/scratch"));
 			assertNull(read(client(server, "22"), "x/test/scratch"));
 			write(client(server, "11"), "x/test/scratch/updated", Strings.create("after-upgrade"));

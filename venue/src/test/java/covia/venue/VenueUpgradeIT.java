@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import java.util.zip.ZipInputStream;
 
@@ -59,6 +60,11 @@ class VenueUpgradeIT {
 		return fixture.substring("covia-".length(), fixture.length() - ".zip".length());
 	}
 
+	/** The adapter state versions each release recorded, so the migrations each fixture starts from are known. */
+	private static final Map<String, Map<String, Long>> RELEASE_ADAPTER_VERSIONS = Map.of(
+		"0.9.11", Map.of(),
+		"0.10.0", Map.of("test", 1L));
+
 	private static final Comparator<String> BY_RELEASE = Comparator.comparing(
 		fixture -> Arrays.stream(release(fixture).split("\\.")).mapToInt(Integer::parseInt).toArray(), Arrays::compare);
 
@@ -76,6 +82,7 @@ class VenueUpgradeIT {
 			ACell released = store.getRootData();
 			VenueState.StoredVersions stored = VenueState.peekVersions(store, key.getAccountKey()).orElseThrow();
 			assertTrue(stored.venue() <= VenueState.CURRENT_VERSION, "a release fixture is never newer than this build");
+			assertEquals(RELEASE_ADAPTER_VERSIONS.get(text(manifest, "coviaVersion")), stored.adapters());
 			assertEquals(released, store.getRootData(), "peeking writes nothing");
 
 			Engine engine = new Engine(VenueStoreFixture.config(file), CoviaApplication.open(store, key), key).launch();
@@ -95,6 +102,9 @@ class VenueUpgradeIT {
 				String alice = text(users.get(0), "did");
 				assertEquals(Maps.of("origin", text(manifest, "coviaVersion")),
 					engine.adapterState("test").read("users/" + alice + "/scratch"));
+				// Each release's test adapter state predates its synthetic steps, which ran in order.
+				assertEquals(convex.core.data.Vectors.of(2L, 3L),
+					engine.adapterState("test").read(covia.adapter.TestAdapter.K_MIGRATIONS.toString()));
 
 				for (ACell user : users) verifyUser(engine, user);
 

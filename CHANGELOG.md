@@ -61,6 +61,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Connected accounts move out of the secret store on first access. A `secret/use`
   grant on `s/oauth/<provider>` no longer covers one: grant `oauth/use` on
   `oauth/<provider>`.
+- The test adapter's state is at version 3, with two synthetic steps for migration tests.
 
 ## [0.10.0] - 2026-10-26
 

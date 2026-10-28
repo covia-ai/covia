@@ -61,18 +61,38 @@ public class TestAdapter extends AAdapter {
 		return Maps.of(K_LATTICE, LATTICE_INFO);
 	}
 
+	/** The versions the synthetic steps reached, in the order they ran. */
+	public static final AString K_MIGRATIONS = Strings.intern("migrations");
+	public static final String UNRECOGNISED_STATE = "Test adapter state is not in version %d's shape";
+
 	/**
 	 * Version 1 is version 0's shape, {@code users/<did>/scratch}, unchanged.
-	 * The test adapter versions its state so every venue, and the
-	 * release-written fixtures, run adapter state migration at start-up.
+	 * Versions 2 and 3 are synthetic, so every venue and the release-written
+	 * fixtures run real steps in order at start-up: each appends the version it
+	 * reaches to {@link #K_MIGRATIONS}, and refuses state whose log does not
+	 * hold exactly the steps before it. State first written at version 3 has no
+	 * log.
 	 */
 	@Override public long stateVersion() {
-		return 1;
+		return 3;
 	}
 
 	@Override public ACell migrateState(long version, ACell state) {
-		if (version == 0) return state;
-		return super.migrateState(version, state);
+		return switch ((int) version) {
+			case 0 -> state;
+			case 1 -> logStep(state, Vectors.empty(), 2);
+			case 2 -> logStep(state, Vectors.of(2L), 3);
+			default -> super.migrateState(version, state);
+		};
+	}
+
+	private static ACell logStep(ACell state, AVector<ACell> before, long reached) {
+		AMap<AString, ACell> record = RT.ensureMap(state);
+		ACell log = (record == null) ? null : record.get(K_MIGRATIONS);
+		if (record == null || !before.equals(log == null ? Vectors.empty() : log)) {
+			throw new IllegalStateException(UNRECOGNISED_STATE.formatted(reached - 1));
+		}
+		return record.assoc(K_MIGRATIONS, before.conj(CVMLong.create(reached)));
 	}
 
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */

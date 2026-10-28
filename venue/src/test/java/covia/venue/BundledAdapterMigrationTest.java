@@ -18,10 +18,12 @@ import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.AuthAdapter;
+import covia.adapter.TestAdapter;
 import covia.lattice.Covia;
 import covia.lattice.WorkspaceRoot;
 
@@ -33,8 +35,8 @@ import covia.lattice.WorkspaceRoot;
  */
 class BundledAdapterMigrationTest {
 
-	/** The test adapter's state at versions 0 and 1: the same shape. */
-	private static final ACell TEST_STATE = Maps.of("users",
+	/** The test adapter's state at versions 0 and 1, the same shape; its synthetic steps log themselves. */
+	private static final AMap<AString, ACell> TEST_STATE = Maps.of("users",
 		Maps.of("did:test:bundled-scratch", Maps.of("scratch", Maps.of("note", "kept"))));
 
 	/**
@@ -44,7 +46,9 @@ class BundledAdapterMigrationTest {
 	 * until it has one.
 	 */
 	static final Map<String, List<ACell>> STATES = Map.of(
-		"test", List.of(TEST_STATE, TEST_STATE));
+		"test", List.of(TEST_STATE, TEST_STATE,
+			TEST_STATE.assoc(TestAdapter.K_MIGRATIONS, Vectors.of(2L)),
+			TEST_STATE.assoc(TestAdapter.K_MIGRATIONS, Vectors.of(2L, 3L))));
 
 	/** New instances of every adapter in covia.jar. */
 	private static List<AAdapter> bundled() {
@@ -101,21 +105,25 @@ class BundledAdapterMigrationTest {
 		}
 	}
 
-	/** The general mechanics, run by the real test adapter across successive starts of one venue. */
+	/** The general mechanics, run by the real test adapter's steps across successive starts of one venue. */
 	@Test void theTestAdapterRunsTheGeneralMechanics() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		CoviaApplication application = CoviaApplication.create(key);
 		AMap<AString, ACell> disabled = Maps.of(Config.ADAPTERS, Maps.of("test", Maps.of(Config.ENABLED, CVMBool.FALSE)));
+		List<ACell> states = STATES.get("test");
+		ACell migrated = states.get(states.size() - 1);
+		long supported = new TestAdapter().stateVersion();
 
-		// A disabled adapter migrates too: its legacy value moves and its version is recorded.
+		// A disabled adapter migrates too: its legacy value moves, every step runs
+		// in order, and its version is recorded.
 		Engine first = new Engine(disabled, application, key);
 		try {
 			VenueState seed = application.venue(key.getAccountKey());
 			seed.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, first.getDIDString()));
-			seed.users().ensure(first.getDIDString()).writeInternalPath(WorkspaceRoot.parseStringPath("w/adapters/test"), TEST_STATE);
+			seed.users().ensure(first.getDIDString()).writeInternalPath(WorkspaceRoot.parseStringPath("w/adapters/test"), states.get(0));
 			first.prepareLaunch();
-			assertEquals(1, first.getVenueState().adapterVersion("test"));
-			assertEquals(TEST_STATE, first.getVenueState().adapterState("test").get());
+			assertEquals(supported, first.getVenueState().adapterVersion("test"));
+			assertEquals(migrated, first.getVenueState().adapterState("test").get());
 		} finally {
 			first.close();
 		}
@@ -128,30 +136,45 @@ class BundledAdapterMigrationTest {
 			second.prepareLaunch();
 			assertSame(current, RT.getIn(second.getVenueState().get(), Covia.ADAPTERS));
 			// Engine.migrate covers installed adapters; launch would install it.
-			second.registerAdapter(new covia.adapter.TestAdapter());
+			second.registerAdapter(new TestAdapter());
 			second.migrate();
 			assertSame(current, RT.getIn(second.getVenueState().get(), Covia.ADAPTERS));
 
-			// State recorded at an older version, as a restore can bring it, migrates on the next call.
-			second.getVenueState().setAdapterVersion("test", 0);
+			// State at an older version, as a restore can bring it, runs only the
+			// steps from that version on the next call.
+			second.getVenueState().transact(draft -> {
+				draft.adapterState("test").set(states.get(2));
+				draft.setAdapterVersion("test", 2);
+			});
 			second.migrate();
-			assertEquals(1, second.getVenueState().adapterVersion("test"));
-			assertSame(current, RT.getIn(second.getVenueState().get(), Covia.ADAPTERS), "version 1's step keeps the shape");
-
-			// Stored state recorded by a newer build.
-			second.getVenueState().setAdapterVersion("test", 5);
+			assertEquals(supported, second.getVenueState().adapterVersion("test"));
+			assertEquals(migrated, second.getVenueState().adapterState("test").get());
 		} finally {
 			second.close();
 		}
 
+		// A start refuses state a step does not recognise, writing nothing: the
+		// current state recorded at version 1 already holds the later steps' log.
+		venue.setAdapterVersion("test", 1);
+		ACell mislabelled = venue.get();
+		Engine unrecognised = new Engine(Maps.empty(), application, key);
+		try {
+			IllegalStateException error = assertThrows(IllegalStateException.class, unrecognised::prepareLaunch);
+			assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1), error.getMessage());
+		} finally {
+			unrecognised.close();
+		}
+		assertSame(mislabelled, venue.get(), "the refused start wrote nothing");
+
 		// A start refuses stored state newer than the adapter, writing nothing.
+		venue.setAdapterVersion("test", supported + 1);
 		ACell before = venue.get();
 		Engine refused = new Engine(Maps.empty(), application, key);
 		try {
 			UnsupportedVersionException error = assertThrows(UnsupportedVersionException.class, refused::prepareLaunch);
 			assertEquals("test", error.adapter());
-			assertEquals(5, error.stored());
-			assertEquals(1, error.supported());
+			assertEquals(supported + 1, error.stored());
+			assertEquals(supported, error.supported());
 		} finally {
 			refused.close();
 		}
@@ -162,9 +185,21 @@ class BundledAdapterMigrationTest {
 		Engine taken = new Engine(Maps.empty(), application, key);
 		try {
 			taken.prepareLaunch();
-			assertEquals(1, taken.getVenueState().adapterVersion("test"));
+			assertEquals(supported, taken.getVenueState().adapterVersion("test"));
 		} finally {
 			taken.close();
 		}
+	}
+
+	/** A step refuses state that is not its version's shape. */
+	@Test void theTestAdapterStepsRefuseOtherShapes() {
+		TestAdapter adapter = new TestAdapter();
+		List<ACell> states = STATES.get("test");
+		assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1),
+			assertThrows(IllegalStateException.class, () -> adapter.migrateState(1, Vectors.of("not a map"))).getMessage());
+		assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1),
+			assertThrows(IllegalStateException.class, () -> adapter.migrateState(1, states.get(2))).getMessage(), "a step runs once");
+		assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(2),
+			assertThrows(IllegalStateException.class, () -> adapter.migrateState(2, states.get(1))).getMessage(), "steps run in order");
 	}
 }

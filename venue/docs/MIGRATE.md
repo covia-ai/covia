@@ -44,7 +44,8 @@ calls an embedder makes in [EMBEDDING.md](EMBEDDING.md).
 ## Older shapes this build reads
 
 The venue is at version 1. Each adapter records its own state version; only
-the test adapter versions its state so far.
+the test adapter versions its state so far, with synthetic steps that show
+which steps ran ([ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)).
 
 | Older shape | Owner | Converted | Where |
 |-------------|-------|-----------|-------|

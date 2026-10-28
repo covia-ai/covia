@@ -203,11 +203,12 @@ public class ModuleLoaderTest {
 			Vectors.of(Strings.create(buildVersionedTestModuleJar(dir).toString())));
 		AKeyPair key = AKeyPair.generate();
 		String record = "users/did:test:versioned-scratch";
-		AMap<AString, ACell> migrated = Maps.of("scratch", "kept", "migrated", 2L);
+		long builtIn = new covia.adapter.TestAdapter().stateVersion();
+		AMap<AString, ACell> migrated = Maps.of("scratch", "kept", "migrated", builtIn + 1);
 		try (EtchStore store = TestTemp.etch("module-migration")) {
 			Engine built = new Engine(Maps.empty(), CoviaApplication.open(store, key), key).launch();
 			try {
-				assertEquals(1, built.getVenueState().adapterVersion("test"));
+				assertEquals(builtIn, built.getVenueState().adapterVersion("test"));
 				built.adapterState("test").write(record + "/scratch", Strings.create("kept"));
 				built.flush();
 			} finally {
@@ -217,7 +218,7 @@ public class ModuleLoaderTest {
 			Engine upgraded = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
 			try {
 				assertTrue(upgraded.getAdapter("test").getClass().getClassLoader() instanceof ModuleClassLoader);
-				assertEquals(2, upgraded.getVenueState().adapterVersion("test"));
+				assertEquals(builtIn + 1, upgraded.getVenueState().adapterVersion("test"));
 				assertEquals(migrated, upgraded.adapterState("test").read(record));
 				upgraded.flush();
 			} finally {
@@ -226,7 +227,7 @@ public class ModuleLoaderTest {
 
 			Engine restarted = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
 			try {
-				assertEquals(2, restarted.getVenueState().adapterVersion("test"), "read back from the store");
+				assertEquals(builtIn + 1, restarted.getVenueState().adapterVersion("test"), "read back from the store");
 				assertEquals(migrated, restarted.adapterState("test").read(record));
 			} finally {
 				restarted.close();
@@ -244,8 +245,8 @@ public class ModuleLoaderTest {
 			try {
 				UnsupportedVersionException e = assertThrows(UnsupportedVersionException.class, refused::launch);
 				assertEquals("test", e.adapter());
-				assertEquals(2, e.stored());
-				assertEquals(1, e.supported());
+				assertEquals(builtIn + 1, e.stored());
+				assertEquals(builtIn, e.supported());
 			} finally {
 				refused.close();
 			}

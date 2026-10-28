@@ -467,9 +467,11 @@ modules, and adapters an operator or embedder adds all use the same hook.
 - A replaced instance keeps running until its replacement has registered. When
   loading a module at runtime that raises its state version, disable the old
   instance first.
-- The built-in test adapter is at version 1, with version 0's shape unchanged,
-  so every venue, the 0.9.11 fixture and `VenueMigrationEndToEndTest` run this
-  path.
+- The built-in test adapter is at version 3, so every venue, both release
+  fixtures and `VenueMigrationEndToEndTest` run this path. Version 1 keeps
+  version 0's shape. Versions 2 and 3 are synthetic: each step adds the
+  version it reaches to the state's `migrations` log, and refuses state not in
+  its version's shape, so a test sees which steps ran, in what order.
 
 ### User-visible extension routes
 

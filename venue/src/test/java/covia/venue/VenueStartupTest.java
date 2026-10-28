@@ -305,9 +305,10 @@ public class VenueStartupTest {
 		EtchStore store = TestTemp.etch("startup-newer-adapter");
 		java.io.File file = store.getFile();
 		CoviaApplication application = CoviaApplication.open(store, key);
+		long supported = new covia.adapter.TestAdapter().stateVersion();
 		application.venue(key.getAccountKey()).cursor().set(convex.core.data.Index.<convex.core.data.Keyword, ACell>none()
 			.assoc(covia.lattice.Covia.ADAPTERS, Maps.of("test", Maps.of("users", Maps.empty())))
-			.assoc(covia.lattice.Covia.ADAPTER_VERSIONS, Maps.of("test", 2L)));
+			.assoc(covia.lattice.Covia.ADAPTER_VERSIONS, Maps.of("test", supported + 1)));
 		application.host().sync();
 		application.host().flush();
 		ACell before = store.getRootData();
@@ -318,8 +319,8 @@ public class VenueStartupTest {
 		while (cause != null && !(cause instanceof UnsupportedVersionException)) cause = cause.getCause();
 		UnsupportedVersionException refused = assertInstanceOf(UnsupportedVersionException.class, cause);
 		assertEquals("test", refused.adapter());
-		assertEquals(2, refused.stored());
-		assertEquals(1, refused.supported());
+		assertEquals(supported + 1, refused.stored());
+		assertEquals(supported, refused.supported());
 		try (EtchStore reopened = EtchStore.create(file)) {
 			assertEquals(before, reopened.getRootData(), "the refused start wrote nothing");
 		}

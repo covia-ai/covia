@@ -28,7 +28,8 @@ mock-LLM agent with a completed, titled session. Both users deliberately have
 the same agent name. Alice also has a synthetic test-adapter scratch value,
 with no bot started: 0.9.11's is at the old `w/adapters/test` route, written by
 the venue user, exercising adapter-state migration; 0.10.0's is in the test
-adapter's own state.
+adapter's own state, at version 1. Both then run the test adapter's later
+steps.
 
 ## Run
 
