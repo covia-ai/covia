@@ -3681,9 +3681,9 @@ public class Engine {
 	 *   <li><b>Target-side admission</b> (covia#447) — an agent record's
 	 *       {@code config.accepts}: the owner's standing policy for who may
 	 *       talk to that agent ({@code agent/request}, {@code agent/message})
-	 *       without a delegation — the venue operator, or exact principal
-	 *       DIDs. Consulted for that one resource shape and those abilities
-	 *       only; never admits the public principal. See {@link Admission}.</li>
+	 *       without a delegation — the venue operator, exact principal DIDs,
+	 *       or anyone. Consulted for that one resource shape and those
+	 *       abilities only. See {@link Admission}.</li>
 	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
 	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
 	 * </ol>
@@ -3729,13 +3729,11 @@ public class Engine {
 	 * for who may talk to their agent, consulted for exactly one resource shape —
 	 * an agent record {@code <owner>/g/<id>} — and the two talk abilities. The
 	 * policy algebra is {@link Admission}; this method only locates the record.
-	 * The public principal is never admitted here: anonymous exposure stays
-	 * A2A's {@code a2a.public} + {@code a2a.caps}.
 	 */
 	private boolean admissionAllows(RequestContext ctx, AString resource, AString ability) {
 		if (!isTalkAbility(ability)) return false;
 		AString caller = ctx.getCallerDID();
-		if (caller == null || isPublicPrincipal(caller)) return false;
+		if (caller == null) return false;
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
 		String rest = resource.toString().substring(owner.toString().length());
@@ -3745,8 +3743,8 @@ public class Engine {
 		User user = venueState.users().get(owner);
 		AgentState agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null) return false;
-		ACell accepts = RT.getIn(agent.getConfig(), Fields.ACCEPTS);
-		return Admission.admits(accepts, caller, isVenuePrincipal(ctx.getUserDID()));
+		return Admission.admits(Admission.policy(agent.getConfig()), caller,
+			isVenuePrincipal(ctx.getUserDID()), isPublicPrincipal(caller));
 	}
 
 	/**

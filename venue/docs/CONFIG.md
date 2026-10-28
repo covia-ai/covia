@@ -2942,17 +2942,29 @@ LAN-reachable one. The agent-card GET is public and works regardless.
 addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
 `agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
 `SubscribeToTask`, `GetExtendedAgentCard`), with its card at the A2A well-known
-path below that base. Private by default: the owner interacts as themselves; anonymous
-non-owners get an existence-hiding 404, authenticated non-owners 403.
-Publishing is per-agent config: `a2a: {public: true}` makes the card
-discoverable; adding an explicit `a2a.caps` scope accepts stranger
-messages, dispatched as the OWNER narrowed by that scope — it must include
-`agent/request` plus whatever the agent's own work needs. `"unrestricted"`
-grants full owner authority (logged loudly). Wire method names are SDK-style
-(`SendMessage`, not `message/send`). The full addressing, discovery and
-publication model is in [A2A_AGENTS.md](./A2A_AGENTS.md), the implementation
-companion to COG-14; non-owner run authority is detailed in
-[A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md).
+path below that base. Private by default: whoever may ask the agent may use
+the endpoint — the owner, a caller the agent's `config.accepts` admits, or one
+presenting an `agent/request` UCAN in `X-Covia-Ucans`. Anyone else gets an
+existence-hiding 404 (anonymous) or 403 (authenticated). Each request is the
+asker's own Job, and the agent serves it as itself, under its own
+`config.caps`, so `caps` is what the owner offers everyone the agent admits.
+Task calls reach only the asker's own tasks for that agent.
+
+`a2a: {public: true}` publishes the card; it admits nobody. `accepts:
+"anyone"` lets anonymous callers ask. They ask as the venue's public
+principal, so the operator decides whether they may at all: an explicit
+`auth.public.caps` must grant `invoke` on `v/ops/agent/request` (and on
+`v/ops/agent/message` to continue a task), and `crud/read` on the public
+principal's jobs to follow them. The read-only default grants the reads but
+no `invoke`, so anonymous askers are refused until the operator opts in.
+Every anonymous caller is that one principal, so they share its jobs: under a
+read-only scope any of them can read an anonymous task by its id, and none can
+cancel it. An older config with `a2a.caps` on a public agent reads as
+`accepts: "anyone"`; `a2a.caps` bounds nothing. Wire method names are
+SDK-style (`SendMessage`, not `message/send`). The full addressing, discovery
+and publication model is in [A2A_AGENTS.md](./A2A_AGENTS.md), the
+implementation companion to COG-14; who may ask an agent and what it does then
+is in [A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md).
 
 Minimal authenticated per-agent request:
 
@@ -2981,8 +2993,8 @@ curl -sS "$AGENT_URL" \
 
 The result is an A2A Task. Poll its `id` at the same `AGENT_URL` with
 `{"jsonrpc":"2.0","id":"get-1","method":"GetTask","params":{"id":"<task-id>"}}`.
-The `Authorization` header may be omitted only when the agent is explicitly
-published with an `a2a.caps` scope that permits the interaction.
+The `Authorization` header may be omitted only when the agent accepts
+`"anyone"` and `auth.public.caps` lets anonymous callers ask.
 
 `SendMessage` never waits for the agent turn to finish. It returns the current
 Task snapshot as soon as the durable Job has been submitted: Task `id` is the

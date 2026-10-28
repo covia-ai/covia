@@ -314,14 +314,16 @@ public class SchedulerTest {
 	 * The owner's caps are captured at schedule time and re-enforced at fire
 	 * time: a deferred op the caps do not cover is denied — exactly as it would
 	 * be on the immediate {@code invokeOperation} path. Guards against the
-	 * scheduler firing under more authority than the owner held.
+	 * scheduler firing under more authority than the owner held. A scoped
+	 * context manages only the events it made, so it is an agent, named as
+	 * the event's actor.
 	 */
 	@Test
 	public void testCapsReplayDeniesUncoveredOp() {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
 			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.of(did).withCaps(caps);
+		RequestContext capCtx = RequestContext.ofAgent(did, s("scoped")).withCaps(caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/forbidden/x")), capCtx, future());
@@ -337,7 +339,7 @@ public class SchedulerTest {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
 			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.of(did).withCaps(caps);
+		RequestContext capCtx = RequestContext.ofAgent(did, s("scoped")).withCaps(caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/allowed/nothing")), capCtx, future());

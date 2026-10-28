@@ -366,9 +366,9 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testAdmittedRequestRunsWithTheOwnersAuthority() {
-		// Admission decides who may ask; the run that serves the request is the
-		// agent's own, bounded only by its config.caps. So it reads the owner's
+	public void testAdmittedRequestIsTheCallersAndTheAgentActsAsItself() {
+		// Admission decides only who may ask. The agent serves the request as
+		// itself, under its own config.caps (none here), so it reads its owner's
 		// workspace for a caller who cannot read it directly.
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		RequestContext bob = RequestContext.of(BOB_DID);
@@ -384,9 +384,9 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, Maps.of("readPath", "w/private-note")), bob);
 		ACell result = request.awaitResult(5000);
 		assertEquals(Strings.create("alice only"), RT.getIn(result, Fields.OUTPUT, "completed"),
-			"the run served Bob with Alice's authority");
+			"the agent served Bob with its own authority");
 		assertEquals(BOB_DID, engine.jobs().getJobData(request.getID(), bob).get(Fields.CALLER),
-			"the request stays attributed to the admitted caller");
+			"the request is the admitted caller's own");
 	}
 
 	@Test
@@ -403,7 +403,7 @@ public class AgentAdapterTest {
 
 		AString address = createAgentAs(RequestContext.of(ALICE_DID), "later-bad", Admission.VENUE);
 		Job update = engine.jobs().invokeOperation("v/ops/agent/update",
-			Maps.of(Fields.AGENT_ID, "later-bad", Fields.CONFIG, Maps.of(Fields.ACCEPTS, Strings.create("anyone"))),
+			Maps.of(Fields.AGENT_ID, "later-bad", Fields.CONFIG, Maps.of(Fields.ACCEPTS, Strings.create("everyone"))),
 			RequestContext.of(ALICE_DID));
 		assertThrows(covia.exception.JobFailedException.class, () -> update.awaitResult(5000));
 		assertTrue(engine.crossUserAllows(engine.venueContext(), address, Abilities.AGENT_REQUEST),

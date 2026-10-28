@@ -1224,14 +1224,24 @@ public class JobManager {
 	 *
 	 * @throws AuthException if the caller does not own the job
 	 */
-	@SuppressWarnings("unchecked")
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
 		AMap<AString, ACell> current = getJobData(jobID, ctx);
 		if (current == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
 		requireJobOwner(ctx, jobID, current);
+		appendToHistory(jobID, ctx.getUserDID(), record);
+	}
+
+	/**
+	 * Framework form of {@link #appendToHistory(Blob, AMap, RequestContext)}:
+	 * records a message the venue itself has accepted for a job of
+	 * {@code ownerDID}, such as the per-agent A2A endpoint recording an ask it
+	 * admitted. No caller check: trust is established by the call path, as for
+	 * {@link #getJobData(Blob)}.
+	 */
+	public void appendToHistory(Blob jobID, AString ownerDID, AMap<AString, ACell> record) {
 		Job live = activeJobs.get(jobID);
 		User user = live instanceof VenueJob job ? job.account()
-			: engine.getVenueState().users().get(ctx.getUserDID());
+			: engine.getVenueState().users().get(ownerDID);
 		if (user != null && user.job(jobID).appendHistory(record) && live instanceof VenueJob job) {
 			job.historyUpdated();
 		}

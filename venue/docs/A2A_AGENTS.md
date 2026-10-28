@@ -88,10 +88,10 @@ time (§ resolution and authorisation), not by hiding the address space.
 ## Resolution and authorisation
 
 An inbound interaction (1) resolves the target agent from the endpoint, then (2)
-dispatches to `agent:chat` / `agent:request` under the caller's
+dispatches to `agent:request` / `agent:message` under the caller's
 `RequestContext`. The capability check is the existing one (COG-10 / COG-13):
-owner, a presented capability over `<ownerDID>/g/<agentId>`, or an agent the
-owner/operator made public. There is no A2A-specific branch in the trust
+owner, the agent's admission policy, or a presented capability over
+`<ownerDID>/g/<agentId>`. There is no A2A-specific branch in the trust
 decision.
 
 Agents are **private by default**. Denials are shaped so as not to leak an
@@ -99,32 +99,22 @@ agent's existence to callers with no standing: an **anonymous** caller gets a
 *not-found*, an **authenticated** caller without access gets a *forbidden*. (This
 mirrors how the current `GetTask` already hides foreign tasks.)
 
-Two independent levers open a private agent, and both already exist as
-primitives: a **UCAN capability** delegated on the agent's address (fine-grained,
-revocable), and an **explicit public flag** in the agent's config. The public
-flag is `a2a: { public: true, caps: … }` and has two levels:
+A private agent is opened the same way whichever door is used: the agent's
+admission policy `config.accepts` (named principals, the venue operator, or
+`"anyone"`), or a **UCAN capability** delegated on the agent's address. The
+**public flag** `a2a: { public: true }` only makes the agent's **card
+discoverable** by anyone; it admits nobody. An older config with `a2a.caps` on
+a public agent reads as `accepts: "anyone"`.
 
-- `public: true` alone makes the agent's **card discoverable** by anyone (no
-  interaction).
-- adding `caps` makes it **interactable** by non-owners. A non-owner's
-  `SendMessage` then runs the agent under the *owner's* identity narrowed by
-  that scope — `RequestContext.of(ownerDID).withCaps(scope)`. A scope can
-  only narrow, so it is escalation-safe. `caps: "unrestricted"` is honoured
-  (full owner authority for anonymous callers) with a warning, mirroring
-  `auth.public.caps`; a public agent with **no** `caps` is discoverable but its
-  interaction is **denied** (`publicInteractionAllowed` is false) — the owner
-  must deliberately bound a run.
+Every per-agent method runs as the asker: a `SendMessage` is the asker's own
+`agent:request` Job, and the agent serves it as itself, under its own
+`config.caps`. Task calls reach only the asker's own tasks for that agent.
 
 The operator's `defaultChatOp` front-door is the venue-level version of the
 public flag.
 
-The **run authority** for a non-owner interaction — whose identity executes, the
-scope applied, and how the public and delegated levers differ — is worked out
-in [A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md). In short: the
-agent always runs under its *owner's* identity; the levers are pure admission; a
-public run is narrowed by `a2a.caps`; the named-delegate scope (gated by a
-dedicated `agent/request` ability) and initiator-provenance are pending
-ratification there.
+Who may ask an agent, and what it does then, is in
+[A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md).
 
 ## Discovery
 
@@ -222,8 +212,8 @@ Shipped:
 - Authenticated catalogue discovery over the job-free agent-list read surface.
 - Per-agent `SendMessage` dispatch through `agent:request`, with Task = task Job
   and `contextId` = session — for fresh sends and `contextId` follow-ups alike (#416).
-- Private-by-default cards, explicit public publication, and attenuated
-  anonymous interaction scopes alongside UCAN delegation.
+- Private-by-default cards, explicit public publication, and the shared
+  admission check (`config.accepts`, UCAN delegation) for asking.
 - `GetTask` and `CancelTask` on the per-agent endpoint.
 - `SubscribeToTask` reattachment on the per-agent endpoint, backed by the same
   durable Job used by polling.

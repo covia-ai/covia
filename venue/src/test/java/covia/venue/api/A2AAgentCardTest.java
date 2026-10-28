@@ -51,6 +51,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.venue.Admission;
 import covia.venue.TestServer;
 import covia.venue.AgentState;
 
@@ -220,22 +221,21 @@ public class A2AAgentCardTest {
 	}
 
 	@Test
-	public void publicAgentWithCaps_acceptsAnonMessage_withoutCapsDenies() throws Exception {
+	public void agentAdmittingAnyone_answersAnonymousAskers_cardOnlyDoesNot() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		AString ownerDid = didOf(kp);
 		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
 		client.setTimeout(5000);
 
-		// Public agent WITH an explicit a2a.caps scope ("unrestricted" for the
-		// test) → an anonymous message/send runs under the owner, bounded by caps.
-		Job withCaps = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+		// accepts "anyone" lets an anonymous caller ask; a2a.public only
+		// publishes the card.
+		Job open = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Strings.create("agentId"), Strings.create("PubChat"),
 				Strings.create("config"), Maps.of(
 						Strings.create("operation"), Strings.create("v/test/ops/echo"),
-						Strings.create("a2a"), Maps.of(
-								Strings.create("public"), CVMBool.TRUE,
-								Strings.create("caps"), Strings.create("unrestricted")))));
-		assertEquals(Status.COMPLETE, withCaps.getStatus(), "create: " + withCaps.getErrorMessage());
+						Fields.ACCEPTS, Admission.ANYONE,
+						Strings.create("a2a"), Maps.of(Strings.create("public"), CVMBool.TRUE))));
+		assertEquals(Status.COMPLETE, open.getStatus(), "create: " + open.getErrorMessage());
 
 		Object env = rpcEnvelope("pm1", "SendMessage", new MessageSendParams(userMessage("hi public"), null, null));
 
@@ -246,31 +246,40 @@ public class A2AAgentCardTest {
 		Task anonTask = extractTask(parsed);
 		assertNotNull(anonTask);
 
-		// The anonymous sender polls its own task by id on the same endpoint.
-		// The lookup runs under the gated dispatch (owner) context, so a task
-		// minted through this endpoint stays visible to the remote sender —
-		// without this, the outbound a2a:send mirror can never observe
-		// completion of a task it created on a public agent.
+		// The anonymous asker polls its own task by id on the same endpoint;
+		// the outbound a2a:send mirror relies on this to observe completion.
 		Map<String, Object> polled = JsonUtil.OBJECT_MAPPER.fromJson(
 				post("/a2a/" + ownerDid + "/g/PubChat",
 						rpcEnvelope("pg1", "GetTask", new TaskQueryParams(anonTask.id(), null)), null).body(),
 				Map.class);
-		assertNull(polled.get("error"), "anonymous sender must be able to poll its task: " + polled.get("error"));
+		assertNull(polled.get("error"), "anonymous asker must be able to poll its task: " + polled.get("error"));
 		assertEquals(anonTask.id(), extractTask(polled).id());
 
-		// Public agent WITHOUT a2a.caps → discoverable, but an anonymous
-		// message/send is denied (card-only; the owner hasn't bounded a run).
-		Job noCaps = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+		// A public card alone admits nobody: discoverable, but asking is denied.
+		Job cardOnly = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Strings.create("agentId"), Strings.create("PubNoCaps"),
 				Strings.create("config"), Maps.of(
 						Strings.create("operation"), Strings.create("v/test/ops/echo"),
 						Strings.create("a2a"), Maps.of(Strings.create("public"), CVMBool.TRUE))));
-		assertEquals(Status.COMPLETE, noCaps.getStatus());
+		assertEquals(Status.COMPLETE, cardOnly.getStatus());
 		assertEquals(404, post("/a2a/" + ownerDid + "/g/PubNoCaps", env, null).statusCode());
+
+		// The older shape, a public agent with a2a.caps, reads as accepts "anyone".
+		Job legacy = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Strings.create("agentId"), Strings.create("PubLegacy"),
+				Strings.create("config"), Maps.of(
+						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("a2a"), Maps.of(
+								Strings.create("public"), CVMBool.TRUE,
+								Strings.create("caps"), Strings.create("unrestricted")))));
+		assertEquals(Status.COMPLETE, legacy.getStatus(), "create: " + legacy.getErrorMessage());
+		HttpResponse<String> legacyAsk = post("/a2a/" + ownerDid + "/g/PubLegacy", env, null);
+		assertEquals(200, legacyAsk.statusCode(), legacyAsk.body());
+		assertNull(parse(legacyAsk).get("error"), legacyAsk.body());
 	}
 
 	@Test
-	public void publicInteraction_runsWithOwnerAuthority_andReachesOwnerJobs() throws Exception {
+	public void anonymousAskIsTheAskersOwn_andTheAgentActsAsItself() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		AString ownerDid = didOf(kp);
 		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
@@ -279,20 +288,13 @@ public class A2AAgentCardTest {
 				Fields.PATH, Strings.create("w/private-note"),
 				Fields.VALUE, Strings.create("alice only"))).getStatus());
 
-		// a2a.caps admits anonymous requests and grants nothing else: no read of w/.
 		String agentId = "Lender";
 		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Fields.AGENT_ID, Strings.create(agentId),
 				Fields.CONFIG, Maps.of(
 						Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
 						"readPath", Strings.create("w/private-note"),
-						"a2a", Maps.of(
-								"public", CVMBool.TRUE,
-								"caps", Vectors.of(
-										Maps.of("with", Strings.create("g/" + agentId),
-												"can", covia.api.Abilities.AGENT_REQUEST),
-										Maps.of("with", Strings.create("v/ops/agent/request"),
-												"can", Strings.create("invoke")))))));
+						Fields.ACCEPTS, Admission.ANYONE)));
 		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
 
 		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
@@ -303,18 +305,59 @@ public class A2AAgentCardTest {
 		HttpResponse<String> polled = post(endpoint,
 				rpcEnvelope("lend-get", "GetTask", new TaskQueryParams(sent.id(), null)), null);
 		assertTrue(polled.body().contains("alice only"),
-				"the anonymous sender read the owner's workspace through the run: " + polled.body());
-		assertEquals(ownerDid, TestServer.ENGINE.jobs()
-				.getJobData(Blob.fromHex(sent.id()), covia.venue.RequestContext.of(ownerDid)).get(Fields.CALLER),
-				"the task is recorded as the owner's own request, not the anonymous sender's");
+				"the agent served the request as itself, with its own authority: " + polled.body());
+		AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
+		assertEquals(publicDid, TestServer.ENGINE.jobs()
+				.getJobData(Blob.fromHex(sent.id()), covia.venue.RequestContext.of(publicDid)).get(Fields.CALLER),
+				"the request is the anonymous asker's own");
 
-		// Public task calls run as the owner, so they accept any of the owner's job ids.
+		// The asker reaches its own tasks for this agent, never the owner's jobs.
 		Job unrelated = client.invokeAndWait(Strings.create("v/test/ops/echo"),
 				Maps.of("note", Strings.create("not from this agent")));
 		Map<String, Object> reached = parse(post(endpoint, rpcEnvelope("reach", "GetTask",
 				new TaskQueryParams(unrelated.getID().toHexString(), null)), null));
-		assertNull(reached.get("error"), "an unrelated owner job is reachable: " + reached);
-		assertEquals(unrelated.getID().toHexString(), extractTask(reached).id());
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(), errorCode(reached),
+				"an unrelated owner job is not reachable: " + reached);
+		Map<String, Object> cancelled = parse(post(endpoint, rpcEnvelope("reach-cancel", "CancelTask",
+				new CancelTaskParams(unrelated.getID().toHexString())), null));
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(), errorCode(cancelled),
+				"an unrelated owner job cannot be cancelled: " + cancelled);
+	}
+
+	@Test
+	public void callerAdmittedByAcceptsAsksThroughA2A() throws Exception {
+		AKeyPair ownerKp = AKeyPair.generate();
+		AString ownerDid = didOf(ownerKp);
+		AKeyPair bobKp = AKeyPair.generate();
+		AString bobDid = didOf(bobKp);
+		String bobJwt = bearerFor(bobKp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(ownerKp)));
+		client.setTimeout(5000);
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create("Desk"),
+				Fields.CONFIG, Maps.of(
+						Fields.OPERATION, Strings.create("v/test/ops/echo"),
+						Fields.ACCEPTS, Vectors.of(bobDid))));
+		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
+
+		// The one check every door shares: accepts admits Bob over A2A too.
+		String endpoint = "/a2a/" + ownerDid + "/g/Desk";
+		assertEquals(200, get(endpoint + "/.well-known/agent-card.json", bobJwt).statusCode(),
+				"whoever may ask sees the card");
+		Map<String, Object> asked = parse(post(endpoint, rpcEnvelope("bob", "SendMessage",
+				new MessageSendParams(userMessage("hello desk"), null, null)), bobJwt));
+		assertNull(asked.get("error"), "Bob is admitted: " + asked);
+		Task task = extractTask(asked);
+		assertEquals(bobDid, TestServer.ENGINE.jobs()
+				.getJobData(Blob.fromHex(task.id()), covia.venue.RequestContext.of(bobDid)).get(Fields.CALLER),
+				"the request is Bob's own");
+		assertNull(parse(post(endpoint, rpcEnvelope("bob-get", "GetTask",
+				new TaskQueryParams(task.id(), null)), bobJwt)).get("error"), "Bob follows his own task");
+
+		// Anyone accepts does not name is still refused.
+		assertEquals(403, post(endpoint, rpcEnvelope("carol", "SendMessage",
+				new MessageSendParams(userMessage("hello desk"), null, null)),
+				bearerFor(AKeyPair.generate())).statusCode());
 	}
 
 	@Test

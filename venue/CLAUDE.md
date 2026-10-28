@@ -170,13 +170,16 @@ per-agent `SendMessage` invokes `agent:request`; the resulting Covia task Job
 is the A2A Task, and its session is the A2A `contextId`. `GetTask` and
 `CancelTask` use the same per-agent endpoint.
 
-Per-agent exposure is private by default. The owner may always address their
-agent. Agent config `a2a: {public: true}` publishes the card; an explicit
-`a2a.caps` additionally permits anonymous interaction, running under the
-owner's identity narrowed by that scope. Card-only publication does not grant
-interaction. Anonymous denials are existence-hiding 404s; authenticated
-callers without standing receive 403. Native authentication and UCAN checks
-still apply—A2A introduces no new authority.
+Per-agent exposure is private by default. Whoever may ask the agent may use
+its endpoint: the owner, a caller the agent's `config.accepts` admits
+(`"anyone"` includes anonymous callers), or one presenting an `agent/request`
+UCAN — the same check as every other way of asking an agent. Each request is
+the asker's own, and the agent serves it as itself, under its own
+`config.caps`. Agent config `a2a: {public: true}` publishes the card and admits
+nobody. Anonymous callers ask as the venue's public principal, so
+`auth.public.caps` must also let them invoke the asking operations.
+Anonymous denials are existence-hiding 404s; authenticated callers without
+standing receive 403. A2A introduces no new authority.
 
 Detailed addressing, publication, identifier mapping and access semantics are
 in [`docs/A2A_AGENTS.md`](docs/A2A_AGENTS.md), the implementation companion to

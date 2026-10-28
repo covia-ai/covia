@@ -54,6 +54,7 @@ which steps ran ([ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)).
 | Job `prev` chain (#611) | Covia | Ignored on read, dropped on the next write | `Job.currentState` |
 | Agent frames with `conversation`/`items` → `history` | Covia | When a session cycle begins | `GoalTreeContext.migrateFrames` |
 | Session `loads` → the root frame's | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |
+| Public agent `a2a.caps` → `accepts: "anyone"` | Covia | Read as the newer shape; the stored config keeps it | `Admission.policy` |
 | Secrets at key version 1 (#535) | Covia | On that secret's next write | `SecretStore` |
 | Connected accounts as user secrets `oauth/<provider>` → `:adapters/oauth` connections | OAuth adapter | On that user's next use of their connections | `OAuthAdapter.moveLegacyGrants` |
 | Telegram session mappings, `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | On first read | `ConversationSessions` |

@@ -47,11 +47,12 @@ public class AccessControl {
 	 * no-ctx variants of {@link JobManager#getJobData(Blob)} and
 	 * {@code deliverMessage} — trust is established by call path, not by a flag.</p>
 	 *
-	 * <p>Sharing the owner's namespace is proximity, not permission. A
-	 * capability-scoped sub-principal (an agent with {@code caps}, a sudo
-	 * delegate) reaches a job it launched itself, recorded as the job's
-	 * {@code actor}, or one its authority covers for {@code ability} on
-	 * {@code <owner>/j/<id>}.</p>
+	 * <p>Sharing the owner's namespace is proximity, not permission. A context
+	 * with a capability scope (an agent with {@code caps}, a sudo delegate, the
+	 * venue's public principal under {@code auth.public.caps}) reaches a job a
+	 * sub-principal launched itself, recorded as the job's {@code actor}, or
+	 * one its authority covers for {@code ability} on {@code <owner>/j/<id>}.
+	 * Only an unscoped context is the owner outright.</p>
 	 *
 	 * @param ctx Request context with caller identity
 	 * @param jobData Job record map
@@ -66,7 +67,7 @@ public class AccessControl {
 		AString userDID = ctx.getUserDID();
 		if (userDID == null) return false;            // anonymous
 		if (!jobCaller.equals(userDID)) return false;
-		if (!ctx.isSubPrincipal() || ctx.getCaps() == null) return true;
+		if (ctx.getCaps() == null) return true;
 		if (ctx.getCallerDID().equals(jobData.get(Fields.ACTOR))) return true;
 		if (!(jobData.get(Fields.ID) instanceof Blob id)) return false;
 		return engine.authorityCovers(ctx, Strings.create(userDID + "/j/" + id.toHexString()), ability);
@@ -77,9 +78,9 @@ public class AccessControl {
 	 *
 	 * <p>Ownership first: the event's {@code owner} must be the request's user.
 	 * As for jobs, sharing the owner's namespace is proximity, not permission: a
-	 * capability-scoped sub-principal reaches only an event it scheduled itself,
-	 * recorded as the event's {@code actor}. Scheduled events are not a
-	 * capability resource, so no caps extend that reach.</p>
+	 * context with a capability scope reaches only an event a sub-principal
+	 * scheduled itself, recorded as the event's {@code actor}. Scheduled events
+	 * are not a capability resource, so no caps extend that reach.</p>
 	 *
 	 * @param ctx Request context with caller identity
 	 * @param event Scheduled event record
@@ -89,7 +90,7 @@ public class AccessControl {
 		if (event == null) return false;
 		AString userDID = ctx.getUserDID();
 		if (userDID == null || !userDID.equals(event.get(ScheduleState.K_OWNER))) return false;
-		if (!ctx.isSubPrincipal() || ctx.getCaps() == null) return true;
+		if (ctx.getCaps() == null) return true;
 		return ctx.getCallerDID().equals(event.get(ScheduleState.K_ACTOR));
 	}
 

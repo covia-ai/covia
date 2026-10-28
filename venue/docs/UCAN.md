@@ -675,15 +675,17 @@ rows — `agent/request` (`agent:request`, `agent:trigger`) and `agent/message`
 (`agent:message`, `agent:chat`, `agent:query`, `agent:step`) on `<ownerDID>/g/<id>` — may be
 admitted by the agent record's own `config.accepts`: `"owner"` (default:
 nobody without a delegation), `"venue"` (the venue operator — the venue
-principal and the agents it owns, never every user hosted here), or an array
-of principal DIDs matched exactly (a user DID admits that user only,
+principal and the agents it owns, never every user hosted here), `"anyone"`
+(every caller, the anonymous public principal included), or an array of
+principal DIDs matched exactly (a user DID admits that user only,
 `<userDID>:g:<agentId>` admits that one agent only; `"venue"` may appear as an
 entry). Admission is the owner's standing statement, evaluated inside the same
 single cross-user gate as proofs (`Engine.crossUserAllows`, see `Admission`),
-and it covers talking only: `crud/read`, `agent/write` and `agent/fork` still
-need a delegation. The public principal is never admitted — anonymous exposure
-remains A2A's `a2a.public` + `a2a.caps`. A malformed policy is rejected at
-`agent:create` / `agent:update`.
+for every way of asking, A2A included. It covers talking only: `crud/read`,
+`agent/write` and `agent/fork` still need a delegation. An admitted request is
+the caller's own, and the agent serves it under its own `caps`
+([A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md)). A malformed
+policy is rejected at `agent:create` / `agent:update`.
 
 File resources use URI form so they parse as standard hierarchical
 identifiers (per UCAN convention for `with`): the configured root is the URI
@@ -812,8 +814,9 @@ token, but it hands authority on, so the caller may confer only what it holds
 refuse a config whose `caps` the caller's own authority does not cover, one
 capability at a time; an absent `caps` is unrestricted, so only a caller
 unrestricted in that namespace may leave it out. The same holds for `accepts`,
-which confers `agent/request` and `agent/message` on the agent, and for a public
-`a2a.caps`. An agent may therefore create sub-agents, never more capable ones,
+which confers `agent/request` and `agent/message` on the agent (an older public
+`a2a.caps` reads as `accepts: "anyone"`). An agent may therefore create
+sub-agents, never more capable ones,
 and a delegated `agent/create` or `agent/write` confers nothing beyond the
 delegation. An update re-checks only the fields it changes. A direct
 `llmagent:chat` or `goaltree:chat` whose input `config.caps` would replace the

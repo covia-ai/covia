@@ -816,10 +816,12 @@ public class OrchestratorTest {
 		VenueServer remote = VenueServer.launch(Maps.of(
 			Config.PORT, CVMLong.ZERO, Config.STORE, "memory",
 			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
+			// Anonymous callers may invoke echo and follow the jobs it makes.
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, CVMBool.TRUE,
-				Config.CAPS, Vectors.of(Capability.create(
-					Strings.create("v/test/ops/echo"), Strings.create("invoke")))))));
+				Config.CAPS, Vectors.of(
+					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke")),
+					Capability.create(Strings.create("j"), Capability.CRUD_READ))))));
 		try {
 			String remoteUrl = "http://127.0.0.1:" + remote.port();
 			String nonStrict = storeJsonOrchestration("""

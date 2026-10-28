@@ -13,11 +13,14 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.CapabilityChecker;
 
 public class AccessControlTest {
 
@@ -262,5 +265,38 @@ public class AccessControlTest {
 		var internalJobs = engine.jobs().getJobs(engine.venueContext());
 		assertNotNull(internalJobs.get(venueJob.getID()),
 			"Internal should see venue's own jobs");
+	}
+
+	@Test
+	public void testPublicScopeBoundsSharedAnonymousJobs() {
+		// Every anonymous caller is the one public principal, so its jobs are
+		// shared: the operator's public scope decides what any of them may do.
+		AString pub = Strings.create(engine.getDIDString() + ":public");
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.of(Fields.MESSAGE, "anon-a"),
+			RequestContext.of(pub));
+		RequestContext readOnly = RequestContext.of(pub).withCaps(CapabilityChecker.readOnlyScope(pub));
+		try {
+			assertNotNull(engine.jobs().getJobData(job.getID(), readOnly), "a read is within the scope");
+			assertThrows(AuthException.class, () -> engine.jobs().cancelJob(job.getID(), readOnly),
+				"a read-only public caller must not cancel another anonymous caller's job");
+		} finally {
+			job.cancel();
+		}
+	}
+
+	@Test
+	public void testScopeBoundsAccessToTheUsersOwnJobs() {
+		// Only an unscoped context is the owner outright; a scope counts here as
+		// at every other check.
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.of(Fields.MESSAGE, "alice"),
+			RequestContext.of(alice));
+		RequestContext narrowed = RequestContext.of(alice).withCaps(Vectors.of(
+			Maps.of("with", Strings.create("g/Helper"), "can", Abilities.AGENT_REQUEST)));
+		try {
+			assertThrows(AuthException.class, () -> engine.jobs().getJobData(job.getID(), narrowed));
+			assertThrows(AuthException.class, () -> engine.jobs().cancelJob(job.getID(), narrowed));
+		} finally {
+			job.cancel();
+		}
 	}
 }

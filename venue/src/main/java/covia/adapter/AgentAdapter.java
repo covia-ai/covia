@@ -152,8 +152,6 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_TOOLS            = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS    = Strings.intern("defaultTools");
 	private static final AString K_CAPS             = Strings.intern("caps");
-	private static final AString K_PUBLIC           = Strings.intern("public");
-	private static final AString K_UNRESTRICTED     = Strings.intern("unrestricted");
 	private static final AString K_CONTEXT          = Strings.intern("context");
 	private static final AString K_OUTPUTS          = Strings.intern("outputs");
 	private static final AString K_RESPONSE_FORMAT  = Strings.intern("responseFormat");
@@ -373,10 +371,10 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Refuses a config that confers authority its author does not hold (see
 	 * {@link Engine#requireConferrable}): the agent's own {@code caps}, absent
-	 * meaning unrestricted; the right to talk to it for whoever {@code accepts}
-	 * admits; and a public A2A interaction scope, {@code a2a.caps}. An update
-	 * re-checks only what it changes from {@code previous}, so editing anything
-	 * else needs no more than {@code agent/write}.
+	 * meaning unrestricted; and the right to talk to it for whoever its
+	 * admission {@link Admission#policy} admits. An update re-checks only what
+	 * it changes from {@code previous}, so editing anything else needs no more
+	 * than {@code agent/write}.
 	 */
 	private void requireConferrable(RequestContext ctx, AgentTarget target,
 			AMap<AString, ACell> config, AMap<AString, ACell> previous) {
@@ -384,25 +382,14 @@ public class AgentAdapter extends AAdapter {
 		if (previous == null || changed(config, previous, K_CAPS)) {
 			engine.requireConferrable(ctx, owner, RT.ensureVector(config.get(K_CAPS)));
 		}
-		AVector<ACell> talk = Vectors.of(
-			Capability.create(target.address(), Abilities.AGENT_REQUEST),
-			Capability.create(target.address(), Abilities.AGENT_MESSAGE));
-		ACell accepts = config.get(Fields.ACCEPTS);
+		ACell accepts = Admission.policy(config);
 		boolean admitsOthers = accepts != null && !Admission.OWNER.equals(accepts)
 			&& !(accepts instanceof AVector<?> entries && entries.isEmpty());
-		if (admitsOthers && (previous == null || changed(config, previous, Fields.ACCEPTS))) {
-			engine.requireConferrable(ctx, owner, talk);
-		}
-		AMap<AString, ACell> a2a = RT.ensureMap(config.get(Fields.A2A));
-		ACell a2aCaps = (a2a == null) ? null : a2a.get(K_CAPS);
-		boolean publicInteraction = a2aCaps != null && CVMBool.TRUE.equals(a2a.get(K_PUBLIC));
-		if (publicInteraction && (previous == null || changed(config, previous, Fields.A2A))) {
-			engine.requireConferrable(ctx, owner, talk);
-			if (K_UNRESTRICTED.equals(a2aCaps)) {
-				engine.requireConferrable(ctx, owner, null);
-			} else if (a2aCaps instanceof AVector<?>) {
-				engine.requireConferrable(ctx, owner, RT.ensureVector(a2aCaps));
-			}
+		if (admitsOthers && (previous == null
+				|| !java.util.Objects.equals(accepts, Admission.policy(previous)))) {
+			engine.requireConferrable(ctx, owner, Vectors.of(
+				Capability.create(target.address(), Abilities.AGENT_REQUEST),
+				Capability.create(target.address(), Abilities.AGENT_MESSAGE)));
 		}
 	}
 
