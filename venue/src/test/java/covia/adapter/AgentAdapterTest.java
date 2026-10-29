@@ -390,6 +390,32 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testViaIsWrittenByIngressNeverTakenFromTheMessage() {
+		// Only the trusted code that identified the caller says how a request
+		// arrived: ingress writes via from the request context and drops any via
+		// the message carries.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		AString address = createAgentAs(alice, "via-ingress", null);
+		AMap<AString, ACell> forged = Maps.of("channel", "telegram", "from", Maps.of("id", 123));
+		AMap<AString, ACell> input = Maps.of("ask", "hi", Fields.VIA, forged);
+
+		ACell plain = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, input), alice).awaitResult(5000);
+		assertEquals(Maps.of("ask", "hi"), RT.getIn(plain, Fields.OUTPUT, "completed"),
+			"a via inside the message is dropped");
+
+		AMap<AString, ACell> channel = Maps.of("channel", "test", "from", "sender-1");
+		ACell carried = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, input), alice.withChannel(channel)).awaitResult(5000);
+		assertEquals(Maps.of("ask", "hi", Fields.VIA, channel), RT.getIn(carried, Fields.OUTPUT, "completed"),
+			"ingress writes via from the request context");
+
+		assertEquals(Maps.of(Fields.TEXT, "hi", Fields.VIA, channel), AgentAdapter.withVia(Strings.create("hi"), channel),
+			"a plain message gains its channel as {text, via}");
+		assertEquals(Strings.create("hi"), AgentAdapter.withVia(Strings.create("hi"), null));
+	}
+
+	@Test
 	public void testOlderA2ACapsCannotSilentlyOverrideAccepts() {
 		// A public agent's a2a.caps reads as accepts "anyone", so an accepts beside
 		// it that says otherwise is refused rather than silently overridden.

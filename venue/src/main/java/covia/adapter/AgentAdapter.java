@@ -1459,6 +1459,33 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
+	 * An invocation's input with its {@code field} (the message, or a task's
+	 * input) as the agent receives it ({@link #withVia(ACell, AMap)}).
+	 */
+	static ACell withVia(ACell input, AString field, AMap<AString, ACell> channel) {
+		AMap<AString, ACell> map = RT.ensureMap(input);
+		if (map == null || map.get(field) == null) return input;
+		return map.assoc(field, withVia(map.get(field), channel));
+	}
+
+	/**
+	 * A message as the agent receives it: {@code via} is the channel the request
+	 * came through, from the request context, and any {@code via} the message
+	 * carries is dropped — only the trusted code that identified the caller says
+	 * how a request arrived. A message that is not a map gains a channel as
+	 * {@code {text, via}}.
+	 */
+	static ACell withVia(ACell message, AMap<AString, ACell> channel) {
+		AMap<AString, ACell> map = RT.ensureMap(message);
+		if (map != null) {
+			map = map.dissoc(Fields.VIA);
+			return (channel == null) ? map : map.assoc(Fields.VIA, channel);
+		}
+		if (message == null || channel == null) return message;
+		return Maps.of(Fields.TEXT, message, Fields.VIA, channel);
+	}
+
+	/**
 	 * agent:request — submit a task to an agent.
 	 *
 	 * <p>The task is purely lattice data — no Job in JobManager. If {@code wait}
@@ -1466,6 +1493,7 @@ public class AgentAdapter extends AAdapter {
 	 * and extracts the task result.</p>
 	 */
 	private void handleRequest(Job job, ACell input, RequestContext ctx) {
+		input = withVia(input, Fields.INPUT, ctx.getChannel());
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_REQUEST, false);
 		AString agentId = target.agentId();
@@ -1551,6 +1579,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	private void handleMessage(Job job, ACell input, RequestContext ctx) {
+		input = withVia(input, Fields.MESSAGE, ctx.getChannel());
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_MESSAGE, false);
 		AString agentId = target.agentId();
@@ -1666,6 +1695,7 @@ public class AgentAdapter extends AAdapter {
 	 * can commit delivery bookkeeping with intake, before the agent wakes.</p>
 	 */
 	private void handleChat(Job job, ACell input, RequestContext ctx) {
+		input = withVia(input, Fields.MESSAGE, ctx.getChannel());
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_MESSAGE, false);
 		AString agentId = target.agentId();
@@ -3706,7 +3736,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
 			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
-			Fields.MESSAGE, message);
+			Fields.MESSAGE, withVia(message, null));
 		if (jobId != null) envelope = envelope.assoc(Fields.JOB_ID, jobId);
 		AgentState.SessionIntake intake = agent.appendSessionPending(
 			sessionId, caller, null, envelope, false);

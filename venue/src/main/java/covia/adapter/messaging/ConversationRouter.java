@@ -69,18 +69,20 @@ public final class ConversationRouter {
 		return spec.routesToAgent() && (!isIdle(conversation) || sessions.get(conversation) != null);
 	}
 
-	/** Call within this conversation's queued turn. */
+	/** Call within this conversation's queued turn. The message is the provider's
+	 * record; its {@code via} is the channel, which travels on the request context. */
 	public ACell chat(String conversation, ACell message) {
 		String sid = sessions.get(conversation);
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, Strings.create(spec.agent()), Fields.MESSAGE, message);
 		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
+		RequestContext ctx = context(message);
 		ACell result;
 		try {
-			result = runOperation(AGENT_CHAT, input);
+			result = run(AGENT_CHAT, input, ctx);
 		} catch (RuntimeException e) {
 			if (sid == null || !isUnknownSession(e)) throw e;
 			sessions.remove(conversation);
-			result = runOperation(AGENT_CHAT, input.dissoc(Fields.SESSION_ID));
+			result = run(AGENT_CHAT, input.dissoc(Fields.SESSION_ID), ctx);
 		}
 		AString newSession = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
 		if (newSession != null && !newSession.toString().equals(sid)) sessions.put(conversation, newSession.toString());
@@ -115,7 +117,7 @@ public final class ConversationRouter {
 		String sid = sessions.get(conversation);
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, Strings.create(spec.agent()), Fields.MESSAGE, message);
 		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
-		RequestContext ctx = context().withSessionDelivery((draft, session, job) -> {
+		RequestContext ctx = context(message).withSessionDelivery((draft, session, job) -> {
 			boolean applied = delivery.accept(draft, session, job);
 			if (applied) sessions.put(draft, conversation, session.toString());
 			return applied;
@@ -154,8 +156,17 @@ public final class ConversationRouter {
 		return RequestContext.of(spec.userDID(engine));
 	}
 
+	/** The context a provider's message is asked under: its {@code via} is the channel. */
+	private RequestContext context(ACell message) {
+		return context().withChannel(RT.ensureMap(RT.getIn(message, Fields.VIA)));
+	}
+
 	public ACell runOperation(String operation, ACell input) {
-		Job job = engine.jobs().invokeOperation(operation, input, context());
+		return run(operation, input, context());
+	}
+
+	private ACell run(String operation, ACell input, RequestContext ctx) {
+		Job job = engine.jobs().invokeOperation(operation, input, ctx);
 		ACell result = job.awaitResult();
 		if (job.getStatus() != Status.COMPLETE) {
 			throw new JobFailedException(job);
