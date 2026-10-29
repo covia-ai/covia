@@ -276,12 +276,12 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			AMap<AString, ACell> attachment;
 			try {
 				// The stored name, ref and size win over the provider's own description.
-				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, router.context()));
+				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, router.agentContext()));
 			} catch (java.io.IOException e) {
 				throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
 			}
 			if (spec.mediaOperation() != null) {
-				attachment = MessagingMedia.processed(attachment, router.runOperation(spec.mediaOperation(),
+				attachment = MessagingMedia.processed(attachment, router.runForAgent(spec.mediaOperation(),
 					attachment.assoc(MessagingMedia.K_CAPTION, Strings.create(text == null ? "" : text)).assoc(MessagingSettings.key("via"), via)));
 			}
 			attachments = attachments.conj(attachment);

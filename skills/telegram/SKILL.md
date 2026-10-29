@@ -8,7 +8,7 @@ argument-hint: "<setup|create|delete|status|send|allow|test|teach> <bot-name>"
 
 **Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first. Telegram support comes from the **covia-telegram** module (`telegram` adapter) — it is not in `covia.jar`; `setup` covers loading it.
 
-A bot is either **created by its user** with `v/ops/telegram/create` (acts as that user, persisted in the venue-private adapter state under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when a bot must act as a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
+A bot is either **created by its user** with `v/ops/telegram/create` (its allow-listed senders come from its creator — an agent as itself, never its owner — persisted in the venue-private adapter state under `users/<did>/bots/<name>`, survives restarts, removed with `v/ops/telegram/delete`) or **declared by the operator** in `adapters.telegram.bots.<name>` (needed when its senders must come from a different identity, e.g. `"user": "public"` on a shared dev venue). Full reference: `venue/docs/CONFIG.md` "Telegram bots". `/adapters` explains the module and runtime-lifecycle mechanics this skill relies on.
 
 ## `setup <bot-name>` — Bring a bot up
 
@@ -28,7 +28,7 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
    ```
    grid_run  operation=v/ops/telegram/create  input={"name": "<bot-name>", "token": "s/TELEGRAM_BOT_TOKEN", "agent": "<agentId>", "allow": []}
    ```
-   The bot acts as **you** (the MCP caller — the public user on a local dev venue). Use `"operation": "<ref>"` instead of `agent` for a deterministic handler (see below), `"open": true` to admit anyone, `"reply"`, `"parseMode"`, `"greeting"` as documented on the op. Needs `telegram/manage` in your scope (unrestricted on `dev/local-open.json`-style venues; the committed `local-dev.json` public scope is read-only — use `/venue-setup` guidance to widen it or authenticate).
+   Messages from the senders on its `allow` list come from **you** (the MCP caller — the public user on a local dev venue). Use `"operation": "<ref>"` instead of `agent` for a deterministic handler (see below), `"open": true` to also admit everyone else as anonymous senders (they may ask only an agent whose `accepts` is `"anyone"`, and only if the operator lets anonymous callers invoke it), `"reply"`, `"parseMode"`, `"greeting"` as documented on the op. Needs `telegram/manage` in your scope (unrestricted on `dev/local-open.json`-style venues; the committed `local-dev.json` public scope is read-only — use `/venue-setup` guidance to widen it or authenticate).
 
    Operator alternative — declare it in the venue config and restart (or apply live with `v/ops/venue/adapter/configure`, venue authority, not persisted); required when the bot must act as an identity other than the caller:
    ```json
@@ -45,8 +45,8 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
      }
    }
    ```
-   - `user` (config only) is the identity the bot acts as — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. The bot has that user's full authority, so choose deliberately. Created bots always act as their creator.
-   - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job in the bot user's job index — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
+   - `user` (config only) is who the bot's allow-listed senders come from — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. Those senders have that user's full authority, so choose deliberately. A created bot's senders come from its creator.
+   - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job of the principal it comes from (the bot user for an allow-listed sender, the anonymous principal for any other) — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
      - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, `via`, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
        ```
        agent_create  agentId="Assistant"  config=["v/agents/templates/telegram", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}]
@@ -149,7 +149,7 @@ grid_run  operation=v/ops/telegram/call  input={"method": "editMessageText", "pa
 
 ## `allow <bot-name>` — Manage who the bot talks to
 
-Access is fail-closed in both directions: `allow` is a list of Telegram user ids and/or `@usernames`; `open: true` admits everyone. An allow-listed bot is its user's channel to the people on the list and nobody else: it converses only in private chats (an allowed user writing in a group is ignored), and `send`/`call` may only address its allowed users. A Telegram id is the identity (permanent, the same for every bot); a username is an alias that can change hands. So an `@username` entry resolves to the person's account the first time they write to the bot: the binding is kept beside the bot's sessions as `resolved/<handle>` in the bot's adapter state and shown by `status`, `allow` itself is never rewritten, and from then on the handle means that account — the bot may message it, and anyone who later takes the same handle is refused. To rebind, delete that record or list the id. For a created bot, `delete` and `create` again with the new list. For a config bot, edit the config and restart, or apply live:
+Access is fail-closed in both directions: `allow` is a list of Telegram user ids and/or `@usernames`; `open: true` also admits everyone else, as anonymous senders. An allow-listed bot is its user's channel to the people on the list and nobody else: it converses only in private chats (an allowed user writing in a group is ignored), and `send`/`call` may only address its allowed users. A Telegram id is the identity (permanent, the same for every bot); a username is an alias that can change hands. So an `@username` entry resolves to the person's account the first time they write to the bot: the binding is kept beside the bot's sessions as `resolved/<handle>` in the bot's adapter state and shown by `status`, `allow` itself is never rewritten, and from then on the handle means that account — the bot may message it, and anyone who later takes the same handle is refused. To rebind, delete that record or list the id. For a created bot, `delete` and `create` again with the new list. For a config bot, edit the config and restart, or apply live:
 ```
 grid_run  operation=v/ops/venue/adapter/configure
           input={"name": "telegram", "config": {"bots": {"<bot-name>": {…full bot entry…}}}, "merge": true}

@@ -694,7 +694,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (reply == null) return;
 		String parseMode = spec.parseMode();
 		if (spec.replyOperation() != null) {
-			ACell formatted = conversations.runOperation(spec.replyOperation(), Maps.of(
+			ACell formatted = conversations.runForAgent(spec.replyOperation(), Maps.of(
 				Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
 			reply = formattedReply(formatted);
 			parseMode = formattedParseMode(formatted, parseMode);
@@ -824,7 +824,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			AMap<AString, ACell> attachment = download(media.get("file_id").getAsString())
 				.merge(RT.castMap(JSON.parse(media.toString())));
 			if (spec.mediaOperation() != null) {
-				ACell processed = conversations.runOperation(spec.mediaOperation(), attachment
+				ACell processed = conversations.runForAgent(spec.mediaOperation(), attachment
 					.assoc(Strings.intern("caption"), Strings.create(text)).assoc(K_VIA, message.get(K_VIA)));
 				attachment = TelegramMedia.processed(attachment, processed);
 			}
@@ -850,11 +850,12 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return fileMetadataRoot + "/" + Strings.create(fileId).getHash().toHexString();
 	}
 
+	/** Automatic intake stores media as the bot's work for its agent. */
 	AMap<AString, ACell> download(String fileId) {
-		return download(fileId, null, null, context());
+		return download(fileId, null, null, conversations.agentContext());
 	}
 
-	/** Explicit destinations use caller authority; automatic intake uses the bot owner's context. */
+	/** Explicit destinations use caller authority; automatic intake uses the bot's work for its agent. */
 	AMap<AString, ACell> download(String fileId, AString destination, String fileName, RequestContext writeContext) {
 		ACell info = call("getFile", Map.of("file_id", fileId));
 		AString path = RT.ensureString(RT.getIn(info, "file_path"));

@@ -159,7 +159,7 @@ class DiscordAdapterTest {
 			Maps.of(Fields.OPERATION,"v/ops/llmagent/chat","llmOperation","v/ops/discord-held/llm")));
 		run(OWNER,"v/ops/secret/set",Maps.of("name","DISCORD_AGENT","value","agent-token"));
 		try {
-			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","open",true));
+			run(OWNER,"v/ops/discord/create",Maps.of("name","agent-bot","token","s/DISCORD_AGENT","agent","discord-agent","allow",Vectors.of("alice")));
 			for(int n=0;n<100&&!gateway.sinks.containsKey("agent-token");n++) Thread.sleep(20);
 			var sink=gateway.sinks.get("agent-token"); assertNotNull(sink);
 			sink.accept(message("first","agent-channel","alice","first input",true,false));

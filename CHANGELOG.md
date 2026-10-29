@@ -57,6 +57,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A per-agent A2A request is the asker's own, admitted by `accepts` or a UCAN, and
   its task calls reach only the asker's tasks for that agent (#619).
 - A capability scope bounds job and scheduled-event access for every context.
+- An agent's ingress writes `via` from the request; a `via` inside a message is dropped.
+- A chat bot's message comes from the bot's principal for an allow-listed sender, and
+  is anonymous otherwise. A bot an agent creates is that agent, never its owner.
+- A `user: "public"` chat bot is bound by the public scope.
 
 ### Migration
 
@@ -74,6 +78,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   and `v/ops/agent/message`.
 - An explicit `auth.public.caps` needs `crud/read` on `j` for anonymous callers to
   follow their jobs.
+- An open chat bot's strangers are anonymous: its agent needs `accepts: "anyone"`, and
+  `auth.public.caps` must grant `invoke` on `v/ops/agent/chat` or the bot's operation.
+- A capped agent behind a chat bot needs write on the media drive to receive media.
+- A bot an agent created earlier still comes from its owner; create it again.
 
 ## [0.10.0] - 2026-10-26
 

@@ -385,6 +385,40 @@ class ConversationRouterTest {
 		} finally { engine.close(); }
 	}
 
+	@Test void aBindingsWorkForItsAgentRunsAsTheAgentOnlyWhenItsPrincipalControlsIt() {
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			Engine.addDemoAssets(engine);
+			var owner = Strings.create("did:test:agent-work");
+			var stranger = Strings.create("did:test:agent-work-stranger");
+			engine.getVenueState().users().ensure(owner);
+			engine.getVenueState().users().ensure(stranger);
+			var ownerContext = covia.venue.RequestContext.of(owner);
+			var caps = convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
+				Strings.create(owner + "/w/media"), convex.auth.ucan.Capability.CRUD_WRITE));
+			for (String id : new String[] {"helper", "sibling"}) {
+				engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "caps", caps)), ownerContext).awaitResult(5000);
+			}
+			var helper = covia.grid.Principals.agentDID(owner, Strings.create("helper"));
+			var state = engine.adapterState("messaging-test");
+
+			// The owner's own bot works for its agent as that agent, within its caps.
+			var own = new ConversationRouter(engine, new Spec("bot", owner.toString(), "helper", null, null),
+				new ConversationSessions(state, "work/own"));
+			assertEquals(helper, own.agentContext().getCallerDID());
+			assertEquals(caps, own.agentContext().getCaps());
+
+			// Nobody else can make the agent act: another user's bot, or a sibling agent's, works as itself.
+			var foreign = new ConversationRouter(engine, new Spec("bot", stranger.toString(), owner + "/g/helper", null, null),
+				new ConversationSessions(state, "work/foreign"));
+			assertEquals(stranger, foreign.agentContext().getCallerDID());
+			var sibling = new ConversationRouter(engine, new Spec("bot", owner.toString(), "sibling", null, null), helper,
+				new ConversationSessions(state, "work/sibling"));
+			assertEquals(helper, sibling.agentContext().getCallerDID(), "the helper's bot, not the sibling it talks to");
+		} finally { engine.close(); }
+	}
+
 	@Test void anonymousSendersNeedPublicAccess() {
 		Engine engine = Engine.createTemp(Maps.of(covia.venue.Config.AUTH, Maps.of(covia.venue.Config.PUBLIC,
 			Maps.of(covia.venue.Config.ENABLED, false))));

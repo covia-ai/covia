@@ -21,9 +21,9 @@ askers differently gives them different agents.
 ## Who may ask
 
 One check serves every door — REST and MCP (`agent:request`, `agent:message`
-and the operations built on them), and the per-agent A2A endpoint. It is the
-single cross-user gate, `Engine.crossUserAllows`, for `agent/request` or
-`agent/message` on `<owner>/g/<agentId>`:
+and the operations built on them), the per-agent A2A endpoint, and chat
+bindings. It is the single cross-user gate, `Engine.crossUserAllows`, for
+`agent/request` or `agent/message` on `<owner>/g/<agentId>`:
 
 - the **owner**, always;
 - a caller the agent's **admission policy**, `config.accepts`, admits:
@@ -31,6 +31,12 @@ single cross-user gate, `Engine.crossUserAllows`, for `agent/request` or
   `"anyone"`, which includes anonymous callers (`Admission`);
 - a caller presenting a **UCAN** granting `agent/request` or `agent/message` on
   the agent (over A2A, in `X-Covia-Ucans`).
+
+Every request comes from a principal. A door that identifies callers itself
+says which: a chat binding's message comes from the binding's principal when
+its allow-list names the sender, and is anonymous otherwise
+([CONFIG.md](./CONFIG.md#who-a-chat-message-comes-from)). A binding an agent
+set up identifies its senders as that agent, never its owner.
 
 The asker's own authority still applies to the act of asking: it must allow
 invoking the operation that asks. An anonymous caller asks as the venue's
@@ -58,7 +64,10 @@ refuse that config (`Admission.configProblem`).
   the asker's own tasks submitted to that agent.
 - **The agent serves it as itself.** The run is the agent sub-principal
   bounded by `config.caps`, exactly as for a request from the owner.
-- **The agent knows who asked.** The task records the asker as its caller.
+- **The agent knows who asked, and how.** The task records the asker as its
+  caller. The trusted code that identified the asker puts the channel on the
+  request context, and the agent's ingress writes it on the message as
+  `via`; a `via` inside a message is dropped.
 
 Every anonymous caller is the one public principal, so they share its jobs:
 what any of them may do with an anonymous task is what the operator's public
@@ -66,9 +75,5 @@ scope allows. A job id is not a credential.
 
 ## Not yet on this model
 
-- **Chat bindings** (Telegram, Slack, Discord, WhatsApp) still file an inbound
-  turn under the binding's user, and tell the agent its owner asked.
-  `<adapter>:create` checks only `<adapter>/manage`, not that the creator may
-  decide who asks the target.
 - **Sessions** do not check who joins: a caller who may ask and knows a
   session id can add to that session.

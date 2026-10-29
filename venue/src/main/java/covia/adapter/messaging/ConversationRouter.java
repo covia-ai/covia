@@ -18,6 +18,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -220,9 +221,32 @@ public final class ConversationRouter {
 		return Strings.create(spec.userDID(engine) + "/g/" + agent);
 	}
 
+	/**
+	 * The context the binding's work for its agent runs under — storing a
+	 * message's media, processing it, formatting the reply: the agent itself,
+	 * bounded by its caps, when the binding's principal controls it (is its owner,
+	 * or the agent); otherwise the binding's principal, since nobody else may make
+	 * an agent act.
+	 */
+	public RequestContext agentContext() {
+		String address = agentAddress().toString();
+		int split = address.indexOf("/g/");
+		AString owner = Strings.create(address.substring(0, split));
+		AString agent = Principals.agentDID(owner, Strings.create(address.substring(split + 3)));
+		AString self = (principal != null) ? principal : spec.userDID(engine);
+		if (!self.equals(owner) && !self.equals(agent)) return context();
+		sessions.requireCurrentUser();
+		return engine.principalContext(agent);
+	}
+
 	/** Run an operation as the binding's own work. */
 	public ACell runOperation(String operation, ACell input) {
 		return run(operation, input, context());
+	}
+
+	/** Run an operation as the binding's work for its agent ({@link #agentContext()}). */
+	public ACell runForAgent(String operation, ACell input) {
+		return run(operation, input, agentContext());
 	}
 
 	/** Run the binding's operation for a provider's message, from whoever it comes

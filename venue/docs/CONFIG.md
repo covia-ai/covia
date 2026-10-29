@@ -2327,6 +2327,32 @@ OpenRAIL-M, Supertone: open use with use-based restrictions that pass to anyone
 using it). The models are fetched by the venue from Hugging Face, not
 distributed with Covia.
 
+### Who a chat message comes from
+
+Telegram, Discord, WhatsApp and Slack bindings share one rule: every message
+comes from a principal, and the binding identifies which.
+
+- **A sender the binding's `allow` names** comes from the binding's
+  principal: its `user` for an operator-declared binding; for one made with
+  `<provider>:create`, its creator — an agent as itself, bounded by its
+  current `config.caps`, never its owner.
+- **A sender only `open: true` admits** is anonymous: the venue's public
+  principal, under `auth.public.caps`. They may ask only an agent whose
+  `accepts` is `"anyone"`, and only if the operator lets anonymous callers
+  invoke the operation that asks (`v/ops/agent/chat`, or the binding's
+  operation). With public access off, they are not served.
+- **The channel** — the provider, the binding, the sender as the platform
+  reported them, and `access` (`allow` or `open`) — travels with the request,
+  and the agent's ingress writes it on the message as `via`. A `via` inside a
+  message is dropped, so an agent can rely on `via`.
+- **The agent acts as itself**, under its own `config.caps`, whoever asked.
+  The binding's work for it — storing a message's media, `mediaOperation`,
+  `replyOperation` — runs as the agent when the binding's principal is the
+  agent or its owner, and otherwise as the binding's principal.
+
+A `user: "public"` binding's allow-listed senders are the public principal
+too, so they are bound by the public scope.
+
 ### Telegram bots (covia-telegram)
 
 The **covia-telegram** module (`telegram` adapter) runs operator-declared
@@ -2374,7 +2400,8 @@ Per bot:
   secrets, and another principal's only under a `secret/use` grant. A bot
   whose secret is absent parks as `PENDING` and retries (once after 2 s, then every 30 s), so provisioning the secret later brings it
   up without a restart.
-- `user` — the DID the bot acts as; every invocation runs with that user's
+- `user` — the principal the bot's allow-listed senders come from
+  ([Who a chat message comes from](#who-a-chat-message-comes-from)), with its
   full authority, so it should be the owner of the agent it routes to.
   `"public"` names the venue's public principal (the same identity as an
   anonymous MCP client on a public venue), which is what a local dev venue's
@@ -2386,9 +2413,8 @@ Per bot:
   receives each turn as `{text, via: {channel: "telegram", bot, access:
   "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
   `from`/`chat` verbatim — so it knows who is on the other end without
-  trusting anything typed; the venue's own "Venue attribution" system note
-  still names the bot's Covia identity (the principal that submitted the
-  turn). The module ships an agent template for exactly this role,
+  trusting anything typed. The agent's ingress writes `via`, and the turn's
+  provenance names the principal the message comes from. The module ships an agent template for exactly this role,
   `v/agents/templates/telegram` (phone-chat register, `via`, per-chat
   sessions, memory pinned into context, telegram/venue/covia skills;
   provider composed at create time): `agent:create {agentId, config:
@@ -2403,7 +2429,8 @@ Per bot:
   operation you own** (an orchestration, a pinned op…) that takes the Update
   and does the work. Agent bots also download photos, voice/audio, documents,
   video/video notes, animations and stickers into the owner's DLFS `telegram`
-  drive after admission. Each turn retains its caption and `attachments`
+  drive after admission, as the bot's work for its agent (a capped agent needs
+  write on that drive). Each turn retains its caption and `attachments`
   descriptors (`kind`, `file_id`, `ref`, `mediaType`, provider metadata).
   Images reach the LLM as asset-reference image blocks; the agent needs
   `crud/read` on the referenced DLFS files and a vision-capable model.
@@ -2426,15 +2453,15 @@ Per bot:
 - `allow` — Telegram user ids and/or `@usernames` permitted to talk to the
   bot. **Fail-closed**: with no `allow` and no `open: true`, everyone is
   refused (in private chats they are told their user id, so an operator can
-  add it). `open: true` admits anyone — appropriate only for a bot whose
-  target is safe for the public.
+  add it). `open: true` also admits everyone else, as anonymous senders —
+  appropriate only for a bot whose target is safe for the public.
 - `parseMode` — `Markdown`, `MarkdownV2` or `HTML` for replies; omit for
   plain text. Markup Telegram rejects is resent as plain text. None of the
   three renders an agent's Markdown as written; for an agent bot use
   `replyOperation: "v/ops/telegram/format"`, whose `HTML` the reply then uses.
 - `greeting` — the `/start` reply (default names the agent and venue).
 - `mediaOperation` — optional, agent bots only. Runs once per downloaded
-  attachment as the bot owner. Input is the attachment descriptor plus
+  attachment, as the bot's work for its agent. Input is the attachment descriptor plus
   `caption` (empty when absent) and `via` (bot, sender, chat, topic/reply IDs).
   Return an object: `{}` leaves this attachment untouched; optional non-empty
   `text` supplies a transcription/extraction. The full non-empty result is
@@ -2458,8 +2485,9 @@ Per bot:
   An application with its own hook calls it after its own processing and
   returns its text and `parse_mode`.
 
-Both hooks invoke ordinary Covia operation references as the bot owner, with
-normal Jobs, secret resolution and capability checks, and no turn timeout.
+Both hooks invoke ordinary Covia operation references as the bot's work for
+its agent ([Who a chat message comes from](#who-a-chat-message-comes-from)),
+with normal Jobs, secret resolution and capability checks, and no turn timeout.
 They may be application adapters, orchestrations or other operations; Telegram
 has no built-in speech provider or application-specific reply syntax. Runtime
 `telegram/create` persists both references and restores them on restart.
@@ -2478,7 +2506,7 @@ backlog when it is enabled again.
 
 Bots can also be **created at runtime by their user**: `v/ops/telegram/create
 {name, token: "s/…", agent | operation, reply?, allow?, open?, parseMode?,
-greeting?, mediaOperation?, replyOperation?}` makes a bot that acts as the caller (no `user` — a user cannot
+greeting?, mediaOperation?, replyOperation?}` makes a bot whose allow-listed senders come from the caller — an agent as itself (no `user` — a user cannot
 create a bot acting as someone else; the token must be a secret reference),
 records it at
 `:adapters/telegram/users/<caller-did>/bots/<name>`, starts it,
@@ -2626,8 +2654,10 @@ and receive
 `{text, via: {channel: "discord", bot, access, from, chat, guild?,
 message_id}, attachments}`. Operation handlers receive a normalized Discord
 message record including attachment ids, filenames, URLs, sizes and types.
-Every inbound turn runs as a Job for the configured `user`. `allow` accepts
-Discord user snowflakes or usernames and fails closed unless `open: true`.
+Each inbound turn is a Job of the principal it comes from
+([Who a chat message comes from](#who-a-chat-message-comes-from)). `allow`
+accepts Discord user snowflakes or usernames and fails closed unless
+`open: true`.
 DMs are handled directly; guild messages require a bot mention by default.
 Set `mentionOnly: false` only when the bot should process every allowed
 message it can see. Built-in text commands are `!start`, `!help`, `!new`, and
@@ -2673,7 +2703,9 @@ bindings use `c-<name>`, runtime bindings an opaque owner-specific name. Runtime
 requires `<provider>/manage`; sends require `<provider>/send` on the binding,
 and WhatsApp downloads `whatsapp/download`.
 
-Both fail closed on empty admission lists, acknowledge only after durable
+Senders are identified as in
+[Who a chat message comes from](#who-a-chat-message-comes-from). Both fail
+closed on empty admission lists, acknowledge only after durable
 acceptance and perform Jobs/replies asynchronously. Pending receipts resume;
 started receipts require inspection after an interruption and are never
 blindly replayed. Local agent input, receipt and session mapping commit together;
