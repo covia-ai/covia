@@ -1132,8 +1132,8 @@ the authentication channel. The three concerns never infer one another:
   transport UCANs (`RequestContext.getRawUcans()`; the parsed maps cannot be
   re-signed) are relayed in the hop's `ucans` body array. The relay drops only
   what is *provably inert* at the target — expired/unparseable tokens, and
-  tokens audienced to an identity that is not the hop's principal (e.g. the
-  local caller's own grants when the venue relays as itself). Deeper filtering
+  tokens audienced to an identity that is not the hop's principal (e.g.
+  grants audienced to this venue when the caller is the hop's principal). Deeper filtering
   is not provable (the relay cannot know which resources an operation on the
   target touches, nor generally the target's DID before contact), so
   presentation remains the *caller's* disclosure decision: present per-request,
