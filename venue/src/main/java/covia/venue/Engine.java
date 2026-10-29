@@ -4005,6 +4005,44 @@ public class Engine {
 		return web != null && value.equals(web + ":public");
 	}
 
+	/**
+	 * The anonymous principal as every door presents it: {@code <venue>:public}
+	 * under the operator's public scope ({@code auth.public.caps}). Null when
+	 * public access is off.
+	 */
+	public RequestContext publicContext() {
+		if (!config.isPublicAccess()) return null;
+		AString publicDID = Strings.create(getDIDString() + ":public");
+		return RequestContext.of(publicDID).withCaps(auth.getPublicScope(publicDID));
+	}
+
+	/**
+	 * The context a stored principal acts under now: an agent as itself, bounded
+	 * by its record's current {@code caps} (none once the agent is gone); the
+	 * public principal as {@link #publicContext()}; any other principal as
+	 * itself.
+	 *
+	 * @throws AuthException for the public principal while public access is off
+	 */
+	public RequestContext principalContext(AString principal) {
+		if (isPublicPrincipal(principal)) {
+			RequestContext anonymous = publicContext();
+			if (anonymous == null) throw new AuthException(PUBLIC_ACCESS_OFF);
+			return anonymous;
+		}
+		if (!covia.grid.Principals.isAgentDID(principal)) return RequestContext.of(principal);
+		AString owner = covia.grid.Principals.userOf(principal);
+		AString agentId = covia.grid.Principals.agentIdOf(principal);
+		AgentState agent = getAgent(owner, agentId);
+		AVector<ACell> caps = (agent == null) ? Vectors.empty()
+			: RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS));
+		RequestContext ctx = RequestContext.ofAgent(owner, agentId);
+		return (caps == null) ? ctx : ctx.withCaps(caps);
+	}
+
+	/** Why the public principal cannot act: the operator has public access off. */
+	public static final String PUBLIC_ACCESS_OFF = "Anonymous callers are not served: the venue's public access is off";
+
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
 	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
 	 *  {@code did:<other>/…} path is another principal's. Owner = the DID prefix

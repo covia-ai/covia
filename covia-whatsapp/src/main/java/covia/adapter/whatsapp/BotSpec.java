@@ -37,7 +37,11 @@ public record BotSpec(String name, AMap<AString, ACell> settings) implements Web
 	public String number() { return MessagingSettings.optional(settings, "number"); }
 	/** Whether a message from this number is admitted. */
 	public boolean admits(String from) {
-		return from != null && from.matches(PHONE) && (admitsAnySender() || MessagingSettings.ids(settings, "allow", PHONE).contains(from));
+		return from != null && from.matches(PHONE) && (admitsAnySender() || lists(from));
+	}
+	/** Whether the allow-list names this number, whom the binding then identifies as its principal. */
+	public boolean lists(String from) {
+		return from != null && MessagingSettings.ids(settings, "allow", PHONE).contains(from);
 	}
 	/** Whether the send operation may address this number. */
 	public boolean allows(String to) {

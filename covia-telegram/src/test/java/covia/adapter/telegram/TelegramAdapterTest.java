@@ -63,6 +63,9 @@ public class TelegramAdapterTest {
 		telegram = new FakeTelegramServer();
 		AMap<AString, ACell> config = Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			// Strangers on an open bot are anonymous: the operator lets them invoke the echo operation.
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.CAPS, Vectors.of(convex.auth.ucan.Capability.create(
+				Strings.create("v/test/ops/echo"), Strings.create("invoke"))))),
 			Config.ADAPTERS, Maps.of(
 				Strings.create("telegram"), Maps.of(
 					TelegramAdapter.K_API_URL, Strings.create(telegram.apiUrl()),
@@ -308,10 +311,11 @@ public class TelegramAdapterTest {
 			configureBots(Maps.of(Strings.create("echo"), echoCfg,
 				Strings.create("modes"), base.assoc(BotSpec.K_REPLY, convex.core.data.prim.CVMBool.FALSE)));
 			awaitState("modes", BotRunner.State.RUNNING, 10_000);
-			RequestContext owner = RequestContext.of(OWNER);
-			Set<Blob> jobsBefore = new HashSet<>(engine.jobs().getJobs(owner).keySet());
+			// The stranger is anonymous, so the Job is the public principal's, not the bot user's.
+			RequestContext anonymous = RequestContext.of(engine.publicContext().getCallerDID());
+			Set<Blob> jobsBefore = new HashSet<>(engine.jobs().getJobs(anonymous).keySet());
 			telegram.push(token, 6001L, "private", STRANGER_ID, null, "quiet");
-			Job quiet = awaitNewJob(owner, jobsBefore, 10_000);
+			Job quiet = awaitNewJob(anonymous, jobsBefore, 10_000);
 			quiet.awaitResult(10_000);
 			await(() -> adapter.runner("modes").isChatIdle(6001L), 10_000,
 				() -> "operation handler did not finish");
@@ -996,6 +1000,25 @@ public class TelegramAdapterTest {
 		FakeTelegramServer.Sent reply = telegram.awaitSent(15_000);
 		assertNotNull(reply);
 		assertTrue(reply.text().contains(text), "inbound text must survive the round trip: " + reply.text());
+	}
+
+	@Test
+	public void testABotAnAgentCreatesIdentifiesItsSendersAsThatAgent() throws Exception {
+		String token = "778:AGENT-BOT";
+		telegram.registerBot(token, "agent_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_AGENT", "value", token));
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of("agentId", "maker",
+			"config", Maps.of("operation", "v/test/ops/taskcomplete")));
+		AString maker = covia.grid.Principals.agentDID(OWNER, Strings.create("maker"));
+
+		run(RequestContext.ofAgent(OWNER, Strings.create("maker")), "v/ops/telegram/create",
+			Maps.of("name", "made", "token", "s/TG_AGENT", "agent", AGENT));
+		assertEquals(maker, adapter.runner(OWNER, "made").context().getCallerDID(),
+			"the bot identifies its senders as the agent, never its owner");
+		adapter.forgetForTest(OWNER, "made");
+		adapter.rearmForTest();
+		assertEquals(maker, adapter.runner(OWNER, "made").context().getCallerDID(), "and still after a restart");
+		run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "made"));
 	}
 
 	@Test

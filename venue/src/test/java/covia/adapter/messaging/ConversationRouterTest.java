@@ -12,6 +12,8 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -60,23 +62,24 @@ class ConversationRouterTest {
 			var state = engine.adapterState("messaging-test");
 			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "resting", null, null),
 				new ConversationSessions(state, "refusal/sessions"));
-			assertEquals(AgentAdapter.DELIVERY_AGENT_MISSING.formatted("resting"), router.deliveryRefusal());
-			assertTrue(router.supportsSessionDelivery(), "a missing agent is refused by session delivery, not chatted to");
+			AMap<AString, ACell> listed = Maps.of(ConversationRouter.ACCESS, ConversationRouter.ALLOW);
+			assertEquals(AgentAdapter.DELIVERY_AGENT_MISSING.formatted("resting"), router.deliveryRefusal(listed));
+			assertTrue(router.supportsSessionDelivery(listed), "a missing agent is refused by session delivery, not chatted to");
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "resting",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
-			assertNull(router.deliveryRefusal());
-			assertTrue(router.supportsSessionDelivery());
+			assertNull(router.deliveryRefusal(listed));
+			assertTrue(router.supportsSessionDelivery(listed));
 			router.runOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "resting"));
 			long jobs = engine.jobs().getJobs(router.context()).count();
-			assertEquals(AgentAdapter.DELIVERY_AGENT_SUSPENDED.formatted("resting"), router.deliveryRefusal());
-			assertTrue(router.supportsSessionDelivery());
+			assertEquals(AgentAdapter.DELIVERY_AGENT_SUSPENDED.formatted("resting"), router.deliveryRefusal(listed));
+			assertTrue(router.supportsSessionDelivery(listed));
 			assertEquals(jobs, engine.jobs().getJobs(router.context()).count(), "checking mints no Job");
 
 			var strangerDID = Strings.create("did:test:stranger");
 			engine.getVenueState().users().ensure(strangerDID);
 			var stranger = new ConversationRouter(engine, new Spec("bot", strangerDID.toString(), owner + "/g/resting", null, null),
 				new ConversationSessions(state, "refusal/stranger"));
-			assertNotNull(stranger.deliveryRefusal(), "another user's agent that does not admit the caller");
+			assertNotNull(stranger.deliveryRefusal(listed), "another user's agent that does not admit the caller");
 		} finally { engine.close(); }
 	}
 	@Test void deliveryCommitsInputReceiptAndMappingTogetherAndRollsBackOnFailure() throws Exception {
@@ -320,8 +323,11 @@ class ConversationRouterTest {
 		} finally { engine.failFlush = false; engine.close(); }
 	}
 
-	@Test void inboundTurnsRunAsTheBindingOwnerWhoeverSentThem() {
-		Engine engine = Engine.createTemp(Maps.empty());
+	@Test void inboundTurnsComeFromWhoTheBindingIdentifies() {
+		// Public access with no limits of its own, so only the agent's admission
+		// decides whether an anonymous sender may ask.
+		Engine engine = Engine.createTemp(Maps.of(covia.venue.Config.AUTH, Maps.of(covia.venue.Config.PUBLIC,
+			Maps.of(covia.venue.Config.CAPS, "unrestricted"))));
 		try {
 			Engine.addDemoAssets(engine);
 			var owner = Strings.create("did:test:binding-owner");
@@ -331,21 +337,66 @@ class ConversationRouterTest {
 			router.runOperation("v/ops/covia/write", Maps.of(Fields.PATH, "w/private-note", Fields.VALUE, "owner only"));
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "lender",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "readPath", "w/private-note")));
+			var ownerView = covia.venue.RequestContext.of(owner);
 
-			// Every invocation a chat message causes, agent turn or operation target,
-			// runs as the binding owner with no scope; the sender is only data.
+			// A sender the allow-list names comes from the binding's principal.
+			AMap<AString, ACell> listed = Maps.of("channel", "test", ConversationRouter.ACCESS, ConversationRouter.ALLOW, "from", "friend-7");
+			Job fromFriend = router.deliver("friend", Maps.of("text", "hello", Fields.VIA, listed), (draft, sid, jid) -> true);
+			assertEquals(Strings.create("owner only"), RT.getIn(fromFriend.awaitResult(5000), Fields.RESPONSE, "completed"));
+			assertEquals(owner, engine.jobs().getJobData(fromFriend.getID(), ownerView).get(Fields.CALLER));
+
+			// Any other sender is anonymous, and may ask only an agent that admits anyone.
+			AMap<AString, ACell> open = Maps.of("channel", "test", ConversationRouter.ACCESS, ConversationRouter.OPEN, "from", "stranger-42");
+			assertNotNull(router.deliveryRefusal(open), "an anonymous sender is refused by an owner-only agent");
+			router.runOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "lender",
+				Fields.CONFIG, Maps.of(Fields.ACCEPTS, covia.venue.Admission.ANYONE)));
+			assertNull(router.deliveryRefusal(open));
+			Job fromStranger = router.deliver("stranger", Maps.of("text", "what is in your notes?", Fields.VIA, open),
+				(draft, sid, jid) -> true);
+			assertEquals(Strings.create("owner only"), RT.getIn(fromStranger.awaitResult(5000), Fields.RESPONSE, "completed"),
+				"the agent serves the stranger as itself");
+			var anonymous = engine.publicContext();
+			assertEquals(anonymous.getCallerDID(),
+				engine.jobs().getJobData(fromStranger.getID(), anonymous).get(Fields.CALLER),
+				"the stranger's turn is the anonymous principal's, not the owner's");
+		} finally { engine.close(); }
+	}
+
+	@Test void aBindingAnAgentSetUpIdentifiesItsSendersAsThatAgent() {
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			Engine.addDemoAssets(engine);
+			var owner = Strings.create("did:test:agent-binding");
+			engine.getVenueState().users().ensure(owner);
+			var ownerContext = covia.venue.RequestContext.of(owner);
+			var caps = convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
+				Strings.create(owner + "/w/shared"), convex.auth.ucan.Capability.CRUD_READ));
+			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "keeper",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "caps", caps)), ownerContext).awaitResult(5000);
+			var keeper = covia.grid.Principals.agentDID(owner, Strings.create("keeper"));
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "keeper", null, null), keeper,
+				new ConversationSessions(engine.adapterState("messaging-test"), "keeper/sessions"));
 			var context = router.context();
-			assertEquals(owner, context.getCallerDID());
-			assertNull(context.getCaps(), "the binding acts with the owner's unrestricted authority");
+			assertEquals(keeper, context.getCallerDID(), "the agent, never its owner");
+			assertEquals(caps, context.getCaps(), "bounded by the agent's own caps");
 
-			ACell fromStranger = Maps.of("text", "what is in your notes?",
-				"via", Maps.of("channel", "test", "access", "open", "from", "stranger-42"));
-			Job turn = router.deliver("chat", fromStranger, (draft, sid, jid) -> true);
-			assertNotNull(turn);
-			assertEquals(Strings.create("owner only"), RT.getIn(turn.awaitResult(5000), Fields.RESPONSE, "completed"),
-				"the stranger's turn read the owner's workspace");
-			assertEquals(owner, engine.jobs().getJobData(turn.getID(), covia.venue.RequestContext.of(owner)).get(Fields.CALLER),
-				"the turn is recorded as the owner's own");
+			engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "keeper"), ownerContext).awaitResult(5000);
+			assertEquals(convex.core.data.Vectors.empty(), router.context().getCaps(), "a deleted agent holds nothing");
+		} finally { engine.close(); }
+	}
+
+	@Test void anonymousSendersNeedPublicAccess() {
+		Engine engine = Engine.createTemp(Maps.of(covia.venue.Config.AUTH, Maps.of(covia.venue.Config.PUBLIC,
+			Maps.of(covia.venue.Config.ENABLED, false))));
+		try {
+			Engine.addDemoAssets(engine);
+			var owner = Strings.create("did:test:closed-venue");
+			engine.getVenueState().users().ensure(owner);
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "agent", null, null),
+				new ConversationSessions(engine.adapterState("messaging-test"), "closed/sessions"));
+			AMap<AString, ACell> open = Maps.of("channel", "test", ConversationRouter.ACCESS, ConversationRouter.OPEN, "from", "stranger");
+			assertNull(engine.publicContext());
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, router.deliveryRefusal(open));
 		} finally { engine.close(); }
 	}
 

@@ -15,6 +15,7 @@ import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -25,19 +26,43 @@ import covia.venue.RequestContext;
  * Provider-independent Job routing and per-conversation ordering. Transport
  * authentication/admission must happen before enqueueing. This in-memory queue
  * is not a durable inbox and must not be used as a webhook acknowledgement.
+ *
+ * <p>Every message comes from a principal. The provider marks each one's
+ * channel ({@code via}) with its {@code access}: {@link #ALLOW} when the
+ * binding's allow-list names the sender, who then comes from the binding's
+ * principal; {@link #OPEN} when only an open binding admits them, and they are
+ * anonymous. The channel travels on the request context.</p>
  */
 public final class ConversationRouter {
 	private static final String AGENT_CHAT = "v/ops/agent/chat";
 	private static final AString[] TEXT_KEYS = {
 		Fields.TEXT, Fields.RESPONSE, Strings.intern("content"), Fields.MESSAGE, Fields.RESULT };
+	/** The field of a channel saying how its sender was admitted. */
+	public static final AString ACCESS = Strings.intern("access");
+	/** The binding identified the sender: its allow-list names them. */
+	public static final AString ALLOW = Strings.intern("allow");
+	/** Only an open binding admits the sender, who is anonymous. */
+	public static final AString OPEN = Strings.intern("open");
 	private final Engine engine;
 	private final MessagingBotSpec spec;
+	private final AString principal;
 	private final ConversationSessions sessions;
 	private final ConcurrentHashMap<String, CompletableFuture<Void>> tails = new ConcurrentHashMap<>();
 
+	/** A binding whose identified senders come from its user. */
 	public ConversationRouter(Engine engine, MessagingBotSpec spec, ConversationSessions sessions) {
+		this(engine, spec, null, sessions);
+	}
+
+	/**
+	 * @param principal who the binding's identified senders come from: the
+	 *        principal that set it up, which may be an agent of its user; null for
+	 *        the binding's user
+	 */
+	public ConversationRouter(Engine engine, MessagingBotSpec spec, AString principal, ConversationSessions sessions) {
 		this.engine = Objects.requireNonNull(engine);
 		this.spec = Objects.requireNonNull(spec);
+		this.principal = principal;
 		this.sessions = Objects.requireNonNull(sessions);
 	}
 
@@ -73,7 +98,7 @@ public final class ConversationRouter {
 	 * record; its {@code via} is the channel, which travels on the request context. */
 	public ACell chat(String conversation, ACell message) {
 		String sid = sessions.get(conversation);
-		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, Strings.create(spec.agent()), Fields.MESSAGE, message);
+		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentAddress(), Fields.MESSAGE, message);
 		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
 		RequestContext ctx = context(message);
 		ACell result;
@@ -89,18 +114,26 @@ public final class ConversationRouter {
 		return RT.getIn(result, Fields.RESPONSE);
 	}
 
-	/** Whether this binding's agent takes input by atomic session delivery: a local
-	 * agent, or one that cannot take input at all, whose delivery is then refused
-	 * once. False for an external agent facade, which keeps its claimed-chat protocol. */
-	public boolean supportsSessionDelivery() {
+	/** Whether this binding's agent takes a message on {@code channel} by atomic
+	 * session delivery: a local agent, or one that cannot take it at all, whose
+	 * delivery is then refused once. False for an external agent facade, which
+	 * keeps its claimed-chat protocol. */
+	public boolean supportsSessionDelivery(AMap<AString, ACell> channel) {
 		return engine.getAdapter("agent") instanceof AgentAdapter adapter
-			&& (deliveryRefusal() != null || adapter.supportsSessionDelivery(context(), Strings.create(spec.agent())));
+			&& (deliveryRefusal(channel) != null || adapter.supportsSessionDelivery(contextFor(channel), agentAddress()));
 	}
 
-	/** Null when this binding's agent can take a delivered message now; otherwise why not. */
-	public String deliveryRefusal() {
-		return engine.getAdapter("agent") instanceof AgentAdapter adapter
-			? adapter.sessionDeliveryRefusal(context(), Strings.create(spec.agent())) : null;
+	/** Null when this binding's agent can take a message on {@code channel} now,
+	 * from whoever it comes from; otherwise why not. */
+	public String deliveryRefusal(AMap<AString, ACell> channel) {
+		if (!(engine.getAdapter("agent") instanceof AgentAdapter adapter)) return null;
+		RequestContext asker;
+		try {
+			asker = contextFor(channel);
+		} catch (AuthException refused) {
+			return refused.getMessage();
+		}
+		return adapter.sessionDeliveryRefusal(asker, agentAddress());
 	}
 
 	/** Admit input without waiting for a response. The participant and session map
@@ -115,7 +148,7 @@ public final class ConversationRouter {
 
 	private Job deliverLocked(String conversation, ACell message, RequestContext.SessionDelivery delivery) {
 		String sid = sessions.get(conversation);
-		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, Strings.create(spec.agent()), Fields.MESSAGE, message);
+		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentAddress(), Fields.MESSAGE, message);
 		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid));
 		RequestContext ctx = context(message).withSessionDelivery((draft, session, job) -> {
 			boolean applied = delivery.accept(draft, session, job);
@@ -151,18 +184,52 @@ public final class ConversationRouter {
 	/** Call within the same queue as chat, so a reset cannot race an in-flight turn. */
 	public void reset(String conversation) { sessions.remove(conversation); }
 
+	/** The binding's principal as it acts now ({@link Engine#principalContext}):
+	 * who its identified senders, and its own work, come from. */
 	public RequestContext context() {
 		sessions.requireCurrentUser();
-		return RequestContext.of(spec.userDID(engine));
+		return engine.principalContext(principal != null ? principal : spec.userDID(engine));
 	}
 
-	/** The context a provider's message is asked under: its {@code via} is the channel. */
-	private RequestContext context(ACell message) {
-		return context().withChannel(RT.ensureMap(RT.getIn(message, Fields.VIA)));
+	/**
+	 * Who a provider's message comes from, carrying its channel ({@code via}):
+	 * the binding's principal for a sender the channel marks {@link #ALLOW},
+	 * anonymous for any other. A message without a channel is the binding's own.
+	 *
+	 * @throws AuthException for an anonymous sender while public access is off
+	 */
+	public RequestContext context(ACell message) {
+		return contextFor(RT.ensureMap(RT.getIn(message, Fields.VIA)));
 	}
 
+	private RequestContext contextFor(AMap<AString, ACell> channel) {
+		if (channel == null || ALLOW.equals(channel.get(ACCESS))) return context().withChannel(channel);
+		sessions.requireCurrentUser();
+		RequestContext anonymous = engine.publicContext();
+		if (anonymous == null) throw new AuthException(Engine.PUBLIC_ACCESS_OFF);
+		return anonymous.withChannel(channel);
+	}
+
+	/** The binding's agent as a full address. A relative reference names an agent
+	 * of the binding's user, wherever the message comes from. */
+	private AString agentAddress() {
+		String agent = spec.agent();
+		if (agent.startsWith("did:")) return Strings.create(agent);
+		if (agent.startsWith("/")) agent = agent.substring(1);
+		if (agent.startsWith("g/")) agent = agent.substring(2);
+		return Strings.create(spec.userDID(engine) + "/g/" + agent);
+	}
+
+	/** Run an operation as the binding's own work. */
 	public ACell runOperation(String operation, ACell input) {
 		return run(operation, input, context());
+	}
+
+	/** Run the binding's operation for a provider's message, from whoever it comes
+	 * from ({@link #context(ACell)}); the input carries no channel of its own, so
+	 * the message's channel is given beside it. */
+	public ACell runOperation(String operation, ACell input, AMap<AString, ACell> channel) {
+		return run(operation, input, contextFor(channel));
 	}
 
 	private ACell run(String operation, ACell input, RequestContext ctx) {

@@ -107,7 +107,6 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private static final AString K_BOT = Strings.intern("bot");
 	private static final AString K_VIA = Strings.intern("via");
 	private static final AString K_CHANNEL = Strings.intern("channel");
-	private static final AString K_ACCESS = Strings.intern("access");
 	private static final AString K_FROM = Strings.intern("from");
 	private static final AString K_CHAT = Strings.intern("chat");
 	private static final AString K_MESSAGE_ID = Strings.intern("message_id");
@@ -158,7 +157,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			this::legacySession, chat -> {
 				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
 			}, this, () -> !stopped && adapter.isActive());
-		conversations = new ConversationRouter(adapter.engine, spec, sessionStore);
+		conversations = new ConversationRouter(adapter.engine, spec, adapter.principalOf(spec, managed), sessionStore);
 		inbox = new WebhookInbox(adapter.engine, storage, statePath("inbox") + "/unbound");
 	}
 
@@ -476,7 +475,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				claimed = inbox.claim(id);
 				if (!claimed) return;
 				// Only session delivery can share a local transaction with its recipient.
-				if (isAgentTurn(update) && conversations.supportsSessionDelivery()) {
+				if (isAgentTurn(update) && conversations.supportsSessionDelivery(channel(update.message()))) {
 					deliverTurn(id, update);
 					return;
 				}
@@ -513,7 +512,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void deliverTurn(String id, Update update) {
 		Message m = update.message();
 		try {
-			String refusal = admitted(update) ? conversations.deliveryRefusal() : NOT_ADMITTED;
+			String refusal = admitted(update) ? conversations.deliveryRefusal(channel(update.message())) : NOT_ADMITTED;
 			if (refusal != null) throw new IllegalStateException(refusal);
 			respondAgent(id, m, messageText(m), true);
 		} catch (RuntimeException failure) {
@@ -735,7 +734,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		Long chatId = chatOf(update);
 		try {
 			if (chatId != null && !spec.silent() && spec.fixedReply() == null) typing(chatId, m);
-			ACell result = conversations.runOperation(spec.operation(), updateRecord(update));
+			ACell result = conversations.runOperation(spec.operation(), updateRecord(update),
+				channel(senderOf(update), chatOfUpdate(update)));
 			if (chatId != null) replyAfter(chatId, m, result);
 		} catch (Throwable t) {
 			logFailure("handler failed for update " + update.updateId(), chatId, t);
@@ -756,21 +756,32 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * mistake for typed text, who is on the other end — Telegram's own {@code from}
 	 * and {@code chat} objects (authenticated by Telegram, admitted by this bot's
 	 * allow-list or its {@code open} setting), the bot, and the message id. The
-	 * framework's own "[Authenticated sender: …]" line names the bot's Covia
-	 * identity; this names the human.
+	 * channel travels on the request context, and the agent's ingress writes it
+	 * as {@code via}; the turn's caller is who the message comes from.
 	 */
 	AMap<AString, ACell> agentMessage(Message m, String text) {
+		return Maps.of(Fields.TEXT, Strings.create(text), K_VIA, channel(m));
+	}
+
+	/** An update's channel: Telegram's own sender and chat, and whether the allow-list names the sender. */
+	private AMap<AString, ACell> channel(User from, Chat chat) {
 		AMap<AString, ACell> via = Maps.of(
 			K_CHANNEL, Strings.create("telegram"),
 			K_BOT, Strings.create(spec.name()),
-			K_ACCESS, Strings.create(spec.open() ? "open" : "allow"));
-		if (m.from() != null) via = via.assoc(K_FROM, telegramCell(m.from()));
-		if (m.chat() != null) via = via.assoc(K_CHAT, telegramCell(m.chat()));
+			ConversationRouter.ACCESS, listed(from) ? ConversationRouter.ALLOW : ConversationRouter.OPEN);
+		if (from != null) via = via.assoc(K_FROM, telegramCell(from));
+		if (chat != null) via = via.assoc(K_CHAT, telegramCell(chat));
+		return via;
+	}
+
+	/** A message's channel, with the ids that place it in its chat. */
+	private AMap<AString, ACell> channel(Message m) {
+		AMap<AString, ACell> via = channel(m.from(), m.chat());
 		if (threadOf(m) != null) via = via.assoc(Strings.intern("message_thread_id"), CVMLong.create(threadOf(m)));
 		if (m.replyToMessage() != null) via = via.assoc(Strings.intern("reply_to_message_id"), CVMLong.create(m.replyToMessage().messageId()));
 		if (m.mediaGroupId() != null) via = via.assoc(Strings.intern("media_group_id"), Strings.create(m.mediaGroupId()));
 		if (m.messageId() != null) via = via.assoc(K_MESSAGE_ID, CVMLong.create(m.messageId()));
-		return Maps.of(Fields.TEXT, Strings.create(text), K_VIA, via);
+		return via;
 	}
 
 	/** A pengrad model object as Telegram's JSON (snake_case), as a cell. */
@@ -931,7 +942,15 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * clears a binding by deleting its record, or by listing the id instead.</p>
 	 */
 	private boolean admits(Long fromId, String fromName) {
-		if (spec.open()) return true;
+		return spec.open() || listed(fromId, fromName);
+	}
+
+	/** Whether the allow-list names this sender, whom the bot then identifies as its principal. */
+	private boolean listed(User from) {
+		return from != null && listed(from.id(), from.username());
+	}
+
+	private boolean listed(Long fromId, String fromName) {
 		if (fromId != null && spec.allowIds().contains(fromId)) return true;
 		if (fromId == null || fromName == null) return false;
 		String handle = fromName.toLowerCase(Locale.ROOT);

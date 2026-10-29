@@ -40,7 +40,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private static final Logger log=LoggerFactory.getLogger(BotRunner.class);
 	static final int MAX_MESSAGE_LENGTH=2000;
 	static final AString K_STATE=Strings.intern("state"),K_USERNAME=Strings.intern("username"),K_BOT_ID=Strings.intern("bot_id"),K_TARGET=Strings.intern("target"),K_RECEIVED=Strings.intern("received"),K_SENT=Strings.intern("sent"),K_FAILED=Strings.intern("failed"),K_MANAGED=Strings.intern("managed");
-	private static final AString K_BOT=Strings.intern("bot"),K_VIA=Strings.intern("via"),K_CHANNEL=Strings.intern("channel"),K_ACCESS=Strings.intern("access"),K_FROM=Strings.intern("from"),K_GUILD=Strings.intern("guild"),K_MESSAGE_ID=Strings.intern("message_id"),K_CHANNEL_ID=Strings.intern("channel_id"),K_NAME=Strings.intern("name"),K_ID=Strings.intern("id"),K_TYPE=Strings.intern("type"),K_ATTACHMENTS=Strings.intern("attachments");
+	private static final AString K_BOT=Strings.intern("bot"),K_VIA=Strings.intern("via"),K_CHANNEL=Strings.intern("channel"),K_FROM=Strings.intern("from"),K_GUILD=Strings.intern("guild"),K_MESSAGE_ID=Strings.intern("message_id"),K_CHANNEL_ID=Strings.intern("channel_id"),K_NAME=Strings.intern("name"),K_ID=Strings.intern("id"),K_TYPE=Strings.intern("type"),K_ATTACHMENTS=Strings.intern("attachments");
 	enum State {STARTING,PENDING,RUNNING,STOPPED}
 	/** Shared by every bot: each HttpClient holds a selector thread for its lifetime. */
 	private static final HttpClient HTTP=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).executor(AAdapter.VIRTUAL_EXECUTOR).build();
@@ -50,7 +50,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	private final ConversationRouter conversations;
 
-	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,new ConversationSessions(adapter.state(spec.userDID(adapter.engine)),sessionsRelativePath(),this,()->!stopped&&adapter.isActive()));}
+	BotRunner(DiscordAdapter adapter,BotSpec spec,String apiUrl,Managed managed){this.adapter=adapter;this.spec=spec;this.apiUrl=apiUrl;this.managed=managed;conversations=new ConversationRouter(adapter.engine,spec,adapter.principalOf(spec,managed),new ConversationSessions(adapter.state(spec.userDID(adapter.engine)),sessionsRelativePath(),this,()->!stopped&&adapter.isActive()));}
 	@Override public BotSpec spec(){return spec;}
 	@Override public Managed managed(){return managed;}
 	@Override public void start(){AAdapter.VIRTUAL_EXECUTOR.execute(this::tryStart);}
@@ -85,7 +85,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private void respondAgent(InboundMessage m,String text) {
 		try {
 			if (stopped || !adapter.isActive()) return;
-			if (conversations.supportsSessionDelivery()) {
+			if (conversations.supportsSessionDelivery(via(m))) {
 				// Gateway delivery has no durable receipt yet. Still commit the
 				// input and session mapping together and release the intake queue.
 				var job = conversations.deliver(m.channelId(), agentMessage(m,text), (draft,sid,jid) -> true);
@@ -103,10 +103,12 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		if (stopped || !adapter.isActive()) return;
 		failed.incrementAndGet();logFailure("failed to respond",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());
 	}
-	private void respondOperation(InboundMessage m){try{ACell result=conversations.runOperation(spec.operation(),messageRecord(m));String reply=conversations.operationReply(result);if(reply!=null)send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("handler failed",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
+	private void respondOperation(InboundMessage m){try{ACell result=conversations.runOperation(spec.operation(),messageRecord(m),via(m));String reply=conversations.operationReply(result);if(reply!=null)send(m.channelId(),reply,m.id());}catch(Throwable t){failed.incrementAndGet();logFailure("handler failed",m,t);sendQuietly(m.channelId(),"⚠️ "+concise(t),m.id());}}
 
 	AMap<AString,ACell> messageRecord(InboundMessage m){AMap<AString,ACell> out=Maps.of(K_BOT,Strings.create(spec.name()),K_ID,Strings.create(m.id()),K_CHANNEL_ID,Strings.create(m.channelId()),Strings.intern("channel_type"),Strings.create(m.channelType()),K_FROM,userRecord(m),Fields.TEXT,Strings.create(m.content()==null?"":m.content()),K_ATTACHMENTS,m.attachments());if(m.channelName()!=null)out=out.assoc(Strings.intern("channel_name"),Strings.create(m.channelName()));if(m.guildId()!=null)out=out.assoc(K_GUILD,Maps.of(K_ID,Strings.create(m.guildId()),K_NAME,Strings.create(m.guildName())));return out;}
-	AMap<AString,ACell> agentMessage(InboundMessage m,String text){AMap<AString,ACell> channel=Maps.of(K_ID,Strings.create(m.channelId()),K_TYPE,Strings.create(m.channelType()));if(m.channelName()!=null)channel=channel.assoc(K_NAME,Strings.create(m.channelName()));AMap<AString,ACell> via=Maps.of(K_CHANNEL,Strings.create("discord"),K_BOT,Strings.create(spec.name()),K_ACCESS,Strings.create(spec.open()?"open":"allow"),K_FROM,userRecord(m),Strings.intern("chat"),channel,K_MESSAGE_ID,Strings.create(m.id()));if(m.guildId()!=null)via=via.assoc(K_GUILD,Maps.of(K_ID,Strings.create(m.guildId()),K_NAME,Strings.create(m.guildName())));return Maps.of(Fields.TEXT,Strings.create(text),K_VIA,via,K_ATTACHMENTS,m.attachments());}
+	/** The message's channel: Discord's authenticated sender and place, and whether the allow-list names the sender. */
+	AMap<AString,ACell> via(InboundMessage m){AMap<AString,ACell> channel=Maps.of(K_ID,Strings.create(m.channelId()),K_TYPE,Strings.create(m.channelType()));if(m.channelName()!=null)channel=channel.assoc(K_NAME,Strings.create(m.channelName()));AMap<AString,ACell> via=Maps.of(K_CHANNEL,Strings.create("discord"),K_BOT,Strings.create(spec.name()),ConversationRouter.ACCESS,spec.lists(m.authorId(),m.username())?ConversationRouter.ALLOW:ConversationRouter.OPEN,K_FROM,userRecord(m),Strings.intern("chat"),channel,K_MESSAGE_ID,Strings.create(m.id()));if(m.guildId()!=null)via=via.assoc(K_GUILD,Maps.of(K_ID,Strings.create(m.guildId()),K_NAME,Strings.create(m.guildName())));return via;}
+	AMap<AString,ACell> agentMessage(InboundMessage m,String text){return Maps.of(Fields.TEXT,Strings.create(text),K_VIA,via(m),K_ATTACHMENTS,m.attachments());}
 	private static AMap<AString,ACell> userRecord(InboundMessage m){AMap<AString,ACell> u=Maps.of(K_ID,Strings.create(m.authorId()),K_USERNAME,Strings.create(m.username()));if(m.globalName()!=null)u=u.assoc(Strings.intern("global_name"),Strings.create(m.globalName()));return u;}
 
 	private String sessionsRelativePath(){return managed==Managed.CONFIG

@@ -42,7 +42,10 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 	/** Allow-list check: numeric ids and unique Discord usernames only. The global
 	 *  display name is user-settable and non-unique, so it never admits anyone. */
 	public boolean allows(String id,String username){
-		if(open) return true;
+		return open || lists(id,username);
+	}
+	/** Whether the allow-list names this sender, whom the bot then identifies as its principal. */
+	public boolean lists(String id,String username){
 		if(id!=null && allowIds.contains(id)) return true;
 		return matches(username);
 	}

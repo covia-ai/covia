@@ -66,7 +66,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		String relayRoot = managed == Managed.CONFIG ? "config/" + spec.name() + "/relay/" + identity
 			: adapter.userStatePath(owner, "relay/" + spec.name() + "/" + identity);
 		inbox = new WebhookInbox(adapter.engine, state, inboxRoot);
-		router = new ConversationRouter(adapter.engine, spec, new ConversationSessions(state, sessionsRoot + "/" + version,
+		router = new ConversationRouter(adapter.engine, spec, adapter.principalOf(spec, managed), new ConversationSessions(state, sessionsRoot + "/" + version,
 			this, () -> running && adapter.isActive()));
 		relay = spec.routesToRelay() ? new RelayBinding<>(this, adapter, relayRoot) : null;
 	}
@@ -222,11 +222,12 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		}
 		String conversation = MessagingSettings.required(event, "conversation");
 		if (!queued.add(id)) return;
-		boolean localSession = spec.routesToAgent() && router.supportsSessionDelivery();
+		AMap<AString, ACell> channel = RT.ensureMap(event.get(Fields.VIA));
+		boolean localSession = spec.routesToAgent() && router.supportsSessionDelivery(channel);
 		router.enqueue(conversation, () -> {
 			if (!claim(id)) return;
 			if (localSession) {
-				String refusal = router.deliveryRefusal();
+				String refusal = router.deliveryRefusal(channel);
 				if (refusal != null) throw new IllegalStateException(refusal);
 				deliverSession(id, event, conversation);
 				return;
@@ -235,7 +236,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			String reply;
 			if (spec.routesToAgent()) {
 				reply = ConversationRouter.responseText(router.chat(conversation, agentMessage(event)));
-			} else reply = router.operationReply(router.runOperation(spec.operation(), input));
+			} else reply = router.operationReply(router.runOperation(spec.operation(), input, channel));
 			if (!running || !adapter.isActive()) return;
 			if (reply != null) adapter.sendReply(this, event, reply);
 			complete(id);

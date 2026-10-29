@@ -25,6 +25,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Principals;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -40,6 +41,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	private static final Logger log = LoggerFactory.getLogger(AMessagingAdapter.class);
 	protected static final AString K_BOTS = Strings.intern("bots");
 	private static final AString K_USER = Strings.intern("user");
+	/** On a created bot's record: the principal that created it, when not its user (an agent of that user). */
+	private static final AString K_PRINCIPAL = Strings.intern("principal");
 	private static final AString K_TOKEN = Strings.intern("token");
 	private static final AString K_DELETED = Strings.intern("deleted");
 
@@ -55,9 +58,12 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String DUPLICATE_BOT = "You already have a %s bot named '%s'";
 	public static final String CONFIG_BOT = "Bot '%s' is declared in venue config; remove it there";
 	public static final String MISSING_BOT = "You have no %s bot named '%s'";
+	public static final String FOREIGN_PRINCIPAL = "a bot's principal must be its user or one of that user's agents, not %s";
 
 	private volatile Map<String, S> specs = Map.of();
 	private final Map<String, R> runners = new LinkedHashMap<>();
+	/** Created bots' principals, by runtime key, where not the bot's user. */
+	private final Map<String, AString> principals = new java.util.concurrent.ConcurrentHashMap<>();
 	private final ScheduledExecutorService retries = Executors.newSingleThreadScheduledExecutor(r -> {
 		Thread t = new Thread(r, getName() + "-retry");
 		t.setDaemon(true);
@@ -171,10 +177,16 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 			String key = runtimeKey(owner, name);
 			if (runners.containsKey(key)) continue;
 			try {
-				AMap<AString, ACell> settings = RT.castMap(entry.getValue());
-				if (settings == null) throw new IllegalArgumentException(SETTINGS_REQUIRED);
+				AMap<AString, ACell> stored = RT.castMap(entry.getValue());
+				if (stored == null) throw new IllegalArgumentException(SETTINGS_REQUIRED);
+				AString principal = RT.ensureString(stored.get(K_PRINCIPAL));
+				if (principal != null && !owner.equals(Principals.userOf(principal))) {
+					throw new IllegalArgumentException(FOREIGN_PRINCIPAL.formatted(principal));
+				}
+				AMap<AString, ACell> settings = stored.dissoc(K_PRINCIPAL);
 				S spec = parseBot(name, settings.assoc(K_USER, owner), true);
-				if (migrate) state(owner).write(userStatePath(owner, "bots/" + name), settings);
+				if (migrate) state(owner).write(userStatePath(owner, "bots/" + name), stored);
+				if (principal != null) principals.put(key, principal);
 				R runner = newBot(spec, Managed.RUNTIME);
 				runners.put(key, runner);
 				runner.start();
@@ -301,11 +313,25 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		engine.requireAuthority(ctx, resource(owner, name), Strings.intern(getName() + "/manage"));
 		String key = runtimeKey(owner, name);
 		if (runners.containsKey(key)) throw new IllegalArgumentException(DUPLICATE_BOT.formatted(providerName(), name));
+		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
+		AString principal = ctx.getCallerDID();
+		boolean own = owner.equals(principal);
+		if (own) principals.remove(key); else principals.put(key, principal);
 		R runner = newBot(spec, Managed.RUNTIME);
-		state(owner).write(userStatePath(owner, "bots/" + name), settings);
+		state(owner).write(userStatePath(owner, "bots/" + name), own ? settings : settings.assoc(K_PRINCIPAL, principal));
 		runners.put(key, runner);
 		runner.start();
 		return runner.status();
+	}
+
+	/**
+	 * Who a bot's identified senders come from: the principal that created it,
+	 * or null for its user (every operator-declared bot, and a bot its user
+	 * created directly).
+	 */
+	public final AString principalOf(S spec, Managed managed) {
+		if (managed != Managed.RUNTIME) return null;
+		return principals.get(runtimeKey(spec.userDID(engine), spec.name()));
 	}
 
 	protected final synchronized ACell handleDelete(RequestContext ctx, ACell input) {
@@ -322,6 +348,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 			throw new IllegalArgumentException(MISSING_BOT.formatted(providerName(), name));
 		}
 		runner.stop();
+		principals.remove(runtimeKey(owner, name));
 		state(owner).delete(userStatePath(owner, "bots/" + name));
 		state(owner).delete(userStatePath(owner, "sessions/" + name));
 		deleteRuntimeState(ctx, name);

@@ -85,7 +85,7 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		String id = MessagingSettings.required(payload, "event_id");
 		var via = Maps.of("channel", NAME, "bot", bot.spec().name(), "from", user, "chat", channel,
 			"message_id", ts, "event_id", id, "team", bot.spec().teamId(), "thread", thread,
-			"access", bot.spec().admitsAnySender() ? "open" : "allow");
+			ConversationRouter.ACCESS, bot.spec().listsUser(user) ? ConversationRouter.ALLOW : ConversationRouter.OPEN);
 		bot.accept(id, Maps.of("conversation", ConversationRouter.key(bot.spec().installationKey(), channel, thread == null ? "" : thread),
 			"text", text, "channel", channel, "thread", thread, "via", via,
 			"input", Maps.of("event_id", id, "team_id", bot.spec().teamId(), "api_app_id", bot.spec().appId(), "event", event)));

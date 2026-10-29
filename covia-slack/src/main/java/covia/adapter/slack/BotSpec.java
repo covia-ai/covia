@@ -38,8 +38,11 @@ public record BotSpec(String name, AMap<AString, ACell> settings) implements Web
 	public String botUserId() { return MessagingSettings.required(settings, "botUserId"); }
 	public String enterpriseId() { return MessagingSettings.optional(settings, "enterpriseId"); }
 	public boolean allowsUser(String id) {
-		return id != null && id.matches(USER_ID) && (admitsAnySender()
-			|| MessagingSettings.ids(settings, "allow", USER_ID).contains(id));
+		return id != null && id.matches(USER_ID) && (admitsAnySender() || listsUser(id));
+	}
+	/** Whether the allow-list names this user, whom the binding then identifies as its principal. */
+	public boolean listsUser(String id) {
+		return id != null && MessagingSettings.ids(settings, "allow", USER_ID).contains(id);
 	}
 	public boolean allowsChannel(String id) { return MessagingSettings.ids(settings, "allowChannels", CHANNEL_ID).contains(id); }
 	@Override public boolean webhookIngress() { return settings.containsKey(MessagingSettings.key(SIGNING_SECRET)); }

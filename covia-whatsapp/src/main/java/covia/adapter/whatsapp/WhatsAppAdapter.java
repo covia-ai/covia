@@ -103,7 +103,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 					if (time > now + 300 || time < now - WINDOW_SECONDS) continue;
 					var via = Maps.of("channel", NAME, "bot", bot.spec().name(), "from", from, "chat", from,
 						"message_id", id, "phoneNumberId", bot.spec().phoneNumberId(),
-						"access", bot.spec().admitsAnySender() ? "open" : "allow");
+						ConversationRouter.ACCESS, bot.spec().lists(from) ? ConversationRouter.ALLOW : ConversationRouter.OPEN);
 					AMap<AString, ACell> event = Maps.of("conversation", ConversationRouter.key(bot.spec().installationKey(), from),
 						"to", from, "messageId", id, "timestamp", timestamp, "via", via,
 						"input", Maps.of("message", message, "metadata", metadata, "business_account_id", bot.spec().businessAccountId()));
