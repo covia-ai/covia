@@ -231,6 +231,7 @@ public final class ConversationRouter {
 	public RequestContext agentContext() {
 		String address = agentAddress().toString();
 		int split = address.indexOf("/g/");
+		if (split < 0) return context(); // not an agent address; asking it is refused anyway
 		AString owner = Strings.create(address.substring(0, split));
 		AString agent = Principals.agentDID(owner, Strings.create(address.substring(split + 3)));
 		AString self = (principal != null) ? principal : spec.userDID(engine);

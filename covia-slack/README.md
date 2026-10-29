@@ -123,7 +123,8 @@ unacknowledged envelopes, and each inbox deduplicates them by `event_id`.
 Slash-command and interactivity envelopes are acknowledged and ignored.
 
 `allow` contains Slack user IDs and defaults to empty; `open: true` opens
-sender admission. Channel publication always requires `allowChannels`, even
+sender admission. A listed sender comes from the binding's principal and any
+other is anonymous ([Who a chat message comes from](../venue/docs/CONFIG.md#who-a-chat-message-comes-from)). Channel publication always requires `allowChannels`, even
 with `open: true`. An admitted direct-message sender can receive an automatic
 reply in that DM. Explicit `slack:send` requires the destination channel,
 including DM channel IDs, in `allowChannels`.

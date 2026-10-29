@@ -1022,6 +1022,33 @@ public class TelegramAdapterTest {
 	}
 
 	@Test
+	public void testACappedAgentsOwnBotAsksItAsItself() throws Exception {
+		String token = "779:SELF-BOT";
+		telegram.registerBot(token, "self_bot");
+		run(RequestContext.of(OWNER), "v/ops/secret/set", Maps.of("name", "TG_SELF", "value", token));
+		// Its own bot's senders come from the agent, so it needs the right to ask itself.
+		AVector<ACell> caps = Vectors.of(
+			convex.auth.ucan.Capability.create(Strings.create(OWNER + "/telegram"), Strings.create("telegram/manage")),
+			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/create"), Strings.create("invoke")),
+			convex.auth.ucan.Capability.create(Strings.create(OWNER + "/g/self-asker"), Strings.create("agent/message")),
+			convex.auth.ucan.Capability.create(Strings.create("v/ops/agent/chat"), Strings.create("invoke")));
+		run(RequestContext.of(OWNER), "v/ops/agent/create", Maps.of(Fields.AGENT_ID, "self-asker",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm", "caps", caps)));
+		run(RequestContext.ofAgent(OWNER, Strings.create("self-asker")).withCaps(caps), "v/ops/telegram/create",
+			Maps.of("name", "self", "token", "s/TG_SELF", "agent", "self-asker", "allow", Vectors.of(CVMLong.create(ALLOWED_ID))));
+		try {
+			BotRunner self = adapter.runner(OWNER, "self");
+			await(() -> self.state() == BotRunner.State.RUNNING, 10_000, () -> "self bot did not start: " + self.error());
+			telegram.push(token, ALLOWED_ID, "private", ALLOWED_ID, "alice", "talk to yourself");
+			FakeTelegramServer.Sent reply = telegram.awaitSent(token, 15_000);
+			assertNotNull(reply);
+			assertTrue(reply.text().contains("talk to yourself"), reply.text());
+		} finally {
+			run(RequestContext.of(OWNER), "v/ops/telegram/delete", Maps.of("name", "self"));
+		}
+	}
+
+	@Test
 	public void testCreateAndDeleteRuntimeBots() throws Exception {
 		String token = "777:CREATED-BOT";
 		telegram.registerBot(token, "created_bot");

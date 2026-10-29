@@ -2351,7 +2351,9 @@ comes from a principal, and the binding identifies which.
   agent or its owner, and otherwise as the binding's principal.
 
 A `user: "public"` binding's allow-listed senders are the public principal
-too, so they are bound by the public scope.
+too, so they are bound by the public scope. A capped agent's own binding asks
+it as the agent, so the agent's `caps` need `agent/message` on itself and
+`invoke` on `v/ops/agent/chat`.
 
 ### Telegram bots (covia-telegram)
 

@@ -315,6 +315,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		if (runners.containsKey(key)) throw new IllegalArgumentException(DUPLICATE_BOT.formatted(providerName(), name));
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
 		AString principal = ctx.getCallerDID();
+		if (!owner.equals(Principals.userOf(principal))) throw new IllegalArgumentException(FOREIGN_PRINCIPAL.formatted(principal));
 		boolean own = owner.equals(principal);
 		if (own) principals.remove(key); else principals.put(key, principal);
 		R runner = newBot(spec, Managed.RUNTIME);

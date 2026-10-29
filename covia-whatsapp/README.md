@@ -59,7 +59,9 @@ the future are ignored. Sender IDs are numeric WhatsApp phone identifiers;
 usernames and business-scoped user IDs are not supported in this version.
 
 `allow` defaults to empty (deny everyone). `open: true` admits any supported
-sender ID and permits outbound sends to any such ID. An allow-listed binding
+sender ID and permits outbound sends to any such ID. A listed sender comes
+from the binding's principal and any other is anonymous
+([Who a chat message comes from](../venue/docs/CONFIG.md#who-a-chat-message-comes-from)). An allow-listed binding
 can send only to its listed IDs. An agent receives `{text, via}` where `via`
 identifies the provider, authenticated sender and phone binding. Provider
 identity does not grant additional venue authority.
