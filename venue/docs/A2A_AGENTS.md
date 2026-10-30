@@ -108,7 +108,10 @@ flag is `a2a: { public: true, caps: … }` and has two levels:
   interaction).
 - adding `caps` makes it **interactable** by non-owners. A non-owner's
   `SendMessage` then runs the agent under the *owner's* identity narrowed by
-  that scope — `RequestContext.of(ownerDID).withCaps(scope)`. A scope can
+  that scope: the caller (the venue public principal when anonymous) acts as a
+  sub-principal in the owner's namespace holding exactly that scope —
+  `Authority.of(caller).onBehalfOf(ownerDID).withGrantScope(scope)` — so the
+  task is the owner's job and records the caller as its `actor`. A scope can
   only narrow, so it is escalation-safe. `caps: "unrestricted"` is honoured
   (full owner authority for anonymous callers) with a warning, mirroring
   `auth.public.caps`; a public agent with **no** `caps` is discoverable but its
@@ -160,8 +163,12 @@ the ownership enforcement (facade over the capability layer), so no A2A-specific
 trust branch exists. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
 `contextId = session` for the task's whole lifecycle — the same on `SendMessage`
-and on a later `GetTask`. `GetTask` / `CancelTask` reuse the front-door by-id
-handlers (a Task id is a global, caller-scoped Job id). `SubscribeToTask`
+and on a later `GetTask`. The per-agent by-id methods — `GetTask`,
+`CancelTask`, `SubscribeToTask` and a `SendMessage` carrying a `taskId` —
+address only tasks of that agent, and for a non-owner only the tasks it created
+there itself (the job's `actor`); anything else is "not found", in one wording,
+so the endpoint discloses nothing about the owner's other jobs. The owner's
+other jobs are addressed on the front door. `SubscribeToTask`
 attaches SSE updates directly to that same Job. A fresh `SendMessage` returns
 immediately with its Task and session identifiers; it never imposes a
 synchronous turn deadline. Polling and SSE therefore observe one state machine

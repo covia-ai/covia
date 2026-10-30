@@ -69,6 +69,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `GET /api/v1/agents/{id}` answers a refused or malformed id with 403 or 400, not 500.
 - `auth:identity-token` refuses a scope lent to a principal acting as itself, and no
   credential authenticates as the venue's public principal.
+- A per-agent A2A `GetTask`, `CancelTask`, `SubscribeToTask` or `taskId` continuation
+  addresses that agent's tasks, and a non-owner only the tasks it created there, now
+  recorded as the job's `actor`.
 
 ### Migration
 

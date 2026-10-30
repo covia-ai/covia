@@ -8,14 +8,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Authority;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -121,6 +125,32 @@ public class AccessControlTest {
 	public void testNullJobDataDenied() {
 		AccessControl ac = engine.getAccessControl();
 		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), null));
+	}
+
+	@Test
+	public void testScopedCallerInOwnersNamespaceReachesOnlyJobsItLaunched() {
+		AccessControl ac = engine.getAccessControl();
+		AString publicDid = Strings.create(engine.getDIDString() + ":public");
+		// The venue's public principal acting within Alice's namespace under an
+		// explicit scope: a sub-principal, as a public A2A dispatch is.
+		RequestContext dispatch = RequestContext.ofAuthority(
+			Authority.of(publicDid).onBehalfOf(ALICE_LITERAL).withGrantScope(Vectors.empty()));
+		assertTrue(dispatch.isSubPrincipal());
+		assertEquals(ALICE_LITERAL, dispatch.getUserDID());
+
+		AMap<AString, ACell> launched = Maps.of(
+			Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"),
+			Fields.STATUS, Status.PENDING,
+			Fields.CALLER, ALICE_LITERAL,
+			Fields.ACTOR, publicDid,
+			Fields.UPDATED, CVMLong.create(1000L));
+		assertTrue(ac.canAccessJob(dispatch, launched), "reaches the job it launched (actor match)");
+		assertTrue(ac.canAccessJob(dispatch, launched, Capability.CRUD_WRITE));
+		AMap<AString, ACell> alicesOwn = launched.dissoc(Fields.ACTOR);
+		assertFalse(ac.canAccessJob(dispatch, alicesOwn),
+			"sharing Alice's namespace is proximity, not permission");
+		assertFalse(ac.canAccessJob(dispatch, alicesOwn, Capability.CRUD_WRITE));
+		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), launched), "the owner reaches both");
 	}
 
 	// ========== RequestContext Properties ==========
