@@ -68,9 +68,16 @@ config = json.loads(path.read_text(encoding="utf-8"))
 # Every venue sits behind Caddy on this host and sees it through the
 # Docker bridge: take the client address from X-Forwarded-For, or every
 # caller shares one rate-limit bucket and one authentication budget
-# (covia#539). An operator-set value is left alone.
+# (covia#539). Each venue also keeps the security audit trail and the
+# per-request access log, as JSON lines a log shipper can route on
+# (security#10, venue/docs/CONFIG.md "Logging"). An operator-set value
+# is left alone.
+config.setdefault("operations", {}).setdefault("log-format", "json")
 for venue in config.get("venues", []):
     venue.setdefault("trustedProxies", ["loopback", "172.16.0.0/12"])
+    logging = venue.setdefault("logging", {})
+    logging.setdefault("audit", True)
+    logging.setdefault("access", True)
 for venue in config.get("venues", []):
     if venue.get("hostname") == "venue-test.covia.ai":
         users = venue.setdefault("users", {})
