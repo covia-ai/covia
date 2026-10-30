@@ -741,7 +741,7 @@ public class UCANTest {
 		assertTrue(notOurs.getMessage().contains(UCANAdapter.PRF_NOT_TO_VENUE));
 
 		String held = heldGrant(ALICE_DID + "/w/", "crud/read", 2 * HOUR);
-		String tampered = held.substring(0, held.length() - 2) + (held.endsWith("A") ? "BB" : "AA");
+		String tampered = tamperSignature(held);
 		Exception invalid = assertThrows(Exception.class, () -> passOn(engine.venueContext(), tampered,
 			ALICE_DID + "/w/shared/", "crud/read", now + HOUR).awaitResult(5000));
 		assertTrue(invalid.getMessage().contains(UCANAdapter.PRF_INVALID));
@@ -949,11 +949,7 @@ public class UCANTest {
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty()).toString();
 
-		// Flip a character in the signature segment (last dot-separated part)
-		int lastDot = jwt.lastIndexOf('.');
-		char c = jwt.charAt(lastDot + 1);
-		char flipped = (c == 'A') ? 'B' : 'A';
-		String tampered = jwt.substring(0, lastDot + 1) + flipped + jwt.substring(lastDot + 2);
+		String tampered = tamperSignature(jwt);
 
 		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(
 			Vectors.of(Strings.create(tampered)));
@@ -1007,6 +1003,16 @@ public class UCANTest {
 	/** Alice's root grant to this venue over one of her resources, as a JWT. */
 	private String heldGrant(String with, String can, long ttlSeconds) {
 		return UcanTokens.grant(ALICE_KP, venueDID.toString(), with, can, ttlSeconds);
+	}
+
+	/**
+	 * The JWT with its signature's first character flipped, so the signature
+	 * bytes always change: its last character also carries slack bits the
+	 * base64url decoder discards, so changing that one may change nothing.
+	 */
+	private static String tamperSignature(String jwt) {
+		int sig = jwt.lastIndexOf('.') + 1;
+		return jwt.substring(0, sig) + ((jwt.charAt(sig) == 'A') ? 'B' : 'A') + jwt.substring(sig + 1);
 	}
 
 	/** Asks for a token to Bob over {@code (with, can)} carrying {@code parent} in prf. */
