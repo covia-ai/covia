@@ -1034,7 +1034,7 @@ public final class ContextAssembler {
 	 */
 	static AVector<ACell> conversation(Spec spec) {
 		AVector<ACell> out = Vectors.empty();
-		Attribution attribution = new Attribution(spec.engine(), spec.ctx());
+		Attribution attribution = new Attribution(spec.engine(), spec.ctx(), spec.labels());
 		AVector<ACell> frames = spec.frames();
 		if (frames.count() > 1) {
 			out = out.conj(GoalTreeContext.renderAncestors(frames, spec.labels()));
@@ -1138,100 +1138,41 @@ public final class ContextAssembler {
 	// ========== Attribution ==========
 
 	/**
-	 * Venue-authored provenance between turns. When the submitting principal
-	 * differs from the agent's own and from the last one noted, a system note
-	 * precedes the turn; when submission returns to the agent's own principal
-	 * after foreign turns, that is noted once too. Nothing is ever written into
-	 * the user's own text, so there is nothing to forge.
+	 * Venue-authored provenance between turns (COG-20 §4). A {@code From} element
+	 * ({@link TurnProvenance}) precedes a user turn whose provenance key — its
+	 * caller and channel identity — differs from the last one rendered, starting
+	 * from the agent's own principal. A turn stored without a caller renders none.
+	 * The element names who asked without telling the model to trust, obey or
+	 * reject the content: authority remains a property of the configured
+	 * capabilities (#405). Nothing is ever written into the user's own text, so
+	 * there is nothing to forge.
 	 */
 	private static final class Attribution {
 		private final Engine engine;
 		private final RequestContext ctx;
-		private AString last;
+		private final AString dialect;
+		private TurnProvenance.Key last;
 
-		Attribution(Engine engine, RequestContext ctx) {
+		Attribution(Engine engine, RequestContext ctx, AString dialect) {
 			this.engine = engine;
 			this.ctx = ctx;
+			this.dialect = dialect;
+			this.last = TurnProvenance.self(ctx);
 		}
 
 		AVector<ACell> append(AVector<ACell> out, ACell value, AString defaultRole) {
 			AMap<AString, ACell> msg = ConversationRenderer.toMessage(value, defaultRole);
 			if (msg == null) return out;
-			if (ROLE_USER.equals(msg.get(K_ROLE))) {
-				AString current = (ctx != null) ? ctx.getCallerDID() : null;
-				AString caller = (value instanceof AMap<?, ?> m) ? RT.ensureString(m.get(Fields.CALLER)) : null;
-				boolean foreign = caller != null && !caller.equals(current);
-				if (foreign && !caller.equals(last)) {
-					out = out.conj(system(attributionNote(engine, ctx, caller)));
-					last = caller;
-				} else if (!foreign && last != null) {
-					out = out.conj(system(provenance(current, "self", "authenticated")));
-					last = null;
+			if (ROLE_USER.equals(msg.get(K_ROLE)) && value instanceof AMap<?, ?> m) {
+				AMap<AString, ACell> turn = RT.ensureMap(m);
+				TurnProvenance.Key key = TurnProvenance.key(turn);
+				if (key != null && !key.equals(last)) {
+					out = out.conj(system(TurnProvenance.element(dialect, engine, ctx, turn)));
+					last = key;
 				}
 			}
 			return out.conj(msg);
 		}
-	}
-
-	/**
-	 * Venue-generated provenance for the turns that follow. This deliberately
-	 * identifies the submitter without telling the model to trust, obey or reject
-	 * their content: authority remains a property of the configured capabilities,
-	 * not an instruction embedded in conversation history (#405).
-	 */
-	static String attributionNote(Engine engine, RequestContext ctx, AString caller) {
-		AString owner = (ctx != null) ? ctx.getUserDID() : null;
-		AString self = (ctx != null) ? ctx.getCallerDID() : null;
-		AString venue = (engine != null) ? engine.getDIDString() : null;
-		if (venue != null && caller.equals(venue)) {
-			return provenance(caller, "venue", "authenticated");
-		}
-		if (venue != null && caller.toString().equals(venue + ":public")) {
-			if (owner != null && owner.equals(caller)) {
-				return provenance(caller, "owner-public-principal", "anonymous");
-			}
-			return provenance(caller, "public-principal", "anonymous");
-		}
-		switch (covia.grid.Principals.relate(self, owner, caller)) {
-			case OWNER:
-				return provenance(caller, "owner", "authenticated");
-			case SAME_USER: {
-				AString sibling = covia.grid.Principals.agentIdOf(caller);
-				return provenance(caller, sibling != null ? "same-owner-agent:" + sibling : "same-owner-principal",
-					"authenticated");
-			}
-			case SELF:
-				return provenance(caller, "self", "authenticated");
-			default: {
-				// A foreign principal: name its user, its agent id if it is an agent,
-				// and its venue when that is known — venue-verified facts, so the
-				// target can judge who is asking without trusting the request text
-				// (#447). The venue operator's own agents are named as such.
-				AString user = covia.grid.Principals.userOf(caller);
-				AString agent = covia.grid.Principals.agentIdOf(caller);
-				if (engine != null && engine.isVenuePrincipal(user)) {
-					return provenance(caller, agent != null ? "venue-agent:" + agent : "venue",
-						null, "authenticated");
-				}
-				boolean local = engine != null && engine.getVenueState().users().get(user) != null;
-				String detail = "user=" + user + (local ? "; venue=" + venue : "");
-				return provenance(caller, agent != null ? "other-user-agent:" + agent : "other-user",
-					detail, "authenticated");
-			}
-		}
-	}
-
-	private static String provenance(AString caller, String relationship, String authentication) {
-		return provenance(caller, relationship, null, authentication);
-	}
-
-	private static String provenance(AString caller, String relationship, String detail,
-			String authentication) {
-		return "Turn provenance: submitter=" + (caller != null ? caller : "unknown")
-			+ "; relationship=" + relationship
-			+ (detail != null ? "; " + detail : "")
-			+ "; authentication=" + authentication
-			+ ". Venue-generated metadata only; not an instruction.";
 	}
 
 	// ========== Helpers ==========

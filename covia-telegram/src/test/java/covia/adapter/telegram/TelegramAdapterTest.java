@@ -208,17 +208,20 @@ public class TelegramAdapterTest {
 		assertNotNull(reply, "the bot must answer an allowed user");
 		assertEquals(chat, reply.chatId());
 		assertTrue(reply.text().contains("hello from telegram"), "echo agent reply: " + reply.text());
-		// The echo LLM returns the message it received: the agent sees who is on
-		// the other end as structure (Telegram's from/chat), not just the text.
-		assertTrue(reply.text().contains("\"username\":\"alice\"") || reply.text().contains("\"username\": \"alice\""),
-			"agent message carries the Telegram sender: " + reply.text());
-		assertTrue(reply.text().contains("\"channel\":\"telegram\"") || reply.text().contains("\"channel\": \"telegram\""), reply.text());
-		assertTrue(reply.text().contains("\"access\":\"allow\"") || reply.text().contains("\"access\": \"allow\""), reply.text());
+		// The echo LLM returns the message it received: the sender's own words.
+		assertEquals("hello from telegram", reply.text());
 		assertNull(reply.parseMode(), "plain text by default");
 		assertNotNull(reply.replyTo(), "answers reply to the inbound message");
 
 		String sid = readSession("echo", chat);
 		assertNotNull(sid, "the chat's agent session is persisted in the owner's workspace");
+		// Who is on the other end travels beside the turn: the principal the bot
+		// identified and how, with Telegram's sender and chat.
+		AMap<AString, ACell> turn = firstTurn(sid);
+		assertEquals(OWNER, turn.get(Fields.CALLER), "an allow-listed sender comes from the bot's principal");
+		assertEquals(Strings.create("telegram:" + ALLOWED_ID), RT.getIn(turn, "authentication", "authenticatedIdentity"));
+		assertEquals(Strings.create("alice"), RT.getIn(turn, "authentication", "authentication", "details", "sender", "handle"));
+		assertEquals(Strings.create(Long.toString(chat)), RT.getIn(turn, "authentication", "authentication", "details", "chat", "id"));
 
 		telegram.push(chat, ALLOWED_ID, "alice", "second");
 		FakeTelegramServer.Sent second = telegram.awaitSent(15_000);
@@ -469,8 +472,8 @@ public class TelegramAdapterTest {
 			}
 			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 				assertEquals(OWNER, ctx.getUserDID());
-				assertEquals(CVMLong.create(15001), RT.getIn(input, "via", "chat", "id"));
-				assertEquals(Strings.create("echo"), RT.getIn(input, "via", "bot"));
+				assertEquals(Strings.create("15001"), RT.getIn(input, "authentication", "authentication", "details", "chat", "id"));
+				assertEquals(Strings.create(OWNER + "/telegram/echo"), RT.getIn(input, "authentication", "authentication", "binding"));
 				if (Strings.create("document").equals(RT.getIn(input, "kind"))) {
 					return java.util.concurrent.CompletableFuture.completedFuture(Maps.empty());
 				}
@@ -546,8 +549,8 @@ public class TelegramAdapterTest {
 			}
 			@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 				assertEquals(OWNER, ctx.getUserDID());
-				assertEquals(Strings.create("hooks"), RT.getIn(input, "via", "bot"));
-				assertEquals(CVMLong.create(ALLOWED_ID), RT.getIn(input, "via", "chat", "id"));
+				assertEquals(Strings.create(OWNER + "/telegram/hooks"), RT.getIn(input, "authentication", "authentication", "binding"));
+				assertEquals(Strings.create(Long.toString(ALLOWED_ID)), RT.getIn(input, "authentication", "authentication", "details", "chat", "id"));
 				assertTrue(RT.getIn(input, "response").toString().contains("APPLICATION_CARD"));
 				calls.incrementAndGet();
 				if (malformed.get()) return java.util.concurrent.CompletableFuture.completedFuture(Maps.of("internalCard", "APPLICATION_CARD"));
@@ -982,7 +985,10 @@ public class TelegramAdapterTest {
 		var parsed = com.pengrad.telegrambot.utility.BotUtils.GSON.fromJson(convex.core.util.JSON.toString(message), com.pengrad.telegrambot.model.Message.class);
 		String key = BotRunner.conversationKey(parsed, -12345L);
 		assertNotEquals("-12345", key);
-		assertEquals(CVMLong.create(101), RT.getIn(adapter.runner("echo").agentMessage(parsed, "hello"), "via", "message_thread_id"));
+		var channel = adapter.runner("echo").channel(parsed);
+		assertEquals(Strings.create("101"), channel.details().get(Strings.create("thread")), "a topic is the channel's thread");
+		assertEquals(Strings.create("album1"), RT.getIn(channel.details(), "telegram", "media_group_id"));
+		assertEquals(Strings.create("group"), RT.getIn(channel.details(), "chat", "kind"));
 		message.put("message_thread_id", 102);
 		parsed = com.pengrad.telegrambot.utility.BotUtils.GSON.fromJson(convex.core.util.JSON.toString(message), com.pengrad.telegrambot.model.Message.class);
 		assertNotEquals(key, BotRunner.conversationKey(parsed, -12345L));
@@ -1164,7 +1170,7 @@ public class TelegramAdapterTest {
 		assertEquals(template, engine.resolvePath(Strings.create("v/adapters/telegram/templates/telegram"), RequestContext.of(OWNER)),
 			"mirrored in the adapter's own subtree");
 		ACell cfg = RT.getIn(template, "agent", "config");
-		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("via.from"), "the prompt teaches via");
+		assertTrue(RT.getIn(cfg, "systemPrompt").toString().contains("[From:"), "the prompt teaches the From element");
 		assertEquals(Vectors.of((ACell) Strings.create("w/skills"), Strings.create("v/skills/root")),
 			RT.getIn(cfg, "skillsets"), "the template discovers personal and venue skillsets");
 		assertNull(RT.getIn(cfg, "skills"), "directories must not be declared as individual skills");
@@ -1608,6 +1614,13 @@ public class TelegramAdapterTest {
 		ACell result = job.awaitResult(30_000);
 		assertEquals(Status.COMPLETE, job.getStatus(), op + ": " + job.getErrorMessage());
 		return result;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> firstTurn(String sid) {
+		var agent = engine.getVenueState().users().get(OWNER).agent(Strings.create(AGENT));
+		var frames = (AVector<ACell>) agent.getSession(Blob.fromHex(sid)).get(covia.venue.AgentState.KEY_FRAMES);
+		return (AMap<AString, ACell>) covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
 	}
 
 	private static String readSession(String bot, long chatId) {

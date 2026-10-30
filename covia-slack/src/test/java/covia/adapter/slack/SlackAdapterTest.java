@@ -131,7 +131,7 @@ class SlackAdapterTest {
 			awaitStatus(f.bot(), "in-flight", WebhookInbox.COMPLETE);
 			var continued = agent.inputs.poll(5, TimeUnit.SECONDS);
 			assertEquals(Strings.create("session-1"), continued.get(Fields.SESSION_ID));
-			assertEquals(Strings.create("and then?"), RT.getIn(continued, Fields.MESSAGE, Fields.TEXT));
+			assertEquals(Strings.create("and then?"), continued.get(Fields.MESSAGE));
 			// With the session stored, later replies continue too, threaded under the root.
 			agent.blocked = null;
 			assertEquals(200, f.webhook(payload("later", reply.assoc(Strings.intern("ts"), Strings.create("1.3")))).status());
@@ -213,9 +213,12 @@ class SlackAdapterTest {
 			FakeAgent agent = new FakeAgent(); f.engine.registerAdapter(agent);
 			f.webhook(payload("first", event("1.1"))); f.api.take(); awaitStatus(f.bot(), "first", WebhookInbox.COMPLETE);
 			var first = agent.inputs.poll(5, TimeUnit.SECONDS); assertNotNull(first); assertNull(first.get(Fields.SESSION_ID));
-			assertEquals(Strings.create("hello"), RT.getIn(first, Fields.MESSAGE, Fields.TEXT));
-			assertEquals(Strings.create("slack"), RT.getIn(first, Fields.MESSAGE, Strings.intern("via"), Strings.intern("channel")));
-			assertEquals(Strings.create("first"), RT.getIn(first, Fields.MESSAGE, Strings.intern("via"), Strings.intern("event_id")));
+			assertEquals(Strings.create("hello"), first.get(Fields.MESSAGE), "the message is the sender's own words");
+			assertEquals(Strings.create("slack"), RT.getIn(agent.authentication, "authentication", "method"));
+			assertEquals(Strings.create("first"), RT.getIn(agent.authentication, "authentication", "details", "slack", "event_id"));
+			assertEquals(Strings.create("C123"), RT.getIn(agent.authentication, "authentication", "details", "chat", "id"));
+			assertEquals(Strings.create("slack:T123/UALICE"), RT.getIn(agent.authentication, "authenticatedIdentity"),
+				"the sender's identity is scoped to its workspace");
 			assertEquals(OWNER, agent.owner);
 			var parsed = BotSpec.parse("main", agentSpec, true);
 			String identity = Strings.create(ConversationRouter.key(OWNER.toString(), parsed.installationKey())).getHash().toHexString();
@@ -301,12 +304,13 @@ class SlackAdapterTest {
 		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
 		final AtomicInteger sessions = new AtomicInteger();
 		volatile AString owner;
+		volatile AMap<AString, ACell> authentication;
 		volatile CompletableFuture<ACell> blocked;
 		@Override public String getName() { return "agent"; }
 		@Override public String getDescription() { return "Deterministic agent chat fixture"; }
 		@Override protected void installAssets() { installAsset("agent/chat", Maps.of("name", "Fixture chat", "operation", Maps.of("adapter", "agent:chat"))); }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-			var in = MessagingSettings.object(input); inputs.add(in); owner = ctx.getUserDID();
+			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
 			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());

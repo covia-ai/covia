@@ -19,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
 
@@ -32,7 +33,10 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	private static final Logger log = LoggerFactory.getLogger(WebhookBot.class);
 	public static final String REPLY_FAILED = "Reply failed after session delivery";
 	public static final String RECONFIGURED = "Bot settings changed after this message was accepted";
+	public static final String UNVERIFIED = "This message was accepted without the channel that identifies its sender";
 	public static final AString VERSION = Strings.intern("bindingVersion");
+	/** An accepted event's verified channel ({@link Channel#toData()}), recorded by the provider adapter. */
+	public static final AString K_CHANNEL = Strings.intern("verifiedChannel");
 	public static final String PROCESSING_FAILED = "Processing failed; inspect the receipt before any manual retry";
 	public static final String CONNECTED = "CONNECTED", CONNECTING = "CONNECTING", RETRYING = "RETRYING";
 	private final AWebhookMessagingAdapter<S> adapter;
@@ -220,22 +224,28 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (guarded(() -> inbox.fail(id, RECONFIGURED, null, System.currentTimeMillis())) != null) lastError = RECONFIGURED;
 			return;
 		}
+		// A message accepted without its verified channel (by an earlier version)
+		// cannot say who it comes from. Fail it once, as for a reconfiguration.
+		Channel channel = Channel.fromData(event.get(K_CHANNEL));
+		if (channel == null) {
+			if (guarded(() -> inbox.fail(id, UNVERIFIED, null, System.currentTimeMillis())) != null) lastError = UNVERIFIED;
+			return;
+		}
 		String conversation = MessagingSettings.required(event, "conversation");
 		if (!queued.add(id)) return;
-		AMap<AString, ACell> channel = RT.ensureMap(event.get(Fields.VIA));
 		boolean localSession = spec.routesToAgent() && router.supportsSessionDelivery(channel);
 		router.enqueue(conversation, () -> {
 			if (!claim(id)) return;
 			if (localSession) {
 				String refusal = router.deliveryRefusal(channel);
 				if (refusal != null) throw new IllegalStateException(refusal);
-				deliverSession(id, event, conversation);
+				deliverSession(id, event, channel, conversation);
 				return;
 			}
 			ACell input = event.get(Fields.INPUT);
 			String reply;
 			if (spec.routesToAgent()) {
-				reply = ConversationRouter.responseText(router.chat(conversation, agentMessage(event)));
+				reply = ConversationRouter.responseText(router.chat(conversation, agentMessage(event, channel), channel));
 			} else reply = router.operationReply(router.runOperation(spec.operation(), input, channel));
 			if (!running || !adapter.isActive()) return;
 			if (reply != null) adapter.sendReply(this, event, reply);
@@ -251,19 +261,20 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		});
 	}
 	/**
-	 * An agent's turn: {@code {text, via, attachments?, content?}}. Each item of the
-	 * event's {@code media} is fetched by the provider and stored in the owner's
-	 * private drive named for the provider, then given to the binding's
-	 * {@code mediaOperation}; images also become image blocks. The text is the
-	 * caption, empty for a bare voice note. A failed fetch fails the turn like any
-	 * other processing failure.
+	 * An agent's turn: the sender's text, or {@code {text, attachments, content?}}
+	 * for a message with media. Each item of the event's {@code media} is fetched
+	 * by the provider and stored in the owner's private drive named for the
+	 * provider, then given to the binding's {@code mediaOperation} with the
+	 * message's {@code authentication} record; images also become image blocks.
+	 * The text is the caption, empty for a bare voice note. A failed fetch fails
+	 * the turn like any other processing failure.
 	 */
-	private AMap<AString, ACell> agentMessage(AMap<AString, ACell> event) {
+	private ACell agentMessage(AMap<AString, ACell> event, Channel channel) {
 		String text = MessagingSettings.optional(event, "text");
-		ACell via = event.get(MessagingSettings.key("via"));
-		AMap<AString, ACell> message = Maps.of(Fields.TEXT, text == null ? "" : text, "via", via);
 		AVector<ACell> media = RT.ensureVector(event.get(MessagingMedia.K_MEDIA));
-		if (media == null || media.isEmpty()) return message;
+		if (media == null || media.isEmpty()) return Strings.create(text == null ? "" : text);
+		AMap<AString, ACell> message = Maps.of(Fields.TEXT, text == null ? "" : text);
+		AMap<AString, ACell> authentication = router.context(channel).getAuthentication();
 		AVector<ACell> attachments = Vectors.empty(), content = Vectors.empty();
 		String directory = MessagingMedia.ownerDirectory(spec.userDID(adapter.engine), adapter.getName());
 		for (ACell cell : media) {
@@ -282,7 +293,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			}
 			if (spec.mediaOperation() != null) {
 				attachment = MessagingMedia.processed(attachment, router.runForAgent(spec.mediaOperation(),
-					attachment.assoc(MessagingMedia.K_CAPTION, Strings.create(text == null ? "" : text)).assoc(MessagingSettings.key("via"), via)));
+					attachment.assoc(MessagingMedia.K_CAPTION, Strings.create(text == null ? "" : text)).assoc(Fields.AUTHENTICATION, authentication)));
 			}
 			attachments = attachments.conj(attachment);
 			AMap<AString, ACell> image = MessagingMedia.imageBlock(attachment);
@@ -292,13 +303,13 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		return content.isEmpty() ? message : message.assoc(Fields.CONTENT, content);
 	}
 	/** One atomic handoff: input, session mapping and COMPLETE receipt commit together. */
-	private void deliverSession(String id, AMap<AString, ACell> event, String conversation) {
-		ACell message = agentMessage(event);
+	private void deliverSession(String id, AMap<AString, ACell> event, Channel channel, String conversation) {
+		ACell message = agentMessage(event, channel);
 		covia.grid.Job job;
 		synchronized (adapter.engine) {
 			synchronized (this) {
 				if (!ready()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
-				job = router.deliver(conversation, message, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
+				job = router.deliver(conversation, message, channel, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
 			}
 		}
 		ConversationRouter.onResponse(job, response -> {

@@ -107,12 +107,12 @@ class SpeechAdapterTest {
 	@Test void itServesAsAMediaOperation() throws Exception {
 		String ref = save("voice.ogg", VOICE, "audio/ogg");
 		AMap<AString, ACell> photo = RT.castMap(Maps.of("ref", ref, "kind", "photo", "mediaType", "image/jpeg",
-			"caption", "", "via", Maps.of("from", "alice")));
+			"caption", "", "authentication", Maps.of("authenticatedIdentity", "telegram:alice")));
 		assertEquals(Maps.empty(), run(owner, "transcribe", photo), "not audio: passed through");
 		assertTrue(api.requests.isEmpty(), "and nothing was sent");
 
 		AMap<AString, ACell> voice = RT.castMap(Maps.of("ref", ref, "kind", "voice", "mediaType", "audio/ogg; codecs=opus",
-			"file_id", "AwACAg", "size", VOICE.length, "caption", "", "via", Maps.of("from", "alice")));
+			"file_id", "AwACAg", "size", VOICE.length, "caption", "", "authentication", Maps.of("authenticatedIdentity", "telegram:alice")));
 		ACell heard = run(owner, "transcribe", voice);
 		AMap<AString, ACell> attachment = MessagingMedia.processed(voice, heard);
 		assertEquals("Hello world.", RT.getIn(attachment, "text").toString(), "the transcript joins the attachment");

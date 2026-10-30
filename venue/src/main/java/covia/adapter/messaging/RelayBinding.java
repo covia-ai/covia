@@ -79,12 +79,10 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 	static final long HOOK_TIMEOUT_MS = 15_000L;
 	private static final Pattern LINK_COMMAND = Pattern.compile("(?i)^link\\s+([a-z0-9-]{4,20})$");
 	private static final String STOP_COMMAND = "stop";
-	/** The parts of a provider event's {@code via} a principal sees. */
-	private static final String[] VISIBLE_VIA = { "channel", "from", "chat", "thread" };
 	/** The parts of an attachment's description a principal sees; its bytes come from {@link #MEDIA}. */
 	private static final String[] VISIBLE_MEDIA = { "kind", "mediaType", "fileName", "voice" };
 
-	private static final AString K_VIA = Strings.intern("via"), K_FROM = Strings.intern("from"),
+	private static final AString K_FROM = Strings.intern("from"), K_CHANNEL_WIRE = Strings.intern("channel"),
 		K_TEXT = Strings.intern("text"), K_TIMESTAMP = Strings.intern("timestamp"), K_ALLOWED = Strings.intern("allowed");
 
 	private final WebhookBot<S> bot;
@@ -131,8 +129,9 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 	}
 
 	private void onEvent(String id, AMap<AString, ACell> event) {
-		String sender = str(RT.ensureMap(event.get(K_VIA)), K_FROM);
-		if (sender == null) return;
+		ChannelAuthentication.Channel channel = ChannelAuthentication.Channel.fromData(event.get(WebhookBot.K_CHANNEL));
+		if (channel == null) return;
+		String sender = channel.senderId();
 		String text = str(event, K_TEXT);
 		text = text == null ? null : text.strip();
 		Matcher link = text == null ? null : LINK_COMMAND.matcher(text);
@@ -205,15 +204,15 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 		return out;
 	}
 
+	/** Where a message came from as the relay's wire shows it: {@code {channel, from, chat, thread?}}. */
 	private static AMap<AString, ACell> via(AMap<AString, ACell> event) {
-		AMap<AString, ACell> via = RT.ensureMap(event.get(K_VIA));
-		AMap<AString, ACell> out = Maps.empty();
-		if (via == null) return out;
-		for (String key : VISIBLE_VIA) {
-			ACell v = via.get(MessagingSettings.key(key));
-			if (v != null) out = out.assoc(MessagingSettings.key(key), v);
-		}
-		return out;
+		ChannelAuthentication.Channel channel = ChannelAuthentication.Channel.fromData(event.get(WebhookBot.K_CHANNEL));
+		if (channel == null) return Maps.empty();
+		AMap<AString, ACell> details = channel.details();
+		AMap<AString, ACell> out = Maps.of(K_CHANNEL_WIRE, channel.method(), K_FROM, channel.sender().get(ChannelAuthentication.K_ID),
+			ChannelAuthentication.K_CHAT, RT.getIn(details, ChannelAuthentication.K_CHAT, ChannelAuthentication.K_ID));
+		ACell thread = details.get(ChannelAuthentication.K_THREAD);
+		return thread == null ? out : out.assoc(ChannelAuthentication.K_THREAD, thread);
 	}
 
 	// ---- the principals' side ----

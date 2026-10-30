@@ -111,9 +111,9 @@ final class TaskTools {
 				if (jobId != null && results != null && results.get(jobId) != null) continue;
 				if (outstanding == 0) sb.append("[Tasks assigned to you]\n");
 				outstanding++;
-				ACell caller = RT.getIn(task, Fields.CALLER);
+				String from = TurnProvenance.summary(engine, ctx, task);
 				sb.append("- Task ").append(jobId);
-				if (caller != null) sb.append(" (from: ").append(caller).append(")");
+				if (from != null) sb.append(" (from: ").append(from).append(")");
 				sb.append(": ").append(renderTaskText(RT.getIn(task, Fields.INPUT))).append("\n");
 				// The requester's declared result shape (#376) — advisory unless
 				// the requester opted into enforcement.

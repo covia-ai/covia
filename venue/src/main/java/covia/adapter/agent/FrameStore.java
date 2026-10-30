@@ -125,8 +125,8 @@ interface FrameStore {
 
 	/**
 	 * Builds the durable user turns presented at the start of a cycle. Each
-	 * keeps the caller its envelope or task recorded: who asked, as the venue
-	 * authenticated them.
+	 * keeps the provenance its envelope or task recorded: who asked, as the venue
+	 * authenticated them (COG-20 §4).
 	 */
 	static AVector<ACell> cycleInputTurns(AVector<ACell> messages, ACell input, long ts) {
 		AVector<ACell> turns = Vectors.empty();
@@ -144,9 +144,7 @@ interface FrameStore {
 				AgentState.K_SOURCE, AgentState.SOURCE_CHAT);
 			ACell jobId = RT.getIn(envelope, Fields.JOB_ID);
 			if (jobId != null) turn = turn.assoc(Fields.JOB_ID, jobId);
-			ACell caller = RT.getIn(envelope, Fields.CALLER);
-			if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
-			turns = turns.conj(turn);
+			turns = turns.conj(AgentAdapter.withRecordedProvenance(turn, envelope));
 		}
 
 		ACell request = RT.getIn(input, Fields.NEW_INPUT);
@@ -158,9 +156,7 @@ interface FrameStore {
 				AgentState.K_SOURCE, AgentState.SOURCE_REQUEST);
 			ACell jobId = RT.getIn(input, Fields.JOB_ID);
 			if (jobId != null) turn = turn.assoc(Fields.JOB_ID, jobId);
-			ACell caller = RT.getIn(input, Fields.TASKS, CVMLong.ZERO, Fields.CALLER);
-			if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
-			turns = turns.conj(turn);
+			turns = turns.conj(AgentAdapter.withRecordedProvenance(turn, RT.getIn(input, Fields.TASKS, CVMLong.ZERO)));
 		}
 		return turns;
 	}

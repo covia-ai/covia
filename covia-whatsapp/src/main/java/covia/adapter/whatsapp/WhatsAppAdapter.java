@@ -17,6 +17,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.messaging.AWebhookMessagingAdapter;
+import covia.adapter.messaging.ChannelAuthentication;
+import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.MessagingHttp;
 import covia.adapter.messaging.MessagingMedia;
@@ -101,11 +103,12 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 					long time = Long.parseLong(timestamp);
 					long now = Instant.now(clock).getEpochSecond();
 					if (time > now + 300 || time < now - WINDOW_SECONDS) continue;
-					var via = Maps.of("channel", NAME, "bot", bot.spec().name(), "from", from, "chat", from,
-						"message_id", id, "phoneNumberId", bot.spec().phoneNumberId(),
-						ConversationRouter.ACCESS, bot.spec().lists(from) ? ConversationRouter.ALLOW : ConversationRouter.OPEN);
+					// A WhatsApp chat is the sender's own number; the business number encloses it.
+					Channel verified = Channel.of(NAME, ChannelAuthentication.SIGNED_CALLBACK,
+							ChannelAuthentication.sender(from, null, null), ChannelAuthentication.chat(from, ChannelAuthentication.DIRECT, null))
+						.space(bot.spec().phoneNumberId(), null, false).message(id);
 					AMap<AString, ACell> event = Maps.of("conversation", ConversationRouter.key(bot.spec().installationKey(), from),
-						"to", from, "messageId", id, "timestamp", timestamp, "via", via,
+						"to", from, "messageId", id, "timestamp", timestamp, WebhookBot.K_CHANNEL, verified.toData(),
 						"input", Maps.of("message", message, "metadata", metadata, "business_account_id", bot.spec().businessAccountId()));
 					if (media) { bot.accept(id, withMedia(event, type, MessagingSettings.object(message.get(MessagingSettings.key(type))))); continue; }
 					if (!isText) { bot.unsupported(id, event); continue; }

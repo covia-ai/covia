@@ -1,6 +1,7 @@
 package covia.adapter.messaging;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
@@ -26,6 +27,14 @@ public interface MessagingBotSpec {
 
 	/** The binding's {@code relay} settings when it relays to principals ({@link RelayBinding}); null otherwise. */
 	default ACell relay() { return null; }
+	/**
+	 * Whether the binding lists this verified sender ({@code {id, handle?, name?}},
+	 * {@link ChannelAuthentication#sender}): its messages then come from the
+	 * binding's principal. Matches the provider's identifiers exactly.
+	 */
+	default boolean lists(AMap<AString, ACell> sender) { return false; }
+	/** Whether any other sender is admitted, as the venue's public principal. */
+	default boolean open() { return false; }
 
 	default boolean routesToAgent() { return agent() != null; }
 	default boolean routesToOperation() { return operation() != null; }

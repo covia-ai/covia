@@ -90,7 +90,8 @@ class WhatsAppMediaTest {
 				"the owner's whatsapp drive holds it");
 			AMap<AString, ACell> hookInput = transcriber.inputs.poll(1, TimeUnit.SECONDS);
 			assertEquals(ref, RT.getIn(hookInput, "ref").toString(), "the hook sees the stored reference");
-			assertEquals(FROM, RT.getIn(hookInput, "via", "from").toString());
+			assertEquals(FROM, RT.getIn(hookInput, "authentication", "authentication", "details", "sender", "id").toString(),
+				"the hook learns who sent it from the authentication record");
 
 			Sent lookup = f.api.gets.poll(1, TimeUnit.SECONDS);
 			Sent download = f.api.gets.poll(1, TimeUnit.SECONDS);

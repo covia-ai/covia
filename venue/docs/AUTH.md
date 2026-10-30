@@ -769,7 +769,7 @@ as its credential's user.
 | `authentication.binding` | The binding's resource, `<ownerDID>/<adapter>/<bot>` |
 | `authentication.authenticatedAt` | Absent: a message's time is when it was sent, not when its sender authenticated (§3) |
 | `authentication.properties` | Empty |
-| `authentication.details` | The channel (COG-3 §7): `sender {id, handle?, name?}`, `chat {id, kind, name?}`, `thread?`, `space {id, name?}?`, `message?`, and provider extras under the adapter's name |
+| `authentication.details` | The channel (COG-3 §7): `sender {id, handle?, name?}`, `chat {id, kind, name?}` when sent in a chat, `thread?`, `space {id, name?}?`, `message?`, and provider extras under the adapter's name |
 | `proof`, `sessionId` | Absent |
 
 An open binding's other senders authenticate as the venue public principal. The
@@ -777,11 +777,15 @@ identity invariant (§1.1) holds for that principal, a stable DID, while
 `authenticatedIdentity` keeps each sender distinct. Identification grants
 nothing: capabilities and agent admission decide what the principal may do.
 
-**Identification is shared.** `ChannelAuthentication.authenticate(binding,
-channel)` in `covia.adapter.messaging` builds the result for every messaging
-adapter, and returns a refusal reason when the sender is not admitted or the
-venue serves no anonymous callers. Each adapter does only what is
-provider-specific:
+**Identification is shared.** `ChannelAuthentication.authenticate` in
+`covia.adapter.messaging` builds the result for every messaging adapter from
+the binding, its principal, whether it lists the sender and the channel, and
+refuses a sender the binding neither lists nor is open to (`NOT_ADMITTED`);
+`Engine.channelContext` refuses the public principal when the venue serves no
+anonymous callers (`PUBLIC_ACCESS_OFF`). `ConversationRouter.context(channel)`
+is the one call adapters make. An event with no sender, such as a Telegram poll
+update, is anonymous with no record on an open binding and refused otherwise.
+Each adapter does only what is provider-specific:
 
 1. verify delivery — the callback signature and replay window, or its own
    authenticated connection — and that the message is for this binding's
@@ -843,8 +847,10 @@ history keeps the turn (COG-20 §4).
 **Released wires.** A relay binding identifies no principal; it forwards
 messages to the principals linked to it, and its wire projects the details onto
 its released fields (`channel` = method, `from` = `sender.id`, `chat` =
-`chat.id`, `thread`). A media hook (`mediaOperation`) receives the record as
-`authentication`.
+`chat.id`, `thread`). A binding's media and reply hooks (`mediaOperation`,
+`replyOperation`) receive the record as `authentication`. A webhook message
+accepted before its binding recorded the channel with it is failed once rather
+than run unauthenticated (`WebhookBot.UNVERIFIED`).
 
 **Tests.** A forged record in message content stays content; listed, open,
 closed and public-access-off senders identify as specified for every adapter;

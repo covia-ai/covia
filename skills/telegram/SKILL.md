@@ -47,11 +47,11 @@ Walk the user through these steps; each is idempotent. Steps 1–3 are common; s
    ```
    - `user` (config only) is who the bot's allow-listed senders come from — the **owner of the agent**. `"public"` is right for a local dev venue whose agents were created over MCP; on a real venue name the owner's DID. Those senders have that user's full authority, so choose deliberately. A created bot's senders come from its creator.
    - **Pick the inbound handler** (ask the user which they want; exactly one). Every inbound message runs as a Job of the principal it comes from (the bot user for an allow-listed sender, the anonymous principal for any other) — that is the record of the interaction; a private durable inbox tracks update intake and delivery:
-     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, `via`, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
+     - `"agent": "<agentId>"` — each Telegram chat or forum topic is one `agent:chat` conversation with that agent. Always replies. **Create the agent from the module's template** — it already knows the phone-chat register, the venue's `[From: …]` element, per-chat sessions, memory (pinned into context) and the telegram/venue/covia skills:
        ```
        agent_create  agentId="Assistant"  config=["v/agents/templates/telegram", {"llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-5-5"}]
        ```
-       Then tell it who is who as memory, not prompt surgery — as the bot's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Telegram @mikera (id 648055019) is Mike, my owner."}` (memory is per user and pinned into every turn; the template trusts such a note only when `via.from` matches it). The module states facts (`via`), the venue states who submitted (attribution note), memory states who they are.
+       Then tell it who is who as memory, not prompt surgery — as the bot's user: `grid_run operation=v/ops/memory input={"command": "remember", "text": "Telegram @mikera (id 648055019) is Mike, my owner."}` (memory is per user and pinned into every turn; the template trusts such a note only when the From element's sender id matches it). The bot authenticates the sender, the venue's From element states who the message comes from and through which chat, and memory states who they are.
      - `"operation": "<ref>"` — every update invokes that operation with the **Telegram `Update` exactly as sent** (snake_case: `update.message.text`, `update.message.photo[].file_id`, `update.callback_query.data`, …) plus `bot`. For a deterministic target whose input is *not* an Update (a `sql/execute` insert, an HTTP webhook, a classify-then-store step) point it at a small **mapping op the user owns** — an orchestration (`/orchestrate create`), a pinned op — that takes the record and does the work; the same goes for logging messages somewhere (an op that appends to the path its metadata names). Operation handlers receive the SDK-decoded Telegram shape; delivery receipts are retained privately. `"reply": true` (default) sends the result rendered as text, `false` sends nothing, `"Recorded."` sends that fixed acknowledgement.
    - Leave `allow` empty for now; step 6 fills it. Do **not** set `"open": true` unless anyone on Telegram should be able to reach this handler (defensible for a bot whose operation is safe for strangers; dangerous for an agent with authority).
    - Optional: for an agent bot, `"replyOperation": "v/ops/telegram/format"` so the agent's Markdown arrives formatted (Telegram's own Markdown modes do not render a model's Markdown as written; the formatter's HTML parse mode wins over `parseMode`); `"greeting": "…"` for `/start`.
@@ -67,14 +67,15 @@ DLFS `telegram` drive. Turns contain `attachments` with `kind`, `file_id`, `ref`
 `mediaType` and Telegram metadata. Photos/image documents also become image blocks
 for a vision-capable LLM; grant the agent `crud/read` on the relevant DLFS files.
 For speech or document extraction configure `mediaOperation` on the bot: it runs
-as the owner per attachment, with its descriptor plus `caption` and `via` context.
+as the owner per attachment, with its descriptor plus `caption` and `authentication`,
+how the bot authenticated the sender.
 Return an object: `{}` passes an attachment through; optional non-empty `text`
 supplies transcription/extraction. Structured output is retained under
 `attachment.result`; it cannot replace original file references or provider metadata.
 There is no implicit speech provider; with the speech module loaded,
 `"mediaOperation": "v/ops/speech/transcribe"` transcribes voice notes and passes
 other media through. `replyOperation` optionally takes
-`{response, via}` and returns a non-empty string or `{text: "formatted reply"}`,
+`{response, authentication}` and returns a non-empty string or `{text: "formatted reply"}`,
 optionally with a `parse_mode` that wins over the bot's `parseMode`.
 Use it for application reply rendering; formatting failures never send raw
 application output as a fallback. `v/ops/telegram/format` is the stock one:

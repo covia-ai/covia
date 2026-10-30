@@ -4012,8 +4012,27 @@ public class Engine {
 	 */
 	public RequestContext publicContext() {
 		if (!config.isPublicAccess()) return null;
-		AString publicDID = Strings.create(getDIDString() + ":public");
+		AString publicDID = publicPrincipal();
 		return RequestContext.of(publicDID).withCaps(auth.getPublicScope(publicDID));
+	}
+
+	/** The venue's public (anonymous) principal, {@code <venue>:public}. */
+	public AString publicPrincipal() {
+		return Strings.create(getDIDString() + ":public");
+	}
+
+	/**
+	 * The context a request authenticated through a channel binding runs under
+	 * (COG-3 §7): its identified principal as it acts now
+	 * ({@link #principalContext}), carrying the result's record without its
+	 * {@code userDID}. The one place a request context gains an authentication
+	 * record.
+	 *
+	 * @throws AuthException for the public principal while public access is off
+	 */
+	public RequestContext channelContext(covia.venue.auth.AuthResult result) {
+		return principalContext(result.userDID())
+			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
 	}
 
 	/**

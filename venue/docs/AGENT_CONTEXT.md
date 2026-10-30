@@ -263,6 +263,7 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:sessionRead` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
+| Who a turn comes from (COG-20 §4): before a user turn whose caller, binding, authenticated identity, chat, thread or space differs from the turn before it, rendered from the stored turn alone; names are never rendered | `[From: <relationship> <principal> — <method> <binding>: sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id>]` | `<from principal="…" relationship="…" method="…" binding="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>` | `## From: …` |
 | Outstanding task | `[Tasks assigned to you]` | `<tasks>` | `## Tasks assigned to you` |
 | Empty-state signal | `[No pending tasks, messages, or job results. …]` | `<no-input>` | `## No input` |
 | Budget warning | `[Context budget] <pct>% …` | `<context-budget>` | `## Context budget` |
@@ -1219,6 +1220,7 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 | Concern | Home |
 |---------|------|
 | `Spec`, `Rendered`, `Prompt`, concatenation and attribution | `ContextAssembler` |
+| The `From` element (§1.2): relationship, channel and identity key | `TurnProvenance` |
 | Atomic session/frame persistence | `AgentState`, through `FrameStore` |
 | Durable context cell contract | §1.1 of this document |
 | The label renderer (§1.2) | `Labels` |

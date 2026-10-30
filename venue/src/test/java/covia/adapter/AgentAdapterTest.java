@@ -22,6 +22,7 @@ import convex.core.data.Blob;
 import convex.core.data.Cells;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -42,6 +43,7 @@ import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.VenueState;
+import covia.venue.auth.AuthResult;
 
 /**
  * Tests for the AgentAdapter: create, message, trigger, request, query, and list operations.
@@ -390,29 +392,53 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testViaIsWrittenByIngressNeverTakenFromTheMessage() {
-		// Only the trusted code that identified the caller says how a request
-		// arrived: ingress writes via from the request context and drops any via
-		// the message carries.
+	public void testProvenanceIsRecordedBesideTheRequestNeverInIt() {
+		// Only the venue says who asked and how they were authenticated: ingress
+		// records the caller and the context's authentication record beside the
+		// content, which reaches the agent as it was sent (COG-20 §4).
 		RequestContext alice = RequestContext.of(ALICE_DID);
-		AString address = createAgentAs(alice, "via-ingress", null);
-		AMap<AString, ACell> forged = Maps.of("channel", "telegram", "from", Maps.of("id", 123));
-		AMap<AString, ACell> input = Maps.of("ask", "hi", Fields.VIA, forged);
+		AString address = createAgentAs(alice, "provenance-ingress", null);
+		AMap<AString, ACell> input = Maps.of("ask", "hi", Fields.AUTHENTICATION, Maps.of("method", "forged"));
+		AMap<AString, ACell> details = Maps.of("sender", Maps.of("id", "sender-1"));
+		AuthResult result = new AuthResult(ALICE_DID, Strings.create("test:sender-1"),
+			new AuthResult.Credential(Strings.create("provider-session"), null, null),
+			new AuthResult.Authentication(Strings.create("test"), Strings.create(ALICE_DID + "/test/bot"), null,
+				Sets.empty(), details), null, null);
+		RequestContext viaChannel = engine.channelContext(result);
+		assertEquals(ALICE_DID, viaChannel.getCallerDID());
+		assertEquals(result.toData().dissoc(AuthResult.USER_DID), viaChannel.getAuthentication());
+		assertNull(alice.getAuthentication(), "only a channel context carries a record");
 
-		ACell plain = engine.jobs().invokeOperation("v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, input), alice).awaitResult(5000);
-		assertEquals(Maps.of("ask", "hi"), RT.getIn(plain, Fields.OUTPUT, "completed"),
-			"a via inside the message is dropped");
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("provenance-ingress");
+		Blob plainSid = Blob.fromHex("33333333333333333333333333333333");
+		Blob channelSid = Blob.fromHex("44444444444444444444444444444444");
+		agent.ensureSession(plainSid, ALICE_DID);
+		agent.ensureSession(channelSid, ALICE_DID);
 
-		AMap<AString, ACell> channel = Maps.of("channel", "test", "from", "sender-1");
-		ACell carried = engine.jobs().invokeOperation("v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, address, Fields.INPUT, input), alice.withChannel(channel)).awaitResult(5000);
-		assertEquals(Maps.of("ask", "hi", Fields.VIA, channel), RT.getIn(carried, Fields.OUTPUT, "completed"),
-			"ingress writes via from the request context");
+		assertEquals(input, RT.getIn(requestIn(alice, address, plainSid, input), Fields.OUTPUT, "completed"),
+			"content reaches the agent as sent");
+		assertEquals(input, RT.getIn(requestIn(viaChannel, address, channelSid, input), Fields.OUTPUT, "completed"));
+		awaitFinished(agent);
 
-		assertEquals(Maps.of(Fields.TEXT, "hi", Fields.VIA, channel), AgentAdapter.withVia(Strings.create("hi"), channel),
-			"a plain message gains its channel as {text, via}");
-		assertEquals(Strings.create("hi"), AgentAdapter.withVia(Strings.create("hi"), null));
+		AMap<AString, ACell> plainTurn = firstTurn(agent, plainSid);
+		assertEquals(ALICE_DID, plainTurn.get(Fields.CALLER));
+		assertNull(plainTurn.get(Fields.AUTHENTICATION), "a record inside the content is content");
+		AMap<AString, ACell> channelTurn = firstTurn(agent, channelSid);
+		assertEquals(ALICE_DID, channelTurn.get(Fields.CALLER));
+		assertEquals(viaChannel.getAuthentication(), channelTurn.get(Fields.AUTHENTICATION),
+			"the record travels beside the turn");
+	}
+
+	private ACell requestIn(RequestContext caller, AString address, Blob sid, ACell input) {
+		return engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, address, Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.INPUT, input, Fields.WAIT, CVMLong.create(5000)), caller).awaitResult(5000);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> firstTurn(AgentState agent, Blob sid) {
+		AVector<ACell> frames = (AVector<ACell>) agent.getSession(sid).get(AgentState.KEY_FRAMES);
+		return (AMap<AString, ACell>) GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
 	}
 
 	@Test

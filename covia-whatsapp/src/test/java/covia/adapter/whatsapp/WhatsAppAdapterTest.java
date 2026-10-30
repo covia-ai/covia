@@ -296,9 +296,17 @@ class WhatsAppAdapterTest {
 				"second", agentSpec.assoc(Strings.intern("phoneNumberId"), Strings.create("54321")))));
 			var first = agentTurn(f, f.adapter, agent, "main", "12345", "441234567890", "first");
 			assertNull(first.get(Fields.SESSION_ID));
-			assertEquals(Strings.create("hello"), RT.getIn(first, Fields.MESSAGE, Fields.TEXT));
-			assertEquals(Maps.of("channel", "whatsapp", "bot", "main", "from", "441234567890", "chat", "441234567890",
-				"message_id", "first", "phoneNumberId", "12345", "access", "allow"), RT.getIn(first, Fields.MESSAGE, Strings.intern("via")));
+			assertEquals(Strings.create("hello"), first.get(Fields.MESSAGE), "the message is the sender's own words");
+			assertEquals(Maps.of(
+				"authenticatedIdentity", "whatsapp:441234567890",
+				"credential", Maps.of("type", "signed-callback"),
+				"authentication", Maps.of("method", "whatsapp", "binding", OWNER + "/whatsapp/main",
+					"properties", Sets.empty(), "details", Maps.of(
+						"sender", Maps.of("id", "441234567890"),
+						"chat", Maps.of("id", "441234567890", "kind", "direct"),
+						"space", Maps.of("id", "12345"),
+						"message", "first"))),
+				agent.authentication, "a listed sender is authenticated through the binding, in the standard channel shape");
 			assertEquals(OWNER, agent.owner);
 			assertNull(agentTurn(f, f.adapter, agent, "main", "12345", "441234567891", "other-sender").get(Fields.SESSION_ID));
 			assertNull(agentTurn(f, f.adapter, agent, "second", "54321", "441234567890", "other-phone").get(Fields.SESSION_ID));
@@ -418,12 +426,13 @@ class WhatsAppAdapterTest {
 		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();
 		final AtomicInteger sessions = new AtomicInteger();
 		volatile AString owner;
+		volatile AMap<AString, ACell> authentication;
 		volatile CompletableFuture<ACell> blocked;
 		@Override public String getName() { return "agent"; }
 		@Override public String getDescription() { return "Deterministic WhatsApp chat fixture"; }
 		@Override protected void installAssets() { installAsset("agent/chat", Maps.of("name", "Fixture chat", "operation", Maps.of("adapter", "agent:chat"))); }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); inputs.add(in);
+			var in = MessagingSettings.object(input); owner = ctx.getUserDID(); authentication = ctx.getAuthentication(); inputs.add(in);
 			if (blocked != null) return blocked;
 			ACell sid = in.get(Fields.SESSION_ID);
 			if (sid == null) sid = Strings.create("session-" + sessions.incrementAndGet());

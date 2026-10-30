@@ -59,11 +59,11 @@
 				},
 				"mediaOperation": {
 					"type": "string",
-					"description": "Optional agent-only operation invoked per downloaded attachment as the bot owner, with {kind, file_id, ref, mediaType, caption, via, ...}. Return an object: {} leaves the attachment untouched; optional non-empty text supplies a transcript/extraction; other structured results are retained under attachment.result without overwriting Telegram metadata. No provider is chosen implicitly."
+					"description": "Optional agent-only operation invoked per downloaded attachment as the bot owner, with {kind, file_id, ref, mediaType, caption, authentication, ...}, where authentication is how the binding authenticated the sender (COG-3 §7). Return an object: {} leaves the attachment untouched; optional non-empty text supplies a transcript/extraction; other structured results are retained under attachment.result without overwriting Telegram metadata. No provider is chosen implicitly."
 				},
 				"replyOperation": {
 					"type": "string",
-					"description": "Optional agent-only reply formatter. Invoked as the bot owner with {response, via}; return a non-empty string or {text: non-empty string, parse_mode?}; a parse_mode returned wins over parseMode. Formats the Telegram reply without changing the stored agent response. Errors do not fall back to sending the unformatted response. v/ops/telegram/format turns an agent's Markdown into Telegram HTML."
+					"description": "Optional agent-only reply formatter. Invoked as the bot owner with {response, authentication}; return a non-empty string or {text: non-empty string, parse_mode?}; a parse_mode returned wins over parseMode. Formats the Telegram reply without changing the stored agent response. Errors do not fall back to sending the unformatted response. v/ops/telegram/format turns an agent's Markdown into Telegram HTML."
 				}
 			},
 			"required": [

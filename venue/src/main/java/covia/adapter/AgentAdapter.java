@@ -1459,30 +1459,15 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * An invocation's input with its {@code field} (the message, or a task's
-	 * input) as the agent receives it ({@link #withVia(ACell, AMap)}).
+	 * A pending envelope or task record with the request's provenance beside its
+	 * content (COG-20 §4): the caller, and the authentication record when a
+	 * channel binding authenticated it — both from the request context only. The
+	 * content is never read for provenance or rewritten with it.
 	 */
-	static ACell withVia(ACell input, AString field, AMap<AString, ACell> channel) {
-		AMap<AString, ACell> map = RT.ensureMap(input);
-		if (map == null || map.get(field) == null) return input;
-		return map.assoc(field, withVia(map.get(field), channel));
-	}
-
-	/**
-	 * A message as the agent receives it: {@code via} is the channel the request
-	 * came through, from the request context, and any {@code via} the message
-	 * carries is dropped — only the trusted code that identified the caller says
-	 * how a request arrived. A message that is not a map gains a channel as
-	 * {@code {text, via}}.
-	 */
-	static ACell withVia(ACell message, AMap<AString, ACell> channel) {
-		AMap<AString, ACell> map = RT.ensureMap(message);
-		if (map != null) {
-			map = map.dissoc(Fields.VIA);
-			return (channel == null) ? map : map.assoc(Fields.VIA, channel);
-		}
-		if (message == null || channel == null) return message;
-		return Maps.of(Fields.TEXT, message, Fields.VIA, channel);
+	static AMap<AString, ACell> withProvenance(AMap<AString, ACell> record, RequestContext ctx) {
+		record = record.assoc(Fields.CALLER, ctx.getCallerDID());
+		AMap<AString, ACell> authentication = ctx.getAuthentication();
+		return (authentication == null) ? record : record.assoc(Fields.AUTHENTICATION, authentication);
 	}
 
 	/**
@@ -1493,7 +1478,6 @@ public class AgentAdapter extends AAdapter {
 	 * and extracts the task result.</p>
 	 */
 	private void handleRequest(Job job, ACell input, RequestContext ctx) {
-		input = withVia(input, Fields.INPUT, ctx.getChannel());
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_REQUEST, false);
 		AString agentId = target.agentId();
@@ -1539,11 +1523,10 @@ public class AgentAdapter extends AAdapter {
 		SessionSpec session = resolveOrMintSession(job, input);
 		if (session == null) return;
 		Blob sid = session.id();
-		AMap<AString, ACell> taskData = Maps.of(
+		AMap<AString, ACell> taskData = withProvenance(Maps.of(
 			Fields.INPUT,      taskInput,
-			Fields.CALLER,     ctx.getCallerDID(),
 			Fields.CREATED,    CVMLong.create(Utils.getCurrentTimestamp()),
-			Fields.SESSION_ID, Strings.create(sid.toHexString()));
+			Fields.SESSION_ID, Strings.create(sid.toHexString())), ctx);
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 			if (strict) taskData = taskData.assoc(Fields.STRICT, CVMBool.TRUE);
@@ -1579,7 +1562,6 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	private void handleMessage(Job job, ACell input, RequestContext ctx) {
-		input = withVia(input, Fields.MESSAGE, ctx.getChannel());
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_MESSAGE, false);
 		AString agentId = target.agentId();
@@ -1635,10 +1617,9 @@ public class AgentAdapter extends AAdapter {
 
 		AString sidHex = Strings.create(sid.toHexString());
 		// Wrap message with caller provenance and the session it belongs to
-		AMap<AString, ACell> envelope = Maps.of(
-			Fields.CALLER,     ctx.getCallerDID(),
+		AMap<AString, ACell> envelope = withProvenance(Maps.of(
 			Fields.SESSION_ID, sidHex,
-			Fields.MESSAGE,    messageContent);
+			Fields.MESSAGE,    messageContent), ctx);
 		if (taskId != null) {
 			envelope = envelope.assoc(Fields.TASK_ID, taskIdHex);
 			AString messageId = RT.ensureString(RT.getIn(messageContent, Fields.MESSAGE_ID));
@@ -1695,7 +1676,6 @@ public class AgentAdapter extends AAdapter {
 	 * can commit delivery bookkeeping with intake, before the agent wakes.</p>
 	 */
 	private void handleChat(Job job, ACell input, RequestContext ctx) {
-		input = withVia(input, Fields.MESSAGE, ctx.getChannel());
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_MESSAGE, false);
 		AString agentId = target.agentId();
@@ -1735,11 +1715,10 @@ public class AgentAdapter extends AAdapter {
 		// The envelope carries the chat Job id for provenance — turns minted
 		// from it keep the id, tying conversation content back to the job.
 		AString jobIdHex = Strings.create(job.getID().toHexString());
-		ACell envelope = Maps.of(
-			Fields.CALLER,     ctx.getCallerDID(),
+		ACell envelope = withProvenance(Maps.of(
 			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent,
-			Fields.JOB_ID,     jobIdHex);
+			Fields.JOB_ID,     jobIdHex), ctx);
 		// Local delivery includes provenance in the admission transaction below.
 		if (ctx.getSessionDelivery() == null) job.updateData(job.getData().assoc(Fields.AGENT_ID, agentId)
 			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sidHex));
@@ -3736,7 +3715,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
 			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
-			Fields.MESSAGE, withVia(message, null));
+			Fields.MESSAGE, message);
 		if (jobId != null) envelope = envelope.assoc(Fields.JOB_ID, jobId);
 		AgentState.SessionIntake intake = agent.appendSessionPending(
 			sessionId, caller, null, envelope, false);
@@ -4262,7 +4241,7 @@ public class AgentAdapter extends AAdapter {
 		// transition adapter. Frame ownership is explicit; adapterFrames remains
 		// the legacy output path for non-owning custom adapters.
 		// Order: inbox messages → picked task input → assistant response.
-		// Every user turn keeps the caller its envelope or task recorded.
+		// Every user turn keeps the provenance its envelope or task recorded.
 		AVector<ACell> turnsToAppend = Vectors.empty();
 		if (pickedSessionBlob != null && leanError == null && adapterFrames == null && !framesOwned) {
 			if (filteredInbox != null) {
@@ -4280,7 +4259,7 @@ public class AgentAdapter extends AAdapter {
 						ACell envJobId = RT.getIn(envelope, Fields.JOB_ID);
 						if (envJobId != null) turn = turn.assoc(Fields.JOB_ID, envJobId);
 						turnsToAppend = turnsToAppend.conj(
-							withCaller(turn, RT.getIn(envelope, Fields.CALLER)));
+							withRecordedProvenance(turn, envelope));
 					}
 				}
 			}
@@ -4296,9 +4275,8 @@ public class AgentAdapter extends AAdapter {
 				if (pickedTask != null) {
 					turn = turn.assoc(Fields.JOB_ID, Strings.create(pickedTask.getKey().toHexString()));
 				}
-				ACell taskCaller = (pickedTask != null && pickedTask.getValue() instanceof AMap)
-					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.CALLER) : null;
-				turnsToAppend = turnsToAppend.conj(withCaller(turn, taskCaller));
+				turnsToAppend = turnsToAppend.conj(withRecordedProvenance(turn,
+					(pickedTask != null) ? pickedTask.getValue() : null));
 			}
 			if (transitionTurns != null) {
 				for (long i = 0; i < transitionTurns.count(); i++) {
@@ -4499,10 +4477,15 @@ public class AgentAdapter extends AAdapter {
 		return llmFailure && timeout;
 	}
 
-	/** Stamps a user turn with its caller, when its envelope or task recorded one. */
-	private static AMap<AString, ACell> withCaller(AMap<AString, ACell> turn, ACell caller) {
-		if (caller == null) return turn;
-		return turn.assoc(Fields.CALLER, caller);
+	/**
+	 * Stamps a user turn with the provenance its envelope or task record carries
+	 * (COG-20 §4): the caller, and the authentication record when there is one.
+	 */
+	public static AMap<AString, ACell> withRecordedProvenance(AMap<AString, ACell> turn, ACell source) {
+		ACell caller = RT.getIn(source, Fields.CALLER);
+		if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
+		ACell authentication = RT.getIn(source, Fields.AUTHENTICATION);
+		return (authentication == null) ? turn : turn.assoc(Fields.AUTHENTICATION, authentication);
 	}
 
 	/** Adds framework audit metadata to an adapter-emitted LLM/tool message
@@ -4692,21 +4675,20 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Formats one canonical taskdata entry — {input, caller, created,
-	 * responseSchema?, strict?, t, sessionId?, goals?} — into the transition
-	 * wire shape {jobId, input, caller?, responseSchema?, strict?}.
+	 * Formats one canonical taskdata entry — {input, caller, authentication?,
+	 * created, responseSchema?, strict?, t, sessionId?, goals?} — into the
+	 * transition wire shape {jobId, input, caller?, authentication?,
+	 * responseSchema?, strict?}.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> formatTask(Blob jobId, ACell raw) {
 		AMap<AString, ACell> taskMap = (raw instanceof AMap) ? (AMap<AString, ACell>) raw : null;
 		ACell taskInput = (taskMap != null) ? taskMap.get(Fields.INPUT) : raw;
-		ACell caller = (taskMap != null) ? taskMap.get(Fields.CALLER) : null;
 		ACell responseSchema = (taskMap != null) ? taskMap.get(Fields.RESPONSE_SCHEMA) : null;
 		ACell strict = (taskMap != null) ? taskMap.get(Fields.STRICT) : null;
-		AMap<AString, ACell> task = Maps.of(
+		AMap<AString, ACell> task = withRecordedProvenance(Maps.of(
 			Fields.JOB_ID, taskIdHex(jobId),
-			Fields.INPUT, taskInput);
-		if (caller != null) task = task.assoc(Fields.CALLER, caller);
+			Fields.INPUT, taskInput), taskMap);
 		if (responseSchema != null) task = task.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 		if (strict != null) task = task.assoc(Fields.STRICT, strict);
 		return task;

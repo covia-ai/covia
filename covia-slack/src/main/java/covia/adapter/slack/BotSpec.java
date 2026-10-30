@@ -44,6 +44,9 @@ public record BotSpec(String name, AMap<AString, ACell> settings) implements Web
 	public boolean listsUser(String id) {
 		return id != null && MessagingSettings.ids(settings, "allow", USER_ID).contains(id);
 	}
+	@Override public boolean lists(AMap<AString, ACell> sender) {
+		return listsUser(MessagingSettings.optional(sender, "id"));
+	}
 	public boolean allowsChannel(String id) { return MessagingSettings.ids(settings, "allowChannels", CHANNEL_ID).contains(id); }
 	@Override public boolean webhookIngress() { return settings.containsKey(MessagingSettings.key(SIGNING_SECRET)); }
 	@Override public boolean connectionIngress() { return settings.containsKey(MessagingSettings.key(APP_TOKEN)); }

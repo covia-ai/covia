@@ -144,9 +144,11 @@ deletions, bot messages and self echoes do not trigger work. DMs share a convers
 per channel, with separate conversations for explicitly threaded DMs. Slack
 timestamp IDs remain strings throughout.
 
-Agents receive `{text, via}`. `via` identifies sender, channel, workspace and
-thread; Slack identities grant no additional venue authority. Replies in
-channels are visible to other channel members. With `operation` instead of
+Agents receive the sender's text. The binding authenticates the sender
+([Who a chat message comes from](../venue/docs/CONFIG.md#who-a-chat-message-comes-from)),
+and the venue's `[From: …]` element in the agent's context names the principal
+the message comes from with the sender, conversation, thread and workspace.
+Replies in channels are visible to other channel members. With `operation` instead of
 `agent`, the input is `{event_id, team_id, api_app_id, event}`. Legacy Slack
 verification tokens are not retained. `reply: false` makes operation handlers
 silent; a string supplies a fixed reply.
@@ -154,7 +156,7 @@ silent; a string supplies a fixed reply.
 ## Agents
 
 The module publishes an agent template at `v/agents/templates/slack`. Agents
-made from it understand the `via` fields and that channel replies are public.
+made from it understand the From element and that channel replies are public.
 They write plain text, which is how replies are sent. The template gives them
 `slack:send` and pins their memory into context. Choose the model when
 creating the agent, then bind it with `"agent"`. The binding's user must own
@@ -170,7 +172,7 @@ Slack supplies user IDs, not names, so record who is who in the agent's
 memory, for example "Slack U0123ABC is Mike, my owner".
 
 Agents find Slack through two skills. `v/skills/adapters/slack` covers sending
-and the `via` fields. It reveals `slack-bot-management`, which covers creating,
+and who a message comes from. It reveals `slack-bot-management`, which covers creating,
 repairing and deleting bindings and in turn reveals the `secrets` skill.
 Reading Slack, such as channel history and user names, belongs to the separate
 `slack` connection skill. It calls the Web API with the owner's

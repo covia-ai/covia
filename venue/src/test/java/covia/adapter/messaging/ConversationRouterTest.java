@@ -47,7 +47,7 @@ class ConversationRouterTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
 			String stale = "00000000000000000000000000000000";
 			sessions.put("chat", stale);
-			assertNotNull(router.chat("chat", Strings.create("hello")));
+			assertNotNull(router.chat("chat", Strings.create("hello"), LISTED));
 			assertNotNull(sessions.get("chat"));
 			assertNotEquals(stale, sessions.get("chat"));
 		} finally { engine.close(); }
@@ -62,7 +62,7 @@ class ConversationRouterTest {
 			var state = engine.adapterState("messaging-test");
 			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "resting", null, null),
 				new ConversationSessions(state, "refusal/sessions"));
-			AMap<AString, ACell> listed = Maps.of(ConversationRouter.ACCESS, ConversationRouter.ALLOW);
+			var listed = LISTED;
 			assertEquals(AgentAdapter.DELIVERY_AGENT_MISSING.formatted("resting"), router.deliveryRefusal(listed));
 			assertTrue(router.supportsSessionDelivery(listed), "a missing agent is refused by session delivery, not chatted to");
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "resting",
@@ -100,7 +100,7 @@ class ConversationRouterTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")));
 			inbox.accept("1", Strings.create("input"));
 			var agent = engine.getVenueState().users().get(owner).agent("atomic");
-			assertThrows(JobFailedException.class, () -> router.deliver("chat", Strings.create("input"), (draft, sid, jid) -> {
+			assertThrows(JobFailedException.class, () -> router.deliver("chat", Strings.create("input"), LISTED, (draft, sid, jid) -> {
 				assertEquals(1, draft.users().get(owner).agent("atomic").getSessionPending(convex.core.data.Blob.fromHex(sid.toString())).count());
 				assertTrue(agent.getSessions().isEmpty(), "the live input must remain invisible until commit");
 				assertTrue(inbox.deliver(draft, "1", sid, jid));
@@ -115,7 +115,7 @@ class ConversationRouterTest {
 			// must discard its speculative session as well as its message append.
 			var calls = new ArrayList<CompletableFuture<Job>>();
 			for (int i = 0; i < 6; i++) calls.add(CompletableFuture.supplyAsync(() -> router.deliver(
-				"chat", Strings.create("input"), (draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid))));
+				"chat", Strings.create("input"), LISTED, (draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid))));
 			int winners = 0;
 			for (var call : calls) if (call.get(10, TimeUnit.SECONDS) != null) winners++;
 			assertEquals(1, winners);
@@ -153,7 +153,7 @@ class ConversationRouterTest {
 			inbox.accept("1", Strings.create("input"));
 			wakes.set(0);
 			var attempts = new java.util.concurrent.atomic.AtomicInteger();
-			var delivery = CompletableFuture.supplyAsync(() -> router.deliver("chat", Strings.create("input"), (draft, sid, jid) -> {
+			var delivery = CompletableFuture.supplyAsync(() -> router.deliver("chat", Strings.create("input"), LISTED, (draft, sid, jid) -> {
 				boolean accepted = inbox.deliver(draft, "1", sid, jid);
 				if (attempts.incrementAndGet() == 1) {
 					staged.countDown();
@@ -176,7 +176,7 @@ class ConversationRouterTest {
 			ConversationRouter.onResponse(job, replies::add, failure -> fail(failure));
 			job.completeWith(Maps.of(Fields.RESPONSE, "reply"));
 			assertEquals(Strings.create("reply"), replies.poll(5, TimeUnit.SECONDS));
-			ConversationRouter.onResponse(router.deliver("chat", Strings.create("input"),
+			ConversationRouter.onResponse(router.deliver("chat", Strings.create("input"), LISTED,
 				(draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid)), replies::add, failure -> fail(failure));
 			assertNull(replies.poll(100, TimeUnit.MILLISECONDS));
 		} finally { release.countDown(); engine.close(); }
@@ -202,7 +202,7 @@ class ConversationRouterTest {
 			router.runOperation("v/ops/agent/create",Maps.of(Fields.AGENT_ID,"deleting",Fields.CONFIG,Maps.of(Fields.OPERATION,"v/ops/llmagent/chat")));
 			inbox.accept("1",Strings.create("input"));
 			var entered = new CountDownLatch(1);
-			var delivery = CompletableFuture.supplyAsync(() -> router.deliver("chat",Strings.create("input"),(draft,sid,jid) -> {
+			var delivery = CompletableFuture.supplyAsync(() -> router.deliver("chat",Strings.create("input"),LISTED,(draft,sid,jid) -> {
 				entered.countDown();
 				try { assertTrue(release.await(10,TimeUnit.SECONDS)); }
 				catch (InterruptedException e) { throw new AssertionError(e); }
@@ -223,7 +223,7 @@ class ConversationRouterTest {
 			assertNotNull(delivery.get(10,TimeUnit.SECONDS));
 			deletion.get(10,TimeUnit.SECONDS);
 			assertNull(state.read("deleting"));
-			assertThrows(IllegalStateException.class, () -> router.deliver("chat",Strings.create("late"),(draft,sid,jid) -> true));
+			assertThrows(IllegalStateException.class, () -> router.deliver("chat",Strings.create("late"),LISTED,(draft,sid,jid) -> true));
 			assertNull(state.read("deleting"));
 		} finally { release.countDown(); engine.close(); }
 	}
@@ -251,7 +251,7 @@ class ConversationRouterTest {
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "restart", Fields.CONFIG,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
 			inbox.accept("1", Strings.create("accepted before wake"));
-			Job job = router.deliver("chat", Strings.create("accepted before wake"),
+			Job job = router.deliver("chat", Strings.create("accepted before wake"), LISTED,
 				(draft, session, id) -> inbox.deliver(draft, "1", session, id));
 			assertFalse(job.isFinished());
 			jobId = job.getID();
@@ -271,7 +271,7 @@ class ConversationRouterTest {
 			assertTrue(job.awaitResult(10_000).toString().contains("accepted before wake"));
 			assertEquals(Status.COMPLETE, job.getStatus());
 			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "restart", null, null), sessions);
-			assertNull(router.deliver("chat", Strings.create("accepted before wake"),
+			assertNull(router.deliver("chat", Strings.create("accepted before wake"), LISTED,
 				(draft, session, id) -> inbox.deliver(draft, "1", session, id)));
 		} finally { second.close(); }
 	}
@@ -309,7 +309,7 @@ class ConversationRouterTest {
 			inbox.accept("1", Strings.create("input"));
 			wakes.set(0);
 			engine.failFlush = true;
-			assertThrows(IllegalStateException.class, () -> router.deliver("chat", Strings.create("input"),
+			assertThrows(IllegalStateException.class, () -> router.deliver("chat", Strings.create("input"), LISTED,
 				(draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid)));
 			assertEquals(0, wakes.get(), "do not execute before the durability barrier succeeds");
 			var jid = convex.core.data.Blob.fromHex(inbox.get("1").get(Fields.JOB_ID).toString());
@@ -332,26 +332,30 @@ class ConversationRouterTest {
 			Engine.addDemoAssets(engine);
 			var owner = Strings.create("did:test:binding-owner");
 			engine.getVenueState().users().ensure(owner);
-			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "lender", null, null),
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "lender", null, null, true),
 				new ConversationSessions(engine.adapterState("messaging-test"), "lender/sessions"));
 			router.runOperation("v/ops/covia/write", Maps.of(Fields.PATH, "w/private-note", Fields.VALUE, "owner only"));
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "lender",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete", "readPath", "w/private-note")));
 			var ownerView = covia.venue.RequestContext.of(owner);
 
-			// A sender the allow-list names comes from the binding's principal.
-			AMap<AString, ACell> listed = Maps.of("channel", "test", ConversationRouter.ACCESS, ConversationRouter.ALLOW, "from", "friend-7");
-			Job fromFriend = router.deliver("friend", Maps.of("text", "hello", Fields.VIA, listed), (draft, sid, jid) -> true);
+			// A sender the binding lists comes from its principal, carrying the record
+			// of how the binding authenticated them.
+			var listed = router.context(LISTED);
+			assertEquals(owner, listed.getCallerDID());
+			assertEquals(Strings.create("test:listed"), listed.getAuthentication().get(covia.venue.auth.AuthResult.AUTHENTICATED_IDENTITY));
+			assertEquals(Strings.create(owner + "/test/bot"),
+				RT.getIn(listed.getAuthentication(), covia.venue.auth.AuthResult.AUTHENTICATION, covia.venue.auth.AuthResult.BINDING));
+			Job fromFriend = router.deliver("friend", Strings.create("hello"), LISTED, (draft, sid, jid) -> true);
 			assertEquals(Strings.create("owner only"), RT.getIn(fromFriend.awaitResult(5000), Fields.RESPONSE, "completed"));
 			assertEquals(owner, engine.jobs().getJobData(fromFriend.getID(), ownerView).get(Fields.CALLER));
 
 			// Any other sender is anonymous, and may ask only an agent that admits anyone.
-			AMap<AString, ACell> open = Maps.of("channel", "test", ConversationRouter.ACCESS, ConversationRouter.OPEN, "from", "stranger-42");
-			assertNotNull(router.deliveryRefusal(open), "an anonymous sender is refused by an owner-only agent");
+			assertNotNull(router.deliveryRefusal(STRANGER), "an anonymous sender is refused by an owner-only agent");
 			router.runOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "lender",
 				Fields.CONFIG, Maps.of(Fields.ACCEPTS, covia.venue.Admission.ANYONE)));
-			assertNull(router.deliveryRefusal(open));
-			Job fromStranger = router.deliver("stranger", Maps.of("text", "what is in your notes?", Fields.VIA, open),
+			assertNull(router.deliveryRefusal(STRANGER));
+			Job fromStranger = router.deliver("stranger", Strings.create("what is in your notes?"), STRANGER,
 				(draft, sid, jid) -> true);
 			assertEquals(Strings.create("owner only"), RT.getIn(fromStranger.awaitResult(5000), Fields.RESPONSE, "completed"),
 				"the agent serves the stranger as itself");
@@ -359,6 +363,33 @@ class ConversationRouterTest {
 			assertEquals(anonymous.getCallerDID(),
 				engine.jobs().getJobData(fromStranger.getID(), anonymous).get(Fields.CALLER),
 				"the stranger's turn is the anonymous principal's, not the owner's");
+			assertEquals(Strings.create("test:stranger"),
+				router.context(STRANGER).getAuthentication().get(covia.venue.auth.AuthResult.AUTHENTICATED_IDENTITY),
+				"anonymous senders stay distinct in provenance");
+
+			// The agent's history keeps who asked and how, beside each turn.
+			var sessions = engine.getVenueState().users().get(owner).agent("lender").getSessions();
+			assertEquals(2, sessions.count());
+			for (long i = 0; i < sessions.count(); i++) {
+				var frames = RT.ensureVector(RT.getIn(sessions.entryAt(i).getValue(), Fields.FRAMES));
+				var turn = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0))).get(0);
+				assertNotNull(RT.getIn(turn, Fields.AUTHENTICATION), "every bot turn keeps its record");
+			}
+		} finally { engine.close(); }
+	}
+
+	@Test void aBindingRefusesSendersItNeitherListsNorIsOpenTo() {
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			Engine.addDemoAssets(engine);
+			var owner = Strings.create("did:test:closed-binding");
+			engine.getVenueState().users().ensure(owner);
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "agent", null, null),
+				new ConversationSessions(engine.adapterState("messaging-test"), "closed-binding/sessions"));
+			assertEquals(ChannelAuthentication.NOT_ADMITTED, router.deliveryRefusal(STRANGER));
+			var thrown = assertThrows(covia.exception.AuthException.class, () -> router.context(STRANGER));
+			assertEquals(ChannelAuthentication.NOT_ADMITTED, thrown.getMessage());
+			assertNull(router.context().getAuthentication(), "the binding's own work carries no record");
 		} finally { engine.close(); }
 	}
 
@@ -426,16 +457,31 @@ class ConversationRouterTest {
 			Engine.addDemoAssets(engine);
 			var owner = Strings.create("did:test:closed-venue");
 			engine.getVenueState().users().ensure(owner);
-			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "agent", null, null),
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "agent", null, null, true),
 				new ConversationSessions(engine.adapterState("messaging-test"), "closed/sessions"));
-			AMap<AString, ACell> open = Maps.of("channel", "test", ConversationRouter.ACCESS, ConversationRouter.OPEN, "from", "stranger");
 			assertNull(engine.publicContext());
-			assertEquals(Engine.PUBLIC_ACCESS_OFF, router.deliveryRefusal(open));
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, router.deliveryRefusal(STRANGER));
 		} finally { engine.close(); }
 	}
 
-	private record Spec(String name, String userRef, String agent, String operation, ACell reply)
-			implements MessagingBotSpec { }
+	/** A binding that lists the sender {@code listed}, and admits anyone else when open. */
+	private record Spec(String name, String userRef, String agent, String operation, ACell reply, boolean open)
+			implements MessagingBotSpec {
+		Spec(String name, String userRef, String agent, String operation, ACell reply) {
+			this(name, userRef, agent, operation, reply, false);
+		}
+		@Override public boolean lists(AMap<AString, ACell> sender) {
+			return Strings.create("listed").equals(sender.get(ChannelAuthentication.K_ID));
+		}
+	}
+
+	private static ChannelAuthentication.Channel channel(String sender) {
+		return ChannelAuthentication.Channel.of("test", ChannelAuthentication.PROVIDER_SESSION,
+			ChannelAuthentication.sender(sender, null, null), ChannelAuthentication.chat("chat-1", ChannelAuthentication.DIRECT, null));
+	}
+
+	/** A sender the binding lists, and one it does not. */
+	private static final ChannelAuthentication.Channel LISTED = channel("listed"), STRANGER = channel("stranger");
 
 	@Test void ordersTurnsAndResetsDespiteFailureOrObserverCancellation() throws Exception {
 		Engine engine = Engine.createTemp(Maps.empty());

@@ -52,6 +52,8 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.adapter.webhook.WebhookInbox;
+import covia.adapter.messaging.ChannelAuthentication;
+import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.messaging.MessagingBot;
 import covia.adapter.messaging.MessagingMedia;
 import covia.adapter.messaging.MessagingText;
@@ -105,11 +107,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final AString K_FAILED = Strings.intern("failed");
 	static final AString K_MANAGED = Strings.intern("managed");
 	private static final AString K_BOT = Strings.intern("bot");
-	private static final AString K_VIA = Strings.intern("via");
-	private static final AString K_CHANNEL = Strings.intern("channel");
-	private static final AString K_FROM = Strings.intern("from");
-	private static final AString K_CHAT = Strings.intern("chat");
-	private static final AString K_MESSAGE_ID = Strings.intern("message_id");
+	/** Telegram's own extras in a channel record: what a message replies to, and its album. */
+	private static final AString K_REPLY_TO = Strings.intern("reply_to_message_id");
+	private static final AString K_MEDIA_GROUP = Strings.intern("media_group_id");
 
 	enum State { STARTING, PENDING, RUNNING, STOPPED }
 
@@ -157,7 +157,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			this::legacySession, chat -> {
 				if (managed == Managed.RUNTIME) adapter.deleteLegacyPath(context(), legacySessionsPath(spec.name()) + "/" + chat);
 			}, this, () -> !stopped && adapter.isActive());
-		conversations = new ConversationRouter(adapter.engine, spec, adapter.principalOf(spec, managed), sessionStore);
+		conversations = new ConversationRouter(adapter.engine, spec, adapter.principalOf(spec, managed), sessionStore, this::lists);
 		inbox = new WebhookInbox(adapter.engine, storage, statePath("inbox") + "/unbound");
 	}
 
@@ -668,10 +668,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			// Remote agent facades cannot join a local lattice transaction. Preserve
 			// their existing claimed-receipt protocol until the remote result arrives.
 			typing(chatId, m);
-			sendAgentReply(m, text, conversations.chat(conversationKey(m, chatId), input));
+			sendAgentReply(m, text, conversations.chat(conversationKey(m, chatId), input, channel(m)));
 			return;
 		}
-		covia.grid.Job job = conversations.deliver(conversationKey(m, chatId), input,
+		covia.grid.Job job = conversations.deliver(conversationKey(m, chatId), input, channel(m),
 			(draft, sid, jid) -> inbox.deliver(draft, updateId, sid, jid));
 		if (job == null) return; // Already delivered; never send a duplicate reply.
 		// Delivery is now durable. Waiting, formatting and sending are independent
@@ -695,7 +695,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		String parseMode = spec.parseMode();
 		if (spec.replyOperation() != null) {
 			ACell formatted = conversations.runForAgent(spec.replyOperation(), Maps.of(
-				Fields.RESPONSE, response, K_VIA, agentMessage(m, text).get(K_VIA)));
+				Fields.RESPONSE, response, Fields.AUTHENTICATION, conversations.context(channel(m)).getAuthentication()));
 			reply = formattedReply(formatted);
 			parseMode = formattedParseMode(formatted, parseMode);
 		}
@@ -735,7 +735,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		try {
 			if (chatId != null && !spec.silent() && spec.fixedReply() == null) typing(chatId, m);
 			ACell result = conversations.runOperation(spec.operation(), updateRecord(update),
-				channel(senderOf(update), chatOfUpdate(update)));
+				channel(senderOf(update), chatOfUpdate(update), m));
 			if (chatId != null) replyAfter(chatId, m, result);
 		} catch (Throwable t) {
 			logFailure("handler failed for update " + update.updateId(), chatId, t);
@@ -752,41 +752,46 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	}
 
 	/**
-	 * The chat message an agent receives: the text plus, as structure it cannot
-	 * mistake for typed text, who is on the other end — Telegram's own {@code from}
-	 * and {@code chat} objects (authenticated by Telegram, admitted by this bot's
-	 * allow-list or its {@code open} setting), the bot, and the message id. The
-	 * channel travels on the request context, and the agent's ingress writes it
-	 * as {@code via}; the turn's caller is who the message comes from.
+	 * The verified channel a message came through (COG-3 §7): Telegram's own sender
+	 * and chat, over the bot's polling session, with the topic as the thread and
+	 * the ids that place the message in its chat. Null for a message with no
+	 * sender and no chat.
 	 */
-	AMap<AString, ACell> agentMessage(Message m, String text) {
-		return Maps.of(Fields.TEXT, Strings.create(text), K_VIA, channel(m));
+	Channel channel(Message m) {
+		return m == null ? null : channel(m.from(), m.chat(), m);
 	}
 
-	/** An update's channel: Telegram's own sender and chat, and whether the allow-list names the sender. */
-	private AMap<AString, ACell> channel(User from, Chat chat) {
-		AMap<AString, ACell> via = Maps.of(
-			K_CHANNEL, Strings.create("telegram"),
-			K_BOT, Strings.create(spec.name()),
-			ConversationRouter.ACCESS, listed(from) ? ConversationRouter.ALLOW : ConversationRouter.OPEN);
-		if (from != null) via = via.assoc(K_FROM, telegramCell(from));
-		if (chat != null) via = via.assoc(K_CHAT, telegramCell(chat));
-		return via;
+	/** An update's verified channel; a post with no author is the chat's own. */
+	private Channel channel(User from, Chat chat, Message m) {
+		AMap<AString, ACell> sender = (from != null)
+			? ChannelAuthentication.sender(Long.toString(from.id()), from.username(), name(from.firstName(), from.lastName()))
+			: (chat != null) ? ChannelAuthentication.sender(Long.toString(chat.id()), chat.username(), chat.title()) : null;
+		if (sender == null) return null;
+		AMap<AString, ACell> where = (chat == null) ? null : ChannelAuthentication.chat(Long.toString(chat.id()),
+			chat.type() == Chat.Type.Private ? ChannelAuthentication.DIRECT
+				: chat.type() == Chat.Type.channel ? ChannelAuthentication.CHANNEL : ChannelAuthentication.GROUP,
+			chat.title());
+		Channel channel = Channel.of(TelegramAdapter.NAME, ChannelAuthentication.PROVIDER_SESSION, sender, where);
+		if (m == null) return channel;
+		AMap<AString, ACell> extras = Maps.empty();
+		if (m.replyToMessage() != null) extras = extras.assoc(K_REPLY_TO, Strings.create(Integer.toString(m.replyToMessage().messageId())));
+		if (m.mediaGroupId() != null) extras = extras.assoc(K_MEDIA_GROUP, Strings.create(m.mediaGroupId()));
+		Long topic = threadOf(m);
+		return channel.thread(topic == null ? null : topic.toString())
+			.message(m.messageId() == null ? null : m.messageId().toString()).extras(extras);
 	}
 
-	/** A message's channel, with the ids that place it in its chat. */
-	private AMap<AString, ACell> channel(Message m) {
-		AMap<AString, ACell> via = channel(m.from(), m.chat());
-		if (threadOf(m) != null) via = via.assoc(Strings.intern("message_thread_id"), CVMLong.create(threadOf(m)));
-		if (m.replyToMessage() != null) via = via.assoc(Strings.intern("reply_to_message_id"), CVMLong.create(m.replyToMessage().messageId()));
-		if (m.mediaGroupId() != null) via = via.assoc(Strings.intern("media_group_id"), Strings.create(m.mediaGroupId()));
-		if (m.messageId() != null) via = via.assoc(K_MESSAGE_ID, CVMLong.create(m.messageId()));
-		return via;
+	private static String name(String first, String last) {
+		if (first == null) return last;
+		return (last == null) ? first : first + " " + last;
 	}
 
-	/** A pengrad model object as Telegram's JSON (snake_case), as a cell. */
-	private static ACell telegramCell(Object model) {
-		return JSON.parse(BotUtils.toJson(model));
+	/** Whether the allow-list names a verified sender ({@link #listed(Long, String)}). */
+	private boolean lists(AMap<AString, ACell> sender) {
+		AString id = RT.ensureString(sender.get(ChannelAuthentication.K_ID));
+		AString handle = RT.ensureString(sender.get(ChannelAuthentication.K_HANDLE));
+		if (id == null || !id.toString().matches("-?[0-9]{1,20}")) return false;
+		return listed(Long.valueOf(id.toString()), handle == null ? null : handle.toString());
 	}
 
 	/** The configured reply after the operation handler ran. */
@@ -811,10 +816,16 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return topic == null ? chatId : ConversationRouter.key(chatId, topic.toString());
 	}
 
-	/** Download privately, then give the agent references rather than token-bearing URLs or bytes. */
+	/**
+	 * The turn an agent receives: the sender's text, or {@code {text, attachments,
+	 * content?}} for a message with media. Downloads privately, then gives the agent
+	 * references rather than token-bearing URLs or bytes.
+	 */
 	private ACell prepareMessage(Message m, String text) {
 		rememberMedia(m);
-		AMap<AString, ACell> message = agentMessage(m, text);
+		if (TelegramMedia.attachments(m).isEmpty()) return Strings.create(text);
+		AMap<AString, ACell> message = Maps.of(Fields.TEXT, Strings.create(text));
+		AMap<AString, ACell> authentication = conversations.context(channel(m)).getAuthentication();
 		AVector<ACell> attachments = Vectors.empty();
 		AVector<ACell> images = Vectors.empty();
 		for (JsonObject media : TelegramMedia.attachments(m)) {
@@ -825,7 +836,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				.merge(RT.castMap(JSON.parse(media.toString())));
 			if (spec.mediaOperation() != null) {
 				ACell processed = conversations.runForAgent(spec.mediaOperation(), attachment
-					.assoc(Strings.intern("caption"), Strings.create(text)).assoc(K_VIA, message.get(K_VIA)));
+					.assoc(Strings.intern("caption"), Strings.create(text)).assoc(Fields.AUTHENTICATION, authentication));
 				attachment = TelegramMedia.processed(attachment, processed);
 			}
 			attachments = attachments.conj(attachment);

@@ -19,6 +19,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `StreamContent`: one-shot content over a stream, such as an HTTP response body.
 - `ai.covia:venue` publishes a test jar (`tests` classifier) with its shared test support.
 - Agent `accepts: "anyone"` admits every caller, anonymous ones included.
+- An LLM agent's context shows who a turn comes from as a `[From: …]` element, once
+  per change of sender (COG-20 §4).
 
 ### Changed
 
@@ -58,7 +60,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A per-agent A2A request is the asker's own, admitted by `accepts` or a UCAN, and
   its task calls reach only the asker's tasks for that agent (#619).
 - A capability scope bounds job and scheduled-event access for every context.
-- An agent's ingress writes `via` from the request; a `via` inside a message is dropped.
+- A chat binding authenticates each sender (AUTH.md §5.3); an agent records the
+  authentication beside the turn, never in the message.
 - A chat bot's message comes from the bot's principal for an allow-listed sender, and
   is anonymous otherwise. A bot an agent creates is that agent, never its owner.
 - A `user: "public"` chat bot is bound by the public scope.
@@ -83,6 +86,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `auth.public.caps` must grant `invoke` on `v/ops/agent/chat` or the bot's operation.
 - A capped agent behind a chat bot needs write on the media drive to receive media.
 - A bot an agent created earlier still comes from its owner; create it again.
+- Agents no longer receive `via`: a chat turn is the sender's text, or
+  `{text, attachments, content?}`.
+- `mediaOperation` and `replyOperation` receive `authentication` instead of `via`.
+- A webhook message accepted before the upgrade and not yet handled fails once.
 
 ## [0.10.0] - 2026-10-26
 

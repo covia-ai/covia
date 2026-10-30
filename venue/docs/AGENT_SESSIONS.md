@@ -26,7 +26,7 @@ A **session** is a scoped interaction between parties with its own history and c
 - **Own history / context** — turns, tool calls, tool results, pinned context entries
 - **Jointly owned** — every listed party holds read/append capability; neither is subordinate
 
-`meta.parties` records *who is present*. Each user turn records *who sent it*: `caller`, the principal the venue authenticated for that request (the owner, another agent, a stranger, or the venue's public principal). It is identity, not namespace: an agent asking is recorded as itself, not as its owner. Assistant turns carry no caller (they are the agent's own output). The LLM runtimes' context assembly renders it as a venue provenance note before a turn whose caller is not the agent itself, once per change of principal.
+`meta.parties` records *who is present*. Each user turn records *who sent it*: `caller`, the principal the venue authenticated for that request (the owner, another agent, a stranger, or the venue's public principal). It is identity, not namespace: an agent asking is recorded as itself, not as its owner. When a channel binding authenticated the caller, the turn also records `authentication`, how it did (AUTH.md §5.3). Assistant turns carry neither (they are the agent's own output). The LLM runtimes' context assembly renders both as a `From` element ([AGENT_CONTEXT.md §1.2](./AGENT_CONTEXT.md#12-instruction-labels-and-data-boundaries), COG-20 §4) before a turn whenever who is talking changes.
 
 Sessions live at `g/<agent>/sessions/<sid>/` in the agent's lattice namespace. The hosting venue mints the id; counterparties echo it on subsequent requests, exactly as in MCP.
 

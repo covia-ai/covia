@@ -43,6 +43,9 @@ public record BotSpec(String name, AMap<AString, ACell> settings) implements Web
 	public boolean lists(String from) {
 		return from != null && MessagingSettings.ids(settings, "allow", PHONE).contains(from);
 	}
+	@Override public boolean lists(AMap<AString, ACell> sender) {
+		return lists(MessagingSettings.optional(sender, "id"));
+	}
 	/** Whether the send operation may address this number. */
 	public boolean allows(String to) {
 		return to != null && to.matches(PHONE) && (MessagingSettings.bool(settings, "open", false)

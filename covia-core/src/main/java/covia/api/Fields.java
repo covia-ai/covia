@@ -298,11 +298,11 @@ public class Fields {
 	 *  unchanged and no migration is implied. Attribution only: ownership,
 	 *  access control and quota all key on {@code caller}. */
 	public static final StringShort ACTOR = Strings.intern("actor");
-	/** On a message or task input to an agent: the channel it came through (the
-	 *  binding and the platform sender it identified), written by the agent's
-	 *  ingress from the request context. A {@code via} supplied inside the
-	 *  message is never kept. */
-	public static final StringShort VIA = Strings.intern("via");
+	/** Beside a request or message an agent receives, and on its history turn:
+	 *  how the venue authenticated the caller through a channel binding (COG-3
+	 *  §7), written by the agent's ingress from the request context. Attribution
+	 *  only, never evidence. */
+	public static final StringShort AUTHENTICATION = Strings.intern("authentication");
 	/** On a job record: the id of the nearest <em>recorded</em> job inside whose
 	 *  execution this job was dispatched. Absent on top-level jobs. Only the
 	 *  up-link is stored; a client reconstructs a job tree by tracing parents. */

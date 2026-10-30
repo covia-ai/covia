@@ -65,9 +65,10 @@ refuse that config (`Admission.configProblem`).
 - **The agent serves it as itself.** The run is the agent sub-principal
   bounded by `config.caps`, exactly as for a request from the owner.
 - **The agent knows who asked, and how.** The task records the asker as its
-  caller. The trusted code that identified the asker puts the channel on the
-  request context, and the agent's ingress writes it on the message as
-  `via`; a `via` inside a message is dropped.
+  caller. When a channel binding authenticated the asker, the request context
+  carries the authentication record (AUTH.md §5.3), and the agent's ingress
+  records it beside the request, never in it, so nothing a caller sends can
+  pose as one.
 
 Every anonymous caller is the one public principal, so they share its jobs:
 what any of them may do with an anonymous task is what the operator's public

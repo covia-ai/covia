@@ -263,13 +263,13 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	static final AString K_MARKDOWN = Strings.intern("markdown");
 	/** {@code telegram:format} given nothing to convert. */
 	public static final String NOTHING_TO_FORMAT =
-		"format expects markdown or text, or a reply hook's {response, via}";
+		"format expects markdown or text, or a reply hook's {response, authentication}";
 
 	/**
 	 * {@code telegram:format}: Markdown to Telegram HTML ({@link TelegramMarkdown}).
 	 * Takes {@code {markdown}} (or, when that is absent or blank, {@code {text}}), a
 	 * bare string from a Java caller, or the reply hook's own
-	 * input {@code {response, via}}, whose response is read as the adapter reads
+	 * input {@code {response, authentication}}, whose response is read as the adapter reads
 	 * any agent reply ({@link ConversationRouter#responseText}). Returns
 	 * {@code {text, parse_mode: "HTML"}}: as a reply hook's result, the reply is
 	 * {@code text}, sent under that {@code parse_mode} whatever the bot's own.

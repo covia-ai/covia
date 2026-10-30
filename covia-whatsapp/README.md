@@ -62,9 +62,9 @@ usernames and business-scoped user IDs are not supported in this version.
 sender ID and permits outbound sends to any such ID. A listed sender comes
 from the binding's principal and any other is anonymous
 ([Who a chat message comes from](../venue/docs/CONFIG.md#who-a-chat-message-comes-from)). An allow-listed binding
-can send only to its listed IDs. An agent receives `{text, via}` where `via`
-identifies the provider, authenticated sender and phone binding. Provider
-identity does not grant additional venue authority.
+can send only to its listed IDs. An agent receives the sender's text, and the
+venue's `[From: …]` element in its context names the principal the message
+comes from with the sender's WhatsApp ID and the phone binding.
 
 To route to a deterministic operation, replace `agent` with `operation`.
 Its input is `{message, metadata, business_account_id}`, retaining the
@@ -110,7 +110,7 @@ An agent binding receives images, voice notes and other audio, video, documents
 and stickers as attachments. When the message is handled, the adapter looks the
 media id up and downloads the short-lived link, both with the binding's token, and
 stores the bytes in the owner's private DLFS `whatsapp` drive (at most 20 MiB).
-The turn is `{text, via, attachments, content?}`:
+The turn is `{text, attachments, content?}`:
 
 - `text` is the caption, or empty for a bare voice note.
 - Each attachment has `kind` (`audio`, `image`, `video`, `document`, `sticker`),
@@ -123,7 +123,8 @@ The turn is `{text, via, attachments, content?}`:
 There is no implicit speech provider. Set `mediaOperation` on an agent binding to
 an operation that transcribes or extracts, such as `v/ops/speech/transcribe` from
 the speech module, which transcribes voice notes and passes other media through: it runs as the owner once per
-attachment, with the attachment plus `caption` and `via`, and returns `{}` to pass
+attachment, with the attachment plus `caption` and `authentication` (how the binding
+authenticated the sender), and returns `{}` to pass
 the attachment through or an object whose non-empty `text` becomes the
 attachment's `text`; the whole result is kept under `attachment.result` and cannot
 replace the reference or media type. A failed download or hook fails the turn like

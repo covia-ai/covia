@@ -10,6 +10,8 @@ import convex.core.data.Maps;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.messaging.AWebhookMessagingAdapter;
+import covia.adapter.messaging.ChannelAuthentication;
+import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.MessagingConnection;
 import covia.adapter.messaging.MessagingHttp;
@@ -46,14 +48,15 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		var payload = json(request);
 		// Slack's signed URL challenge does not contain installation IDs.
 		if ("url_verification".equals(MessagingSettings.required(payload, "type"))) return WebhookResponse.text(200, MessagingSettings.required(payload, "challenge"));
-		return admit(bot, payload) ? WebhookResponse.text(200, "") : WebhookResponse.text(403, UNAUTHORIZED);
+		return admit(bot, payload, ChannelAuthentication.SIGNED_CALLBACK) ? WebhookResponse.text(200, "") : WebhookResponse.text(403, UNAUTHORIZED);
 	}
 	/**
 	 * Admission and durable acceptance of one Events API payload from either
-	 * transport, after it has authenticated. False when it belongs to another
-	 * installation; ignored events are admitted without effect.
+	 * transport, after it has authenticated ({@code credential}: how). False when
+	 * it belongs to another installation; ignored events are admitted without
+	 * effect. The accepted event carries its verified channel.
 	 */
-	boolean admit(WebhookBot<BotSpec> bot, AMap<AString, ACell> payload) {
+	boolean admit(WebhookBot<BotSpec> bot, AMap<AString, ACell> payload, AString credential) {
 		if (!"event_callback".equals(MessagingSettings.required(payload, "type"))) return true;
 		if (!bot.spec().appId().equals(MessagingSettings.required(payload, "api_app_id"))
 			|| !bot.spec().teamId().equals(MessagingSettings.required(payload, "team_id")) || !authorizedInstallation(bot.spec(), payload)) return false;
@@ -83,13 +86,20 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		if (eventType.equals("app_mention")) text = text.replace("<@" + bot.spec().botUserId() + ">", "").strip();
 		if (text.isBlank()) return true;
 		String id = MessagingSettings.required(payload, "event_id");
-		var via = Maps.of("channel", NAME, "bot", bot.spec().name(), "from", user, "chat", channel,
-			"message_id", ts, "event_id", id, "team", bot.spec().teamId(), "thread", thread,
-			ConversationRouter.ACCESS, bot.spec().listsUser(user) ? ConversationRouter.ALLOW : ConversationRouter.OPEN);
+		// Slack user ids are unique within a workspace, so the identity names it.
+		Channel verified = Channel.of(NAME, credential, ChannelAuthentication.sender(user, null, null),
+				ChannelAuthentication.chat(channel, chatKind(channel), null))
+			.thread(thread).space(bot.spec().teamId(), null, true).message(ts)
+			.extras(Maps.of("event_id", id));
 		bot.accept(id, Maps.of("conversation", ConversationRouter.key(bot.spec().installationKey(), channel, thread == null ? "" : thread),
-			"text", text, "channel", channel, "thread", thread, "via", via,
+			"text", text, "channel", channel, "thread", thread, WebhookBot.K_CHANNEL, verified.toData(),
 			"input", Maps.of("event_id", id, "team_id", bot.spec().teamId(), "api_app_id", bot.spec().appId(), "event", event)));
 		return true;
+	}
+	/** A Slack conversation's kind from its id: {@code D} a direct message, {@code G} a private channel or group DM. */
+	private static AString chatKind(String channel) {
+		if (channel.startsWith("D")) return ChannelAuthentication.DIRECT;
+		return channel.startsWith("G") ? ChannelAuthentication.GROUP : ChannelAuthentication.CHANNEL;
 	}
 	/**
 	 * Bindings resolving to one app token share its connection, since Slack

@@ -2341,10 +2341,15 @@ comes from a principal, and the binding identifies which.
   `accepts` is `"anyone"`, and only if the operator lets anonymous callers
   invoke the operation that asks (`v/ops/agent/chat`, or the binding's
   operation). With public access off, they are not served.
-- **The channel** — the provider, the binding, the sender as the platform
-  reported them, and `access` (`allow` or `open`) — travels with the request,
-  and the agent's ingress writes it on the message as `via`. A `via` inside a
-  message is dropped, so an agent can rely on `via`.
+- **The authentication record** travels with the request: the binding, the
+  provider-scoped identity it authenticated, how delivery was verified, and
+  the channel in one shape for every provider — `sender {id, handle?, name?}`,
+  `chat {id, kind}`, `thread`, `space`, `message`, with provider extras under
+  the provider's name ([AUTH.md §5.3](AUTH.md#53-channel-methods-messaging-bindings)).
+  The agent records it beside the turn, never in the message, so nothing typed
+  can pose as it, and an LLM agent's context shows it as a `[From: …]` element
+  whenever who is talking changes. The message itself is the sender's text,
+  or `{text, attachments, content?}` when it carries media.
 - **The agent acts as itself**, under its own `config.caps`, whoever asked.
   The binding's work for it — storing a message's media, `mediaOperation`,
   `replyOperation` — runs as the agent when the binding's principal is the
@@ -2412,12 +2417,12 @@ Per bot:
   Telegram chat (or forum topic) is one `agent:chat` session, persisted at
   `:adapters/telegram/config/<bot>/sessions/<chatId>` so
   conversations survive restarts; `/new` starts a fresh one. The agent
-  receives each turn as `{text, via: {channel: "telegram", bot, access:
-  "allow" | "open", from, chat, message_id}}` — Telegram's authenticated
-  `from`/`chat` verbatim — so it knows who is on the other end without
-  trusting anything typed. The agent's ingress writes `via`, and the turn's
-  provenance names the principal the message comes from. The module ships an agent template for exactly this role,
-  `v/agents/templates/telegram` (phone-chat register, `via`, per-chat
+  receives each turn as the sender's text, from the principal the bot
+  authenticated, with the Telegram sender, chat and topic in the
+  authentication record ([Who a chat message comes from](#who-a-chat-message-comes-from)),
+  so it knows who is on the other end without trusting anything typed. The
+  module ships an agent template for exactly this role,
+  `v/agents/templates/telegram` (phone-chat register, the From element, per-chat
   sessions, memory pinned into context, telegram/venue/covia skills;
   provider composed at create time): `agent:create {agentId, config:
   ["v/agents/templates/telegram", {llmOperation, model}]}`. With
@@ -2464,7 +2469,8 @@ Per bot:
 - `greeting` — the `/start` reply (default names the agent and venue).
 - `mediaOperation` — optional, agent bots only. Runs once per downloaded
   attachment, as the bot's work for its agent. Input is the attachment descriptor plus
-  `caption` (empty when absent) and `via` (bot, sender, chat, topic/reply IDs).
+  `caption` (empty when absent) and `authentication`, the message's
+  authentication record (bot, sender, chat, topic and reply IDs).
   Return an object: `{}` leaves this attachment untouched; optional non-empty
   `text` supplies a transcription/extraction. The full non-empty result is
   retained under `attachment.result`, so application record IDs, language and
@@ -2473,7 +2479,7 @@ Per bot:
   select handling by `kind` or `mediaType`; a speech-only handler can return
   `{}` for photos and documents. Malformed results and processing failures
   fail the turn visibly rather than silently dropping the attachment.
-- `replyOperation` — optional, agent bots only. Takes `{response, via}` after
+- `replyOperation` — optional, agent bots only. Takes `{response, authentication}` after
   the agent completes and returns a non-empty string or `{text: "..."}`,
   optionally with `parse_mode`, which then wins over `parseMode`.
   This is the application's place to render structured responses or remove
@@ -2612,8 +2618,9 @@ uncertain sends still need reconciliation. Removing a runtime bot removes its
 receipts, but downloaded files remain in its owner's DLFS drive.
 Store durability follows the venue configuration (temporary venues remain
 ephemeral). Media albums retain `media_group_id` but each message is a separate
-turn; `/new` resets only the current topic. `via` also includes topic and reply
-message IDs when supplied by Telegram.
+turn; `/new` resets only the current topic. The authentication record carries
+the topic as its `thread`, and the reply-to and media-group IDs under
+`telegram`, when Telegram supplies them.
 
 ### Discord bots (covia-discord)
 
@@ -2652,9 +2659,9 @@ bot is expected to process guild text.
 
 Each bot has exactly one `agent` or `operation` handler. Agent conversations
 persist under `:adapters/discord/config/<bot>/sessions/<channelId>`
-and receive
-`{text, via: {channel: "discord", bot, access, from, chat, guild?,
-message_id}, attachments}`. Operation handlers receive a normalized Discord
+and receive the sender's text, or `{text, attachments}` when the message
+carries files; the authentication record holds the Discord sender, channel and
+server. Operation handlers receive a normalized Discord
 message record including attachment ids, filenames, URLs, sizes and types.
 Each inbound turn is a Job of the principal it comes from
 ([Who a chat message comes from](#who-a-chat-message-comes-from)). `allow`

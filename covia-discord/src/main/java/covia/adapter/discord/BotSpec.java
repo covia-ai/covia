@@ -14,6 +14,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.venue.Engine;
+import covia.adapter.messaging.ChannelAuthentication;
 import covia.adapter.messaging.MessagingBotSpec;
 
 /** Immutable and validated configuration for one Discord bot. */
@@ -49,6 +50,10 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 		if(id!=null && allowIds.contains(id)) return true;
 		return matches(username);
 	}
+	@Override public boolean lists(AMap<AString,ACell> sender){
+		return lists(str(sender.get(ChannelAuthentication.K_ID)),str(sender.get(ChannelAuthentication.K_HANDLE)));
+	}
+	private static String str(ACell value){return value instanceof AString s?s.toString():null;}
 	private boolean matches(String name){return name!=null&&allowNames.contains(name.toLowerCase(Locale.ROOT));}
 
 	static BotSpec parse(String name, ACell cell, boolean strict) {
