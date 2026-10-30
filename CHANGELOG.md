@@ -24,6 +24,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `AAdapter.stateSteps()`: an adapter's state migration as an ordered list of
   `MigrationStep`s; its state version is their number.
 - `ucan:issue` takes `prf`: the venue passes on part of a grant made to it (#636).
+- `Engine.connectVenue`: connects to another venue through the outbound guard.
 
 ### Changed
 
@@ -41,6 +42,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Connected accounts no longer appear in `secret:list` or a user export.
 - Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
 - Each venue migration step is a class, listed in order in `VenueMigrations.STEPS`.
+- `RemoteFetchException.malformedVenue` is `invalidVenue`, which also reports a
+  target the outbound guard refuses.
 
 ### Deprecated
 
@@ -67,6 +70,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Deleting an account revokes its connected accounts at their providers.
 - The `sql` skill says a registered database name always means the shared connection.
 - A `did:web` document is fetched only from a host the outbound guard allows.
+- Grid and remote-agent targets, orchestration steps' venues and `did:web` asset
+  publishers pass the outbound guard; a loopback or private venue needs its host in
+  `adapters.http.allowedHosts`.
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.

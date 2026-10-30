@@ -76,8 +76,8 @@ public class TwoVenueTestServer {
 		ENGINE_B.didVerifier().registerMethod("web",
 			fixedVerifier(DID_A, ENGINE_A.getAccountKey()));
 
-		// HTTPAdapter SSRF allowlist — needed only by http:get/http:post,
-		// not by grid:* federation (VenueHTTP makes its own requests).
+		// The outbound guard's allow list: federation to the other venue and
+		// http:get/http:post both dial it on localhost.
 		// Allow both forms because some libs canonicalise differently.
 		HTTPAdapter httpA = (HTTPAdapter) ENGINE_A.getAdapter("http");
 		HTTPAdapter httpB = (HTTPAdapter) ENGINE_B.getAdapter("http");

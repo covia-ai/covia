@@ -12,7 +12,6 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.grid.Grid;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
@@ -46,7 +45,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				principal = null;
 			}
 			case "caller" -> {
-				AString targetDID = Strings.create(targetVenueDID(venueSpec));
+				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec));
 				String credential = GridAdapter.identityCredential(ctx, tokens, ctx.getCallerDID(), targetDID);
 				if (credential == null) {
 					throw new AuthException("authenticateAs=caller requires an in-date, empty-att "
@@ -58,7 +57,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			}
 			case "venue" -> {
 				if (!engine.isDirectVenue(ctx)) throw new AuthException(VENUE_MODE_DENIED);
-				AString targetDID = Strings.create(targetVenueDID(venueSpec));
+				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec));
 				auth = VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
 					targetDID.toString());
 				saved = saved.assoc(Fields.VENUE, targetDID);
@@ -68,14 +67,17 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				"authenticateAs must be one of: anonymous, caller, venue");
 		}
 
-		Venue venue = Grid.connect(venueSpec.toString(), auth);
+		Venue venue = engine.connectVenue(venueSpec.toString(), auth);
 		List<String> grants = GridAdapter.admissibleGrants(ctx, tokens, principal);
 		venue.setUcans(grants);
 		if (grants != null) saved = saved.assoc(Fields.UCANS, convex.core.data.Vectors.create(grants.stream().map(Strings::create).toList()));
 		return new VenueConnection(venue, saved);
 	}
 
-	/** Rebuilds observation of a job {@link #connect} already authorised; grants nothing new. */
+	/**
+	 * Rebuilds observation of a job {@link #connect} already authorised; grants
+	 * nothing new. The target passes the outbound guard again, as it stands now.
+	 */
 	public static Venue restore(Engine engine, AString target, AMap<AString, ACell> saved) {
 		String mode = RT.ensureString(saved.get(AUTHENTICATE_AS)).toString();
 		VenueAuth auth = switch (mode) {
@@ -85,7 +87,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				RT.ensureString(saved.get(Fields.VENUE)).toString());
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};
-		Venue venue = Grid.connect(target.toString(), auth);
+		Venue venue = engine.connectVenue(target.toString(), auth);
 		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
 		if (grants != null) {
 			List<String> raw = new ArrayList<>();
@@ -95,10 +97,14 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		return venue;
 	}
 
-	/** Resolve the target identity once for audience-bound venue authentication. */
-	private static String targetVenueDID(AString venueSpec) {
+	/**
+	 * Resolve the target identity once for audience-bound venue authentication.
+	 * Discovery dials the target itself, so it passes the outbound guard first.
+	 */
+	private static String targetVenueDID(Engine engine, AString venueSpec) {
 		String target = venueSpec.toString();
 		if (target.startsWith("did:")) return target;
+		engine.requireSafeUrl(target);
 		return VenueDID.discover(target);
 	}
 

@@ -1294,9 +1294,13 @@ Currently defined:
   header always wins. Public APIs such as Wikipedia refuse anonymous clients.
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
   always refused by, the outbound (SSRF) guard. Every caller-chosen target
-  passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers and
-  `did:web` documents. Block wins over allow. Loopback, private and link-local
-  targets are refused unless their host is allowed here. A name is resolved
+  passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers,
+  `did:web` documents, and other venues — grid and remote-agent targets,
+  orchestration steps' venues and the publishers of `did:web` asset
+  references, whether named by URL or DID. Block wins over allow. Loopback,
+  private and link-local targets are refused unless their host is allowed
+  here, so federating with a venue on the same machine or a private network
+  needs its host listed. A name is resolved
   when it is checked and again when it is dialled, so a name whose answer
   changes in between is not caught. The guard belongs to the `http` adapter:
   with it disabled, every such target is refused. Both lists are published at

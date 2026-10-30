@@ -90,6 +90,7 @@ import covia.grid.Asset;
 import covia.grid.Grid;
 import covia.grid.Operation;
 import covia.grid.Venue;
+import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
@@ -2119,8 +2120,8 @@ public class Engine {
 	 * remote {@code did:web} reference, the publisher is reachable but has no
 	 * such asset / does not bind the name). It <b>throws</b>
 	 * {@link covia.exception.RemoteFetchException} when a remote fetch fails
-	 * <em>operationally</em> (venue unreachable, remote error, malformed venue
-	 * reference, or metadata that fails the content-addressing check) — a down
+	 * <em>operationally</em> (venue unreachable, remote error, malformed or refused
+	 * venue reference, or metadata that fails the content-addressing check) — a down
 	 * venue is not the same as a missing operation. Callers on a single-ref
 	 * path let it propagate (invoke → HTTP 502, job-aware adapter → job failure);
 	 * aggregate callers that resolve many refs (tool/context assembly) catch it
@@ -2363,8 +2364,8 @@ public class Engine {
 	 * @return Verified Asset with metadata, or null if the asset is genuinely
 	 *         absent (the venue is reachable but holds no such asset)
 	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
-	 *         returns an error, the connection string is malformed, or the
-	 *         returned metadata fails the content-addressing check (#174)
+	 *         returns an error, the connection string is malformed or refused,
+	 *         or the returned metadata fails the content-addressing check (#174)
 	 */
 	/**
 	 * Fetched remote definitions, keyed by content hash. Definitions are
@@ -2389,6 +2390,15 @@ public class Engine {
 		definitionCache.put(fetched.getID(), fetched.getMetadata());
 	}
 
+	/** The publisher a remote fetch dials, anonymously and through {@link #connectVenue}. */
+	private Venue publisherVenue(String venueConn) {
+		try {
+			return connectVenue(venueConn, VenueAuth.none());
+		} catch (IllegalArgumentException e) {
+			throw RemoteFetchException.invalidVenue(venueConn, e);
+		}
+	}
+
 	public Asset fetchRemoteAsset(String venueConn, Hash id) {
 		// Cache first: the hash IS the identity, so for a definition we
 		// already hold the connection string is irrelevant — a venue in a
@@ -2396,12 +2406,7 @@ public class Engine {
 		Asset cached = cachedDefinition(id);
 		if (cached != null) return cached;
 
-		Venue remote;
-		try {
-			remote = Grid.connect(venueConn);
-		} catch (IllegalArgumentException e) {
-			throw RemoteFetchException.malformedVenue(venueConn, e);
-		}
+		Venue remote = publisherVenue(venueConn);
 		Asset fetched = fetchRemoteAsset(remote, id);   // throws on unreachable/integrity; null on a genuine 404
 		cacheDefinition(fetched);
 		return fetched;
@@ -2424,15 +2429,10 @@ public class Engine {
 	 * @return Verified Asset with metadata, or null if the venue is reachable
 	 *         but does not bind the name (a genuine absence)
 	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
-	 *         returns an error, or the connection string is malformed (#174)
+	 *         returns an error, or the connection string is malformed or refused (#174)
 	 */
 	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
-		Venue remote;
-		try {
-			remote = Grid.connect(venueConn);
-		} catch (IllegalArgumentException e) {
-			throw RemoteFetchException.malformedVenue(venueConn, e);
-		}
+		Venue remote = publisherVenue(venueConn);
 		// Resolve the name to an id AT THE PUBLISHER. An operational failure here
 		// (venue down / error) is a real error naming the venue — NOT "operation
 		// not found". A reachable venue that simply does not bind the name
@@ -2460,7 +2460,7 @@ public class Engine {
 	 * absent, or the metadata declares no content. When the metadata declares
 	 * a sha256, the fetched bytes are verified against it — substituted content
 	 * throws rather than being adopted. Operational failures (venue unreachable,
-	 * error, malformed reference) also throw (#174).
+	 * error, malformed or refused reference) also throw (#174).
 	 *
 	 * @param ref Remote DID URL reference (hash or named form)
 	 * @return Content blob, or null if there is genuinely none to fetch
@@ -2470,12 +2470,7 @@ public class Engine {
 	public ACell fetchRemoteContent(AString ref) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null || !"web".equals(r.method())) return null;   // not a fetchable remote ref
-		Venue remote;
-		try {
-			remote = Grid.connect(r.didString());
-		} catch (IllegalArgumentException e) {
-			throw RemoteFetchException.malformedVenue(r.didString(), e);
-		}
+		Venue remote = publisherVenue(r.didString());
 		try {
 			Hash id = (r.hash() != null) ? r.hash() : remote.getOperationId(r.name());
 			if (id == null) return null;   // genuine absence: name not bound
@@ -4188,10 +4183,10 @@ public class Engine {
 
 	/**
 	 * Outbound-target policy for every caller-chosen URL the venue dials (an MCP
-	 * server, an A2A peer, a model endpoint, a did:web document): the http
-	 * adapter's SSRF guard with the operator's allow and block lists, so nothing
-	 * can reach what a direct HTTP call could not (#234). Fails closed when the
-	 * http adapter is absent.
+	 * server, an A2A peer, a model endpoint, a did:web document, another venue
+	 * through {@link #connectVenue}): the http adapter's SSRF guard with the
+	 * operator's allow and block lists, so nothing can reach what a direct HTTP
+	 * call could not (#234). Fails closed when the http adapter is absent.
 	 *
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
@@ -4211,6 +4206,31 @@ public class Engine {
 	 */
 	public void requireSafeHost(String host) {
 		ssrfGuard().requireSafeHost(host);
+	}
+
+	/** Opening of the refusal for a venue reached by a transport the outbound guard cannot check. */
+	public static final String UNGUARDED_VENUE_TRANSPORT = "Venue transport cannot be checked by the outbound guard: ";
+
+	/**
+	 * Connects to a venue this venue dials on a caller's behalf — a grid or
+	 * remote-agent target, an orchestration step's venue, the publisher of a
+	 * remote asset reference. Whatever spelled the target (a URL or a DID), the
+	 * address the connection will dial passes {@link #requireSafeUrl} before any
+	 * request is made; a transport other than HTTP is refused.
+	 *
+	 * @param spec Venue URL or DID
+	 * @param auth Authentication the connection presents
+	 * @return The connected venue, not yet contacted
+	 * @throws IllegalArgumentException when the spec is malformed or its address is refused
+	 * @throws IllegalStateException when the http adapter is not registered
+	 */
+	public Venue connectVenue(String spec, VenueAuth auth) {
+		Venue venue = Grid.connect(spec, auth);
+		if (!(venue instanceof VenueHTTP http)) {
+			throw new IllegalArgumentException(UNGUARDED_VENUE_TRANSPORT + spec);
+		}
+		requireSafeUrl(http.getBaseURI().toString());
+		return venue;
 	}
 
 	private HTTPAdapter ssrfGuard() {

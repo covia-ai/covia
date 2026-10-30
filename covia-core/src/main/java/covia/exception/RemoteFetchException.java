@@ -3,7 +3,7 @@ package covia.exception;
 /**
  * Signals that fetching an asset definition or content from a remote venue
  * failed for an <em>operational</em> reason — the venue was unreachable, it
- * returned an error, the reference was malformed, or the returned metadata
+ * returned an error, the reference was malformed or refused, or the returned metadata
  * failed the content-addressing integrity check.
  *
  * <p>This is deliberately distinct from a genuine <em>absence</em> (the remote
@@ -45,10 +45,11 @@ public class RemoteFetchException extends CoviaException {
 			venue, String.valueOf(ref), cause);
 	}
 
-	/** The venue connection string / reference could not be parsed. */
-	public static RemoteFetchException malformedVenue(String venue, Throwable cause) {
+	/** The venue connection string / reference could not be parsed, or names
+	 *  a target the fetching venue's outbound guard refuses. */
+	public static RemoteFetchException invalidVenue(String venue, Throwable cause) {
 		return new RemoteFetchException(
-			"Malformed venue reference '" + venue + "': " + causeMessage(cause),
+			"Invalid venue reference '" + venue + "': " + causeMessage(cause),
 			venue, null, cause);
 	}
 

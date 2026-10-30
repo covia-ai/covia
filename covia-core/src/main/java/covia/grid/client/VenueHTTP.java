@@ -168,10 +168,11 @@ public class VenueHTTP extends Venue {
 	}
 	
 	/**
-	 * Gets the base URI for API requests
+	 * Gets the base URI for API requests. Every request this client makes
+	 * resolves against it, so its host is the only one the client dials.
 	 * @return The base URI
 	 */
-	protected URI getBaseURI() {
+	public URI getBaseURI() {
 		return baseURI;
 	}
 

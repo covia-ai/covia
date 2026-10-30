@@ -769,6 +769,7 @@ public class OrchestratorTest {
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, CVMBool.TRUE,
 				Config.CAPS, Strings.create("unrestricted")))));
+		Engine local = loopbackFederatingEngine();
 		try {
 			// Give the remote echo binding a schema that deliberately differs from
 			// the local venue's echo metadata. The remote still returns its input;
@@ -784,7 +785,7 @@ public class OrchestratorTest {
 					Fields.VALUE, remoteEcho),
 				remote.getEngine().venueContext()).awaitResult(5000);
 
-			String hash = storeJsonOrchestration("""
+			String hash = storeJsonOrchestration(local, """
 				{
 					"name": "Strict remote schema",
 					"operation": {
@@ -800,7 +801,7 @@ public class OrchestratorTest {
 				}
 			""".formatted(remote.port()));
 
-			Job job = engine.jobs().invokeOperation(hash,
+			Job job = local.jobs().invokeOperation(hash,
 				Maps.empty(), RequestContext.of(ALICE_DID));
 			assertThrows(RuntimeException.class, () -> job.awaitResult(10000));
 			assertEquals(Status.FAILED, job.getStatus());
@@ -808,6 +809,7 @@ public class OrchestratorTest {
 				job.getErrorMessage());
 		} finally {
 			remote.close();
+			local.close();
 		}
 	}
 
@@ -822,9 +824,10 @@ public class OrchestratorTest {
 				Config.CAPS, Vectors.of(
 					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke")),
 					Capability.create(Strings.create("j"), Capability.CRUD_READ))))));
+		Engine local = loopbackFederatingEngine();
 		try {
 			String remoteUrl = "http://127.0.0.1:" + remote.port();
-			String nonStrict = storeJsonOrchestration("""
+			String nonStrict = storeJsonOrchestration(local, """
 				{
 					"name": "Remote invoke without metadata read",
 					"operation": {
@@ -838,14 +841,14 @@ public class OrchestratorTest {
 					}
 				}
 			""".formatted(remoteUrl));
-			ACell result = engine.jobs().invokeOperation(nonStrict,
+			ACell result = local.jobs().invokeOperation(nonStrict,
 				Maps.empty(), RequestContext.of(ALICE_DID)).awaitResult(10000);
 			assertEquals(CVMBool.TRUE, RT.getIn(result, "allowed"),
 				"invoke authority alone is sufficient when strict validation is off");
 
 			long jobsBefore = RT.ensureLong(
 				RT.getIn(remote.getEngine().getStats(), "jobs")).longValue();
-			String strict = storeJsonOrchestration("""
+			String strict = storeJsonOrchestration(local, """
 				{
 					"name": "Strict remote metadata read",
 					"operation": {
@@ -861,7 +864,7 @@ public class OrchestratorTest {
 				}
 			""".formatted(remoteUrl));
 
-			Job job = engine.jobs().invokeOperation(strict,
+			Job job = local.jobs().invokeOperation(strict,
 				Maps.empty(), RequestContext.of(ALICE_DID));
 			assertThrows(RuntimeException.class, () -> job.awaitResult(10000));
 			assertTrue(job.getErrorMessage().contains("requires readable operation metadata"),
@@ -871,7 +874,20 @@ public class OrchestratorTest {
 				"strict metadata resolution must fail before a remote child job is submitted");
 		} finally {
 			remote.close();
+			local.close();
 		}
+	}
+
+	/**
+	 * An engine whose operator allows loopback targets, for steps naming a venue
+	 * on this machine; the shared engine keeps the outbound guard's default.
+	 */
+	private static Engine loopbackFederatingEngine() {
+		Engine local = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1")))));
+		Engine.addDemoAssets(local);
+		return local;
 	}
 
 	@Test

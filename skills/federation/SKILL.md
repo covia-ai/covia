@@ -25,13 +25,23 @@ This demo requires a second venue. Options:
 **Option A — Two local venues on different ports:**
 ```bash
 # Terminal 1: local venue on default port
-java -jar venue/target/covia.jar
+java -jar venue/target/covia.jar local-venue-config.json
 
 # Terminal 2: second venue on port 8081
 java -jar venue/target/covia.jar second-venue-config.json
 ```
 
-Where `second-venue-config.json` contains:
+Where `local-venue-config.json` lets the local venue dial a venue on this
+machine (the outbound guard refuses loopback targets unless their host is
+allowed):
+```json
+{
+  "venues": [{ "name": "Local Venue", "port": 8080, "mcp": { "enabled": true },
+    "adapters": { "http": { "allowedHosts": ["localhost"] } } }]
+}
+```
+
+and `second-venue-config.json` contains:
 ```json
 {
   "venues": [{ "name": "Remote Venue", "port": 8081, "mcp": { "enabled": true } }]

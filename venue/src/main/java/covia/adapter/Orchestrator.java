@@ -26,10 +26,10 @@ import convex.core.util.Utils;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
-import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
+import covia.grid.auth.VenueAuth;
 import covia.venue.RequestContext;
 
 public class Orchestrator extends AAdapter {
@@ -690,7 +690,7 @@ public class Orchestrator extends AAdapter {
 			private Venue targetVenue() {
 				AString venueSpec=RT.ensureString(step.get(Fields.VENUE));
 				if (venueSpec == null) return null;
-				if (remoteVenue == null) remoteVenue=Grid.connect(venueSpec.toString());
+				if (remoteVenue == null) remoteVenue=engine.connectVenue(venueSpec.toString(), VenueAuth.none());
 				return remoteVenue;
 			}
 
