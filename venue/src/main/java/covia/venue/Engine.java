@@ -2390,11 +2390,14 @@ public class Engine {
 		definitionCache.put(fetched.getID(), fetched.getMetadata());
 	}
 
-	/** The publisher a remote fetch dials, anonymously and through {@link #connectVenue}. */
+	/**
+	 * The publisher a remote fetch dials, anonymously and through {@link #connectVenue}.
+	 * Without the http adapter every target is refused, as a fetch failure like any other.
+	 */
 	private Venue publisherVenue(String venueConn) {
 		try {
 			return connectVenue(venueConn, VenueAuth.none());
-		} catch (IllegalArgumentException e) {
+		} catch (IllegalArgumentException | IllegalStateException e) {
 			throw RemoteFetchException.invalidVenue(venueConn, e);
 		}
 	}

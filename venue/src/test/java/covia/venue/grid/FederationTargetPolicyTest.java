@@ -18,11 +18,13 @@ import com.sun.net.httpserver.HttpServer;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.HTTPAdapter;
 import covia.api.Fields;
+import covia.exception.RemoteFetchException;
 import covia.grid.Job;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -118,6 +120,17 @@ public class FederationTargetPolicyTest {
 		try (Peer peer = new Peer()) {
 			String ref = "did:web:127.0.0.1%3A" + peer.port() + "/a/" + "0123456789abcdef".repeat(4);
 			assertRefused(peer, HTTPAdapter.PRIVATE_ADDRESS, ENGINE, ref, Maps.empty());
+		}
+	}
+
+	@Test
+	void withoutTheGuardNoPublisherIsDialled() {
+		Engine bare = Engine.createTemp(null);   // no adapters, so no http adapter to guard with
+		try {
+			assertThrows(RemoteFetchException.class, () -> bare.fetchRemoteAsset("did:web:venue.example.com",
+				Hash.parse("0123456789abcdef".repeat(4))));
+		} finally {
+			bare.close();
 		}
 	}
 
