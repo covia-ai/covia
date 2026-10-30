@@ -2453,9 +2453,7 @@ public class AgentAdapterTest {
 		assertEquals(assistantTurn.get(AgentState.K_TURN_TS), meta.get(Fields.UPDATED),
 			"meta.updated must ratchet to the newest persisted turn timestamp");
 
-		// #84 opt-in off by default: no per-turn caller attribution.
-		assertNull(userTurn.get(Fields.CALLER),
-			"recordCaller off (default) → user turns carry no caller");
+		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER), "the user turn keeps its caller");
 	}
 
 	@Test
@@ -2491,16 +2489,15 @@ public class AgentAdapterTest {
 		assertEquals(CVMLong.create(4), RT.getIn(session, "meta", "turns"));
 	}
 
-	/** #84: with config.recordCaller, user turns record the sender's DID. */
+	/** Every user turn in history keeps its caller; the agent's own turns carry none. */
 	@Test
 	@SuppressWarnings("unchecked")
-	public void testRecordCallerStampsUserTurns() {
+	public void testHistoryUserTurnsKeepTheirCaller() {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "caller-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
-					Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
-					Strings.create("recordCaller"), CVMBool.TRUE)),
+					Strings.create("llmOperation"), Strings.create("v/test/ops/llm"))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job chatJob = engine.jobs().invokeOperation("v/ops/agent/chat",
@@ -2514,8 +2511,7 @@ public class AgentAdapterTest {
 		AVector<ACell> history = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 
 		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) history.get(0);
-		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER),
-			"user turn records the sender DID when recordCaller is on");
+		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER), "the user turn keeps its caller");
 		// Assistant turns are the agent's own output — never caller-stamped.
 		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(1);
 		assertNull(assistantTurn.get(Fields.CALLER),

@@ -353,9 +353,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// presented input before the first inference, exactly as GoalTree does.
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input, messages,
 			GoalTreeContext.describeTransitionInput(messages, tasks, pending),
-			convex.core.util.Utils.getCurrentTimestamp(),
-			convex.core.data.prim.CVMBool.TRUE.equals(
-				RT.getIn(recordConfig, Strings.intern("recordCaller"))), log);
+			convex.core.util.Utils.getCurrentTimestamp(), log);
 		if (opened.failed()) {
 			CycleRecord.Result cycle = CycleRecord.end();
 			AMap<AString, ACell> failed = Maps.of(

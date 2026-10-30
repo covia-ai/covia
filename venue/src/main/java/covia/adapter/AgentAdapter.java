@@ -4262,13 +4262,7 @@ public class AgentAdapter extends AAdapter {
 		// transition adapter. Frame ownership is explicit; adapterFrames remains
 		// the legacy output path for non-owning custom adapters.
 		// Order: inbox messages → picked task input → assistant response.
-		//
-		// Per-turn caller attribution (#84): opt-in via config.recordCaller.
-		// Off by default (single-party sessions: caller == owner, redundant);
-		// on for multi-party sessions (e.g. A2A-exposed agents) where you need
-		// who-sent-which, not just meta.parties' who's-present.
-		boolean recordCaller = CVMBool.TRUE.equals(
-			RT.getIn(agent.getConfig(), Strings.intern("recordCaller")));
+		// Every user turn keeps the caller its envelope or task recorded.
 		AVector<ACell> turnsToAppend = Vectors.empty();
 		if (pickedSessionBlob != null && leanError == null && adapterFrames == null && !framesOwned) {
 			if (filteredInbox != null) {
@@ -4286,7 +4280,7 @@ public class AgentAdapter extends AAdapter {
 						ACell envJobId = RT.getIn(envelope, Fields.JOB_ID);
 						if (envJobId != null) turn = turn.assoc(Fields.JOB_ID, envJobId);
 						turnsToAppend = turnsToAppend.conj(
-							withCaller(turn, recordCaller, RT.getIn(envelope, Fields.CALLER)));
+							withCaller(turn, RT.getIn(envelope, Fields.CALLER)));
 					}
 				}
 			}
@@ -4304,7 +4298,7 @@ public class AgentAdapter extends AAdapter {
 				}
 				ACell taskCaller = (pickedTask != null && pickedTask.getValue() instanceof AMap)
 					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.CALLER) : null;
-				turnsToAppend = turnsToAppend.conj(withCaller(turn, recordCaller, taskCaller));
+				turnsToAppend = turnsToAppend.conj(withCaller(turn, taskCaller));
 			}
 			if (transitionTurns != null) {
 				for (long i = 0; i < transitionTurns.count(); i++) {
@@ -4505,14 +4499,9 @@ public class AgentAdapter extends AAdapter {
 		return llmFailure && timeout;
 	}
 
-	/**
-	 * Stamps a user turn with its sender's DID (#84) when {@code recordCaller}
-	 * is on and a caller is known. Off by default and a no-op when the caller
-	 * is absent, so single-party sessions carry no redundant per-turn DID.
-	 */
-	private static AMap<AString, ACell> withCaller(AMap<AString, ACell> turn,
-			boolean recordCaller, ACell caller) {
-		if (!recordCaller || caller == null) return turn;
+	/** Stamps a user turn with its caller, when its envelope or task recorded one. */
+	private static AMap<AString, ACell> withCaller(AMap<AString, ACell> turn, ACell caller) {
+		if (caller == null) return turn;
 		return turn.assoc(Fields.CALLER, caller);
 	}
 

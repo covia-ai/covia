@@ -46,7 +46,7 @@ interface FrameStore {
 	 */
 	static Opened open(Engine engine, RequestContext ctx, AString agentId,
 			ACell input, AVector<ACell> messages, String rootDescription,
-			long cycleTs, boolean recordCaller, Logger log) {
+			long cycleTs, Logger log) {
 		Blob sid = ctx.getSessionId();
 		AgentState agent = resolveAgentState(engine, ctx, agentId);
 		if (sid != null && agent != null && agent.getSession(sid) != null) {
@@ -81,7 +81,7 @@ interface FrameStore {
 				}
 			}
 
-			AVector<ACell> turns = cycleInputTurns(messages, input, cycleTs, recordCaller);
+			AVector<ACell> turns = cycleInputTurns(messages, input, cycleTs);
 			long drainCount = (messages != null) ? messages.count() : 0;
 			if (!agent.session(sid).presentCycleInput(epoch, turns, drainCount)) {
 				return failed("Session cycle was superseded before input presentation: " + sid);
@@ -96,7 +96,7 @@ interface FrameStore {
 		frames = GoalTreeContext.migrateFrames(frames);
 		frames = GoalTreeContext.withRootLoads(frames,
 			ContextChain.sessionRootLoads(RT.getIn(input, Fields.SESSION)));
-		frames = appendCycleInputTurns(frames, messages, input, cycleTs, recordCaller);
+		frames = appendCycleInputTurns(frames, messages, input, cycleTs);
 		return new Opened(new LocalFrameStore(frames), false, null);
 	}
 
@@ -111,30 +111,24 @@ interface FrameStore {
 	}
 
 	/** Appends the presented chat/request turns to the root conversation. */
+	@SuppressWarnings("unchecked")
 	static AVector<ACell> appendCycleInputTurns(AVector<ACell> frames,
 			AVector<ACell> messages, ACell input, long ts) {
-		return appendCycleInputTurns(frames, messages, input, ts, false);
-	}
-
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> appendCycleInputTurns(AVector<ACell> frames,
-			AVector<ACell> messages, ACell input, long ts, boolean recordCaller) {
 		if (frames == null || frames.isEmpty()) return frames;
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> turns = cycleInputTurns(messages, input, ts, recordCaller);
+		AVector<ACell> turns = cycleInputTurns(messages, input, ts);
 		for (long i = 0; i < turns.count(); i++) {
 			root = GoalTreeContext.appendTurn(root, turns.get(i));
 		}
 		return frames.assoc(0, root);
 	}
 
-	/** Builds the durable user turns presented at the start of a cycle. */
+	/**
+	 * Builds the durable user turns presented at the start of a cycle. Each
+	 * keeps the caller its envelope or task recorded: who asked, as the venue
+	 * authenticated them.
+	 */
 	static AVector<ACell> cycleInputTurns(AVector<ACell> messages, ACell input, long ts) {
-		return cycleInputTurns(messages, input, ts, false);
-	}
-
-	private static AVector<ACell> cycleInputTurns(
-			AVector<ACell> messages, ACell input, long ts, boolean recordCaller) {
 		AVector<ACell> turns = Vectors.empty();
 		CVMLong tsCell = CVMLong.create(ts);
 		for (long i = 0; messages != null && i < messages.count(); i++) {
@@ -151,7 +145,7 @@ interface FrameStore {
 			ACell jobId = RT.getIn(envelope, Fields.JOB_ID);
 			if (jobId != null) turn = turn.assoc(Fields.JOB_ID, jobId);
 			ACell caller = RT.getIn(envelope, Fields.CALLER);
-			if (recordCaller && caller != null) turn = turn.assoc(Fields.CALLER, caller);
+			if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
 			turns = turns.conj(turn);
 		}
 
@@ -165,7 +159,7 @@ interface FrameStore {
 			ACell jobId = RT.getIn(input, Fields.JOB_ID);
 			if (jobId != null) turn = turn.assoc(Fields.JOB_ID, jobId);
 			ACell caller = RT.getIn(input, Fields.TASKS, CVMLong.ZERO, Fields.CALLER);
-			if (recordCaller && caller != null) turn = turn.assoc(Fields.CALLER, caller);
+			if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
 			turns = turns.conj(turn);
 		}
 		return turns;

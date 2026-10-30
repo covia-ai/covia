@@ -34,6 +34,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   read unless the venue sends a length.
 - A `claudecode:session` opened without a prompt takes no pool slot until its first turn.
 - Connected accounts no longer appear in `secret:list` or a user export.
+- Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
 
 ### Security
 

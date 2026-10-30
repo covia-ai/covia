@@ -13,7 +13,6 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
@@ -572,8 +571,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		long cycleTs = convex.core.util.Utils.getCurrentTimestamp();
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input,
-			messages, rootDescription, cycleTs,
-			CVMBool.TRUE.equals(RT.getIn(recordConfig, Strings.intern("recordCaller"))), log);
+			messages, rootDescription, cycleTs, log);
 		if (opened.failed()) {
 			return Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error());
 		}
