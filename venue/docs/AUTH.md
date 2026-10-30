@@ -69,7 +69,7 @@ The implementation is further along than #297/#296 suggest:
 config; a common method result (identity, evidence and typed method details);
 an optional central session service with revocation; provider
 account-linking/migration rules; route-class assurance enforcement. Basic
-issuer/subject binding is now implemented (�2.3).
+issuer/subject binding is now implemented (§2.3).
 
 ### 2.1 Consolidation review (2026-10-22)
 
@@ -142,7 +142,7 @@ fix. Reusable explicit-clock/skew `exp`/`nbf` validation is requested in
 [Convex #766](https://github.com/Convex-Dev/convex/issues/766), to replace existing
 local duplication rather than grow a new validator. External provider/browser
 login was still incomplete at that audit; the subsequent hardening is recorded
-in �2.3. Managed-session revocation and evidence-policy integration remain
+in §2.3. Managed-session revocation and evidence-policy integration remain
 unimplemented.
 
 ### 2.3 External login consolidation (#298, 2026-10-22)
@@ -287,7 +287,7 @@ earlier evidence, even when rebinding the same identity.
 
 The compatibility identity fields remain `AString`. Method-owned immutable
 `AMap<AString, ACell>` payloads carry provenance; the core declares no built-in
-method ids, protocol fields or Java payload subclasses. After �2.3, provider
+method ids, protocol fields or Java payload subclasses. After §2.3, provider
 `iss` and `sub` are verified and must match an existing issuer/subject account
 binding; email is never a lookup key.
 
@@ -632,6 +632,7 @@ remain separate from both login and the venue's authorization-server grants.
 | `email` | Magic link / OTP | Verified address on the user record | Address control; no MFA or phishing resistance inferred | Optional continuity | #299 |
 | `webauthn` | Passkey assertion | Registered credential id | Derived from verified flags and attestation; hardware never presumed | Optional continuity | #300 |
 | `password` | Password (+ recovery) | Stored verifier | Password verification; no MFA inferred | Optional continuity | #301 |
+| adapter name (`telegram`, `slack`, `whatsapp`, `discord`) | Provider-delivered message (`signed-callback`, `provider-session`) | Binding identification (§5.3) | The provider's sender identity; no human authentication time | No — per message | — |
 
 Named-user and `did:key` self-issued login share the `key` method
 deliberately: same credential class, same signature verification, same
@@ -747,6 +748,111 @@ integer from 1 to 3600. Refresh by invoking again with `overwrite:true` before
 expiry; there is no automatic refresh. The receiver still applies its own
 audience, lifetime and admission policies. The token conveys identity only:
 it contains no UCAN grants or proofs and adds no permissions.
+
+### 5.3 Channel methods (messaging bindings)
+
+A messaging binding — a Telegram or Discord bot, a Slack app installation, a
+WhatsApp number — is the authentication method for the messages it receives
+(COG-3 §7). The provider authenticates the sender; the binding verifies
+delivery, identifies the principal and produces an `AuthResult` like any other
+method. The request then runs as that principal, exactly as an HTTP request runs
+as its credential's user.
+
+**The result.**
+
+| Field | Value |
+|-------|-------|
+| `userDID` | The identified principal: the binding's principal for a listed sender, the venue public principal for any other sender on an open binding |
+| `authenticatedIdentity` | `<method>:<sender id>`, the id qualified as `<space>/<id>` where the provider scopes sender ids to a space (Slack: `slack:T0123/U0456`) |
+| `credential.type` | `signed-callback` (WhatsApp, the Slack Events API) or `provider-session` (Telegram polling, the Discord gateway, Slack Socket Mode) |
+| `authentication.method` | The adapter's name |
+| `authentication.binding` | The binding's resource, `<ownerDID>/<adapter>/<bot>` |
+| `authentication.authenticatedAt` | Absent: a message's time is when it was sent, not when its sender authenticated (§3) |
+| `authentication.properties` | Empty |
+| `authentication.details` | The channel (COG-3 §7): `sender {id, handle?, name?}`, `chat {id, kind, name?}`, `thread?`, `space {id, name?}?`, `message?`, and provider extras under the adapter's name |
+| `proof`, `sessionId` | Absent |
+
+An open binding's other senders authenticate as the venue public principal. The
+identity invariant (§1.1) holds for that principal, a stable DID, while
+`authenticatedIdentity` keeps each sender distinct. Identification grants
+nothing: capabilities and agent admission decide what the principal may do.
+
+**Identification is shared.** `ChannelAuthentication.authenticate(binding,
+channel)` in `covia.adapter.messaging` builds the result for every messaging
+adapter, and returns a refusal reason when the sender is not admitted or the
+venue serves no anonymous callers. Each adapter does only what is
+provider-specific:
+
+1. verify delivery — the callback signature and replay window, or its own
+   authenticated connection — and that the message is for this binding's
+   account;
+2. build the `Channel` value (method, credential type and the standard details)
+   from the verified payload, ids as strings, never from message text;
+3. answer whether its binding lists the sender (`lists`), by the provider's
+   stable id or, where the provider restricts and reassigns handles, by handle.
+
+The binding supplies its principal (the owner, or the agent that created it)
+and whether it is open. Restricting where a binding serves, such as Slack's
+`allowChannels`, is the adapter's admission of a chat, not identification.
+
+**The request context.** `Engine.channelContext(AuthResult)` is
+`principalContext(userDID)` with the result's data projection attached by
+`RequestContext.withAuthentication`. Only that seam sets it; an HTTP request's
+result stays on its HTTP context. The projection is attribution, not evidence: assurance policy
+never reads it from a context (§3.1), and contexts the venue starts for an
+agent's own work (`ofAgent`, `principalContext`, the scheduler's replay) carry
+none, so nothing is inherited through jobs or agent delegation. A bot's own work
+for its agent — storing media, its media and reply operations — runs in such a
+context.
+
+**Recorded with the turn.** The agent's ingress (`agent:chat`, `agent:message`,
+`agent:request`) writes the request's `caller` and its `authentication` — the
+projection without `userDID`, which is the caller — onto the session envelope
+and the task record, from the request context only. Message content is never
+read for or rewritten with provenance. Both runtimes (the adapter's cycle merge
+and `FrameStore.cycleInputTurns`) copy both fields onto each user turn, and the
+task wire shape carries them, so a turn keeps its provenance for as long as
+history keeps the turn (COG-20 §4).
+
+**Rendered from the record.** `ContextAssembler` renders a `From` label element
+(`Labels.Kind.FROM`, AGENT_CONTEXT.md §1.2) in the agent's dialect:
+
+| Dialect | Owner over the API | Open-bot sender |
+|---------|-------------------|-----------------|
+| `bracket` | `[From: owner did:key:z6MkAlice]` | `[From: anonymous did:web:venue.example:public — telegram helper: sender 5551 @sam, direct chat 5551]` |
+| `xml` | `<from principal="did:key:z6MkAlice" relationship="owner"/>` | `<from principal="…:public" relationship="anonymous" method="telegram" binding="helper" sender="5551" handle="sam" chat="5551" chat-kind="direct"/>` |
+
+- **When.** Before a user turn whose key — caller, method, binding,
+  authenticated identity, chat id, thread, space id — differs from the last key
+  rendered, starting from the agent's own principal. Per-message fields
+  (`message`, adapter extras) are never part of the key. A user turn without a
+  recorded caller renders no element and leaves the key unchanged.
+- **What.** The relationship is computed from DIDs alone: the agent's own DID,
+  its owner's and the venue's. No venue state is consulted, so registering or
+  deleting a user never changes an earlier element. The channel part shows the
+  method, the binding's name, ids, the chat kind, a thread and a space id.
+  `name` fields are never rendered (COG-3 §7). Ids and handles render only when
+  they match a conservative identifier pattern; xml values are escaped.
+- **Cache.** The element is a pure function of the stored turns and the three
+  DIDs, and history is append-only within a frame, so each cycle's rendered
+  conversation extends the previous cycle's unchanged. Changing the element's
+  format rebuilds every session's prefix once.
+- **Tasks.** The outstanding-task message renders its requester through the same
+  element.
+
+**Released wires.** A relay binding identifies no principal; it forwards
+messages to the principals linked to it, and its wire projects the details onto
+its released fields (`channel` = method, `from` = `sender.id`, `chat` =
+`chat.id`, `thread`). A media hook (`mediaOperation`) receives the record as
+`authentication`.
+
+**Tests.** A forged record in message content stays content; listed, open,
+closed and public-access-off senders identify as specified for every adapter;
+envelope, task record and history turns keep `caller` and `authentication` in
+both runtimes; rendering a session twice, with a turn added in between, leaves
+the earlier output unchanged, also across a user's registration; `name` fields
+and malformed handles never render; the relay wire is unchanged; an agent's own
+contexts carry no `authentication`.
 
 ## 6. Configuration
 
