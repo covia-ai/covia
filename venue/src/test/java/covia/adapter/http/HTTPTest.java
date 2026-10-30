@@ -7,11 +7,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.OutputStream;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
+import java.net.spi.InetAddressResolver;
+import java.net.spi.InetAddressResolver.LookupPolicy;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
@@ -32,6 +43,7 @@ import covia.venue.TestOps;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
+import covia.adapter.GuardedResolver;
 import covia.adapter.HTTPAdapter;
 import covia.test.IntegrationTest;
 
@@ -416,6 +428,98 @@ public class HTTPTest {
 				"url", "http://this-host-definitely-does-not-exist-xyz123.invalid/path"
 			)).join();
 		}, "Unresolvable hosts should be rejected");
+	}
+
+	// A host that passes the guard is held: every later lookup of it, by any
+	// client, may answer only addresses the guard would pass.
+
+	private static final LookupPolicy ANY_FAMILY = LookupPolicy.of(LookupPolicy.IPV4 | LookupPolicy.IPV6);
+
+	/** An upstream resolver answering successive lookups with successive addresses, as a changing DNS record would. */
+	private static InetAddressResolver answering(String... addresses) {
+		Deque<String> next = new ArrayDeque<>(List.of(addresses));
+		return new InetAddressResolver() {
+			@Override public Stream<InetAddress> lookupByName(String host, LookupPolicy policy) throws UnknownHostException {
+				String literal = next.poll();
+				if (literal == null) throw new UnknownHostException(host);
+				return Stream.of(InetAddress.getByAddress(host, InetAddress.getByName(literal).getAddress()));
+			}
+			@Override public String lookupByAddress(byte[] addr) throws UnknownHostException {
+				throw new UnknownHostException();
+			}
+		};
+	}
+
+	@Test public void testGuardedResolverIsTheJvmResolver() {
+		assertTrue(GuardedResolver.isActive(), HTTPAdapter.RESOLVER_INACTIVE);
+	}
+
+	@Test public void testHeldHostRefusesALaterPrivateAnswer() throws Exception {
+		String host = "changing-" + UUID.randomUUID() + ".test";
+
+		// Not held: answers pass through as the upstream gives them
+		GuardedResolver.Resolver open = new GuardedResolver.Resolver(answering("203.0.113.7", "127.0.0.1"));
+		assertEquals("203.0.113.7", open.lookupByName(host, ANY_FAMILY).findFirst().get().getHostAddress());
+		assertEquals("127.0.0.1", open.lookupByName(host, ANY_FAMILY).findFirst().get().getHostAddress());
+
+		// Held, whatever its case or trailing dot: the public answer stands, the loopback one is refused
+		GuardedResolver.hold(host.toUpperCase(Locale.ROOT));
+		GuardedResolver.Resolver resolver = new GuardedResolver.Resolver(answering("203.0.113.7", "127.0.0.1"));
+		assertEquals("203.0.113.7", resolver.lookupByName(host, ANY_FAMILY).findFirst().get().getHostAddress());
+		UnknownHostException refused = assertThrows(UnknownHostException.class,
+			() -> resolver.lookupByName(host + ".", ANY_FAMILY));
+		assertTrue(refused.getMessage().startsWith(GuardedResolver.PRIVATE_ADDRESS), refused.getMessage());
+	}
+
+	@Test public void testGuardHoldsTheHostsItPasses() {
+		HTTPAdapter adapter = new HTTPAdapter();
+		adapter.requireSafeUrl("http://203.0.113.9/x");
+		assertTrue(GuardedResolver.isHeld("203.0.113.9"));
+		assertThrows(IllegalArgumentException.class, () -> adapter.requireSafeUrl("http://10.9.8.7/"));
+		assertFalse(GuardedResolver.isHeld("10.9.8.7"));
+
+		// Allowing a host releases it, and the guard never holds an allowed host
+		String added = "allowed-" + UUID.randomUUID() + ".test";
+		GuardedResolver.hold(added);
+		adapter.addAllowedHost(added);
+		assertFalse(GuardedResolver.isHeld(added));
+		adapter.requireSafeUrl("http://" + added + "/");
+		assertFalse(GuardedResolver.isHeld(added));
+
+		String configured = "configured-" + UUID.randomUUID() + ".test";
+		GuardedResolver.hold(configured);
+		assertTrue(adapter.configure(Maps.of("allowedHosts", Vectors.of(configured.toUpperCase(Locale.ROOT))), false));
+		assertFalse(GuardedResolver.isHeld(configured));
+	}
+
+	@Test public void testAddressRule() throws Exception {
+		for (String a : List.of("127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1",
+				"169.254.169.254", "100.64.0.1", "100.100.100.200", "0.0.0.0", "0.1.2.3",
+				"::1", "::", "fe80::1", "fec0::1", "fc00::1", "fd00:ec2::254",
+				"::ffff:127.0.0.1", "::127.0.0.1", "64:ff9b::a9fe:a9fe", "64:ff9b::7f00:1")) {
+			assertTrue(GuardedResolver.isBlocked(InetAddress.getByName(a)), a);
+		}
+		for (String a : List.of("8.8.8.8", "1.1.1.1", "203.0.113.7", "100.128.0.1", "172.32.0.1", "192.169.0.1",
+				"2001:4860:4860::8888", "2606:4700::1111", "64:ff9b::808:808", "::ffff:8.8.8.8")) {
+			assertFalse(GuardedResolver.isBlocked(InetAddress.getByName(a)), a);
+		}
+
+		// An IPv4-mapped address kept in IPv6 form is refused as its IPv4 address is
+		byte[] mapped = new byte[16];
+		mapped[10] = (byte) 0xFF;
+		mapped[11] = (byte) 0xFF;
+		mapped[12] = (byte) 169;
+		mapped[13] = (byte) 254;
+		mapped[14] = (byte) 169;
+		mapped[15] = (byte) 254;
+		assertTrue(GuardedResolver.isBlocked(Inet6Address.getByAddress(null, mapped, -1)));
+
+		HTTPAdapter adapter = new HTTPAdapter();
+		for (String url : List.of("http://[fd00:ec2::254]/latest/", "http://[::ffff:169.254.169.254]/",
+				"http://100.100.100.200/", "http://0.0.0.0:8080/")) {
+			IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> adapter.requireSafeUrl(url));
+			assertTrue(e.getMessage().startsWith(HTTPAdapter.PRIVATE_ADDRESS), e.getMessage());
+		}
 	}
 
 	// ====================================================================

@@ -1295,12 +1295,17 @@ Currently defined:
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
   always refused by, the outbound (SSRF) guard. Every caller-chosen target
   passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers and
-  `did:web` documents. Block wins over allow. Loopback, private and link-local
-  targets are refused unless their host is allowed here. A name is resolved
-  when it is checked and again when it is dialled, so a name whose answer
-  changes in between is not caught. The guard belongs to the `http` adapter:
-  with it disabled, every such target is refused. Both lists are published at
-  `v/info/adapters/http`.
+  `did:web` documents. Block wins over allow. Loopback, private, shared
+  (`100.64.0.0/10`), link-local, unspecified and `0.0.0.0/8` addresses, IPv6
+  unique local addresses (`fc00::/7`) and IPv6 forms that carry one of these
+  IPv4 addresses are refused unless their host is allowed here. A name that
+  passes is held to the same rule for every later lookup, by whichever client,
+  until the venue stops or its host is allowed here: the venue's jar makes
+  `covia.adapter.GuardedResolver` the JVM's name resolver. If the JVM resolves
+  through anything else (`jdk.net.hosts.file` set, or another
+  `InetAddressResolverProvider` found first), only allowed hosts pass. The
+  guard belongs to the `http` adapter: with it disabled, every such target is
+  refused. Both lists are published at `v/info/adapters/http`.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default
   `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop passes
   the SSRF guard, credentials are dropped on a change of origin, and a loop or

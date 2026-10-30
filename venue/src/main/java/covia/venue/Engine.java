@@ -4191,11 +4191,12 @@ public class Engine {
 	 * server, an A2A peer, a model endpoint, a did:web document): the http
 	 * adapter's SSRF guard with the operator's allow and block lists, so nothing
 	 * can reach what a direct HTTP call could not (#234). Fails closed when the
-	 * http adapter is absent.
+	 * http adapter is absent, or when the JVM does not resolve names through
+	 * {@link covia.adapter.GuardedResolver}.
 	 *
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the http adapter is not registered
+	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(String url) {
 		ssrfGuard().requireSafeUrl(url);
@@ -4207,7 +4208,7 @@ public class Engine {
 	 *
 	 * @param host Host name or address literal
 	 * @throws IllegalArgumentException naming the rule when the host is refused
-	 * @throws IllegalStateException when the http adapter is not registered
+	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public void requireSafeHost(String host) {
 		ssrfGuard().requireSafeHost(host);

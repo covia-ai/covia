@@ -68,6 +68,15 @@ state in `engine.adapterState(name)`, and owns that state's schema
   revokes the user, fails with `Engine.USER_DELETION_PENDING`, and leaves the
   adapter's data until an adapter of that name is active again.
 
+**The venue jar sets the JVM's name resolver.** It registers
+`covia.adapter.GuardedResolver` as an `InetAddressResolverProvider`, the
+outbound guard's connect-time half. It answers every lookup as the JDK's own
+resolver does, except for hosts the guard has passed, which it holds to the
+guard's address rule. If your application ships its own provider, or sets
+`jdk.net.hosts.file`, the guard passes only allow-listed hosts and the `http`
+adapter logs `HTTPAdapter.RESOLVER_INACTIVE` when installed. Keep the service
+file when you repackage the jar.
+
 ## User data
 
 Find a user with `engine.getVenueState().users().ensure(did)` or `get(did)`.

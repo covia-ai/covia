@@ -59,6 +59,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Deleting an account revokes its connected accounts at their providers.
 - The `sql` skill says a registered database name always means the shared connection.
 - A `did:web` document is fetched only from a host the outbound guard allows.
+- The outbound guard's address rule applies to every later lookup of a host it passes,
+  and also refuses IPv6 unique local and IPv4-carrying forms, `100.64.0.0/10` and `0.0.0.0/8`.
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.

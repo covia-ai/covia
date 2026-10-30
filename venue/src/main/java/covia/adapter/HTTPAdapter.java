@@ -47,13 +47,14 @@ import covia.venue.RequestContext;
  *
  * <p><b>SSRF guard.</b> Every URL — the first request and every redirect hop,
  * and the URLs other outbound adapters submit through {@link #requireSafeUrl}
- * — must be http(s), must resolve, and must not resolve to a loopback,
- * site-local, link-local or wildcard address unless its host is on the allow
+ * — must be http(s), must resolve, and must not resolve to an address
+ * {@link GuardedResolver#isBlocked} refuses unless its host is on the allow
  * list. The block list is checked first and always wins. Both lists come from
  * the operator ({@code adapters.http.allowedHosts} / {@code blockedHosts}) or
  * from an embedding host ({@link #addAllowedHost}, {@link #addBlockedHost}).
- * Resolution happens at validation time; the client resolves again when it
- * connects, so a host whose answer changes between the two is not caught.</p>
+ * A name that passes is held by {@link GuardedResolver}, the JVM's resolver,
+ * so every later lookup of it, including the one a client makes when it
+ * connects, is held to the same rule.</p>
  *
  * <p><b>User-Agent (#422).</b> A caller who supplies no {@code User-Agent}
  * gets the venue's — {@code Covia/<version> (+https://covia.ai)} unless the
@@ -149,6 +150,7 @@ public class HTTPAdapter extends AAdapter {
 		}
 		userAgent = agent;
 		configuredAllow = allow;
+		allow.forEach(GuardedResolver::release);
 		configuredBlock = block;
 		maxRedirects = hops;
 		return true;
@@ -204,6 +206,7 @@ public class HTTPAdapter extends AAdapter {
 	 */
 	public void addAllowedHost(String host) {
 		allowList.add(host.toLowerCase(Locale.ROOT));
+		GuardedResolver.release(host);
 	}
 
 	/**
@@ -240,19 +243,31 @@ public class HTTPAdapter extends AAdapter {
 	}
 
 	/** Opening of the refusal for a host that resolves to a private or internal address. */
-	public static final String PRIVATE_ADDRESS = "Host resolves to a private/internal address: ";
+	public static final String PRIVATE_ADDRESS = GuardedResolver.PRIVATE_ADDRESS;
 
 	/** Opening of the refusal for a host on a block list. */
 	public static final String BLOCKED_HOST = "Host is blocked: ";
+
+	/** Why the guard passes no host off its allow list: the JVM resolves names without {@link GuardedResolver}. */
+	public static final String RESOLVER_INACTIVE = "SSRF validation unavailable: the JVM's name resolver is not "
+		+ GuardedResolver.class.getName() + " (is jdk.net.hosts.file set, or another InetAddressResolverProvider first on the class path?)";
+
+	@Override
+	public void install(Engine engine) {
+		super.install(engine);
+		if (!GuardedResolver.isActive()) log.error(RESOLVER_INACTIVE);
+	}
 
 	/**
 	 * The host half of the guard, for outbound targets that are not URLs (a
 	 * Convex peer): the block list always wins, the allow list bypasses the
 	 * address check, and otherwise the host must resolve and none of its
-	 * addresses may be loopback, site-local, link-local or wildcard.
+	 * addresses may be one {@link GuardedResolver#isBlocked} refuses. A host
+	 * that passes is held to that rule for every later lookup.
 	 *
 	 * @param host Host name or address literal
 	 * @throws IllegalArgumentException if the host is blocked, private or unresolvable
+	 * @throws IllegalStateException if the JVM does not resolve through {@link GuardedResolver}
 	 */
 	public void requireSafeHost(String host) {
 		if (host == null || host.isEmpty()) {
@@ -270,14 +285,21 @@ public class HTTPAdapter extends AAdapter {
 			return;
 		}
 
-		// Block private/internal addresses
+		if (!GuardedResolver.isActive()) {
+			throw new IllegalStateException(RESOLVER_INACTIVE);
+		}
+		requirePublic(host);
+		// Held from here on. Checking again covers an answer that changed
+		// before the hold took effect; any later answer is the resolver's to check.
+		GuardedResolver.hold(host);
+		requirePublic(host);
+	}
+
+	/** The host resolves, and to no address the rule blocks. */
+	private static void requirePublic(String host) {
 		try {
-			InetAddress[] addresses = InetAddress.getAllByName(host);
-			for (InetAddress addr : addresses) {
-				if (addr.isLoopbackAddress()
-						|| addr.isSiteLocalAddress()
-						|| addr.isLinkLocalAddress()
-						|| addr.isAnyLocalAddress()) {
+			for (InetAddress addr : InetAddress.getAllByName(host)) {
+				if (GuardedResolver.isBlocked(addr)) {
 					throw new IllegalArgumentException(
 						PRIVATE_ADDRESS + host
 						+ " (resolved to " + addr.getHostAddress() + ")"
