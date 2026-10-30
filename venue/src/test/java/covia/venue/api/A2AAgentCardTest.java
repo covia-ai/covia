@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -40,12 +41,16 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.TestAdapter;
 import covia.grid.Job;
@@ -53,6 +58,7 @@ import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.Admission;
+import covia.venue.RequestContext;
 import covia.venue.TestServer;
 import covia.venue.AgentState;
 
@@ -311,18 +317,6 @@ public class A2AAgentCardTest {
 		assertEquals(publicDid, TestServer.ENGINE.jobs()
 				.getJobData(Blob.fromHex(sent.id()), covia.venue.RequestContext.of(publicDid)).get(Fields.CALLER),
 				"the request is the anonymous asker's own");
-
-		// The asker reaches its own tasks for this agent, never the owner's jobs.
-		Job unrelated = client.invokeAndWait(Strings.create("v/test/ops/echo"),
-				Maps.of("note", Strings.create("not from this agent")));
-		Map<String, Object> reached = parse(post(endpoint, rpcEnvelope("reach", "GetTask",
-				new TaskQueryParams(unrelated.getID().toHexString(), null)), null));
-		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(), errorCode(reached),
-				"an unrelated owner job is not reachable: " + reached);
-		Map<String, Object> cancelled = parse(post(endpoint, rpcEnvelope("reach-cancel", "CancelTask",
-				new CancelTaskParams(unrelated.getID().toHexString())), null));
-		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(), errorCode(cancelled),
-				"an unrelated owner job cannot be cancelled: " + cancelled);
 	}
 
 	@Test
@@ -400,6 +394,104 @@ public class A2AAgentCardTest {
 		assertEquals(carolDid, TestServer.ENGINE.jobs()
 				.getJobData(Blob.fromHex(extractTask(parsed).id()), covia.venue.RequestContext.of(carolDid))
 				.get(Fields.CALLER), "the request is the delegate's own");
+	}
+
+	/**
+	 * A per-agent endpoint reaches only the asker's own tasks for that agent: an
+	 * anonymous asker never the owner's other jobs nor the owner's own tasks on
+	 * the same agent, and the owner never a stranger's task or a job of theirs
+	 * that is no task of this agent, whatever job ids either holds.
+	 */
+	@Test
+	public void aPerAgentEndpointReachesOnlyTheAskersOwnTasksForThatAgent() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+		String agentId = "PubGate" + Long.toUnsignedString(System.nanoTime(), 36);
+		String endpoint = "/a2a/" + ownerDid + "/g/" + agentId;
+
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(agentId)) {
+			Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Fields.AGENT_ID, Strings.create(agentId),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, Strings.create("v/test/ops/taskcomplete"),
+					"testGate", Strings.create(agentId),
+					Fields.ACCEPTS, Admission.ANYONE)));
+			assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+
+			// An owner job unrelated to the agent, still running.
+			Job unrelated = client.invoke(Strings.create("v/test/ops/never"), Maps.of())
+				.get(5, TimeUnit.SECONDS);
+			// The public caller's first task holds the agent at the gate, so the
+			// owner's own task on this agent (submitted natively) and a second
+			// public task both stay queued and non-terminal.
+			Task held = publicSend(endpoint, "held");
+			assertTrue(gate.awaitEntered(5, TimeUnit.SECONDS), "public task did not reach the gate");
+			Job ownTask = client.invoke(Strings.create("v/ops/agent/request"), Maps.of(
+				Fields.AGENT_ID, Strings.create(agentId),
+				Fields.INPUT, Maps.of("task", Strings.create("the owner's own task")),
+				"timeout", CVMLong.create(0))).get(5, TimeUnit.SECONDS);
+			Task queued = publicSend(endpoint, "queued");
+
+			// Provenance in the agent's own books: while held, the task row names
+			// the public principal as its caller, not the owner.
+			AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
+			AgentState agentState = TestServer.ENGINE.getVenueState().users().get(ownerDid).agent(agentId);
+			assertEquals(publicDid, RT.getIn(agentState.getTasks().get(Blob.fromHex(held.id())), Fields.CALLER));
+
+			// Foreign to the public caller: the unrelated job, and the owner's own
+			// task on this very agent. Read, cancel and subscribe are all refused
+			// with one wording, and nothing happens to either job.
+			for (String foreign : List.of(unrelated.getID().toHexString(), ownTask.getID().toHexString())) {
+				assertAgentTaskRefused(post(endpoint, rpcEnvelope("fg", "GetTask",
+					new TaskQueryParams(foreign, null)), null));
+				assertAgentTaskRefused(post(endpoint, rpcEnvelope("fc", "CancelTask",
+					new CancelTaskParams(foreign)), null));
+				assertAgentTaskRefused(post(endpoint, rpcEnvelope("fs", "SubscribeToTask",
+					new TaskIdParams(foreign)), null));
+			}
+			assertFalse(TestServer.ENGINE.jobs().getJob(unrelated.getID()).isFinished(),
+				"the unrelated job was touched");
+			assertFalse(TestServer.ENGINE.jobs().getJob(ownTask.getID()).isFinished(),
+				"the owner's task was touched");
+
+			// The public caller's own tasks: readable, cancellable, subscribable.
+			Map<String, Object> polled = parse(post(endpoint, rpcEnvelope("pg", "GetTask",
+				new TaskQueryParams(held.id(), null)), null));
+			assertNull(polled.get("error"), "own task must be readable: " + polled.get("error"));
+			assertEquals(held.id(), extractTask(polled).id());
+			Map<String, Object> cancelled = parse(post(endpoint, rpcEnvelope("pc", "CancelTask",
+				new CancelTaskParams(queued.id())), null));
+			assertNull(cancelled.get("error"), "own task must be cancellable: " + cancelled.get("error"));
+			assertEquals(TaskState.TASK_STATE_CANCELED, extractTask(cancelled).status().state());
+			TaskStatusUpdateEvent streamed = awaitFinalStatusUpdate(endpoint, held.id(), null,
+				7000, gate::release);
+			assertEquals(TaskState.TASK_STATE_COMPLETED, streamed.status().state());
+
+			// The task is the anonymous asker's own job, acted by no one else.
+			AMap<AString, ACell> record = TestServer.ENGINE.jobs().getJobData(Blob.fromHex(held.id()),
+				RequestContext.of(publicDid));
+			assertEquals(publicDid, record.get(Fields.CALLER));
+			assertNull(record.get(Fields.ACTOR));
+
+			// The owner addresses its own tasks for this agent here, and every job
+			// of theirs on the front door. A stranger's task is the stranger's job,
+			// which the owner sees in the agent's tasks, not here; and a per-agent
+			// endpoint is not a second front door for the owner's other jobs.
+			assertNull(parse(post(endpoint, rpcEnvelope("og", "GetTask",
+				new TaskQueryParams(ownTask.getID().toHexString(), null)), jwt)).get("error"));
+			assertAgentTaskRefused(post(endpoint, rpcEnvelope("oh", "GetTask",
+				new TaskQueryParams(held.id(), null)), jwt));
+			assertAgentTaskRefused(post(endpoint, rpcEnvelope("on", "GetTask",
+				new TaskQueryParams(unrelated.getID().toHexString(), null)), jwt));
+			assertNull(parse(post("/a2a", rpcEnvelope("ou", "GetTask",
+				new TaskQueryParams(unrelated.getID().toHexString(), null)), jwt)).get("error"));
+			Map<String, Object> ownerCancel = parse(post("/a2a", rpcEnvelope("oc", "CancelTask",
+				new CancelTaskParams(unrelated.getID().toHexString())), jwt));
+			assertNull(ownerCancel.get("error"), "owner cancel: " + ownerCancel.get("error"));
+		}
 	}
 
 	@Test
@@ -654,6 +746,31 @@ public class A2AAgentCardTest {
 	@SuppressWarnings("unchecked")
 	private static int errorCode(Map<String, Object> rpcResp) {
 		return ((Number) ((Map<String, Object>) rpcResp.get("error")).get("code")).intValue();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static String errorMessage(Map<String, Object> rpcResp) {
+		return (String) ((Map<String, Object>) rpcResp.get("error")).get("message");
+	}
+
+	/** A per-agent by-id call refused as addressing no task of this caller's. */
+	private static void assertAgentTaskRefused(HttpResponse<String> response) {
+		assertEquals(200, response.statusCode(), response.body());
+		Map<String, Object> rpc = parse(response);
+		assertNull(rpc.get("result"), "must not expose the task: " + response.body());
+		assertEquals(org.a2aproject.sdk.spec.A2AErrorCodes.TASK_NOT_FOUND.code(), errorCode(rpc),
+			response.body());
+		assertEquals(A2A.AGENT_TASK_NOT_FOUND, errorMessage(rpc));
+	}
+
+	/** An anonymous SendMessage on a per-agent endpoint; the task it created. */
+	private Task publicSend(String endpoint, String text) throws Exception {
+		Map<String, Object> sent = parse(post(endpoint, rpcEnvelope("send-" + text, "SendMessage",
+			new MessageSendParams(userMessage(text), null, null)), null));
+		assertNull(sent.get("error"), "public send: " + sent.get("error"));
+		Task task = extractTask(sent);
+		assertNotNull(task);
+		return task;
 	}
 
 	@SuppressWarnings("unchecked")

@@ -291,6 +291,7 @@ public final class VenueAuthenticator {
 		public static final String ISSUED_BY_SUBJECT = "token is issued by its subject (iss = sub)";
 		public static final String MALFORMED_SUBJECT = "malformed subject DID: ";
 		public static final String MISSING_SUBJECT = "missing sub claim";
+		public static final String PUBLIC_SUBJECT = "the venue's public principal is a shared namespace, not an identity that authenticates: ";
 		public static final String NO_VENUE_KEY = "this venue has no signing key, so it cannot have issued this token";
 		public static final String VENUE_SIGNATURE_FAILS = "signature does not verify for this venue's key";
 		public static final String NO_PROVIDERS = "no external identity provider is configured on this venue";
@@ -455,6 +456,9 @@ public final class VenueAuthenticator {
 		AString iss = RT.ensureString(claims.get(ISS));
 		String subject = sub.toString();
 		long now = System.currentTimeMillis() / 1000;
+		// The venue key could sign its own public principal as a nested subject;
+		// nothing authenticates as the anonymous namespace.
+		if (engine.isPublicPrincipal(sub)) return Verdict.fail(Reason.PUBLIC_SUBJECT + sub);
 
 		if (subject.startsWith("did:key:")) {
 			// Self-certifying key, or an identity in that key's exact namespace.
@@ -552,6 +556,7 @@ public final class VenueAuthenticator {
 		} catch (RuntimeException e) {
 			return Verdict.fail(Reason.MALFORMED_SUBJECT + sub);
 		}
+		if (engine.isPublicPrincipal(sub)) return Verdict.fail(Reason.PUBLIC_SUBJECT + sub);
 		// A venue signature identifies the credential issuer, not the login
 		// method. Legacy login and OAuth-issued JWTs share this verifier.
 		return Verdict.ok(sub, sub, VENUE_JWT, expiryMetadata(claims),

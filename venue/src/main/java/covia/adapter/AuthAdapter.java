@@ -32,6 +32,8 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods {
 	public static final long DEFAULT_IDENTITY_LIFETIME = 300;
 	public static final long MAX_IDENTITY_LIFETIME = 3600;
 	public static final String IDENTITY_AUTH_REQUIRED = "An authenticated non-public caller is required";
+	public static final String IDENTITY_DIRECT_ONLY = "The caller must act under its own authority, or as a sub-principal; "
+		+ "a principal acting as itself under a restricted scope cannot mint its identity";
 	public static final String IDENTITY_NOT_OWNED = "The caller identity must be the venue signing key DID or nested beneath it";
 	public static final String IDENTITY_INPUT = "Expected an object containing only aud, name, lifetime and overwrite";
 	public static final String IDENTITY_AUDIENCE = "aud must be a target venue DID without a path, query or fragment";
@@ -111,6 +113,15 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods {
 		AString caller = ctx == null ? null : ctx.getCallerDID();
 		if (caller == null || engine.isPublicPrincipal(caller) || engine.isPublicPrincipal(ctx.getUserDID())) {
 			throw new IllegalArgumentException(IDENTITY_AUTH_REQUIRED);
+		}
+		// A restricted scope on a principal acting as itself (a scoped credential,
+		// say) bounds what this request may do; a bearer for that identity would
+		// carry it beyond the bound, so the op refuses the shape. A sub-principal
+		// (an agent, a delegate) mints only its own identity, which the venue
+		// bounds again wherever it is used, and a principal with its own
+		// authority has no scope.
+		if (ctx.getCaps() != null && !ctx.isSubPrincipal()) {
+			throw new IllegalArgumentException(IDENTITY_DIRECT_ONLY);
 		}
 		AString signer = UCAN.toDIDKey(engine.getKeyPair().getAccountKey());
 		if (!signer.equals(caller) && !VenueAuthenticator.isNestedIdentity(caller, signer)) {

@@ -2988,8 +2988,9 @@ the endpoint — the owner, a caller the agent's `config.accepts` admits, or one
 presenting an `agent/request` UCAN in `X-Covia-Ucans`. Anyone else gets an
 existence-hiding 404 (anonymous) or 403 (authenticated). Each request is the
 asker's own Job, and the agent serves it as itself, under its own
-`config.caps`, so `caps` is what the owner offers everyone the agent admits.
-Task calls reach only the asker's own tasks for that agent.
+`config.caps`, so `caps` is what the owner offers everyone the agent admits;
+set it as tightly as the public should get, or publish a dedicated public
+agent. Task calls reach only the asker's own tasks for that agent.
 
 `a2a: {public: true}` publishes the card; it admits nobody. `accepts:
 "anyone"` lets anonymous callers ask. They ask as the venue's public

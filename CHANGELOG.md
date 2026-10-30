@@ -38,8 +38,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Connected accounts no longer appear in `secret:list` or a user export.
 - Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
 
+### Removed
+
+- The `venue/relay` ability and `UcanTokens.relayDelegation`: users hop with
+  `authenticateAs: "caller"` and grants.
+
 ### Security
 
+- `authenticateAs: "venue"` is only for the venue itself. A user could have the venue
+  act as itself, at another venue or at itself as the operator.
 - `crypto:derive-key` reads only the caller's own secrets, and `crypto:jwt-decode`
   never returns a stored token's signature, so `secret/use` never yields possession.
 - Venue-local SQL databases are named `<userDID>/sql/<db>`: users whose DIDs differ
@@ -57,14 +64,24 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.
 - A token refresh never brings back a disconnected account, and a callback for a
   deleted account stores nothing.
-- A per-agent A2A request is the asker's own, admitted by `accepts` or a UCAN, and
-  its task calls reach only the asker's tasks for that agent (#619).
+- A per-agent A2A request is the asker's own, admitted by `accepts` or a UCAN. Its
+  `GetTask`, `CancelTask`, `SubscribeToTask` and `taskId` continuation reach only the
+  asker's tasks for that agent, refused alike otherwise (#619).
 - A capability scope bounds job and scheduled-event access for every context.
 - A chat binding authenticates each sender (AUTH.md §5.3); an agent records the
   authentication beside the turn, never in the message.
 - A chat bot's message comes from the bot's principal for an allow-listed sender, and
   is anonymous otherwise. A bot an agent creates is that agent, never its owner.
 - A `user: "public"` chat bot is bound by the public scope.
+- `GET /api/v1/secrets` needs the read `secret:list` needs: a public scope without
+  `crud/read` on `s/` no longer lists the public store's secret names.
+- `GET /api/v1/operations/{name}` resolves the name as the caller, not as an
+  anonymous, unscoped context.
+- A job stream reads each frame as its subscriber and ends once `GET /jobs/{id}`
+  would refuse it, such as after the job's deletion or its proof's expiry.
+- `GET /api/v1/agents/{id}` answers a refused or malformed id with 403 or 400, not 500.
+- `auth:identity-token` refuses a principal acting as itself under a restricted scope,
+  and no credential authenticates as the venue's public principal.
 
 ### Migration
 

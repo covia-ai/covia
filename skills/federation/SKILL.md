@@ -72,7 +72,7 @@ Ask the user for the remote venue URL (or use `http://localhost:8081` if running
 Ask the user which operation and input, then:
 
 ```
-grid_run  operation=<op>  input=<input>  venue=<venue-url>  authenticateAs=<anonymous|caller|venue>
+grid_run  operation=<op>  input=<input>  venue=<venue-url>  authenticateAs=<anonymous|caller>
 ```
 
 ## Key Talking Points
@@ -80,8 +80,8 @@ grid_run  operation=<op>  input=<input>  venue=<venue-url>  authenticateAs=<anon
 - Operations execute on the **remote** venue — data stays where it's controlled
 - The local venue only sees the result, not intermediate state
 - UCAN capability tokens travel through the `ucans` proof channel for fine-grained authorisation and are forwarded only when admissible for the explicitly selected remote principal
-- Remote authentication is explicit: use `authenticateAs=caller` with an empty-`att` credential audienced to the target, or `authenticateAs=venue` for a venue-authenticated hop
-- `venue/relay` authorises the explicit `authenticateAs=venue` request; merely presenting the grant never changes behaviour
+- Remote authentication is explicit: use `authenticateAs=caller` with an empty-`att` credential audienced to the target
+- `authenticateAs=venue` is only for the venue itself; no grant lends the venue's identity to anyone else
 - Every invocation creates an immutable job record on both venues
 - Venues are identified by DIDs — decentralised, no central registry
 - The same operation interface works locally and across the grid

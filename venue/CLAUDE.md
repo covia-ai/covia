@@ -167,16 +167,19 @@ Covia exposes both the venue front door and individual hosted agents:
 
 The front door invokes `a2a.defaultChatOp` for a fresh `SendMessage`. A
 per-agent `SendMessage` invokes `agent:request`; the resulting Covia task Job
-is the A2A Task, and its session is the A2A `contextId`. `GetTask` and
-`CancelTask` use the same per-agent endpoint.
+is the A2A Task, and its session is the A2A `contextId`. `GetTask`,
+`CancelTask`, `SubscribeToTask` and a `taskId` continuation on the same
+per-agent endpoint reach only the asker's own tasks for that agent; anything
+else is refused alike (`A2A.AGENT_TASK_NOT_FOUND`).
 
 Per-agent exposure is private by default. Whoever may ask the agent may use
 its endpoint: the owner, a caller the agent's `config.accepts` admits
 (`"anyone"` includes anonymous callers), or one presenting an `agent/request`
 UCAN — the same check as every other way of asking an agent. Each request is
 the asker's own, and the agent serves it as itself, under its own
-`config.caps`. Agent config `a2a: {public: true}` publishes the card and admits
-nobody. Anonymous callers ask as the venue's public principal, so
+`config.caps`, so an owner who wants a narrower public face publishes a
+dedicated agent. Agent config `a2a: {public: true}` publishes the card and
+admits nobody. Anonymous callers ask as the venue's public principal, so
 `auth.public.caps` must also let them invoke the asking operations.
 Anonymous denials are existence-hiding 404s; authenticated callers without
 standing receive 403. A2A introduces no new authority.

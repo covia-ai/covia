@@ -270,7 +270,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 ### P3 — Future (design goals from venue/CLAUDE.md)
 
 - [ ] **Asset versioning** — Track version history, deprecation, and lineage in lattice
-- [ ] **Cross-venue trust policies** — Policy-based access control between venues; venue reputation/attestation. Self-sovereign cross-venue grants + authority forwarding (identity tokens, `venue/relay` delegations) shipped (covia#100 C3a, `venue/docs/UCAN.md` §5.6); remaining = custodial attestation + the venue trust policy (C3b)
+- [ ] **Cross-venue trust policies** — Policy-based access control between venues; venue reputation/attestation. Self-sovereign cross-venue grants + authority forwarding (identity tokens; venue identity only for the venue itself) shipped (covia#100 C3a, `venue/docs/UCAN.md` §5.6); remaining = custodial attestation + the venue trust policy (C3b)
 - [ ] **Capability negotiation** — Discovery endpoint for venue capabilities via DID documents
 - [ ] **Signed operations** — Cryptographic attribution for every job submission
 - [ ] **Compliance reporting** — Data lineage tracking and audit log queries

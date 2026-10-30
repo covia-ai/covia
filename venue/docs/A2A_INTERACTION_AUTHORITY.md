@@ -15,8 +15,12 @@ what to do with the request. Nothing narrows or widens that authority
 according to who asked.
 
 An LLM agent's reading of a request can be talked round, so `config.caps` is
-what the owner offers everyone the agent admits. An owner who trusts different
-askers differently gives them different agents.
+what the owner offers everyone the agent admits. A bound that depended on the
+asker would limit what the agent does without limiting what it knows: one
+agent has one memory and one workspace, and serves every pending request and
+message in the same cycle. The unit of isolation is the agent, so an owner who
+trusts different askers differently gives them different agents, each with its
+own state.
 
 ## Who may ask
 
@@ -61,7 +65,9 @@ refuse that config (`Admission.configProblem`).
   the asker's name — the venue's public principal for an anonymous caller. The
   asker follows and cancels it under their own authority; they reach nothing
   else of the owner's. The per-agent A2A endpoint's task calls answer only for
-  the asker's own tasks submitted to that agent.
+  the asker's own tasks submitted to that agent, and refuse every other id
+  alike, so the endpoint is no oracle for other jobs; the owner reaches its
+  other jobs on the front door.
 - **The agent serves it as itself.** The run is the agent sub-principal
   bounded by `config.caps`, exactly as for a request from the owner.
 - **The agent knows who asked, and how.** The task records the asker as its

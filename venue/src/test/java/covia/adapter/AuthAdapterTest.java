@@ -165,14 +165,38 @@ class AuthAdapterTest {
 	}
 
 	@Test void customMetadataCannotBypassIdentityInvokeGrant() {
-		RequestContext ctx = localCaller().withCaps(Vectors.of(
+		// An agent holding invoke on another op and secret/write: a sub-principal,
+		// so it passes the scoped-self refusal and reaches the pinned invoke check.
+		RequestContext owner = localCaller();
+		RequestContext ctx = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker")).withCaps(Vectors.of(
 			Capability.create(Strings.create("v/ops/auth/whoami"), AAdapter.INVOKE),
 			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)))
 			.withOp(Strings.create("v/ops/auth/whoami"));
 		AuthAdapter adapter = (AuthAdapter) TestEngine.ENGINE.getAdapter("auth");
-		assertThrows(Exception.class, () -> adapter.invokeFuture(ctx,
-			Maps.of("operation", Maps.of("adapter", "auth:identity-token")), identityInput()).join());
-		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", RequestContext.of(ctx.getCallerDID())));
+		String message = assertThrows(Exception.class, () -> adapter.invokeFuture(ctx,
+			Maps.of("operation", Maps.of("adapter", "auth:identity-token")), identityInput()).join()).getMessage();
+		assertFalse(message.contains(AuthAdapter.IDENTITY_DIRECT_ONLY), message);
+		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+	}
+
+	@Test void aScopedSelfCannotMintItsWholeIdentity() {
+		// The owner's own DID as caller, narrowed by a scope (a scoped credential,
+		// say). Even a scope covering both abilities must not mint a bearer for the
+		// whole identity, which would carry it beyond the scope.
+		RequestContext owner = localCaller();
+		RequestContext scoped = owner.withCaps(Vectors.of(
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE),
+			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)));
+		assertFalse(scoped.isSubPrincipal());
+		assertEquals(AuthAdapter.IDENTITY_DIRECT_ONLY, identityFailure(scoped, identityInput()).getErrorMessage());
+		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+		// The owner's own unrestricted authority, and a scoped agent of the owner, still mint.
+		assertEquals(owner.getCallerDID(), RT.getIn(identityJob(owner, identityInput()).awaitResult(5000), "sub"));
+		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker")).withCaps(Vectors.of(
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE),
+			Capability.create(Strings.create("s/AGENT"), Abilities.SECRET_WRITE)));
+		assertEquals(agent.getCallerDID(), RT.getIn(identityJob(agent,
+			identityInput().assoc(Strings.create("name"), Strings.create("AGENT"))).awaitResult(5000), "sub"));
 	}
 
 	@Test

@@ -22,6 +22,15 @@ import covia.venue.RequestContext;
 /** Shared native venue connection policy. Saved authority is for protected storage only. */
 public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
+
+	/**
+	 * Refusal of {@code authenticateAs=venue} for anyone but the venue itself.
+	 * Authenticating as the venue carries all of its standing, so no grant can
+	 * lend it: other callers authenticate as themselves and present grants.
+	 */
+	public static final String VENUE_MODE_DENIED =
+		"authenticateAs=venue is only for the venue itself; use authenticateAs=caller with your own credential and grants";
+
 	public static VenueConnection connect(Engine engine, RequestContext ctx, AString venueSpec, ACell input) {
 		AString venueDID = engine.getDIDString();
 		List<UCAN> tokens = GridAdapter.parsedRawUcans(ctx, engine.didVerifier());
@@ -48,11 +57,8 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				principal = ctx.getCallerDID();
 			}
 			case "venue" -> {
+				if (!engine.isDirectVenue(ctx)) throw new AuthException(VENUE_MODE_DENIED);
 				AString targetDID = Strings.create(targetVenueDID(venueSpec));
-				if (!GridAdapter.hasRelayGrant(tokens, ctx.getCallerDID(), venueDID)) {
-					throw new AuthException("authenticateAs=venue requires venue/relay on "
-						+ ctx.getCallerDID() + " granted to " + venueDID);
-				}
 				auth = VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
 					targetDID.toString());
 				saved = saved.assoc(Fields.VENUE, targetDID);
@@ -69,6 +75,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		return new VenueConnection(venue, saved);
 	}
 
+	/** Rebuilds observation of a job {@link #connect} already authorised; grants nothing new. */
 	public static Venue restore(Engine engine, AString target, AMap<AString, ACell> saved) {
 		String mode = RT.ensureString(saved.get(AUTHENTICATE_AS)).toString();
 		VenueAuth auth = switch (mode) {

@@ -150,8 +150,12 @@ the ownership enforcement (facade over the capability layer), so no A2A-specific
 trust branch exists. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
 `contextId = session` for the task's whole lifecycle — the same on `SendMessage`
-and on a later `GetTask`. `GetTask` / `CancelTask` reuse the front-door by-id
-handlers (a Task id is a global, caller-scoped Job id). `SubscribeToTask`
+and on a later `GetTask`. The per-agent by-id methods — `GetTask`,
+`CancelTask`, `SubscribeToTask` and a `SendMessage` carrying a `taskId` —
+reach only the asker's own Jobs whose recorded agent address is this agent's;
+anything else is "not found", in one wording (`A2A.AGENT_TASK_NOT_FOUND`), so
+the endpoint discloses nothing about other jobs. The owner's other jobs are
+addressed on the front door. `SubscribeToTask`
 attaches SSE updates directly to that same Job. A fresh `SendMessage` returns
 immediately with its Task and session identifiers; it never imposes a
 synchronous turn deadline. Polling and SSE therefore observe one state machine

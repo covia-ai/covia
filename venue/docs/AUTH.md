@@ -660,7 +660,11 @@ Two notes:
    Enforcing `iss == sub` would conflate JWT claim semantics with
    Covia's separate subject-admission policy. (COG-3 §5's
    "MUST equal `sub` when present" wording is stricter than enforced
-   behaviour — a docs follow-up may reconcile them.)
+   behaviour — a docs follow-up may reconcile them.) One subject is
+   refused whoever signs for it: the venue's public principal
+   (`<venueDID>:public`) is a shared authorisation namespace, not an
+   identity, so no self-issued or venue-signed credential authenticates
+   as it.
 2. **Enrolment authorisation** (decided): add/revoke ops require the
    venue operator, or the user themselves meeting `policy.enrolment`
    via step-up (§9) — a live session alone is never enough to change
@@ -733,6 +737,11 @@ signing key from input. The caller must be the venue's signing `did:key` or a
 valid identity nested below it. An unrelated external key identity, a
 `did:web` identity, and anonymous/public callers are refused; an embedder
 holding a different installation key uses `VenueAuth.namedKeyPair` instead.
+The caller must also be acting under its own authority or as a sub-principal.
+A restricted scope on a principal acting as itself bounds what the request may
+do, and a bearer for that identity would carry it beyond the bound, so the
+operation refuses that shape. A sub-principal (an agent, a delegate) mints only
+its own identity, which the venue bounds again wherever it is used.
 
 It requires `invoke` on `v/ops/auth/identity-token` and `secret/write` on
 `s/RELAY_TOKEN`. Agents write into their owner's secret store under their

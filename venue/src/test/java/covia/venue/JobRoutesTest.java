@@ -27,6 +27,7 @@ import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.auth.VenueAuth;
+import covia.venue.server.SseServer;
 
 /**
  * #200 — the job SSE route must be reachable.
@@ -165,6 +166,45 @@ public class JobRoutesTest {
 				"the status-change broadcast must reach the subscriber (#225): " + frames);
 		} finally {
 			in.close();
+		}
+	}
+
+	/**
+	 * A stream is read as its subscriber for its whole life, not only when it
+	 * opens. Once GET /jobs/{id} would refuse the caller — here the owner has
+	 * deleted the job while its handle runs on — the stream ends with a
+	 * not-found frame instead of carrying the detached job's updates. An
+	 * expired delegation ends a delegate's stream the same way.
+	 */
+	@Test
+	public void jobSseEndsWhenTheJobCanNoLongerBeRead() throws Exception {
+		VenueAuth auth = VenueAuth.keyPair(AKeyPair.generate(), TestServer.ENGINE.getDIDString().toString());
+		RequestContext owner = RequestContext.of(Strings.create(auth.getDID()));
+		Job job = TestServer.ENGINE.jobs().invokeOperation("v/test/ops/never",
+			Maps.of(Fields.MESSAGE, "deleted-while-streaming"), owner);
+		String id = job.getID().toHexString();
+		try {
+			HttpResponse<InputStream> sse = http.send(HttpRequest.newBuilder()
+				.uri(new URI(base + "/api/v1/jobs/" + id + "/sse"))
+				.header("Accept", "text/event-stream")
+				.header("Authorization", "Bearer " + auth.mintToken())
+				.GET().build(), HttpResponse.BodyHandlers.ofInputStream());
+			try (InputStream in = sse.body()) {
+				assertEquals(200, sse.statusCode());
+				assertTrue(!readUntil(in, "status").get(10, TimeUnit.SECONDS).isEmpty(),
+					"the stream opens with the job record");
+
+				assertTrue(TestServer.ENGINE.jobs().deleteJob(job.getID(), owner));
+				CompletableFuture<java.util.List<String>> after = readUntil(in, SseServer.JOB_NOT_FOUND);
+				job.cancel(); // the detached handle still publishes this update
+				java.util.List<String> frames = after.get(10, TimeUnit.SECONDS);
+				assertTrue(frames.stream().anyMatch(l -> l.contains(SseServer.JOB_NOT_FOUND)),
+					"the stream must end as GET would answer: " + frames);
+				assertTrue(frames.stream().noneMatch(l -> l.contains("CANCELLED")),
+					"a deleted job's update must not reach the stream: " + frames);
+			}
+		} finally {
+			job.cancel();
 		}
 	}
 

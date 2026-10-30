@@ -33,6 +33,7 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.UserAdapter;
 import covia.adapter.DLFSAdapter;
+import covia.adapter.SecretAdapter;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -49,7 +50,6 @@ import covia.venue.AssetStore;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
-import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
@@ -1579,8 +1579,12 @@ public class CoviaAPI extends ACoviaAPI {
 							example = "v/test/ops/echo") })
 	protected void getOperation(Context ctx) {
 		String name = ctx.pathParam("name");
+		// Resolved as the caller, like assets/<ref>: an encoded name may be any
+		// lattice path, so the read is the caller's to make, never the venue's.
+		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
 		try {
-			Asset asset = venue.resolveAsset(name);
+			Asset asset = engine().resolveAsset(Strings.create(name), rctx);
 			if (asset == null) {
 				buildError(ctx, 404, "Operation not found: " + name);
 				return;
@@ -1601,8 +1605,10 @@ public class CoviaAPI extends ACoviaAPI {
 				if (output != null) result.put("output", output);
 			}
 			buildResult(ctx, 200, result);
-		} catch (IOException e) {
-			buildError(ctx, 500, "Error resolving operation: " + e.getMessage());
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (covia.exception.RemoteFetchException e) {
+			buildError(ctx, 502, e.getMessage());
 		}
 	}
 
@@ -2033,7 +2039,16 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		String id = ctx.pathParam("id");
 		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
-		AMap<AString, ACell> info = agent.agentInfo(rctx, Strings.create(id));
+		AMap<AString, ACell> info;
+		try {
+			info = agent.agentInfo(rctx, Strings.create(id));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+			return;
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		}
 		if (info == null) {
 			buildError(ctx, 404, "Agent not found: " + id);
 			return;
@@ -2234,6 +2249,9 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
 		}
 		String sessionParam = ctx.queryParam("sessionId");
 		if (sessionParam != null && !sessionParam.isBlank() && SseServer.sessionFilter(sessionParam) == null) {
@@ -2277,19 +2295,23 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "listSecrets")
 	protected void listSecrets(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString callerDID = rctx.getCallerDID();
-		if (callerDID == null) {
+		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
-
-		User user = engine().getVenueState().users().get(callerDID);
-		if (user == null) {
-			buildResult(ctx, 200, Maps.of(Fields.ITEMS, Strings.create("[]"), Fields.TOTAL, 0));
+		SecretAdapter secrets = (SecretAdapter) engine().getAdapter("secret");
+		if (secrets == null) {
+			buildError(ctx, 404, ADAPTER_NOT_ACTIVE + "secret");
 			return;
 		}
 
-		AVector<AString> names = user.secrets().list();
+		AVector<AString> names;
+		try {
+			names = secrets.listNames(rctx);
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+			return;
+		}
 		ArrayList<Object> items = new ArrayList<>();
 		for (long i = 0; i < names.count(); i++) {
 			items.add(names.get(i).toString());

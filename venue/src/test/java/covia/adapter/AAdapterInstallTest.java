@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.core.data.Hash;
 import convex.core.data.ACell;
@@ -26,7 +27,14 @@ import covia.venue.TestEngine;
  * silently missing ops is broken — same policy as
  * {@code Engine.materialiseVOps}. {@code strictAssets: false} downgrades to
  * a warning, for test/debug scaffolding only.
+ *
+ * <p>Isolated because the schema-warning test raises the process-wide
+ * {@code AAdapter} logger to WARN to capture its events. A logging call checks
+ * the level first and additivity later, so a WARN another test provokes on
+ * that logger meanwhile can slip onto the console as the level is restored, or
+ * inflate the captured count; no ordering of the restore closes that.</p>
  */
+@Isolated("mutates the shared AAdapter logger level")
 public class AAdapterInstallTest {
 
 	@Test

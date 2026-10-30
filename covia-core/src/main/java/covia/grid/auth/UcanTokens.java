@@ -23,18 +23,13 @@ import convex.core.data.Vectors;
  * UCAN envelope, but it remains inert there and is installed as the target
  * request's bearer only after an explicit {@code authenticateAs=caller}.</p>
  *
- * <p>Three token shapes (see the venue UCAN spec §5.6):</p>
+ * <p>Two token shapes (see the venue UCAN spec §5.6):</p>
  * <ul>
  *   <li>{@link #identityToken} — proves <em>who you are</em> to one venue;</li>
- *   <li>{@link #grant} — delegates capability over your resources to someone;</li>
- *   <li>{@link #relayDelegation} — authorises an explicitly requested venue-
- *       authenticated cross-venue hop.</li>
+ *   <li>{@link #grant} — delegates capability over your resources to someone.</li>
  * </ul>
  */
 public final class UcanTokens {
-
-	/** The ability that authorises a venue to relay a hop as itself. */
-	public static final String VENUE_RELAY = "venue/relay";
 
 	private UcanTokens() {}
 
@@ -79,36 +74,6 @@ public final class UcanTokens {
 		long exp = (System.currentTimeMillis() / 1000) + ttlSeconds;
 		return mint(ownerKP, audienceDID, exp,
 			Vectors.of(Capability.create(Strings.create(with), Strings.create(can))));
-	}
-
-	/**
-	 * Mints a <b>relay delegation</b>: authorises {@code venueDID} to make an
-	 * explicitly requested cross-venue hop authenticated as itself, exercising
-	 * the caller's authority. Carries the {@code venue/relay} grant plus the substantive
-	 * capabilities the venue may exercise (each {@code {with, can}} pair from
-	 * {@code caps}). The venue accepts the grant only when its issuer is the
-	 * authenticated caller; the grid input must separately say
-	 * {@code authenticateAs=venue}.
-	 *
-	 * @param kp         the caller's key pair
-	 * @param venueDID   the relaying venue's DID (the token's audience)
-	 * @param ttlSeconds validity window
-	 * @param caps       alternating {@code with, can} pairs for the substantive
-	 *                   grants (may be empty for relay authority alone)
-	 * @return the delegation as a JWT string
-	 */
-	public static String relayDelegation(AKeyPair kp, String venueDID,
-			long ttlSeconds, String... caps) {
-		if (caps.length % 2 != 0) {
-			throw new IllegalArgumentException("caps must be alternating with, can pairs");
-		}
-		long exp = (System.currentTimeMillis() / 1000) + ttlSeconds;
-		AVector<ACell> att = Vectors.of(
-			(ACell) Capability.create(Strings.create(did(kp)), Strings.create(VENUE_RELAY)));
-		for (int i = 0; i < caps.length; i += 2) {
-			att = att.conj(Capability.create(Strings.create(caps[i]), Strings.create(caps[i + 1])));
-		}
-		return mint(kp, venueDID, exp, att);
 	}
 
 	/** Uses Convex's any-DID payload API; no helper assumes the audience method. */
