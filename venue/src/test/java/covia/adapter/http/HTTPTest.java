@@ -409,6 +409,25 @@ public class HTTPTest {
 		}, "Block list should override allow list");
 	}
 
+	@Test public void testSSRFListsMatchANameWithOrWithoutItsTrailingDot() {
+		HTTPAdapter adapter = new HTTPAdapter();
+		adapter.addBlockedHost("blocked.example");
+		IllegalArgumentException dotted = assertThrows(IllegalArgumentException.class,
+			() -> adapter.requireSafeUrl("http://Blocked.Example./x"));
+		assertTrue(dotted.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), dotted.getMessage());
+
+		assertTrue(adapter.configure(Maps.of("blockedHosts", Vectors.of("configured.example.")), false));
+		IllegalArgumentException bare = assertThrows(IllegalArgumentException.class,
+			() -> adapter.requireSafeUrl("http://configured.example/"));
+		assertTrue(bare.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), bare.getMessage());
+
+		// An allowed host is allowed however it is written, so it is never looked up
+		String allowed = "allowed-" + UUID.randomUUID() + ".test";
+		adapter.addAllowedHost(allowed + ".");
+		adapter.requireSafeUrl("http://" + allowed + "/");
+		adapter.requireSafeUrl("http://" + allowed + "./");
+	}
+
 	@Test public void testSSRFBlocksNonHTTPSchemes() {
 		HTTPAdapter adapter = new HTTPAdapter();
 		// example.com resolves to a public IP, so the IP check passes,

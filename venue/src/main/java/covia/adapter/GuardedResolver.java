@@ -67,20 +67,20 @@ public final class GuardedResolver extends InetAddressResolverProvider {
 
 	/** Holds a name the guard has passed to the address rule for every later lookup. */
 	public static void hold(String host) {
-		held.add(key(host));
+		held.add(hostKey(host));
 	}
 
 	/** Releases a held name: for a host an operator allow-lists. */
 	public static void release(String host) {
-		held.remove(key(host));
+		held.remove(hostKey(host));
 	}
 
 	public static boolean isHeld(String host) {
-		return held.contains(key(host));
+		return held.contains(hostKey(host));
 	}
 
-	/** Host names are case-insensitive, and a trailing dot names the same host. */
-	private static String key(String host) {
+	/** A host name as the guard compares it: names are case-insensitive, and a trailing dot names the same host. */
+	public static String hostKey(String host) {
 		String k = host.toLowerCase(Locale.ROOT);
 		return k.endsWith(".") ? k.substring(0, k.length() - 1) : k;
 	}

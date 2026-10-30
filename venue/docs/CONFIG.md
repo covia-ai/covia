@@ -1295,7 +1295,8 @@ Currently defined:
 - `http.allowedHosts` / `http.blockedHosts` — host names exempted from, or
   always refused by, the outbound (SSRF) guard. Every caller-chosen target
   passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers and
-  `did:web` documents. Block wins over allow. Loopback, private, shared
+  `did:web` documents. Names match whatever their case and with or without a
+  trailing dot. Block wins over allow. Loopback, private, shared
   (`100.64.0.0/10`), link-local, unspecified and `0.0.0.0/8` addresses, IPv6
   unique local addresses (`fc00::/7`) and IPv6 forms that carry one of these
   IPv4 addresses are refused unless their host is allowed here. A name that

@@ -169,7 +169,7 @@ public class HTTPAdapter extends AAdapter {
 				throw new IllegalArgumentException("adapters.http." + key
 					+ " entries must be host names, got: " + values.get(i));
 			}
-			out.add(host.toString().trim().toLowerCase(Locale.ROOT));
+			out.add(GuardedResolver.hostKey(host.toString().trim()));
 		}
 		return Set.copyOf(out);
 	}
@@ -205,7 +205,7 @@ public class HTTPAdapter extends AAdapter {
 	 * @param host Hostname to allow (e.g. "internal-api.company.com")
 	 */
 	public void addAllowedHost(String host) {
-		allowList.add(host.toLowerCase(Locale.ROOT));
+		allowList.add(GuardedResolver.hostKey(host));
 		GuardedResolver.release(host);
 	}
 
@@ -214,7 +214,7 @@ public class HTTPAdapter extends AAdapter {
 	 * @param host Hostname to block
 	 */
 	public void addBlockedHost(String host) {
-		blockList.add(host.toLowerCase(Locale.ROOT));
+		blockList.add(GuardedResolver.hostKey(host));
 	}
 
 	// ========== SSRF guard ==========
@@ -273,15 +273,15 @@ public class HTTPAdapter extends AAdapter {
 		if (host == null || host.isEmpty()) {
 			throw new IllegalArgumentException("No host to check");
 		}
-		String lowerHost = host.toLowerCase(Locale.ROOT);
+		String key = GuardedResolver.hostKey(host);
 
 		// Block list always wins
-		if (blockList.contains(lowerHost) || configuredBlock.contains(lowerHost)) {
+		if (blockList.contains(key) || configuredBlock.contains(key)) {
 			throw new IllegalArgumentException(BLOCKED_HOST + host);
 		}
 
 		// Allow list bypasses SSRF checks
-		if (allowList.contains(lowerHost) || configuredAllow.contains(lowerHost)) {
+		if (allowList.contains(key) || configuredAllow.contains(key)) {
 			return;
 		}
 
