@@ -106,28 +106,30 @@ flag is `a2a: { public: true, caps: … }` and has two levels:
 
 - `public: true` alone makes the agent's **card discoverable** by anyone (no
   interaction).
-- adding `caps` makes it **interactable** by non-owners. A non-owner's
-  `SendMessage` then runs the agent under the *owner's* identity narrowed by
-  that scope: the caller (the venue public principal when anonymous) acts as a
-  sub-principal in the owner's namespace holding exactly that scope —
-  `Authority.of(caller).onBehalfOf(ownerDID).withGrantScope(scope)` — so the
-  task is the owner's job and records the caller as its `actor`. A scope can
-  only narrow, so it is escalation-safe. `caps: "unrestricted"` is honoured
-  (full owner authority for anonymous callers) with a warning, mirroring
-  `auth.public.caps`; a public agent with **no** `caps` is discoverable but its
-  interaction is **denied** (`publicInteractionAllowed` is false) — the owner
-  must deliberately bound a run.
+- adding `caps` makes it **interactable** by non-owners: a non-owner's
+  `SendMessage` is dispatched as the caller (the venue public principal when
+  anonymous) acting as a sub-principal in the owner's namespace holding exactly
+  that scope — `Authority.of(caller).onBehalfOf(ownerDID).withGrantScope(scope)`
+  — so the task is the owner's job and records the caller as its `actor`. The
+  scope admits the request: it must cover `agent/request` on the agent
+  (`agent/message` for a `taskId` continuation). It does not narrow the run —
+  the agent runs as it always runs, under its own `config.caps`, so a public
+  agent's `config.caps` *is* its public bound, and an owner who wants a narrower
+  public face publishes a dedicated agent. `caps: "unrestricted"` is honoured
+  (the request is admitted with the owner's full authority) with a warning,
+  mirroring `auth.public.caps`; a public agent with **no** `caps` is discoverable
+  but its interaction is **denied** (`publicInteractionAllowed` is false) — the
+  owner must deliberately admit strangers.
 
 The operator's `defaultChatOp` front-door is the venue-level version of the
 public flag.
 
-The **run authority** for a non-owner interaction — whose identity executes, the
-scope applied, and how the public and delegated levers differ — is worked out
-in [A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md). In short: the
-agent always runs under its *owner's* identity; the levers are pure admission; a
-public run is narrowed by `a2a.caps`; the named-delegate scope (gated by a
-dedicated `agent/request` ability) and initiator-provenance are pending
-ratification there.
+The **run authority** for a non-owner interaction — whose identity executes and
+how the public and delegated levers differ — is worked out in
+[A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md). In short: the
+agent always runs as itself in its *owner's* namespace under its own
+`config.caps`; the levers are pure admission; who asked is recorded on the task
+(`actor`) rather than changing what the run may do.
 
 ## Discovery
 
@@ -229,8 +231,8 @@ Shipped:
 - Authenticated catalogue discovery over the job-free agent-list read surface.
 - Per-agent `SendMessage` dispatch through `agent:request`, with Task = task Job
   and `contextId` = session — for fresh sends and `contextId` follow-ups alike (#416).
-- Private-by-default cards, explicit public publication, and attenuated
-  anonymous interaction scopes alongside UCAN delegation.
+- Private-by-default cards, explicit public publication with an admitting
+  `a2a.caps` scope, alongside UCAN delegation.
 - `GetTask` and `CancelTask` on the per-agent endpoint.
 - `SubscribeToTask` reattachment on the per-agent endpoint, backed by the same
   durable Job used by polling.

@@ -243,7 +243,7 @@ public class A2A extends ACoviaAPI {
 	 * is public AND has an explicit {@code a2a.caps} grant scope (COG-14 §5). Public
 	 * without one is discoverable (card) but not anonymously interactable:
 	 * running the agent for anonymous callers requires the owner to deliberately
-	 * bound it.
+	 * admit them.
 	 */
 	private static boolean publicInteractionAllowed(AgentState agent) {
 		return isPublic(agent)
@@ -261,7 +261,9 @@ public class A2A extends ACoviaAPI {
 	 * {@code "unrestricted"} → no scope (full owner authority — the owner's
 	 * explicit, logged choice); a malformed value falls back to a read-only scope.
 	 * A grant scope can only narrow what the caller may do, so this is
-	 * escalation-safe.
+	 * escalation-safe. The scope admits the request; the agent's own cycles run
+	 * as the agent under its {@code config.caps} ({@code AgentAdapter.wakeAgent}),
+	 * as for every caller.
 	 */
 	private RequestContext publicDispatchContext(RequestContext caller, A2ACodec.AgentRef ref,
 			AgentState agent) {

@@ -1,31 +1,30 @@
-# A2A Interaction Authority (design)
+# A2A Interaction Authority
 
 The crux of per-agent A2A exposure: when a **non-owner** interacts with an
 agent, **under whose authority** does the agent run, and **bounded by what**?
 This is the authority model that [A2A_AGENTS.md](./A2A_AGENTS.md) §"Resolution and
-authorisation" defers to. It is a proposal under review — the decisions it must
-settle are listed at the end.
+authorisation" defers to.
 
 For the agent model see [AGENT_SESSIONS.md](./AGENT_SESSIONS.md); for the
 capability primitives see the venue access-control design and COG-13.
 
-## Principle: an agent always runs as its owner
+## Principle: an agent always runs as itself, in its owner's namespace
 
 An agent is the owner's. Its config, its workspace memory, its secrets, and any
 credits or downstream authority it spends are the **owner's**. It follows that an
-agent **executes under its owner's identity — always, for every caller**. A
-caller's identity never becomes the execution identity.
+agent **executes in its owner's namespace, as the owner's agent sub-principal —
+always, for every caller** (`RequestContext.ofAgent(owner, agentId)`, bounded by
+its own `config.caps`). A caller's identity never becomes the execution identity.
 
 This settles the shape of the whole problem. The question is never "run the agent
 *as Bob*" (Bob has no standing in the owner's namespace, and an agent cut off from
 its owner's memory and secrets cannot function). The question is only:
 
-> May this caller cause a run, and **how much of the owner's authority** may the
-> resulting run wield?
+> May this caller cause a run?
 
 ## Two separable questions
 
-The current prose conflates two orthogonal things:
+Two orthogonal things must stay apart:
 
 1. **Admission** — *who* may cause the agent to run at all.
 2. **Execution authority** — once running, *how much* of the owner's authority
@@ -35,85 +34,75 @@ Admission is about the knock at the door; execution authority is about how much
 power the resulting run holds. Keeping them separate is what makes the model
 tractable.
 
-## Three layers of authority
+## One authority per agent
 
-Any run — owner-initiated or not — is bounded by the intersection of:
+Every run — owner-initiated or not — is bounded by **the agent's own
+capability**: its config `caps` (the `CapabilityChecker` gate on its tool calls)
+bounds what the agent may *ever* do, independent of any caller, the owner's own
+interactions included. This is the owner's standing statement: "this is what my
+agent is allowed to do." It is the bound on every run, and the only one.
 
-- **Layer 0 — the agent's intrinsic capability.** The agent's own config `caps`
-  (the `CapabilityChecker` gate on its tool calls) bounds what the agent may
-  *ever* do, independent of any caller — including the owner's own interactions.
-  This is the owner's standing statement: "this is what my agent is allowed to
-  do." It is the **absolute bound** on every run.
+There is deliberately no second, caller-dependent bound that narrows a run for an
+outside party. An agent is one brain with one memory: a run bounded in what it
+may *do* for a stranger still knows everything the agent knows, so a per-caller
+scope would limit actions without isolating knowledge, and it would have to be
+threaded through a run loop whose cycle serves one task and every pending
+message. The honest unit of isolation is the agent. **An owner who wants a
+narrower public face publishes a dedicated agent whose `config.caps` is that
+face** — with its own state, workspace and skills, so a stranger reaches neither
+the private agent's authority nor its memory.
 
-- **Layer 1 — admission.** Owner (always); anonymous/public (via the agent's
-  public flag); a named delegate (via a UCAN grant). Denials are leak-shaped —
-  an anonymous caller gets *not-found*, an authenticated caller without standing
-  gets *forbidden* — so the address space is not a disclosure oracle.
+**Admission** — owner (always); anonymous/public (via the agent's public flag);
+a named delegate (via a UCAN grant). Denials are leak-shaped — an anonymous
+caller gets *not-found*, an authenticated caller without standing gets
+*forbidden* — so the address space is not a disclosure oracle.
 
-- **Layer 2 — the interaction scope.** A *further* narrowing applied to the
-  owner-identity run when the initiator is **not** the owner, so that an outside
-  party can never drive the agent at the owner's unrestricted authority even
-  within Layer 0. This is the new concept this document pins down.
-
-Effective authority of a run = Layer 0 ∩ Layer 2, executed under the owner's
-identity, admitted by Layer 1.
+Effective authority of a run = the agent's `config.caps`, executed as the agent
+in the owner's namespace, admitted by whichever lever the caller came through.
 
 ## Identity for authority vs identity for provenance
 
-For a non-owner interaction these **diverge**, and both must be recorded:
+For a non-owner interaction these **diverge**, and both are recorded:
 
-- **Authority identity** = the **owner** (what the run may touch).
+- **Authority identity** = the **owner** (whose namespace, and whose agent's
+  `config.caps`, the run uses).
 - **Initiator identity** = the **caller** — the delegate's DID, or the venue
-  public DID for an anonymous caller (who *caused* the run).
+  public principal (`<venueDID>:public`) for an anonymous caller (who *caused*
+  the run).
 
-The audit trail must carry both. A task/session created by a non-owner records
-the owner as the authority under which it ran *and* the initiator on whose behalf
-it was admitted. Collapsing the two (recording only the owner as "caller") loses
-the accountability the venue exists to provide — "who caused this" is exactly the
-question a system of record must answer. This is a required field, not a nicety.
+The audit trail carries both. A request admitted through the public lever is
+dispatched as the caller acting as a sub-principal in the owner's namespace
+(`Authority.of(caller).onBehalfOf(owner)` under the admitting scope), so the
+task Job records the owner as `caller` (ownership, quota, persistence) and the
+initiator as `actor`, and the agent's task row names the initiator as its
+`caller`. The model sees the same provenance: `ContextAssembler.attributionNote`
+presents the public principal as anonymous, never as the owner. Collapsing the
+two would lose the accountability the venue exists to provide — "who caused
+this" is exactly the question a system of record must answer.
 
-## The interaction scope, per admission class
+## Admission, per class
 
-Layer 2 is the open design point. Its value depends only on **how the caller was
-admitted** (Layer 1), never on the caller's own ambient authority:
+- **Owner-initiated** — the owner addresses their agent as themselves.
 
-- **Owner-initiated** — no Layer 2 narrowing. The owner runs their own agent at
-  Layer 0.
-
-- **Public / anonymous** — bounded by the agent's configured **`a2a.caps`**,
-  the *public interaction scope*. This is a required, owner-declared bound: a
-  public agent with no `a2a.caps` is discoverable (its card) but **not
-  interactable** — the owner must deliberately bound what an anonymous run may
-  do. `a2a.caps: "unrestricted"` is honoured (with a warning) as the owner's
-  explicit choice. *(This ratifies the behaviour already built for the public
-  lever.)*
+- **Public / anonymous** — admitted by the agent's `a2a.public` flag together
+  with an explicit **`a2a.caps`**: the grant scope the non-owner's *request* is
+  dispatched under. It must cover `agent/request` on the agent (and
+  `agent/message` for a `taskId` continuation) or the send is refused. It
+  governs the request, not the run — the run is the agent's, under
+  `config.caps`, like every run — so a grant in `a2a.caps` beyond the talk
+  abilities has no effect. `a2a.caps: "unrestricted"` admits the request with
+  the owner's full authority and is honoured with a warning as the owner's
+  explicit choice. A public agent with no `a2a.caps` is discoverable (its card)
+  but **not interactable** — the owner must deliberately admit strangers.
 
 - **Named delegate** — admitted by a UCAN grant the owner issued naming that
-  exact principal and agent. **Recommended:** such a run is bounded only by
-  Layer 0 (the agent's own configured capability) — i.e. a named delegate runs
-  the agent at its full configured authority, the same as the owner, differing
-  only in admission and provenance. The rationale mirrors the public
-  "unrestricted is honoured because the owner chose it" rule, one step stronger:
-  issuing a capability that names a specific principal *and* a specific agent is
-  a deliberate, higher-bar trust decision than flipping a public flag, so it
-  warrants at least the authority the public scope could grant. The owner may
-  optionally attach a **narrower** scope to a specific grant to restrict that
-  delegate further (narrowing-only — a grant can never widen beyond Layer 0).
+  exact principal and agent (ability `agent/request`), or by the agent's native
+  `config.accepts` policy. Such a run is the agent's run under `config.caps`,
+  the same as for the owner and for the public, differing only in admission and
+  provenance. A delegate who should see a narrower agent is given a narrower
+  agent; a grant does not carry a run scope.
 
-The invariant this produces:
-
-> `a2a.caps` is the **public** interaction scope — not "all non-owner". Layer 0
-> (the agent's own config caps) is the absolute bound for **every** run. No
-> interaction, by anyone other than the owner, can ever cause the agent to exceed
-> Layer 0.
-
-The trade-off to weigh: a uniform "`a2a.caps` bounds *every* non-owner run,
-delegates included" is simpler to reason about, but it makes a named grant unable
-to express more trust than the anonymous public gets — which defeats the point of
-naming a delegate. The recommendation above keeps the two admission classes with
-distinct scopes; the alternative collapses them. This is the decision to ratify.
-
-## Admission mechanics (logical)
+### Admission mechanics
 
 - **Public flag** — `a2a.public` on the agent config admits anonymous callers to
   discovery; `a2a.caps` additionally admits them to interaction (per above).
@@ -125,9 +114,9 @@ distinct scopes; the alternative collapses them. This is the decision to ratify.
   authority, and so the ability namespace has room to grow (`agent/message`,
   `agent/chat`) hierarchically. The delegate presents the token; it is verified
   as any cross-user proof is (the root is the self-sovereign owner or its
-  controlling venue, audience is the caller, temporal bounds hold, and the grant **covers** the agent
-  resource with boundary-aware matching so a grant on `…/g/agent` cannot cover a
-  sibling `…/g/agentX`).
+  controlling venue, audience is the caller, temporal bounds hold, and the grant
+  **covers** the agent resource with boundary-aware matching so a grant on
+  `…/g/agent` cannot cover a sibling `…/g/agentX`).
 
 - **Native admission policy** — `config.accepts` on the agent record
   (covia#447): the owner's standing statement of who may talk to the agent —
@@ -137,9 +126,18 @@ distinct scopes; the alternative collapses them. This is the decision to ratify.
   `agent/request` and `agent/message` only. A2A does not consult it yet — its
   non-owner path remains the public lever above.
 
-All three levers are pure **admission**; none changes the execution identity (still
-the owner) — they only decide whether a run happens and, for the public lever,
-which scope applies.
+All three levers are pure **admission**; none changes the execution identity
+(the owner's agent, under its `config.caps`) — they only decide whether a run
+happens, and record who asked.
+
+## Addressing a task afterwards
+
+The task a non-owner creates through a per-agent endpoint is the owner's job.
+The per-agent by-id methods (`GetTask`, `CancelTask`, `SubscribeToTask`, a
+`SendMessage` with a `taskId`) let that caller — and only that caller, by the
+recorded `actor` — read, cancel, follow and continue it. The owner's other
+jobs, and other callers' tasks, are "not found" there in one wording; the owner
+addresses every job of theirs on the front door.
 
 ## Lifecycle and boundaries
 
@@ -159,20 +157,5 @@ which scope applies.
 ## Out of scope for this iteration
 
 - Sub-delegation / delegation chains (C2).
-- A delegate polling the resulting task via `GetTask` (the task is owned by the
-  agent owner) — a follow-up once the initiator-provenance field exists to
-  scope it.
-- Task continuations (an inbound `taskId`).
 - Cross-user addressing for the REST/MCP agent ops (A2A carries the owner in its
   path; the native ops take a bare agent id).
-
-## Decisions to ratify
-
-1. **Named-delegate scope** — Layer-0-only by default (recommended), vs a
-   uniform `a2a.caps` for all non-owner runs, vs a separate owner-configured
-   "delegated scope". This is the central call.
-2. **Per-grant narrowing** — support an optional narrower scope attached to a
-   specific grant now, or defer to C2.
-3. **Initiator provenance** — the field/shape recording the initiator alongside
-   the owner authority on a non-owner task/session (name, and whether it also
-   captures the admitting grant id for audit).

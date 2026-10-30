@@ -2945,10 +2945,13 @@ addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
 path below that base. Private by default: the owner interacts as themselves; anonymous
 non-owners get an existence-hiding 404, authenticated non-owners 403.
 Publishing is per-agent config: `a2a: {public: true}` makes the card
-discoverable; adding an explicit `a2a.caps` scope accepts stranger
-messages, dispatched as the OWNER narrowed by that scope — it must include
-`agent/request` plus whatever the agent's own work needs. `"unrestricted"`
-grants full owner authority (logged loudly). Wire method names are SDK-style
+discoverable; adding an explicit `a2a.caps` scope accepts stranger messages:
+the request is dispatched as the stranger (the venue public principal when
+anonymous) in the owner's namespace under that scope, which must include
+`agent/request` on the agent (`agent/message` to continue a task). The agent's
+work then runs under the agent's own `config.caps`, as always — set that as
+tightly as the public should get, or publish a dedicated public agent.
+`"unrestricted"` admits with full owner authority (logged loudly). Wire method names are SDK-style
 (`SendMessage`, not `message/send`). The full addressing, discovery and
 publication model is in [A2A_AGENTS.md](./A2A_AGENTS.md), the implementation
 companion to COG-14; non-owner run authority is detailed in
