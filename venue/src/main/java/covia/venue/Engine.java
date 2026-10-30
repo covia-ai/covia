@@ -4206,12 +4206,13 @@ public class Engine {
 	 * for (a did:web document a presented token names): the http adapter's SSRF
 	 * guard with the operator's allow and block lists, so nothing can reach what
 	 * a direct HTTP call could not (#234). Fails closed when the http adapter is
-	 * absent. A target a caller chose goes through
+	 * absent, or when the JVM does not resolve names through
+	 * {@link covia.adapter.GuardedResolver}. A target a caller chose goes through
 	 * {@link #requireSafeUrl(RequestContext, String)}.
 	 *
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the http adapter is not registered
+	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(String url) {
 		ssrfGuard().requireSafeUrl(url);
@@ -4226,7 +4227,7 @@ public class Engine {
 	 * @param ctx The caller that chose the target
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the http adapter is not registered
+	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(RequestContext ctx, String url) {
 		if (!outboundUnrestricted(ctx)) requireSafeUrl(url);
@@ -4240,7 +4241,7 @@ public class Engine {
 	 * @param ctx The caller that chose the target
 	 * @param host Host name or address literal
 	 * @throws IllegalArgumentException naming the rule when the host is refused
-	 * @throws IllegalStateException when the http adapter is not registered
+	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public void requireSafeHost(RequestContext ctx, String host) {
 		if (!outboundUnrestricted(ctx)) ssrfGuard().requireSafeHost(host);
@@ -4276,7 +4277,7 @@ public class Engine {
 	 * @param auth Authentication the connection presents
 	 * @return The connected venue, not yet contacted
 	 * @throws IllegalArgumentException when the spec is malformed or its address is refused
-	 * @throws IllegalStateException when the http adapter is not registered
+	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
 		return connectVenue(spec, auth, outboundUnrestricted(ctx));

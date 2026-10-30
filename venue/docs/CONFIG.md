@@ -1314,16 +1314,22 @@ Currently defined:
   passes it: HTTP, MCP, A2A and model endpoint URLs, relayed Convex peers,
   `did:web` documents, and other venues — grid and remote-agent targets,
   orchestration steps' venues and the publishers of `did:web` asset
-  references, whether named by URL or DID. Block wins over allow. Loopback,
-  private and link-local targets are refused unless their host is allowed
-  here, so federating with a venue on the same machine or a private network
-  needs its host listed. The venue itself, and a holder of a venue-issued
-  `outbound/any` grant on `<venueDID>/outbound`, may have MCP, A2A, model,
-  Convex peer and venue targets dialled unchecked; agents, the venue's own
-  included, are checked unless granted it. `http:*` requests and `did:web`
-  documents are checked for every caller. A name is resolved
-  when it is checked and again when it is dialled, so a name whose answer
-  changes in between is not caught. The guard belongs to the `http` adapter:
+  references, whether named by URL or DID. Names match whatever their case and
+  with or without a trailing dot. Block wins over allow. Loopback, private,
+  shared (`100.64.0.0/10`), link-local, unspecified and `0.0.0.0/8` addresses,
+  IPv6 unique local addresses (`fc00::/7`) and IPv6 forms that carry one of
+  these IPv4 addresses are refused unless their host is allowed here, so
+  federating with a venue on the same machine or a private network needs its
+  host listed. The venue itself, and a holder of a venue-issued `outbound/any`
+  grant on `<venueDID>/outbound`, may have MCP, A2A, model, Convex peer and
+  venue targets dialled unchecked; agents, the venue's own included, are
+  checked unless granted it. `http:*` requests and `did:web` documents are
+  checked for every caller. A name that passes is held to the same rule for
+  every later lookup, by whichever client, until the venue stops or its host
+  is allowed here: the venue's jar makes `covia.adapter.GuardedResolver` the
+  JVM's name resolver. If the JVM resolves through anything else
+  (`jdk.net.hosts.file` set, or another `InetAddressResolverProvider` found
+  first), only allowed hosts pass. The guard belongs to the `http` adapter:
   with it disabled, every such target is refused. Both lists are published at
   `v/info/adapters/http`.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default
