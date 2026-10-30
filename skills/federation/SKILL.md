@@ -92,6 +92,7 @@ grid_run  operation=<op>  input=<input>  venue=<venue-url>  authenticateAs=<anon
 - UCAN capability tokens travel through the `ucans` proof channel for fine-grained authorisation and are forwarded only when admissible for the explicitly selected remote principal
 - Remote authentication is explicit: use `authenticateAs=caller` with an empty-`att` credential audienced to the target
 - `authenticateAs=venue` is only for the venue itself; no grant lends the venue's identity to anyone else
+- A credential goes only to a venue proven to hold its audience DID: a `did:web` venue at its own https address (http on loopback). Two local venues with `did:key` identities federate with `authenticateAs=anonymous`
 - Every invocation creates an immutable job record on both venues
 - Venues are identified by DIDs — decentralised, no central registry
 - The same operation interface works locally and across the grid
