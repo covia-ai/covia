@@ -2566,10 +2566,12 @@ public class AgentAdapterTest {
 		// target agent's session ties back to the calling job as chat turns do (#378).
 		assertEquals(Strings.create(reqJob.getID().toHexString()), userTurn.get(Fields.JOB_ID),
 			"request turn records the calling agent:request job id");
+		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER), "the request turn keeps its caller");
 
 		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(1);
 		assertEquals(AgentState.ROLE_ASSISTANT, assistantTurn.get(AgentState.K_ROLE));
 		assertEquals(AgentState.SOURCE_TRANSITION, assistantTurn.get(AgentState.K_SOURCE));
+		assertNull(assistantTurn.get(Fields.CALLER), "assistant turns carry no caller");
 	}
 
 	/**
