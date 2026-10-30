@@ -54,8 +54,10 @@ class TelegramModuleIT {
 
 		String executable = System.getProperty("os.name", "").startsWith("Windows")
 			? "java.exe" : "java";
+		// The child writes UTF-8, as the log is read back, whatever the console code page.
 		List<String> command = List.of(
 			Path.of(System.getProperty("java.home"), "bin", executable).toString(),
+			"-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
 			"-cp", venueJar + java.io.File.pathSeparator
 				+ System.getProperty("covia.test.classes"),
 			"covia.adapter.telegram.TelegramModuleSmokeMain", moduleJar.toString());

@@ -1,5 +1,6 @@
 package covia.adapter.telegram;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -32,6 +33,9 @@ public final class TelegramModuleSmokeMain {
 			AMap<AString, ACell> config = Maps.of(
 				Config.MODULES, Vectors.of(Maps.of("path", args[0])),
 				Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+				// Strangers on an open bot are anonymous: the operator lets them invoke the echo operation.
+				Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.CAPS, Vectors.of(
+					Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke"))))),
 				Config.ADAPTERS, Maps.of(
 					Strings.create("telegram"), Maps.of(
 						Strings.create("apiUrl"), Strings.create(telegram.apiUrl()),
@@ -62,7 +66,7 @@ public final class TelegramModuleSmokeMain {
 					throw new AssertionError("Telegram bot-management skill was not installed");
 				}
 
-				// Inbound: an open bot answers a stranger via the echo operation.
+				// Inbound: an open bot answers an anonymous stranger via the echo operation.
 				telegram.push(4242L, 99L, "smoker", "round trip");
 				FakeTelegramServer.Sent reply = telegram.awaitSent(30_000);
 				if (reply == null || !reply.text().contains("round trip")) {
