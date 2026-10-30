@@ -85,9 +85,10 @@ compatibility rejection and reopen behaviour. Do not bump this integer for an
 ordinary software release. Binaries predating version checks must still be
 excluded operationally from upgraded stores.
 
-[MIGRATE.md](MIGRATE.md) covers venue migration as a whole: who owns each part
-of the schema, the older shapes this build reads, and what remains to build
-(#624). The transitional records this section permits are the shapes it lists.
+[MIGRATE.md](MIGRATE.md) covers venue migration as a whole: its requirements,
+who owns each part of the schema, and each migration in this build with its
+code. The transitional records this section permits are the shapes it lists
+as converted on use.
 
 ## Snapshot implementation contract
 
