@@ -265,6 +265,26 @@ class AuthResultTest {
 		assertFalse(engine.crossUserAllows(caller, Strings.create(sibling + "/w/private"), Capability.CRUD_READ));
 	}
 
+	@Test
+	void thePublicPrincipalNeverAuthenticates() {
+		// The venue key can sign its own public principal as a nested subject, and
+		// could issue a session for it; neither credential may authenticate.
+		AString publicDID = Strings.create(engine.getDIDString() + ":public");
+		assertTrue(engine.isPublicPrincipal(publicDID));
+		AString selfIssued = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(), publicDID.toString(),
+			engine.getDIDString().toString(), 300).mintToken());
+		assertKeyRejected(selfIssued, VenueAuthenticator.Reason.PUBLIC_SUBJECT);
+		AString venueSigned = JWT.signPublic(Maps.of(JWT.ISS, engine.getDIDString(), JWT.SUB, publicDID,
+			JWT.AUD, engine.getDIDString(), JWT.IAT, now, JWT.EXP, expiry), engine.getKeyPair());
+		String message = assertThrows(AuthException.class, () -> auth.verify(venueSigned)).getMessage();
+		assertTrue(message.startsWith(VenueAuthenticator.VENUE_TOKEN_REJECTED_PREFIX), message);
+		assertTrue(message.contains(VenueAuthenticator.Reason.PUBLIC_SUBJECT), message);
+		// Any other venue-key-signed nested subject still authenticates.
+		AString user = Strings.create(UCAN.toDIDKey(engine.getKeyPair().getAccountKey()) + ":u:alice");
+		assertEquals(user, auth.authenticate(Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(),
+			user.toString(), engine.getDIDString().toString(), 300).mintToken())));
+	}
+
 	private static void assertKeyRejected(AString token, String reason) {
 		String message = assertThrows(AuthException.class, () -> auth.verify(token)).getMessage();
 		assertTrue(message.startsWith(VenueAuthenticator.SELF_ISSUED_REJECTED_PREFIX), message);

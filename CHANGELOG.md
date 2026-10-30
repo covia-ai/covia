@@ -67,6 +67,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A job stream reads each frame as its subscriber and ends once `GET /jobs/{id}`
   would refuse it, such as after the job's deletion or its proof's expiry.
 - `GET /api/v1/agents/{id}` answers a refused or malformed id with 403 or 400, not 500.
+- `auth:identity-token` refuses a scope lent to a principal acting as itself, and no
+  credential authenticates as the venue's public principal.
 
 ### Migration
 

@@ -69,7 +69,7 @@ The implementation is further along than #297/#296 suggest:
 config; a common method result (identity, evidence and typed method details);
 an optional central session service with revocation; provider
 account-linking/migration rules; route-class assurance enforcement. Basic
-issuer/subject binding is now implemented (�2.3).
+issuer/subject binding is now implemented (§2.3).
 
 ### 2.1 Consolidation review (2026-10-22)
 
@@ -142,7 +142,7 @@ fix. Reusable explicit-clock/skew `exp`/`nbf` validation is requested in
 [Convex #766](https://github.com/Convex-Dev/convex/issues/766), to replace existing
 local duplication rather than grow a new validator. External provider/browser
 login was still incomplete at that audit; the subsequent hardening is recorded
-in �2.3. Managed-session revocation and evidence-policy integration remain
+in §2.3. Managed-session revocation and evidence-policy integration remain
 unimplemented.
 
 ### 2.3 External login consolidation (#298, 2026-10-22)
@@ -287,7 +287,7 @@ earlier evidence, even when rebinding the same identity.
 
 The compatibility identity fields remain `AString`. Method-owned immutable
 `AMap<AString, ACell>` payloads carry provenance; the core declares no built-in
-method ids, protocol fields or Java payload subclasses. After �2.3, provider
+method ids, protocol fields or Java payload subclasses. After §2.3, provider
 `iss` and `sub` are verified and must match an existing issuer/subject account
 binding; email is never a lookup key.
 
@@ -659,7 +659,11 @@ Two notes:
    Enforcing `iss == sub` would conflate JWT claim semantics with
    Covia's separate subject-admission policy. (COG-3 §5's
    "MUST equal `sub` when present" wording is stricter than enforced
-   behaviour — a docs follow-up may reconcile them.)
+   behaviour — a docs follow-up may reconcile them.) One subject is
+   refused whoever signs for it: the venue's public principal
+   (`<venueDID>:public`) is a shared authorisation namespace, not an
+   identity, so no self-issued or venue-signed credential authenticates
+   as it.
 2. **Enrolment authorisation** (decided): add/revoke ops require the
    venue operator, or the user themselves meeting `policy.enrolment`
    via step-up (§9) — a live session alone is never enough to change
@@ -732,6 +736,11 @@ signing key from input. The caller must be the venue's signing `did:key` or a
 valid identity nested below it. An unrelated external key identity, a
 `did:web` identity, and anonymous/public callers are refused; an embedder
 holding a different installation key uses `VenueAuth.namedKeyPair` instead.
+The caller must also be acting under its own authority or as a sub-principal:
+a restricted scope on a principal acting as itself is a profile lent to
+someone else (a public dispatch running as an agent's owner, say), and the
+operation cannot tell the owner from the stranger wearing the owner's DID, so
+it refuses that shape rather than mint the owner's bearer.
 
 It requires `invoke` on `v/ops/auth/identity-token` and `secret/write` on
 `s/RELAY_TOKEN`. Agents write into their owner's secret store under their

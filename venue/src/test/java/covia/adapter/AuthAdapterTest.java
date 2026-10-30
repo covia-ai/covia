@@ -165,14 +165,39 @@ class AuthAdapterTest {
 	}
 
 	@Test void customMetadataCannotBypassIdentityInvokeGrant() {
-		RequestContext ctx = localCaller().withCaps(Vectors.of(
+		// An agent holding invoke on another op and secret/write: a sub-principal,
+		// so it passes the lent-scope refusal and reaches the pinned invoke check.
+		RequestContext owner = localCaller();
+		RequestContext ctx = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker")).withCaps(Vectors.of(
 			Capability.create(Strings.create("v/ops/auth/whoami"), AAdapter.INVOKE),
 			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)))
 			.withOp(Strings.create("v/ops/auth/whoami"));
 		AuthAdapter adapter = (AuthAdapter) TestEngine.ENGINE.getAdapter("auth");
-		assertThrows(Exception.class, () -> adapter.invokeFuture(ctx,
-			Maps.of("operation", Maps.of("adapter", "auth:identity-token")), identityInput()).join());
-		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", RequestContext.of(ctx.getCallerDID())));
+		String message = assertThrows(Exception.class, () -> adapter.invokeFuture(ctx,
+			Maps.of("operation", Maps.of("adapter", "auth:identity-token")), identityInput()).join()).getMessage();
+		assertFalse(message.contains(AuthAdapter.IDENTITY_DIRECT_ONLY), message);
+		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+	}
+
+	@Test void lentScopeCannotMintTheIdentityItWasLentBy() {
+		// The shape a public or anonymous dispatch gives a stranger: the owner's own
+		// DID as caller, narrowed by a scope. Even a scope covering both abilities
+		// must not mint the owner's bearer; the op cannot tell the owner from the
+		// stranger, so it refuses the shape.
+		RequestContext owner = localCaller();
+		RequestContext lent = owner.withCaps(Vectors.of(
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE),
+			Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE)));
+		assertFalse(lent.isSubPrincipal());
+		assertEquals(AuthAdapter.IDENTITY_DIRECT_ONLY, identityFailure(lent, identityInput()).getErrorMessage());
+		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+		// The owner's own unrestricted authority, and a scoped agent of the owner, still mint.
+		assertEquals(owner.getCallerDID(), RT.getIn(identityJob(owner, identityInput()).awaitResult(5000), "sub"));
+		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker")).withCaps(Vectors.of(
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE),
+			Capability.create(Strings.create("s/AGENT"), Abilities.SECRET_WRITE)));
+		assertEquals(agent.getCallerDID(), RT.getIn(identityJob(agent,
+			identityInput().assoc(Strings.create("name"), Strings.create("AGENT"))).awaitResult(5000), "sub"));
 	}
 
 	@Test
