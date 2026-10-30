@@ -6,6 +6,7 @@
       "port": 8080,
       "allowPrivateNetwork": true,
       "users": { "autoCreate": true },
+      "adapters": { "http": { "allowedHosts": ["localhost"] } },
       "mcp": {},
       "webdav": { "enabled": true },
       "a2a": {
@@ -22,6 +23,7 @@
       "port": 8081,
       "allowPrivateNetwork": true,
       "users": { "autoCreate": true },
+      "adapters": { "http": { "allowedHosts": ["localhost"] } },
       "mcp": {},
       "webdav": { "enabled": true },
       "a2a": {
