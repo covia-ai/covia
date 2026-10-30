@@ -23,6 +23,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   per change of sender (COG-20 §4).
 - `AAdapter.stateSteps()`: an adapter's state migration as an ordered list of
   `MigrationStep`s; its state version is their number.
+- `ucan:issue` takes `prf`: the venue passes on part of a grant made to it (#636).
 
 ### Changed
 

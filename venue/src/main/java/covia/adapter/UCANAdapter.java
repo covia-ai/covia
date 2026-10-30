@@ -3,6 +3,7 @@ package covia.adapter;
 import java.util.concurrent.CompletableFuture;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.RootAuthorityPolicy;
 import convex.auth.ucan.UCAN;
 import convex.auth.did.DID;
 import convex.auth.jwt.JWT;
@@ -27,13 +28,26 @@ import covia.venue.UcanJwtValidator;
  *
  * <p>The issuance operation creates venue-signed roots for the venue's own
  * resources and its managed custodial users. Self-sovereign users issue with
- * their own key using the client SDK; the venue must not impersonate them.</p>
+ * their own key using the client SDK; the venue must not impersonate them.
+ * Given {@code prf}, it instead signs the next link of a chain, passing on
+ * part of a grant made to the venue; only the venue itself may ask.</p>
  */
 public class UCANAdapter extends AAdapter {
 
 	private static final AString K_TOKEN = Strings.intern("token");
 	private static final AString K_AUTHORISES = Strings.intern("authorises");
 	private static final AString K_AUDIENCE = Strings.intern("audience");
+
+	/** Refusal of {@code prf} from any caller but the venue itself. */
+	public static final String PRF_VENUE_ONLY = "Only the venue itself may pass on a grant it holds (prf)";
+	/** Refusal of a {@code prf} entry that does not verify. */
+	public static final String PRF_INVALID = "A prf entry is not a valid UCAN";
+	/** Refusal of a {@code prf} entry addressed to someone other than this venue. */
+	public static final String PRF_NOT_TO_VENUE = "A prf entry is not a grant to this venue";
+	/** Refusal of an {@code att} entry that no {@code prf} entry covers. */
+	public static final String PRF_NOT_COVERED = "No grant in prf covers";
+	/** Refusal of an {@code exp} later than the covering {@code prf} entry allows. */
+	public static final String PRF_OUTLIVED = "exp outlives the grant in prf that covers";
 
 	@Override
 	public String getName() {
@@ -71,12 +85,14 @@ public class UCANAdapter extends AAdapter {
 	}
 
 	/**
-	 * Issues a venue-signed UCAN token for a venue-controlled resource.
+	 * Issues a venue-signed UCAN token.
 	 *
 	 * <p>The venue signs with its own key pair. The issuer DID is the venue's DID.
-	 * The caller must be authenticated. The resource must be owned by the venue
-	 * or one of its managed custodial users; self-sovereign owners sign with
-	 * their own key client-side.</p>
+	 * The caller must be authenticated. Without {@code prf} the token is a root,
+	 * so the resource must be owned by the venue or one of its managed custodial
+	 * users; self-sovereign owners sign with their own key client-side. With
+	 * {@code prf} the token passes on grants made to the venue
+	 * ({@link #requireHeld}).</p>
 	 *
 	 * @return The complete signed UCAN token as a CVM map
 	 */
@@ -106,6 +122,18 @@ public class UCANAdapter extends AAdapter {
 		AVector<ACell> att = RT.getIn(input, UCAN.ATT);
 		if (att == null || att.count() == 0) {
 			throw new RuntimeException("att (attenuations) is required and must not be empty");
+		}
+
+		// prf passes on the venue's own authority, so no request but the
+		// venue's own selects it; an empty prf is a root, as in the token.
+		ACell prfCell = RT.getIn(input, UCAN.PRF);
+		AVector<ACell> prf = RT.ensureVector(prfCell);
+		if (prfCell != null && prf == null) {
+			throw new IllegalArgumentException("prf must be an array of UCAN JWTs");
+		}
+		if (prf != null && prf.isEmpty()) prf = null;
+		if (prf != null && !engine.isDirectVenue(ctx)) {
+			throw new AuthException(PRF_VENUE_ONLY + ", not " + ctx.getCallerDID());
 		}
 
 		AMap<AString, ACell> inputMap = RT.castMap(input);
@@ -155,7 +183,8 @@ public class UCANAdapter extends AAdapter {
 				throw new RuntimeException("att[" + i + "].can (ability) is required");
 			}
 			if (w.startsWith("did:")) {
-				if (!w.startsWith(callerPrefix)) {
+				// With prf, held grants authorise the entry instead (requireHeld)
+				if (prf == null && !w.startsWith(callerPrefix)) {
 					// Held granting right: minting over another principal's resource
 					// requires proofs covering grant/<can> on it — and the minted
 					// authority must not outlive the granting right enabling it
@@ -195,20 +224,24 @@ public class UCANAdapter extends AAdapter {
 		}
 		att = canonAtt;
 
-		// This operation signs a new ROOT with the venue key. That is valid only
-		// for resources the venue actually controls: its own DID or one of its
-		// managed custodial users. A self-sovereign caller must sign with their
-		// own key client-side; a held use/grant proof cannot turn the venue into
-		// the root authority for an unrelated DID.
+		// Without prf this operation signs a new ROOT with the venue key. That is
+		// valid only for resources the venue actually controls: its own DID or one
+		// of its managed custodial users. A self-sovereign caller must sign with
+		// their own key client-side; a held use/grant proof cannot turn the venue
+		// into the root authority for an unrelated DID.
 		AString venueDID = engine.getDIDString();
-		for (long i = 0; i < att.count(); i++) {
-			AMap<AString, ACell> cap = RT.castMap(att.get(i));
-			AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
-			if (!engine.rootAuthorityPolicy().acceptsRoot(venueDID, with)) {
-				throw new AuthException("Cannot issue a venue-signed root grant for " + with
-					+ ": the resource is not controlled by this venue. Self-sovereign DID "
-					+ "owners must sign the UCAN with their own key; use user:create with a "
-					+ "username only for a venue-managed custodial identity");
+		if (prf != null) {
+			requireHeld(prf, att, now, exp);
+		} else {
+			for (long i = 0; i < att.count(); i++) {
+				AMap<AString, ACell> cap = RT.castMap(att.get(i));
+				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
+				if (!engine.rootAuthorityPolicy().acceptsRoot(venueDID, with)) {
+					throw new AuthException("Cannot issue a venue-signed root grant for " + with
+						+ ": the resource is not controlled by this venue. Self-sovereign DID "
+						+ "owners must sign the UCAN with their own key; use user:create with a "
+						+ "username only for a venue-managed custodial identity");
+				}
 			}
 		}
 
@@ -233,7 +266,7 @@ public class UCANAdapter extends AAdapter {
 			UCAN.AUD, audDID,
 			UCAN.UCV, UCAN.VERSION,
 			UCAN.ATT, att,
-			UCAN.PRF, Vectors.empty());
+			UCAN.PRF, (prf != null) ? prf : Vectors.empty());
 		claims = claims.assoc(UCAN.EXP, (exp == null) ? null : CVMLong.create(exp));
 		AString token = JWT.signPublic(claims, venueKP);
 		engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "ucan",
@@ -241,6 +274,47 @@ public class UCANAdapter extends AAdapter {
 			covia.venue.Audit.K_EXP, (exp == null) ? "never" : exp);
 
 		return Maps.of("token", token);
+	}
+
+	/**
+	 * A token with proofs is the next link of their chains, never a root: each
+	 * proof must be a valid grant made to this venue, and one of them must cover
+	 * every entry of {@code att} now and through {@code exp}. These are the
+	 * checks a verifier makes of the chain, made before the venue signs it.
+	 */
+	private void requireHeld(AVector<ACell> prf, AVector<ACell> att, long now, Long exp) {
+		AString venueDID = engine.getDIDString();
+		AVector<ACell> held = Vectors.empty();
+		for (long i = 0; i < prf.count(); i++) {
+			AString jwt = RT.ensureString(prf.get(i));
+			UcanJwtValidator.Validation parent = (jwt != null)
+				? UcanJwtValidator.validate(jwt, now, engine.didVerifier()) : null;
+			if (parent == null || !parent.valid()) {
+				throw new IllegalArgumentException(PRF_INVALID + " (prf[" + i + "]"
+					+ ((parent != null) ? ": " + parent.reason() : ": expected a JWT string") + ")");
+			}
+			if (!venueDID.equals(parent.token().getAudience())) {
+				throw new AuthException(PRF_NOT_TO_VENUE + " (prf[" + i + "] is addressed to "
+					+ parent.token().getAudience() + ")");
+			}
+			held = held.conj(parent.token().toMap());
+		}
+		RootAuthorityPolicy roots = engine.rootAuthorityPolicy();
+		long horizon = (exp == null) ? Long.MAX_VALUE : exp - 1;
+		for (long i = 0; i < att.count(); i++) {
+			AMap<AString, ACell> cap = RT.castMap(att.get(i));
+			AString with = RT.ensureString(cap.get(Capability.WITH));
+			AString can = RT.ensureString(cap.get(Capability.CAN));
+			if (!CapabilityChecker.proofsStructurallyCover(held, venueDID, roots, with, can, now)) {
+				throw new AuthException(PRF_NOT_COVERED + " " + can + " on " + with
+					+ ": a token with prf only passes on grants the venue holds, so grants over "
+					+ "the venue's own resources need a token without prf");
+			}
+			if (!CapabilityChecker.proofsStructurallyCover(held, venueDID, roots, with, can, horizon)) {
+				throw new AuthException(PRF_OUTLIVED + " " + can + " on " + with
+					+ "; request a shorter exp");
+			}
+		}
 	}
 
 	/**

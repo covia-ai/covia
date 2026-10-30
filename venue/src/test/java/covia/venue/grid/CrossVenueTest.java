@@ -16,6 +16,7 @@ import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -394,6 +395,55 @@ public class CrossVenueTest {
 			"a venue-issued grant should reach the venue's resources at B: "
 				+ RT.getIn(read.getData(), Fields.ERROR));
 		assertEquals(Strings.create("shared by A"), RT.getIn(read.getData(), Fields.OUTPUT, "value"));
+	}
+
+	/**
+	 * The venue passes on part of a grant another venue made to it: B grants A
+	 * read on a document in B's namespace, A passes it on to Alice with B's
+	 * grant in prf, and Alice reads it at B through A, as herself.
+	 */
+	@Test
+	public void venuePassesOnAGrantItHoldsElsewhere() throws Exception {
+		TwoVenueTestServer.ENGINE_B.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/held-share/doc", Fields.VALUE, "held by A"),
+			TwoVenueTestServer.ENGINE_B.venueContext()).awaitResult(10_000);
+		long now = System.currentTimeMillis() / 1000;
+		ACell toA = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation("v/ops/ucan/issue", Maps.of(
+			"aud", TwoVenueTestServer.DID_A,
+			"att", Vectors.of(Maps.of("with", "w/held-share/", "can", Capability.CRUD_READ)),
+			"exp", now + 3600),
+			TwoVenueTestServer.ENGINE_B.venueContext()).awaitResult(10_000);
+
+		AKeyPair aliceKP = AKeyPair.generate();
+		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
+		ACell toAlice = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation("v/ops/ucan/issue", Maps.of(
+			"aud", aliceDID,
+			"att", Vectors.of(Maps.of("with", TwoVenueTestServer.DID_B + "/w/held-share/",
+				"can", Capability.CRUD_READ)),
+			"exp", now + 1800,
+			"prf", Vectors.of(RT.getIn(toA, "token"))),
+			TwoVenueTestServer.ENGINE_A.venueContext()).awaitResult(10_000);
+
+		AMap<AString, ACell> read = Maps.of(
+			Fields.OPERATION, "v/ops/covia/read",
+			Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+			"authenticateAs", "caller",
+			Fields.INPUT, Maps.of(Fields.PATH, TwoVenueTestServer.DID_B + "/w/held-share/doc"));
+		VenueHTTP aliceOnA = VenueHTTP.create(
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
+
+		// Control: as herself but without the passed-on grant, Alice is refused at B.
+		aliceOnA.setUcans(java.util.List.of(identityToken(aliceKP, TwoVenueTestServer.DID_B)));
+		assertNotEquals(Status.COMPLETE, aliceOnA.invokeAndWait(OP_GRID_RUN, read).getStatus(),
+			"without a grant Alice has no standing in B's namespace");
+
+		aliceOnA.setUcans(java.util.List.of(RT.getIn(toAlice, "token").toString(),
+			identityToken(aliceKP, TwoVenueTestServer.DID_B)));
+		Job hop = aliceOnA.invokeAndWait(OP_GRID_RUN, read);
+		assertEquals(Status.COMPLETE, hop.getStatus(),
+			"the chain B -> A -> Alice should reach B's document: "
+				+ RT.getIn(hop.getData(), Fields.ERROR));
+		assertEquals(Strings.create("held by A"), RT.getIn(hop.getData(), Fields.OUTPUT, "value"));
 	}
 
 	/**

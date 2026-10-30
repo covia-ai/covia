@@ -311,8 +311,9 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
 - A DID URL in the **caller's own namespace** is issuable by this operation
   only when the caller is a locally managed custodial user. A self-sovereign
   caller must sign client-side.
-- A DID URL in **another principal's namespace** is issuable only under a
-  held **granting right** (COG-17): the caller's transport-presented
+- A DID URL in **another principal's namespace** is issuable as a root only
+  under a held **granting right** (COG-17), or passed on by the venue itself
+  with `prf` (below). For a root, the caller's transport-presented
   proofs must cover `grant/<can>` on the resource (proofs travel in the
   proof channel, never in operation input), and the minted `exp` must not
   outlive the enabling right (coverage is re-evaluated at the minted
@@ -322,6 +323,35 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   the venue into root authority for an external DID. This makes `ucan:issue`
   a *granting surface* — the `grant/…` rule binds token production; chain
   resolution stays grant-agnostic.
+
+**Passing on a held grant.** With `prf`, the issuance operation of COG-17
+signs the next link of a chain instead of a root: the venue passes on part of
+grants made to it, typically by another venue over that venue's resources.
+
+```json
+ucan:issue {
+  aud: "did:key:zAlice...",
+  att: [{ with: "did:web:b.example/w/shared/", can: "crud/read" }],
+  exp: 1735689600,
+  prf: ["<b.example's grant to this venue>"]
+}
+```
+
+- Only the venue itself may supply `prf` (`Engine.isDirectVenue`): the
+  authority passed on is the venue's, not the caller's.
+- Each `prf` entry must be a valid UCAN JWT addressed to this venue, and one
+  of them must cover every `att` entry now and through `exp`, so a
+  non-expiring link needs a non-expiring parent. These are the checks a
+  verifier makes of the chain (§4.4), made before signing.
+- A token with proofs is never a root, so it cannot also grant the venue's
+  own resources; those take a token without `prf`.
+- The parents' caveats bind wherever the chain is used, because verification
+  evaluates `nb` at every hop.
+- A parent rooted in another venue's custodial user is refused until
+  custodial attestation exists (C3b, §5.6).
+
+The proofs are part of the token being signed, so they are operation input.
+Proofs that authorise a request travel in the proof channel instead (§4.3).
 
 ### 4.2 Delivery
 
@@ -1156,8 +1186,8 @@ the authentication channel. The three concerns never infer one another:
   right the venue has. A user reaches the venue's own resources at a target
   through capabilities instead: a `ucan:issue` grant from the venue, presented
   with `authenticateAs: "caller"` (custodial users through C3b attestation).
-  `ucan:issue` mints roots only, so a grant a target made to this venue cannot
-  be re-delegated to a user (covia#636).
+  A grant a target made to this venue reaches a user the same way: the venue
+  passes on part of it with `ucan:issue` and `prf` (§4.1).
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context

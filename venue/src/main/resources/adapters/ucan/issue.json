@@ -1,6 +1,6 @@
 {
 	"name": "Issue UCAN Token",
-	"description": "Creates a venue-signed UCAN capability token for resources controlled by this venue or one of its managed custodial users. The venue is the issuer. Self-sovereign DID owners must sign UCANs with their own key using a client SDK. The token grants the audience (aud) the specified capabilities (att). Set exp to a future Unix timestamp for a finite lifetime; omitted exp or explicit exp:null mints a genuinely non-expiring token with an explicit null claim.",
+	"description": "Creates a venue-signed UCAN capability token for resources controlled by this venue or one of its managed custodial users. The venue is the issuer. Self-sovereign DID owners must sign UCANs with their own key using a client SDK. The token grants the audience (aud) the specified capabilities (att). Set exp to a future Unix timestamp for a finite lifetime; omitted exp or explicit exp:null mints a genuinely non-expiring token with an explicit null claim. With prf, the venue itself passes on part of grants made to it: the token carries them as proof, every att entry must be covered by one of them, and exp cannot outlive it.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "ucan:issue",
@@ -27,6 +27,11 @@
 				},
 				"exp": {
 					"description": "Optional expiry as a future integer Unix timestamp in seconds. Omit or set to null for a genuinely non-expiring token; the emitted token carries an explicit exp:null claim."
+				},
+				"prf": {
+					"type": "array",
+					"description": "Optional proofs: UCAN JWTs granting this venue the capabilities it passes on. Only the venue itself may supply them. Omitted or empty mints a root.",
+					"items": { "type": "string" }
 				}
 			},
 			"required": ["aud", "att"]
