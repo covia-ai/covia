@@ -1,7 +1,9 @@
 package covia.adapter;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import convex.auth.did.DID;
 import convex.auth.ucan.UCAN;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -13,6 +15,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Grid;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
@@ -32,6 +35,14 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	 */
 	public static final String VENUE_MODE_DENIED =
 		"authenticateAs=venue is only for the venue itself; use authenticateAs=caller with your own credential and grants";
+
+	/**
+	 * Opening of the refusal to send a credential to a venue whose DID the
+	 * connection cannot prove. A did:web venue proves itself at its own https
+	 * address (plain http on loopback).
+	 */
+	public static final String VENUE_UNPROVEN =
+		"No credential is sent to a venue whose DID is unproven; a did:web venue is proven only at its own https address. Unproven: ";
 
 	public static VenueConnection connect(Engine engine, RequestContext ctx, AString venueSpec, ACell input) {
 		AString venueDID = engine.getDIDString();
@@ -106,13 +117,49 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	/**
 	 * Resolve the target identity once for audience-bound venue authentication.
 	 * Discovery dials the target itself, so it passes the outbound guard first
-	 * unless the caller could have the venue dial anywhere.
+	 * unless the caller could have the venue dial anywhere. A credential goes
+	 * only to a venue proven to hold the DID it is audienced to, unless the
+	 * operator turns proof off ({@code auth.requireVenueProof}).
 	 */
 	private static String targetVenueDID(Engine engine, AString venueSpec, boolean unrestricted) {
 		String target = venueSpec.toString();
-		if (target.startsWith("did:")) return target;
-		if (!unrestricted) engine.requireSafeUrl(target);
-		return VenueDID.discover(target);
+		String did;
+		if (target.startsWith("did:")) {
+			did = target;
+		} else {
+			if (!unrestricted) engine.requireSafeUrl(target);
+			did = VenueDID.discover(target);
+		}
+		if (engine.config().isRequireVenueProof() && !proven(target, did)) {
+			throw new AuthException(VENUE_UNPROVEN + did + " at " + target);
+		}
+		return did;
+	}
+
+	/**
+	 * Whether connecting to {@code target} proves the venue holds {@code did}.
+	 * A did:web venue proves itself at its own address ({@link Grid#webDIDAddress}),
+	 * by TLS or on loopback; a target named by that DID is reached there. No other
+	 * DID is proven at an address.
+	 */
+	static boolean proven(String target, String did) {
+		if (!did.startsWith("did:web:")) return false;
+		if (target.equals(did)) return true;
+		try {
+			URI expected = Grid.webDIDAddress(DID.fromString(did));
+			URI actual = URI.create(target.trim());
+			return expected.getScheme().equalsIgnoreCase(actual.getScheme())
+				&& expected.getHost() != null
+				&& expected.getHost().equalsIgnoreCase(actual.getHost())
+				&& port(expected) == port(actual);
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
+	}
+
+	private static int port(URI uri) {
+		if (uri.getPort() >= 0) return uri.getPort();
+		return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
 	}
 
 }

@@ -291,6 +291,9 @@ public class Config {
 	public static final AString AUDIENCE = Strings.intern("audience");
 	/** Whether a bearer credential must carry an expiry ({@code auth.requireExp}, default true). */
 	public static final AString REQUIRE_EXP = Strings.intern("requireExp");
+	/** Whether an authenticated connection to another venue must prove its DID first
+	 *  ({@code auth.requireVenueProof}, default true). */
+	public static final AString REQUIRE_VENUE_PROOF = Strings.intern("requireVenueProof");
 	/** Obsolete option recognised only to report its required migration. */
 	public static final AString LOGIN_REDIRECT_ORIGINS = Strings.intern("loginRedirectOrigins");
 	/** Exact frontend destinations for single-use login handoff codes. */
@@ -746,11 +749,12 @@ public class Config {
 		if (auth == null) return;
 		validateUnknownFields(auth,
 			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
-				"requireExp", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
+				"requireExp", "requireVenueProof", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
 			"auth", strict);
 		covia.venue.auth.AuthMethods.validateConfig(auth);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
 		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
+		optionalBoolean(auth, REQUIRE_VENUE_PROOF, "auth.requireVenueProof", true);
 		optionalLong(auth, MAX_TOKEN_LIFETIME, "auth.maxTokenLifetime", 1, Long.MAX_VALUE);
 
 		AString audience = optionalString(auth, AUDIENCE, "auth.audience");
@@ -1830,6 +1834,21 @@ public class Config {
 		AMap<AString, ACell> authConfig = getAuthConfig();
 		if (authConfig != null) {
 			ACell v = authConfig.get(REQUIRE_EXP);
+			if (v != null) return RT.bool(v);
+		}
+		return true;
+	}
+
+	/**
+	 * Whether an authenticated connection to another venue must prove the
+	 * venue's DID before sending it a credential ({@code auth.requireVenueProof},
+	 * default {@code true}). Off, the venue takes the DID a target claims at its
+	 * address, for test venues whose DID is served where it cannot be proven.
+	 */
+	public boolean isRequireVenueProof() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			ACell v = authConfig.get(REQUIRE_VENUE_PROOF);
 			if (v != null) return RT.bool(v);
 		}
 		return true;

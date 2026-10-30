@@ -68,6 +68,19 @@ public class Grid {
 	}
 
 	private static Venue connectWebDID(DID did, VenueAuth auth) {
+		return VenueHTTP.create(webDIDAddress(did), auth);
+	}
+
+	/**
+	 * The address a did:web venue is reached at, and so the one place it can
+	 * prove its DID: {@code https://<host>[:port]}, or plain http for
+	 * {@code localhost} and {@code 127.0.0.1}.
+	 *
+	 * @param did A did:web DID naming a host, e.g. {@code did:web:venue.example.com%3A3000}
+	 * @return The venue's base address
+	 * @throws IllegalArgumentException if the DID does not name a host
+	 */
+	public static URI webDIDAddress(DID did) {
 		// did:web encodes an optional port with a percent-encoded colon
 		// (did:web:example.com%3A3000) — decode it for the URL form.
 		String host = did.getID().replace("%3A", ":").replace("%3a", ":");
@@ -76,7 +89,7 @@ public class Grid {
 		String hostName = host.contains(":") ? host.substring(0, host.indexOf(':')) : host;
 		String scheme = (hostName.equals("localhost") || hostName.equals("127.0.0.1"))
 			? "http" : "https";
-		return VenueHTTP.create(URI.create(scheme + "://" + host), auth);
+		return URI.create(scheme + "://" + host);
 	}
 
 	/**

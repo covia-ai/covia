@@ -456,8 +456,9 @@ grid:invoke {
 ```
 `anonymous` is the default, `caller` requires a target-audienced empty-`att`
 credential, and `venue` is only for the venue itself. Credentials and grants
-are forwarded in their distinct channels, filtered to the selected principal.
-Grant presence never selects a mode. See §5.6.
+are forwarded in their distinct channels, filtered to the selected principal,
+and only to a venue whose DID is proven. Grant presence never selects a mode.
+See §5.6.
 
 **Agent tool calls**: The agent framework (level 2) attaches the user's
 proofs automatically when invoking tools on behalf of the user. Agents
@@ -1189,6 +1190,14 @@ the authentication channel. The three concerns never infer one another:
   with `authenticateAs: "caller"` (custodial users through C3b attestation).
   A grant a target made to this venue reaches a user the same way: the venue
   passes on part of it with `ucan:issue` and `prf` (§4.1).
+- **Target identity** — a credential (`caller` or `venue`) is sent only to a
+  venue proven to hold the DID it is audienced to: a `did:web` venue at its own
+  address, `https://<host>` or plain http on loopback, whether the hop names it
+  by that DID or by that address. A target named by URL states its DID at
+  `/.well-known/did.json`; a DID it cannot prove there — another host's
+  `did:web`, or a `did:key` — is refused before any credential leaves.
+  `auth.requireVenueProof: false` takes the stated DID instead, for test venues
+  whose `did:web` name is served elsewhere.
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context

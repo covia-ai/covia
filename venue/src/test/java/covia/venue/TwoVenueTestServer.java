@@ -9,6 +9,7 @@ import convex.core.data.AccountKey;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import covia.adapter.HTTPAdapter;
 import covia.api.Fields;
 import covia.grid.client.VenueHTTP;
@@ -112,7 +113,10 @@ public class TwoVenueTestServer {
 					// Federation tests invoke ops cross-venue as the public caller,
 					// so run public access unrestricted. PublicScopeTest covers the
 					// secure read-only default and authenticated access.
-					Config.CAPS, Strings.create("unrestricted"))
+					Config.CAPS, Strings.create("unrestricted")),
+				// Each venue's did:web name is served at localhost, where no
+				// connection can prove it; VenueIdentityProofTest covers proof.
+				Config.REQUIRE_VENUE_PROOF, CVMBool.FALSE
 			)
 		), TestTemp.etch(hostname));
 	}

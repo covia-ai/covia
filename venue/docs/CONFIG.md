@@ -1001,6 +1001,23 @@ further ahead than this. Deliberately unset by default, since a cap is a
 nuisance in development. Worth setting on a production venue — for example
 30 days (`2592000`), the frontend's longest identity-token option, or lower.
 
+## Venue identity proof (`auth.requireVenueProof`)
+
+```json
+{
+  "auth": { "requireVenueProof": true }
+}
+```
+
+`requireVenueProof` (default `true`): an authenticated grid or remote-agent hop
+(`authenticateAs` `caller` or `venue`) sends its credential only to a venue
+proven to hold the DID the credential is audienced to — a `did:web` venue at
+its own `https://<host>` address, or plain http on loopback. A venue reached at
+any other address, or one with a `did:key`, is refused before the credential
+leaves. Turn it off only for test venues whose `did:web` name is served
+elsewhere; the venue then takes the DID a target states at its address. See
+UCAN.md §5.6.
+
 ## Public access (`auth.public`)
 
 ```json

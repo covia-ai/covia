@@ -27,6 +27,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `Engine.connectVenue`: connects to another venue through the outbound guard.
 - `outbound/any` on `<venueDID>/outbound`: the venue's own standing to dial any MCP,
   A2A, model, Convex peer or venue target unchecked, delegable by a venue-issued grant.
+- `Grid.webDIDAddress`: the address a `did:web` venue is reached at.
+- `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
 
 ### Changed
 
@@ -79,6 +81,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   publishers pass the outbound guard; a loopback or private venue needs its host in
   `adapters.http.allowedHosts` unless the venue itself, or an `outbound/any` holder,
   makes the call.
+- An authenticated grid or remote-agent hop sends its credential only to a venue
+  proven to hold the DID it is audienced to: a `did:web` venue at its own https
+  address (http on loopback).
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.
