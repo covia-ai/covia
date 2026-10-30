@@ -1154,7 +1154,7 @@ the authentication channel. The three concerns never infer one another:
   through capabilities instead: a `ucan:issue` grant from the venue, presented
   with `authenticateAs: "caller"` (custodial users through C3b attestation).
   `ucan:issue` mints roots only, so a grant a target made to this venue cannot
-  yet be re-delegated to a user.
+  be re-delegated to a user (covia#636).
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context
