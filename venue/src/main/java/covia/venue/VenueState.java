@@ -36,6 +36,7 @@ import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.venue.migration.VenueMigrations;
 import covia.venue.storage.LatticeStorage;
 
 /**
@@ -65,8 +66,8 @@ import covia.venue.storage.LatticeStorage;
  * Children have no independent publication or merge boundary.</p>
  */
 public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
-	/** Version 1 permits lazy legacy adapter records; it does not imply a full rewrite. */
-	public static final long CURRENT_VERSION = 1;
+	/** The venue schema version: the number of {@link VenueMigrations#STEPS}. */
+	public static final long CURRENT_VERSION = VenueMigrations.STEPS.size();
 	public static final String INVALID_STATE = "Venue state must be a keyword-keyed Index";
 	public static final String INVALID_VERSION = "Venue :version must be a non-negative integer";
 	public static final String UNSUPPORTED_VERSION = "Venue version %d is newer than supported version %d";
@@ -334,7 +335,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	/** A worker view guarded against deletion or recreation of its owner. */
 	public AdapterState adapterState(String name, AString owner) {
 		AdapterState.validateName(name);
-		migrateLegacyState("w/adapters/" + name, Covia.ADAPTERS, convex.core.data.Strings.create(name));
+		moveLegacyAdapterState(name);
 		return AdapterState.bind(this, name, owner);
 	}
 
@@ -350,33 +351,32 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	public static final String LEGACY_STATE_CONFLICT = "Conflicting legacy venue state at ";
 
-	/** Move one legacy value exactly, removing its old copy in the same commit. */
-	private void migrateLegacyState(String path, Keyword region, AString key) {
+	/**
+	 * Moves an adapter's value at the legacy {@code w/adapters/<name>} to
+	 * {@code :adapters/<name>} exactly, removing the old copy in the same commit.
+	 */
+	private void moveLegacyAdapterState(String name) {
+		String path = "w/adapters/" + name;
+		AString key = Strings.create(name);
 		requireSupportedVersion();
 		if (legacyState(path) == null) return;
 		transact(draft -> {
 			draft.requireSupportedVersion();
 			ACell legacy = draft.legacyState(path);
 			if (legacy == null) return;
-			AMap<ACell, ACell> parent = RT.ensureMap(key == null ? draft.get() : RT.getIn(draft.get(), region));
-			ACell target = key == null ? region : key;
-			boolean present = parent != null && parent.containsKey(target);
-			if (present && !Objects.equals(parent.get(target), legacy)) {
+			AMap<ACell, ACell> adapters = RT.ensureMap(RT.getIn(draft.get(), Covia.ADAPTERS));
+			boolean present = adapters != null && adapters.containsKey(key);
+			if (present && !Objects.equals(adapters.get(key), legacy)) {
 				// There is no generic merge for arbitrary adapter-owned values.
 				throw new IllegalStateException(LEGACY_STATE_CONFLICT + path);
 			}
-			if (!present) {
-				AForkableCursor<ACell> destination = draft.cursor().path(region);
-				if (key != null) destination = destination.withDefault(Maps.empty()).path(key);
-				destination.set(legacy);
-			}
+			if (!present) draft.cursor().path(Covia.ADAPTERS).withDefault(Maps.empty()).path(key).set(legacy);
 			draft.venueUser().deleteInternalPath(covia.lattice.WorkspaceRoot.parseStringPath(path));
 		});
 	}
 
 	/** Only unfinished work is indexed here; no user/job scan is needed on startup. */
 	AMap<AString, ACell> pendingUserDeletions(String name) {
-		migrateLegacyState("w/user-deletions", Covia.USER_DELETIONS, null);
 		AMap<AString, ACell> pending = RT.ensureMap(RT.getIn(get(), Covia.USER_DELETIONS, convex.core.data.Strings.create(name)));
 		return pending == null ? Maps.empty() : pending;
 	}
@@ -606,19 +606,17 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		for (AdapterMigration migration : adapters) migrateAdapterInPlace(migration);
 	}
 
-	/** Only called on a transaction draft; add each future upgrade here. */
+	/**
+	 * Only called on a transaction draft: each venue step from the stored
+	 * version, recording each version reached. Steps are in
+	 * {@link VenueMigrations#STEPS}.
+	 */
 	private void migrateInPlace() {
 		long version = requireSupportedVersion();
 		while (version < CURRENT_VERSION) {
-			switch ((int) version) {
-				case 0 -> {
-					// Version 1 introduces adapter-owned components and a framework
-					// cleanup index. Only the small pending index moves at startup;
-					// adapter values still move exactly on first access.
-					migrateLegacyState("w/user-deletions", Covia.USER_DELETIONS, null);
-				}
-				default -> throw unsupportedVersion(version);
-			}
+			ACell value = get();
+			ACell migrated = VenueMigrations.STEPS.get((int) version).apply(value);
+			if (migrated != value) cursor().set(migrated);
 			cursor().withDefault(Index.none()).path(Covia.VERSION).set(CVMLong.create(++version));
 		}
 	}

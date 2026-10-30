@@ -193,13 +193,13 @@ class BundledAdapterMigrationTest {
 
 	/** A step refuses state that is not its version's shape. */
 	@Test void theTestAdapterStepsRefuseOtherShapes() {
-		TestAdapter adapter = new TestAdapter();
+		var steps = new TestAdapter().stateSteps();
 		List<ACell> states = STATES.get("test");
 		assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1),
-			assertThrows(IllegalStateException.class, () -> adapter.migrateState(1, Vectors.of("not a map"))).getMessage());
+			assertThrows(IllegalStateException.class, () -> steps.get(1).apply(Vectors.of("not a map"))).getMessage());
 		assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1),
-			assertThrows(IllegalStateException.class, () -> adapter.migrateState(1, states.get(2))).getMessage(), "a step runs once");
+			assertThrows(IllegalStateException.class, () -> steps.get(1).apply(states.get(2))).getMessage(), "a step runs once");
 		assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(2),
-			assertThrows(IllegalStateException.class, () -> adapter.migrateState(2, states.get(1))).getMessage(), "steps run in order");
+			assertThrows(IllegalStateException.class, () -> steps.get(2).apply(states.get(1))).getMessage(), "steps run in order");
 	}
 }

@@ -21,6 +21,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Agent `accepts: "anyone"` admits every caller, anonymous ones included.
 - An LLM agent's context shows who a turn comes from as a `[From: …]` element, once
   per change of sender (COG-20 §4).
+- `AAdapter.stateSteps()`: an adapter's state migration as an ordered list of
+  `MigrationStep`s; its state version is their number.
 
 ### Changed
 
@@ -37,6 +39,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `claudecode:session` opened without a prompt takes no pool slot until its first turn.
 - Connected accounts no longer appear in `secret:list` or a user export.
 - Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
+- Each venue migration step is a class, listed in order in `VenueMigrations.STEPS`.
+
+### Deprecated
+
+- `AAdapter.migrateState`, with an overridden `stateVersion`: give `stateSteps()`.
 
 ### Removed
 

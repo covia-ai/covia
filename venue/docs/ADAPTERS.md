@@ -417,25 +417,30 @@ than the adapter understands is refused instead of misread. Built-in adapters,
 modules, and adapters an operator or embedder adds all use the same hook.
 
 ```java
-@Override public long stateVersion() { return 2; }
+private static final List<MigrationStep> STATE_STEPS = List.of(
+    new BotsUnderKey(),     // 0 → 1
+    new LimitsAdded());     // 1 → 2
 
-@Override public ACell migrateState(long version, ACell state) {
-    return switch ((int) version) {
-        case 0 -> Maps.of("bots", state);                                  // 0 → 1
-        case 1 -> RT.ensureMap(state).assoc(Strings.create("limits"), Maps.empty()); // 1 → 2
-        default -> super.migrateState(version, state);
-    };
+@Override public List<MigrationStep> stateSteps() { return STATE_STEPS; }
+
+/** Version 1: the bot registry, version 0's whole state, moves under "bots". */
+static final class BotsUnderKey implements MigrationStep {
+    @Override public ACell apply(ACell state) { return Maps.of("bots", state); }
 }
 ```
 
+- Each step is a `MigrationStep` (`covia.venue.migration`), a class of its
+  own with its own tests. Step `i` takes state at version `i` to version
+  `i + 1`, so `stateVersion()` is the number of steps. A schema change adds a
+  step at the end; a released step never changes.
 - The venue records the version each adapter's state has reached in its
-  `:adapter-versions` region. An adapter that does not override
-  `stateVersion()` is at version 0 and records nothing.
-- Steps run in order from the recorded version up to `stateVersion()`, and the
-  new version is recorded with them. A legacy `w/adapters/<name>` value moves
-  first. A venue with no state for the adapter records the adapter's own
-  version, lower or higher, without calling `migrateState`: with nothing
-  stored, there is nothing to misread.
+  `:adapter-versions` region. An adapter with no steps is at version 0 and
+  records nothing.
+- Steps run in order from the recorded version, and the new version is
+  recorded with them. A legacy `w/adapters/<name>` value moves first. A venue
+  with no state for the adapter records the adapter's own version, lower or
+  higher, without running a step: with nothing stored, there is nothing to
+  misread.
 - At launch, the built-in adapters and every configured module's adapters
   migrate together, after the venue's own steps, in the one transaction that
   opens the venue and before any bootstrap write. A refusal or a failing step in
@@ -454,11 +459,14 @@ modules, and adapters an operator or embedder adds all use the same hook.
 - Either way, steps run whether the adapter is enabled or disabled, and before
   `configure`, install or any deletion hook sees the state. A step cannot depend
   on the adapter's configuration.
-- Each step is a pure function of its arguments: no I/O, no engine calls, no
+- Each step is a pure function of its argument: no I/O, no engine calls, no
   clock, no runtime changes. The transaction may run it again, or discard its
   result. It returns the same cell when nothing changes, and throws for a shape
   it does not recognise. The state and version then stay as they were, and the
   start or registration fails.
+- The form released in 0.10.0, overriding `stateVersion()` and
+  `migrateState(version, state)`, still migrates as before. It is deprecated
+  for removal; give `stateSteps()` instead.
 - Stored state recorded at a newer version than the adapter supports is
   refused with an `UnsupportedVersionException` naming the adapter, including a
   disabled adapter, so the start or registration fails. To run an older build without
@@ -614,7 +622,7 @@ State schemas need explicit tests. Cover the exact canonical paths, venue
 ownership, restart recovery, deletion, config/runtime separation, malformed
 records, and any migration from an older layout. A new schema should define
 which version wins during migration and make repeated migration idempotent.
-Version it with `stateVersion` and `migrateState`
+Version it with `stateSteps`
 ([Versioned state and migration](#versioned-state-and-migration)), and test each
 step: older state converts, a current state comes back as the same cell, and an
 unknown shape is refused.

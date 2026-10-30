@@ -30,7 +30,7 @@ Each part of the schema has one owner, which defines its migrations.
   secrets.
 - **Each adapter** owns its state at `:adapters/<name>` and any older paths it
   wrote. Its versioned steps, whether it is built in, a module or an
-  embedder's, go through `AAdapter.stateVersion` and `migrateState`.
+  embedder's, are its `AAdapter.stateSteps()`.
 - **An embedder** migrates any other data of its own after Covia's migration
   returns. Covia does not change it.
 
@@ -44,6 +44,12 @@ Each part of the schema has one owner, which defines its migrations.
   newer shape, with no I/O and no clock; anything else it needs, such as the
   venue's keys, is passed in. A part already current comes back as the same
   cell. An unrecognised shape is refused with a reason.
+- **Each version step is a class.** A step is a `MigrationStep`
+  (`covia.venue.migration`) with its own tests. Covia's are listed in order in
+  `VenueMigrations.STEPS` and an adapter's in its `stateSteps()`; step `i`
+  takes version `i` to `i + 1`, so a version is the number of steps. A schema
+  change adds a step at the end, and a released step never changes.
+  `VenueState` only runs them.
 - **Start-up is one transaction.** `VenueState.initialise(did, adapters)` runs
   the venue's steps, then those of the built-in and configured module
   adapters, before any other write. A refusal or a failing step discards the
@@ -75,20 +81,20 @@ The venue is at version 1.
 
 | Step | Change | Code |
 |------|--------|------|
-| 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `VenueState.migrateInPlace`, `case 0` |
+| 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `UserDeletionsRegion` |
 
 ### Adapter steps
 
 | Adapter | Step | Change | Code |
 |---------|------|--------|------|
-| `test` | 0 → 1 | None: version 1 has version 0's shape | `TestAdapter.migrateState`, `case 0` |
-| `test` | 1 → 2, 2 → 3 | Synthetic, for tests: each appends the version it reaches to `migrations` | `TestAdapter.migrateState`, `case 1`, `case 2` |
+| `test` | 0 → 1 | None: version 1 has version 0's shape | `TestAdapter.STATE_STEPS` |
+| `test` | 1 → 2, 2 → 3 | Synthetic, for tests: each appends the version it reaches to `migrations` | `TestAdapter.LogStep` |
 
 ### Shapes converted on use
 
 | Older shape | Owner | Converted | Code |
 |-------------|-------|-----------|------|
-| Adapter state at `w/adapters/<name>` → `:adapters/<name>` | Covia | Before a versioned adapter's steps; otherwise when the adapter's state is first read | `VenueState.migrateLegacyState` |
+| Adapter state at `w/adapters/<name>` → `:adapters/<name>` | Covia | Before a versioned adapter's steps; otherwise when the adapter's state is first read | `VenueState.moveLegacyAdapterState` |
 | Job with a `prev` chain | Covia | Read without the chain; dropped on the job's next write | `Job.currentState` |
 | Agent frame with `conversation` or `items` → `history` | Covia | When a session cycle begins | `GoalTreeContext.migrateFrames` |
 | Session `loads` → the root frame's `loads` | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |

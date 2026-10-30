@@ -46,7 +46,7 @@ changes in a way an older build cannot read, as `:version` does, so an older
 venue refuses the export rather than importing shapes it cannot read.
 
 An adapter versions its own state instead, in the venue's `:adapter-versions`
-region, and migrates it through `AAdapter.stateVersion` and `migrateState`:
+region, and migrates it through `AAdapter.stateSteps`:
 in the start-up transaction above, or, for an adapter registered later, in its
 own transaction as it registers
 ([ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)). That
@@ -62,7 +62,7 @@ open store without an Engine and without writing. An embedder calls it before
 starting a venue on that store, to learn whether the start will migrate or
 refuse the store, and to take any copy it wants first.
 
-The `0 → 1` migration moves the small legacy `w/user-deletions` index to the
+The `0 → 1` migration (`UserDeletionsRegion`) moves the small legacy `w/user-deletions` index to the
 venue's `:user-deletions` region and advances `:version` in the same transaction.
 Conflicting copies fail without changing either copy or the version. Identity
 initialization is part of that transaction too. Exceptions roll everything back;
@@ -76,10 +76,11 @@ user, job or adapter scan is added. The version identifies the formats readers
 and writers must understand, not completion of a bulk rewrite. Adapters retain
 ownership of their private schemas.
 
-For future venue format changes, add the next ordered step in
-`VenueState.migrateInPlace`, then advance `CURRENT_VERSION`. Steps must be pure,
-retry-safe domain updates with no I/O; the version advances only after the step
-succeeds. Keep expensive per-record conversion lazy and explicitly include the
+For a venue format change, add a step class at the end of
+`VenueMigrations.STEPS` (`covia.venue.migration`), with its own tests;
+`CURRENT_VERSION` is the number of steps. A step is a pure function of the
+venue value, with no I/O, and may run again on a retried transaction; the
+version advances only after the step succeeds. Keep expensive per-record conversion lazy and explicitly include the
 supported transitional forms in that version's contract. Test rollback,
 compatibility rejection and reopen behaviour. Do not bump this integer for an
 ordinary software release. Binaries predating version checks must still be

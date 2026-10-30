@@ -57,8 +57,8 @@ own code. See [MIGRATE.md](MIGRATE.md).
 Register your own adapters with `engine.registerAdapter(adapter)` on a
 prepared engine, in the launch hook or later. An adapter keeps its private
 state in `engine.adapterState(name)`, and owns that state's schema
-([ADAPTERS.md](ADAPTERS.md)): registering migrates it to the adapter's
-`stateVersion()`.
+([ADAPTERS.md](ADAPTERS.md)): registering migrates it through the adapter's
+`stateSteps()`.
 
 **To switch an adapter off, disable it; don't remove it.**
 - `engine.disableAdapter(name)` stops dispatch, but the adapter still runs its
