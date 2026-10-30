@@ -417,7 +417,7 @@ venue never receives a PNA preflight anyway. Set `allowPrivateNetwork` explicitl
 to override in either direction — `true` to answer preflights on a non-loopback
 dev venue (accepting that a public origin may then reach it across the private
 network), or `false` to refuse them even on loopback. The checked-in
-`local-dev.json` sets it `true` so the demo flow works on its all-interfaces bind.
+`local-dev.json` binds loopback, so the demo flow works without setting it.
 
 > **Safari caveat:** Safari has no PNA opt-in and blocks localhost-from-https
 > regardless of this header. The universal answer for a hosted page reaching a
@@ -1300,7 +1300,11 @@ Currently defined:
   references, whether named by URL or DID. Block wins over allow. Loopback,
   private and link-local targets are refused unless their host is allowed
   here, so federating with a venue on the same machine or a private network
-  needs its host listed. A name is resolved
+  needs its host listed. The venue itself, and a holder of a venue-issued
+  `outbound/any` grant on `<venueDID>/outbound`, may have MCP, A2A, model,
+  Convex peer and venue targets dialled unchecked; agents, the venue's own
+  included, are checked unless granted it. `http:*` requests and `did:web`
+  documents are checked for every caller. A name is resolved
   when it is checked and again when it is dialled, so a name whose answer
   changes in between is not caught. The guard belongs to the `http` adapter:
   with it disabled, every such target is refused. Both lists are published at

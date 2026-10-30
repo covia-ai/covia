@@ -2337,7 +2337,7 @@ public class Engine {
 		if (r.name() != null) {
 			// Named refs are publisher-scoped bindings — OUR v/ops/x is not
 			// THEIR v/ops/x, so there is no local-copy shortcut.
-			return "web".equals(r.method()) ? fetchRemoteNamedAsset(r.didString(), r.name()) : null;
+			return "web".equals(r.method()) ? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
 		}
 		Asset local = lookupLocalAsset(r);
 		if (local != null) {
@@ -2347,7 +2347,7 @@ public class Engine {
 			if (checked) requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
 			return local;
 		}
-		return "web".equals(r.method()) ? fetchRemoteAsset(r.didString(), r.hash()) : null;
+		return "web".equals(r.method()) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
 	}
 
 	/**
@@ -2391,25 +2391,32 @@ public class Engine {
 	}
 
 	/**
-	 * The publisher a remote fetch dials, anonymously and through {@link #connectVenue}.
-	 * Without the http adapter every target is refused, as a fetch failure like any other.
+	 * The publisher a remote fetch for {@code ctx} dials, anonymously and through
+	 * {@link #connectVenue(RequestContext, String, VenueAuth)}. Without the http
+	 * adapter every guarded target is refused, as a fetch failure like any other.
 	 */
-	private Venue publisherVenue(String venueConn) {
+	private Venue publisherVenue(RequestContext ctx, String venueConn) {
 		try {
-			return connectVenue(venueConn, VenueAuth.none());
+			return connectVenue(ctx, venueConn, VenueAuth.none());
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			throw RemoteFetchException.invalidVenue(venueConn, e);
 		}
 	}
 
-	public Asset fetchRemoteAsset(String venueConn, Hash id) {
+	/**
+	 * Fetches an asset definition from a remote venue for {@code ctx}, verified
+	 * against its hash. See {@link #fetchRemoteAsset(Venue, Hash)}.
+	 *
+	 * @param ctx The caller whose reference names the publisher
+	 */
+	public Asset fetchRemoteAsset(RequestContext ctx, String venueConn, Hash id) {
 		// Cache first: the hash IS the identity, so for a definition we
 		// already hold the connection string is irrelevant — a venue in a
 		// reference is a retrieval hint, not part of the name.
 		Asset cached = cachedDefinition(id);
 		if (cached != null) return cached;
 
-		Venue remote = publisherVenue(venueConn);
+		Venue remote = publisherVenue(ctx, venueConn);
 		Asset fetched = fetchRemoteAsset(remote, id);   // throws on unreachable/integrity; null on a genuine 404
 		cacheDefinition(fetched);
 		return fetched;
@@ -2427,6 +2434,7 @@ public class Engine {
 	 * record an invocation creates (the job's op field records the hash
 	 * the name resolved to at invoke time).</p>
 	 *
+	 * @param ctx The caller whose reference names the publisher
 	 * @param venueConn Remote venue connection string (did:web or URL)
 	 * @param name Catalog operation name, e.g. "v/ops/json/merge"
 	 * @return Verified Asset with metadata, or null if the venue is reachable
@@ -2434,8 +2442,8 @@ public class Engine {
 	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
 	 *         returns an error, or the connection string is malformed or refused (#174)
 	 */
-	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
-		Venue remote = publisherVenue(venueConn);
+	public Asset fetchRemoteNamedAsset(RequestContext ctx, String venueConn, String name) {
+		Venue remote = publisherVenue(ctx, venueConn);
 		// Resolve the name to an id AT THE PUBLISHER. An operational failure here
 		// (venue down / error) is a real error naming the venue — NOT "operation
 		// not found". A reachable venue that simply does not bind the name
@@ -2465,15 +2473,16 @@ public class Engine {
 	 * throws rather than being adopted. Operational failures (venue unreachable,
 	 * error, malformed or refused reference) also throw (#174).
 	 *
+	 * @param ctx The caller whose reference names the publisher
 	 * @param ref Remote DID URL reference (hash or named form)
 	 * @return Content blob, or null if there is genuinely none to fetch
 	 * @throws covia.exception.RemoteFetchException on operational fetch failure
 	 *         or a content sha256 mismatch (#174)
 	 */
-	public ACell fetchRemoteContent(AString ref) {
+	public ACell fetchRemoteContent(RequestContext ctx, AString ref) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null || !"web".equals(r.method())) return null;   // not a fetchable remote ref
-		Venue remote = publisherVenue(r.didString());
+		Venue remote = publisherVenue(ctx, r.didString());
 		try {
 			Hash id = (r.hash() != null) ? r.hash() : remote.getOperationId(r.name());
 			if (id == null) return null;   // genuine absence: name not bound
@@ -2519,7 +2528,7 @@ public class Engine {
 
 	/**
 	 * Fetches and verifies an asset definition from an already-connected
-	 * remote venue. See {@link #fetchRemoteAsset(String, Hash)}.
+	 * remote venue. See {@link #fetchRemoteAsset(RequestContext, String, Hash)}.
 	 *
 	 * @param remote Remote venue
 	 * @param id Asset id (CAD3 value hash of the metadata)
@@ -2728,7 +2737,7 @@ public class Engine {
 		if (ref.startsWith(NS_DID) && !isLocalDIDResource(ref)) {
 			Asset remoteAsset = resolveDIDURL(ref, ctx);
 			if (remoteAsset == null) return null;
-			ACell remoteContent = fetchRemoteContent(ref);
+			ACell remoteContent = fetchRemoteContent(ctx, ref);
 			if (remoteContent instanceof convex.core.data.ABlob b) {
 				return new covia.venue.storage.ContentProvider.Resolved(
 					covia.grid.impl.BlobContent.of(b), declaredContentType(remoteAsset.meta()));
@@ -4164,12 +4173,20 @@ public class Engine {
 	 * @throws covia.exception.AuthException when the caller lacks the authority
 	 */
 	public void requireVenueAuthority(RequestContext ctx, String resource, AString ability) {
-		if (isDirectVenue(ctx)) return;
-		AString full = Strings.create(getDIDString() + "/" + resource);
-		if (crossUserAllows(ctx, full, ability)) return;
+		if (hasVenueAuthority(ctx, resource, ability)) return;
 		throw new covia.exception.AuthException(VENUE_AUTHORITY_DENIED + ": requires " + ability
-			+ " on " + full + " from the venue (call as the venue or present "
+			+ " on " + getDIDString() + "/" + resource + " from the venue (call as the venue or present "
 			+ "a venue-issued delegation)");
+	}
+
+	/**
+	 * Whether the caller holds venue authority: it is the venue itself, or
+	 * presents a venue-rooted delegation covering {@code <venue DID>/<resource>}
+	 * for {@code ability}. The check behind {@link #requireVenueAuthority}.
+	 */
+	public boolean hasVenueAuthority(RequestContext ctx, String resource, AString ability) {
+		if (isDirectVenue(ctx)) return true;
+		return crossUserAllows(ctx, Strings.create(getDIDString() + "/" + resource), ability);
 	}
 
 	/**
@@ -4185,11 +4202,12 @@ public class Engine {
 	}
 
 	/**
-	 * Outbound-target policy for every caller-chosen URL the venue dials (an MCP
-	 * server, an A2A peer, a model endpoint, a did:web document, another venue
-	 * through {@link #connectVenue}): the http adapter's SSRF guard with the
-	 * operator's allow and block lists, so nothing can reach what a direct HTTP
-	 * call could not (#234). Fails closed when the http adapter is absent.
+	 * Outbound-target policy for a URL the venue dials that no caller vouches
+	 * for (a did:web document a presented token names): the http adapter's SSRF
+	 * guard with the operator's allow and block lists, so nothing can reach what
+	 * a direct HTTP call could not (#234). Fails closed when the http adapter is
+	 * absent. A target a caller chose goes through
+	 * {@link #requireSafeUrl(RequestContext, String)}.
 	 *
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
@@ -4200,15 +4218,45 @@ public class Engine {
 	}
 
 	/**
-	 * {@link #requireSafeUrl} for a caller-chosen target that is a host rather
-	 * than a URL (a Convex peer): the same guard and lists, without the scheme.
+	 * Outbound-target policy for every caller-chosen URL the venue dials (an MCP
+	 * server, an A2A peer, a model endpoint): {@link #requireSafeUrl(String)},
+	 * unless the caller may have the venue dial anywhere
+	 * ({@link #outboundUnrestricted}).
 	 *
+	 * @param ctx The caller that chose the target
+	 * @param url URL string to validate
+	 * @throws IllegalArgumentException naming the rule when the URL is refused
+	 * @throws IllegalStateException when the http adapter is not registered
+	 */
+	public void requireSafeUrl(RequestContext ctx, String url) {
+		if (!outboundUnrestricted(ctx)) requireSafeUrl(url);
+	}
+
+	/**
+	 * {@link #requireSafeUrl(RequestContext, String)} for a caller-chosen target
+	 * that is a host rather than a URL (a Convex peer): the same guard and lists,
+	 * without the scheme.
+	 *
+	 * @param ctx The caller that chose the target
 	 * @param host Host name or address literal
 	 * @throws IllegalArgumentException naming the rule when the host is refused
 	 * @throws IllegalStateException when the http adapter is not registered
 	 */
-	public void requireSafeHost(String host) {
-		ssrfGuard().requireSafeHost(host);
+	public void requireSafeHost(RequestContext ctx, String host) {
+		if (!outboundUnrestricted(ctx)) ssrfGuard().requireSafeHost(host);
+	}
+
+	/** Venue-relative resource on which {@link Abilities#OUTBOUND_ANY} is delegated. */
+	public static final String OUTBOUND = "outbound";
+
+	/**
+	 * Whether the caller may have the venue dial any target, unchecked by the
+	 * outbound guard: the venue itself, or a holder of a venue-issued
+	 * {@link Abilities#OUTBOUND_ANY} grant on {@code <venue DID>/outbound}.
+	 * Agents, including the venue's own, are checked unless granted it.
+	 */
+	public boolean outboundUnrestricted(RequestContext ctx) {
+		return hasVenueAuthority(ctx, OUTBOUND, Abilities.OUTBOUND_ANY);
 	}
 
 	/** Opening of the refusal for a venue reached by a transport the outbound guard cannot check. */
@@ -4218,17 +4266,32 @@ public class Engine {
 	 * Connects to a venue this venue dials on a caller's behalf — a grid or
 	 * remote-agent target, an orchestration step's venue, the publisher of a
 	 * remote asset reference. Whatever spelled the target (a URL or a DID), the
-	 * address the connection will dial passes {@link #requireSafeUrl} before any
-	 * request is made; a transport other than HTTP is refused.
+	 * address the connection will dial passes {@link #requireSafeUrl(String)}
+	 * before any request is made, and a transport other than HTTP is refused,
+	 * unless the caller may have the venue dial anywhere
+	 * ({@link #outboundUnrestricted}).
 	 *
+	 * @param ctx The caller that chose the target
 	 * @param spec Venue URL or DID
 	 * @param auth Authentication the connection presents
 	 * @return The connected venue, not yet contacted
 	 * @throws IllegalArgumentException when the spec is malformed or its address is refused
 	 * @throws IllegalStateException when the http adapter is not registered
 	 */
-	public Venue connectVenue(String spec, VenueAuth auth) {
+	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
+		return connectVenue(spec, auth, outboundUnrestricted(ctx));
+	}
+
+	/**
+	 * {@link #connectVenue(RequestContext, String, VenueAuth)} for a caller whose
+	 * standing was decided when the connection was first authorised, such as a
+	 * recovered job's.
+	 *
+	 * @param unrestricted Whether that caller could have the venue dial anywhere
+	 */
+	public Venue connectVenue(String spec, VenueAuth auth, boolean unrestricted) {
 		Venue venue = Grid.connect(spec, auth);
+		if (unrestricted) return venue;
 		if (!(venue instanceof VenueHTTP http)) {
 			throw new IllegalArgumentException(UNGUARDED_VENUE_TRANSPORT + spec);
 		}

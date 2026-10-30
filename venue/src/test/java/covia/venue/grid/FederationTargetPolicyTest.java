@@ -15,6 +15,9 @@ import org.junit.jupiter.api.TestInfo;
 
 import com.sun.net.httpserver.HttpServer;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -23,6 +26,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.HTTPAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.RemoteFetchException;
 import covia.grid.Job;
@@ -33,11 +37,13 @@ import covia.venue.TestEngine;
 
 /**
  * Every venue this venue dials on a caller's behalf passes the outbound guard
- * ({@link Engine#connectVenue}): grid operations, target discovery for
- * {@code authenticateAs=caller}, remote agents, orchestration steps and the
- * publishers of did:web asset references. A loopback target is refused before
- * any request reaches it unless the operator allows its host, and the block
- * list wins over the allow list.
+ * ({@link Engine#connectVenue(RequestContext, String, covia.grid.auth.VenueAuth)}):
+ * grid operations, target discovery for {@code authenticateAs=caller}, remote
+ * agents, orchestration steps and the publishers of did:web asset references.
+ * A loopback target is refused before any request reaches it unless the
+ * operator allows its host, and the block list wins over the allow list. The
+ * venue itself, and a holder of a venue-issued {@code outbound/any} grant,
+ * dial anywhere; the venue's own agents are checked.
  */
 public class FederationTargetPolicyTest {
 
@@ -127,7 +133,7 @@ public class FederationTargetPolicyTest {
 	void withoutTheGuardNoPublisherIsDialled() {
 		Engine bare = Engine.createTemp(null);   // no adapters, so no http adapter to guard with
 		try {
-			assertThrows(RemoteFetchException.class, () -> bare.fetchRemoteAsset("did:web:venue.example.com",
+			assertThrows(RemoteFetchException.class, () -> bare.fetchRemoteAsset(ctx, "did:web:venue.example.com",
 				Hash.parse("0123456789abcdef".repeat(4))));
 		} finally {
 			bare.close();
@@ -135,12 +141,39 @@ public class FederationTargetPolicyTest {
 	}
 
 	@Test
+	void venueItselfDialsAnywhere() throws IOException {
+		try (Peer peer = new Peer()) {
+			assertReached(peer, ENGINE, ENGINE.venueContext());
+		}
+	}
+
+	@Test
+	void outboundGrantHolderDialsAnywhere() throws IOException {
+		AKeyPair holder = AKeyPair.generate();
+		UCAN grant = UCAN.create(ENGINE.getKeyPair(), holder.getAccountKey(),
+			System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(Strings.create(ENGINE.getDIDString() + "/" + Engine.OUTBOUND),
+				Abilities.OUTBOUND_ANY)),
+			Vectors.empty());
+		RequestContext granted = RequestContext.of(UCAN.toDIDKey(holder.getAccountKey()))
+			.withProofs(Vectors.of(grant.toMap()));
+		try (Peer peer = new Peer()) {
+			assertReached(peer, ENGINE, granted);
+		}
+	}
+
+	@Test
+	void venueAgentIsChecked() throws IOException {
+		ctx = ENGINE.venueContext().withAgentId(Strings.create("helper"));
+		try (Peer peer = new Peer()) {
+			assertRefused(peer, HTTPAdapter.PRIVATE_ADDRESS, ENGINE, GRID_RUN, gridInput(peer.url("127.0.0.1")));
+		}
+	}
+
+	@Test
 	void allowedLoopbackTargetIsReached() throws IOException {
 		try (Peer peer = new Peer()) {
-			Job job = LISTED.jobs().invokeOperation(GRID_RUN, gridInput(peer.url("127.0.0.1")), ctx);
-			// The peer is no venue, so the call itself fails once it has arrived
-			assertThrows(Exception.class, () -> job.awaitResult(5000));
-			assertTrue(peer.requests.get() > 0, "an allowed host is dialled");
+			assertReached(peer, LISTED, ctx);
 		}
 	}
 
@@ -154,6 +187,14 @@ public class FederationTargetPolicyTest {
 	private static AMap<AString, ACell> gridInput(String venue) {
 		return Maps.of(Fields.VENUE, venue, Fields.OPERATION, "v/test/ops/echo",
 			Fields.INPUT, Maps.of("message", "hello"));
+	}
+
+	/** A grid call to the peer on 127.0.0.1 from {@code caller} arrives there. */
+	private static void assertReached(Peer peer, Engine engine, RequestContext caller) {
+		Job job = engine.jobs().invokeOperation(GRID_RUN, gridInput(peer.url("127.0.0.1")), caller);
+		// The peer is no venue, so the call itself fails once it has arrived
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(peer.requests.get() > 0, "the target is dialled");
 	}
 
 	/** The call is refused with the given rule, at submission or as its job's failure, and nothing reached the peer. */

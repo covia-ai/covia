@@ -149,7 +149,7 @@ public class ConvexAdapter extends AAdapter {
 		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		return switch (op) {
-			case "query" -> invokeQuery(meta, input);
+			case "query" -> invokeQuery(ctx, meta, input);
 			case "transact" -> invokeTransact(ctx, meta, input);
 			case "generate-key" -> CompletableFuture.supplyAsync(
 				() -> generateKey(ctx, input), VIRTUAL_EXECUTOR);
@@ -164,14 +164,14 @@ public class ConvexAdapter extends AAdapter {
 		};
 	}
 
-	private CompletableFuture<ACell> invokeQuery(AMap<AString, ACell> meta, ACell input) {
+	private CompletableFuture<ACell> invokeQuery(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		final Query request;
 		try {
 			request = query(input);
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
-		return withConvexClient(meta, input, convex -> executeQuery(convex, request));
+		return withConvexClient(ctx, meta, input, convex -> executeQuery(convex, request));
 	}
 
 	private CompletableFuture<ACell> invokeTransact(RequestContext ctx,
@@ -182,7 +182,7 @@ public class ConvexAdapter extends AAdapter {
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
-		return withConvexClient(meta, input, convex -> executeTransact(convex, request));
+		return withConvexClient(ctx, meta, input, convex -> executeTransact(convex, request));
 	}
 
 	private record Query(Address address, ACell code) {}
@@ -341,12 +341,12 @@ public class ConvexAdapter extends AAdapter {
 		return parsed.toFlatBlob();
 	}
 
-	private CompletableFuture<ACell> withConvexClient(AMap<AString, ACell> meta, ACell input,
+	private CompletableFuture<ACell> withConvexClient(RequestContext ctx, AMap<AString, ACell> meta, ACell input,
 			Function<Convex, CompletableFuture<ACell>> action) {
 
 		return CompletableFuture.supplyAsync(() -> {
 			// Outside the connect wrapper: a refusal is the venue's answer, not a connection failure
-			URI endpoint = permittedPeer(meta, input);
+			URI endpoint = permittedPeer(ctx, meta, input);
 			try {
 				return Convex.connect(endpoint);
 			} catch (Exception e) {
@@ -375,7 +375,7 @@ public class ConvexAdapter extends AAdapter {
 	 * relay, refused unless the operator sets {@code anyPeer}; then its host
 	 * passes the venue's outbound address guard like any caller-chosen target.
 	 */
-	private URI permittedPeer(AMap<AString, ACell> meta, ACell input) {
+	private URI permittedPeer(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		PeerPolicy p = policy;
 		ACell named = RT.getIn(input, Fields.PEER);
 		if (named == null && meta != null) named = RT.getIn(meta, Fields.OPERATION, Fields.PEER);
@@ -383,7 +383,7 @@ public class ConvexAdapter extends AAdapter {
 		URI target = peerEndpoint(named, "peer");
 		if (target.equals(p.peer())) return target;
 		if (!p.anyPeer()) throw new IllegalArgumentException("Peer " + target + " " + OTHER_PEER);
-		engine.requireSafeHost(target.getHost());
+		engine.requireSafeHost(ctx, target.getHost());
 		return target;
 	}
 

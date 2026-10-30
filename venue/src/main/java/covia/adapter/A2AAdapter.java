@@ -290,7 +290,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 					K_VENUE, Strings.create(venue),
 					K_AGENT, Strings.create(address));
 			}
-			engine.requireSafeUrl(normaliseAgentCardUrl(cardBase));
+			engine.requireSafeUrl(ctx, normaliseAgentCardUrl(cardBase));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -304,13 +304,13 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			return CompletableFuture.failedFuture(e);
 		}
 
-		return fetchAgentCardUrl(cardBase, discoveryAuth).thenApply(cardCell -> {
+		return fetchAgentCardUrl(ctx, cardBase, discoveryAuth).thenApply(cardCell -> {
 			if (!(cardCell instanceof AMap<?, ?>)) {
 				throw new IllegalArgumentException("Remote Agent Card is not a JSON object");
 			}
 			AMap<AString, ACell> card = (AMap<AString, ACell>) cardCell;
 			String endpoint = endpointFromCard(card);
-			engine.requireSafeUrl(endpoint);
+			engine.requireSafeUrl(ctx, endpoint);
 			// Validate the stored scheme and secret now, while importing, so a bad
 			// binding cannot become a dormant asset that fails only during a task.
 			resolveAssetAuth(storedAuth, card, ctx, endpoint);
@@ -420,7 +420,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (endpoint == null || card == null) {
 			throw new IllegalArgumentException("A2A agent asset requires a card and endpoint");
 		}
-		engine.requireSafeUrl(endpoint.toString());
+		engine.requireSafeUrl(ctx, endpoint.toString());
 		AMap<AString, ACell> authBinding = RT.ensureMap(a2a.get(K_AUTH));
 		RequestAuth auth = resolveAssetAuth(authBinding, card, ctx, endpoint.toString());
 		return new AgentTarget(endpoint.toString(), card, auth, metadata.getHash());
@@ -430,7 +430,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AString url = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (url == null) throw new IllegalArgumentException("'agent' is required (or 'url' on a raw A2A operation)");
 		String rpcUrl = normaliseRpcUrl(url.toString());
-		engine.requireSafeUrl(rpcUrl);
+		engine.requireSafeUrl(ctx, rpcUrl);
 		return new AgentTarget(rpcUrl, null, RequestAuth.bearer(resolveBearer(input, ctx, rpcUrl)), null);
 	}
 
@@ -521,15 +521,15 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				"'url' is required (remote A2A base or RPC URL)"));
 		}
 		try {
-			return fetchAgentCardUrl(urlCell.toString(), RequestAuth.bearer(resolveBearer(input, ctx, urlCell.toString())));
+			return fetchAgentCardUrl(ctx, urlCell.toString(), RequestAuth.bearer(resolveBearer(input, ctx, urlCell.toString())));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
 	}
 
-	private CompletableFuture<ACell> fetchAgentCardUrl(String baseUrl, RequestAuth auth) {
+	private CompletableFuture<ACell> fetchAgentCardUrl(RequestContext ctx, String baseUrl, RequestAuth auth) {
 		String url = normaliseAgentCardUrl(baseUrl);
-		engine.requireSafeUrl(url);
+		engine.requireSafeUrl(ctx, url);
 		HttpRequest.Builder builder = HttpRequest.newBuilder(authUri(url, auth))
 				.GET()
 				.timeout(Duration.ofSeconds(30));

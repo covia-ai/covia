@@ -74,6 +74,9 @@ public final class Abilities {
 	/** Connect the venue's P2P node to a peer (covia#587) — guarded on
 	 *  {@code <venue DID>/p2p}. */
 	public static final AString P2P_MANAGE = Strings.intern("p2p/manage");
+	/** Have the venue dial any outbound target, unchecked by its outbound
+	 *  guard — held by the venue itself, delegable on {@code <venue DID>/outbound}. */
+	public static final AString OUTBOUND_ANY = Strings.intern("outbound/any");
 
 	/** The venue-relative MCP management resource guarded by {@link #MCP_MANAGE}:
 	 *  a delegation names it as {@code <venue DID>/v/mcp}. */

@@ -25,6 +25,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `MigrationStep`s; its state version is their number.
 - `ucan:issue` takes `prf`: the venue passes on part of a grant made to it (#636).
 - `Engine.connectVenue`: connects to another venue through the outbound guard.
+- `outbound/any` on `<venueDID>/outbound`: the venue's own standing to dial any MCP,
+  A2A, model, Convex peer or venue target unchecked, delegable by a venue-issued grant.
 
 ### Changed
 
@@ -44,6 +46,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Each venue migration step is a class, listed in order in `VenueMigrations.STEPS`.
 - `RemoteFetchException.malformedVenue` is `invalidVenue`, which also reports a
   target the outbound guard refuses.
+- `Engine.requireSafeUrl` and `requireSafeHost` take the `RequestContext` of the
+  caller that chose the target, and `Engine.fetchRemoteAsset`, `fetchRemoteNamedAsset`
+  and `fetchRemoteContent` the caller whose reference names the publisher.
 
 ### Deprecated
 
@@ -72,7 +77,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `did:web` document is fetched only from a host the outbound guard allows.
 - Grid and remote-agent targets, orchestration steps' venues and `did:web` asset
   publishers pass the outbound guard; a loopback or private venue needs its host in
-  `adapters.http.allowedHosts`.
+  `adapters.http.allowedHosts` unless the venue itself, or an `outbound/any` holder,
+  makes the call.
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.

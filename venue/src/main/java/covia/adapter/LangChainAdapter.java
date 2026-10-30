@@ -378,7 +378,7 @@ public class LangChainAdapter extends AAdapter {
 		}
 
 		// A url is an outbound target like any other: it passes the venue's SSRF guard.
-		String urlRefused = checkUrl(urlParam);
+		String urlRefused = checkUrl(ctx, urlParam);
 		if (urlRefused != null) return CompletableFuture.completedFuture(Status.failure(urlRefused));
 
 		// Optional sampling/bounds parameters (#218): temperature and topP pass
@@ -1066,13 +1066,14 @@ public class LangChainAdapter extends AAdapter {
 	 * the venue's SSRF guard. Which key may travel to it is the secret's
 	 * owner's decision, enforced where the key is resolved.
 	 *
+	 * @param ctx The caller that named the url
 	 * @return null when the url may be used, otherwise the reason it may not
 	 */
-	String checkUrl(AString urlParam) {
+	String checkUrl(RequestContext ctx, AString urlParam) {
 		if (urlParam == null) return null;
 		String url = urlParam.toString();
 		try {
-			engine.requireSafeUrl(url);
+			engine.requireSafeUrl(ctx, url);
 		} catch (IllegalArgumentException e) {
 			return e.getMessage();
 		}

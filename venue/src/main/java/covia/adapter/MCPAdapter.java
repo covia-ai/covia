@@ -109,7 +109,7 @@ public class MCPAdapter extends AAdapter {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
 						// The caller may name the server: the same outbound policy as http.
-						engine.requireSafeUrl(serverUrl.toString());
+						engine.requireSafeUrl(ctx, serverUrl.toString());
 
 						// Bridged form (#80): when the OPERATION metadata pins the
 						// remote tool, the op's declared input IS the tool's own
@@ -155,7 +155,7 @@ public class MCPAdapter extends AAdapter {
 						if (serverUrl == null) {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
-						engine.requireSafeUrl(serverUrl.toString());
+						engine.requireSafeUrl(ctx, serverUrl.toString());
 
 						// Get API access token, if provided
 						AString token = RT.getIn(input, Fields.TOKEN);
@@ -547,7 +547,7 @@ public class MCPAdapter extends AAdapter {
 		boolean venueScope = isVenueScope(ctx, input);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
-		engine.requireSafeUrl(url.toString());
+		engine.requireSafeUrl(ctx, url.toString());
 
 		// Discover tools under the REGISTRAR's auth (resolved now, not stored raw)
 		String token = resolveAuthRef(ctx, auth, url);
@@ -620,7 +620,7 @@ public class MCPAdapter extends AAdapter {
 		if (venuePath) requireVenueManage(ctx);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
-		engine.requireSafeUrl(url.toString());
+		engine.requireSafeUrl(ctx, url.toString());
 
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		String token = resolveAuthRef(ctx, auth, url);

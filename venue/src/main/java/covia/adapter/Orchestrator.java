@@ -690,7 +690,7 @@ public class Orchestrator extends AAdapter {
 			private Venue targetVenue() {
 				AString venueSpec=RT.ensureString(step.get(Fields.VENUE));
 				if (venueSpec == null) return null;
-				if (remoteVenue == null) remoteVenue=engine.connectVenue(venueSpec.toString(), VenueAuth.none());
+				if (remoteVenue == null) remoteVenue=engine.connectVenue(ctx, venueSpec.toString(), VenueAuth.none());
 				return remoteVenue;
 			}
 

@@ -125,11 +125,8 @@ class RemoteAgentAdapterTest {
 			Fields.AGENT_ID, "did:test:owner/g/worker", Fields.INPUT, Maps.of("task", "do work")); }
 		@Override public void close() { server.stop(0); }
 	}
-	/** The peer listens on loopback, which the outbound guard refuses unless the operator allows it. */
-	private static final AMap<AString, ACell> PEER_ALLOWED = Maps.of(Config.ADAPTERS,
-		Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
 	private static Engine engine() {
-		Engine engine = Engine.createTemp(PEER_ALLOWED); Engine.addDemoAssets(engine); return engine;
+		Engine engine = Engine.createTemp(null); Engine.addDemoAssets(engine); return engine;
 	}
 
 	@Test void continuationAcknowledgementAndRecoveryKeepTheSameTask() throws Exception {
@@ -186,7 +183,7 @@ class RemoteAgentAdapterTest {
 		try (Peer peer = new Peer()) {
 			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
-			AMap<AString, ACell> config = PEER_ALLOWED.assoc(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
+			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job original;
@@ -213,7 +210,10 @@ class RemoteAgentAdapterTest {
 		try (Peer peer = new Peer()) {
 			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
-			AMap<AString, ACell> config = PEER_ALLOWED.assoc(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
+			// The venue's own agent dials the loopback peer, and agents pass the
+			// outbound guard, so the operator allows the peer's host
+			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
+				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
 			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			Engine.addDemoAssets(first);
 			Job original;

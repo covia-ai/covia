@@ -9,6 +9,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -21,6 +22,8 @@ import covia.venue.RequestContext;
 /** Shared native venue connection policy. Saved authority is for protected storage only. */
 public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
+	/** Saved when the caller could have the venue dial anywhere, so recovery reconnects alike. */
+	private static final AString OUTBOUND_ANY = Strings.intern("outboundAny");
 
 	/**
 	 * Refusal of {@code authenticateAs=venue} for anyone but the venue itself.
@@ -35,17 +38,19 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		List<UCAN> tokens = GridAdapter.parsedRawUcans(ctx, engine.didVerifier());
 		AString modeCell = RT.ensureString(RT.getIn(input, AUTHENTICATE_AS));
 		String mode = (modeCell != null) ? modeCell.toString() : "anonymous";
+		boolean unrestricted = engine.outboundUnrestricted(ctx);
 
 		VenueAuth auth;
 		AString principal;
 		AMap<AString, ACell> saved = Maps.of(AUTHENTICATE_AS, Strings.create(mode));
+		if (unrestricted) saved = saved.assoc(OUTBOUND_ANY, CVMBool.TRUE);
 		switch (mode) {
 			case "anonymous" -> {
 				auth = VenueAuth.none();
 				principal = null;
 			}
 			case "caller" -> {
-				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec));
+				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec, unrestricted));
 				String credential = GridAdapter.identityCredential(ctx, tokens, ctx.getCallerDID(), targetDID);
 				if (credential == null) {
 					throw new AuthException("authenticateAs=caller requires an in-date, empty-att "
@@ -57,7 +62,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			}
 			case "venue" -> {
 				if (!engine.isDirectVenue(ctx)) throw new AuthException(VENUE_MODE_DENIED);
-				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec));
+				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec, unrestricted));
 				auth = VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
 					targetDID.toString());
 				saved = saved.assoc(Fields.VENUE, targetDID);
@@ -67,7 +72,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				"authenticateAs must be one of: anonymous, caller, venue");
 		}
 
-		Venue venue = engine.connectVenue(venueSpec.toString(), auth);
+		Venue venue = engine.connectVenue(venueSpec.toString(), auth, unrestricted);
 		List<String> grants = GridAdapter.admissibleGrants(ctx, tokens, principal);
 		venue.setUcans(grants);
 		if (grants != null) saved = saved.assoc(Fields.UCANS, convex.core.data.Vectors.create(grants.stream().map(Strings::create).toList()));
@@ -76,7 +81,8 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 
 	/**
 	 * Rebuilds observation of a job {@link #connect} already authorised; grants
-	 * nothing new. The target passes the outbound guard again, as it stands now.
+	 * nothing new. The target passes the outbound guard again, as it stands now,
+	 * unless the original caller could have the venue dial anywhere.
 	 */
 	public static Venue restore(Engine engine, AString target, AMap<AString, ACell> saved) {
 		String mode = RT.ensureString(saved.get(AUTHENTICATE_AS)).toString();
@@ -87,7 +93,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				RT.ensureString(saved.get(Fields.VENUE)).toString());
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};
-		Venue venue = engine.connectVenue(target.toString(), auth);
+		Venue venue = engine.connectVenue(target.toString(), auth, CVMBool.TRUE.equals(saved.get(OUTBOUND_ANY)));
 		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
 		if (grants != null) {
 			List<String> raw = new ArrayList<>();
@@ -99,12 +105,13 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 
 	/**
 	 * Resolve the target identity once for audience-bound venue authentication.
-	 * Discovery dials the target itself, so it passes the outbound guard first.
+	 * Discovery dials the target itself, so it passes the outbound guard first
+	 * unless the caller could have the venue dial anywhere.
 	 */
-	private static String targetVenueDID(Engine engine, AString venueSpec) {
+	private static String targetVenueDID(Engine engine, AString venueSpec, boolean unrestricted) {
 		String target = venueSpec.toString();
 		if (target.startsWith("did:")) return target;
-		engine.requireSafeUrl(target);
+		if (!unrestricted) engine.requireSafeUrl(target);
 		return VenueDID.discover(target);
 	}
 

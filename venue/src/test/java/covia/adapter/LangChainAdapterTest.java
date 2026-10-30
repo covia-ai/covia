@@ -2266,9 +2266,12 @@ public class LangChainAdapterTest {
 			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
 			// Allow-listed hosts skip resolution, so the "allowed" case needs no DNS.
 			((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("evil.example");
-			assertNull(adapter.checkUrl(null));
-			assertNull(adapter.checkUrl(Strings.create("https://evil.example/v1")));
-			assertNotNull(adapter.checkUrl(Strings.create("http://127.0.0.1:1/")));
+			RequestContext caller = RequestContext.of(Strings.create("did:key:z6MkCallerUrlPolicy"));
+			assertNull(adapter.checkUrl(caller, null));
+			assertNull(adapter.checkUrl(caller, Strings.create("https://evil.example/v1")));
+			assertNotNull(adapter.checkUrl(caller, Strings.create("http://127.0.0.1:1/")));
+			// The venue itself may have any url dialled
+			assertNull(adapter.checkUrl(engine.venueContext(), Strings.create("http://127.0.0.1:1/")));
 			assertEquals("https://api.anthropic.com/v1/", LangChainAdapter.defaultBaseUrl("anthropic"));
 			assertNull(LangChainAdapter.defaultBaseUrl("nope"));
 		} finally {

@@ -488,7 +488,7 @@ public class AssetAdapter extends AAdapter {
 				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);   // source read checked above
 				if (fetched == null) throw new IllegalArgumentException("Asset not found: " + pathStr);
 				metaString = fetched.getMetadata();
-				content = engine.fetchRemoteContent(pathStr);
+				content = engine.fetchRemoteContent(ctx, pathStr);
 			} else {
 				throw new IllegalArgumentException("Asset not found: " + pathStr);
 			}
@@ -511,7 +511,7 @@ public class AssetAdapter extends AAdapter {
 				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);
 				if (fetched == null) throw new IllegalArgumentException("Path not found: " + pathStr);
 				metaString = fetched.getMetadata();
-				content = engine.fetchRemoteContent(pathStr);
+				content = engine.fetchRemoteContent(ctx, pathStr);
 			} else {
 				throw new IllegalArgumentException("Path not found: " + pathStr);
 			}
