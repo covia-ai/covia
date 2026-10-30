@@ -1,0 +1,29 @@
+{
+	"name": "confluence",
+	"description": "Work with Confluence Cloud pages, spaces, and search using the user's own site and API token. Load for page/space reads, CQL search, and creating pages.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Confluence\nA multi-value connection: your **site** rides the base URL and your **Basic auth** rides a header. Calls go through `v/ops/http/get` / `v/ops/http/post` against `https://{s/CONFLUENCE_SITE}.atlassian.net/wiki` with `secretHeaders: {\"Authorization\": \"s/CONFLUENCE_AUTH\"}` (the stored value is `Basic <base64(email:api_token)>`; create the token at id.atlassian.com -> Security). The venue substitutes `{s/CONFLUENCE_SITE}` and injects the header.\n\nCommon calls:\n- Whoami: `GET /rest/api/user/current`\n- Spaces: `GET /rest/api/space?limit=50`\n- Pages: `GET /rest/api/content?type=page&limit=25`\n- One page (with body): `GET /rest/api/content/{id}?expand=body.storage,version`\n- Search (CQL): `GET /rest/api/content/search?cql=<encoded>` (e.g. `text ~ \"onboarding\"`)\n- Create a page: `POST /rest/api/content` body `{\"type\":\"page\",\"title\":\"...\",\"space\":{\"key\":\"KEY\"},\"body\":{\"storage\":{\"value\":\"<p>...</p>\",\"representation\":\"storage\"}}}`\n\nRules:\n- Check `status`; errors are `{statusCode, message}`. 401 = bad token; 404 often means no access to that space.\n- URL-encode `cql` with `v/ops/jvm/url-encode`. Both the site and the auth header must be configured.\n"
+	},
+	"connection": {
+		"baseUrl": "https://{s/CONFLUENCE_SITE}.atlassian.net/wiki",
+		"auth": {
+			"kind": "secret-header",
+			"alternatives": [
+				"s/CONFLUENCE_AUTH"
+			]
+		},
+		"required": [
+			"s/CONFLUENCE_SITE",
+			"s/CONFLUENCE_AUTH"
+		]
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
