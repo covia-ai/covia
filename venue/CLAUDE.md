@@ -291,9 +291,8 @@ java -jar target/covia.jar [config.json]
 - `docs/MODELS.md` — model definition assets (design): a model is an operation asset at `v/models/<provider>/<id>`
 - `docs/PROJECT.md` — projects (design): a work-breakdown tree at `w/projects/<pid>` where every node has a principal, an assignee, targets, tolerances and PRINCE2-style product descriptions, and the assignee of a node is the principal of its children; the `project` adapter builds, executes and rolls up the tree
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
-- `docs/MIGRATE.md` — venue migration: who owns each part of the schema, the
-  older shapes this build reads and when each converts, what remains (#624),
-  and how migration is tested
+- `docs/MIGRATE.md` — venue migration: requirements, ownership and design,
+  each migration in this build with its code, and how migration is tested
 - `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
   `docs/GOAL_TREE.md` — agent architecture
 - `docs/READ_API.md` — job-free read surface

@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import java.security.SecureRandom;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +30,7 @@ import covia.venue.RequestContext;
 import covia.venue.AgentState;
 import covia.venue.AdapterState;
 import covia.venue.api.A2ACodec;
+import covia.venue.migration.MigrationStep;
 
 public class TestAdapter extends AAdapter {
 	
@@ -68,31 +70,34 @@ public class TestAdapter extends AAdapter {
 	/**
 	 * Version 1 is version 0's shape, {@code users/<did>/scratch}, unchanged.
 	 * Versions 2 and 3 are synthetic, so every venue and the release-written
-	 * fixtures run real steps in order at start-up: each appends the version it
-	 * reaches to {@link #K_MIGRATIONS}, and refuses state whose log does not
-	 * hold exactly the steps before it. State first written at version 3 has no
-	 * log.
+	 * fixtures run real steps in order at start-up. State first written at
+	 * version 3 has no log.
 	 */
-	@Override public long stateVersion() {
-		return 3;
+	private static final List<MigrationStep> STATE_STEPS = List.of(
+		state -> state,		// 0 → 1
+		new LogStep(2),		// 1 → 2
+		new LogStep(3));	// 2 → 3
+
+	@Override public List<MigrationStep> stateSteps() {
+		return STATE_STEPS;
 	}
 
-	@Override public ACell migrateState(long version, ACell state) {
-		return switch ((int) version) {
-			case 0 -> state;
-			case 1 -> logStep(state, Vectors.empty(), 2);
-			case 2 -> logStep(state, Vectors.of(2L), 3);
-			default -> super.migrateState(version, state);
-		};
-	}
-
-	private static ACell logStep(ACell state, AVector<ACell> before, long reached) {
-		AMap<AString, ACell> record = RT.ensureMap(state);
-		ACell log = (record == null) ? null : record.get(K_MIGRATIONS);
-		if (record == null || !before.equals(log == null ? Vectors.empty() : log)) {
-			throw new IllegalStateException(UNRECOGNISED_STATE.formatted(reached - 1));
+	/**
+	 * A synthetic step to version {@code reached}: appends it to
+	 * {@link #K_MIGRATIONS}, and refuses state whose log does not hold exactly
+	 * the versions from 2 to the one before it.
+	 */
+	private record LogStep(long reached) implements MigrationStep {
+		@Override public ACell apply(ACell state) {
+			AVector<ACell> before = Vectors.empty();
+			for (long v = 2; v < reached; v++) before = before.conj(CVMLong.create(v));
+			AMap<AString, ACell> record = RT.ensureMap(state);
+			ACell log = (record == null) ? null : record.get(K_MIGRATIONS);
+			if (record == null || !before.equals(log == null ? Vectors.empty() : log)) {
+				throw new IllegalStateException(UNRECOGNISED_STATE.formatted(reached - 1));
+			}
+			return record.assoc(K_MIGRATIONS, before.conj(CVMLong.create(reached)));
 		}
-		return record.assoc(K_MIGRATIONS, before.conj(CVMLong.create(reached)));
 	}
 
 	/** A small connected view: diagnostics are computed, only scratch is persisted. */

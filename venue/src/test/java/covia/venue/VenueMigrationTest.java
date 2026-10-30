@@ -73,7 +73,7 @@ class VenueMigrationTest {
 		venue.cursor().path(Covia.USER_DELETIONS).set(Maps.of("conflicting", true));
 		ACell before = venue.get();
 		var error = assertThrows(IllegalStateException.class, () -> venue.initialise(DID));
-		assertEquals(VenueState.LEGACY_STATE_CONFLICT + "w/user-deletions", error.getMessage());
+		assertEquals(covia.venue.migration.UserDeletionsRegion.CONFLICT, error.getMessage());
 		assertSame(before, venue.get());
 		assertEquals(0, venue.version());
 	}

@@ -1,112 +1,129 @@
 # Venue Migration
 
-Venue migration brings a venue's stored state to the schema this build
-supports. This document sets out who owns each part of that schema, the older
-shapes this build still reads, what remains to build (#624), and how
-migration is tested. Version numbers and how to add a venue step are in
+Migration brings a venue's stored state to the schema of the running build.
+The version fields are defined in
 [PERSISTENCE.md](PERSISTENCE.md#venue-versions-and-migrations), adapter state
 versions in [ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration), and the
 calls an embedder makes in [EMBEDDING.md](EMBEDDING.md).
 
-## Principles
+## Requirements
 
-- **Each part of the schema has one owner.** Covia owns the venue value and
-  every user's jobs, agents, sessions and secrets. Each adapter owns its own
-  state and any legacy paths it once wrote, and migrates them with the adapter
-  inactive: no bots, no network. An embedder owns its own data and migrates it
-  itself, after Covia's migration returns. Covia never runs an embedder's
-  steps, and leaves the embedder's values as it found them.
-- **A build upgrades any older supported version.** Starting a venue migrates
-  it in one transaction, Covia's steps then those of the built-in and
-  configured-module adapters, before any other write: all of it commits or
-  none of it does. An adapter registered later migrates as it registers.
-  Migration is also a call, so an embedder can migrate a store before launch,
-  or a running venue at any time.
-- **A newer version is refused.** Stored state newer than the build, Covia's or
-  an adapter's, fails with `UnsupportedVersionException`, and nothing is
-  written.
-- **Migrations are pure functions.** A migration takes one part of the venue
-  state, such as a user's secrets, a job, a session or an adapter's state, to a
-  newer shape. It does no I/O and reads no clock; anything it needs, such as
-  the venue's keys, is passed in. A part already current comes back as the
-  same cell, so migrating again writes nothing. A shape it does not recognise
-  is refused with a reason. Start-up, conversion on use and `user:import` call
-  the same function.
-- **Some shapes convert lazily.** A version may still read an older shape and
-  convert it when the venue next uses it, which keeps start-up cheap. Readers
-  normalise the shape, so code beyond the reader sees only the current one. A
-  release that drops support for an older shape converts every part still in
-  it first.
-- **Migration only goes forward.** An older build cannot read upgraded values,
-  so a caller that may need to go back keeps the state from before the
-  upgrade (#354).
+- A build reads a store written by any older release and brings it to its own
+  schema.
+- A build refuses stored state newer than it supports, Covia's or an
+  adapter's, and writes nothing.
+- A failed migration leaves the store as it was.
+- Migrating state that is already current writes nothing.
+- Migration only goes forward. An older build cannot read upgraded state, so
+  going back needs the state from before the upgrade (#354).
+- Migration can run at any time: at start-up, on a store before launch, or on
+  a running venue. The stored versions can be read without writing.
+- One call converts every older shape, and a read-only check reports any that
+  remain (#624, not built). Until then, a shape that converts on use can stay
+  in a store indefinitely, and the code that reads it cannot be removed.
 
-## Older shapes this build reads
+## Ownership
 
-The venue is at version 1. Each adapter records its own state version; only
-the test adapter versions its state so far, with synthetic steps that show
-which steps ran ([ADAPTERS.md](ADAPTERS.md#versioned-state-and-migration)).
+Each part of the schema has one owner, which defines its migrations.
 
-| Older shape | Owner | Converted | Where |
-|-------------|-------|-----------|-------|
-| `w/user-deletions` → `:user-deletions` (venue version 0 → 1) | Covia | At start-up | `VenueState.migrateInPlace` |
-| `w/adapters/<name>` → `:adapters/<name>` | Covia, for each adapter | At start-up for a versioned adapter, otherwise on first use | `VenueState.migrateLegacyState` |
-| Job `prev` chain (#611) | Covia | Ignored on read, dropped on the next write | `Job.currentState` |
-| Agent frames with `conversation`/`items` → `history` | Covia | When a session cycle begins | `GoalTreeContext.migrateFrames` |
-| Session `loads` → the root frame's | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |
-| Public agent `a2a.caps` → `accepts: "anyone"` | Covia | Read as the newer shape; the stored config keeps it | `Admission.policy` |
-| Created chat bot without `principal` → comes from its user | Messaging adapters | Read as is; one an agent created comes from its owner until created again | `AMessagingAdapter.startRegistry` |
-| Secrets at key version 1 (#535) | Covia | On that secret's next write | `SecretStore` |
-| Connected accounts as user secrets `oauth/<provider>` → `:adapters/oauth` connections | OAuth adapter | On that user's next use of their connections | `OAuthAdapter.moveLegacyGrants` |
-| Telegram session mappings, `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | On first read | `ConversationSessions` |
-| Telegram bot registry, `w/telegram/bots` | Telegram adapter | Read at start, filling missing bindings | `TelegramAdapter.rearmLegacyBots` |
+- **Covia** owns the venue value and each user's jobs, agents, sessions and
+  secrets.
+- **Each adapter** owns its state at `:adapters/<name>` and any older paths it
+  wrote. Its versioned steps, whether it is built in, a module or an
+  embedder's, are its `AAdapter.stateSteps()`.
+- **An embedder** migrates any other data of its own after Covia's migration
+  returns. Covia does not change it.
 
-`user:import` (#615) applies Covia's migrations to an incoming user, and
-refuses an export newer than the build.
+## Design
 
-## Still to build (#624)
+- **Versions.** The venue value's `:version`, against
+  `VenueState.CURRENT_VERSION`, covers Covia's schema. Each adapter's version
+  is recorded in `:adapter-versions`, against its `stateVersion()`. A user
+  export carries its own version, `UserExports.VERSION`.
+- **Migrations are pure functions.** Each takes one part of the state to a
+  newer shape, with no I/O and no clock; anything else it needs, such as the
+  venue's keys, is passed in. A part already current comes back as the same
+  cell. An unrecognised shape is refused with a reason.
+- **Each version step is a class.** A step is a `MigrationStep`
+  (`covia.venue.migration`) with its own tests. Covia's are listed in order in
+  `VenueMigrations.STEPS` and an adapter's in its `stateSteps()`; step `i`
+  takes version `i` to `i + 1`, so a version is the number of steps. A schema
+  change adds a step at the end, and a released step never changes.
+  `VenueState` only runs them.
+- **Start-up is one transaction.** `VenueState.initialise(did, adapters)` runs
+  the venue's steps, then those of the built-in and configured module
+  adapters, before any other write. A refusal or a failing step discards the
+  whole transaction. An adapter registered later migrates in its own
+  transaction as it registers (`VenueState.migrateAdapter`).
+- **Migration is also a call.** `Engine.migrate()` migrates the venue and
+  every installed adapter. `VenueState.migrate(adapters)` does the same on a
+  store before launch. `VenueState.peekVersions` reads the stored versions
+  without writing.
+- **Some shapes convert on use.** A venue version may read an older shape and
+  convert it when the part is next used, instead of at start-up. The reader
+  normalises it, so code beyond the reader sees only the current shape. A
+  build that stops reading such a shape first converts every part still in it.
+- **Import migrates.** `user:import` brings jobs to their current shape and
+  re-encrypts secrets under the current key; other shapes convert on use. It
+  refuses an export newer than `UserExports.VERSION`.
 
-A store can keep the shapes converted on use indefinitely, so the code that
-reads them can never be removed, and nothing tells a caller whether any remain.
-
-- **Convert on request.** Each shape above that converts on use becomes a
-  migration function that the migration call also applies, so one call leaves
-  no older shape, Covia's or a loaded adapter's. An adapter whose module is not
-  loaded cannot convert its own parts; the call reports that, rather than
-  treating the venue as current.
-- **Check.** The read-only check reports any older shapes left, as well as the
-  stored versions `VenueState.peekVersions` reads today.
-
-Open questions:
+Open questions for #624:
 
 - Whether the check finds older shapes by scanning, or from a record kept as
   they change, and so whether versions are also recorded for each user.
-- How long an older shape stays supported once it can be converted on request.
+- How long an older shape stays readable once it can be converted on request.
+
+## Migrations in this build
+
+The venue is at version 1.
+
+### Venue steps
+
+| Step | Change | Code |
+|------|--------|------|
+| 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `UserDeletionsRegion` |
+
+### Adapter steps
+
+| Adapter | Step | Change | Code |
+|---------|------|--------|------|
+| `test` | 0 → 1 | None: version 1 has version 0's shape | `TestAdapter.STATE_STEPS` |
+| `test` | 1 → 2, 2 → 3 | Synthetic, for tests: each appends the version it reaches to `migrations` | `TestAdapter.LogStep` |
+
+### Shapes converted on use
+
+| Older shape | Owner | Converted | Code |
+|-------------|-------|-----------|------|
+| Adapter state at `w/adapters/<name>` → `:adapters/<name>` | Covia | Before a versioned adapter's steps; otherwise when the adapter's state is first read | `VenueState.moveLegacyAdapterState` |
+| Job with a `prev` chain | Covia | Read without the chain; dropped on the job's next write | `Job.currentState` |
+| Agent frame with `conversation` or `items` → `history` | Covia | When a session cycle begins | `GoalTreeContext.migrateFrames` |
+| Session `loads` → the root frame's `loads` | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |
+| Secret at key version 1 | Covia | Read with the version 1 key; re-encrypted under the current key on its next write | `SecretStore` |
+| Public agent with `a2a.caps` | Covia | Read as `accepts: "anyone"`; the stored config is unchanged | `Admission.policy` |
+| Created chat bot with no `principal` | Messaging adapters | Read as created by its user; the stored record is unchanged | `AMessagingAdapter.principalOf` |
+| OAuth grant as a user secret `oauth/<provider>` → `:adapters/oauth` connection | OAuth adapter | On the user's next use of their connections | `OAuthAdapter.moveLegacyGrants` |
+| Telegram session mapping at `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | When the chat's mapping is first read | `ConversationSessions`, `BotRunner.legacySession` |
+| Telegram bot registry at `w/telegram/bots` | Telegram adapter | At adapter start, for each bot with no current binding | `TelegramAdapter.rearmLegacyBots` |
 
 ## Testing
 
-- **Built states.** Migration tests build their older states in code. A
-  migration function has tests of its own: a current part comes back as the
-  same cell, an older part converts and converting it again changes nothing,
-  and an unknown shape is refused. A module adapter tests its own shapes in its
-  own module, as `TelegramMigrationTest` does.
-- **End to end.** `VenueMigrationEndToEndTest` builds one venue at version 0
-  holding every shape in the table except Telegram's, with each versioned
-  bundled adapter's oldest state, and takes it to the current version in
-  process. It checks the start-up conversions after the start-up transaction,
-  each later conversion after the venue next uses the shape, and that
-  migrating again changes nothing. A new venue version or older shape is
-  seeded there, and the test fails until a new version's shapes are.
-- **Release-line fixtures.** Each release line (0.9, 0.10, …) leaves one store,
-  written by a published jar of that line and never regenerated:
-  `covia-0.9.11.zip` and `covia-0.10.0.zip` (see their
-  [README](../src/test/resources/migrations/README.md)). Fixtures are big, so
-  only the failsafe integration tests `VenueUpgradeIT` and
-  `VenueStoreMigrationIT` open them.
+- **Migration functions.** Tests build the older state in code: a current part
+  comes back as the same cell, an older part converts and converting it again
+  changes nothing, and an unrecognised shape is refused. A module tests its own
+  shapes, as `TelegramMigrationTest` does.
+- **End to end.** `VenueMigrationEndToEndTest` builds a venue at version 0
+  holding every shape above that Covia and the bundled adapters convert, which
+  leaves out the two read as they are and the messaging adapters' shapes. Each
+  versioned bundled adapter starts at its oldest state. The test migrates the
+  venue in process. A new venue step or older shape is seeded there; raising
+  `CURRENT_VERSION` fails the test until the new step's shapes are.
+- **Release-line fixtures.** Each release line (0.9, 0.10, …) has one store,
+  written by a published jar of that line and never regenerated
+  ([README](../src/test/resources/migrations/README.md)). The failsafe
+  integration tests `VenueUpgradeIT` and `VenueStoreMigrationIT` open them.
 
 ## Out of scope
 
 - The Etch store format, which does not change.
-- DLFS node shapes. They are Convex's schema, and Convex 0.8.18 reads both
-  forms.
-- Backups: #354.
+- DLFS node shapes, which are Convex's schema; Convex 0.8.18 reads both forms.
+- Backups (#354).

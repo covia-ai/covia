@@ -177,40 +177,55 @@ public abstract class AAdapter {
 	public static final String NO_STATE_MIGRATION = "Adapter '%s' has no state migration from version %d";
 
 	/**
-	 * Version of the private state schema this adapter reads and writes at
-	 * {@code :adapters/<name>}. 0, the default, means the adapter does not
-	 * version its state. Raise it when the stored shape changes, and give the
-	 * step from the previous version in {@link #migrateState}. The venue records
-	 * the version each adapter's state has reached, so a step runs once per
-	 * venue. Stored state recorded at a version above this one is refused with a
-	 * {@link covia.venue.UnsupportedVersionException}.
+	 * The steps of the private state schema this adapter reads and writes at
+	 * {@code :adapters/<name>}, in order: step {@code i} takes state at version
+	 * {@code i} to version {@code i + 1}. None, the default, means the adapter
+	 * does not version its state. When the stored shape changes, add a step at
+	 * the end; a released step never changes. Each step is a
+	 * {@link covia.venue.migration.MigrationStep}, and cannot depend on this
+	 * adapter's configuration.
+	 *
+	 * <p>Steps run in order from the recorded version, enabled or disabled,
+	 * before {@link #configure}, install and any deletion hook. A built-in or
+	 * configured-module adapter migrates at launch, after the venue's own steps,
+	 * in the one transaction that opens the venue; an adapter registered later
+	 * migrates in its own transaction as it registers. The new version is
+	 * recorded with the steps. A venue holding no state for this adapter records
+	 * its version, lower or higher, without running them.</p>
 	 */
-	public long stateVersion() {
-		return 0;
+	public java.util.List<covia.venue.migration.MigrationStep> stateSteps() {
+		return java.util.List.of();
 	}
 
 	/**
-	 * Migrates this adapter's state from {@code version} to {@code version + 1}.
-	 * Steps run in order from the recorded version to {@link #stateVersion()},
-	 * enabled or disabled, before {@link #configure}, install and any deletion
-	 * hook. A built-in or configured-module adapter migrates at launch, after the
-	 * venue's own steps, in the one transaction that opens the venue; an adapter
-	 * registered later migrates in its own transaction as it registers. The new
-	 * version is recorded with the steps. A venue holding no state for this
-	 * adapter records its version, lower or higher, without calling it.
-	 *
-	 * <p>Must be a pure function of its arguments: no I/O, no engine calls, no
-	 * clock, no runtime changes, no configuration. The transaction may run it
-	 * again or discard its result. Return the same cell when nothing changes.
-	 * Throw for a shape it does not recognise: the state and its version then
-	 * stay as they were, and the start or registration fails.</p>
+	 * Version of this adapter's state schema: the number of
+	 * {@link #stateSteps()}. The venue records the version each adapter's state
+	 * has reached, so a step runs once per venue. Stored state recorded at a
+	 * version above this one is refused with a
+	 * {@link covia.venue.UnsupportedVersionException}. Overriding it, with
+	 * {@link #migrateState}, is the deprecated form of {@link #stateSteps()}.
+	 */
+	public long stateVersion() {
+		return stateSteps().size();
+	}
+
+	/**
+	 * Migrates this adapter's state from {@code version} to {@code version + 1}
+	 * by running that step of {@link #stateSteps()}.
 	 *
 	 * @param version the version {@code state} is at, below {@link #stateVersion()}
 	 * @param state this adapter's state at that version, never null
 	 * @return the state at {@code version + 1}
+	 * @deprecated Give the steps as {@link #stateSteps()}, and do not override
+	 *             {@link #stateVersion()}.
 	 */
+	@Deprecated(since = "0.10.1", forRemoval = true)
 	public ACell migrateState(long version, ACell state) {
-		throw new IllegalStateException(NO_STATE_MIGRATION.formatted(getName(), version));
+		java.util.List<covia.venue.migration.MigrationStep> steps = stateSteps();
+		if (version < 0 || version >= steps.size()) {
+			throw new IllegalStateException(NO_STATE_MIGRATION.formatted(getName(), version));
+		}
+		return steps.get((int) version).apply(state);
 	}
 
 	/**

@@ -19,6 +19,7 @@ Manage capability-based authorisation on a Covia venue using UCAN tokens.
 - **aud** (audience) — who receives the capability
 - **att** (attenuations) — array of `{with, can}` pairs defining what's allowed
 - **exp** (expiry) — Unix timestamp when the token expires
+- **prf** (proofs) — the grants the issuer passes on; empty for a root
 
 ## Resources (the `with` field)
 
@@ -117,6 +118,22 @@ ucan_issue
 # secretHeaders; the venue sends it only to urls under the nb.url prefix
 ```
 
+## Example: Pass On a Grant This Venue Holds
+
+```
+# Venue B granted this venue read on B's shared folder (b-grant is that JWT).
+# Called as the venue itself, pass part of it on to Alice:
+ucan_issue
+  aud: "did:key:zAlice..."
+  att: [{ "with": "did:web:b.example/w/shared/reports/", "can": "crud/read" }]
+  exp: <no later than b-grant's exp>
+  prf: ["<b-grant>"]
+
+# Alice presents the token at B, directly or through this venue with
+# authenticateAs: "caller"; B checks the chain back to its own grant.
+# Only the venue itself may supply prf; any other caller is refused.
+```
+
 ## Solo Demo (No Second User)
 
 If demoing alone without a second DID, you can still show the flow:
@@ -133,9 +150,3 @@ If demoing alone without a second DID, you can still show the flow:
 2. **Explain the model** — use the `explain` command to walk through the concepts. The token itself demonstrates the structure even without a real second party.
 
 3. **Show the token contents** — UCANs are self-describing. Display the issued token and walk through the fields (issuer, audience, attenuations, expiry, signature).
-
-## Current Status
-
-- **Phase C1 (complete):** Venue-signed tokens, per-request verification, DID URL resources, adversarial tests
-- **Phase C2 (planned):** Delegation chains, proof chain walking, revocation
-- **Phase C3 (planned):** Cross-venue federation with UCAN proofs
