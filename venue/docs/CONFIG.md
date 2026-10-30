@@ -1321,21 +1321,22 @@ Currently defined:
   these IPv4 addresses are refused unless their host is allowed here, so
   federating with a venue on the same machine or a private network needs its
   host listed. The venue itself, and a holder of a venue-issued `outbound/any`
-  grant on `<venueDID>/outbound`, may have MCP, A2A, model, Convex peer and
-  venue targets dialled unchecked; agents, the venue's own included, are
-  checked unless granted it. `http:*` requests and `did:web` documents are
-  checked for every caller. A name that passes is held to the same rule for
-  every later lookup, by whichever client, until the venue stops or its host
-  is allowed here: the venue's jar makes `covia.adapter.GuardedResolver` the
-  JVM's name resolver. If the JVM resolves through anything else
-  (`jdk.net.hosts.file` set, or another `InetAddressResolverProvider` found
-  first), only allowed hosts pass. The guard belongs to the `http` adapter:
-  with it disabled, every such target is refused. Both lists are published at
-  `v/info/adapters/http`.
+  grant on `<venueDID>/outbound`, may have HTTP, MCP, A2A, model, Convex peer
+  and venue targets dialled unchecked, every redirect of an `http:*` request
+  included; agents, the venue's own included, are checked unless granted it.
+  `did:web` documents are checked for every caller. A name that passes is
+  held to the same rule for every later lookup, by whichever client, until the
+  venue stops or its host is allowed here: the venue's jar makes
+  `covia.adapter.GuardedResolver` the JVM's name resolver. If the JVM resolves
+  through anything else (`jdk.net.hosts.file` set, or another
+  `InetAddressResolverProvider` found first), only allowed hosts pass. The
+  guard belongs to the `http` adapter: with it disabled, every such target is
+  refused. Both lists are published at `v/info/adapters/http`.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default
-  `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop passes
-  the SSRF guard, credentials are dropped on a change of origin, and a loop or
-  a longer chain fails the request naming the chain.
+  `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop is
+  checked by the SSRF guard as the first request is, credentials are dropped
+  on a change of origin, and a loop or a longer chain fails the request naming
+  the chain.
 - `convex.peer` — the Convex peer that `convex:query` and `convex:transact` use
   (default `peer.convex.live:18888`; `host:port`, `tcp://host:port` or
   `tls://host:port`). It is the operator's choice, so it does not pass the

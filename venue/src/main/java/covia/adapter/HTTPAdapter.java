@@ -54,7 +54,9 @@ import covia.venue.RequestContext;
  * from an embedding host ({@link #addAllowedHost}, {@link #addBlockedHost}).
  * A name that passes is held by {@link GuardedResolver}, the JVM's resolver,
  * so every later lookup of it, including the one a client makes when it
- * connects, is held to the same rule.</p>
+ * connects, is held to the same rule. A caller who may have the venue dial
+ * anywhere ({@link Engine#outboundUnrestricted}) has its own requests and
+ * their redirect hops sent unchecked.</p>
  *
  * <p><b>User-Agent (#422).</b> A caller who supplies no {@code User-Agent}
  * gets the venue's — {@code Covia/<version> (+https://covia.ai)} unless the
@@ -239,7 +241,7 @@ public class HTTPAdapter extends AAdapter {
 		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
 			throw new IllegalArgumentException("URL must be http(s): " + url);
 		}
-		validateURL(uri);
+		validateURL(uri, false);
 	}
 
 	/** Opening of the refusal for a host that resolves to a private or internal address. */
@@ -312,24 +314,32 @@ public class HTTPAdapter extends AAdapter {
 	}
 
 	/**
-	 * Validates a URL for SSRF safety: its host passes {@link #requireSafeHost}
-	 * and its scheme is http(s).
+	 * Validates a URL for SSRF safety: it has a host, its scheme is http(s),
+	 * and, unless the caller may have the venue dial anywhere, its host passes
+	 * {@link #requireSafeHost}.
 	 *
 	 * @param uri URI to validate
+	 * @param unrestricted Whether the caller may have the venue dial anywhere
 	 * @throws IllegalArgumentException if the URL targets a blocked or private address
 	 */
-	private void validateURL(URI uri) {
+	private void validateURL(URI uri, boolean unrestricted) {
 		String host = uri.getHost();
 		if (host == null) {
 			throw new IllegalArgumentException("URL has no host: " + uri);
 		}
-		requireSafeHost(host);
 
 		// Block non-HTTP(S) schemes
 		String scheme = uri.getScheme();
 		if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
 			throw new IllegalArgumentException("Only HTTP/HTTPS schemes are allowed, got: " + scheme);
 		}
+
+		if (!unrestricted) requireSafeHost(host);
+	}
+
+	/** Whether the caller may have the venue dial anywhere; false with no engine to ask. */
+	private boolean outboundUnrestricted(RequestContext ctx) {
+		return engine != null && engine.outboundUnrestricted(ctx);
 	}
 
 	@Override
@@ -499,7 +509,8 @@ public class HTTPAdapter extends AAdapter {
 
 			// Validate URL for SSRF safety
 			URI targetUri = new URI(finalUrl);
-			validateURL(targetUri);
+			boolean unrestricted = outboundUnrestricted(ctx);
+			validateURL(targetUri, unrestricted);
 
 			String bodyText = (bodyField == null) ? "" : JSON.printPretty(bodyField).toString();
 
@@ -565,7 +576,7 @@ public class HTTPAdapter extends AAdapter {
 			Outbound request = new Outbound(method, bodyText, outHeaders, Set.copyOf(credentials));
 			Set<URI> visited = new HashSet<>();
 			visited.add(targetUri);
-			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions);
+			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions, unrestricted);
 
 		} catch (URISyntaxException e) {
 			throw new RuntimeException("Bad URI syntax: "+url,e);
@@ -578,7 +589,7 @@ public class HTTPAdapter extends AAdapter {
 	 * longer than the limit and refused targets fail the job naming the chain.
 	 */
 	private CompletableFuture<ACell> send(URI uri, Outbound request, boolean follow, int hopsLeft,
-			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions) {
+			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions, boolean unrestricted) {
 		return httpClient.sendAsync(request.build(uri), HttpResponse.BodyHandlers.ofString())
 			.thenCompose(response -> {
 				int code = response.statusCode();
@@ -605,11 +616,12 @@ public class HTTPAdapter extends AAdapter {
 					throw new IllegalArgumentException("Redirect loop: " + chain(hops));
 				}
 				try {
-					validateURL(next);
+					validateURL(next, unrestricted);
 				} catch (IllegalArgumentException e) {
 					throw new IllegalArgumentException("Redirect refused: " + e.getMessage() + " — " + chain(hops));
 				}
-				return send(next, request.follow(code, sameOrigin(uri, next)), true, hopsLeft - 1, hops, visited, redactions);
+				return send(next, request.follow(code, sameOrigin(uri, next)), true, hopsLeft - 1, hops, visited, redactions,
+					unrestricted);
 			});
 	}
 

@@ -144,7 +144,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `asset/read` | — | Get / list content-addressed assets |
 | `venue/restart` | — | Restart a standalone venue process or hand off to a successor jar |
 | `venue/gc` | — | Garbage-collect the venue's Etch store online (`<venueDID>/store`) |
-| `outbound/any` | — | Have the venue dial any MCP, A2A, model, Convex peer or venue target, unchecked by its outbound guard (`<venueDID>/outbound`) |
+| `outbound/any` | — | Have the venue dial any HTTP, MCP, A2A, model, Convex peer or venue target, unchecked by its outbound guard (`<venueDID>/outbound`) |
 | `secret/use` | — | Use a secret's value in an operation without seeing it; bindable to a destination with `nb.url` |
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
 | `oauth` | every `oauth/*` | All connected-account operations |

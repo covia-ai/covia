@@ -21,11 +21,13 @@ import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
@@ -38,6 +40,8 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
+import covia.venue.Engine;
+import covia.venue.TestEngine;
 import covia.venue.TestServer;
 import covia.venue.TestOps;
 import covia.venue.RequestContext;
@@ -861,10 +865,14 @@ public class HTTPTest {
 	 *  whether the request was refused before it left (a synchronous
 	 *  IllegalArgumentException) or failed once in flight (a FAILED job). */
 	private static String failureOf(ACell input) {
+		return failureOf(TestServer.ENGINE, RequestContext.of(Strings.create("did:test:http:redirects")), input);
+	}
+
+	/** {@link #failureOf(ACell)} on {@code engine}, as {@code caller}. */
+	private static String failureOf(Engine engine, RequestContext caller, ACell input) {
 		Job job;
 		try {
-			job = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", input,
-				RequestContext.of(Strings.create("did:test:http:redirects")));
+			job = engine.jobs().invokeOperation("v/ops/http/get", input, caller);
 		} catch (RuntimeException refused) {
 			return String.valueOf(refused.getMessage());
 		}
@@ -1137,6 +1145,64 @@ public class HTTPTest {
 			assertTrue(refused.contains("queryParams.filter must be a string, number or boolean"), refused);
 		} finally {
 			echo.stop(0);
+		}
+	}
+
+	// ====================================================================
+	// Who the guard checks: not the venue itself, but users and agents,
+	// the venue's own included (Engine.outboundUnrestricted)
+	// ====================================================================
+
+	/** A listener on 127.0.0.1, which the shared engine allows no caller: {@code /hop} redirects to {@code /end}. */
+	private static HttpServer loopback(AtomicInteger requests) throws java.io.IOException {
+		HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		s.createContext("/hop", x -> { requests.incrementAndGet(); redirect(x, 302, "/end"); });
+		s.createContext("/end", x -> { requests.incrementAndGet(); respond(x, 200, "reached"); });
+		s.start();
+		return s;
+	}
+
+	private static ACell hop(HttpServer s) {
+		return Maps.of("url", "http://127.0.0.1:" + s.getAddress().getPort() + "/hop");
+	}
+
+	@Test public void testVenueItselfReachesALoopbackTargetAndItsRedirect() throws Exception {
+		Engine engine = TestEngine.ENGINE;
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer s = loopback(requests);
+		try {
+			Job job = engine.jobs().invokeOperation("v/ops/http/get", hop(s), engine.venueContext());
+			job.awaitResult(10_000);
+			assertEquals("reached", body(job));
+			assertEquals(1, RT.count(RT.getIn(job.getOutput(), "redirects")));
+			assertEquals(2, requests.get());
+		} finally {
+			s.stop(0);
+		}
+	}
+
+	@Test public void testUserIsRefusedALoopbackTarget(TestInfo info) throws Exception {
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer s = loopback(requests);
+		try {
+			String refusal = failureOf(TestEngine.ENGINE, RequestContext.of(TestEngine.uniqueDID(info)), hop(s));
+			assertTrue(refusal.contains(HTTPAdapter.PRIVATE_ADDRESS), refusal);
+			assertEquals(0, requests.get());
+		} finally {
+			s.stop(0);
+		}
+	}
+
+	@Test public void testVenueAgentIsRefusedALoopbackTarget() throws Exception {
+		Engine engine = TestEngine.ENGINE;
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer s = loopback(requests);
+		try {
+			String refusal = failureOf(engine, engine.venueContext().withAgentId(Strings.create("helper")), hop(s));
+			assertTrue(refusal.contains(HTTPAdapter.PRIVATE_ADDRESS), refusal);
+			assertEquals(0, requests.get());
+		} finally {
+			s.stop(0);
 		}
 	}
 }

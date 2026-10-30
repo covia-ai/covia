@@ -25,8 +25,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `MigrationStep`s; its state version is their number.
 - `ucan:issue` takes `prf`: the venue passes on part of a grant made to it (#636).
 - `Engine.connectVenue`: connects to another venue through the outbound guard.
-- `outbound/any` on `<venueDID>/outbound`: the venue's own standing to dial any MCP,
-  A2A, model, Convex peer or venue target unchecked, delegable by a venue-issued grant.
+- `outbound/any` on `<venueDID>/outbound`: the venue's own standing to dial any HTTP,
+  MCP, A2A, model, Convex peer or venue target unchecked, delegable by a venue-issued grant.
 - `Grid.webDIDAddress`: the address a `did:web` venue is reached at.
 - `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
 
