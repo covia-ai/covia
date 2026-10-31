@@ -25,7 +25,9 @@ import covia.adapter.AAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
@@ -255,7 +257,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** Resolves the data shared by provider-edge rendering and agent assembly. */
 	public static ResolvedModel resolveModel(Engine engine, Asset selected, AString requestedModel,
 			AMap<AString, ACell> config, RequestContext ctx) {
-		if (selected == null) throw new IllegalArgumentException("LLM operation does not resolve");
+		if (selected == null) throw new NotFoundException("LLM operation does not resolve", null);
 		AMap<AString, ACell> selectedMeta = selected.meta();
 		AMap<AString, ACell> selectedFacet = modelFacet(selectedMeta);
 		AString selectedId = RT.ensureString(selectedFacet.get(K_MODEL_ID));
@@ -266,8 +268,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		AString providerRef = RT.ensureString(selectedFacet.get(K_MODEL_PROVIDER));
 		if (providerRef != null) {
 			provider = engine.resolveAsset(providerRef, ctx);
-			if (provider == null) throw new IllegalArgumentException(
-				"Model provider does not resolve: " + providerRef);
+			if (provider == null) throw new NotFoundException(
+				"Model provider does not resolve: " + providerRef, providerRef.toString());
 		}
 
 		AMap<AString, ACell> execution = modelProfile(provider.meta(), modelId);
@@ -317,7 +319,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			String text = new ContextLoader(engine).resolveText(entry, ctx);
 			return config.assoc(K_SYSTEM_PROMPT, Strings.create(text));
 		} catch (RuntimeException e) {
-			throw new IllegalStateException("config.systemPrompt did not resolve — " + entry
+			if (!isExpectedFailure(e)) throw e;
+			throw new InvalidInputException("config.systemPrompt did not resolve — " + entry
 				+ ": " + ContextLoader.rootMessage(e), e);
 		}
 	}

@@ -17,6 +17,8 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Asset;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -271,7 +273,7 @@ public class ContextLoader {
 			if (s == null) throw new RuntimeException("job " + jobId + " output is not text");
 			return s.toString();
 		}
-		throw new IllegalArgumentException("entry declares none of ref, text, op, job");
+		throw new InvalidInputException("entry declares none of ref, text, op, job");
 	}
 
 	Resolved resolveMapEntry(AMap<AString, ACell> map, RequestContext ctx) {
@@ -475,11 +477,11 @@ public class ContextLoader {
 		if (input != null) provenance = provenance.assoc(K_INPUT, input);
 		try {
 			Asset asset = engine.resolveAsset(op, ctx);
-			if (asset == null) throw new IllegalArgumentException(
-				"Cannot resolve context operation: " + op);
+			if (asset == null) throw new NotFoundException(
+				"Cannot resolve context operation: " + op, op.toString());
 			ACell readOnly = RT.getIn(asset.meta(), Fields.OPERATION, Fields.READ_ONLY);
 			if (CVMBool.FALSE.equals(readOnly)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Context operation declares operation.readOnly=false: " + op);
 			}
 			if (readOnly == null) {
@@ -487,7 +489,7 @@ public class ContextLoader {
 				// Agent create/update surfaces the missing classification to the
 				// operator; inference context stays free of authoring diagnostics.
 			} else if (!(readOnly instanceof CVMBool)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Context operation has non-boolean operation.readOnly: " + op);
 			}
 			// Context loading is framework infrastructure: entries are

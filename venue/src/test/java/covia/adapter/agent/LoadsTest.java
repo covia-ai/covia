@@ -31,6 +31,7 @@ import covia.adapter.agent.ContextAssembler.Prompt;
 import covia.adapter.agent.ContextAssembler.Spec;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -138,13 +139,13 @@ public class LoadsTest {
 
 	@Test
 	public void testDeclaredLoadsRejectAmbiguousOrMalformedForms() {
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("text", "note", "op", "v/ops/covia/list")), "loads"));
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("input", Maps.of())), "loads"));
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("op", CVMLong.create(1))), "loads"));
-		assertThrows(IllegalArgumentException.class, () -> ContextChain.declaredLoads(Maps.of(
+		assertThrows(InvalidInputException.class, () -> ContextChain.declaredLoads(Maps.of(
 			Strings.create("x"), spec("volatile", "yes")), "loads"));
 	}
 

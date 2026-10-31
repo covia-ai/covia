@@ -44,6 +44,7 @@ import covia.adapter.agent.Skills;
 import covia.adapter.agent.ContextLoader;
 import covia.adapter.agent.Loads;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.adapter.agent.ExternalAgents;
 import covia.grid.Job;
 import covia.grid.Principals;
@@ -832,7 +833,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> config;
 		try {
 			config = parseConfigArg(configArg, ctx);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e)); return;
 		}
 		// A genuinely omitted config means "give me the useful platform
@@ -879,7 +880,7 @@ public class AgentAdapter extends AAdapter {
 			try {
 				defConfig = resolveConfigValue(defMeta, ctx, new ArrayList<>(), 0,
 					"definition '" + definitionRef + "'");
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				job.fail("Invalid agent definition " + definitionRef + ": " + e.getMessage());
 				return;
 			}
@@ -934,7 +935,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		try {
 			validateComposedConfig(config);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return;
 		}
@@ -1414,7 +1415,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> overrideConfig;
 		try {
 			overrideConfig = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e)); return;
 		}
 		AMap<AString, ACell> sourceConfig = RT.ensureMap(
@@ -1423,7 +1424,7 @@ public class AgentAdapter extends AAdapter {
 			: (sourceConfig != null ? mergeConfigMaps(sourceConfig, overrideConfig) : overrideConfig);
 		try {
 			validateComposedConfig(forkConfig);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return;
 		}
@@ -2130,7 +2131,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> assistant;
 		try {
 			assistant = AbstractLLMAdapter.stepAssistant(RT.getIn(input, K_ASSISTANT));
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(e.getMessage());
 			return;
 		}
@@ -2548,7 +2549,7 @@ public class AgentAdapter extends AAdapter {
 		DeleteRequest request;
 		try {
 			request = parseDeleteRequest(input);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(e.getMessage());
 			return;
 		}
@@ -2769,7 +2770,7 @@ public class AgentAdapter extends AAdapter {
 			try {
 				AMap<AString, ACell> resolved = parseConfigArg(configInput, ctx);
 				newConfig = mergeConfigMaps(agent.getConfig(), resolved);
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				job.fail(describeFailure(e));
 				return;
 			}
@@ -2782,7 +2783,7 @@ public class AgentAdapter extends AAdapter {
 		if (newConfig != null) {
 			try {
 				validateComposedConfig(newConfig);
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				job.fail(describeFailure(e));
 				return;
 			}
@@ -5071,12 +5072,12 @@ public class AgentAdapter extends AAdapter {
 	private AMap<AString, ACell> resolveConfigValue(ACell value, RequestContext ctx,
 			List<String> resolving, int depth, String location) {
 		if (depth > MAX_CONFIG_LAYER_DEPTH) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				location + " exceeds the maximum config composition depth of "
 					+ MAX_CONFIG_LAYER_DEPTH + "; simplify the layer/reference chain");
 		}
 		if (value == null) {
-			throw new IllegalArgumentException(location + " is null; remove this layer. "
+			throw new InvalidInputException(location + " is null; remove this layer. "
 				+ "To clear an inherited field, set that field to null inside a config map");
 		}
 
@@ -5099,7 +5100,7 @@ public class AgentAdapter extends AAdapter {
 				try {
 					parsed = JSON.parse(text);
 				} catch (RuntimeException e) {
-					throw new IllegalArgumentException(location
+					throw new InvalidInputException(location
 						+ " looks like inline JSON but could not be parsed: "
 						+ describeFailure(e));
 				}
@@ -5118,14 +5119,14 @@ public class AgentAdapter extends AAdapter {
 		ACell facetCell = map.get(K_AGENT_FACET);
 		if (map.containsKey(K_AGENT_FACET)) {
 			if (!(facetCell instanceof AMap<?,?> rawFacet)) {
-				throw new IllegalArgumentException(location
+				throw new InvalidInputException(location
 					+ ".agent must be a map containing config and optionally operation/state; got "
 					+ configValueType(facetCell));
 			}
 			AMap<AString, ACell> facet = (AMap<AString, ACell>) rawFacet;
 			if (!facet.containsKey(Fields.CONFIG) && !facet.containsKey(Fields.OPERATION)
 					&& !facet.containsKey(AgentState.KEY_STATE)) {
-				throw new IllegalArgumentException(location
+				throw new InvalidInputException(location
 					+ ".agent must contain at least one of config, operation, or state");
 			}
 			AMap<AString, ACell> config = facet.containsKey(Fields.CONFIG)
@@ -5134,7 +5135,7 @@ public class AgentAdapter extends AAdapter {
 				: Maps.empty();
 			ACell operationCell = facet.get(Fields.OPERATION);
 			if (operationCell != null && !(operationCell instanceof AString)) {
-				throw new IllegalArgumentException(location
+				throw new InvalidInputException(location
 					+ ".agent.operation must be a string operation path; got "
 					+ configValueType(operationCell));
 			}
@@ -5164,7 +5165,7 @@ public class AgentAdapter extends AAdapter {
 		if (cycleStart >= 0) {
 			List<String> cycle = new ArrayList<>(resolving.subList(cycleStart, resolving.size()));
 			cycle.add(key);
-			throw new IllegalArgumentException(location + " has a cyclic config reference: "
+			throw new InvalidInputException(location + " has a cyclic config reference: "
 				+ String.join(" -> ", cycle));
 		}
 		resolving.add(key);
@@ -5173,8 +5174,9 @@ public class AgentAdapter extends AAdapter {
 			try {
 				resolved = engine.resolvePath(ref, ctx);
 			} catch (RuntimeException e) {
-				throw new IllegalArgumentException(location + " could not resolve config reference '"
-					+ key + "': " + describeFailure(e));
+				if (!isExpectedFailure(e)) throw e;
+				throw new InvalidInputException(location + " could not resolve config reference '"
+					+ key + "': " + describeFailure(e), e);
 			}
 			// Pure path resolution intentionally does not fetch remote DID assets.
 			// Config assets are definitions, so a remote content-addressed or named
@@ -5184,13 +5186,14 @@ public class AgentAdapter extends AAdapter {
 				try {
 					remote = engine.resolveAsset(ref, ctx);
 				} catch (RuntimeException e) {
-					throw new IllegalArgumentException(location + " could not fetch remote config asset '"
-						+ key + "': " + describeFailure(e));
+					if (!isExpectedFailure(e)) throw e;
+					throw new InvalidInputException(location + " could not fetch remote config asset '"
+						+ key + "': " + describeFailure(e), e);
 				}
 				if (remote != null) resolved = remote.meta();
 			}
 			if (resolved == null) {
-				throw new IllegalArgumentException(location + " references '" + key
+				throw new InvalidInputException(location + " references '" + key
 					+ "', but it was not found; check the path and the caller's read capability. "
 					+ "String config layers are references; put prompt text inside {systemPrompt: ...}");
 			}
@@ -5201,8 +5204,8 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	private static IllegalArgumentException invalidConfigShape(String location, ACell value) {
-		return new IllegalArgumentException(location
+	private static InvalidInputException invalidConfigShape(String location, ACell value) {
+		return new InvalidInputException(location
 			+ " must be a config map or a string reference (for example "
 			+ "'v/agents/templates/worker'); got " + configValueType(value));
 	}
@@ -5234,7 +5237,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> entry = (AMap<AString, ACell>) pm;
 			Loads.validateSpec(entry, "config", K_SYSTEM_PROMPT);
 			if (!Loads.declaresSource(entry)) {
-				throw new IllegalArgumentException("config.systemPrompt must be a string, or an entry"
+				throw new InvalidInputException("config.systemPrompt must be a string, or an entry"
 					+ " declaring one of ref, text, op, job; got a map with none");
 			}
 		} else {
@@ -5249,7 +5252,7 @@ public class AgentAdapter extends AAdapter {
 		// runtime must fail loudly here instead (#447).
 		String admissionProblem = Admission.configProblem(config);
 		if (admissionProblem != null) {
-			throw new IllegalArgumentException("config." + admissionProblem);
+			throw new InvalidInputException("config." + admissionProblem);
 		}
 		requireConfigType(config, K_CONTEXT, AVector.class, "an array of context entries");
 		requireConfigType(config, Fields.LOADS, AMap.class, "a map of path to load options");
@@ -5259,28 +5262,28 @@ public class AgentAdapter extends AAdapter {
 		ACell responseFormat = config.get(K_RESPONSE_FORMAT);
 		if (responseFormat != null && !(responseFormat instanceof AString)
 				&& !(responseFormat instanceof AMap<?,?>)) {
-			throw new IllegalArgumentException("config.responseFormat must be a string or map; got "
+			throw new InvalidInputException("config.responseFormat must be a string or map; got "
 				+ configValueType(responseFormat));
 		}
 
 		ACell toolsCell = config.get(K_TOOLS);
 		if (toolsCell == null) return;
 		if (!(toolsCell instanceof AVector<?> tools)) {
-			throw new IllegalArgumentException("config.tools must be an array of string operation paths "
+			throw new InvalidInputException("config.tools must be an array of string operation paths "
 				+ "or {operation, name?, description?} maps; got " + configValueType(toolsCell));
 		}
 		for (long i = 0; i < tools.count(); i++) {
 			ACell entry = (ACell) tools.get(i);
 			if (entry instanceof AString) continue;
 			if (!(entry instanceof AMap<?,?> rawTool)) {
-				throw new IllegalArgumentException("config.tools[" + i + "] must be a string operation "
+				throw new InvalidInputException("config.tools[" + i + "] must be a string operation "
 					+ "path/harness tool name or an {operation, name?, description?} map; got "
 					+ configValueType(entry));
 			}
 			AMap<AString, ACell> tool = (AMap<AString, ACell>) rawTool;
 			ACell operation = tool.get(Fields.OPERATION);
 			if (!(operation instanceof AString)) {
-				throw new IllegalArgumentException("config.tools[" + i
+				throw new InvalidInputException("config.tools[" + i
 					+ "].operation is required and must be a string operation path; got "
 					+ configValueType(operation));
 			}
@@ -5294,14 +5297,14 @@ public class AgentAdapter extends AAdapter {
 		ACell value = config.get(key);
 		// Null is the merge model's explicit "clear inherited optional value".
 		if (value == null || expected.isInstance(value)) return;
-		throw new IllegalArgumentException("config." + key + " must be "
+		throw new InvalidInputException("config." + key + " must be "
 			+ expectedDescription + "; got " + configValueType(value));
 	}
 
 	private static void requireToolText(AMap<AString, ACell> tool, AString key, long index) {
 		ACell value = tool.get(key);
 		if (value != null && !(value instanceof AString)) {
-			throw new IllegalArgumentException("config.tools[" + index + "]." + key
+			throw new InvalidInputException("config.tools[" + index + "]." + key
 				+ " must be a string when present; got " + configValueType(value));
 		}
 	}
@@ -5368,7 +5371,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return null;
 		}
@@ -5409,7 +5412,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return null;
 		}

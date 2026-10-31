@@ -29,6 +29,7 @@ import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.AuthException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -454,7 +455,7 @@ public class SkillsTest {
 
 	@Test
 	public void testNonStringSourceThrows() {
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(InvalidInputException.class, () ->
 			Skills.listSkills(engine, ctx,
 				Skills.SkillSources.ofSkillsets(Vectors.of(CVMLong.create(1)))));
 	}

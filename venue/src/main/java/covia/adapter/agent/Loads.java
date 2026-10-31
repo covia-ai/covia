@@ -20,6 +20,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -155,25 +156,25 @@ public final class Loads {
 			if (v == null) continue;
 			forms++;
 			if (RT.ensureString(v) == null) {
-				throw new IllegalArgumentException(which + " entry '" + key + "' " + k
+				throw new InvalidInputException(which + " entry '" + key + "' " + k
 					+ " must be a string, got " + v.getClass().getSimpleName());
 			}
 		}
 		if (forms > 1) {
-			throw new IllegalArgumentException(which + " entry '" + key
+			throw new InvalidInputException(which + " entry '" + key
 				+ "' must declare at most one of ref, text, op, job");
 		}
 		if (spec.get(K_INPUT) != null && spec.get(K_OP) == null) {
-			throw new IllegalArgumentException(which + " entry '" + key + "' input needs an op");
+			throw new InvalidInputException(which + " entry '" + key + "' input needs an op");
 		}
 		ACell vol = spec.get(K_VOLATILE);
 		if (vol != null && !(vol instanceof CVMBool)) {
-			throw new IllegalArgumentException(which + " entry '" + key + "' volatile must be a boolean, got "
+			throw new InvalidInputException(which + " entry '" + key + "' volatile must be a boolean, got "
 				+ vol.getClass().getSimpleName());
 		}
 		ACell trusted = spec.get(K_TRUSTED);
 		if (trusted != null && !(trusted instanceof CVMBool)) {
-			throw new IllegalArgumentException(which + " entry '" + key + "' trusted must be a boolean, got "
+			throw new InvalidInputException(which + " entry '" + key + "' trusted must be a boolean, got "
 				+ trusted.getClass().getSimpleName());
 		}
 	}

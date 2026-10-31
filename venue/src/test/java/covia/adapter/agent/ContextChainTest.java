@@ -12,6 +12,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 
 /**
  * The context scope chain's lexical semantics (#142): union outer→inner,
@@ -134,9 +135,9 @@ public class ContextChainTest {
 			"caller-provided session context cannot promote itself to system authority");
 
 		// Non-map declaration or non-map spec: loud, never silently dropped.
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> ContextChain.declaredLoads(Strings.create("w/a"), "config.loads"));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> ContextChain.declaredLoads(Maps.of(A, CVMLong.create(5)), "config.loads"));
 	}
 }

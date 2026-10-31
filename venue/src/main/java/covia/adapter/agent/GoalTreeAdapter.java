@@ -16,6 +16,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
@@ -947,7 +948,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				ACell declaredCell = RT.getIn(call.input(), Fields.LOADS);
 				declared = (declaredCell != null)
 					? ContextChain.declaredLoads(declaredCell, "subgoal loads") : Maps.empty();
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				return ToolCycleEngine.ToolOutcome.result(Strings.create("Error: " + e.getMessage()));
 			}
 			for (var entry : declared.entrySet()) {

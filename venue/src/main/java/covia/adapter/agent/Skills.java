@@ -22,6 +22,7 @@ import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -322,7 +323,7 @@ public final class Skills {
 	private static AString sourceRef(ACell raw) {
 		AString source = RT.ensureString(raw);
 		if (source == null) {
-			throw new IllegalArgumentException("skills sources must be strings — got: " + raw);
+			throw new InvalidInputException("skills sources must be strings — got: " + raw);
 		}
 		return source;
 	}

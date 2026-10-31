@@ -19,6 +19,7 @@ import convex.core.lang.RT;
 import covia.adapter.agent.ContextAssembler.Prompt;
 import covia.adapter.agent.ContextAssembler.Spec;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -412,7 +413,7 @@ public class ContextAssemblerTest {
 	public void testPinnedContextTrustMustBeBoolean() {
 		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Vectors.of((ACell) Maps.of(
 			"text", "x", "trusted", "yes")));
-		IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+		InvalidInputException ex = assertThrows(InvalidInputException.class,
 			() -> ContextAssembler.assemble(spec(config)));
 		assertTrue(ex.getMessage().contains("config.context[0] trusted"), ex.getMessage());
 	}
@@ -451,7 +452,7 @@ public class ContextAssemblerTest {
 			Maps.of("op", "v/test/ops/echo"), "config.context[0]"));
 		assertFalse(ContextAssembler.volatileContextEntry(
 			Maps.of("op", "v/test/ops/echo", "volatile", false), "config.context[0]"));
-		IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+		InvalidInputException ex = assertThrows(InvalidInputException.class,
 			() -> ContextAssembler.volatileContextEntry(
 				Maps.of("ref", "w/data", "volatile", "sometimes"), "config.context[0]"));
 		assertTrue(ex.getMessage().contains("volatile must be a boolean"), ex.getMessage());
