@@ -384,6 +384,21 @@ public final class ToolPalette {
 	}
 
 	/** Direct fixed-route lookup. */
+	/** The tool names that {@link #operation} routes in any of these indexes. */
+	@SafeVarargs
+	static Set<String> names(AMap<AString, ACell>... toolIndexes) {
+		Set<String> names = new HashSet<>();
+		for (AMap<AString, ACell> index : toolIndexes) {
+			if (index == null) continue;
+			for (var entry : index.entrySet()) {
+				if (RT.ensureString(RT.getIn(entry.getValue(), Fields.OPERATION)) != null) {
+					names.add(entry.getKey().toString());
+				}
+			}
+		}
+		return names;
+	}
+
 	static AString operation(AMap<AString, ACell> toolIndex, String name) {
 		return (toolIndex == null || name == null) ? null
 			: RT.ensureString(RT.getIn(toolIndex.get(Strings.create(name)), Fields.OPERATION));

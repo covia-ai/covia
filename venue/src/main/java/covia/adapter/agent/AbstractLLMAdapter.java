@@ -918,8 +918,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *
 	 * @param toolName the tool name as returned by the LLM
 	 * @param input the tool call arguments
-	 * @param operation resolved operation route, or null when the tool name is
-	 *        itself an operation reference
+	 * @param operation resolved operation route, or null when the palette binds
+	 *        no route ({@link #dispatchUnbound}, knowing no surface to hint from)
 	 * @param ctx request context for the tool dispatch — carries the agent's
 	 *        grant scope ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
@@ -929,31 +929,57 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
 			AString operation, RequestContext ctx, long timeoutMs) {
+		if (operation == null) return dispatchUnbound(toolName, input, ctx, null, timeoutMs);
 		// Capability enforcement happens at the operation's own enforcement point
 		// under the agent's grant scope carried on ctx — no name-keyed gate here.
 		// The host's guards come first: a call they refuse never runs.
-		if (operation != null) {
-			String refused = guard(toolName, operation, input, ctx, timeoutMs);
-			if (refused != null) return Strings.create("Error: " + refused);
-			return invokeOperation(operation, input, ctx, timeoutMs);
-		}
+		String refused = guard(toolName, operation, input, ctx, timeoutMs);
+		if (refused != null) return Strings.create("Error: " + refused);
+		return invokeOperation(operation, input, ctx, timeoutMs);
+	}
 
-		// A harness pseudo-tool name reaching grid dispatch belongs to another
-		// runtime — this runtime's own harness tools were intercepted by the
-		// subclass before falling through. It exists in no catalog, so fail the
-		// call with the actual reason instead of a generic resolution miss (#143).
+	/** A harness tool of this runtime named through {@code invoke_tool}. */
+	static final String CALL_HARNESS_DIRECTLY = "'%s' is a harness tool; call it directly, not through invoke_tool";
+
+	/**
+	 * Dispatches a tool name the active palette binds to no route (#643). The
+	 * name is either an operation reference, dispatched as one, or nothing this
+	 * session can call: then nothing runs, and the model is told why and, when
+	 * {@code surface} shows it for certain, how to make the tool callable
+	 * ({@link HarnessTools#unboundTool}).
+	 *
+	 * @param surface what the session can call and acquire; null when unknown
+	 */
+	protected ACell dispatchUnbound(String toolName, ACell input, RequestContext ctx,
+			HarnessTools.ToolSurface surface, long timeoutMs) {
+		// This runtime intercepts its own harness tools by name, so one arriving
+		// here came through invoke_tool.
+		if (harnessToolNames().contains(toolName)) {
+			return Strings.create("Error: " + String.format(CALL_HARNESS_DIRECTLY, toolName));
+		}
+		// Another runtime's harness tool exists in no catalog: name the actual
+		// reason rather than a resolution miss (#143).
 		String provider = HarnessNames.PROVIDERS.get(toolName);
 		if (provider != null) {
 			return Strings.create("Error: '" + toolName + "' is a " + provider
 				+ " harness tool — not available under this agent's runtime (" + getName() + ")");
 		}
 
-		// Fall through to grid dispatch
 		AString named = Strings.create(toolName);
+		Asset asset;
+		try {
+			asset = engine.resolveAsset(named, ctx);
+		} catch (Exception e) {
+			return Strings.create("Error: " + toolFailure(e, toolName));
+		}
+		if (asset == null) return Strings.create("Error: " + HarnessTools.unboundTool(toolName, surface));
 		String refused = guard(toolName, named, input, ctx, timeoutMs);
 		if (refused != null) return Strings.create("Error: " + refused);
 		return invokeOperation(named, input, ctx, timeoutMs);
 	}
+
+	/** This runtime's own harness tool names, which its cycle intercepts. */
+	protected abstract java.util.Set<String> harnessToolNames();
 
 	/** The host's tool guards on this call: null to run it, else why not. */
 	private String guard(String toolName, AString operation, ACell input, RequestContext ctx, long timeoutMs) {

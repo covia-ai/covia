@@ -102,6 +102,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	@Override
+	protected java.util.Set<String> harnessToolNames() {
+		return HARNESS_TOOL_NAMES;
+	}
+
+	@Override
 	public String getName() {
 		return "llmagent";
 	}
@@ -736,8 +741,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	private ACell dispatchActiveTool(String name, ACell input, ToolContext toolCtx) {
-		return dispatchTool(name, input, toolCtx.operation(name),
-			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
+		AString operation = toolCtx.operation(name);
+		if (operation != null) return dispatchTool(name, input, operation, toolCtx.ctx, toolCtx.toolCallTimeoutMs);
+		return dispatchUnbound(name, input, toolCtx.ctx, new HarnessTools.ToolSurface(
+			loadScope(toolCtx, ""), toolCtx.callableNames()), toolCtx.toolCallTimeoutMs);
 	}
 
 	// ========== Built-in tool execution ==========
@@ -992,6 +999,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AString operation(String name) {
 			AString operation = ToolPalette.operation(currentLoadToolIndex, name);
 			return (operation != null) ? operation : ToolPalette.operation(toolIndex, name);
+		}
+
+		/** Every tool name {@link #operation} routes. */
+		java.util.Set<String> callableNames() {
+			return ToolPalette.names(currentLoadToolIndex, toolIndex);
 		}
 
 		String activityLabel(String name) {

@@ -679,6 +679,31 @@ timeout, so a wave takes as long as its slowest member; and the timeline's
 `calls[].ms` is each call's own wall clock. A single-call batch runs on the
 loop thread with no hop.
 
+#### Tool failures and unbound names
+
+Every failed call returns an `"Error: …"` result the model can act on
+(`AbstractLLMAdapter.toolFailure`). An expected failure — a `CoviaException`,
+and for now the JDK argument, state and unsupported-operation exceptions
+(#644) — is its own reason. Anything else is a runtime or venue bug: it is
+logged at ERROR with its stack, and the result says it was an unexpected venue
+error, not caused by the call's input, with the class and message for
+debugging. Timeouts and interruptions have their own results.
+
+A name the palette binds to no route (`dispatchUnbound`) runs nothing unless
+it resolves to an operation, which is dispatched as one. Otherwise the result
+says why, and what would make it callable when that is certain:
+
+| Name | Answer |
+|---|---|
+| A harness tool of this runtime, through `invoke_tool` | Call it directly |
+| Another runtime's harness tool | Not available under this runtime |
+| Equal to a callable tool up to case and `-`/`_` | The callable name |
+| Provided by an advertised skill, with `skill_load` offered | `skill_load` one of the skills that provide it |
+| Anything else | No such tool, and not an operation reference |
+
+A skill counts as providing a tool only when it resolves and binding its
+operations as `skill_load` does yields exactly that name.
+
 #### Additional tools
 
 Level 2 also passes through any **external MCP tools** configured for the agent

@@ -151,6 +151,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		HARNESS_NAMES = java.util.Set.copyOf(names);
 	}
 
+	@Override
+	protected java.util.Set<String> harnessToolNames() {
+		return HARNESS_NAMES;
+	}
+
 	/** Everything a cycle holds constant across its frames and inferences;
 	 *  each frame adds its index and fixed base-tool projection. */
 	record Cycle(AMap<AString, ACell> config, AString llmOperation,
@@ -793,7 +798,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		private ACell dispatchActiveTool(String name, ACell input) {
 			AString operation = ToolPalette.operation(iterationToolIndex, name);
 			if (operation == null) operation = ToolPalette.operation(toolIndex, name);
-			return dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
+			if (operation != null) return dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
+			return dispatchUnbound(name, input, ctx, new HarnessTools.ToolSurface(loadScope(),
+				ToolPalette.names(iterationToolIndex, toolIndex)), toolCallTimeoutMs);
 		}
 
 		private boolean excludesLoadName(String name, AString owner) {

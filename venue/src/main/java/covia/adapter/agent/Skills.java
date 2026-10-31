@@ -284,6 +284,40 @@ public final class Skills {
 		return false;
 	}
 
+	/** The skills on the effective advertised surface that provide the tool
+	 * {@code toolName}, by index name, sorted. A skill provides it only when it
+	 * resolves and loading it would bind exactly that name: its operations are
+	 * bound as {@code skill_load} binds them. Answers a call to a tool whose
+	 * skill is not loaded (#643). */
+	static List<String> providersOf(Engine engine, RequestContext ctx,
+			SkillSources configured, AMap<AString, ACell> effectiveLoads,
+			String toolName) {
+		SkillSources effective = effectiveSources(engine, ctx, configured, effectiveLoads);
+		java.util.TreeSet<String> out = new java.util.TreeSet<>();
+		for (SkillIndexEntry entry : listSkills(engine, ctx, effective)) {
+			if (entry.error() != null) continue;
+			try {
+				ResolvedSkill skill = resolveRef(engine, ctx, entry.path());
+				AVector<ACell> bindings = ToolPalette.bindingsForOperations(
+					engine, ctx, skill.toolOps());
+				for (long i = 0; i < bindings.count(); i++) {
+					ACell name = RT.getIn(bindings.get(i), Fields.DEFINITION, Fields.NAME);
+					if (name != null && toolName.equals(name.toString())) {
+						out.add(entry.name());
+						break;
+					}
+				}
+			} catch (RuntimeException e) {
+				// A skill that cannot be resolved or bound now is not hinted.
+				// Only an unexplained failure is a fault worth reporting.
+				if (!covia.adapter.AAdapter.isSelfDescribing(e)) {
+					log.error("Skill {} failed while finding providers of {}", entry.path(), toolName, e);
+				}
+			}
+		}
+		return List.copyOf(out);
+	}
+
 	/** A source ref must be a string; anything else is a configuration error. */
 	private static AString sourceRef(ACell raw) {
 		AString source = RT.ensureString(raw);
