@@ -38,6 +38,10 @@ import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -1062,14 +1066,15 @@ public class CoviaAPI extends ACoviaAPI {
 			// venue, and that upstream fetch failed — a gateway error, not "the
 			// operation does not exist" (#174). The message names the venue.
 			this.buildError(ctx, 502, e.getMessage());
-		} catch (IllegalArgumentException | IllegalStateException e) {
-			this.buildError(ctx, 400, "Error invoking operation: " + e.getMessage());
-			return;
 		} catch (covia.exception.RateLimitException e) {
 			// Caller is over an admission/rate limit (e.g. concurrent-job cap) and
 			// the bounded wait elapsed — standard backpressure: 429 + Retry-After.
 			ctx.header("Retry-After", Long.toString(e.getRetryAfterSeconds()));
 			this.buildError(ctx, 429, e.getMessage());
+			return;
+		} catch (CoviaException | IllegalArgumentException | IllegalStateException e) {
+			// Any other expected refusal of the invocation.
+			this.buildError(ctx, 400, "Error invoking operation: " + e.getMessage());
 			return;
 		} catch (Exception e) {
 			this.buildError(ctx, 500, "Unexpected failure invoking operation: "+e);
@@ -1228,9 +1233,9 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 202, response);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException | IllegalArgumentException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
@@ -2119,7 +2124,8 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (RuntimeException e) {
 			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
 			buildError(ctx, cause instanceof AuthException ? 403
-				: cause instanceof IllegalArgumentException ? 400 : 500, cause.getMessage());
+				: (cause instanceof IllegalArgumentException || cause instanceof InvalidInputException
+					|| cause instanceof NotFoundException) ? 400 : 500, cause.getMessage());
 		}
 	}
 

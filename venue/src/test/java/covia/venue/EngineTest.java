@@ -425,7 +425,7 @@ public class EngineTest {
 		Engine closedEngine = Engine.createTemp(null);
 		Engine.addDemoAssets(closedEngine);
 		closedEngine.close();
-		assertThrows(IllegalStateException.class, () -> closedEngine.jobs().invokeOperation(
+		assertThrows(covia.exception.UnavailableException.class, () -> closedEngine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext()));
 		assertTrue(closedEngine.jobs().invokeInternal(
 			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext())

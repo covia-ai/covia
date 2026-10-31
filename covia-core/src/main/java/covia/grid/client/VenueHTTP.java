@@ -35,6 +35,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.NotFoundException;
 import covia.exception.RateLimitException;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
@@ -1392,10 +1394,11 @@ public class VenueHTTP extends Venue {
 			HttpResponse<String> response = sendSync(req);
 			int code = response.statusCode();
 			if (code == 202) return;
+			// The same types the venue's own JobManager.deliverMessage throws.
 			if (code == 404) {
-				throw new IllegalArgumentException("Job not found: " + jobId);
+				throw new NotFoundException("Job not found: " + jobId, jobId);
 			} else if (code == 409) {
-				throw new IllegalStateException("Job is in terminal state: " + jobId);
+				throw new ConflictException("Job is in terminal state: " + jobId);
 			}
 			throw new ResponseException("Failed to send message: HTTP " + code);
 		} catch (IOException | InterruptedException e) {

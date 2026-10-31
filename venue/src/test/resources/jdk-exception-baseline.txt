@@ -12,7 +12,7 @@ covia-core/src/main/java/covia/grid/auth/UcanTokens.java 3
 covia-core/src/main/java/covia/grid/auth/VenueAuth.java 3
 covia-core/src/main/java/covia/grid/auth/VenueDID.java 1
 covia-core/src/main/java/covia/grid/client/RetryPolicy.java 2
-covia-core/src/main/java/covia/grid/client/VenueHTTP.java 8
+covia-core/src/main/java/covia/grid/client/VenueHTTP.java 6
 covia-core/src/main/java/covia/grid/impl/LatticeContent.java 2
 covia-core/src/main/java/covia/grid/impl/PathContent.java 1
 covia-core/src/main/java/covia/grid/impl/StreamContent.java 3
@@ -95,7 +95,7 @@ venue/src/main/java/covia/venue/AuthState.java 13
 venue/src/main/java/covia/venue/Config.java 20
 venue/src/main/java/covia/venue/CoviaApplication.java 2
 venue/src/main/java/covia/venue/Engine.java 53
-venue/src/main/java/covia/venue/JobManager.java 23
+venue/src/main/java/covia/venue/JobManager.java 3
 venue/src/main/java/covia/venue/LocalVenue.java 6
 venue/src/main/java/covia/venue/Modules.java 16
 venue/src/main/java/covia/venue/RemoteJobs.java 6

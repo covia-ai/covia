@@ -717,8 +717,8 @@ public class MCP extends McpServer {
 		} catch (java.util.concurrent.CancellationException e) {
 			return toolError("Cancelled");
 		} catch (java.util.concurrent.CompletionException e) {
-			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			return toolError(cause.toString()); // as a failed get() has always said it
+			// An expected failure is its reason; only an unexpected one names its class.
+			return toolError(covia.adapter.AAdapter.describeFailure(e));
 		}
 	}
 
