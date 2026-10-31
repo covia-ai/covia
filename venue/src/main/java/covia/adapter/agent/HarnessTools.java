@@ -282,7 +282,7 @@ final class HarnessTools {
 				}
 			}
 		} catch (RuntimeException e) {
-			return Strings.create("Error: more_tools denied: " + describe(e));
+			return Strings.create("Error: more_tools denied: " + AbstractLLMAdapter.toolFailure(e, MORE_TOOLS));
 		}
 		AVector<ACell> resolved = ToolPalette.bindingsForOperations(
 			scope.engine, scope.context, requested);
@@ -393,7 +393,7 @@ final class HarnessTools {
 			try {
 				new ContextLoader(scope.engine).requireReadAccess(path, scope.context);
 			} catch (RuntimeException e) {
-				return Strings.create("Error: context_load denied: " + describe(e));
+				return Strings.create("Error: context_load denied: " + AbstractLLMAdapter.toolFailure(e, CONTEXT_LOAD));
 			}
 		} else {
 			key = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_ID));
@@ -485,14 +485,8 @@ final class HarnessTools {
 			}
 			return outcome.result();
 		} catch (RuntimeException e) {
-			return Strings.create("Error: skill_load failed: " + describe(e));
+			return Strings.create("Error: skill_load failed: " + AbstractLLMAdapter.toolFailure(e, SKILL_LOAD));
 		}
 	}
 
-	private static String describe(Throwable failure) {
-		Throwable cause = AbstractLLMAdapter.unwrap(failure);
-		String message = cause.getMessage();
-		return (message == null || message.isBlank())
-			? cause.getClass().getSimpleName() : message;
-	}
 }

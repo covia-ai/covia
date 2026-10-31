@@ -1044,9 +1044,11 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
-			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
+			return toolTimeout(timeoutMs);
+		} catch (InterruptedException e) {
+			return toolInterrupted();
 		} catch (Exception e) {
-			return Strings.create("Error: " + unwrap(e).getMessage());
+			return Strings.create("Error: " + toolFailure(e, operation.toString()));
 		} finally {
 			if (relay != null) relay.close();
 		}
@@ -1096,16 +1098,37 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return DEFAULT_LLM_TIMEOUT_MS;
 	}
 
+	/** Opens the tool result for a failure the venue did not expect (#644). */
+	public static final String UNEXPECTED_TOOL_FAILURE =
+		"unexpected venue error, not caused by this call's input; it has been logged";
+
 	/**
-	 * Unwraps a {@link java.util.concurrent.CompletionException} to expose the
-	 * adapter's original exception — otherwise error messages read
-	 * "java.util.concurrent.CompletionException: ...".
+	 * Explains a failed tool call to the model. An expected failure
+	 * ({@link AAdapter#isSelfDescribing}) is its own reason. Anything else —
+	 * including an expected type thrown without a reason — is a runtime or
+	 * venue bug: it is logged here at ERROR with its stack, and the model is
+	 * told it was unexpected, the class and message kept for debugging.
 	 */
-	public static Throwable unwrap(Throwable t) {
-		if (t instanceof java.util.concurrent.CompletionException && t.getCause() != null) {
-			return t.getCause();
-		}
-		return t;
+	public static String toolFailure(Throwable failure, String toolName) {
+		Throwable cause = unwrap(failure);
+		String message = cause.getMessage();
+		boolean explained = message != null && !message.isBlank();
+		if (explained && isSelfDescribing(cause)) return conciseDetail(message, MAX_FAILURE_CHARS);
+		log.error("Unexpected failure in tool {}", toolName, cause);
+		String detail = cause.getClass().getSimpleName() + (explained ? ": " + message : "");
+		return conciseDetail(UNEXPECTED_TOOL_FAILURE + " (" + detail + ")", MAX_FAILURE_CHARS);
+	}
+
+	/** The result of a tool call whose operation outran its budget. */
+	static AString toolTimeout(long timeoutMs) {
+		return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
+	}
+
+	/** The result of a tool call abandoned because its cycle was interrupted;
+	 *  the thread's interrupt status is restored for the cycle to observe. */
+	static AString toolInterrupted() {
+		Thread.currentThread().interrupt();
+		return Strings.create("Error: tool call interrupted — the agent cycle is stopping");
 	}
 
 	// ========== Tool result message construction ==========
