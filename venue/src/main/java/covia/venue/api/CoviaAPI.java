@@ -2223,7 +2223,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDirectory(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException | UnavailableException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (Exception e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());

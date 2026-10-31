@@ -10,6 +10,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 
 /**
  * Readable text from a document — the seam behind {@code mode: "extract"}
@@ -126,8 +127,8 @@ public interface TextExtractor {
 				a.isEmpty() ? null : Integer.parseInt(a),
 				b.isEmpty() ? null : Integer.parseInt(b) };
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException(
-				"pages must be a page number, a range like \"3-5\", or {first, last}; got: " + spec);
+			throw new InvalidInputException(
+				"pages must be a page number, a range like \"3-5\", or {first, last}; got: " + spec, e);
 		}
 	}
 }

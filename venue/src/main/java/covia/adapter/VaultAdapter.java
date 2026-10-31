@@ -11,6 +11,9 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.exception.ConfigurationException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
 
 /**
@@ -62,7 +65,7 @@ public class VaultAdapter extends AAdapter {
 		if (config.containsKey(CONFIG_DRIVE)) {
 			AString configured = RT.ensureString(config.get(CONFIG_DRIVE));
 			if (configured == null || !isValidDriveName(configured.toString())) {
-				throw new IllegalStateException("adapters.vault.drive must be a non-empty "
+				throw new ConfigurationException("adapters.vault.drive must be a non-empty "
 					+ "DLFS drive name without '/', '\\', or ':'");
 			}
 			driveName = configured;
@@ -92,7 +95,7 @@ public class VaultAdapter extends AAdapter {
 		// Map vault:X → dlfs:X with drive injected
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("No vault operation specified"));
+			return CompletableFuture.failedFuture(new NotSupportedException("No vault operation specified"));
 		}
 
 		// Inject drive name into input
@@ -103,7 +106,7 @@ public class VaultAdapter extends AAdapter {
 		// Delegate to the typed DLFS operation boundary.
 		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
 		if (dlfs == null) {
-			return CompletableFuture.failedFuture(new IllegalStateException("DLFS adapter not available"));
+			return CompletableFuture.failedFuture(new UnavailableException("DLFS adapter not available"));
 		}
 
 		return dlfs.invokeBoundOperation(ctx, subOp, inputMap);

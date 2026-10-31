@@ -28,6 +28,7 @@ import convex.core.data.Maps;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
+import covia.exception.InvalidInputException;
 import covia.lattice.Covia;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
@@ -367,7 +368,7 @@ public class DLFSAdapterTest {
 	public void testUpstreamRejectedDriveNamesAreNotCreated() throws Exception {
 		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
 		for (String name : new String[] {".", "..", " padded ", "x".repeat(129)}) {
-			var error = assertThrows(IllegalArgumentException.class,
+			var error = assertThrows(InvalidInputException.class,
 				() -> adapter.getDriveForIdentity(ALICE_DID.toString(), name));
 			assertEquals(DLFSAdapter.INVALID_DRIVE_NAME, error.getMessage());
 		}
@@ -742,7 +743,7 @@ public class DLFSAdapterTest {
 		assertEquals("*", RT.getIn(read, "content").toString());
 		assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> engine.createContent(ref,
 			new java.io.ByteArrayInputStream(new byte[] {9}), null, ctx));
-		assertThrows(IllegalArgumentException.class, () -> engine.resolveContent(
+		assertThrows(InvalidInputException.class, () -> engine.resolveContent(
 			convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/%2e%2e/escape"), ctx));
 		var scoped = ctx.withCaps(convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
 			convex.core.data.Strings.create("dlfs/names/" + name), convex.auth.ucan.Capability.CRUD_READ)));

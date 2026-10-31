@@ -29,6 +29,10 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.utils.MimeUtils;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -86,17 +90,17 @@ final class FileOperations {
 		try {
 			relative = base.getFileSystem().getPath(stripped);
 		} catch (InvalidPathException e) {
-			throw new IllegalArgumentException(
-				"Invalid path '" + userPath + "': " + e.getReason());
+			throw new InvalidInputException(
+				"Invalid path '" + userPath + "': " + e.getReason(), e);
 		}
 		if (relative.isAbsolute() || relative.getRoot() != null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Path must be relative to '" + rootLabel + "': " + userPath);
 		}
 
 		Path target = base.resolve(relative).normalize();
 		if (!target.startsWith(base)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Path escapes '" + rootLabel + "': " + userPath);
 		}
 
@@ -111,7 +115,7 @@ final class FileOperations {
 			Path realBase = base.toRealPath();
 			Path realProbe = probe.toRealPath();
 			if (!realProbe.startsWith(realBase)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Path escapes '" + rootLabel + "' through a symbolic link: " + userPath);
 			}
 		}
@@ -125,7 +129,7 @@ final class FileOperations {
 	}
 
 	static ACell list(Path dir, AttributeReader attributeReader) throws IOException {
-		if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + dir);
+		if (!Files.isDirectory(dir)) throw new InvalidInputException("Not a directory: " + dir);
 		AVector<ACell> entries = Vectors.empty();
 		boolean changed = false;
 		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
@@ -161,7 +165,7 @@ final class FileOperations {
 
 	static ACell tree(Path dir, AMap<AString, ACell> input,
 			AttributeReader attributeReader) throws IOException {
-		if (!Files.isDirectory(dir)) throw new IllegalArgumentException("Not a directory: " + dir);
+		if (!Files.isDirectory(dir)) throw new InvalidInputException("Not a directory: " + dir);
 		int maxDepth = boundedInt(input, "maxDepth", 3, 1, MAX_DEPTH_CAP);
 		int maxEntries = boundedInt(input, "maxEntries", 500, 1, MAX_ENTRIES_CAP);
 		AString infoCell = RT.ensureString(input.get(Strings.create("info")));
@@ -238,7 +242,7 @@ final class FileOperations {
 	 *  {@link TextExtractor} and the read's {@code pages} / {@code maxChars} options. */
 	static ACell read(Path file, String mode, String binaryUrl, Engine engine,
 			AMap<AString, ACell> input) throws IOException {
-		if (!Files.isRegularFile(file)) throw new IllegalArgumentException("Not a regular file: " + file);
+		if (!Files.isRegularFile(file)) throw new InvalidInputException("Not a regular file: " + file);
 		byte[] bytes = Files.readAllBytes(file);
 		String mime = MimeUtils.guess(displayName(file), bytes);
 		CVMLong size = CVMLong.create(bytes.length);
@@ -246,7 +250,7 @@ final class FileOperations {
 
 		return switch (effectiveMode) {
 			case "text" -> {
-				if (!looksLikeText(bytes)) throw new IllegalArgumentException("File is not valid UTF-8 text");
+				if (!looksLikeText(bytes)) throw new InvalidInputException("File is not valid UTF-8 text");
 				yield Maps.of("content", new String(bytes, StandardCharsets.UTF_8),
 					"encoding", "utf-8", "size", size, "mime", mime);
 			}
@@ -257,7 +261,7 @@ final class FileOperations {
 					yield Maps.of("value", JSON.parse(new String(bytes, StandardCharsets.UTF_8)),
 						"size", size, "mime", mime);
 				} catch (Exception e) {
-					throw new IllegalArgumentException("File is not valid JSON: " + e.getMessage());
+					throw new InvalidInputException("File is not valid JSON: " + e.getMessage(), e);
 				}
 			}
 			case "auto" -> {
@@ -273,7 +277,7 @@ final class FileOperations {
 					"encoding", "base64", "size", size, "mime", mime);
 			}
 			case "extract" -> extract(bytes, displayName(file), mime, size, engine, input);
-			default -> throw new IllegalArgumentException(
+			default -> throw new InvalidInputException(
 				"Unknown mode '" + effectiveMode + "'. Expected: auto, text, bytes, json, extract");
 		};
 	}
@@ -289,12 +293,12 @@ final class FileOperations {
 			Engine engine, AMap<AString, ACell> input) throws IOException {
 		TextExtractor extractor = (engine != null) ? engine.findAdapter(TextExtractor.class) : null;
 		if (extractor == null) {
-			throw new IllegalArgumentException("mode 'extract' needs the documents module (covia-documents), "
+			throw new NotSupportedException("mode 'extract' needs the documents module (covia-documents), "
 				+ "which is not loaded on this venue — read the file with mode 'bytes', or ask the operator "
 				+ "to load the module");
 		}
 		if (!extractor.supports(mime, name)) {
-			throw new IllegalArgumentException("No text extractor for " + name + " (" + mime
+			throw new NotSupportedException("No text extractor for " + name + " (" + mime
 				+ "); supported: " + extractor.supported());
 		}
 		CVMLong max = (input != null) ? RT.ensureLong(input.get(TextExtractor.K_MAX_CHARS)) : null;
@@ -334,7 +338,8 @@ final class FileOperations {
 		covia.venue.storage.ContentProvider.Resolved resolved =
 			engine.resolveContentBlock(block, ctx);
 		if (resolved == null && contentBlockHasLocator(block)) {
-			throw new IllegalArgumentException("Content descriptor did not resolve any data");
+			throw new NotFoundException("Content descriptor did not resolve any data",
+				stringAt(block, Fields.REF));
 		}
 
 		java.nio.file.OpenOption[] options = createOptions(file);
@@ -374,12 +379,12 @@ final class FileOperations {
 		ACell pathCell = input.get(Fields.PATH);
 		if (pathCell != null) {
 			AString path = RT.ensureString(pathCell);
-			if (path == null) throw new IllegalArgumentException("path must be a string");
+			if (path == null) throw new InvalidInputException("path must be a string");
 			return path.toString();
 		}
 		AString fileName = RT.ensureString(RT.getIn(input, Fields.CONTENT, Fields.FILE_NAME));
 		if (fileName == null || fileName.isEmpty()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"path is required unless content.fileName supplies it");
 		}
 		return fileName.toString();
@@ -393,13 +398,13 @@ final class FileOperations {
 		AString contentRef = RT.ensureString(input.get(FIELD_CONTENT_REF));
 		AString legacyAssetRef = RT.ensureString(input.get(FIELD_ASSET));
 		if (contentRef != null && legacyAssetRef != null && !contentRef.equals(legacyAssetRef)) {
-			throw new IllegalArgumentException("contentRef conflicts with legacy 'asset'");
+			throw new InvalidInputException("contentRef conflicts with legacy 'asset'");
 		}
 		if (contentRef == null) contentRef = legacyAssetRef;
 		int supplied = (content != null ? 1 : 0) + (hasValue ? 1 : 0)
 			+ (bytesB64 != null ? 1 : 0) + (contentRef != null ? 1 : 0);
 		if (supplied != 1) {
-			throw new IllegalArgumentException(supplied == 0
+			throw new InvalidInputException(supplied == 0
 				? "Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'contentRef' is required"
 				: "Only one of 'content', 'value', 'bytes', or 'contentRef' may be supplied");
 		}
@@ -410,7 +415,8 @@ final class FileOperations {
 		if (contentRef != null) {
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine.resolveContent(contentRef, assetCtx);
-			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + contentRef);
+			if (resolved == null) throw new NotFoundException("No content at ref: " + contentRef,
+				contentRef.toString());
 			try (InputStream is = resolved.content().getInputStream();
 				 OutputStream os = Files.newOutputStream(target, options)) {
 				return is.transferTo(os);
@@ -454,7 +460,7 @@ final class FileOperations {
 		boolean existed = Files.exists(target);
 		if (existed) {
 			if (!Files.isDirectory(target)) {
-				throw new IllegalArgumentException("Path exists and is not a directory: " + target);
+				throw new ConflictException("Path exists and is not a directory: " + target);
 			}
 		} else if (RT.bool(input.get(FIELD_PARENTS))) {
 			Files.createDirectories(target);
@@ -468,7 +474,7 @@ final class FileOperations {
 			throws IOException {
 		if (!Files.exists(target)) return Maps.of("deleted", CVMBool.FALSE, "existed", CVMBool.FALSE);
 		if (protectedRoot != null && target.equals(protectedRoot)) {
-			throw new IllegalArgumentException("Refusing to delete the root itself");
+			throw new InvalidInputException("Refusing to delete the root itself");
 		}
 		if (Files.isDirectory(target) && RT.bool(input.get(FIELD_RECURSIVE))) {
 			deleteRecursive(target);

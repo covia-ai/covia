@@ -24,6 +24,11 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.utils.MimeUtils;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -147,7 +152,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			// Lazy adapter lookup — FileAdapter may register before DLFSAdapter.
 			AAdapter raw = engine.getAdapter("dlfs");
 			if (!(raw instanceof DLFSAdapter dlfs)) {
-				throw new IllegalStateException(
+				throw new UnavailableException(
 					"DLFS-backed root '" + driveName + "' requires the DLFS adapter to be registered");
 			}
 			// Drives auto-create on first connect; cheap cursor view per call.
@@ -160,12 +165,12 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			// but this keeps the security boundary local to path materialisation.
 			Path relative = driveRoot.getFileSystem().getPath(subpath);
 			if (relative.isAbsolute() || relative.getRoot() != null) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"DLFS root subpath must be relative: " + subpath);
 			}
 			Path base = driveRoot.resolve(relative).normalize();
 			if (!base.startsWith(driveRoot)) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"DLFS root subpath escapes drive: " + subpath);
 			}
 			// The drive itself is lazy-created; its configured subtree follows the
@@ -264,10 +269,10 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				boolean readOnly = RT.bool(rm.get(Config.READ_ONLY));
 				AString description = RT.ensureString(rm.get(FIELD_DESCRIPTION));
 				if (subpathRaw != null && subpathCell == null) {
-					throw new IllegalArgumentException("'subpath' must be a string");
+					throw new ConfigurationException("'subpath' must be a string");
 				}
 				if (subpathCell != null && dlfsCell == null) {
-					throw new IllegalArgumentException(
+					throw new ConfigurationException(
 						"'subpath' is only valid for a DLFS-backed root");
 				}
 				int variants = (isTemp ? 1 : 0) + (dlfsCell != null ? 1 : 0)
@@ -297,7 +302,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			} else {
 				log.warn("FileAdapter: root '{}' must be string or map — skipped", name);
 			}
-		} catch (IOException | IllegalArgumentException e) {
+		} catch (IOException | ConfigurationException | IllegalArgumentException e) {
 			log.warn("FileAdapter: root '{}' failed: {}", name, e.getMessage());
 		}
 	}
@@ -305,23 +310,23 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	/** Normalises a portable provider-relative DLFS subtree path. */
 	private static String normaliseDLFSSubpath(String configured) {
 		if (configured == null || configured.isBlank()) {
-			throw new IllegalArgumentException("'subpath' must not be empty");
+			throw new ConfigurationException("'subpath' must not be empty");
 		}
 		String portable = configured.replace('\\', '/');
 		if (portable.startsWith("/") || portable.matches("^[A-Za-z]:.*")) {
-			throw new IllegalArgumentException("'subpath' must be relative: " + configured);
+			throw new ConfigurationException("'subpath' must be relative: " + configured);
 		}
 		java.util.ArrayList<String> segments = new java.util.ArrayList<>();
 		for (String segment : portable.split("/")) {
 			if (segment.isEmpty() || ".".equals(segment)) continue;
 			if ("..".equals(segment)) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"'subpath' must not contain '..': " + configured);
 			}
 			segments.add(segment);
 		}
 		if (segments.isEmpty()) {
-			throw new IllegalArgumentException("'subpath' must name a directory");
+			throw new ConfigurationException("'subpath' must name a directory");
 		}
 		return String.join("/", segments);
 	}
@@ -387,11 +392,11 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	private Path resolvePath(RequestContext ctx, String rootName, String userPath, boolean mustExist) throws IOException {
 		if (rootName == null || rootName.isEmpty()) {
-			throw new IllegalArgumentException("'root' is required");
+			throw new InvalidInputException("'root' is required");
 		}
 		Root root = roots.get(rootName);
 		if (root == null) {
-			throw new IllegalArgumentException("Unknown root '" + rootName
+			throw new InvalidInputException("Unknown root '" + rootName
 				+ "'. Configured: " + roots.keySet());
 		}
 
@@ -415,7 +420,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	private DLFSAdapter requireDLFSAdapter() {
 		AAdapter raw = engine.getAdapter("dlfs");
 		if (!(raw instanceof DLFSAdapter dlfs)) {
-			throw new IllegalStateException("DLFS adapter is not available");
+			throw new UnavailableException("DLFS adapter is not available");
 		}
 		return dlfs;
 	}
@@ -431,7 +436,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
 				.resolveAuthorisedPath(ctx, userPath, ability);
 			if (target == null) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"'root' is required unless 'path' is a dlfs/<drive>/... or DID-scoped DLFS reference");
 			}
 			if (mustExist && !Files.exists(target.path())) throw new NoSuchFileException(userPath);
@@ -447,7 +452,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			String requested = schemeResource("file", Strings.create(rootName),
 				userPath != null ? Strings.create(userPath) : null);
 			engine.requireAuthority(ctx, Strings.create(requested), ability);
-			throw new IllegalArgumentException("Unknown root '" + rootName + "'");
+			throw new InvalidInputException("Unknown root '" + rootName + "'");
 		}
 		if (root instanceof DLFSRoot dr) {
 			String relative = joinDLFSPath(dr.subpath, userPath);
@@ -460,7 +465,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				Files.createDirectories(logicalBase);
 			}
 			if (!target.path().startsWith(logicalBase)) {
-				throw new IllegalArgumentException("Path escapes root '" + rootName + "': " + userPath);
+				throw new InvalidInputException("Path escapes root '" + rootName + "': " + userPath);
 			}
 			if (mustExist && !Files.exists(target.path())) throw new NoSuchFileException(userPath);
 			return new FileTarget(logicalBase, target.path(), target.resource(),
@@ -488,7 +493,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	private Root requireRoot(String name) {
 		Root r = roots.get(name);
 		if (r == null) {
-			throw new IllegalArgumentException("Unknown root '" + name + "'");
+			throw new InvalidInputException("Unknown root '" + name + "'");
 		}
 		return r;
 	}
@@ -540,7 +545,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		FileTarget target = resolveTarget(ctx, rootName, archivePart, ability, true);
 		Path archive = target.path();
 		if (!Files.isRegularFile(archive)) {
-			throw new IllegalArgumentException("Not an archive file: " + archivePart);
+			throw new InvalidInputException("Not an archive file: " + archivePart);
 		}
 
 		java.util.concurrent.locks.ReentrantLock lock = archiveLocks.computeIfAbsent(
@@ -553,8 +558,8 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			fs = java.nio.file.FileSystems.newFileSystem(archive);
 		} catch (Exception mountErr) {
 			lock.unlock();
-			throw new IllegalArgumentException("Not a readable zip/jar archive: " + archivePart
-				+ " (" + mountErr.getClass().getSimpleName() + ")");
+			throw new InvalidInputException("Not a readable zip/jar archive: " + archivePart
+				+ " (" + mountErr.getClass().getSimpleName() + ")", mountErr);
 		}
 		try {
 			Path zipRoot = fs.getRootDirectories().iterator().next();
@@ -564,7 +569,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			}
 			Path entry = stripped.isEmpty() ? zipRoot : zipRoot.resolve(stripped).normalize();
 			if (!entry.startsWith(zipRoot)) {
-				throw new IllegalArgumentException("Path escapes archive '" + archivePart + "': " + entryPart);
+				throw new InvalidInputException("Path escapes archive '" + archivePart + "': " + entryPart);
 			}
 			if (mustExist && !Files.exists(entry)) {
 				throw new NoSuchFileException(rootName + ":" + userPath);
@@ -606,20 +611,20 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	 *  {@code file:} sees into archives read-only; mutate them via the archive adapter. */
 	private static void rejectArchiveEntry(String pathArg, String verb) {
 		if (archiveBang(pathArg) >= 0) {
-			throw new IllegalArgumentException("Cannot " + verb + " an archive entry ('" + pathArg
+			throw new InvalidInputException("Cannot " + verb + " an archive entry ('" + pathArg
 				+ "') — file access to archives is read-only; use archive:zip / archive:extract");
 		}
 	}
 
 	private void requireWritable(String rootName) {
 		if (requireRoot(rootName).readOnly) {
-			throw new IllegalArgumentException("Root '" + rootName + "' is read-only");
+			throw new InvalidInputException("Root '" + rootName + "' is read-only");
 		}
 	}
 
 	private static void requireWritable(FileTarget target) {
 		if (target.readOnly()) {
-			throw new IllegalArgumentException("Root '" + target.rootName() + "' is read-only");
+			throw new InvalidInputException("Root '" + target.rootName() + "' is read-only");
 		}
 	}
 
@@ -658,12 +663,15 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("No file sub-operation specified"));
+				new NotSupportedException("No file sub-operation specified"));
 		}
 
 		return CompletableFuture.supplyAsync(() -> {
 			try {
 				return dispatch(ctx, subOp, RT.castMap(input));
+			} catch (RuntimeException e) {
+				if (!isExpectedFailure(e)) throw e;
+				throw new RuntimeException(e.getMessage(), e);
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
@@ -691,7 +699,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			case "delete" -> handleDelete(ctx, input);
 			case "mkdir"  -> handleMkdir(ctx, input);
 			case "stat"   -> handleStat(ctx, input);
-			default       -> throw new IllegalArgumentException("Unknown file operation: " + subOp);
+			default       -> throw new NotSupportedException("Unknown file operation: " + subOp);
 		};
 	}
 
@@ -721,7 +729,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				Capability.CRUD_READ, true)) {
 			Path path = resolved.path();
 			if (!Files.isRegularFile(path)) {
-				throw new IllegalArgumentException("No file at reference: " + ref);
+				throw new NotFoundException("No file at reference: " + ref, ref.toString());
 			}
 			covia.grid.AContent content;
 			if (resolved.entryPath() != null) {
@@ -913,10 +921,10 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			Path source, Path target,
 			String fromArg, String toArg) throws IOException {
 		if (source.equals(sourceBase) || target.equals(targetBase)) {
-			throw new IllegalArgumentException("Refusing to move or copy the root itself");
+			throw new InvalidInputException("Refusing to move or copy the root itself");
 		}
 		if (source.equals(target)) {
-			throw new IllegalArgumentException("Source and destination are the same path: " + fromArg);
+			throw new InvalidInputException("Source and destination are the same path: " + fromArg);
 		}
 		if (!Files.exists(source)) {
 			throw new NoSuchFileException(fromArg);
@@ -927,7 +935,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 		if (source.getFileSystem() == target.getFileSystem()
 				&& Files.isDirectory(source) && target.startsWith(source)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Cannot move or copy a directory into itself: " + toArg);
 		}
 	}
@@ -974,11 +982,11 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			String qualifiedRoot = (slash >= 0) ? rest.substring(0, slash) : rest;
 			String path = (slash >= 0) ? rest.substring(slash + 1) : "";
 			if (qualifiedRoot.isEmpty()) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"'" + endpointField + "' file reference is missing a root");
 			}
 			if (explicitRoot != null && !explicitRoot.equals(qualifiedRoot)) {
-				throw new IllegalArgumentException("'" + rootField + "' (" + explicitRoot
+				throw new InvalidInputException("'" + rootField + "' (" + explicitRoot
 					+ ") conflicts with '" + endpointField + "' root " + qualifiedRoot);
 			}
 			return new FileEndpoint(qualifiedRoot, path);
@@ -986,18 +994,18 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		if (value.startsWith("dlfs/") || value.startsWith("dlfs://")
 				|| (value.startsWith("did:") && value.contains("/dlfs/"))) {
 			if (explicitRoot != null) {
-				throw new IllegalArgumentException("'" + rootField
+				throw new InvalidInputException("'" + rootField
 					+ "' cannot be combined with a canonical DLFS reference in '" + endpointField + "'");
 			}
 			return new FileEndpoint(null, value);
 		}
 		if (value.contains("://")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"'" + endpointField + "' must be relative or use file://<root>/<path>");
 		}
 		String root = (explicitRoot != null) ? explicitRoot : fallbackRoot;
 		if (root == null || root.isEmpty()) {
-			throw new IllegalArgumentException("'" + rootField + "' is required when '"
+			throw new InvalidInputException("'" + rootField + "' is required when '"
 				+ endpointField + "' is not a file:// reference");
 		}
 		return new FileEndpoint(root, value);
@@ -1040,7 +1048,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	private static String requiredStringArg(AMap<AString, ACell> input, AString key) {
 		String value = stringArg(input, key);
 		if (value == null || value.isEmpty()) {
-			throw new IllegalArgumentException("'" + key + "' is required");
+			throw new InvalidInputException("'" + key + "' is required");
 		}
 		return value;
 	}
