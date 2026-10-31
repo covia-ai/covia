@@ -10,6 +10,7 @@ import covia.api.Fields;
 import covia.exception.ConflictException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
@@ -45,7 +46,7 @@ public final class ExternalAgents {
 		AString name = definition == null ? null : RT.ensureString(definition.get(Fields.ADAPTER));
 		AAdapter adapter = name == null ? null : engine.getAdapter(name.toString());
 		if (!(adapter instanceof ARemoteAgentAdapter<?> remote))
-			throw new IllegalArgumentException(UNAVAILABLE + name);
+			throw new UnavailableException(UNAVAILABLE + name);
 		return remote;
 	}
 

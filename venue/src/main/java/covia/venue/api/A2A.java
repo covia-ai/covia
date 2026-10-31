@@ -41,6 +41,7 @@ import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.AgentState;
@@ -575,6 +576,9 @@ public class A2A extends ACoviaAPI {
 		} catch (AuthException e) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
 			return;
+		} catch (UnavailableException e) {
+			writeError(ctx, id, A2AErrorCodes.INTERNAL, e.getMessage());
+			return;
 		}
 
 		AMap<AString, ACell> jobData = engine().jobs().getJobData(taskId, rctx);
@@ -776,6 +780,9 @@ public class A2A extends ACoviaAPI {
 				return;
 			} catch (AuthException e) {
 				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
+				return;
+			} catch (UnavailableException e) {
+				writeError(ctx, id, A2AErrorCodes.INTERNAL, e.getMessage());
 				return;
 			}
 		}

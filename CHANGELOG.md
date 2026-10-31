@@ -28,6 +28,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `llmagent:chat` and `goaltree:chat` run as their agent under its current caps.
 - Records that name only their caller act for an owner only through an existing agent.
 - A venue shutting down answers 503.
+- A message to an external agent whose backend adapter is unloaded answers 503, not 404.
 - Storing an asset or reading a user path unauthenticated answers 403, not 400.
 - A chat bot that is not running says whether it is starting, retrying or stopped.
 - Compaction summaries name the turns they stand for.

@@ -43,6 +43,7 @@ import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.ShuttingDownException;
+import covia.exception.UnavailableException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -1213,7 +1214,8 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
 					@OpenApiResponse(status = "409", description = "Job is in terminal state, or its adapter refused the message"),
-					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown")
+					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown"),
+					@OpenApiResponse(status = "503", description = "The job's backend is not available on this venue")
 					})
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
@@ -1245,6 +1247,8 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
+		} catch (UnavailableException e) {
+			buildError(ctx, 503, e.getMessage());
 		}
 	}
 
