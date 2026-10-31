@@ -72,7 +72,8 @@ public final class Authority {
 	 * a principal in another namespace, from a relationship it holds — running
 	 * its own agent ({@link #ofAgent}) or acting on a delegation
 	 * ({@link #onBehalfOf}). Whatever stores an authority stores that namespace
-	 * beside the DID and rebuilds from both ({@link #restore}).</p>
+	 * beside the DID and rebuilds from both
+	 * ({@link #of(AString, AString, AVector)}).</p>
 	 *
 	 * @param did Caller DID, or null for anonymous
 	 */
@@ -109,20 +110,20 @@ public final class Authority {
 	 */
 	public static Authority ofAgent(AString userDID, AString agentId) {
 		if (userDID == null) return ANONYMOUS;
-		return new Authority(Principals.agentDID(userDID, agentId), userDID, null, null);
+		return of(Principals.agentDID(userDID, agentId), userDID, null);
 	}
 
 	/**
-	 * Rebuilds a stored authority: {@code did} acting in the namespace of
-	 * {@code userDID} under the recorded scope. The venue authorised both when it
-	 * recorded them, so they are restored exactly; stored proofs, if any, are
-	 * attached with {@link #withProofs}.
+	 * An authority for {@code did} acting in the namespace of {@code userDID}
+	 * under the given scope. This states a relationship rather than finding one,
+	 * so it is for one the venue holds or recorded: its own agent's, or a stored
+	 * context being rebuilt. Proofs, if any, are attached with {@link #withProofs}.
 	 *
 	 * @param did Caller DID, or null for anonymous
-	 * @param userDID the recorded namespace; null or {@code did} for its own
-	 * @param grants the recorded scope, or null for unrestricted
+	 * @param userDID the namespace it acts in; null or {@code did} for its own
+	 * @param grants the held capability scope, or null for unrestricted
 	 */
-	public static Authority restore(AString did, AString userDID, AVector<ACell> grants) {
+	public static Authority of(AString did, AString userDID, AVector<ACell> grants) {
 		return (did == null) ? ANONYMOUS : new Authority(did, userDID, grants, null);
 	}
 

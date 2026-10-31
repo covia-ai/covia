@@ -363,7 +363,7 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 	}
 
 	private RequestContext hookContext() {
-		return RequestContext.of(bot.spec().userDID(adapter.engine));
+		return adapter.engine.context(bot.spec().userDID(adapter.engine));
 	}
 
 	private Admission admit(AString principal) {

@@ -870,4 +870,40 @@ public class EngineTest {
 		// Whatever this build carries, the venue never reports a blank version.
 		assertFalse(Engine.jarVersion().isBlank());
 	}
+
+	@Test
+	public void contextDecidesWhatAPrincipalMayDoNow() {
+		AString owner = TestEngine.uniqueDID("context-owner");
+		venue.getVenueState().users().ensure(owner);
+		AVector<ACell> caps = Vectors.of(Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")));
+		venue.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, caps)), RequestContext.of(owner)).awaitResult(5000);
+		AString worker = covia.grid.Principals.agentDID(owner, Strings.create("worker"));
+
+		// In its own namespace a user is unrestricted, and an agent-shaped name holds nothing.
+		assertEquals(owner, venue.context(owner).getUserDID());
+		assertNull(venue.context(owner).getCaps());
+		assertEquals(worker, venue.context(worker).getUserDID());
+		assertEquals(Vectors.empty(), venue.context(worker).getCaps());
+
+		// For its owner, the owner's agent acts as itself in the owner's namespace, under its own caps.
+		RequestContext agent = venue.context(owner, worker);
+		assertEquals(worker, agent.getCallerDID());
+		assertEquals(owner, agent.getUserDID());
+		assertEquals(caps, agent.getCaps());
+		assertNull(venue.context(owner, owner).getCaps());
+		assertEquals(Vectors.empty(), venue.context(owner,
+			covia.grid.Principals.agentDID(owner, Strings.create("gone"))).getCaps(), "an agent that is gone holds nothing");
+
+		// The owner comes from the record: anyone else's agent, or any other user, is refused.
+		AString other = TestEngine.uniqueDID("context-other");
+		assertThrows(covia.exception.AuthException.class, () -> venue.context(other, worker));
+		assertThrows(covia.exception.AuthException.class, () -> venue.context(owner, other));
+
+		// The public principal acts only as itself, under the public scope.
+		AString publicDID = venue.publicPrincipal();
+		RequestContext anonymous = venue.context(owner, publicDID);
+		assertEquals(publicDID, anonymous.getUserDID());
+		assertEquals(venue.getAuth().getPublicScope(publicDID), anonymous.getCaps());
+	}
 }

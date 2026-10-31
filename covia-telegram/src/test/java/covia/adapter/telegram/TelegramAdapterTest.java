@@ -315,7 +315,7 @@ public class TelegramAdapterTest {
 				Strings.create("modes"), base.assoc(BotSpec.K_REPLY, convex.core.data.prim.CVMBool.FALSE)));
 			awaitState("modes", BotRunner.State.RUNNING, 10_000);
 			// The stranger is anonymous, so the Job is the public principal's, not the bot user's.
-			RequestContext anonymous = RequestContext.of(engine.publicContext().getCallerDID());
+			RequestContext anonymous = RequestContext.of(engine.publicPrincipal());
 			Set<Blob> jobsBefore = new HashSet<>(engine.jobs().getJobs(anonymous).keySet());
 			telegram.push(token, 6001L, "private", STRANGER_ID, null, "quiet");
 			Job quiet = awaitNewJob(anonymous, jobsBefore, 10_000);

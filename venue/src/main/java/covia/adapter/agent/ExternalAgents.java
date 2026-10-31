@@ -8,6 +8,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.*;
 
@@ -72,7 +73,7 @@ public final class ExternalAgents {
 			AString backendOp = Strings.create(adapter.getName() + ":" + invocation.operation());
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, backendOp));
 			// The resident agent's configured authority applies, never the waking caller's grants.
-			RequestContext execution = AbstractLLMAdapter.capsContext(agent.getConfig(), RequestContext.ofAgent(owner, id)).withJob(job)
+			RequestContext execution = engine.context(owner, Principals.agentDID(owner, id)).withJob(job)
 				.withOp(Strings.create("v/ops/" + adapter.getName() + "/" + invocation.operation()));
 			var prepared = engine.jobs().prepareAgentInteraction(meta, invocation.input(), execution);
 			Job child = prepared.job();
@@ -134,7 +135,7 @@ public final class ExternalAgents {
 		User user = owner == null ? null : engine.getVenueState().users().get(owner);
 		AgentState agent = user == null ? null : user.agent(RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		ACell childId = job.getData().get(CHILD);
-		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), RequestContext.of(owner));
+		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);
 			if (agent != null) agent.session(Job.parseID(job.getData().get(Fields.SESSION_ID))).finishExternalTurn(job.getID(), null, null);

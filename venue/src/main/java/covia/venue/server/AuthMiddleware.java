@@ -19,7 +19,6 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.AuthException;
-import covia.grid.Principals;
 import covia.venue.Audit;
 import covia.venue.Auth;
 import covia.venue.Config;
@@ -54,12 +53,6 @@ public class AuthMiddleware {
 
 	static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	static final String CALLER_DID_ATTR = "callerDID";
-	/**
-	 * Context attribute holding the capability grant scope for an unauthenticated
-	 * (public) caller, derived from {@code auth.public.caps}. Absent for
-	 * authenticated callers (unrestricted unless a transport token attenuates).
-	 */
-	static final String CALLER_CAPS_ATTR = "callerCaps";
 	// Per-instance state. Was static, which made running multiple VenueServers
 	// in the same JVM (production multi-tenant, parallel test classes) racy:
 	// every register() call would trample the previous instance's fields,
@@ -67,7 +60,6 @@ public class AuthMiddleware {
 	// and 403'd by AccessControl on cross-venue job lookups.
 	private final AString publicDID;
 	private final boolean publicAccessEnabled;
-	private final AVector<ACell> publicScope;
 	private final Engine engine;
 	private final VenueAuthenticator authenticator;
 	/** Per-address backpressure on credential checks (covia#539); null when rate limiting is off. */
@@ -84,12 +76,6 @@ public class AuthMiddleware {
 			? new AuthThrottle(config.getTrustedProxies(), config.getAuthFailureBurst(),
 				config.getAuthFailuresPerMinute(), config.getAuthConcurrency(), config.getRateLimitBlockMs())
 			: null;
-		// Capability grant scope for public callers — secure read-only by default,
-		// operator-overridable via auth.public.caps. Only relevant when public
-		// access is enabled (otherwise every anonymous request is 401'd, except on
-		// COVIA_DISCOVERY routes such as /api/v1/status, which stay reachable so a
-		// client can find and verify the venue before it authenticates).
-		this.publicScope = publicAccessEnabled ? auth.getPublicScope(publicDID) : null;
 	}
 
 	/**
@@ -122,6 +108,7 @@ public class AuthMiddleware {
 	 * headers are not inspected and no venue user is admitted.
 	 */
 	private void extractMatchedIdentity(Context ctx) {
+		VenueAuthenticator.bindEngine(ctx, engine);
 		Set<RouteRole> roles = ctx.routeRoles();
 		if (VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_MCP)) {
 			Config config = engine.config();
@@ -151,13 +138,14 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Attribute an unauthenticated request to the venue's public DID and stash
-	 * the public capability grant scope (if any), so the downstream
-	 * {@link #callerContext} applies it uniformly.
+	 * Attribute an unauthenticated request to the venue's public DID, whose scope
+	 * {@link #callerContext} applies ({@code auth.public.caps}). While public
+	 * access is off the request stays anonymous: only COVIA_DISCOVERY routes
+	 * such as /api/v1/status reach here then, so a client can find and verify
+	 * the venue before it authenticates.
 	 */
 	private void markPublic(Context ctx) {
-		ctx.attribute(CALLER_DID_ATTR, publicDID);
-		if (publicScope != null) ctx.attribute(CALLER_CAPS_ATTR, publicScope);
+		if (publicAccessEnabled) ctx.attribute(CALLER_DID_ATTR, publicDID);
 	}
 
 	/**
@@ -334,34 +322,29 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Builds the base {@link RequestContext} for an inbound request: the caller
-	 * DID plus, for unauthenticated (public) callers, the configured capability
-	 * grant scope ({@code auth.public.caps}, default read-only). This is the single
-	 * seam where a request's grant scope is established, before transport-token
-	 * authority ({@link #withTransportGrants}) is layered on. Null-safe: a null
-	 * Javalin context (e.g. an MCP call with no HTTP context) yields
+	 * Builds the base {@link RequestContext} for an inbound request: its caller
+	 * as it acts now in its own namespace ({@link Engine#context(AString)}), so
+	 * an anonymous caller holds the public scope and an agent-shaped subject
+	 * holds nothing. Transport-token authority ({@link #withTransportGrants}) is
+	 * layered on after. Null-safe: a null Javalin context (e.g. an MCP call with
+	 * no HTTP context) or a request with no caller yields
 	 * {@link RequestContext#ANONYMOUS}.
-	 *
-	 * <p>An authenticated agent identity starts with an empty capability scope
-	 * and its own full subject as namespace. Its name alone must not establish
-	 * local owner access (including ownership-only job checks). Explicit host
-	 * policy or verified transport proofs must authorize access to other namespaces.</p>
 	 *
 	 * @param ctx Javalin context, or null
 	 * @return the caller's request context with its grant scope applied
+	 * @throws IllegalStateException for a caller on a request no venue serves
 	 */
 	public static RequestContext callerContext(Context ctx) {
 		if (ctx == null) return RequestContext.ANONYMOUS;
-		RequestContext rctx = RequestContext.of(getCallerDID(ctx));
-		if (Principals.isAgentDID(rctx.getCallerDID())) {
-			// A credential proves the subject, not a local execution relationship:
-			// an agent-shaped name brings no authority of its own.
-			rctx = rctx.withCaps(Vectors.empty());
-		}
-		AVector<ACell> caps = ctx.attribute(CALLER_CAPS_ATTR);
-		if (caps != null) rctx = rctx.withCaps(caps);
-		return rctx;
+		AString caller = getCallerDID(ctx);
+		if (caller == null) return RequestContext.ANONYMOUS;
+		Engine engine = VenueAuthenticator.engineOf(ctx);
+		if (engine == null) throw new IllegalStateException(NO_VENUE);
+		return engine.context(caller);
 	}
+
+	/** Why a request's caller has no context: no venue's middleware or authenticator bound it. */
+	public static final String NO_VENUE = "No venue serves this request: its caller was not bound by a venue's middleware or authenticator";
 
 	/**
 	 * Attach transport-presented UCAN grants to a request context — the single

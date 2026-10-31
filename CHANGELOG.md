@@ -33,7 +33,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - `Authority.of` makes every DID its own namespace; scheduled fires and restored agent
-  contexts rebuild in the namespace they recorded (`RequestContext.restore`).
+  contexts rebuild in the namespace they recorded (`RequestContext.of(caller, user, caps)`).
+- `Engine.context` replaces `principalContext` and `publicContext`; `channelContext`
+  takes the binding's owner.
+- `RequestContext.of(did, proofs)` removed; use `of(did).withProofs(proofs)`.
+- Discovery routes stay anonymous while public access is off.
 - A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
   it stands for by position in the frame's history. A legacy frame renders as it will
   once migrated, so migration still leaves the model's input unchanged.

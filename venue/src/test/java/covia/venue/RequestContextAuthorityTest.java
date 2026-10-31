@@ -32,8 +32,8 @@ public class RequestContextAuthorityTest {
 
 	@Test
 	public void testWrapsPresentedProofs() {
-		// of(did, proofs) attaches PRESENTED proofs; the caller stays unrestricted.
-		RequestContext ctx = RequestContext.of(ALICE, Vectors.of(PROOF));
+		// withProofs attaches PRESENTED proofs; the caller stays unrestricted.
+		RequestContext ctx = RequestContext.of(ALICE).withProofs(Vectors.of(PROOF));
 		Authority a = ctx.getAuthority();
 		assertEquals(ALICE, a.getDID());
 		assertEquals(1, a.getProofs().count());

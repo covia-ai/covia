@@ -509,7 +509,7 @@ public class HITLAdapter extends AAdapter {
 				Maps.of(Strings.intern("aud"), requester,
 					Strings.intern("att"), approved,
 					Hitl.EXP, (exp == null) ? null : CVMLong.create(exp)),
-				RequestContext.of(responder)).get(30, TimeUnit.SECONDS);
+				engine.context(responder)).get(30, TimeUnit.SECONDS);
 			AString token = RT.ensureString(RT.getIn(result, Hitl.TOKEN));
 			if (token == null) throw new IllegalStateException("ucan:issue returned no token");
 			return token;

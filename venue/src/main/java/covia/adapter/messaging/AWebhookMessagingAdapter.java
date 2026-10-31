@@ -170,7 +170,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		String name = fileName == null ? MessagingMedia.fallbackName(bot.spec().name(), id, fetched.contentType()) : fileName.toString();
 		try {
 			return MessagingMedia.store(engine, fetched.bytes(), fetched.contentType(), directory, name,
-				destination == null ? RequestContext.of(owner) : ctx).assoc(MessagingSettings.key("media_id"), Strings.create(id));
+				destination == null ? engine.context(owner) : ctx).assoc(MessagingSettings.key("media_id"), Strings.create(id));
 		} catch (java.io.IOException e) {
 			throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
 		}

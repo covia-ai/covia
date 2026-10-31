@@ -707,8 +707,9 @@ are compatibility APIs and do not imply admission as a local user. Relay
 handlers likewise receive the complete subject for their own authorization.
 Installation membership and grants do not transfer to descendants or siblings.
 
-For agent-shaped subjects, `AuthMiddleware.callerContext` binds both actor
-and namespace to the full subject and starts with an empty capability scope.
+For agent-shaped subjects, `AuthMiddleware.callerContext` (through
+`Engine.context`) binds both actor and namespace to the full subject and starts
+with an empty capability scope.
 It does not infer local agent execution or owner access from the name, even
 for ownership-only job checks. Verified transport grants can authorize the
 exact agent audience for specific resources; a sibling cannot reuse them.
@@ -808,12 +809,12 @@ The binding supplies its principal (the owner, or the agent that created it)
 and whether it is open. Restricting where a binding serves, such as Slack's
 `allowChannels`, is the adapter's admission of a chat, not identification.
 
-**The request context.** `Engine.channelContext(AuthResult)` is
-`principalContext(userDID)` with the result's data projection attached by
+**The request context.** `Engine.channelContext(owner, AuthResult)` is
+`Engine.context(owner, userDID)` with the result's data projection attached by
 `RequestContext.withAuthentication`. Only that seam sets it; an HTTP request's
 result stays on its HTTP context. The projection is attribution, not evidence: assurance policy
 never reads it from a context (§3.1), and contexts the venue starts for an
-agent's own work (`ofAgent`, `principalContext`, the scheduler's replay) carry
+agent's own work (`ofAgent`, `Engine.context`, the scheduler's replay) carry
 none, so nothing is inherited through jobs or agent delegation. A bot's own work
 for its agent — storing media, its media and reply operations — runs in such a
 context.

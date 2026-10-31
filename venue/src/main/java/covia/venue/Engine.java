@@ -3089,7 +3089,7 @@ public class Engine {
 	 * and all auth paths just work against the venue's DID directly.</p>
 	 */
 	public RequestContext venueContext() {
-		return RequestContext.of(getDIDString());
+		return context(getDIDString());
 	}
 
 	/**
@@ -4011,53 +4011,64 @@ public class Engine {
 		return web != null && value.equals(web + ":public");
 	}
 
-	/**
-	 * The anonymous principal as every door presents it: {@code <venue>:public}
-	 * under the operator's public scope ({@code auth.public.caps}). Null when
-	 * public access is off.
-	 */
-	public RequestContext publicContext() {
-		if (!config.isPublicAccess()) return null;
-		AString publicDID = publicPrincipal();
-		return RequestContext.of(publicDID).withCaps(auth.getPublicScope(publicDID));
-	}
-
 	/** The venue's public (anonymous) principal, {@code <venue>:public}. */
 	public AString publicPrincipal() {
 		return Strings.create(getDIDString() + ":public");
 	}
 
 	/**
-	 * The context a request authenticated through a channel binding runs under
-	 * (COG-3 §7): its identified principal as it acts now
-	 * ({@link #principalContext}), carrying the result's record without its
-	 * {@code userDID}. The one place a request context gains an authentication
-	 * record.
+	 * The context {@code principal} acts under now, in its own namespace. This
+	 * and {@link #context(AString, AString)} are where the venue decides, from
+	 * its own state, what a principal may do; {@link RequestContext#of} only
+	 * builds a context already decided or recorded.
 	 *
+	 * <ul>
+	 *   <li>The public principal, as every door presents it
+	 *       ({@code <venue>:public}), holds the operator's public scope
+	 *       ({@code auth.public.caps}).</li>
+	 *   <li>An agent-shaped DID holds nothing: its name establishes no
+	 *       relationship with the owner it names, so its authority comes only
+	 *       from proofs it presents.</li>
+	 *   <li>Any other principal, the venue included, is unrestricted in its own
+	 *       namespace.</li>
+	 * </ul>
+	 *
+	 * @param principal the acting DID, or null for anonymous
 	 * @throws AuthException for the public principal while public access is off
 	 */
-	public RequestContext channelContext(covia.venue.auth.AuthResult result) {
-		return principalContext(result.userDID())
-			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+	public RequestContext context(AString principal) {
+		if (principal == null) return RequestContext.ANONYMOUS;
+		if (isPublicPrincipal(principal)) {
+			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
+			AString publicDID = publicPrincipal();
+			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID));
+		}
+		if (covia.grid.Principals.isAgentDID(principal)) {
+			return RequestContext.of(principal, null, Vectors.empty());
+		}
+		return RequestContext.of(principal);
 	}
 
 	/**
-	 * The context a stored principal acts under now: an agent as itself, bounded
-	 * by its record's current {@code caps} (none once the agent is gone); the
-	 * public principal as {@link #publicContext()}; any other principal as
-	 * itself.
+	 * The context {@code principal} acts under now for {@code owner}, whose
+	 * record (a binding, say) names it: the owner itself; one of the owner's
+	 * agents, as itself in the owner's namespace, bounded by its current
+	 * {@code config.caps} (none once it is gone); or the public principal, which
+	 * acts only as itself. The owner comes from the record, never from the
+	 * principal's name.
 	 *
-	 * @throws AuthException for the public principal while public access is off
+	 * @throws AuthException for any other principal, or for the public principal
+	 *         while public access is off
 	 */
-	public RequestContext principalContext(AString principal) {
-		if (isPublicPrincipal(principal)) {
-			RequestContext anonymous = publicContext();
-			if (anonymous == null) throw new AuthException(PUBLIC_ACCESS_OFF);
-			return anonymous;
+	public RequestContext context(AString owner, AString principal) {
+		if (principal == null || principal.equals(owner) || isPublicPrincipal(principal)) {
+			return context(principal);
 		}
-		if (!covia.grid.Principals.isAgentDID(principal)) return RequestContext.of(principal);
-		AString owner = covia.grid.Principals.userOf(principal);
 		AString agentId = covia.grid.Principals.agentIdOf(principal);
+		if (owner == null || agentId == null
+				|| !principal.equals(covia.grid.Principals.agentDID(owner, agentId))) {
+			throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal, owner));
+		}
 		AgentState agent = getAgent(owner, agentId);
 		AVector<ACell> caps = (agent == null) ? Vectors.empty()
 			: RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS));
@@ -4065,8 +4076,25 @@ public class Engine {
 		return (caps == null) ? ctx : ctx.withCaps(caps);
 	}
 
+	/**
+	 * The context a request authenticated through {@code owner}'s channel
+	 * binding runs under (COG-3 §7): its identified principal as it acts now
+	 * ({@link #context(AString, AString)}), carrying the result's record without
+	 * its {@code userDID}. The one place a request context gains an
+	 * authentication record.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString)}
+	 */
+	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
+		return context(owner, result.userDID())
+			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+	}
+
 	/** Why the public principal cannot act: the operator has public access off. */
 	public static final String PUBLIC_ACCESS_OFF = "Anonymous callers are not served: the venue's public access is off";
+
+	/** Why a record cannot act as a principal: it is neither the owner nor one of the owner's agents. */
+	public static final String FOREIGN_PRINCIPAL = "%s acts neither as %s nor as one of its agents";
 
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
 	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A

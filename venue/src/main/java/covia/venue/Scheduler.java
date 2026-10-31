@@ -451,7 +451,7 @@ public class Scheduler {
 		// Fire as whoever scheduled it, in the namespace it scheduled in: the
 		// scheduling agent or delegate when there was one, else the owner.
 		AString actor = RT.ensureString(rec.get(K_ACTOR));
-		RequestContext ctx = RequestContext.restore((actor != null) ? actor : owner, owner,
+		RequestContext ctx = RequestContext.of((actor != null) ? actor : owner, owner,
 			asVector(rec.get(K_CAPS)));
 		AVector<ACell> proofs = asVector(rec.get(K_PROOFS));
 		if (proofs != null) ctx = ctx.withProofs(proofs);

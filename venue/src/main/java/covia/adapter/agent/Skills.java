@@ -1374,7 +1374,7 @@ public final class Skills {
 	 */
 	public static int validateVenueLibrary(Engine engine) {
 		if (engine == null) return 0;
-		return validateLibrary(engine, RequestContext.of(engine.getDIDString()), VENUE_SKILLS);
+		return validateLibrary(engine, engine.venueContext(), VENUE_SKILLS);
 	}
 
 	/**

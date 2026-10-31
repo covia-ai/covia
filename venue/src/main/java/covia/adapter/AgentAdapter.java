@@ -3390,7 +3390,7 @@ public class AgentAdapter extends AAdapter {
 			owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
 			if (owner == null) return null;
 		}
-		RequestContext ctx = RequestContext.restore(caller, owner, caps);
+		RequestContext ctx = RequestContext.of(caller, owner, caps);
 		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
 		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
 		ACell jobId = snapshot.get(K_CONTEXT_JOB_ID);

@@ -49,7 +49,8 @@ venue/
   `CompletableFuture` (or overrides the job-aware `invoke` for direct job
   control — multi-turn, orchestration, HITL).
 - **RequestContext** — caller DID, verified UCAN proofs, capability scope,
-  execution scopes. `Engine.requireAuthority(ctx, resource, ability)` is the
+  execution scopes. `RequestContext.of` builds one; `Engine.context` decides
+  what a principal may do now. `Engine.requireAuthority(ctx, resource, ability)` is the
   point-of-action enforcement primitive; `Engine.crossUserAllows` is the
   single cross-user gate (public-user parity + target-side admission
   `config.accepts` for talking to an agent, #447 + delegation proofs).

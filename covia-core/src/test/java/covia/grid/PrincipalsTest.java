@@ -148,8 +148,8 @@ public class PrincipalsTest {
 		assertNotEquals(Authority.ofAgent(ALICE_WEB, CAROL), named);
 		assertEquals(agent, Authority.of(agent, convex.core.data.Vectors.empty()).getUserDID());
 		// The relationship is stated, never parsed.
-		assertEquals(Authority.ofAgent(ALICE_WEB, CAROL), Authority.restore(agent, ALICE_WEB, null));
-		assertEquals(named, Authority.restore(agent, agent, null));
+		assertEquals(Authority.ofAgent(ALICE_WEB, CAROL), Authority.of(agent, ALICE_WEB, null));
+		assertEquals(named, Authority.of(agent, agent, null));
 	}
 
 	@Test

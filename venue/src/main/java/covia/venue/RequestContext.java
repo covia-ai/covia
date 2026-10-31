@@ -182,26 +182,20 @@ public class RequestContext {
 	}
 
 	/**
-	 * Creates a RequestContext with caller DID and UCAN proofs.
-	 */
-	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
-		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.of(callerDID).withProofs(proofs));
-	}
-
-	/**
-	 * Rebuilds a stored context: {@code callerDID} acting in the namespace of
-	 * {@code userDID} under the stored capability scope ({@link Authority#restore}).
-	 * A context that persists records both DIDs, since neither can be recovered
-	 * from the other: a DID is its own namespace ({@link Authority#of(AString)}).
+	 * Creates a RequestContext for {@code callerDID} acting in the namespace of
+	 * {@code userDID} under the given capability scope
+	 * ({@link Authority#of(AString, AString, AVector)}). This rebuilds a stored
+	 * context: one that persists records both DIDs, since neither can be
+	 * recovered from the other. Deciding what a principal may do now is
+	 * {@link covia.venue.Engine#context(AString, AString)}.
 	 *
 	 * @param callerDID who acted, or null for anonymous
 	 * @param userDID the namespace it acted in; null or {@code callerDID} for its own
-	 * @param caps the stored scope, or null for unrestricted
+	 * @param caps the scope, or null for unrestricted
 	 */
-	public static RequestContext restore(AString callerDID, AString userDID, AVector<ACell> caps) {
+	public static RequestContext of(AString callerDID, AString userDID, AVector<ACell> caps) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.restore(callerDID, userDID, caps));
+		return new RequestContext(Authority.of(callerDID, userDID, caps));
 	}
 
 	/**
