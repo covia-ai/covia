@@ -3238,15 +3238,15 @@ public class Engine {
 	 */
 	public AString managedUserDID(AString username) {
 		if (username == null || username.isEmpty()) {
-			throw new IllegalArgumentException("username is required");
+			throw new InvalidInputException("username is required");
 		}
 		if (!username.toString().matches("[A-Za-z0-9._-]+")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"username may contain only letters, numbers, '.', '_' and '-'");
 		}
 		AString base = config.getWebDID();
 		if (base == null) {
-			throw new IllegalStateException("Venue-managed usernames require a public hostname "
+			throw new ConfigurationException("Venue-managed usernames require a public hostname "
 				+ "so they can use did:web; pass a full user DID instead");
 		}
 		return Strings.create(base + ":u:" + username);
@@ -3373,7 +3373,7 @@ public class Engine {
 		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
 		requireNotSubPrincipal(did);
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
-			throw new IllegalArgumentException(PROTECTED_USER);
+			throw new InvalidInputException(PROTECTED_USER);
 		}
 		userDeletionLock.lock();
 		try {
@@ -3413,7 +3413,7 @@ public class Engine {
 		flush();
 		if (failure != null) throw failure;
 		if (venueState.users().isDeleting(did)) {
-			throw new IllegalStateException(USER_DELETION_PENDING);
+			throw new UnavailableException(USER_DELETION_PENDING);
 		}
 		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
 		return deleted.tombstone();
@@ -3435,7 +3435,7 @@ public class Engine {
 
 	/** Activation holds the registry monitor: never wait for a deletion that needs it. */
 	private void resumeAdapterUserDeletions(AAdapter adapter) {
-		if (!userDeletionLock.tryLock()) throw new IllegalStateException(USER_DELETION_IN_PROGRESS);
+		if (!userDeletionLock.tryLock()) throw new ConflictException(USER_DELETION_IN_PROGRESS);
 		try {
 			String name = adapter.getName();
 			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
@@ -3818,7 +3818,7 @@ public class Engine {
 				|| isPublicPrincipal(ctx.getCallerDID())) {
 			throw new AuthException("Authentication required for user/sudo");
 		}
-		if (userDID == null) throw new IllegalArgumentException("Target user DID is required");
+		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
 		if (!crossUserAllows(ctx, userDID, Abilities.USER_SUDO)) {

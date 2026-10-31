@@ -94,7 +94,7 @@ venue/src/main/java/covia/venue/AssetStore.java 1
 venue/src/main/java/covia/venue/AuthState.java 13
 venue/src/main/java/covia/venue/Config.java 20
 venue/src/main/java/covia/venue/CoviaApplication.java 2
-venue/src/main/java/covia/venue/Engine.java 34
+venue/src/main/java/covia/venue/Engine.java 27
 venue/src/main/java/covia/venue/JobManager.java 3
 venue/src/main/java/covia/venue/LocalVenue.java 6
 venue/src/main/java/covia/venue/Modules.java 16

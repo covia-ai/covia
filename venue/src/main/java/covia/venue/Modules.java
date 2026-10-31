@@ -21,6 +21,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.exception.CoviaException;
 
 /**
  * Loading and unloading of venue modules — adapters packaged as external
@@ -245,7 +246,7 @@ public class Modules {
 			return new Discovered(name, jarPath, sha256, config, loader, List.copyOf(active));
 		} catch (RuntimeException | Error e) {
 			closeQuietly(loader, e);
-			if (e instanceof IllegalStateException ise) throw ise;
+			if (e instanceof IllegalStateException || e instanceof CoviaException) throw (RuntimeException) e;
 			throw new IllegalStateException("Failed to load module: " + jarPath, e);
 		}
 	}
@@ -322,7 +323,7 @@ public class Modules {
 				closeQuietly(previous.loader(), e);
 			}
 			closeQuietly(loader, e);
-			if (e instanceof IllegalStateException ise) throw ise;
+			if (e instanceof IllegalStateException || e instanceof CoviaException) throw (RuntimeException) e;
 			throw new IllegalStateException("Failed to load module: " + jarPath, e);
 		}
 	}
