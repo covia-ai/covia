@@ -18,7 +18,7 @@ covia-core/src/main/java/covia/grid/impl/PathContent.java 1
 covia-core/src/main/java/covia/grid/impl/StreamContent.java 3
 venue/src/main/java/covia/adapter/A2AAdapter.java 45
 venue/src/main/java/covia/adapter/AAdapter.java 9
-venue/src/main/java/covia/adapter/AgentAdapter.java 44
+venue/src/main/java/covia/adapter/AgentAdapter.java 40
 venue/src/main/java/covia/adapter/ArchiveAdapter.java 15
 venue/src/main/java/covia/adapter/AssetAdapter.java 19
 venue/src/main/java/covia/adapter/AuthAdapter.java 9
@@ -42,7 +42,7 @@ venue/src/main/java/covia/adapter/OAuthAdapter.java 41
 venue/src/main/java/covia/adapter/Orchestrator.java 27
 venue/src/main/java/covia/adapter/P2PAdapter.java 18
 venue/src/main/java/covia/adapter/ProjectAdapter.java 1
-venue/src/main/java/covia/adapter/RemoteAgentAdapter.java 4
+venue/src/main/java/covia/adapter/RemoteAgentAdapter.java 2
 venue/src/main/java/covia/adapter/SchedulerAdapter.java 7
 venue/src/main/java/covia/adapter/SchemaAdapter.java 7
 venue/src/main/java/covia/adapter/SecretAdapter.java 13
@@ -59,7 +59,7 @@ venue/src/main/java/covia/adapter/agent/AbstractLLMAdapter.java 3
 venue/src/main/java/covia/adapter/agent/ContextAssembler.java 2
 venue/src/main/java/covia/adapter/agent/ConversationHistory.java 3
 venue/src/main/java/covia/adapter/agent/ConversationRenderer.java 6
-venue/src/main/java/covia/adapter/agent/ExternalAgents.java 7
+venue/src/main/java/covia/adapter/agent/ExternalAgents.java 2
 venue/src/main/java/covia/adapter/agent/GoalTreeContext.java 14
 venue/src/main/java/covia/adapter/agent/LLMAgentAdapter.java 1
 venue/src/main/java/covia/adapter/agent/Skills.java 7
@@ -78,7 +78,6 @@ venue/src/main/java/covia/adapter/messaging/MessagingText.java 1
 venue/src/main/java/covia/adapter/messaging/RelaySettings.java 4
 venue/src/main/java/covia/adapter/messaging/WebhookBot.java 7
 venue/src/main/java/covia/adapter/relay/MessageRelay.java 2
-venue/src/main/java/covia/adapter/remote/ARemoteAgentAdapter.java 3
 venue/src/main/java/covia/adapter/remote/RemoteInteraction.java 1
 venue/src/main/java/covia/adapter/remote/VenueRemoteAgent.java 2
 venue/src/main/java/covia/adapter/webhook/WebhookInbox.java 7

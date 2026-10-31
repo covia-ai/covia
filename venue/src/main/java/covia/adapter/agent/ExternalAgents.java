@@ -7,6 +7,9 @@ import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
@@ -56,16 +59,16 @@ public final class ExternalAgents {
 		AMap<AString, ACell> definition = validate(agent.getRecord().get(AgentState.KEY_AGENT));
 		ARemoteAgentAdapter<?> adapter = backend(definition);
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
-			if (RT.getIn(input, option) != null) throw new IllegalArgumentException(UNSUPPORTED + option);
+			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
 		}
-		if (supplied && agent.getSession(sid) == null) throw new IllegalArgumentException(UNKNOWN_SESSION);
+		if (supplied && agent.getSession(sid) == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
 			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())).assoc(OWNER, owner)
 			.assoc(KIND, Strings.create(operation)));
 		if (job.isFinished()) return;
 		if (!agent.claimExternalTurn(sid, job.getID(), caller.getCallerDID(), content, !supplied))
-			throw new IllegalStateException(SESSION_BUSY);
+			throw new ConflictException(SESSION_BUSY);
 		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {
 			ACell remoteSession = RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.SESSION_ID);
@@ -170,9 +173,9 @@ public final class ExternalAgents {
 		Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
 		if (parent == null || !owns(parent) || parent.isFinished()
 				|| !parent.getID().equals(RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.JOB_ID)))
-			throw new IllegalArgumentException(NO_ACTIVE_TURN);
+			throw new ConflictException(NO_ACTIVE_TURN);
 		Job child = engine.jobs().getJob(Job.parseID(parent.getData().get(CHILD)));
-		if (child == null) throw new IllegalArgumentException(MISSING_CHILD);
+		if (child == null) throw new ConflictException(MISSING_CHILD);
 		backend(validate(agent.getRecord().get(AgentState.KEY_AGENT))).handleMessage(child, Maps.of(Fields.MESSAGE, content));
 	}
 }
