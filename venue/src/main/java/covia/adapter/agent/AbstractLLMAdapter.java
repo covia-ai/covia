@@ -28,6 +28,7 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
 import covia.grid.Job;
+import covia.grid.Operation;
 import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
@@ -966,16 +967,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		}
 
 		AString named = Strings.create(toolName);
-		Asset asset;
+		Operation op;
 		try {
-			asset = engine.resolveAsset(named, ctx);
+			op = Operation.from(engine.resolveAsset(named, ctx));
 		} catch (Exception e) {
 			return Strings.create("Error: " + toolFailure(e, toolName));
 		}
-		if (asset == null) return Strings.create("Error: " + HarnessTools.unboundTool(toolName, surface));
+		if (op == null) return Strings.create("Error: " + HarnessTools.unboundTool(toolName, surface));
 		String refused = guard(toolName, named, input, ctx, timeoutMs);
 		if (refused != null) return Strings.create("Error: " + refused);
-		return invokeOperation(named, input, ctx, timeoutMs);
+		return invokeOperation(named, op, input, ctx, timeoutMs);
 	}
 
 	/** This runtime's own harness tool names, which its cycle intercepts. */
@@ -1043,6 +1044,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * announced against the tool call that invoked it.
 	 */
 	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
+		return invokeOperation(operation, null, input, ctx, timeoutMs);
+	}
+
+	/** As {@link #invokeOperation(AString, ACell, RequestContext, long)}, with
+	 *  the operation already resolved from {@code operation} when non-null. */
+	private ACell invokeOperation(AString operation, Operation resolved, ACell input,
+			RequestContext ctx, long timeoutMs) {
 		// Internal dispatch preserves types exactly — no coercion here. Tool
 		// arguments were already normalised once at the LLM wire boundary
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
@@ -1065,8 +1073,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
 				return receipt;
 			}
-			ACell result = engine.jobs().invokeInternal(operation, input, ctx,
-					(relay != null) ? relay::watch : null)
+			java.util.function.Consumer<Job> watch = (relay != null) ? relay::watch : null;
+			ACell result = ((resolved != null)
+					? engine.jobs().invokeInternal(operation, resolved, input, ctx, watch)
+					: engine.jobs().invokeInternal(operation, input, ctx, watch))
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {

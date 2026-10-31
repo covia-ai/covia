@@ -611,7 +611,16 @@ public class JobManager {
 			return CompletableFuture.failedFuture(
 				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
 		}
+		return invokeInternal(ref, op, input, ctx, watch);
+	}
 
+	/**
+	 * As {@link #invokeInternal(AString, ACell, RequestContext, Consumer)}, for
+	 * an operation the caller has already resolved from {@code ref}, so the
+	 * reference is not resolved again.
+	 */
+	public CompletableFuture<ACell> invokeInternal(AString ref, Operation op, ACell input,
+			RequestContext ctx, Consumer<Job> watch) {
 		// Always local — see invokeOperation(AString,...): resolution
 		// returns definitions, never remote execution handles.
 		// Scope to the caller-supplied reference for resource-precise

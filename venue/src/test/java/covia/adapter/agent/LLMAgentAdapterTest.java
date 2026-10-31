@@ -2946,7 +2946,7 @@ public class LLMAgentAdapterTest {
 
 		// A genuinely unknown name is neither a tool nor an operation reference.
 		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), null, ctx, 1000);
-		assertEquals("Error: " + String.format(HarnessTools.NO_SUCH_TOOL, "no_such_tool_xyz"),
+		assertEquals("Error: " + HarnessTools.noSuchTool("no_such_tool_xyz", null),
 			RT.ensureString(unknown).toString());
 	}
 

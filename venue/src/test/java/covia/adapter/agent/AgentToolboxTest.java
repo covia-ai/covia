@@ -318,14 +318,31 @@ public class AgentToolboxTest {
 				"covia_read", "[alpha, beta]")), result(step, "call_unloaded"), where);
 			assertEquals(Strings.create("Error: " + String.format(HarnessTools.TOOL_NEAR_MISS,
 				"test-echo", "test_echo")), result(step, "call_near_miss"), where);
-			assertEquals(Strings.create("Error: " + String.format(HarnessTools.NO_SUCH_TOOL,
-				"records_read")), result(step, "call_unknown"), where);
+			assertEquals(Strings.create("Error: " + String.format(HarnessTools.NO_SUCH_TOOL, "records_read")
+				+ "; " + HarnessTools.USE_TOOL_LIST), result(step, "call_unknown"), where);
 			assertEquals(Strings.create("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY,
 				HarnessTools.CONTEXT_LOAD)), result(step, "call_harness"), where);
 			assertFalse(messages(step).toString().contains(CONTEXT_MARKER),
 				where + " a refused call loaded or read the context: " + step);
 			// A full operation reference still dispatches as one.
 			assertEquals(Maps.of("ok", true), result(step, "call_reference"), where);
+		}
+	}
+
+	/** With few tools, a name nothing provides is answered with all of them. */
+	@Test
+	public void unknownNameListsAShortToolList() {
+		for (AgentRuntime runtime : RUNTIMES) {
+			AMap<AString, ACell> config = Maps.of(
+				Fields.OPERATION, runtime.operation(),
+				"llmOperation", "v/test/ops/llm",
+				Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")));
+			RunningAgent agent = start(runtime, runtime.name() + "-short-list", config);
+			AMap<AString, ACell> step = step(agent, "call a tool that does not exist",
+				assistantCall("call_unknown", "records_read", Maps.empty()), null);
+			assertEquals(Strings.create("Error: " + HarnessTools.noSuchTool("records_read",
+				Set.of(TaskTools.COMPLETE, TaskTools.FAIL, "test_echo"))),
+				result(step, "call_unknown"), runtime.name());
 		}
 	}
 

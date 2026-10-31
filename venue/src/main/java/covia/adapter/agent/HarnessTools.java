@@ -159,15 +159,21 @@ final class HarnessTools {
 	static final String TOOL_NOT_LOADED = "tool '%s' is not loaded; call skill_load with one of %s first";
 	/** A name that differs from a callable tool only by case or separator. */
 	static final String TOOL_NEAR_MISS = "no tool named '%s'; did you mean '%s'?";
-	/** A name nothing on this agent's surface provides. */
-	static final String NO_SUCH_TOOL =
-		"no tool named '%s', and it is not an operation reference; call only the tools in your tool list";
-	/** At most this many providing skills are named. */
-	static final int MAX_PROVIDERS_NAMED = 5;
+	/** A name nothing on this agent's surface provides; a tail follows. */
+	static final String NO_SUCH_TOOL = "no tool named '%s', and it is not an operation reference";
+	/** The tail when the session has no tools at all. */
+	static final String NO_TOOLS = "no tools are available";
+	/** The tail naming a short tool list. */
+	static final String ONLY_TOOLS = "your only tools are: %s";
+	/** The tail when the tool list is long, or not known here. */
+	static final String USE_TOOL_LIST = "call only the tools in your tool list";
+	/** At most this many providing skills, or callable tools, are named. */
+	static final int MAX_NAMED = 5;
 
 	/**
 	 * What a session can call and acquire, for answering a tool name it cannot
-	 * call: the load scope it would load into and the tool names it binds now.
+	 * call: the load scope it would load into, and every tool name it was
+	 * offered — the fixed tools and those its loads added.
 	 */
 	record ToolSurface(LoadScope scope, Set<String> callable) {}
 
@@ -179,7 +185,7 @@ final class HarnessTools {
 	 * skill would bind exactly that name. A null surface knows nothing to hint.
 	 */
 	static String unboundTool(String name, ToolSurface surface) {
-		if (surface == null) return String.format(NO_SUCH_TOOL, name);
+		if (surface == null) return noSuchTool(name, null);
 		String near = nearMiss(name, surface.callable());
 		if (near != null) return String.format(TOOL_NEAR_MISS, name, near);
 		LoadScope scope = surface.scope();
@@ -187,13 +193,23 @@ final class HarnessTools {
 			List<String> providers = Skills.providersOf(scope.engine, scope.context,
 				scope.skillSources, ContextChain.effective(scope.outerLoads, scope.loads), name);
 			if (!providers.isEmpty()) {
-				List<String> named = providers.subList(0, Math.min(providers.size(), MAX_PROVIDERS_NAMED));
+				List<String> named = providers.subList(0, Math.min(providers.size(), MAX_NAMED));
 				String list = "[" + String.join(", ", named)
 					+ (providers.size() > named.size() ? ", …" : "") + "]";
 				return String.format(TOOL_NOT_LOADED, name, list);
 			}
 		}
-		return String.format(NO_SUCH_TOOL, name);
+		return noSuchTool(name, surface.callable());
+	}
+
+	/** The answer for a name nothing provides, ending with what the session
+	 *  can call: none, a short list, or its tool list; null when not known. */
+	static String noSuchTool(String name, Set<String> callable) {
+		String tail;
+		if (callable == null || callable.size() > MAX_NAMED) tail = USE_TOOL_LIST;
+		else if (callable.isEmpty()) tail = NO_TOOLS;
+		else tail = String.format(ONLY_TOOLS, String.join(", ", new java.util.TreeSet<>(callable)));
+		return String.format(NO_SUCH_TOOL, name) + "; " + tail;
 	}
 
 	/** The callable name equal to {@code name} up to case and {@code -}/{@code _}, if one. */
