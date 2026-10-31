@@ -135,6 +135,19 @@ public class OperationResolutionTest {
 		assertEquals(Strings.create("hello from /o/"), RT.getIn(result, "echo"));
 	}
 
+	@Test
+	public void testRecordedOpResolvesInTheRecordedNamespaceOnly() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "o/my-echo", Fields.VALUE, Maps.of(
+				"operation", Maps.of("adapter", "test:echo"))),
+			alice).awaitResult(5000);
+		AString opRef = Strings.create("o/my-echo");
+		assertNotNull(engine.jobs().resolveRecordedOp(opRef, aliceDID));
+		// A job record's caller is its namespace. An agent-shaped one is its own,
+		// never that of the user its name nests under.
+		assertNull(engine.jobs().resolveRecordedOp(opRef, Strings.create(aliceDID + ":g:worker")));
+	}
+
 	// ========== /o/<name> resolution — string values are NOT references ==========
 	//
 	// Per OPERATIONS.md §4 (no ref following), the resolver does not chase

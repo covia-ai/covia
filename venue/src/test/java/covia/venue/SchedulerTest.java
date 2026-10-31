@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -30,6 +31,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
@@ -112,6 +114,41 @@ public class SchedulerTest {
 
 		// Event consumed — gone from the owner's list.
 		assertTrue(sched.list(ctx).isEmpty(), "triggered event should be removed");
+	}
+
+	/** A fire runs as the context that scheduled it: same caller, namespace and scope. */
+	@Test
+	public void testFireRebuildsTheSchedulingContext() {
+		RequestContext[] contexts = {
+			ctx,
+			RequestContext.ofAgent(did, s("worker")),
+			RequestContext.ofAgent(did, s("worker")).withCaps(Vectors.of(Maps.of(Capability.CAN, s("invoke")))),
+			// An authenticated agent-shaped subject, as AuthMiddleware.callerContext builds it.
+			RequestContext.of(s(did + ":u:alice:g:worker")).withCaps(Vectors.empty()),
+			// A delegate acting in this user's namespace, as user/sudo builds it.
+			RequestContext.of(s(did + "-delegate")).onBehalfOf(did),
+		};
+		for (RequestContext live : contexts) {
+			Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), live, future());
+			RequestContext fired = Scheduler.fireContext(engine.getVenueState().schedule().find(handle).rec());
+			assertEquals(live.getCallerDID(), fired.getCallerDID());
+			assertEquals(live.getUserDID(), fired.getUserDID());
+			assertEquals(live.getCaps(), fired.getCaps());
+			assertTrue(sched.cancel(handle, RequestContext.of(live.getUserDID())));
+		}
+	}
+
+	@Test
+	public void testAgentFireRunsInItsOwnersNamespace() throws Exception {
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext agent = RequestContext.ofAgent(did, s("worker")).withCaps(caps);
+		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), agent, future());
+		TestAdapter.CAPTURED_CTX.remove(did);
+		sched.trigger(handle, agent).get(5, TimeUnit.SECONDS);
+		RequestContext fired = TestAdapter.CAPTURED_CTX.get(did);
+		assertNotNull(fired, "the fire ran in the owner's namespace");
+		assertEquals(agent.getCallerDID(), fired.getCallerDID());
+		assertEquals(caps, fired.getCaps());
 	}
 
 	@Test

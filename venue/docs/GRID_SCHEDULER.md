@@ -24,8 +24,9 @@ per-thread `AgentScheduler` that predated this service has been retired.
   - `by` — the DID of the caller that scheduled it, always recorded: the
     owner's own, or that of an agent or delegate acting for them. Attribution
     only; it repeats `actor` for an agent.
-  - `actor` — the agent sub-principal that scheduled it, when not the owner;
-    the event fires as `actor` when set, otherwise as `owner`.
+  - `actor` — the agent or delegate that scheduled it, when not the owner;
+    the event fires as `actor` in `owner`'s namespace when set, otherwise as
+    `owner`.
   - `created` — wall-clock millis at which it was scheduled.
   - `description` — optional caller-written display text saying what the event
     is for, at most 500 characters. Never interpreted.

@@ -3419,15 +3419,14 @@ public class Engine {
 	/**
 	 * Rejects an agent-shaped DID where a <em>user</em> identity is required.
 	 *
-	 * <p>An agent DID is {@code <owner>:g:<agentId>}, and that nesting is
-	 * load-bearing: {@code Principals.userOf} resolves it to the owner's
-	 * namespace. Admitting such a DID as a user in its own right would therefore
-	 * hand its bearer the namespace of whoever the prefix names. Agents are
-	 * minted by the venue as sub-principals of an existing account, never
-	 * registered as users. A credential may authenticate an agent-shaped subject
-	 * on an identity-only route, but that does not admit a user or establish a
-	 * local owner relationship. This admission guard keeps such subjects out of
-	 * native user routes and records.</p>
+	 * <p>An agent DID is {@code <owner>:g:<agentId>}, and that name also
+	 * addresses agent {@code agentId} of the owner its prefix names. Admitting
+	 * such a DID as a user in its own right would make one name mean two
+	 * principals. Agents are minted by the venue as sub-principals of an existing
+	 * account, never registered as users. A credential may authenticate an
+	 * agent-shaped subject on an identity-only route, but that does not admit a
+	 * user or establish a local owner relationship. This admission guard keeps
+	 * such subjects out of native user routes and records.</p>
 	 *
 	 * <p>Self-issued subjects may use any installed DID method, so this check is
 	 * an intentional method-independent admission invariant rather than an

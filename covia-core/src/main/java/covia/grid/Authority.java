@@ -66,32 +66,30 @@ public final class Authority {
 	 * An authority for the given identity, unrestricted ({@code null} scope) and
 	 * carrying no presented proofs.
 	 *
-	 * <p>The namespace is <b>recovered from the DID</b> ({@link Principals#userOf}),
-	 * so reconstructing a context from a stored identity is lossless: a scheduled
-	 * event, a recovered job or a capability gate that replays as
-	 * {@code <owner>:g:<agent>} still resolves in the owner's namespace. This is
-	 * the point of a syntactically nested sub-principal — the relation travels
-	 * with the name and survives persistence, where an out-of-band field would
-	 * not. A DID that names no agent is its own user, so this is a no-op for
-	 * every ordinary principal.</p>
+	 * <p>The DID is <b>its own namespace</b>, whatever its name looks like: an
+	 * agent-shaped DID names no owner relationship by itself. Only the venue puts
+	 * a principal in another namespace, from a relationship it holds — running
+	 * its own agent ({@link #ofAgent}) or acting on a delegation
+	 * ({@link #onBehalfOf}). Whatever stores an authority stores that namespace
+	 * beside the DID and rebuilds from both.</p>
 	 *
 	 * @param did Caller DID, or null for anonymous
 	 */
 	public static Authority of(AString did) {
-		return (did == null) ? ANONYMOUS : new Authority(did, Principals.userOf(did), null, null);
+		return (did == null) ? ANONYMOUS : new Authority(did, null, null, null);
 	}
 
 	/**
 	 * An authority for the given identity bound to the given capability scope.
 	 * A {@code null} scope is unrestricted; a non-null scope binds the principal
-	 * to exactly those capabilities (an agent's {@code config.caps}). The
-	 * namespace is recovered from the DID, as in {@link #of(AString)}.
+	 * to exactly those capabilities (an agent's {@code config.caps}). The DID is
+	 * its own namespace, as in {@link #of(AString)}.
 	 * @param did Caller DID, or null for anonymous
 	 * @param grants the held capability scope, or null for unrestricted
 	 */
 	public static Authority of(AString did, AVector<ACell> grants) {
 		return (did == null && grants == null) ? ANONYMOUS
-			: new Authority(did, Principals.userOf(did), grants, null);
+			: new Authority(did, null, grants, null);
 	}
 
 	/**

@@ -19,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.AuthException;
+import covia.grid.Principals;
 import covia.venue.Audit;
 import covia.venue.Auth;
 import covia.venue.Config;
@@ -352,10 +353,10 @@ public class AuthMiddleware {
 	public static RequestContext callerContext(Context ctx) {
 		if (ctx == null) return RequestContext.ANONYMOUS;
 		RequestContext rctx = RequestContext.of(getCallerDID(ctx));
-		if (rctx.isSubPrincipal()) {
-			// Undo the local-agent owner projection and drop ambient authority.
-			// A credential proves the subject, not a local execution relationship.
-			rctx = RequestContext.ofAuthority(rctx.getAuthority().onBehalfOf(rctx.getCallerDID()));
+		if (Principals.isAgentDID(rctx.getCallerDID())) {
+			// A credential proves the subject, not a local execution relationship:
+			// an agent-shaped name brings no authority of its own.
+			rctx = rctx.withCaps(Vectors.empty());
 		}
 		AVector<ACell> caps = ctx.attribute(CALLER_CAPS_ATTR);
 		if (caps != null) rctx = rctx.withCaps(caps);

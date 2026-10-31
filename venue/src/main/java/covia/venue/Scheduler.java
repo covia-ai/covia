@@ -446,17 +446,15 @@ public class Scheduler {
 	}
 
 	/** The identity and stapled authority a fire runs under (design §5). */
-	private static RequestContext fireContext(AMap<AString, ACell> rec) {
+	static RequestContext fireContext(AMap<AString, ACell> rec) {
 		AString owner = RT.ensureString(rec.get(K_OWNER));
-		// Fire as the scheduling agent when there was one. Authority.of recovers
-		// the owning namespace from the agent DID, so a replayed sub-principal
-		// still resolves the owner's secrets and workspace.
+		// Fire as whoever scheduled it, in the namespace it scheduled in: the
+		// scheduling agent or delegate when there was one, else the owner.
 		AString actor = RT.ensureString(rec.get(K_ACTOR));
-		RequestContext ctx = RequestContext.of((actor != null) ? actor : owner);
+		RequestContext ctx = RequestContext.restore((actor != null) ? actor : owner, owner,
+			asVector(rec.get(K_CAPS)));
 		AVector<ACell> proofs = asVector(rec.get(K_PROOFS));
 		if (proofs != null) ctx = ctx.withProofs(proofs);
-		AVector<ACell> caps = asVector(rec.get(K_CAPS));
-		if (caps != null) ctx = ctx.withCaps(caps);
 		return ctx;
 	}
 

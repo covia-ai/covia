@@ -46,6 +46,7 @@ import covia.adapter.agent.Loads;
 import covia.api.Fields;
 import covia.adapter.agent.ExternalAgents;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Admission;
 import covia.venue.AgentState;
@@ -3375,20 +3376,20 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
 		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
 		if (caller == null) return null;
-		RequestContext ctx = RequestContext.of(caller);
+		AVector<ACell> caps = null;
 		if (snapshot.containsKey(K_CONTEXT_CAPS)) {
-			AVector<ACell> caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
+			caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
 			if (caps == null) return null;
-			ctx = ctx.withCaps(caps);
 		}
-		// Legacy snapshots implicitly used the caller's namespace. New snapshots
-		// bind local execution IDs explicitly; changing the owner must retain the
-		// proof-only boundary (bearer credentials are deliberately not restored).
+		// Snapshots record the namespace. Legacy ones predate nested subjects, so
+		// their caller's name was its namespace. Bearer credentials are deliberately
+		// not restored: a delegate's recorded empty scope leaves it proof-bounded.
+		AString owner = Principals.userOf(caller);
 		if (snapshot.containsKey(K_CONTEXT_USER)) {
-			AString owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
+			owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
 			if (owner == null) return null;
-			ctx = ctx.onBehalfOf(owner);
 		}
+		RequestContext ctx = RequestContext.restore(caller, owner, caps);
 		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
 		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
 		ACell jobId = snapshot.get(K_CONTEXT_JOB_ID);

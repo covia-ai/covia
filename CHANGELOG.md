@@ -32,6 +32,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- `Authority.of` makes every DID its own namespace; scheduled fires and restored agent
+  contexts rebuild in the namespace they recorded (`RequestContext.restore`).
 - A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
   it stands for by position in the frame's history. A legacy frame renders as it will
   once migrated, so migration still leaves the model's input unchanged.

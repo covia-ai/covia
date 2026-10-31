@@ -782,17 +782,20 @@ every grant's `with`, so agent `config.caps` written as `w/decisions/` keep
 their meaning. The proof path is unaffected: a bare `with` in a token binds to
 that token's signed `iss`.
 
-The nesting is recoverable by parsing (`Principals.userOf`), and
-`Authority.of(did)` uses it, so reconstructing a context from a stored DID is
-lossless — a scheduled event or capability gate that replays as
-`<owner>:g:<agent>` still resolves the owner's namespace. That parse is
-therefore load-bearing for authorisation, which is why an admitted user may
-never be agent-shaped: `Engine.admitUser` rejects one at the admission
-boundary. A bearer may authenticate a nested agent identity on an identity-only
-route (AUTH.md section 5.2), but it establishes no local execution relationship.
-`AuthMiddleware.callerContext` keeps that full subject as both actor and
-namespace with an empty capability scope, so the name grants no owner access.
-Explicit authorization is required to act within another namespace.
+The namespace is never parsed from a name: `Authority.of(did)` makes every DID
+its own namespace, agent-shaped or not. Only the venue puts a principal in
+another namespace, from a relationship it holds — running its own agent
+(`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `user/sudo`
+does). Whatever persists a context records the namespace beside the caller:
+a job's `caller` is its namespace and its `actor` who acted, a scheduled
+event's `owner` and `actor` likewise, and `RequestContext.restore` rebuilds a
+stored pair as it ran. An admitted user may never be agent-shaped
+(`Engine.admitUser` rejects one), so a name addressing an agent never also
+names a user. A bearer may authenticate a nested agent identity on an
+identity-only route (AUTH.md section 5.2), but it establishes no local execution
+relationship. `AuthMiddleware.callerContext` keeps that full subject as both
+actor and namespace with an empty capability scope, so the name grants no owner
+access. Explicit authorization is required to act within another namespace.
 
 Being a sub-principal is **proximity, not permission**.
 `ctx.relationTo(target)` classifies a target as `SELF`, `OWNER`, `SAME_USER`

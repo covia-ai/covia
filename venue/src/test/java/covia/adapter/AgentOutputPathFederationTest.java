@@ -8,12 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -97,6 +100,30 @@ public class AgentOutputPathFederationTest {
 		assertEquals(caller, legacy.getExecutionScope().ownerDID());
 		assertEquals(agent, legacy.getAgentId());
 		assertNull(AgentAdapter.restoreOutputContext(Maps.of(Fields.CALLER, caller, "user", null)));
+	}
+
+	@Test
+	public void outputContextRecoveryKeepsAnAgentsScopeAndASubjectsOwnNamespace() {
+		AString owner = Strings.create("did:key:zOwner");
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, Strings.create("invoke")));
+		RequestContext agent = RequestContext.ofAgent(owner, Strings.create("worker")).withCaps(caps);
+		RequestContext restored = AgentAdapter.restoreOutputContext(AgentAdapter.snapshotOutputContext(agent));
+		assertEquals(agent.getCallerDID(), restored.getCallerDID());
+		assertEquals(owner, restored.getUserDID());
+		assertEquals(caps, restored.getCaps());
+
+		// An authenticated agent-shaped subject stays in its own namespace.
+		AString subject = Strings.create(owner + ":u:alice:g:worker");
+		RequestContext external = AgentAdapter.restoreOutputContext(AgentAdapter.snapshotOutputContext(
+			RequestContext.of(subject).withCaps(Vectors.empty())));
+		assertEquals(subject, external.getUserDID());
+		assertEquals(Vectors.empty(), external.getCaps());
+
+		// Snapshots from before nested subjects named an agent's owner by its DID.
+		RequestContext legacy = AgentAdapter.restoreOutputContext(Maps.of(
+			Fields.CALLER, agent.getCallerDID(), "caps", caps));
+		assertEquals(owner, legacy.getUserDID());
+		assertEquals(caps, legacy.getCaps());
 	}
 
 	@Test
