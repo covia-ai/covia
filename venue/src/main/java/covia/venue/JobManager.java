@@ -1409,8 +1409,8 @@ public class JobManager {
 	 * Resolves a job record's {@code op}. A record carries the reference that
 	 * was invoked (#499): venue paths and bare hashes resolve under the venue
 	 * context exactly as before, while a caller-relative reference ({@code o/…},
-	 * {@code w/…}) resolves in the namespace the job was accepted in: the
-	 * record's {@code caller}, which is its own namespace. Never throws — an
+	 * {@code w/…}) resolves in the namespace the job was accepted in, which the
+	 * record holds as {@code caller}. Never throws — an
 	 * unresolvable reference (renamed catalog entry, unreachable remote) leaves
 	 * the job without metadata rather than aborting recovery.
 	 */

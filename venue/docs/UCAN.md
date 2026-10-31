@@ -774,7 +774,7 @@ Two questions must not be conflated, and the context answers them separately:
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside
-agent execution. For an agent, `w/foo` still means the **owner's** workspace —
+agent execution and delegation (`user/sudo`). For an agent, `w/foo` still means the **owner's** workspace —
 that is the namespace it lives and works in — while the agent remains a
 distinct principal. `RequestContext.grantsDenial` canonicalises bare paths
 against `getUserDID()`, applying the same DID to the request resource and to
@@ -788,8 +788,8 @@ another namespace, from a relationship it holds — running its own agent
 (`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `user/sudo`
 does). Whatever persists a context records the namespace beside the caller:
 a job's `caller` is its namespace and its `actor` who acted, a scheduled
-event's `owner` and `actor` likewise, and `RequestContext.restore` rebuilds a
-stored pair as it ran. An admitted user may never be agent-shaped
+event's `owner` and `actor` likewise, and `Authority.restore` (through
+`RequestContext.restore`) rebuilds a stored pair as it ran. An admitted user may never be agent-shaped
 (`Engine.admitUser` rejects one), so a name addressing an agent never also
 names a user. A bearer may authenticate a nested agent identity on an
 identity-only route (AUTH.md section 5.2), but it establishes no local execution

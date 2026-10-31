@@ -3381,9 +3381,10 @@ public class AgentAdapter extends AAdapter {
 			caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
 			if (caps == null) return null;
 		}
-		// Snapshots record the namespace. Legacy ones predate nested subjects, so
-		// their caller's name was its namespace. Bearer credentials are deliberately
-		// not restored: a delegate's recorded empty scope leaves it proof-bounded.
+		// Snapshots record the namespace. Those from before 0.10.0 do not: they ran
+		// in the namespace their caller's name gave, so they are restored there.
+		// Bearer credentials are deliberately not restored: a delegate's recorded
+		// empty scope leaves it proof-bounded.
 		AString owner = Principals.userOf(caller);
 		if (snapshot.containsKey(K_CONTEXT_USER)) {
 			owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));

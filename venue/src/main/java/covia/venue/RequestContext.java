@@ -191,9 +191,9 @@ public class RequestContext {
 
 	/**
 	 * Rebuilds a stored context: {@code callerDID} acting in the namespace of
-	 * {@code userDID} under the stored capability scope. A context that persists
-	 * records both DIDs, since neither can be recovered from the other: a DID is
-	 * its own namespace ({@link Authority#of(AString)}).
+	 * {@code userDID} under the stored capability scope ({@link Authority#restore}).
+	 * A context that persists records both DIDs, since neither can be recovered
+	 * from the other: a DID is its own namespace ({@link Authority#of(AString)}).
 	 *
 	 * @param callerDID who acted, or null for anonymous
 	 * @param userDID the namespace it acted in; null or {@code callerDID} for its own
@@ -201,7 +201,7 @@ public class RequestContext {
 	 */
 	public static RequestContext restore(AString callerDID, AString userDID, AVector<ACell> caps) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.of(callerDID).onBehalfOf(userDID).withGrantScope(caps));
+		return new RequestContext(Authority.restore(callerDID, userDID, caps));
 	}
 
 	/**

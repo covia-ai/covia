@@ -40,8 +40,9 @@ public final class Authority {
 	private final AString did;
 
 	/** The user whose namespace this authority acts within, when that differs
-	 *  from {@link #did} (an agent sub-principal). {@code null} = the principal
-	 *  is its own user. Read through {@link #getUserDID()}, never directly. */
+	 *  from {@link #did} (an agent, or a delegate acting for that user).
+	 *  {@code null} = the principal is its own user. Read through
+	 *  {@link #getUserDID()}, never directly. */
 	private final AString user;
 
 	/** The caller's own held capability scope. {@code null} = unrestricted. */
@@ -71,7 +72,7 @@ public final class Authority {
 	 * a principal in another namespace, from a relationship it holds — running
 	 * its own agent ({@link #ofAgent}) or acting on a delegation
 	 * ({@link #onBehalfOf}). Whatever stores an authority stores that namespace
-	 * beside the DID and rebuilds from both.</p>
+	 * beside the DID and rebuilds from both ({@link #restore}).</p>
 	 *
 	 * @param did Caller DID, or null for anonymous
 	 */
@@ -112,6 +113,20 @@ public final class Authority {
 	}
 
 	/**
+	 * Rebuilds a stored authority: {@code did} acting in the namespace of
+	 * {@code userDID} under the recorded scope. The venue authorised both when it
+	 * recorded them, so they are restored exactly; stored proofs, if any, are
+	 * attached with {@link #withProofs}.
+	 *
+	 * @param did Caller DID, or null for anonymous
+	 * @param userDID the recorded namespace; null or {@code did} for its own
+	 * @param grants the recorded scope, or null for unrestricted
+	 */
+	public static Authority restore(AString did, AString userDID, AVector<ACell> grants) {
+		return (did == null) ? ANONYMOUS : new Authority(did, userDID, grants, null);
+	}
+
+	/**
 	 * Returns this actor executing on behalf of {@code userDID} under its
 	 * presented delegation proofs.
 	 *
@@ -137,7 +152,8 @@ public final class Authority {
 
 	/**
 	 * The user whose namespace this authority acts within — the owner for an agent
-	 * sub-principal, and {@link #getDID()} for every other principal.
+	 * sub-principal, the delegating user for a delegate ({@link #onBehalfOf}),
+	 * and {@link #getDID()} for every other principal.
 	 *
 	 * <p>This is the DID that resolves bare lattice paths and per-user state
 	 * (workspace, secrets, jobs, inbox). It is <b>not</b> an identity: use
