@@ -121,6 +121,17 @@ class AgentFacetTest {
         assertEquals(ExternalAgents.UNAVAILABLE + "facetprobe", e.getMessage());
     }
 
+    @Test void messageToAgentWithBrokenStoredDefinitionSaysItIsMisconfigured() throws Exception {
+        create(); probe.waiting = true;
+        Job first = invoke("request", target().assoc(Fields.INPUT, Maps.of("task", "wait")));
+        assertEquals(Status.INPUT_REQUIRED, first.getStatus(), first.getErrorMessage());
+        AgentState agent = agent("external");
+        agent.putRecord(agent.getRecord().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "")));
+        covia.exception.UnavailableException e = assertThrows(covia.exception.UnavailableException.class,
+            () -> engine.jobs().deliverMessage(first.getID(), Maps.of(Fields.MESSAGE, Strings.create("continue")), ctx));
+        assertEquals(ExternalAgents.MISCONFIGURED + ExternalAgents.INVALID, e.getMessage());
+    }
+
     @Test void badOptionsUnknownSessionAndNativeOnlyOperationsAreExplicitFailures() throws Exception {
         create();
         Job unknown = invoke("chat", target().assoc(Fields.SESSION_ID, Strings.create("00112233445566778899aabbccddeeff"))

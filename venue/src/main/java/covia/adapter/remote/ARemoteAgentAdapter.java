@@ -52,7 +52,10 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 	public static final String UNSUPPORTED_AGENT_OPERATION = "Agent adapter does not support this operation: ";
 	public static final String INVALID_AGENT_DEFINITION = "Invalid agent definition: ";
 
-	/** Validate adapter-specific data without contacting the provider or resolving secrets. */
+	/**
+	 * Validate adapter-specific data without contacting the provider or
+	 * resolving secrets, throwing {@code InvalidInputException} with the reason.
+	 */
 	public void validateAgent(AMap<AString, ACell> definition) {}
 
 	/** A private backend invocation, dispatched through the ordinary Job machinery. */

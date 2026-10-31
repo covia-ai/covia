@@ -47,7 +47,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	@Override public void validateAgent(AMap<AString, ACell> definition) {
 		AString id = RT.ensureString(definition.get(Fields.AGENT_ID));
-		if (id == null || id.toString().isBlank()) throw new IllegalArgumentException(INVALID_INPUT);
+		if (id == null || id.toString().isBlank()) throw new InvalidInputException(INVALID_INPUT);
 	}
 
 	@Override public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,

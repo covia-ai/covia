@@ -3435,8 +3435,7 @@ public class AgentAdapter extends AAdapter {
 		if (child == null) throw new ConflictException(ExternalAgents.MISSING_CHILD);
 		AString owner = RT.ensureString(job.getData().get(Strings.intern("agentOwner")));
 		AgentState agent = getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
-		externalAgents().backend(externalAgents().validate(agent.getRecord().get(AgentState.KEY_AGENT)))
-			.handleMessage(child, messageRecord);
+		externalAgents().backend(externalAgents().stored(agent)).handleMessage(child, messageRecord);
 	}
 
 	/**

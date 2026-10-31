@@ -16,7 +16,7 @@ covia-core/src/main/java/covia/grid/client/VenueHTTP.java 6
 covia-core/src/main/java/covia/grid/impl/LatticeContent.java 2
 covia-core/src/main/java/covia/grid/impl/PathContent.java 1
 covia-core/src/main/java/covia/grid/impl/StreamContent.java 3
-venue/src/main/java/covia/adapter/A2AAdapter.java 45
+venue/src/main/java/covia/adapter/A2AAdapter.java 44
 venue/src/main/java/covia/adapter/AAdapter.java 9
 venue/src/main/java/covia/adapter/AgentAdapter.java 1
 venue/src/main/java/covia/adapter/ArchiveAdapter.java 15
@@ -42,7 +42,7 @@ venue/src/main/java/covia/adapter/OAuthAdapter.java 41
 venue/src/main/java/covia/adapter/Orchestrator.java 27
 venue/src/main/java/covia/adapter/P2PAdapter.java 18
 venue/src/main/java/covia/adapter/ProjectAdapter.java 1
-venue/src/main/java/covia/adapter/RemoteAgentAdapter.java 2
+venue/src/main/java/covia/adapter/RemoteAgentAdapter.java 1
 venue/src/main/java/covia/adapter/SchedulerAdapter.java 7
 venue/src/main/java/covia/adapter/SchemaAdapter.java 7
 venue/src/main/java/covia/adapter/SecretAdapter.java 13
@@ -58,7 +58,6 @@ venue/src/main/java/covia/adapter/agent/AbstractLLMAdapter.java 1
 venue/src/main/java/covia/adapter/agent/ContextAssembler.java 2
 venue/src/main/java/covia/adapter/agent/ConversationHistory.java 3
 venue/src/main/java/covia/adapter/agent/ConversationRenderer.java 3
-venue/src/main/java/covia/adapter/agent/ExternalAgents.java 1
 venue/src/main/java/covia/adapter/agent/LLMAgentAdapter.java 1
 venue/src/main/java/covia/adapter/agent/ToolCallIds.java 2
 venue/src/main/java/covia/adapter/agent/ToolPalette.java 2

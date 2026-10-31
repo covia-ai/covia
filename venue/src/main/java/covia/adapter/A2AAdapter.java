@@ -34,6 +34,7 @@ import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.adapter.remote.RemoteInteraction;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -153,7 +154,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	@Override public void validateAgent(AMap<AString, ACell> definition) {
 		if (RT.ensureString(definition.get(K_ENDPOINT)) == null || RT.ensureMap(definition.get(K_CARD)) == null)
-			throw new IllegalArgumentException(INVALID_AGENT_DEFINITION + "A2A requires endpoint and card");
+			throw new InvalidInputException(INVALID_AGENT_DEFINITION + "A2A requires endpoint and card");
 	}
 
 	@Override public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,

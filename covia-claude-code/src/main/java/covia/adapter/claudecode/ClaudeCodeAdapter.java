@@ -31,6 +31,7 @@ import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.adapter.remote.RemoteInteraction;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -516,7 +517,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	@Override public void validateAgent(AMap<AString, ACell> definition) {
 		AString project = RT.ensureString(definition.get(K_PROJECT));
 		if (project == null || project.toString().isBlank())
-			throw new IllegalArgumentException(INVALID_AGENT_DEFINITION + "Claude Code requires project");
+			throw new InvalidInputException(INVALID_AGENT_DEFINITION + "Claude Code requires project");
 	}
 
 	@Override public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,

@@ -8,6 +8,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.api.Fields;
 import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
@@ -26,6 +27,7 @@ public final class ExternalAgents {
 	public static final String MISSING_CHILD = "External agent backend job is unavailable; submission will not be replayed";
 	public static final String IMMUTABLE_DEFINITION = "Changing agent metadata requires creating a new agent";
 	public static final String NO_ACTIVE_TURN = "External agent message requires an active task or session turn";
+	public static final String MISCONFIGURED = "Agent is misconfigured and cannot be reached until it is recreated: ";
 	public static final AString CHILD = Strings.intern("agentBackendJob");
 	private static final AString KIND = Strings.intern("agentInteraction");
 	private static final AString OWNER = Strings.intern("agentOwner");
@@ -33,13 +35,28 @@ public final class ExternalAgents {
 
 	public ExternalAgents(Engine engine) { this.engine = engine; }
 
+	/** Checks a definition offered for a new agent: a bad one is the caller's input. */
 	public AMap<AString, ACell> validate(ACell value) {
 		AMap<AString, ACell> definition = RT.ensureMap(value);
 		AString name = definition == null ? null : RT.ensureString(definition.get(Fields.ADAPTER));
 		if (name == null || name.toString().isBlank() || name.toString().contains(":"))
-			throw new IllegalArgumentException(INVALID);
+			throw new InvalidInputException(INVALID);
 		backend(definition).validateAgent(definition);
 		return definition;
+	}
+
+	/**
+	 * An existing agent's definition, checked again before use. It passed
+	 * {@link #validate} when the agent was created and cannot change, so a
+	 * failure now is the agent's, not the caller's: the agent cannot be
+	 * reached until it is recreated.
+	 */
+	public AMap<AString, ACell> stored(AgentState agent) {
+		try {
+			return validate(agent.getRecord().get(AgentState.KEY_AGENT));
+		} catch (InvalidInputException e) {
+			throw new UnavailableException(MISCONFIGURED + e.getMessage(), e);
+		}
 	}
 
 	public ARemoteAgentAdapter<?> backend(AMap<AString, ACell> definition) {
@@ -57,7 +74,7 @@ public final class ExternalAgents {
 
 	public void start(Job job, RequestContext caller, AString owner, AString id, AString address,
 			AgentState agent, String operation, ACell input, Blob sid, boolean supplied) {
-		AMap<AString, ACell> definition = validate(agent.getRecord().get(AgentState.KEY_AGENT));
+		AMap<AString, ACell> definition = stored(agent);
 		ARemoteAgentAdapter<?> adapter = backend(definition);
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
 			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
@@ -146,7 +163,7 @@ public final class ExternalAgents {
 			return true;
 		}
 		attach(job, child, agent, Job.parseID(job.getData().get(Fields.SESSION_ID)),
-			backend(validate(agent.getRecord().get(AgentState.KEY_AGENT))));
+			backend(stored(agent)));
 		return true;
 	}
 
@@ -177,6 +194,6 @@ public final class ExternalAgents {
 			throw new ConflictException(NO_ACTIVE_TURN);
 		Job child = engine.jobs().getJob(Job.parseID(parent.getData().get(CHILD)));
 		if (child == null) throw new ConflictException(MISSING_CHILD);
-		backend(validate(agent.getRecord().get(AgentState.KEY_AGENT))).handleMessage(child, Maps.of(Fields.MESSAGE, content));
+		backend(stored(agent)).handleMessage(child, Maps.of(Fields.MESSAGE, content));
 	}
 }
