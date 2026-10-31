@@ -818,12 +818,15 @@ public class TelegramAdapterTest {
 		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes,
 			engine.resolveContent(Strings.create("dlfs/imports/note.ogg"), owner).content().getBlob().getBytes());
 
-		AString file = Strings.create("file://tmp/telegram-download.ogg");
+		// Creating a file needs write on its directory, which the owner makes
+		run(owner, "v/ops/file/mkdir", Maps.of("root", "tmp", "path", "telegram-scope"));
+		AString file = Strings.create("file://tmp/telegram-scope/telegram-download.ogg");
 		RequestContext scoped = owner.withCaps(Vectors.of(
 			convex.auth.ucan.Capability.create(Strings.create("v/ops/telegram/download"), Strings.create("invoke")),
 			convex.auth.ucan.Capability.create(Strings.create(OWNER + "/telegram/echo"), TelegramAdapter.ABILITY_CALL),
-			convex.auth.ucan.Capability.create(file, convex.auth.ucan.Capability.CRUD_WRITE)));
-		result = run(scoped, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "file://tmp/", "fileName", "telegram-download.ogg"));
+			convex.auth.ucan.Capability.create(Strings.create("file://tmp/telegram-scope/"),
+				convex.auth.ucan.Capability.CRUD_WRITE)));
+		result = run(scoped, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "file://tmp/telegram-scope/", "fileName", "telegram-download.ogg"));
 		assertEquals(file, RT.getIn(result, Fields.REF));
 		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, engine.resolveContent(file, owner).content().getBlob().getBytes());
 

@@ -66,19 +66,24 @@ drives and keys as they were; over WebDAV it answers 404. This holds for `dlfs`
 operations, content references to `dlfs/<drive>/<path>`, and a caller's
 `destination`.
 
-Creating a drive changes the drive itself, so it needs `crud/write` over
-`[<owner>/]dlfs/<drive>`, however it is triggered; a grant over
-`<owner>/dlfs/<drive>/` covers it, and one over `<owner>/dlfs/` covers any name.
-Operations name the drive in `drive`: a bare name, or `<ownerDID>/<drive>` for
-another user's drive under their grant. `createDrive` and `deleteDrive` also
-accept `name` as an alias for a bare name.
+Creating an entry changes the directory that holds it. A write that creates a
+file or directory therefore needs `crud/write` on that directory, or on the
+nearest one that exists when several levels are missing, as well as on the
+entry. A grant over an existing file changes it but creates nothing. Likewise,
+creating a drive adds it to its owner's drives, so `createDrive` needs
+`crud/write` over `[<owner>/]dlfs`; a grant over the drive alone does not
+create it. Operations name the drive in `drive`: a bare name, or
+`<ownerDID>/<drive>` for another user's drive under their grant. `createDrive`
+and `deleteDrive` also accept `name` as an alias for a bare name.
 
-A component that names its own drive creates it with its first write there,
-through `DLFSAdapter.ensureDrive`: Vault's configured drive, a DLFS-backed
-`file` root, and the drive a messaging provider or speech stores media in by
-default (`<owner>/dlfs/<provider>/`). The write is authorised as usual, and the
-creation needs `crud/write` over the drive, as `createDrive` does. Reads never
-create a drive.
+A component that names its own drive creates it, as the drive's owner, with
+its first write there. These drives are Vault's configured drive, a DLFS-backed
+`file` root (with its subpath), and the drive a messaging provider or speech
+stores media in by default (`<owner>/dlfs/<provider>/`). Like a user's
+namespaces, such a root counts as present. The write is authorised as usual:
+a new file at the drive's root needs `crud/write` over the drive. Only then is
+the root created. Messaging and speech go through `DLFSAdapter.ensureDrive`.
+Reads never create a drive.
 
 ## File adapter
 

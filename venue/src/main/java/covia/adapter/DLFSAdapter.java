@@ -4,6 +4,7 @@ import static convex.dlfs.DLFSDriveManager.isValidDriveName;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -239,7 +240,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * or deleted fails with {@link #DRIVE_NOT_FOUND}, leaving the user's drives
 	 * and keys as they were: only {@code dlfs:createDrive}, WebDAV
 	 * {@code MKCOL} and a component that names its own drive
-	 * ({@link #ensureDrive}, Vault's writes) create one. Cheap — just a cursor view, no
+	 * (Vault, a DLFS-backed file root, {@link #ensureDrive}) create one. Cheap — just a cursor view, no
 	 * caching. The view keeps the caller's signing key isolated while reading
 	 * the shared venue write clock for every mutation.
 	 *
@@ -254,21 +255,79 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * Makes sure the drive a DLFS reference ({@code [<owner>/]dlfs/<drive>[/<path>]})
-	 * names is live before a write to it, for a component that names its own drive:
-	 * Vault's configured drive, a DLFS-backed file root, a messaging provider's or
-	 * speech's media drive. The write to {@code ref} is authorised first, as
-	 * {@code dlfs:write} authorises it. Creating the drive changes the drive itself,
-	 * so it also needs crud/write over the drive, as {@code dlfs:createDrive} does.
-	 * An operation on a drive its caller names never creates it.
+	 * Makes sure the drive a component names is live before the component writes
+	 * at {@code ref} ({@code [<owner>/]dlfs/<drive>[/<path>]}): a messaging
+	 * provider's or speech's media drive. Like a user's namespaces, the
+	 * component's drive counts as present, so the write is authorised as
+	 * {@code dlfs:write} authorises it, and the drive is then created as its
+	 * owner. An operation on a drive its caller names never creates it.
 	 */
 	public void ensureDrive(RequestContext ctx, String ref) {
 		DlfsFileRef fr = parseDlfsFileRef(ref);
 		if (fr == null) throw new IllegalArgumentException(INVALID_DRIVE_NAME);
 		RequestContext driveCtx = authorise(ctx, fr, Capability.CRUD_WRITE);
-		if (liveDrive(driveCtx, fr.drive()) != null) return;
-		authorise(ctx, new DlfsFileRef(fr.ownerDID(), fr.drive(), ""), Capability.CRUD_WRITE);
-		getOrCreateDrive(driveCtx, fr.drive());
+		try {
+			authoriseCreate(ctx, driveCtx, fr, "");
+			materialise(driveCtx, new DlfsFileRef(fr.ownerDID(), fr.drive(), ""));
+		} catch (IOException e) {
+			throw new java.io.UncheckedIOException(e);
+		}
+	}
+
+	/**
+	 * Whether a write at {@code fr}, already authorised there, may create it.
+	 * Creating an entry changes the directory that holds it, so a write at a
+	 * path that does not exist is also authorised at the nearest directory above
+	 * it that does.
+	 *
+	 * @param root the path, within the drive, of a component's own root, which
+	 *        counts as present even before it is created, drive included. Null
+	 *        for a drive its caller names, which must be live.
+	 */
+	private boolean authoriseCreate(RequestContext ctx, RequestContext driveCtx, DlfsFileRef fr,
+			String root) throws IOException {
+		DLFSDrive drive = liveDrive(driveCtx, fr.drive());
+		String at = root;
+		if (drive != null) {
+			FileSystem fs = drive.fileSystem();
+			Path driveRoot = fs.getRootDirectories().iterator().next();
+			Path nearest = FileOperations.writeAuthority(
+				resolvePath(fs, root == null ? "" : root), resolvePath(fs, fr.path()));
+			at = driveRoot.relativize(nearest).toString();
+		} else if (root == null) {
+			throw new IllegalArgumentException(DRIVE_NOT_FOUND + fr.drive());
+		}
+		if (at.equals(fr.path())) return false;
+		authorise(ctx, new DlfsFileRef(fr.ownerDID(), fr.drive(), at), Capability.CRUD_WRITE);
+		return true;
+	}
+
+	/**
+	 * Creates a component's root as its owner: the drive, if it is not live,
+	 * and the directories on the root's path. Callers have authorised the
+	 * component's write there.
+	 */
+	private void materialise(RequestContext driveCtx, DlfsFileRef root) throws IOException {
+		DLFSDrive drive = liveDrive(driveCtx, root.drive());
+		FileSystem fs = (drive != null) ? drive.fileSystem() : getOrCreateDrive(driveCtx, root.drive());
+		Path base = resolvePath(fs, root.path());
+		if (!Files.exists(base)) Files.createDirectories(base);
+	}
+
+	/**
+	 * Creating a drive adds it to its owner's drives, so a drive that is not
+	 * live needs crud/write over {@code [<owner>/]dlfs} as well as over itself.
+	 */
+	private void authoriseNewDrive(RequestContext ctx, DriveTarget target) {
+		if (target.crossUser()) {
+			String resource = dlfsResource(target.ownerDID(), null, null);
+			if (!engine.crossUserAllows(ctx, Strings.create(resource), Capability.CRUD_WRITE)) {
+				throw new IllegalStateException(
+					"Access denied: no " + Capability.CRUD_WRITE + " capability for " + resource);
+			}
+			return;
+		}
+		engine.requireAuthority(ctx, Strings.create(dlfsResource(null, null, null)), Capability.CRUD_WRITE);
 	}
 
 	/**
@@ -327,8 +386,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	/**
 	 * Typed delegation point for adapters such as Vault that bind a drive of
-	 * their own: a write there creates the bound drive if it is not live and
-	 * the caller may write over it ({@link #ensureDrive}).
+	 * their own. The bound drive counts as present: a write there is authorised
+	 * as usual, and then creates the drive as its owner if it is not live.
 	 */
 	CompletableFuture<ACell> invokeBoundOperation(RequestContext ctx, String subOp,
 			AMap<AString, ACell> input) {
@@ -403,8 +462,14 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	record DlfsFileRef(AString ownerDID, String drive, String path) {}
 
-	/** An authorised DLFS path, exposed package-locally to FileAdapter. */
-	record AuthorisedPath(Path root, Path path, String resource, String binaryUrl) {}
+	/**
+	 * An authorised DLFS path, exposed package-locally to FileAdapter.
+	 *
+	 * @param mayCreate whether a write was authorised to create the path; one
+	 *        that was not may only change it
+	 */
+	record AuthorisedPath(Path root, Path path, String resource, String binaryUrl,
+			boolean mayCreate) {}
 
 	/**
 	 * Parses a DID-scoped DLFS file reference, or returns null when {@code ref}
@@ -467,17 +532,46 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability)
 			throws IOException {
+		return resolveAuthorisedPath(ctx, ref, ability, null);
+	}
+
+	/**
+	 * @param componentRoot for a component that names its own drive (a
+	 *        DLFS-backed file root), its root {@code dlfs/<drive>[/<subpath>]}. It
+	 *        counts as present, and a write under it creates it, drive included,
+	 *        as its owner. Null for a reference its caller names.
+	 */
+	AuthorisedPath resolveAuthorisedPath(RequestContext ctx, String ref, AString ability,
+			String componentRoot) throws IOException {
 		DlfsFileRef fr = parseDlfsFileRef(ref);
 		if (fr == null) return null;
 
 		RequestContext driveCtx = authorise(ctx, fr, ability);
+		boolean mayCreate = false;
+		if (Capability.CRUD_WRITE.equals(ability)) {
+			DlfsFileRef root = componentRoot(fr, componentRoot);
+			mayCreate = authoriseCreate(ctx, driveCtx, fr, root == null ? null : root.path());
+			if (root != null) materialise(driveCtx, root);
+		}
 		FileSystem fs = getDrive(driveCtx, fr.drive());
 		Path root = fs.getRootDirectories().iterator().next();
 		Path path = resolvePath(fs, fr.path());
 		String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
 			fr.path().isEmpty() ? null : Strings.create(fr.path()));
 		String binaryUrl = isCrossUser(ctx, fr) ? null : buildWebDAVUrl(fr.drive(), fr.path());
-		return new AuthorisedPath(root, path, resource, binaryUrl);
+		return new AuthorisedPath(root, path, resource, binaryUrl, mayCreate);
+	}
+
+	/** The component root {@code fr} lies under, or null if there is none or it lies outside. */
+	private static DlfsFileRef componentRoot(DlfsFileRef fr, String componentRoot) {
+		DlfsFileRef root = parseDlfsFileRef(componentRoot);
+		if (root == null || !root.drive().equals(fr.drive())
+				|| !java.util.Objects.equals(root.ownerDID(), fr.ownerDID())) {
+			return null;
+		}
+		String r = root.path();
+		boolean within = r.isEmpty() || fr.path().equals(r) || fr.path().startsWith(r + "/");
+		return within ? root : null;
 	}
 
 	/**
@@ -555,15 +649,17 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AuthorisedPath target = resolveAuthorisedPath(ctx, ref.toString(), Capability.CRUD_WRITE);
 		if (target == null) return false;
 		Path path = target.path();
+		// Authorised only to change it, so it existed: create never replaces
+		if (createOnly && !target.mayCreate()) throw new FileAlreadyExistsException(ref.toString());
 		// Interim (covia#629): a DLFS stream write is visible as it goes, so a
 		// failed or cancelled upload leaves a cut-off file under the real name.
 		// Convex's atomic conditional install (Convex-Dev/convex#790) would
 		// publish the file only on a clean end of stream, with createOnly
 		// checked at that moment.
 		try (java.io.OutputStream os = Files.newOutputStream(path, createOnly
-				? FileOperations.createOptions(path) : new java.nio.file.OpenOption[] {
-				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-				StandardOpenOption.WRITE })) {
+				? FileOperations.createOptions(path)
+				: FileOperations.writeOptions(path, StandardOpenOption.TRUNCATE_EXISTING,
+					target.mayCreate()))) {
 			data.transferTo(os);
 		}
 		return true;
@@ -658,8 +754,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * @param boundDrive the drive is the calling adapter's own (Vault), so a
-	 *                   write creates it if it is not live ({@link #ensureDrive})
+	 * @param boundDrive the drive is the calling adapter's own (Vault), so it
+	 *                   counts as present and an authorised write creates it
 	 */
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input,
 			boolean boundDrive) throws IOException {
@@ -697,10 +793,20 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		} else {
 			requireDlfsCap(ctx, subOp, input);
 		}
-		if (boundDrive && !target.crossUser() && target.driveName() != null
-				&& Capability.CRUD_WRITE.equals(abilityFor(subOp))) {
-			ensureDrive(ctx, dlfsResource(null, Strings.create(target.driveName()),
-				RT.ensureString(input.get(FIELD_PATH))));
+		boolean mayCreate = false;
+		if (Capability.CRUD_WRITE.equals(abilityFor(subOp)) && target.driveName() != null) {
+			if ("createDrive".equals(subOp)) {
+				if (liveDrive(driveCtx, target.driveName()) == null) authoriseNewDrive(ctx, target);
+			} else {
+				AString path = RT.ensureString(input.get(FIELD_PATH));
+				DlfsFileRef fr = new DlfsFileRef(target.ownerDID(), target.driveName(),
+					path == null ? "" : path.toString());
+				// A bound drive is the calling adapter's own, so it counts as present
+				DlfsFileRef root = (boundDrive && !target.crossUser())
+					? new DlfsFileRef(target.ownerDID(), target.driveName(), "") : null;
+				mayCreate = authoriseCreate(ctx, driveCtx, fr, root == null ? null : root.path());
+				if (root != null) materialise(driveCtx, root);
+			}
 		}
 
 		return switch (subOp) {
@@ -710,15 +816,15 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			case "list" -> handleList(driveCtx, input);
 			case "tree" -> handleTree(driveCtx, input);
 			case "read" -> handleRead(driveCtx, input, target.crossUser());
-			case "create" -> handleCreate(driveCtx, ctx, input, target);
+			case "create" -> handleCreate(driveCtx, ctx, input, target, mayCreate);
 			// handleWrite takes BOTH contexts: the drive opens under driveCtx (the
 			// owner, for a cross-user write), but a caller-supplied `asset` ref is
 			// resolved under the CALLER's own context — resolving caller input under
 			// owner authority would let a drive-scoped grant read the owner's other
 			// namespaces (confused deputy).
-			case "write" -> handleWrite(driveCtx, ctx, input, false);
-			case "append" -> handleWrite(driveCtx, ctx, input, true);
-			case "mkdir" -> handleMkdir(driveCtx, input);
+			case "write" -> handleWrite(driveCtx, ctx, input, false, mayCreate);
+			case "append" -> handleWrite(driveCtx, ctx, input, true, mayCreate);
+			case "mkdir" -> handleMkdir(driveCtx, input, mayCreate);
 			case "delete" -> handleDelete(driveCtx, input);
 			case "stat" -> handleStat(driveCtx, input);
 			default -> throw new IllegalArgumentException("Unknown DLFS operation: " + subOp);
@@ -804,33 +910,34 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 *                 {@code asset} reference under the caller's own authority
 	 */
 	private ACell handleWrite(RequestContext ctx, RequestContext assetCtx,
-			AMap<AString, ACell> input, boolean append) throws IOException {
+			AMap<AString, ACell> input, boolean append, boolean mayCreate) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
-		return FileOperations.write(path, input, engine, assetCtx, append, true);
+		return FileOperations.write(path, input, engine, assetCtx, append, mayCreate);
 	}
 
 	private ACell handleCreate(RequestContext ctx, RequestContext contentCtx,
-			AMap<AString, ACell> input, DriveTarget target) throws IOException {
+			AMap<AString, ACell> input, DriveTarget target, boolean mayCreate) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		String pathArg = FileOperations.createPath(input);
 		Path path = resolvePath(fs, pathArg);
 		AMap<AString, ACell> result = RT.ensureMap(
-			FileOperations.create(path, input, engine, contentCtx, true));
+			FileOperations.create(path, input, engine, contentCtx, mayCreate));
 		AString drive = RT.ensureString(input.get(FIELD_DRIVE));
 		String ref = dlfsResource(target.ownerDID(), drive, Strings.create(pathArg));
 		return result.assoc(Fields.REF, Strings.create(ref));
 	}
 
-	private ACell handleMkdir(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+	private ACell handleMkdir(RequestContext ctx, AMap<AString, ACell> input,
+			boolean mayCreate) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 		Path path = resolvePath(fs, pathCell.toString());
-		return FileOperations.mkdir(path, input, true);
+		return FileOperations.mkdir(path, input, mayCreate);
 	}
 
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

@@ -377,7 +377,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			}
 			if (mustExist && !Files.exists(target.path())) throw new NoSuchFileException(userPath);
 			return new FileTarget(target.root(), target.path(), target.resource(),
-				false, target.binaryUrl(), null, true);
+				false, target.binaryUrl(), null, target.mayCreate());
 		}
 
 		Root root = roots.get(rootName);
@@ -393,21 +393,19 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		if (root instanceof DLFSRoot dr) {
 			String relative = joinDLFSPath(dr.subpath, userPath);
 			String ref = "dlfs/" + dr.driveName + (relative.isEmpty() ? "" : "/" + relative);
-			DLFSAdapter dlfs = requireDLFSAdapter();
-			// The root names its drive, so a write creates it.
-			if (Capability.CRUD_WRITE.equals(ability)) dlfs.ensureDrive(ctx, ref);
-			DLFSAdapter.AuthorisedPath target = dlfs.resolveAuthorisedPath(ctx, ref, ability);
+			// The root names its drive and subpath, which count as present: a
+			// write under them creates them as their owner
+			String rootRef = "dlfs/" + dr.driveName + (dr.subpath == null ? "" : "/" + dr.subpath);
+			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
+				.resolveAuthorisedPath(ctx, ref, ability, rootRef);
 			Path logicalBase = FileOperations.resolve(target.root(), dr.subpath,
 				"DLFS root '" + rootName + "'", false);
-			if (!Files.exists(logicalBase) && Capability.CRUD_WRITE.equals(ability)) {
-				Files.createDirectories(logicalBase);
-			}
 			if (!target.path().startsWith(logicalBase)) {
 				throw new IllegalArgumentException("Path escapes root '" + rootName + "': " + userPath);
 			}
 			if (mustExist && !Files.exists(target.path())) throw new NoSuchFileException(userPath);
 			return new FileTarget(logicalBase, target.path(), target.resource(),
-				root.readOnly, target.binaryUrl(), rootName, true);
+				root.readOnly, target.binaryUrl(), rootName, target.mayCreate());
 		}
 
 		Path base = ((HostRoot) root).canonical;

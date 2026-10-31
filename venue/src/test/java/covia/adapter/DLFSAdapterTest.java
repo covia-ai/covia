@@ -452,15 +452,13 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
-	public void testAgentCreatesOnlyTheDrivesItsGrantCovers() {
-		// dlfs:createDrive needs crud/write over the drive itself, dlfs/<name>. An
-		// agent granted that creates the named drive and no other. A grant over a
-		// file inside the drive, or crud/read over every drive, creates none.
-		RequestContext maker = RequestContext.ofAgent(ALICE_DID, Strings.create("maker"))
+	public void testCreatingADriveNeedsWriteOnTheDrives() {
+		// Creating a drive adds it to its owner's drives, so dlfs:createDrive needs
+		// crud/write over dlfs. A grant over the drive itself, over a file inside
+		// it, or crud/read over every drive creates none.
+		RequestContext driveOnly = RequestContext.ofAgent(ALICE_DID, Strings.create("drive-only"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/reports"), Capability.CRUD_WRITE)));
-		engine.jobs().invokeOperation("v/ops/dlfs/create-drive",
-			Maps.of("name", "reports"), maker).awaitResult(5000);
-		failure("v/ops/dlfs/create-drive", Maps.of("name", "other"), maker);
+		failure("v/ops/dlfs/create-drive", Maps.of("name", "reports"), driveOnly);
 
 		RequestContext fileWriter = RequestContext.ofAgent(ALICE_DID, Strings.create("logger"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/logs/today.txt"), Capability.CRUD_WRITE)));
@@ -469,28 +467,74 @@ public class DLFSAdapterTest {
 		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
 		failure("v/ops/dlfs/create-drive", Maps.of("name", "notes"), reader);
+		assertEquals(0, driveNames().count());
 
+		RequestContext maker = RequestContext.ofAgent(ALICE_DID, Strings.create("maker"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs"), Capability.CRUD_WRITE)));
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive",
+			Maps.of("name", "reports"), maker).awaitResult(5000);
 		assertEquals(Vectors.of("reports"), driveNames());
 	}
 
 	@Test
-	public void testEnsureDriveCreatesOnlyUnderWriteAuthority() {
-		// A component that names its own drive creates it only where its caller
-		// may write over the drive itself, as createDrive needs. A grant over one
-		// file in the drive passes once the drive exists.
+	public void testEnsureDriveCreatesOnlyForAnAuthorisedWrite() {
+		// A component's drive counts as present, like a user's namespaces: it is
+		// created, as its owner, for a write its caller may make there. Writing a
+		// new file at the drive's root needs crud/write over the drive, so a grant
+		// over one file creates nothing until that file exists.
 		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
 		RequestContext reader = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
 			Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
 		RequestContext fileWriter = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
 			Capability.create(Strings.create("dlfs/owned/a.txt"), Capability.CRUD_WRITE)));
+		RequestContext driveWriter = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/owned/"), Capability.CRUD_WRITE)));
 		assertThrows(Exception.class, () -> adapter.ensureDrive(reader, "dlfs/owned"));
 		assertThrows(Exception.class, () -> adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt"));
 		assertEquals(0, driveNames().count());
 
+		adapter.ensureDrive(driveWriter, "dlfs/owned/a.txt");
 		adapter.ensureDrive(RequestContext.of(ALICE_DID), "dlfs/owned");
-		adapter.ensureDrive(RequestContext.of(ALICE_DID), "dlfs/owned");
-		adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt");
 		assertEquals(Vectors.of("owned"), driveNames());
+		assertThrows(Exception.class, () -> adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt"));
+
+		run("v/ops/dlfs/write", Maps.of("drive", "owned", "path", "a.txt", "content", "a"));
+		adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt");
+	}
+
+	@Test
+	public void testCreatingAnEntryNeedsWriteOnItsDirectory() {
+		// Creating an entry changes the directory that holds it. A grant over a
+		// file changes it while it exists; creating a file or directory needs
+		// crud/write on the directory, or the nearest one that exists.
+		run("v/ops/dlfs/create-drive", Maps.of("drive", "docs"));
+		run("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "old.txt", "content", "old"));
+		RequestContext leaf = RequestContext.ofAgent(ALICE_DID, Strings.create("leaf")).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/docs/old.txt"), Capability.CRUD_WRITE),
+			Capability.create(Strings.create("dlfs/docs/new.txt"), Capability.CRUD_WRITE),
+			Capability.create(Strings.create("dlfs/docs/sub"), Capability.CRUD_WRITE)));
+		engine.jobs().invokeOperation("v/ops/dlfs/write",
+			Maps.of("drive", "docs", "path", "old.txt", "content", "changed"), leaf).awaitResult(5000);
+		failure("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "new.txt", "content", "x"), leaf);
+		failure("v/ops/dlfs/append", Maps.of("drive", "docs", "path", "new.txt", "content", "x"), leaf);
+		failure("v/ops/dlfs/create", Maps.of("drive", "docs", "path", "new.txt"), leaf);
+		failure("v/ops/dlfs/mkdir", Maps.of("drive", "docs", "path", "sub"), leaf);
+		failure("v/ops/file/write", Maps.of("path", "dlfs/docs/new.txt", "content", "x"), leaf);
+
+		RequestContext dir = RequestContext.ofAgent(ALICE_DID, Strings.create("dir")).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/docs/"), Capability.CRUD_WRITE)));
+		engine.jobs().invokeOperation("v/ops/dlfs/mkdir",
+			Maps.of("drive", "docs", "path", "a/b", "parents", true), dir).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/dlfs/write",
+			Maps.of("drive", "docs", "path", "a/b/new.txt", "content", "new"), dir).awaitResult(5000);
+
+		AVector<?> entries = RT.ensureVector(RT.getIn(
+			run("v/ops/dlfs/list", Maps.of("drive", "docs")), "entries"));
+		assertEquals(2, entries.count(), "only old.txt and a: " + entries);
+		assertEquals("changed", RT.getIn(
+			run("v/ops/dlfs/read", Maps.of("drive", "docs", "path", "old.txt")), "content").toString());
+		assertEquals("new", RT.getIn(
+			run("v/ops/dlfs/read", Maps.of("drive", "docs", "path", "a/b/new.txt")), "content").toString());
 	}
 
 	@Test

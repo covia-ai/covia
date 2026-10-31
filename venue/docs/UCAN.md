@@ -669,8 +669,11 @@ references with `secret/use` instead.
 Creating an entry changes the directory that holds it. A write that creates
 therefore also needs `crud/write` on that directory, or on the nearest one
 that exists when several levels are missing. A grant on an existing file
-changes it but creates nothing. This applies on host and temp file roots,
-including `archive:extract` and `archive:zip` destinations.
+changes it but creates nothing. This applies to files on host, temp and DLFS
+roots, including `archive:extract` and `archive:zip` destinations, and to DLFS
+drives, which are entries of `[<owner>/]dlfs`. A component's own drive (Vault's,
+a DLFS-backed root's, a messaging or speech media drive) counts as present: an
+authorised write there creates it as its owner.
 
 | Point | Required Capability |
 |-------|-------------------|
@@ -685,8 +688,8 @@ including `archive:extract` and `archive:zip` destinations.
 | `file:delete` | `crud/delete` on the resolved file or DLFS resource |
 | `dlfs:read` / `dlfs:list` / `dlfs:tree` / `dlfs:stat` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:listDrives` | `{ with: "dlfs", can: "crud/read" }` |
-| `dlfs:write` / `dlfs:append` / `dlfs:create` / `dlfs:mkdir` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
-| `dlfs:createDrive`, and a component creating the drive it names | `{ with: "dlfs/<drive>", can: "crud/write" }` |
+| `dlfs:write` / `dlfs:append` / `dlfs:create` / `dlfs:mkdir` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }`, and on the directory that holds a new entry |
+| `dlfs:createDrive` | `{ with: "dlfs", can: "crud/write" }` |
 | `dlfs:delete` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |

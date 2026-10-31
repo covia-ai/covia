@@ -52,16 +52,16 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   caller that chose the target, and `Engine.fetchRemoteAsset`, `fetchRemoteNamedAsset`
   and `fetchRemoteContent` the caller whose reference names the publisher.
 - A DLFS drive is created before use: an operation on a missing or deleted drive fails,
-  and only `createDrive` and WebDAV `MKCOL` create one (#641). Vault, DLFS-backed file
-  roots, and messaging and speech media create their own drive with their first write
-  there (`DLFSAdapter.ensureDrive`). Creating a drive needs `crud/write` over it, however
-  it is triggered.
+  and only `createDrive` and WebDAV `MKCOL` create one (#641). `createDrive` needs
+  `crud/write` over `[<owner>/]dlfs`. Vault, DLFS-backed file roots, and messaging and
+  speech media create their own drive, as its owner, with their first authorised write
+  there (`DLFSAdapter.ensureDrive`).
 - `dlfs:createDrive` and `deleteDrive` take the drive in `drive`, as other DLFS operations
   do; `name` remains an alias for a bare drive name.
 - `file:move` needs `crud/read` and `crud/delete` on its source, not `crud/write`.
-- Creating a file or directory on a host or temp root needs `crud/write` on the directory
-  that holds it; a grant on an existing file only changes it. Archive operations authorise
-  through the file adapter, so DLFS-backed roots check their DLFS resource.
+- Creating a file or directory, on a host, temp or DLFS root, needs `crud/write` on the
+  directory that holds it; a grant on an existing file only changes it. Archive operations
+  authorise through the file adapter, so DLFS-backed roots check their DLFS resource.
 
 ### Deprecated
 

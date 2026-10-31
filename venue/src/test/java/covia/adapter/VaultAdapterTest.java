@@ -60,12 +60,14 @@ public class VaultAdapterTest {
 	}
 
 	@Test
-	public void testVaultCreatesItsDriveOnlyWithWriteOverIt() {
-		// Creating the vault drive needs crud/write over the drive, as createDrive
-		// does. A grant over one file in the vault writes there once the drive
-		// exists, but does not create it.
+	public void testVaultCreatesItsDriveForAnAuthorisedWrite() {
+		// The vault drive counts as present, like a user's namespaces: a write
+		// there creates it, as its owner, once the write is allowed. A new file at
+		// the vault's root needs crud/write over the vault, so a grant over one
+		// file changes it once it exists, but creates nothing.
 		RequestContext fileWriter = RequestContext.of(aliceDID).withCaps(Vectors.of(
-			Capability.create(Strings.create("dlfs/vault/note.txt"), Capability.CRUD_WRITE)));
+			Capability.create(Strings.create("dlfs/vault/note.txt"), Capability.CRUD_WRITE),
+			Capability.create(Strings.create("dlfs/vault/other.txt"), Capability.CRUD_WRITE)));
 		var refused = engine.jobs().invokeOperation("v/ops/vault/write",
 			Maps.of("path", "note.txt", "content", "first"), fileWriter);
 		assertThrows(Exception.class, () -> refused.awaitResult(5000));
@@ -81,6 +83,9 @@ public class VaultAdapterTest {
 		engine.jobs().invokeOperation("v/ops/vault/write",
 			Maps.of("path", "note.txt", "content", "third"), fileWriter).awaitResult(5000);
 		assertEquals("third", RT.getIn(run("v/ops/vault/read", Maps.of("path", "note.txt")), "content").toString());
+		var created = engine.jobs().invokeOperation("v/ops/vault/write",
+			Maps.of("path", "other.txt", "content", "new"), fileWriter);
+		assertThrows(Exception.class, () -> created.awaitResult(5000));
 	}
 
 	@Test

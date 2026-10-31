@@ -1254,8 +1254,13 @@ public class FileAdapterTest {
 			AVector<ACell> logicalCaps = Vectors.of(Capability.create(
 				Strings.create("dlfs/vault-drive/agent-output/allowed/"), Capability.CRUD_WRITE));
 			RequestContext logical = RequestContext.of(did).withCaps(logicalCaps);
-			Job allowedDir = eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
+			// Creating allowed changes the root's directory, outside the grant
+			Job deniedDir = eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
 				"root", "documents", "path", "allowed", "parents", true), logical);
+			try { deniedDir.awaitResult(2000); } catch (RuntimeException ignored) {}
+			assertEquals(Status.FAILED, deniedDir.getStatus());
+			Job allowedDir = eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
+				"root", "documents", "path", "allowed", "parents", true), free);
 			allowedDir.awaitResult(2000);
 			assertEquals(Status.COMPLETE, allowedDir.getStatus());
 			Job allowedWrite = eng.jobs().invokeOperation("v/ops/file/write", Maps.of(

@@ -309,18 +309,23 @@ public class DLFSCrossUserTest {
 	}
 
 	@Test
-	public void testCrossUserCreateDriveNeedsWriteOverThatDrive() {
+	public void testCrossUserCreateDriveNeedsWriteOverHerDrives() {
 		// Bob creates a drive in Alice's space by naming it <alice>/<drive> in
-		// `drive`, under her grant of crud/write over that drive. The grant creates
-		// the drive it names and no other; a read grant over all her drives creates none.
-		RequestContext bob = withProofs(BOB,
+		// `drive`. Creating a drive adds it to her drives, so it needs her grant
+		// of crud/write over <alice>/dlfs; a grant over the drive itself, or a
+		// read grant over all her drives, creates none.
+		RequestContext driveOnly = withProofs(BOB,
 			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs/inbox/", "crud/write", 3600));
-		run("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/inbox"), bob);
-		failure("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/other"), bob);
+		failure("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/inbox"), driveOnly);
 
 		RequestContext reader = withProofs(BOB,
 			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs/", "crud/read", 3600));
 		failure("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/notes"), reader);
+		assertEquals(Vectors.of("docs"), aliceDrives());
+
+		RequestContext bob = withProofs(BOB,
+			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs", "crud/write", 3600));
+		run("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/inbox"), bob);
 
 		// `name` takes a bare drive name only, so it never reaches another user's space.
 		assertTrue(failure("v/ops/dlfs/create-drive", Maps.of("name", ALICE_DID + "/inbox2"), bob)
@@ -411,6 +416,22 @@ public class DLFSCrossUserTest {
 		ACell result = run("v/ops/dlfs/read",
 			Maps.of("drive", "docs", "path", "shared/frombob.md"), ALICE);
 		assertEquals("hello from bob", RT.getIn(result, "content").toString());
+	}
+
+	@Test
+	public void testCrossUserGrantOnAFileCreatesNothing() {
+		// Creating a file in Alice's drive changes the directory that holds it,
+		// so her grant over the file alone changes it once it exists.
+		AMap<AString, ACell> fileGrant = issueToken(BOB_DID, ALICE_DID, "/dlfs/docs/note.md", "crud/write", 3600);
+		failure("v/ops/dlfs/write",
+			Maps.of("drive", aliceDocs, "path", "note.md", "content", "from bob"), withProofs(BOB, fileGrant));
+
+		run("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "note.md", "content", "alice"), ALICE);
+		engine.jobs().invokeOperation("v/ops/dlfs/write",
+			Maps.of("drive", aliceDocs, "path", "note.md", "content", "from bob"),
+			withProofs(BOB, fileGrant)).awaitResult(5000);
+		assertEquals("from bob", RT.getIn(run("v/ops/dlfs/read",
+			Maps.of("drive", "docs", "path", "note.md"), ALICE), "content").toString());
 	}
 
 	@Test
