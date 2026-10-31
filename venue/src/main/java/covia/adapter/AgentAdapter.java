@@ -3374,7 +3374,7 @@ public class AgentAdapter extends AAdapter {
 	 * reconstructed: raw bearer credentials are never persisted.
 	 */
 	@SuppressWarnings("unchecked")
-	static RequestContext restoreOutputContext(ACell snapshotCell) {
+	RequestContext restoreOutputContext(ACell snapshotCell) {
 		if (!(snapshotCell instanceof AMap<?, ?> raw)) return null;
 		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
 		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
@@ -3384,11 +3384,10 @@ public class AgentAdapter extends AAdapter {
 			caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
 			if (caps == null) return null;
 		}
-		// Snapshots record the namespace. Those from before 0.10.0 do not: they ran
-		// in the namespace their caller's name gave, so they are restored there.
-		// Bearer credentials are deliberately not restored: a delegate's recorded
-		// empty scope leaves it proof-bounded.
-		AString owner = Principals.userOf(caller);
+		// Snapshots record the namespace; those from before 0.10.0 name only the
+		// caller. Bearer credentials are deliberately not restored: a delegate's
+		// recorded empty scope leaves it proof-bounded.
+		AString owner = engine.legacyNamespace(caller);
 		if (snapshot.containsKey(K_CONTEXT_USER)) {
 			owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
 			if (owner == null) return null;

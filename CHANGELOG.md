@@ -40,6 +40,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Discovery routes stay anonymous while public access is off.
 - Deleting an agent removes the events it scheduled; any left fire nothing.
 - Scheduled events fire with their actor's authority at fire time; caps are no longer stored.
+- Records that name only their caller act in its owner's namespace only for an existing agent.
 - `llmagent:chat` and `goaltree:chat` run as their agent under its current caps, invoked
   only by its own run or its owner; input `config.caps` no longer sets their scope.
 - A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns

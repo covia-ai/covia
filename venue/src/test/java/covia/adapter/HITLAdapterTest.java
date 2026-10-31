@@ -26,6 +26,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.grid.auth.UcanTokens;
 import covia.grid.hitl.Hitl;
@@ -190,6 +191,35 @@ public class HITLAdapterTest {
 			RT.getIn(owner.agent("hitl-agent").getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
 			"the human answer must arrive in the asking session: " + conversation);
+	}
+
+	/** A record naming only its sender answers into an agent's session only when the sender is that existing agent's. */
+	@Test
+	public void testALegacyRecordAnswersOnlyAnAgentThatExists() {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "legacy-agent", Fields.CONFIG, Maps.empty()), ALICE).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("legacy-agent");
+		Blob sid = Blob.fromHex("1e9ac7001e9ac7001e9ac7001e9ac700");
+		agent.ensureSession(sid, ALICE_DID);
+
+		String asked = plantLegacyRecord("1e9ac701", Principals.agentDID(ALICE_DID, Strings.create("legacy-agent")), sid);
+		String forged = plantLegacyRecord("1e9ac702", Principals.agentDID(ALICE_DID, Strings.create("ghost")), sid);
+		respond(ALICE, Hitl.answer(asked).answer("ok", true).build());
+		respond(ALICE, Hitl.answer(forged).answer("ok", true).build());
+
+		String pending = agent.getSessionPending(sid).toString();
+		assertTrue(pending.contains(asked), "the asking agent receives its answer: " + pending);
+		assertFalse(pending.contains(forged), "a name alone reaches no agent's session: " + pending);
+	}
+
+	/** An open request as stored before the requester's namespace was recorded. */
+	private String plantLegacyRecord(String id, AString from, Blob sid) {
+		AMap<AString, ACell> request = Hitl.request("Legacy").ask(Hitl.approval("ok", "OK?").required()).build();
+		engine.getVenueState().users().ensure(ALICE_DID).putHitlRequest(Strings.create(id), Maps.of(
+			Hitl.ID, id, Hitl.FROM, from, Hitl.TITLE, "Legacy", Hitl.ASKS, request.get(Hitl.ASKS),
+			Hitl.STATUS, Hitl.OPEN, Hitl.CREATED, CVMLong.create(System.currentTimeMillis()),
+			Hitl.AGENT, "legacy-agent", Fields.SESSION_ID, sid.toHexString()));
+		return id;
 	}
 
 	@Test

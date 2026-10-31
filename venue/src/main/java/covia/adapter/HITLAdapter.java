@@ -686,7 +686,7 @@ public class HITLAdapter extends AAdapter {
 			if (agentId == null || sidHex == null) return; // Human/API requester.
 			Blob sid = Blob.fromHex(sidHex.toString());
 			AString owner = RT.ensureString(record.get(K_REQUESTER_USER));
-			if (owner == null) owner = Principals.userOf(RT.ensureString(record.get(Hitl.FROM)));
+			if (owner == null) owner = engine.legacyNamespace(RT.ensureString(record.get(Hitl.FROM)));
 			// The result carries the request ID. This is an independent message,
 			// not a chat waiter tied to the now-terminal HITL Job.
 			if (owner != null && sid != null && agents != null
