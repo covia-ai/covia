@@ -1086,6 +1086,16 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Whether a failure was expected: a self-describing type carrying its
+	 * reason (#644). Anything else reaching a caller — including an expected
+	 * type thrown without a reason — is a runtime or venue bug.
+	 */
+	public static boolean isExpectedFailure(Throwable t) {
+		String message = t.getMessage();
+		return message != null && !message.isBlank() && isSelfDescribing(t);
+	}
+
+	/**
 	 * Whether a throwable's message reads as a complete diagnostic on its own:
 	 * Covia's own exceptions and the standard argument/state/unsupported
 	 * families are written for humans; everything else is named by type too.

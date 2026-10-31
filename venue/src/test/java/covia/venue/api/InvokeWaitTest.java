@@ -110,6 +110,16 @@ public class InvokeWaitTest {
 	}
 
 	@Test
+	public void testRunOperationFailureIsBadRequestWithItsReason() throws Exception {
+		// The operation ran and failed for its own stated reason: the request
+		// gets 400 with that reason, as documented, not a server error.
+		HttpResponse<String> resp = run(
+			"{\"operation\":\"v/test/ops/error\",\"input\":{\"message\":\"deliberate failure\"}}");
+		assertEquals(400, resp.statusCode(), resp.body());
+		assertTrue(resp.body().contains("deliberate failure"), resp.body());
+	}
+
+	@Test
 	public void testIntegerWaitReturnsFinishedRecord() throws Exception {
 		HttpResponse<String> resp = invoke("?wait=5000",
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":1}}");

@@ -876,7 +876,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,403,"Not authorised to store asset content: "+idString);
 		} catch (IllegalArgumentException e) {
 			this.buildError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
-		} catch (IOException | OutOfMemoryError e) {
+		} catch (IOException e) {
 			this.buildError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
 		}
 	}
@@ -944,11 +944,12 @@ public class CoviaAPI extends ACoviaAPI {
 			} else if (cause instanceof covia.exception.RateLimitException rate) {
 				ctx.header("Retry-After", Long.toString(rate.getRetryAfterSeconds()));
 				buildError(ctx, 429, rate.getMessage());
-			} else if (cause instanceof IllegalArgumentException
-					|| cause instanceof IllegalStateException) {
+			} else if (AAdapter.isExpectedFailure(cause)) {
+				// The operation ran and failed for its own stated reason.
 				buildError(ctx, 400, "Error running operation: " + cause.getMessage());
 			} else {
-				buildError(ctx, 500, "Operation failed: " + cause.getMessage());
+				log.error("Unexpected failure running operation {}", op, cause);
+				buildError(ctx, 500, "Operation failed: " + AAdapter.describeFailure(cause));
 			}
 		} catch (Exception e) {
 			buildError(ctx, 500, "Unexpected failure running operation: " + e);
@@ -1062,7 +1063,7 @@ public class CoviaAPI extends ACoviaAPI {
 			// operation does not exist" (#174). The message names the venue.
 			this.buildError(ctx, 502, e.getMessage());
 		} catch (IllegalArgumentException | IllegalStateException e) {
-			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
+			this.buildError(ctx, 400, "Error invoking operation: " + e.getMessage());
 			return;
 		} catch (covia.exception.RateLimitException e) {
 			// Caller is over an admission/rate limit (e.g. concurrent-job cap) and
@@ -1177,8 +1178,6 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx,200,status);
 		} catch (AuthException e) {
 			buildError(ctx,403,e.getMessage());
-		} catch (Exception e) {
-			buildError(ctx,404,"Job not found: "+id);
 		}
 	}
 	
