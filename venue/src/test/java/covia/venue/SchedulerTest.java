@@ -38,6 +38,7 @@ import covia.adapter.TestAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.server.AuthMiddleware;
@@ -260,6 +261,7 @@ public class SchedulerTest {
 		Blob handle = sched.schedule(s("v/test/ops/echo"), s("boo"), ghost, future(), everyHour(), null);
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
+		assertInstanceOf(NotFoundException.class, ex.getCause());
 		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getCallerDID()), ex.getCause().getMessage());
 		ScheduleState state = engine.getVenueState().schedule();
 		assertNull(state.find(handle), "a recurring event is dropped, not rescheduled");

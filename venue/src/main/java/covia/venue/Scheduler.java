@@ -27,6 +27,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.NotFoundException;
 import covia.grid.Asset;
 import covia.venue.ScheduleState.Entry;
 import static covia.venue.ScheduleState.*;
@@ -377,7 +378,7 @@ public class Scheduler {
 		if (gone != null) {
 			state().remove(key);
 			armNext();
-			return new Claimed(rec, null, new IllegalStateException(AGENT_GONE.formatted(gone)));
+			return new Claimed(rec, null, new NotFoundException(AGENT_GONE.formatted(gone), gone.toString()));
 		}
 		JobManager.Prepared job = null;
 		RuntimeException error = null;

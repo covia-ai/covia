@@ -19,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Audit;
 import covia.venue.Auth;
 import covia.venue.Config;
@@ -339,7 +340,7 @@ public class AuthMiddleware {
 		AString caller = getCallerDID(ctx);
 		if (caller == null) return RequestContext.ANONYMOUS;
 		Engine engine = VenueAuthenticator.engineOf(ctx);
-		if (engine == null) throw new IllegalStateException(NO_VENUE);
+		if (engine == null) throw new ConfigurationException(NO_VENUE);
 		return engine.context(caller);
 	}
 
