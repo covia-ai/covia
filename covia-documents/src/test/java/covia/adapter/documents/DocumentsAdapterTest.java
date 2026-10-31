@@ -25,6 +25,7 @@ import convex.core.lang.RT;
 import covia.adapter.TextExtractor;
 import covia.adapter.TextExtractor.Extraction;
 import covia.adapter.TextExtractor.Request;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -169,7 +170,7 @@ public class DocumentsAdapterTest {
 		Integer[] map = TextExtractor.parsePages(Maps.of("first", 2));
 		assertEquals(2, map[0]);
 		assertNull(map[1]);
-		assertThrows(IllegalArgumentException.class, () -> TextExtractor.parsePages(Strings.create("three")));
+		assertThrows(InvalidInputException.class, () -> TextExtractor.parsePages(Strings.create("three")));
 	}
 
 	// ========== Through the venue ==========

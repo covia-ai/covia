@@ -30,6 +30,11 @@ import convex.core.lang.RT;
 import convex.dlfs.DLFSDrive;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.utils.MimeUtils;
@@ -250,7 +255,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	public DLFSLocal getDrive(RequestContext ctx, String driveName) {
 		DLFSDrive drive = liveDrive(ctx, driveName);
-		if (drive == null) throw new IllegalArgumentException(DRIVE_NOT_FOUND + driveName);
+		if (drive == null) throw new NotFoundException(DRIVE_NOT_FOUND + driveName, driveName);
 		return (DLFSLocal) drive.fileSystem();
 	}
 
@@ -264,7 +269,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	public void ensureDrive(RequestContext ctx, String ref) {
 		DlfsFileRef fr = parseDlfsFileRef(ref);
-		if (fr == null) throw new IllegalArgumentException(INVALID_DRIVE_NAME);
+		if (fr == null) throw new InvalidInputException(INVALID_DRIVE_NAME);
 		RequestContext driveCtx = authorise(ctx, fr, Capability.CRUD_WRITE);
 		try {
 			authoriseCreate(ctx, driveCtx, fr, "");
@@ -295,7 +300,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 				resolvePath(fs, root == null ? "" : root), resolvePath(fs, fr.path()));
 			at = driveRoot.relativize(nearest).toString();
 		} else if (root == null) {
-			throw new IllegalArgumentException(DRIVE_NOT_FOUND + fr.drive());
+			throw new NotFoundException(DRIVE_NOT_FOUND + fr.drive(), fr.drive());
 		}
 		if (at.equals(fr.path())) return false;
 		authorise(ctx, new DlfsFileRef(fr.ownerDID(), fr.drive(), at), Capability.CRUD_WRITE);
@@ -322,7 +327,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (target.crossUser()) {
 			String resource = dlfsResource(target.ownerDID(), null, null);
 			if (!engine.crossUserAllows(ctx, Strings.create(resource), Capability.CRUD_WRITE)) {
-				throw new IllegalStateException(
+				throw new AuthException(
 					"Access denied: no " + Capability.CRUD_WRITE + " capability for " + resource);
 			}
 			return;
@@ -337,7 +342,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private DLFSLocal getOrCreateDrive(RequestContext ctx, String driveName) {
 		requireValidDriveName(driveName);
 		DLFSDrive drive = engine.getDLFSDrives(ensureUserKeyPair(ctx)).getOrCreateDrive(driveName);
-		if (drive == null) throw new IllegalArgumentException(DRIVE_UNAVAILABLE + driveName);
+		if (drive == null) throw new UnavailableException(DRIVE_UNAVAILABLE + driveName);
 		return (DLFSLocal) drive.fileSystem();
 	}
 
@@ -349,7 +354,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	private static void requireValidDriveName(String driveName) {
-		if (!isValidDriveName(driveName)) throw new IllegalArgumentException(INVALID_DRIVE_NAME);
+		if (!isValidDriveName(driveName)) throw new InvalidInputException(INVALID_DRIVE_NAME);
 	}
 
 	/**
@@ -379,7 +384,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("No DLFS sub-operation specified"));
+			return CompletableFuture.failedFuture(new NotSupportedException("No DLFS sub-operation specified"));
 		}
 		return invokeOperation(ctx, subOp, RT.castMap(input), false);
 	}
@@ -399,6 +404,9 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		return CompletableFuture.supplyAsync(() -> {
 			try {
 				return dispatch(ctx, subOp, input, boundDrive);
+			} catch (RuntimeException e) {
+				if (!isExpectedFailure(e)) throw e;
+				throw new RuntimeException(e.getMessage(), e);
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
@@ -506,13 +514,13 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		String p = path;
 		while (p.startsWith("/")) p = p.substring(1);
 		if (p.indexOf('\\') >= 0) {
-			throw new IllegalArgumentException("DLFS paths must use '/' separators: " + path);
+			throw new InvalidInputException("DLFS paths must use '/' separators: " + path);
 		}
 		java.util.ArrayDeque<String> parts = new java.util.ArrayDeque<>();
 		for (String part : p.split("/", -1)) {
 			if (part.isEmpty() || ".".equals(part)) continue;
 			if ("..".equals(part)) {
-				if (parts.isEmpty()) throw new IllegalArgumentException("Path escapes DLFS drive: " + path);
+				if (parts.isEmpty()) throw new InvalidInputException("Path escapes DLFS drive: " + path);
 				parts.removeLast();
 			} else {
 				parts.addLast(part);
@@ -618,7 +626,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (target == null) return null;
 		Path path = target.path();
 		if (!Files.exists(path) || Files.isDirectory(path)) {
-			throw new IllegalArgumentException("No file at DLFS path: " + ref);
+			throw new NotFoundException("No file at DLFS path: " + ref, ref.toString());
 		}
 		return new covia.venue.storage.ContentProvider.Resolved(
 			covia.grid.impl.PathContent.of(path), MimeUtils.guessByName(ref.toString()));
@@ -689,11 +697,11 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		String drive = didURL.getPath();
 		if (drive != null && drive.startsWith("/")) drive = drive.substring(1);
 		if (drive == null || drive.isEmpty()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"DLFS DID-URL drive reference must name a drive, e.g. did:key:.../<drive>");
 		}
 		if (!isValidDriveName(drive)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"DLFS DID-URL drive reference must name exactly one valid drive");
 		}
 		boolean cross = !ownerDID.equals(ctx.getUserDID());
@@ -713,7 +721,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		requireValidDriveName(name.toString());
 		AString drive = RT.ensureString(input.get(FIELD_DRIVE));
 		if (drive == null) return input.assoc(FIELD_DRIVE, name);
-		if (!drive.equals(name)) throw new IllegalArgumentException(DRIVE_NAME_CONFLICT);
+		if (!drive.equals(name)) throw new InvalidInputException(DRIVE_NAME_CONFLICT);
 		return input;
 	}
 
@@ -733,7 +741,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			AMap<AString, ACell> input) {
 		AString ability = abilityFor(subOp);
 		if (ability == null) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Cross-user DLFS access is not permitted for '" + subOp + "' on another user's drive");
 		}
 		AString pathCell = RT.ensureString(RT.getIn(input, FIELD_PATH));
@@ -773,7 +781,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		input = driveFromName(subOp, input);
 		DriveTarget target = parseDriveRef(ctx, input);
 		if (target.driveName() != null && !isValidDriveName(target.driveName())) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				INVALID_DRIVE_NAME);
 		}
 		RequestContext driveCtx = ctx;
@@ -827,7 +835,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			case "mkdir" -> handleMkdir(driveCtx, input, mayCreate);
 			case "delete" -> handleDelete(driveCtx, input);
 			case "stat" -> handleStat(driveCtx, input);
-			default -> throw new IllegalArgumentException("Unknown DLFS operation: " + subOp);
+			default -> throw new NotSupportedException("Unknown DLFS operation: " + subOp);
 		};
 	}
 
@@ -862,7 +870,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	/** The bare drive name an operation names in {@code drive}. */
 	private static String requireDriveName(AMap<AString, ACell> input) {
 		AString drive = RT.ensureString(input.get(FIELD_DRIVE));
-		if (drive == null) throw new IllegalArgumentException("'drive' is required");
+		if (drive == null) throw new InvalidInputException("'drive' is required");
 		return drive.toString();
 	}
 
@@ -893,7 +901,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		FileSystem fs = getDrive(ctx, driveName);
 
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
-		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+		if (pathCell == null) throw new InvalidInputException("'path' is required");
 
 		AString modeCell = RT.ensureString(input.get(FIELD_MODE));
 		String mode = modeCell != null ? modeCell.toString() : "auto";
@@ -913,7 +921,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			AMap<AString, ACell> input, boolean append, boolean mayCreate) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
-		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+		if (pathCell == null) throw new InvalidInputException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
 		return FileOperations.write(path, input, engine, assetCtx, append, mayCreate);
@@ -935,7 +943,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			boolean mayCreate) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
-		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+		if (pathCell == null) throw new InvalidInputException("'path' is required");
 		Path path = resolvePath(fs, pathCell.toString());
 		return FileOperations.mkdir(path, input, mayCreate);
 	}
@@ -943,7 +951,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
-		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+		if (pathCell == null) throw new InvalidInputException("'path' is required");
 		Path path = resolvePath(fs, pathCell.toString());
 		Path root = fs.getRootDirectories().iterator().next();
 		return FileOperations.delete(path, root, input);
@@ -952,7 +960,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private ACell handleStat(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
-		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+		if (pathCell == null) throw new InvalidInputException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
 		return FileOperations.stat(path, null);

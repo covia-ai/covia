@@ -32,6 +32,8 @@ import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.fs.impl.DLFSLocal;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.lattice.Covia;
 import covia.venue.CoviaApplication;
@@ -390,7 +392,7 @@ public class DLFSAdapterTest {
 	public void testUpstreamRejectedDriveNamesAreNotCreated() throws Exception {
 		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
 		for (String name : new String[] {".", "..", " padded ", "x".repeat(129)}) {
-			var error = assertThrows(IllegalArgumentException.class,
+			var error = assertThrows(InvalidInputException.class,
 				() -> adapter.getDriveForIdentity(ALICE_DID.toString(), name));
 			assertEquals(DLFSAdapter.INVALID_DRIVE_NAME, error.getMessage());
 		}
@@ -444,7 +446,7 @@ public class DLFSAdapterTest {
 				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:read on " + drive);
 			assertTrue(failure("v/ops/file/write", Maps.of("path", ref, "content", "new"), alice)
 				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:write on " + drive);
-			var put = assertThrows(IllegalArgumentException.class, () -> engine.putContent(
+			var put = assertThrows(NotFoundException.class, () -> engine.putContent(
 				Strings.create(ref), new java.io.ByteArrayInputStream(new byte[] {1}), null, alice));
 			assertTrue(put.getMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), "content write on " + drive);
 		}
@@ -943,7 +945,7 @@ public class DLFSAdapterTest {
 		assertEquals("*", RT.getIn(read, "content").toString());
 		assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> engine.createContent(ref,
 			new java.io.ByteArrayInputStream(new byte[] {9}), null, ctx));
-		assertThrows(IllegalArgumentException.class, () -> engine.resolveContent(
+		assertThrows(InvalidInputException.class, () -> engine.resolveContent(
 			convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/%2e%2e/escape"), ctx));
 		var scoped = ctx.withCaps(convex.core.data.Vectors.of(convex.auth.ucan.Capability.create(
 			convex.core.data.Strings.create("dlfs/names/" + name), convex.auth.ucan.Capability.CRUD_READ)));

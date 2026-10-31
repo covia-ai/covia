@@ -1357,7 +1357,8 @@ public class CoviaAdapter extends AAdapter {
 			// Another user's record is an entry of the venue's users, which no grant
 			// of theirs covers, so a write reaches only a user the venue has
 			if (!didTarget.ownerDID().equals(ctx.getUserDID())) {
-				throw new IllegalArgumentException(covia.venue.VenueState.UNKNOWN_USER);
+				throw new covia.exception.NotFoundException(covia.venue.VenueState.UNKNOWN_USER,
+					didTarget.ownerDID().toString());
 			}
 			didTarget = engine.resolveUserPath(ctx, raw, true);
 		}

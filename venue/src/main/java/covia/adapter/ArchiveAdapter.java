@@ -33,6 +33,10 @@ import convex.core.util.JSON;
 import convex.auth.ucan.Capability;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
 
 /**
@@ -104,7 +108,7 @@ public class ArchiveAdapter extends AAdapter {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("No archive sub-operation specified"));
+				new NotSupportedException("No archive sub-operation specified"));
 		}
 		return CompletableFuture.supplyAsync(() -> {
 			try {
@@ -114,7 +118,7 @@ public class ArchiveAdapter extends AAdapter {
 					case "list"    -> handleList(ctx, in);
 					case "extract" -> handleExtract(ctx, in);
 					case "zip"     -> handleZip(ctx, in);
-					default -> throw new IllegalArgumentException("Unknown archive operation: " + subOp);
+					default -> throw new NotSupportedException("Unknown archive operation: " + subOp);
 				};
 			} catch (RuntimeException e) {
 				throw e;
@@ -128,7 +132,7 @@ public class ArchiveAdapter extends AAdapter {
 	private FileAdapter files() {
 		AAdapter raw = engine.getAdapter("file");
 		if (!(raw instanceof FileAdapter fa)) {
-			throw new IllegalStateException("Archive operations require the file adapter to be registered");
+			throw new UnavailableException("Archive operations require the file adapter to be registered");
 		}
 		return fa;
 	}
@@ -157,7 +161,7 @@ public class ArchiveAdapter extends AAdapter {
 		AString contentRef = RT.ensureString(input.get(FIELD_CONTENT_REF));
 		AString legacyAssetRef = RT.ensureString(input.get(FIELD_ASSET));
 		if (contentRef != null && legacyAssetRef != null && !contentRef.equals(legacyAssetRef)) {
-			throw new IllegalArgumentException("contentRef conflicts with legacy 'asset'");
+			throw new InvalidInputException("contentRef conflicts with legacy 'asset'");
 		}
 		if (contentRef == null) contentRef = legacyAssetRef;
 		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
@@ -165,11 +169,11 @@ public class ArchiveAdapter extends AAdapter {
 		int provided = ((root != null && path != null) ? 1 : 0)
 			+ (contentRef != null ? 1 : 0) + (bytesB64 != null ? 1 : 0);
 		if (provided == 0) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Provide an archive source: 'root'+'path', 'contentRef', or 'bytes'");
 		}
 		if (provided > 1) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Provide only one archive source: 'root'+'path', 'contentRef', or 'bytes'");
 		}
 
@@ -177,7 +181,7 @@ public class ArchiveAdapter extends AAdapter {
 			Path file = files().target(ctx, root.toString(), path.toString(),
 				Capability.CRUD_READ, true).path();
 			if (!Files.isRegularFile(file)) {
-				throw new IllegalArgumentException("Archive is not a regular file: " + path);
+				throw new InvalidInputException("Archive is not a regular file: " + path);
 			}
 			return new Source(file, false);
 		}
@@ -190,7 +194,8 @@ public class ArchiveAdapter extends AAdapter {
 				// which only serves metadata-declared content.
 				covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(contentRef, ctx);
 				if (resolved == null || resolved.content() == null) {
-					throw new IllegalArgumentException("Content reference not found: " + contentRef);
+					throw new NotFoundException("Content reference not found: " + contentRef,
+						contentRef.toString());
 				}
 				Files.write(tmp, resolved.content().getBlob().getBytes());
 			} else {
@@ -238,7 +243,7 @@ public class ArchiveAdapter extends AAdapter {
 		AString destRoot = RT.ensureString(input.get(FIELD_DEST_ROOT));
 		AString destPath = RT.ensureString(input.get(FIELD_DEST_PATH));
 		if (destRoot == null) {
-			throw new IllegalArgumentException("'destRoot' is required (the root to extract into)");
+			throw new InvalidInputException("'destRoot' is required (the root to extract into)");
 		}
 		FileAdapter.FileTarget dest = files().target(ctx, destRoot.toString(),
 			destPath != null ? destPath.toString() : null, Capability.CRUD_WRITE, false);
@@ -258,13 +263,13 @@ public class ArchiveAdapter extends AAdapter {
 			for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
 				ZipEntry ze = e.nextElement();
 				if (++entries > MAX_ENTRIES) {
-					throw new IllegalArgumentException("Archive exceeds the entry cap (" + MAX_ENTRIES + ")");
+					throw new InvalidInputException("Archive exceeds the entry cap (" + MAX_ENTRIES + ")");
 				}
 				// Zip-slip: resolve the entry inside the destination and verify it
 				// cannot escape (normalize collapses any '..'), before touching disk.
 				Path target = destReal.resolve(ze.getName()).normalize();
 				if (!target.startsWith(destReal)) {
-					throw new IllegalArgumentException("Archive entry escapes destination: " + ze.getName());
+					throw new InvalidInputException("Archive entry escapes destination: " + ze.getName());
 				}
 				if (ze.isDirectory()) {
 					Files.createDirectories(target);
@@ -300,7 +305,7 @@ public class ArchiveAdapter extends AAdapter {
 		int n;
 		while ((n = is.read(buf)) != -1) {
 			if (n > remaining) {
-				throw new IllegalArgumentException("Archive exceeds the total-size cap (" + MAX_TOTAL_BYTES + " bytes)");
+				throw new InvalidInputException("Archive exceeds the total-size cap (" + MAX_TOTAL_BYTES + " bytes)");
 			}
 			os.write(buf, 0, n);
 			copied += n;
@@ -314,7 +319,7 @@ public class ArchiveAdapter extends AAdapter {
 	private ACell handleZip(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		AString srcRoot = RT.ensureString(input.get(FIELD_ROOT));
 		if (srcRoot == null) {
-			throw new IllegalArgumentException("'root' is required (the source root to zip from)");
+			throw new InvalidInputException("'root' is required (the source root to zip from)");
 		}
 		// Sources: 'paths' (array) or a single 'path'.
 		java.util.List<String> relPaths = new java.util.ArrayList<>();
@@ -328,7 +333,7 @@ public class ArchiveAdapter extends AAdapter {
 		AString single = RT.ensureString(input.get(FIELD_PATH));
 		if (single != null) relPaths.add(single.toString());
 		if (relPaths.isEmpty()) {
-			throw new IllegalArgumentException("Provide 'path' or 'paths' — the files/directories to zip");
+			throw new InvalidInputException("Provide 'path' or 'paths' — the files/directories to zip");
 		}
 
 		AString destRoot = RT.ensureString(input.get(FIELD_DEST_ROOT));
@@ -434,7 +439,7 @@ public class ArchiveAdapter extends AAdapter {
 
 	private void writeEntry(ZipOutputStream zos, String name, Path file, long[] count) throws IOException {
 		if (++count[0] > MAX_ENTRIES) {
-			throw new IllegalArgumentException("Zip exceeds the entry cap (" + MAX_ENTRIES + ")");
+			throw new InvalidInputException("Zip exceeds the entry cap (" + MAX_ENTRIES + ")");
 		}
 		ZipEntry ze = new ZipEntry(name);
 		zos.putNextEntry(ze);
