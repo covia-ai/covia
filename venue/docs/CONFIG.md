@@ -1010,21 +1010,50 @@ further ahead than this. Deliberately unset by default, since a cap is a
 nuisance in development. Worth setting on a production venue — for example
 30 days (`2592000`), the frontend's longest identity-token option, or lower.
 
-## Venue identity proof (`auth.requireVenueProof`)
+## Venue identity proof (`auth.venueProof`, `auth.requireVenueProof`)
 
 ```json
 {
-  "auth": { "requireVenueProof": true }
+  "auth": {
+    "venueProof": [
+      { "adapter": "auth", "implementation": "address" },
+      { "adapter": "auth", "implementation": "challenge" }
+    ]
+  }
 }
 ```
 
-`requireVenueProof` (default `true`): an authenticated grid or remote-agent hop
-(`authenticateAs` `caller` or `venue`) sends its credential only to a venue
-proven to hold the DID the credential is audienced to — a `did:web` venue at
-its own `https://<host>` address, or plain http on loopback. A venue reached at
-any other address, or one with a `did:key`, is refused before the credential
-leaves. Turn it off only for test venues whose `did:web` name is served
-elsewhere; the venue then takes the DID a target states at its address. See
+An authenticated grid or remote-agent hop (`authenticateAs` `caller` or
+`venue`) sends its credential only to a venue proven to hold the DID the
+credential is audienced to. `venueProof` lists the mechanisms that may prove
+it, in order. The first that proves the DID wins; if none does, the hop is
+refused with each mechanism's reason before the credential leaves. The example
+is the default.
+
+- `address`: a `did:web` venue at its own address, `https://<host>`, or plain
+  http on loopback.
+- `challenge`: the venue answers a fresh nonce sent to `POST /api/v1/challenge`
+  with a proof signed by its DID's key that names the address dialled. It
+  proves a `did:key`. A proof is reused for two minutes for the same target and
+  DID; a failure is not. This build verifies challenge proofs but does not
+  answer challenges, so other venues prove it only by `address`.
+
+Any listed mechanism is enough, so the list is as strong as its weakest member:
+list only mechanisms you trust on their own. An unlisted mechanism is never
+tried, and `[]` proves nothing, so every authenticated hop is refused while
+anonymous hops are unaffected. Each entry names an adapter and one of its
+implementations; an adapter contributes them by implementing
+`VenueProofMethods` (ADAPTERS.md). Every entry must be available when the
+venue starts, and an entry whose adapter is disabled proves nothing. A
+mechanism dials the target through the outbound guard, as the hop does.
+
+A recovered job proves its target again before re-sending a saved credential.
+If the target is no longer proven, the job waits for authority
+(`auth-required`) and the credential is not sent.
+
+`requireVenueProof` (default `true`): `false` skips proof and takes the DID a
+target states at its address, for test venues whose DID cannot be proven where
+they are served. It sits outside the list because it proves nothing. See
 UCAN.md §5.6.
 
 ## Public access (`auth.public`)

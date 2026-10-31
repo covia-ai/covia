@@ -32,6 +32,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `ConflictException`, `NotSupportedException`, `UnavailableException`,
   `ConfigurationException` (#644).
 - `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
+- `auth.venueProof`: the mechanisms, in order, that may prove a venue's DID, by default
+  `address` then `challenge`; adapters add more through `VenueProofMethods`.
+- `VenueChallenge` verifies a venue's challenge proof of its DID, and
+  `VenueHTTP.challenge` asks for one.
 
 ### Changed
 
@@ -95,8 +99,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   `adapters.http.allowedHosts` unless the venue itself, or an `outbound/any` holder,
   makes the call.
 - An authenticated grid or remote-agent hop sends its credential only to a venue
-  proven to hold the DID it is audienced to: a `did:web` venue at its own https
-  address (http on loopback).
+  proven to hold the DID it is audienced to, by its address or by a challenge. A
+  recovered job proves its target again before re-sending a saved credential.
 - The outbound guard's address rule applies to every later lookup of a host it passes,
   and also refuses IPv6 unique local and IPv4-carrying forms, `100.64.0.0/10` and `0.0.0.0/8`.
 - `http.allowedHosts` and `http.blockedHosts` match a host name with or without its trailing dot.
