@@ -729,9 +729,13 @@ public class FileAdapterTest {
 		RequestContext gated = RequestContext.of(
 			convex.core.data.Strings.create(DID)).withCaps(caps);
 
-		// mkdir within scope — allowed
-		Job mkdirJob = engine.jobs().invokeOperation("v/ops/file/mkdir",
+		// Creating cap-write itself changes the root, outside the grant; the
+		// uncapped owner creates it
+		assertCapDenied("v/ops/file/mkdir",
 			Maps.of("root", "work", "path", "cap-write", "parents", true), gated);
+		Job mkdirJob = engine.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("root", "work", "path", "cap-write", "parents", true),
+			RequestContext.of(convex.core.data.Strings.create(DID)));
 		mkdirJob.awaitResult(5000);
 		assertEquals(Status.COMPLETE, mkdirJob.getStatus());
 
@@ -884,7 +888,7 @@ public class FileAdapterTest {
 			.withCaps(Vectors.of(
 				fileCap("cap-move/source/item.txt", Capability.CRUD_READ),
 				fileCap("cap-move/source/item.txt", Capability.CRUD_DELETE),
-				fileCap("cap-move/target/item.txt", Capability.CRUD_WRITE)));
+				fileCap("cap-move/target/", Capability.CRUD_WRITE)));
 
 		Job moved = engine.jobs().invokeOperation("v/ops/file/move", Maps.of(
 			"root", "work",
@@ -899,12 +903,17 @@ public class FileAdapterTest {
 		Files.writeString(workspace.resolve("cap-move/source/denied.txt"), "denied");
 		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
 			fileCap("cap-move/source/denied.txt", Capability.CRUD_WRITE),
-			fileCap("cap-move/target/denied.txt", Capability.CRUD_WRITE));
+			fileCap("cap-move/target/", Capability.CRUD_WRITE));
 		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
 			fileCap("cap-move/source/denied.txt", Capability.CRUD_DELETE),
-			fileCap("cap-move/target/denied.txt", Capability.CRUD_WRITE));
+			fileCap("cap-move/target/", Capability.CRUD_WRITE));
 		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
 			fileCap("cap-move/source/denied.txt", Capability.CRUD_READ),
+			fileCap("cap-move/target/", Capability.CRUD_WRITE));
+		// Creating the destination needs write on the directory that holds it
+		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
+			fileCap("cap-move/source/denied.txt", Capability.CRUD_READ),
+			fileCap("cap-move/source/denied.txt", Capability.CRUD_DELETE),
 			fileCap("cap-move/target/denied.txt", Capability.CRUD_WRITE));
 		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
 			fileCap("cap-move/source/denied.txt", Capability.CRUD_READ),
@@ -938,7 +947,7 @@ public class FileAdapterTest {
 			convex.core.data.Strings.create("file://work/cap-copy/source/item.txt"),
 			convex.auth.ucan.Capability.CRUD_READ);
 		var targetWrite = convex.auth.ucan.Capability.create(
-			convex.core.data.Strings.create("file://work/cap-copy/target/item.txt"),
+			convex.core.data.Strings.create("file://work/cap-copy/target/"),
 			convex.auth.ucan.Capability.CRUD_WRITE);
 		RequestContext allowed = RequestContext.of(convex.core.data.Strings.create(DID))
 			.withCaps(convex.core.data.Vectors.of(sourceRead, targetWrite));
@@ -966,6 +975,59 @@ public class FileAdapterTest {
 		assertNotNull(denied);
 		assertTrue(denied.contains("Capability denied"));
 		assertFalse(Files.exists(workspace.resolve("cap-copy/target/no-read.txt")));
+	}
+
+	@Test
+	public void testCreatingAnEntryNeedsWriteOnItsDirectory() throws IOException {
+		Files.createDirectories(workspace.resolve("cap-entry/dir"));
+		Files.writeString(workspace.resolve("cap-entry/dir/old.txt"), "old");
+
+		// A grant on a file changes it while it exists, but creates nothing
+		RequestContext leaf = RequestContext.of(Strings.create(DID)).withCaps(Vectors.of(
+			fileCap("cap-entry/dir/old.txt", Capability.CRUD_WRITE),
+			fileCap("cap-entry/dir/new.txt", Capability.CRUD_WRITE),
+			fileCap("cap-entry/dir/sub", Capability.CRUD_WRITE)));
+		Job changed = engine.jobs().invokeOperation("v/ops/file/write", Maps.of(
+			"root", "work", "path", "cap-entry/dir/old.txt", "content", "changed"), leaf);
+		changed.awaitResult(5000);
+		assertEquals(Status.COMPLETE, changed.getStatus());
+		assertEquals("changed", Files.readString(workspace.resolve("cap-entry/dir/old.txt")));
+		assertCapDenied("v/ops/file/write", Maps.of(
+			"root", "work", "path", "cap-entry/dir/new.txt", "content", "x"), leaf);
+		assertCapDenied("v/ops/file/append", Maps.of(
+			"root", "work", "path", "cap-entry/dir/new.txt", "content", "x"), leaf);
+		assertCapDenied("v/ops/file/create", Maps.of(
+			"root", "work", "path", "cap-entry/dir/new.txt"), leaf);
+		assertCapDenied("v/ops/file/mkdir", Maps.of(
+			"root", "work", "path", "cap-entry/dir/sub"), leaf);
+		assertFalse(Files.exists(workspace.resolve("cap-entry/dir/new.txt")));
+		assertFalse(Files.exists(workspace.resolve("cap-entry/dir/sub")));
+
+		// A grant on the directory creates in it, missing levels included
+		RequestContext dir = RequestContext.of(Strings.create(DID)).withCaps(Vectors.of(
+			fileCap("cap-entry/dir/", Capability.CRUD_WRITE)));
+		Job created = engine.jobs().invokeOperation("v/ops/file/write", Maps.of(
+			"root", "work", "path", "cap-entry/dir/new.txt", "content", "new"), dir);
+		created.awaitResult(5000);
+		assertEquals(Status.COMPLETE, created.getStatus());
+		Job nested = engine.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
+			"root", "work", "path", "cap-entry/dir/a/b/c", "parents", true), dir);
+		nested.awaitResult(5000);
+		assertEquals(Status.COMPLETE, nested.getStatus());
+		assertTrue(Files.isDirectory(workspace.resolve("cap-entry/dir/a/b/c")));
+
+		// ...but not the directory itself, which is an entry of its parent
+		RequestContext below = RequestContext.of(Strings.create(DID)).withCaps(Vectors.of(
+			fileCap("cap-entry/missing/", Capability.CRUD_WRITE)));
+		assertCapDenied("v/ops/file/mkdir", Maps.of(
+			"root", "work", "path", "cap-entry/missing/x", "parents", true), below);
+		assertFalse(Files.exists(workspace.resolve("cap-entry/missing")));
+	}
+
+	private void assertCapDenied(String op, ACell input, RequestContext ctx) {
+		String denied = capDenialOf(() -> engine.jobs().invokeOperation(op, input, ctx));
+		assertNotNull(denied, op + " should be denied: " + input);
+		assertTrue(denied.contains("Capability denied"), "expected capability denial, got: " + denied);
 	}
 
 	// =========================================================

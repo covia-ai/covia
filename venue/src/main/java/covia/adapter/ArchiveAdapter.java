@@ -174,8 +174,8 @@ public class ArchiveAdapter extends AAdapter {
 		}
 
 		if (root != null && path != null) {
-			engine.requireAuthority(ctx, Strings.create(schemeResource("file", root, path)), Capability.CRUD_READ);
-			Path file = files().resolve(ctx, root.toString(), path.toString(), Capability.CRUD_READ, true);
+			Path file = files().target(ctx, root.toString(), path.toString(),
+				Capability.CRUD_READ, true).path();
 			if (!Files.isRegularFile(file)) {
 				throw new IllegalArgumentException("Archive is not a regular file: " + path);
 			}
@@ -240,11 +240,13 @@ public class ArchiveAdapter extends AAdapter {
 		if (destRoot == null) {
 			throw new IllegalArgumentException("'destRoot' is required (the root to extract into)");
 		}
-		engine.requireAuthority(ctx, Strings.create(schemeResource("file", destRoot, destPath)), Capability.CRUD_WRITE);
+		FileAdapter.FileTarget dest = files().target(ctx, destRoot.toString(),
+			destPath != null ? destPath.toString() : null, Capability.CRUD_WRITE, false);
 		files().requireWritableRoot(destRoot.toString());
-		Path destDir = files().resolve(ctx, destRoot.toString(), destPath != null ? destPath.toString() : null,
-			Capability.CRUD_WRITE, false);
-		Files.createDirectories(destDir);
+		Path destDir = dest.path();
+		// Entries go inside destDir, which the write is authorised over
+		if (dest.mayCreate()) Files.createDirectories(destDir);
+		else if (!Files.isDirectory(destDir)) throw new java.nio.file.NotDirectoryException(destDir.toString());
 		Path destReal = destDir.toRealPath();
 
 		long entries = 0;
@@ -337,9 +339,7 @@ public class ArchiveAdapter extends AAdapter {
 		java.util.List<Path> srcFiles = new java.util.ArrayList<>();
 		java.util.List<String> srcEntryBases = new java.util.ArrayList<>();
 		for (String rel : relPaths) {
-			engine.requireAuthority(ctx,
-				Strings.create(schemeResource("file", srcRoot, Strings.create(rel))), Capability.CRUD_READ);
-			Path p = files().resolve(ctx, srcRoot.toString(), rel, Capability.CRUD_READ, true);
+			Path p = files().target(ctx, srcRoot.toString(), rel, Capability.CRUD_READ, true).path();
 			srcFiles.add(p);
 			// Entry name preserves the caller-supplied relative path (zip -r style).
 			srcEntryBases.add(rel.replace('\\', '/').replaceAll("^/+", ""));
@@ -347,11 +347,13 @@ public class ArchiveAdapter extends AAdapter {
 
 		// Destination: a jailed file, or (default) a content-addressed asset.
 		Path destFile = null;
+		boolean destCreate = true;
 		if (toFile) {
-			engine.requireAuthority(ctx,
-				Strings.create(schemeResource("file", destRoot, destPath)), Capability.CRUD_WRITE);
+			FileAdapter.FileTarget dest = files().target(ctx, destRoot.toString(), destPath.toString(),
+				Capability.CRUD_WRITE, false);
 			files().requireWritableRoot(destRoot.toString());
-			destFile = files().resolve(ctx, destRoot.toString(), destPath.toString(), Capability.CRUD_WRITE, false);
+			destFile = dest.path();
+			destCreate = dest.mayCreate();
 			Path parent = destFile.getParent();
 			if (parent != null && !Files.exists(parent)) {
 				throw new java.nio.file.NoSuchFileException("Parent directory does not exist: " + parent);
@@ -365,7 +367,7 @@ public class ArchiveAdapter extends AAdapter {
 		try {
 			Path out = toFile ? destFile : zipTmp;
 			try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(out,
-					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE))) {
+					FileOperations.writeOptions(out, StandardOpenOption.TRUNCATE_EXISTING, destCreate)))) {
 				for (int i = 0; i < srcFiles.size(); i++) {
 					addToZip(zos, srcFiles.get(i), srcEntryBases.get(i), entryCount);
 				}

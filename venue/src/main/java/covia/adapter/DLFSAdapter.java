@@ -810,7 +810,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
-		return FileOperations.write(path, input, engine, assetCtx, append);
+		return FileOperations.write(path, input, engine, assetCtx, append, true);
 	}
 
 	private ACell handleCreate(RequestContext ctx, RequestContext contentCtx,
@@ -819,7 +819,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		String pathArg = FileOperations.createPath(input);
 		Path path = resolvePath(fs, pathArg);
 		AMap<AString, ACell> result = RT.ensureMap(
-			FileOperations.create(path, input, engine, contentCtx));
+			FileOperations.create(path, input, engine, contentCtx, true));
 		AString drive = RT.ensureString(input.get(FIELD_DRIVE));
 		String ref = dlfsResource(target.ownerDID(), drive, Strings.create(pathArg));
 		return result.assoc(Fields.REF, Strings.create(ref));
@@ -830,7 +830,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 		Path path = resolvePath(fs, pathCell.toString());
-		return FileOperations.mkdir(path, input);
+		return FileOperations.mkdir(path, input, true);
 	}
 
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

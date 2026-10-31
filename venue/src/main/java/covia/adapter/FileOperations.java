@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -305,14 +306,18 @@ final class FileOperations {
 		return extraction.toCell(mime, size.longValue());
 	}
 
+	/**
+	 * @param mayCreate whether the write was authorised to create the file; one
+	 *        that was not only changes a file that still exists
+	 */
 	static ACell write(Path file, AMap<AString, ACell> input, Engine engine,
-			RequestContext assetCtx, boolean append) throws IOException {
+			RequestContext assetCtx, boolean append, boolean mayCreate) throws IOException {
 		Path parent = file.getParent();
 		if (parent != null && !Files.isDirectory(parent)) {
 			throw new NoSuchFileException("Parent directory does not exist: " + parent);
 		}
 		boolean existed = exists(file);
-		long count = writeInput(file, input, engine, assetCtx, append);
+		long count = writeInput(file, input, engine, assetCtx, append, mayCreate);
 		return Maps.of(append ? "appended" : "written", CVMLong.create(count),
 			"created", CVMBool.create(!existed));
 	}
@@ -325,7 +330,9 @@ final class FileOperations {
 	 * do on asset metadata.
 	 */
 	static ACell create(Path file, AMap<AString, ACell> input, Engine engine,
-			RequestContext ctx) throws IOException {
+			RequestContext ctx, boolean mayCreate) throws IOException {
+		// Authorised only to change it, so the file existed: create never replaces
+		if (!mayCreate) throw new FileAlreadyExistsException(file.toString());
 		Path parent = file.getParent();
 		if (parent != null && !Files.isDirectory(parent)) {
 			throw new NoSuchFileException("Parent directory does not exist: " + parent);
@@ -386,7 +393,7 @@ final class FileOperations {
 	}
 
 	private static long writeInput(Path target, AMap<AString, ACell> input,
-			Engine engine, RequestContext assetCtx, boolean append) throws IOException {
+			Engine engine, RequestContext assetCtx, boolean append, boolean create) throws IOException {
 		AString content = RT.ensureString(input.get(FIELD_CONTENT));
 		boolean hasValue = input.containsKey(FIELD_VALUE);
 		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
@@ -406,7 +413,7 @@ final class FileOperations {
 
 		StandardOpenOption mode = append
 			? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING;
-		java.nio.file.OpenOption[] options = writeOptions(target, mode);
+		java.nio.file.OpenOption[] options = writeOptions(target, mode, create);
 		if (contentRef != null) {
 			covia.venue.storage.ContentProvider.Resolved resolved =
 				engine.resolveContent(contentRef, assetCtx);
@@ -425,17 +432,16 @@ final class FileOperations {
 		return data.length;
 	}
 
-	private static java.nio.file.OpenOption[] writeOptions(Path target,
-			StandardOpenOption mode) {
+	/** Options to write a file in {@code mode}, creating it only when {@code create}. */
+	static java.nio.file.OpenOption[] writeOptions(Path target,
+			StandardOpenOption mode, boolean create) {
+		java.util.List<java.nio.file.OpenOption> options = new java.util.ArrayList<>(
+			java.util.List.of(mode, StandardOpenOption.WRITE));
+		if (create) options.add(StandardOpenOption.CREATE);
 		if (target.getFileSystem() == java.nio.file.FileSystems.getDefault()) {
-			return new java.nio.file.OpenOption[] {
-				StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE,
-				LinkOption.NOFOLLOW_LINKS
-			};
+			options.add(LinkOption.NOFOLLOW_LINKS);
 		}
-		return new java.nio.file.OpenOption[] {
-			StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE
-		};
+		return options.toArray(java.nio.file.OpenOption[]::new);
 	}
 
 	static java.nio.file.OpenOption[] createOptions(Path target) {
@@ -450,12 +456,30 @@ final class FileOperations {
 		};
 	}
 
-	static ACell mkdir(Path target, AMap<AString, ACell> input) throws IOException {
+	/**
+	 * Where a write at {@code target} is authorised: the target when it exists,
+	 * otherwise the nearest existing directory above it, because creating an
+	 * entry changes the directory that holds it. {@code base}, the root the
+	 * target was resolved in, is always present.
+	 */
+	static Path writeAuthority(Path base, Path target) {
+		Path at = target;
+		while (!at.equals(base) && !exists(at)) at = at.getParent();
+		return at;
+	}
+
+	/**
+	 * @param mayCreate whether the write was authorised to create; one that
+	 *        was not refuses a target that has gone since it was authorised
+	 */
+	static ACell mkdir(Path target, AMap<AString, ACell> input, boolean mayCreate) throws IOException {
 		boolean existed = Files.exists(target);
 		if (existed) {
 			if (!Files.isDirectory(target)) {
 				throw new IllegalArgumentException("Path exists and is not a directory: " + target);
 			}
+		} else if (!mayCreate) {
+			throw new NoSuchFileException(target.toString());
 		} else if (RT.bool(input.get(FIELD_PARENTS))) {
 			Files.createDirectories(target);
 		} else {

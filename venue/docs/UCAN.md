@@ -666,6 +666,12 @@ references with `secret/use` instead.
 
 ### 5.3 Enforcement Points
 
+Creating an entry changes the directory that holds it. A write that creates
+therefore also needs `crud/write` on that directory, or on the nearest one
+that exists when several levels are missing. A grant on an existing file
+changes it but creates nothing. This applies on host and temp file roots,
+including `archive:extract` and `archive:zip` destinations.
+
 | Point | Required Capability |
 |-------|-------------------|
 | `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
@@ -673,9 +679,9 @@ references with `secret/use` instead.
 | `covia:delete` (cross-user) | `{ with: "<path>", can: "crud/delete" }` |
 | `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
 | `file:roots` | `{ with: "file://", can: "crud/read" }` |
-| `file:write` / `file:append` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource |
-| `file:move` | `crud/read` and `crud/delete` on the resolved source, `crud/write` on the resolved destination |
-| `file:copy` | `crud/read` on the resolved source and `crud/write` on the resolved destination |
+| `file:write` / `file:append` / `file:create` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource, and on the directory that holds a new one |
+| `file:move` | `crud/read` and `crud/delete` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
+| `file:copy` | `crud/read` on the resolved source, `crud/write` on the resolved destination and the directory that holds it |
 | `file:delete` | `crud/delete` on the resolved file or DLFS resource |
 | `dlfs:read` / `dlfs:list` / `dlfs:tree` / `dlfs:stat` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:listDrives` | `{ with: "dlfs", can: "crud/read" }` |
