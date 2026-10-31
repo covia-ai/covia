@@ -83,6 +83,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `auth.audience`: `auth.requireAud` replaces it.
 - `ConversionException`: a malformed venue response is a `ResponseException`.
 
+### Fixed
+
+- Cancel, pause, resume and messages by id reach a job listed moments after it was
+  submitted, instead of missing it (404).
+
 ### Security
 
 - `authenticateAs: "venue"` is only for the venue itself. A user could have the venue
