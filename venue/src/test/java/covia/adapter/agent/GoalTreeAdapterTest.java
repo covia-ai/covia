@@ -956,23 +956,23 @@ public class GoalTreeAdapterTest {
 
 	@Test
 	public void testInvokeWithCancelledJob() {
-		// Test the full invoke path — cancel the job, verify it doesn't complete normally
-		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		// Test the full invoke path — cancel a chat whose LLM never answers,
+		// verify it ends cancelled rather than completing or failing
+		ACell input = Maps.of(Fields.AGENT_ID, "invoke-cancel",
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/never"),
+				Strings.create("systemPrompt"), Strings.create("Test")));
+		// A step runs only for an agent that exists
+		LLMAgentAdapterTest.ensureAgent(engine, ALICE, input);
 
-		Job job = engine.jobs().invokeOperation("v/ops/goaltree/chat",
-			Maps.of(Fields.AGENT_ID, "invoke-cancel",
-				AgentState.KEY_CONFIG, Maps.of(
-					Strings.create("llmOperation"), Strings.create("v/test/ops/never"),
-					Strings.create("systemPrompt"), Strings.create("Test"))),
-			ALICE);
+		Job job = engine.jobs().invokeOperation("v/ops/goaltree/chat", input, ALICE);
 
 		// Cancel immediately
 		job.cancel();
 
 		TestEngine.awaitCondition(job::isFinished, 2000,
 			() -> "cancelled GoalTree job did not finish (status=" + job.getStatus() + ")");
-		assertTrue(job.isFinished(), "Job should be finished after cancel");
-		assertEquals("CANCELLED", job.getStatus().toString());
+		assertEquals(Status.CANCELLED, job.getStatus(), job.getErrorMessage());
 	}
 
 	@Test
