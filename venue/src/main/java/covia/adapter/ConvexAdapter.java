@@ -38,7 +38,10 @@ import convex.core.crypto.ASignature;
 import convex.core.cvm.Address;
 import convex.net.Transports;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -118,15 +121,20 @@ public class ConvexAdapter extends AAdapter {
 			for (long i = 0; i < config.count(); i++) {
 				AString key = config.entryAt(i).getKey();
 				if (!SETTINGS.contains(key)) {
-					throw new IllegalArgumentException("adapters.convex: unknown setting '" + key + "'");
+					throw new ConfigurationException("adapters.convex: unknown setting '" + key + "'");
 				}
 			}
 		}
 		ACell rawPeer = config.get(K_PEER);
-		URI peer = peerEndpoint((rawPeer != null) ? rawPeer : Strings.create(DEFAULT_PEER), "adapters.convex.peer");
+		URI peer;
+		try {
+			peer = peerEndpoint((rawPeer != null) ? rawPeer : Strings.create(DEFAULT_PEER), "adapters.convex.peer");
+		} catch (InvalidInputException e) {
+			throw new ConfigurationException(e.getMessage(), e);
+		}
 		ACell rawAny = config.get(K_ANY_PEER);
 		if (rawAny != null && !(rawAny instanceof CVMBool)) {
-			throw new IllegalArgumentException("adapters.convex.anyPeer must be a boolean, got: " + rawAny);
+			throw new ConfigurationException("adapters.convex.anyPeer must be a boolean, got: " + rawAny);
 		}
 		policy = new PeerPolicy(peer, CVMBool.TRUE.equals(rawAny));
 		return true;
@@ -160,7 +168,7 @@ public class ConvexAdapter extends AAdapter {
 			case "encode-cad3" -> CompletableFuture.supplyAsync(
 				() -> encodeCAD3(input), VIRTUAL_EXECUTOR);
 			default -> CompletableFuture.failedFuture(
-				new UnsupportedOperationException("Unsupported Convex operation: " + op));
+				new NotSupportedException("Unsupported Convex operation: " + op));
 		};
 	}
 
@@ -227,11 +235,11 @@ public class ConvexAdapter extends AAdapter {
 	private ACell generateKey(RequestContext ctx, ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (name == null || name.toString().isBlank()) {
-			throw new IllegalArgumentException("name is required");
+			throw new InvalidInputException("name is required");
 		}
 		ACell overwriteValue = RT.getIn(input, Fields.OVERWRITE);
 		if (overwriteValue != null && !(overwriteValue instanceof CVMBool)) {
-			throw new IllegalArgumentException("overwrite must be a boolean");
+			throw new InvalidInputException("overwrite must be a boolean");
 		}
 
 		AKeyPair keyPair = AKeyPair.generate();
@@ -245,13 +253,13 @@ public class ConvexAdapter extends AAdapter {
 
 	private ACell sign(RequestContext ctx, ACell input) {
 		AString message = RT.ensureString(RT.getIn(input, Fields.MESSAGE));
-		if (message == null) throw new IllegalArgumentException("message is required");
+		if (message == null) throw new InvalidInputException("message is required");
 		AString encodingValue = RT.ensureString(RT.getIn(input, K_ENCODING));
 		String encoding = (encodingValue != null) ? encodingValue.toString() : "utf8";
 		Blob bytes = switch (encoding) {
 			case "utf8" -> Blob.wrap(message.toString().getBytes(StandardCharsets.UTF_8));
 			case "hex" -> parseBlob(message, "message");
-			default -> throw new IllegalArgumentException("encoding must be 'utf8' or 'hex'");
+			default -> throw new InvalidInputException("encoding must be 'utf8' or 'hex'");
 		};
 		AKeyPair keyPair = resolveKeyPair(ctx, input, true);
 		ASignature signature = keyPair.sign(bytes);
@@ -264,15 +272,15 @@ public class ConvexAdapter extends AAdapter {
 		ACell supplied = RT.getIn(input, K_ENCODING);
 		if (supplied instanceof AString text
 				&& text.count() > (CPoSConstants.MAX_MESSAGE_LENGTH * 2L + 2L)) {
-			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+			throw new InvalidInputException("CAD3 encoding exceeds the maximum message size of "
 				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
 		}
 		ABlob parsed = Blobs.parse(supplied);
 		if (parsed == null) {
-			throw new IllegalArgumentException("encoding must be a hexadecimal CAD3 blob");
+			throw new InvalidInputException("encoding must be a hexadecimal CAD3 blob");
 		}
 		if (parsed.count() > CPoSConstants.MAX_MESSAGE_LENGTH) {
-			throw new IllegalArgumentException("CAD3 encoding exceeds the maximum message size of "
+			throw new InvalidInputException("CAD3 encoding exceeds the maximum message size of "
 				+ CPoSConstants.MAX_MESSAGE_LENGTH + " bytes");
 		}
 		try {
@@ -280,16 +288,16 @@ public class ConvexAdapter extends AAdapter {
 			// be carried by this encoding rather than resolved from ambient venue state.
 			return CVMEncoder.INSTANCE.decodeMultiCell(parsed.toFlatBlob());
 		} catch (PartialMessageException e) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Incomplete CAD3 encoding; missing referenced cell " + e.getMissingHash(), e);
 		} catch (BadFormatException e) {
-			throw new IllegalArgumentException("Invalid CAD3 encoding: " + e.getMessage(), e);
+			throw new InvalidInputException("Invalid CAD3 encoding: " + e.getMessage(), e);
 		}
 	}
 
 	private ACell encodeCAD3(ACell input) {
 		if (!(input instanceof AMap<?, ?> map) || !map.containsKey(Fields.VALUE)) {
-			throw new IllegalArgumentException("encode-cad3 requires a 'value' field");
+			throw new InvalidInputException("encode-cad3 requires a 'value' field");
 		}
 		ACell value = map.get(Fields.VALUE);
 		Blob encoding = Format.encodeMultiCell(value, true);
@@ -298,10 +306,10 @@ public class ConvexAdapter extends AAdapter {
 			// Never return a purported complete encoding that cannot stand alone.
 			ACell roundTrip = CVMEncoder.INSTANCE.decodeMultiCell(encoding);
 			if (!Cells.equals(value, roundTrip)) {
-				throw new IllegalArgumentException("CAD3 value did not round-trip exactly");
+				throw new InvalidInputException("CAD3 value did not round-trip exactly");
 			}
 		} catch (PartialMessageException e) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Value exceeds the maximum complete CAD3 message size", e);
 		} catch (BadFormatException e) {
 			throw new IllegalStateException("Generated invalid CAD3 encoding", e);
@@ -318,7 +326,7 @@ public class ConvexAdapter extends AAdapter {
 		String value = supplied.toString();
 		boolean secretRef = Engine.isSecretRef(value);
 		if (requireSecretRef && !secretRef) {
-			throw new IllegalArgumentException("seed must be an s/<name> secret reference");
+			throw new InvalidInputException("seed must be an s/<name> secret reference");
 		}
 		if (secretRef) {
 			String resolved = engine.resolveSecret(value, ctx);
@@ -328,7 +336,7 @@ public class ConvexAdapter extends AAdapter {
 		}
 		Blob seed = parseBlob(Strings.create(value), "seed");
 		if (seed.count() != AKeyPair.SEED_LENGTH) {
-			throw new IllegalArgumentException("Ed25519 seed must be exactly "
+			throw new InvalidInputException("Ed25519 seed must be exactly "
 				+ AKeyPair.SEED_LENGTH + " bytes");
 		}
 		return AKeyPair.create(seed);
@@ -336,7 +344,7 @@ public class ConvexAdapter extends AAdapter {
 
 	private static Blob parseBlob(AString value, String field) {
 		ABlob parsed = Blobs.parse(value);
-		if (parsed == null) throw new IllegalArgumentException(
+		if (parsed == null) throw new InvalidInputException(
 			field + " must be a hexadecimal blob");
 		return parsed.toFlatBlob();
 	}
@@ -382,7 +390,7 @@ public class ConvexAdapter extends AAdapter {
 		if (named == null) return p.peer();
 		URI target = peerEndpoint(named, "peer");
 		if (target.equals(p.peer())) return target;
-		if (!p.anyPeer()) throw new IllegalArgumentException("Peer " + target + " " + OTHER_PEER);
+		if (!p.anyPeer()) throw new InvalidInputException("Peer " + target + " " + OTHER_PEER);
 		engine.requireSafeHost(ctx, target.getHost());
 		return target;
 	}
@@ -415,8 +423,8 @@ public class ConvexAdapter extends AAdapter {
 		}
 	}
 
-	private static IllegalArgumentException notAPeer(String field, ACell value) {
-		return new IllegalArgumentException(field + " " + NOT_A_PEER + ", got: " + value);
+	private static InvalidInputException notAPeer(String field, ACell value) {
+		return new InvalidInputException(field + " " + NOT_A_PEER + ", got: " + value);
 	}
 
 	private void closeQuietly(AutoCloseable closeable) {
