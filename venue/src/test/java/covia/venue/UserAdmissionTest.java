@@ -41,7 +41,8 @@ class UserAdmissionTest {
 			AKeyPair keyPair = AKeyPair.generate();
 			AString did = UCAN.toDIDKey(keyPair.getAccountKey());
 			VenueHTTP client = VenueHTTP.create(
-				URI.create("http://localhost:" + server.port()), VenueAuth.keyPair(keyPair));
+				URI.create("http://localhost:" + server.port()),
+				VenueAuth.keyPair(keyPair, server.getEngine().getDIDString().toString()));
 
 			CompletionException failure = assertThrows(CompletionException.class,
 				() -> client.startJobAsync(Strings.create("v/test/ops/echo"), Maps.empty()).join());

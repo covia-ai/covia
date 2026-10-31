@@ -91,6 +91,7 @@ public class HitlFederationTest {
 		return JWT.signPublic(Maps.of(
 			"sub", userDID,
 			"iss", TwoVenueTestServer.ENGINE_B.getDIDString(),
+			"aud", TwoVenueTestServer.ENGINE_B.getDIDString(),
 			"iat", now,
 			"exp", now + 300), TwoVenueTestServer.ENGINE_B.getKeyPair()).toString();
 	}
@@ -126,7 +127,7 @@ public class HitlFederationTest {
 		// Bob calls VENUE A; his ucans carry the delegation plus his identity
 		// token for venue B. The grid op input carries data only (COG-15).
 		VenueHTTP bobOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_A));
 		bobOnA.setUcans(java.util.List.of(
 			hitlGrant, identityToken(bobKP, TwoVenueTestServer.DID_B)));
 
@@ -205,7 +206,7 @@ public class HitlFederationTest {
 
 		// Bob presents ONLY his identity token — no delegation from Alice.
 		VenueHTTP bobOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_A));
 		bobOnA.setUcans(java.util.List.of(
 			identityToken(bobKP, TwoVenueTestServer.DID_B)));
 

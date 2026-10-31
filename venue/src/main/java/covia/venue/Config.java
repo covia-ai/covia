@@ -285,10 +285,13 @@ public class Config {
 	 *  (legacy permissive behaviour); an explicit cap array → that scope. */
 	public static final AString CAPS = Strings.intern("caps");
 
-	/** Key for the JWT audience policy, under {@code auth}: {@code "verify"}
-	 *  (default — check aud if present) or {@code "require"} (aud must be present
-	 *  and match). A mismatched aud is always rejected under both. */
+	/** Obsolete option recognised only to report its required migration. */
 	public static final AString AUDIENCE = Strings.intern("audience");
+	/** The migration reported for {@code auth.audience}. */
+	public static final String AUDIENCE_REPLACED =
+		"replace with auth.requireAud (true by default; false accepts a bearer without aud)";
+	/** Whether a bearer credential must name this venue in {@code aud} ({@code auth.requireAud}, default true). */
+	public static final AString REQUIRE_AUD = Strings.intern("requireAud");
 	/** Whether a bearer credential must carry an expiry ({@code auth.requireExp}, default true). */
 	public static final AString REQUIRE_EXP = Strings.intern("requireExp");
 	/** Whether an authenticated connection to another venue must prove its DID first
@@ -749,17 +752,17 @@ public class Config {
 		if (auth == null) return;
 		validateUnknownFields(auth,
 			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
-				"requireExp", "requireVenueProof", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
+				"requireAud", "requireExp", "requireVenueProof", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
 			"auth", strict);
 		covia.venue.auth.AuthMethods.validateConfig(auth);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
+		optionalBoolean(auth, REQUIRE_AUD, "auth.requireAud", true);
 		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
 		optionalBoolean(auth, REQUIRE_VENUE_PROOF, "auth.requireVenueProof", true);
 		optionalLong(auth, MAX_TOKEN_LIFETIME, "auth.maxTokenLifetime", 1, Long.MAX_VALUE);
 
-		AString audience = optionalString(auth, AUDIENCE, "auth.audience");
-		if (audience != null && !Set.of("verify", "require").contains(audience.toString())) {
-			throw malformed("auth.audience", "must be verify or require");
+		if (auth.containsKey(AUDIENCE)) {
+			throw malformed("auth.audience", AUDIENCE_REPLACED);
 		}
 		optionalStringVector(auth, ACCEPTED_AUDIENCES, "auth.acceptedAudiences");
 		optionalStringVector(auth, LOGIN_REDIRECT_ORIGINS, "auth.loginRedirectOrigins");
@@ -1808,19 +1811,19 @@ public class Config {
 	}
 
 	/**
-	 * JWT audience policy from {@code auth.audience}: {@code "require"} (aud must
-	 * be present and match this venue) or {@code "verify"} (the default — if aud
-	 * is present it must match; if absent, accept). A mismatched aud is always
-	 * rejected; there is no "off".
-	 * @return {@code "require"} or {@code "verify"} (default)
+	 * Whether a bearer credential must name this venue in {@code aud}
+	 * ({@code auth.requireAud}, default {@code true}), as RFC 8725 §3.9 requires
+	 * of JWTs whose issuer serves more than one recipient. Off, a credential
+	 * without {@code aud} is accepted; a present {@code aud} that does not name
+	 * this venue is refused either way.
 	 */
-	public String getAudiencePolicy() {
+	public boolean isRequireAud() {
 		AMap<AString, ACell> authConfig = getAuthConfig();
 		if (authConfig != null) {
-			AString v = RT.ensureString(authConfig.get(AUDIENCE));
-			if (v != null && "require".equals(v.toString())) return "require";
+			ACell v = authConfig.get(REQUIRE_AUD);
+			if (v != null) return RT.bool(v);
 		}
-		return "verify";
+		return true;
 	}
 
 	/**

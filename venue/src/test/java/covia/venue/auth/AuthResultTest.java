@@ -333,8 +333,8 @@ class AuthResultTest {
 		Engine relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
 		try {
 			VenueAuthenticator verifier = new VenueAuthenticator(relaxed);
-			AString token = JWT.signPublic(Maps.of("sub", did, "iat", "not-a-time",
-				"auth_time", now, "amr", Vectors.of("mfa")), key);
+			AString token = JWT.signPublic(Maps.of("sub", did, "aud", relaxed.getDIDString(),
+				"iat", "not-a-time", "auth_time", now, "amr", Vectors.of("mfa")), key);
 			AuthResult result = verifier.verify(token);
 			assertNull(result.credential().expiresAt());
 			assertUnknownEvidence(result);

@@ -92,7 +92,8 @@ public final class VenueAuthenticator {
 	private final AString venueDID;
 	private final Auth venueAuth;
 	private final Map<String, OAuthConfig> externalProviders;
-	private final String audiencePolicy;
+	/** Bearer credentials must name this venue in {@code aud} ({@code auth.requireAud}). */
+	private final boolean requireAud;
 	private final Set<String> acceptedAudienceStrings;
 	private final Set<AString> acceptedAudiences;
 	private final Engine engine;
@@ -142,7 +143,7 @@ public final class VenueAuthenticator {
 		this.externalProviders = providers != null ? Map.copyOf(providers)
 			: venueAuth.getLoginProviders().hasProviders()
 				? venueAuth.getLoginProviders().getProviders() : null;
-		this.audiencePolicy = venueAuth.getAudiencePolicy();
+		this.requireAud = venueAuth.isRequireAud();
 		this.requireExp = engine.config().isRequireExp();
 		this.maxLifetimeSeconds = engine.config().getMaxTokenLifetime();
 
@@ -272,7 +273,7 @@ public final class VenueAuthenticator {
 		public static final String MALFORMED_NBF = "malformed nbf: expected an integer Unix timestamp";
 		public static final String NON_EXPIRING = "non-expiring credential: this venue requires bearer credentials to expire (auth.requireExp)";
 		public static final String LIFETIME_EXCEEDS = "token expires further ahead than this venue allows (auth.maxTokenLifetime): ";
-		public static final String AUDIENCE_REQUIRED = "audience (aud) is required but absent";
+		public static final String AUDIENCE_REQUIRED = "missing aud: this venue requires bearer credentials to name it as audience (auth.requireAud)";
 		public static final String AUDIENCE_NOT_THIS_VENUE = "token audience is not this venue: ";
 		public static final String AUDIENCE_LIST_EXCLUDES_VENUE = "token audience list does not include this venue";
 		public static final String MALFORMED_AUDIENCE = "malformed audience (aud) claim";
@@ -660,7 +661,7 @@ public final class VenueAuthenticator {
 	/** Null when the audience names this venue (or is absent and not required); otherwise why not. */
 	private String audienceProblem(ACell aud) {
 		if (aud == null) {
-			return "require".equals(audiencePolicy) ? Reason.AUDIENCE_REQUIRED : null;
+			return requireAud ? Reason.AUDIENCE_REQUIRED : null;
 		}
 		if (aud instanceof AString s) {
 			return acceptedAudienceStrings.contains(s.toString()) ? null : Reason.AUDIENCE_NOT_THIS_VENUE + s;

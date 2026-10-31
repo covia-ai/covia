@@ -69,8 +69,7 @@ public class NamedUserAuthTest {
 			Config.PORT, 0, Config.STORE, "memory",
 			Config.HOSTNAME, "named-auth.example",
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, false),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, false)),
 			Config.USERS, Maps.of(
 				Config.AUTO_CREATE, false,
 				Config.BOOTSTRAP, Maps.of(

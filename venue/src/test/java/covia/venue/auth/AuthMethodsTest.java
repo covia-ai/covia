@@ -123,7 +123,8 @@ class AuthMethodsTest {
 			try {
 				VenueAuthenticator service = new VenueAuthenticator(engine);
 				AString did = UCAN.toDIDKey(key.getAccountKey());
-				AMap<AString, ACell> claims = Maps.of("sub", did, "exp", System.currentTimeMillis()/1000 + 300);
+				AMap<AString, ACell> claims = Maps.of("sub", did, "aud", engine.getDIDString(),
+					"exp", System.currentTimeMillis()/1000 + 300);
 				AString token = JWT.signPublic(claims, key);
 				AString legacy = JWT.signPublic(claims.assoc(UCAN.ISS, engine.getDIDString()), engine.getKeyPair());
 				if (explicit) {

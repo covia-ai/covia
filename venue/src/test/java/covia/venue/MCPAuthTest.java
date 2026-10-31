@@ -94,8 +94,7 @@ public class MCPAuthTest {
 						Vectors.of(UCAN.toDIDKey(outsiderKey.getAccountKey()))))),
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, true),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, true)),
 			Fields.MCP, Maps.of(
 				"includeAdapters", Vectors.of("covia", "secret", "user"),
 				Config.AUTH, Maps.of(
@@ -577,8 +576,7 @@ public class MCPAuthTest {
 			Config.SEED, seed,
 			Config.RATE_LIMIT, Maps.of(Config.ENABLED, false),
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, false),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, false)),
 			Config.USERS, Maps.of(
 				Config.AUTO_CREATE, false,
 				Config.BOOTSTRAP, Maps.of(

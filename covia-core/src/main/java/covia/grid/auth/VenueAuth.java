@@ -68,8 +68,8 @@ public abstract class VenueAuth {
 	 *
 	 * <p>Rotation of a stored token is the caller's responsibility;
 	 * {@code apply()} never needs rotation because it signs fresh per
-	 * request. Bind {@code aud} for anything long-lived — a captured
-	 * aud-less token replays anywhere self-issued tokens are accepted.
+	 * request. Venues refuse a token without {@code aud} by default; where one
+	 * accepts it, a captured aud-less token replays at every such venue.
 	 *
 	 * @return The signed token string
 	 * @throws UnsupportedOperationException for strategies that cannot mint
@@ -103,7 +103,9 @@ public abstract class VenueAuth {
 	 * Self-issued EdDSA JWT authentication using an Ed25519 key pair.
 	 * Generates a fresh short-lived JWT for each request, signed with
 	 * the given key pair. The JWT's {@code sub} claim is a {@code did:key}
-	 * derived from the public key.
+	 * derived from the public key. The JWT carries no {@code aud}, so a venue
+	 * accepts it only with {@code auth.requireAud: false}; otherwise use
+	 * {@link #keyPair(AKeyPair, String)}.
 	 *
 	 * @param keyPair Ed25519 key pair for signing
 	 * @return A key pair auth instance
@@ -114,9 +116,9 @@ public abstract class VenueAuth {
 
 	/**
 	 * As {@link #keyPair(AKeyPair)}, with the JWT's {@code aud} claim bound to
-	 * the target venue's DID. RECOMMENDED for any venue whose DID is known: a
-	 * captured token then cannot be replayed at any other venue that accepts
-	 * self-issued tokens (RFC 7519 §4.1.3). Discover the DID with
+	 * the target venue's DID. Venues require this by default
+	 * ({@code auth.requireAud}): a captured token then cannot be replayed at any
+	 * other venue (RFC 8725 §3.9). Discover the DID with
 	 * {@link VenueDID#discover(String)}.
 	 *
 	 * @param keyPair Ed25519 key pair for signing
@@ -131,8 +133,8 @@ public abstract class VenueAuth {
 	 * As {@link #keyPair(AKeyPair, String)}, with an explicit token lifetime.
 	 * The default (300s) suits per-request tokens — signing is effectively
 	 * free, so short lifetimes cost nothing. Longer lifetimes are for minted
-	 * long-lived credentials; pass a null {@code audienceDID} only when the
-	 * target venue's DID is genuinely unknowable.
+	 * long-lived credentials. A null {@code audienceDID} omits {@code aud},
+	 * which venues refuse unless they set {@code auth.requireAud: false}.
 	 *
 	 * @param keyPair Ed25519 key pair for signing
 	 * @param audienceDID the target venue's DID, or null for no audience binding

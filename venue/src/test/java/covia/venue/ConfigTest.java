@@ -145,13 +145,26 @@ public class ConfigTest {
 		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
 			Config.AUTH, Strings.create("public"))));
 		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
-			Config.AUTH, Maps.of(Config.AUDIENCE, Strings.create("optional")))));
+			Config.AUTH, Maps.of(Config.REQUIRE_AUD, Strings.create("no")))));
 		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
 			Config.RATE_LIMIT, Maps.of(Strings.create("rps"), 0L))));
 		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
 			Config.MCP, Maps.of(
 				Config.AUTH, Maps.of(
 					Config.ALLOWED_DIDS, Vectors.of("did:not valid"))))));
+	}
+
+	@Test
+	public void testBearerAudienceIsRequiredUnlessTurnedOff() {
+		assertTrue(new Config(Maps.of()).isRequireAud());
+		assertFalse(new Config(Maps.of(
+			Config.AUTH, Maps.of(Config.REQUIRE_AUD, CVMBool.FALSE))).isRequireAud());
+		// The replaced audience policy is refused with its migration, whatever its value.
+		for (String policy : new String[] {"verify", "require"}) {
+			IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+				Config.AUTH, Maps.of(Config.AUDIENCE, Strings.create(policy)))));
+			assertTrue(e.getMessage().contains(Config.AUDIENCE_REPLACED));
+		}
 	}
 
 	@Test

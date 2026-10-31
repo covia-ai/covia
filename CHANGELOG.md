@@ -60,6 +60,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - The `venue/relay` ability and `UcanTokens.relayDelegation`: users hop with
   `authenticateAs: "caller"` and grants.
+- `auth.audience`: `auth.requireAud` replaces it.
 
 ### Security
 
@@ -87,6 +88,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The outbound guard's address rule applies to every later lookup of a host it passes,
   and also refuses IPv6 unique local and IPv4-carrying forms, `100.64.0.0/10` and `0.0.0.0/8`.
 - `http.allowedHosts` and `http.blockedHosts` match a host name with or without its trailing dot.
+- A bearer credential must name the venue in `aud` unless `auth.requireAud` is off.
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.

@@ -62,7 +62,7 @@ The implementation is further along than #297/#296 suggest:
 | Key enrolment surface (#296) | `UserAdapter` (`user:create` keys, add/revoke ops), `Engine` creation path | Venue-authorised, audited (`addedBy`/`revokedBy`) |
 | Session minting | `LoginProviders` OAuth callback | Inline `JWT.signPublic` — no session id, no revocation, no amr/auth_time |
 | OAuth authorization server | `OAuthProvider` | Existing code/PKCE, token, refresh and revocation endpoints; scopes recorded for audit, not yet enforced as capability restrictions |
-| Audience policy | `Auth` config + `requireAudience` | `verify`/`require`, `acceptedAudiences`, did:web alias |
+| Audience policy | `Auth` config + `audienceProblem` | `requireAud` (default on), `acceptedAudiences`, did:web alias |
 | Public capability scope | `auth.public.*` (COG-10) | Unchanged by this design |
 
 **Gaps this design closes:** per-method enable/disable and policy
@@ -884,7 +884,7 @@ method settings and validation. Reuse `configure`, enable/disable and module
 load/unload rather than adding a second management surface.
 
 The central `auth` block owns method bindings, shared policy and session settings.
-Existing `public`, `tokenExpiry`, `audience` and `acceptedAudiences` keep their current
+Existing `public`, `tokenExpiry`, `requireAud` and `acceptedAudiences` keep their current
 meaning during migration. Policy may refer to method ids without owning their
 implementation configuration.
 

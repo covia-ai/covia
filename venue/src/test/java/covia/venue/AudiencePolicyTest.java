@@ -24,66 +24,65 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.grid.Job;
 import covia.exception.AuthException;
 import covia.exception.ResponseException;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.venue.auth.VenueAuthenticator;
 import covia.venue.server.VenueServer;
 
 /**
  * #149 — JWT audience ({@code aud}) validation at the HTTP transport boundary.
  *
  * <p>A bearer token presented to a venue must be intended for that venue
- * (RFC 7519 §4.1.3) — otherwise a token minted for venue A could be replayed
- * to venue B. Two policies:</p>
- * <ul>
- *   <li>{@code verify} (default) — if {@code aud} is present it must match;
- *       an absent {@code aud} is tolerated (migration-friendly);</li>
- *   <li>{@code require} — {@code aud} must be present AND match.</li>
- * </ul>
- * <p>A present-but-mismatched {@code aud} is rejected with 401 under BOTH
- * policies — never silently downgraded to the public identity. {@code aud} may
- * be a string or an array of strings.</p>
+ * (RFC 8725 §3.9) — otherwise a token minted for venue A could be replayed
+ * to venue B, and a JWT its signer made for some other purpose could be
+ * presented as a login. {@code auth.requireAud} (default true) refuses a
+ * bearer without {@code aud}; off, an absent {@code aud} is accepted.</p>
+ * <p>A present-but-mismatched {@code aud} is rejected with 401 either way —
+ * never silently downgraded to the public identity. {@code aud} may be a
+ * string or an array of strings.</p>
  */
 @TestInstance(Lifecycle.PER_CLASS)
 public class AudiencePolicyTest {
 
 	private static final AString OP_ECHO = Strings.create("v/test/ops/echo");
 
-	private VenueServer requireServer;  // audience = require (+ an accepted-audience allowlist)
-	private AString verifyVenueDID;
-	private AString requireVenueDID;
-	/** Extra audience the requireServer is configured to also accept. */
+	private VenueServer optionalServer;  // requireAud = false (+ an accepted-audience allowlist)
+	private AString defaultVenueDID;
+	private AString optionalVenueDID;
+	/** Extra audience the optionalServer is configured to also accept. */
 	private AString extraDID;
 
 	@BeforeAll
 	public void setup() {
 		extraDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 
-		// Verify-policy cases run against the shared TestServer (its default policy
-		// IS verify), so no dedicated venue is needed. Only the require policy needs
-		// its own venue — which also carries the accepted-audiences allowlist, so a
-		// single extra venue covers both the require and the allowlist cases.
-		verifyVenueDID = TestServer.ENGINE.getDIDString();
+		// Default-policy cases run against the shared TestServer, so no dedicated
+		// venue is needed for them. Only requireAud: false needs its own venue —
+		// which also carries the accepted-audiences allowlist, so a single extra
+		// venue covers both the optional-audience and the allowlist cases.
+		defaultVenueDID = TestServer.ENGINE.getDIDString();
 
-		// The require venue also carries a public hostname, so it publishes a
+		// The optional venue also carries a public hostname, so it publishes a
 		// did:web alias (covia#167) — covering the alias-audience cases too.
-		requireServer = VenueServer.launch(Maps.of(
+		optionalServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, Config.STORE, "memory",
-			Config.HOSTNAME, Strings.create("venue-req.example.com"),
+			Config.HOSTNAME, Strings.create("venue-opt.example.com"),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true),
-				Config.AUDIENCE, Strings.create("require"),
+				Config.REQUIRE_AUD, CVMBool.FALSE,
 				Config.ACCEPTED_AUDIENCES, Vectors.of(extraDID))));
-		requireVenueDID = requireServer.getEngine().getDIDString();
+		optionalVenueDID = optionalServer.getEngine().getDIDString();
 	}
 
 	@AfterAll
 	public void teardown() {
-		if (requireServer != null) try { requireServer.close(); } catch (Exception ignored) {}
+		if (optionalServer != null) try { optionalServer.close(); } catch (Exception ignored) {}
 	}
 
 	private static VenueHTTP client(VenueServer server, String jwt) {
@@ -107,15 +106,15 @@ public class AudiencePolicyTest {
 		return JWT.signPublic(claims, kp).toString();
 	}
 
-	/** Venue-issued login/session JWT for a managed user. */
-	private static String venueSigned(VenueServer server, AString sub, AString iss,
+	/** Venue-issued login/session JWT for a user. */
+	private static String venueSigned(Engine venue, AString sub, AString iss,
 			ACell aud, long exp) {
 		AMap<AString, ACell> claims = Maps.of(
 			Strings.create("sub"), sub,
 			Strings.create("iss"), iss,
 			Strings.create("exp"), CVMLong.create(exp));
 		if (aud != null) claims = claims.assoc(Strings.create("aud"), aud);
-		return JWT.signPublic(claims, server.getEngine().getKeyPair()).toString();
+		return JWT.signPublic(claims, venue.getKeyPair()).toString();
 	}
 
 	/** A UCAN audienced to the given venue, in date, no caps. */
@@ -138,79 +137,72 @@ public class AudiencePolicyTest {
 		assertInstanceOf(ResponseException.class, failure.getCause());
 	}
 
-	// =============================== require ===============================
+	// ============================ default: required ============================
 
 	@Test
-	public void requireRejectsMissingAudience() {
-		// A presented token with no aud is rejected under require.
-		assertRejected401(client(requireServer, selfIssued(AKeyPair.generate(), null)));
+	public void defaultRejectsMissingAudience() {
+		// A presented token with no aud is rejected by default.
+		assertRejected401(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), null)));
+		AuthException rejected = assertThrows(AuthException.class, () ->
+			TestServer.SERVER.authenticator().authenticate(
+				Strings.create(selfIssued(AKeyPair.generate(), null))));
+		assertTrue(rejected.getMessage().contains(VenueAuthenticator.Reason.AUDIENCE_REQUIRED));
 	}
 
 	@Test
-	public void requireAcceptsVenueAudience() throws Exception {
-		assertAccepted(client(requireServer, ucanFor(AKeyPair.generate(), requireVenueDID)));
+	public void defaultAcceptsVenueAudience() throws Exception {
+		assertAccepted(client(TestServer.BASE_URL, ucanFor(AKeyPair.generate(), defaultVenueDID)));
+		assertAccepted(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), defaultVenueDID)));
 	}
 
 	@Test
-	public void managedUserSessionRequiresVenueSignatureAndValidClaims() throws Exception {
-		Engine venue = requireServer.getEngine();
-		AString managed = venue.managedUserDID(Strings.create("managed-session"));
+	public void venueSessionRequiresVenueSignatureAndValidClaims() throws Exception {
+		Engine venue = TestServer.ENGINE;
+		AString user = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		long now = System.currentTimeMillis() / 1000;
 
-		assertAccepted(client(requireServer,
-			venueSigned(requireServer, managed, requireVenueDID, requireVenueDID, now + 3600)));
+		assertAccepted(client(TestServer.BASE_URL,
+			venueSigned(venue, user, defaultVenueDID, defaultVenueDID, now + 3600)));
 
 		AKeyPair attacker = AKeyPair.generate();
 		AMap<AString, ACell> forgedClaims = Maps.of(
-			Strings.create("sub"), managed,
-			Strings.create("iss"), requireVenueDID,
-			Strings.create("aud"), requireVenueDID,
+			Strings.create("sub"), user,
+			Strings.create("iss"), defaultVenueDID,
+			Strings.create("aud"), defaultVenueDID,
 			Strings.create("exp"), CVMLong.create(now + 3600));
-		assertRejected401(client(requireServer,
+		assertRejected401(client(TestServer.BASE_URL,
 			JWT.signPublic(forgedClaims, attacker).toString()));
 
-		assertRejected401(client(requireServer,
-			venueSigned(requireServer, managed, requireVenueDID, requireVenueDID, now - 3600)));
-		assertRejected401(client(requireServer,
-			venueSigned(requireServer, managed, requireVenueDID,
+		assertRejected401(client(TestServer.BASE_URL,
+			venueSigned(venue, user, defaultVenueDID, defaultVenueDID, now - 3600)));
+		assertRejected401(client(TestServer.BASE_URL,
+			venueSigned(venue, user, defaultVenueDID,
 				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()), now + 3600)));
-		assertRejected401(client(requireServer,
-			venueSigned(requireServer, managed,
-				Strings.create("did:web:attacker.example"), requireVenueDID, now + 3600)));
-		assertRejected401(client(requireServer,
-			venueSigned(requireServer, Strings.create("not-a-did"),
-				requireVenueDID, requireVenueDID, now + 3600)));
+		assertRejected401(client(TestServer.BASE_URL,
+			venueSigned(venue, user,
+				Strings.create("did:web:attacker.example"), defaultVenueDID, now + 3600)));
+		assertRejected401(client(TestServer.BASE_URL,
+			venueSigned(venue, Strings.create("not-a-did"),
+				defaultVenueDID, defaultVenueDID, now + 3600)));
 	}
 
 	@Test
-	public void requireRejectsVenueSessionWithoutAudience() {
-		Engine venue = requireServer.getEngine();
-		AString managed = venue.managedUserDID(Strings.create("missing-session-aud"));
-		assertRejected401(client(requireServer,
-			venueSigned(requireServer, managed, requireVenueDID, null,
-				(System.currentTimeMillis() / 1000) + 3600)));
-	}
-
-	// =============================== verify ================================
-
-	@Test
-	public void verifyToleratesMissingAudience() throws Exception {
-		// Default policy: an absent aud is tolerated (the token still authenticates).
-		assertAccepted(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), null)));
-	}
-
-	@Test
-	public void presentButWrongAudienceRejectedUnderVerify() {
-		// RFC 7519 MUST: a present-but-mismatched aud is rejected even under verify.
-		AString wrong = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		assertRejected401(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), wrong)));
+	public void defaultRejectsVenueSignedTokenWithoutAudience() {
+		Engine venue = TestServer.ENGINE;
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString user = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		assertRejected401(client(TestServer.BASE_URL,
+			venueSigned(venue, user, defaultVenueDID, null, exp)));
+		// Whatever the venue key signs without aud is no login, the venue's own DID included.
+		assertRejected401(client(TestServer.BASE_URL,
+			venueSigned(venue, defaultVenueDID, defaultVenueDID, null, exp)));
 	}
 
 	@Test
 	public void arrayAudienceAcceptedWhenItIncludesVenue() throws Exception {
 		// aud may be an array (StringOrURI[]); accepted if any element matches.
 		AString other = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		ACell arrayAud = Vectors.of(other, verifyVenueDID);
+		ACell arrayAud = Vectors.of(other, defaultVenueDID);
 		assertAccepted(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), arrayAud)));
 	}
 
@@ -221,11 +213,26 @@ public class AudiencePolicyTest {
 		assertRejected401(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), Vectors.of(o1, o2))));
 	}
 
+	// ========================= requireAud: false ==========================
+
+	@Test
+	public void optionalAudienceAcceptsMissingAudience() throws Exception {
+		assertAccepted(client(optionalServer, selfIssued(AKeyPair.generate(), null)));
+	}
+
+	@Test
+	public void presentButWrongAudienceRejectedWhenOptional() {
+		// RFC 7519 MUST: a present-but-mismatched aud is rejected even when aud is optional.
+		AString wrong = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		assertRejected401(client(optionalServer, selfIssued(AKeyPair.generate(), wrong)));
+	}
+
 	@Test
 	public void configuredAllowlistAudienceAccepted() throws Exception {
 		// auth.acceptedAudiences extends the allowlist beyond the venue's own DID
-		// (exercised on the require venue, which carries the allowlist).
-		assertAccepted(client(requireServer, selfIssued(AKeyPair.generate(), extraDID)));
+		// (exercised on the optional venue, which carries the allowlist).
+		assertAccepted(client(optionalServer, selfIssued(AKeyPair.generate(), extraDID)));
+		assertAccepted(client(optionalServer, ucanFor(AKeyPair.generate(), optionalVenueDID)));
 	}
 
 	// ==================== did:web alias audience (covia#167) ====================
@@ -236,36 +243,36 @@ public class AudiencePolicyTest {
 		// from /.well-known/did.json — the did:web alias when the venue has a
 		// public hostname. The venue accepts the alias; its canonical identity
 		// (and validation key) remains the did:key.
-		assertAccepted(client(requireServer,
-			selfIssued(AKeyPair.generate(), Strings.create("did:web:venue-req.example.com"))));
+		assertAccepted(client(optionalServer,
+			selfIssued(AKeyPair.generate(), Strings.create("did:web:venue-opt.example.com"))));
 	}
 
 	@Test
 	public void publicAuthenticatorUsesVenueAudiencePolicy() {
 		AKeyPair key = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(key.getAccountKey());
-		AString webDID = Strings.create("did:web:venue-req.example.com");
+		AString webDID = Strings.create("did:web:venue-opt.example.com");
 		AString token = Strings.create(selfIssued(key, webDID));
 
-		assertEquals(did, requireServer.authenticator().authenticate(token));
-		assertTrue(requireServer.authenticator().acceptedAudiences()
-			.contains(requireVenueDID));
-		assertTrue(requireServer.authenticator().acceptedAudiences()
+		assertEquals(did, optionalServer.authenticator().authenticate(token));
+		assertTrue(optionalServer.authenticator().acceptedAudiences()
+			.contains(optionalVenueDID));
+		assertTrue(optionalServer.authenticator().acceptedAudiences()
 			.contains(webDID));
-		assertTrue(requireServer.authenticator().acceptedAudiences()
+		assertTrue(optionalServer.authenticator().acceptedAudiences()
 			.contains(extraDID));
 
 		AString wrongAudience = Strings.create("did:web:other.example.com");
 		AuthException rejected = assertThrows(AuthException.class, () ->
-			requireServer.authenticator().authenticate(
+			optionalServer.authenticator().authenticate(
 				Strings.create(selfIssued(AKeyPair.generate(), wrongAudience))));
-		assertTrue(rejected.getMessage().contains("audience"));
+		assertTrue(rejected.getMessage().contains(VenueAuthenticator.Reason.AUDIENCE_NOT_THIS_VENUE));
 	}
 
 	@Test
 	public void wrongWebAliasAudienceRejected() {
 		// A did:web audience for a DIFFERENT domain is not this venue.
-		assertRejected401(client(requireServer,
+		assertRejected401(client(optionalServer,
 			selfIssued(AKeyPair.generate(), Strings.create("did:web:other.example.com"))));
 	}
 }

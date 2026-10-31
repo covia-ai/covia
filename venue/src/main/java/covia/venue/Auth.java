@@ -32,10 +32,10 @@ import covia.venue.auth.LoginProviders;
  *   },                                //   (reads only); "unrestricted" = no scope;
  *                                     //   or an explicit capability array
  *   "tokenExpiry": 86400,             // JWT expiry in seconds (default 24h)
- *   "audience": "verify",             // JWT aud policy: "verify" (default — if
- *                                     //   aud present it must match) or "require"
- *                                     //   (aud must be present AND match). A
- *                                     //   present-but-wrong aud is always 401.
+ *   "requireAud": true,               // a bearer must name this venue in aud
+ *                                     //   (default); false also accepts one
+ *                                     //   without aud. A present-but-wrong aud
+ *                                     //   is always 401.
  *   "acceptedAudiences": ["did:..."], // extra accepted aud values beyond the
  *                                     //   venue's own DID (e.g. a did:key form
  *                                     //   for a did:web venue)
@@ -68,7 +68,7 @@ public class Auth {
 	private final long tokenExpiry;
 	private final boolean publicAccessEnabled;
 	private final ACell publicCapsConfig;
-	private final String audiencePolicy;
+	private final boolean requireAud;
 	private final java.util.Set<String> configuredAudiences;
 	private final AString webDID;
 
@@ -86,7 +86,7 @@ public class Auth {
 		this.tokenExpiry = config.getTokenExpiry();
 		this.publicAccessEnabled = config.isPublicAccess();
 		this.publicCapsConfig = config.getPublicCapsConfig();
-		this.audiencePolicy = config.getAudiencePolicy();
+		this.requireAud = config.isRequireAud();
 		java.util.Set<String> aud = new java.util.HashSet<>();
 		AVector<ACell> acc = config.getAcceptedAudiences();
 		if (acc != null) {
@@ -140,9 +140,9 @@ public class Auth {
 		return Strings.intern(publicCapsConfig instanceof AVector ? "custom" : "read-only");
 	}
 
-	/** JWT audience policy: {@code "require"} or {@code "verify"} (default). */
-	public String getAudiencePolicy() {
-		return audiencePolicy;
+	/** Whether a bearer must name this venue in {@code aud} ({@code auth.requireAud}). */
+	public boolean isRequireAud() {
+		return requireAud;
 	}
 
 	/** Operator-configured extra accepted JWT audiences (beyond the venue's own

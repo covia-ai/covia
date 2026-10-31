@@ -290,8 +290,7 @@ class EmbedderRoutePolicyTest {
 				"rps", 1L,
 				"burst", 1L),
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, true),
-				Config.AUDIENCE, "require"),
+				Config.PUBLIC, Maps.of(Config.ENABLED, true)),
 			Fields.MCP, Maps.of(
 				Config.AUTH, Maps.of(Config.REQUIRED, true))),
 			List.of(this::registerRoutes));

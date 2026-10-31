@@ -979,13 +979,22 @@ for custom methods. Automatic HTTP bearer classification still selects `key`,
 `ucan` or `oidc`; custom transports choose a method explicitly. The extension
 does not yet add new ceremonies, assurance policy or revocable sessions.
 
-## Bearer expiry (`auth.requireExp`, `auth.maxTokenLifetime`)
+## Bearer audience and expiry (`auth.requireAud`, `auth.requireExp`, `auth.maxTokenLifetime`)
 
 ```json
 {
-  "auth": { "requireExp": true, "maxTokenLifetime": 2592000 }
+  "auth": { "requireAud": true, "requireExp": true, "maxTokenLifetime": 2592000 }
 }
 ```
+
+`requireAud` (default `true`): a bearer credential must name this venue in
+`aud` — its DID, its `did:web` alias, or a value in `auth.acceptedAudiences`. A
+credential without `aud` is refused with a reason naming this setting. RFC 7519
+leaves `aud` optional, but RFC 8725 §3.9 requires it whenever one issuer's JWTs
+go to more than one recipient, as a key holder's do: without it, a token made for
+another venue, or for some other purpose, would pass as a login here. Turn it
+off only for clients that cannot name the venue. A present `aud` that does not
+name this venue is refused either way.
 
 `requireExp` (default `true`): a bearer credential must expire. A self-issued
 JWT without `exp`, or a UCAN bearer with `exp: null`, is refused with a reason

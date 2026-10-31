@@ -245,7 +245,7 @@ public class CrossVenueTest {
 		AKeyPair aliceKP = AKeyPair.generate();
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
 		VenueHTTP aliceOnB = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP));
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP, TwoVenueTestServer.DID_B));
 		Job write = aliceOnB.invokeAndWait(Strings.create("v/ops/covia/write"),
 			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, Strings.create("shared content")));
 		assertEquals(Status.COMPLETE, write.getStatus(), "Alice's write on B should complete");
@@ -263,7 +263,7 @@ public class CrossVenueTest {
 
 		// Bob authenticates to B as himself and presents Alice's grant as a proof.
 		VenueHTTP bobOnB = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(bobKP));
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_B));
 		bobOnB.setUcans(java.util.List.of(grantJWT));
 
 		Job read = bobOnB.invokeAndWait(Strings.create("v/ops/covia/read"),
@@ -276,7 +276,7 @@ public class CrossVenueTest {
 
 		// And the grant is exactly what authorised it: without the proof, denied.
 		VenueHTTP bobNoProof = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(bobKP));
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_B));
 		Job denied = bobNoProof.invokeAndWait(Strings.create("v/ops/covia/read"),
 			Maps.of(Fields.PATH, aliceDID + "/w/shared/doc"));
 		assertNotEquals(Status.COMPLETE, denied.getStatus(),
@@ -306,7 +306,7 @@ public class CrossVenueTest {
 		AKeyPair aliceKP = AKeyPair.generate();
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
 		VenueHTTP aliceOnB = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP));
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP, TwoVenueTestServer.DID_B));
 		aliceOnB.invokeAndWait(Strings.create("v/ops/covia/write"),
 			Maps.of(Fields.PATH, "w/hop/doc", Fields.VALUE, Strings.create("hop content")));
 
@@ -321,7 +321,7 @@ public class CrossVenueTest {
 		// Bob calls VENUE A. His ucans carry everything: the grant (aud = Bob)
 		// and his identity token for venue B (aud = B, empty att).
 		VenueHTTP bobOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_A));
 		bobOnA.setUcans(java.util.List.of(
 			aliceGrant, identityToken(bobKP, TwoVenueTestServer.DID_B)));
 
@@ -339,7 +339,7 @@ public class CrossVenueTest {
 		// Control: without an identity token the hop is anonymous at B — the
 		// grant alone (audienced to Bob) cannot authorise an anonymous caller.
 		VenueHTTP bobNoIdentity = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_A));
 		bobNoIdentity.setUcans(java.util.List.of(aliceGrant));
 		Job anon = bobNoIdentity.invokeAndWait(OP_GRID_RUN, Maps.of(
 			Fields.OPERATION, "v/ops/covia/read",
@@ -387,7 +387,7 @@ public class CrossVenueTest {
 			TwoVenueTestServer.ENGINE_A.venueContext()).awaitResult(10_000);
 
 		VenueHTTP aliceOnB = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP));
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP, TwoVenueTestServer.DID_B));
 		aliceOnB.setUcans(java.util.List.of(RT.getIn(issued, "token").toString()));
 		Job read = aliceOnB.invokeAndWait(Strings.create("v/ops/covia/read"),
 			Maps.of(Fields.PATH, TwoVenueTestServer.DID_A + "/w/venue-share/doc"));
@@ -430,7 +430,7 @@ public class CrossVenueTest {
 			"authenticateAs", "caller",
 			Fields.INPUT, Maps.of(Fields.PATH, TwoVenueTestServer.DID_B + "/w/held-share/doc"));
 		VenueHTTP aliceOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP, TwoVenueTestServer.DID_A));
 
 		// Control: as herself but without the passed-on grant, Alice is refused at B.
 		aliceOnA.setUcans(java.util.List.of(identityToken(aliceKP, TwoVenueTestServer.DID_B)));
@@ -455,7 +455,7 @@ public class CrossVenueTest {
 		AKeyPair aliceKP = AKeyPair.generate();
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
 		VenueHTTP aliceOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(aliceKP, TwoVenueTestServer.DID_A));
 		aliceOnA.setUcans(java.util.List.of(UcanTokens.grant(aliceKP,
 			TwoVenueTestServer.DID_A, aliceDID.toString(), "venue/relay", 3600)));
 
@@ -478,7 +478,7 @@ public class CrossVenueTest {
 		AKeyPair malloryKP = AKeyPair.generate();
 		AString malloryDID = UCAN.toDIDKey(malloryKP.getAccountKey());
 		VenueHTTP malloryOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(malloryKP));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(malloryKP, TwoVenueTestServer.DID_A));
 		malloryOnA.setUcans(java.util.List.of(UcanTokens.grant(malloryKP,
 			TwoVenueTestServer.DID_A, malloryDID.toString(), "venue/relay", 3600)));
 

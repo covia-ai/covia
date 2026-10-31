@@ -41,7 +41,7 @@ class RelayRoutesTest {
 		try (HttpClient client = HttpClient.newHttpClient()) {
 			URI endpoint = URI.create("http://127.0.0.1:" + server.port() + "/relay/test-relay/c-main/echo");
 			AKeyPair key = AKeyPair.generate();
-			VenueAuth auth = VenueAuth.keyPair(key);
+			VenueAuth auth = VenueAuth.keyPair(key, server.getEngine().getDIDString().toString());
 
 			assertEquals(401, send(client, endpoint, "{}", null).statusCode(), "anonymous callers are refused");
 			assertEquals(404, send(client, endpoint, "{}", auth).statusCode(), "no relay adapter yet");
