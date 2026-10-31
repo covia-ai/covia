@@ -90,6 +90,8 @@ public class SoftKillPersistenceTest {
 	}
 
 	private static void writeDLFS(VenueServer server, String drive, String path, String content) throws Exception {
+		server.getEngine().jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", drive),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		server.getEngine().jobs().invokeOperation(
 			"v/ops/dlfs/write",
 			Maps.of("drive", drive, "path", path, "content", content),

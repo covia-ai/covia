@@ -49,6 +49,8 @@ class LocalSpeechRealModelTest {
 			venue.configureAdapter(SpeechAdapter.NAME, convex.core.data.Maps.of("engine", "local", "local", convex.core.data.Maps.of(
 				"transcribeModel", "moonshine-tiny", "fetchNatives", true, "cacheDir", CACHE.toString())));
 			String ref = owner + "/dlfs/media/0.wav";
+			venue.jobs().invokeOperation("v/ops/dlfs/create-drive", convex.core.data.Maps.of("name", "media"),
+				covia.venue.RequestContext.of(owner)).awaitResult(10_000);
 			assertTrue(venue.createContent(convex.core.data.Strings.create(ref), Files.newInputStream(wav), "audio/wav",
 				covia.venue.RequestContext.of(owner)));
 			convex.core.data.ACell heard = venue.jobs().invokeOperation("v/ops/speech/transcribe", convex.core.data.Maps.of("ref", ref),

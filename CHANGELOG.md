@@ -51,9 +51,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `Engine.requireSafeUrl` and `requireSafeHost` take the `RequestContext` of the
   caller that chose the target, and `Engine.fetchRemoteAsset`, `fetchRemoteNamedAsset`
   and `fetchRemoteContent` the caller whose reference names the publisher.
-- Only `createDrive`, writes and WebDAV `MKCOL` create a DLFS drive; reading a missing
-  or deleted drive fails (#641). `DLFSAdapter.getDrive` and `FileAdapter.resolve`
-  take the operation's ability.
+- A DLFS drive is created before use: an operation on a missing or deleted drive fails,
+  and only `createDrive` and WebDAV `MKCOL` create one (#641). Vault, DLFS-backed file
+  roots, and messaging and speech media create their own drive with their first write
+  there (`DLFSAdapter.ensureDrive`). `FileAdapter.resolve` takes the operation's ability.
 
 ### Deprecated
 

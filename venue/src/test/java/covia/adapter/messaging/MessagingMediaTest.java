@@ -39,7 +39,7 @@ class MessagingMediaTest {
 
 	@Test void storesNeverOverwrite(TestInfo info) throws Exception {
 		AString owner = TestEngine.uniqueDID(info);
-		String directory = MessagingMedia.ownerDirectory(owner, "media-test");
+		String directory = MessagingMedia.ensureOwnerDirectory(TestEngine.ENGINE, owner, "media-test", RequestContext.of(owner));
 		byte[] first = "first".getBytes(StandardCharsets.UTF_8), second = "second".getBytes(StandardCharsets.UTF_8);
 		AMap<AString, ACell> a = MessagingMedia.store(TestEngine.ENGINE, first, "audio/ogg", directory, "note.ogg", RequestContext.of(owner));
 		AMap<AString, ACell> b = MessagingMedia.store(TestEngine.ENGINE, second, "audio/ogg", directory, "note.ogg", RequestContext.of(owner));

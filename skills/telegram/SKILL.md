@@ -87,7 +87,8 @@ and fileName are optional: destination is a directory reference such as
 `dlfs/imports` or `file://inbox`, with or without a trailing slash. Omit it for
 the bot owner's DLFS `telegram` drive. Explicit destinations use the caller's
 write authority and a content provider supporting create-only writes; parent
-directories must exist. DLFS and configured file roots support this contract.
+directories, and a DLFS destination's drive, must exist. DLFS and configured file
+roots support this contract.
 The name is explicit fileName, then a safe original name retained from an
 admitted Telegram message, then a generated fallback. Original names and MIME
 types survive bot restarts; `getFile` alone does not preserve them. Conflicts

@@ -84,7 +84,9 @@ public class DLFSAdapterTest {
 
 	/** A drive view to write into, creating the drive if needed. */
 	private DLFSLocal writableDrive(DLFSAdapter adapter, String name) {
-		return adapter.getDrive(RequestContext.of(ALICE_DID), name, Capability.CRUD_WRITE);
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		adapter.ensureDrive(alice, "dlfs/" + name);
+		return adapter.getDrive(alice, name);
 	}
 
 	@Test
@@ -418,35 +420,59 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
-	public void testReadsNeedALiveDrive() {
-		// Only createDrive and writes create a drive. Reads, and deletes within a
-		// drive, fail on a drive that is absent or deleted, and leave it so.
+	public void testOperationsNeedALiveDrive() throws Exception {
+		// Only createDrive creates a drive the caller names. Every other operation,
+		// writes included, fails on a drive that is absent or deleted, and leaves it so.
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		run("v/ops/dlfs/create-drive", Maps.of("name", "kept"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "gone"));
 		run("v/ops/dlfs/write", Maps.of("drive", "gone", "path", "a.txt", "content", "old"));
 		run("v/ops/dlfs/delete-drive", Maps.of("name", "gone"));
 
 		for (String drive : new String[] {"missing", "gone"}) {
-			for (String op : new String[] {"list", "tree", "stat", "read", "delete"}) {
+			for (String op : new String[] {"list", "tree", "stat", "read", "delete", "create", "mkdir"}) {
 				assertTrue(failure("v/ops/dlfs/" + op, Maps.of("drive", drive, "path", "a.txt"), alice)
 					.contains(DLFSAdapter.DRIVE_NOT_FOUND), op + " on " + drive);
 			}
-			assertTrue(failure("v/ops/file/read", Maps.of("path", "dlfs/" + drive + "/a.txt"), alice)
+			for (String op : new String[] {"write", "append"}) {
+				assertTrue(failure("v/ops/dlfs/" + op,
+					Maps.of("drive", drive, "path", "a.txt", "content", "new"), alice)
+					.contains(DLFSAdapter.DRIVE_NOT_FOUND), op + " on " + drive);
+			}
+			String ref = "dlfs/" + drive + "/a.txt";
+			assertTrue(failure("v/ops/file/read", Maps.of("path", ref), alice)
 				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:read on " + drive);
+			assertTrue(failure("v/ops/file/write", Maps.of("path", ref, "content", "new"), alice)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:write on " + drive);
+			var put = assertThrows(IllegalArgumentException.class, () -> engine.putContent(
+				Strings.create(ref), new java.io.ByteArrayInputStream(new byte[] {1}), null, alice));
+			assertTrue(put.getMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), "content write on " + drive);
 		}
 		assertEquals(Vectors.of("kept"), driveNames());
+	}
 
-		// A write still creates the drive it names.
-		run("v/ops/dlfs/write", Maps.of("drive", "fresh", "path", "a.txt", "content", "new"));
-		assertEquals(Vectors.of("fresh", "kept"), driveNames());
+	@Test
+	public void testEnsureDriveCreatesOnlyUnderWriteAuthority() {
+		// A component that names its own drive creates it, but only where the
+		// caller could write.
+		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
+		RequestContext reader = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+		assertThrows(Exception.class, () -> adapter.ensureDrive(reader, "dlfs/owned"));
+		assertEquals(0, driveNames().count());
+
+		adapter.ensureDrive(RequestContext.of(ALICE_DID), "dlfs/owned");
+		adapter.ensureDrive(RequestContext.of(ALICE_DID), "dlfs/owned");
+		assertEquals(Vectors.of("owned"), driveNames());
 	}
 
 	@Test
 	public void testReadOnlyAgentCannotCreateDrives() {
 		// An agent whose caps allow only crud/read on its owner's drives reads
 		// them, but brings no drive into being, new or deleted.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "notes"));
 		run("v/ops/dlfs/write", Maps.of("drive", "notes", "path", "a.txt", "content", "hello"));
-		run("v/ops/dlfs/write", Maps.of("drive", "gone", "path", "a.txt", "content", "old"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "gone"));
 		run("v/ops/dlfs/delete-drive", Maps.of("name", "gone"));
 		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
 			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
@@ -465,11 +491,13 @@ public class DLFSAdapterTest {
 
 	@Test
 	public void testReadsMintNoDriveKey() {
-		// A user who has never written to DLFS has no drives. Listing, reading and
-		// deleting a drive find none, and none of them generates the user's DLFS key.
+		// A user who has never created a drive has none. Listing, reading, writing
+		// and deleting a drive find none, and none of them generates the user's DLFS key.
 		RequestContext alice = RequestContext.of(ALICE_DID);
 		assertEquals(0, driveNames().count());
 		assertTrue(failure("v/ops/dlfs/list", Maps.of("drive", "docs"), alice)
+			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		assertTrue(failure("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "a.txt", "content", "x"), alice)
 			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
 		run("v/ops/dlfs/delete-drive", Maps.of("name", "docs"));
 		var user = engine.getVenueState().users().get(ALICE_DID);
@@ -481,6 +509,7 @@ public class DLFSAdapterTest {
 	@SuppressWarnings("unchecked")
 	public void testWriteReachesRootCursor() {
 		// Write a file via DLFS adapter
+		run("v/ops/dlfs/create-drive", Maps.of("name", "sync-test"));
 		run("v/ops/dlfs/write", Maps.of("drive", "sync-test", "path", "hello.txt", "content", "sync check"));
 
 		// Verify the root cursor has DLFS data
@@ -816,6 +845,7 @@ public class DLFSAdapterTest {
 	@Test
 	public void didContentReferencesDecodeNamesBeforeAccessChecks() throws Exception {
 		var ctx = covia.venue.RequestContext.of(ALICE_DID);
+		run("v/ops/dlfs/create-drive", Maps.of("name", "names"));
 		String name = "Lab report+日本語(1).txt";
 		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
 		var ref = convex.core.data.Strings.create(ALICE_DID + "/dlfs/names/" + encoded);

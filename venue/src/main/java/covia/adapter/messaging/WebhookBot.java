@@ -22,6 +22,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
+import covia.venue.RequestContext;
 
 /**
  * A durable binding fed by signed HTTP callbacks, a provider connection, or
@@ -276,7 +277,6 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		AMap<AString, ACell> message = Maps.of(Fields.TEXT, text == null ? "" : text);
 		AMap<AString, ACell> authentication = router.context(channel).getAuthentication();
 		AVector<ACell> attachments = Vectors.empty(), content = Vectors.empty();
-		String directory = MessagingMedia.ownerDirectory(spec.userDID(adapter.engine), adapter.getName());
 		for (ACell cell : media) {
 			AMap<AString, ACell> item = MessagingSettings.object(cell);
 			MessagingMedia.Fetched fetched = adapter.fetchMedia(this, item);
@@ -284,10 +284,13 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (type == null) type = fetched.contentType();
 			String name = MessagingSettings.optional(item, "fileName");
 			if (!MessagingMedia.safeFileName(name)) name = MessagingMedia.fallbackName(spec.name(), MessagingSettings.required(item, "id"), type);
+			RequestContext writer = router.agentContext();
+			String directory = MessagingMedia.ensureOwnerDirectory(adapter.engine, spec.userDID(adapter.engine),
+				adapter.getName(), writer);
 			AMap<AString, ACell> attachment;
 			try {
 				// The stored name, ref and size win over the provider's own description.
-				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, router.agentContext()));
+				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, writer));
 			} catch (java.io.IOException e) {
 				throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
 			}

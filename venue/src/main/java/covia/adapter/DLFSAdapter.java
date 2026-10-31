@@ -234,28 +234,43 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * Connects a DLFS drive view for an operation needing {@code ability}.
-	 * Only a write ({@code crud/write}) creates a drive that is absent or
-	 * deleted. Any other operation needs a live drive and fails with
-	 * {@link #DRIVE_NOT_FOUND}, leaving the user's drives and keys as they
-	 * were. Cheap — just a cursor view, no caching. The view keeps the
-	 * caller's signing key isolated while reading the shared venue write clock
-	 * for every mutation.
+	 * Connects a view of one of the user's live drives. A drive that is absent
+	 * or deleted fails with {@link #DRIVE_NOT_FOUND}, leaving the user's drives
+	 * and keys as they were: only {@code dlfs:createDrive}, WebDAV
+	 * {@code MKCOL} and a component that names its own drive
+	 * ({@link #ensureDrive}, Vault's writes) create one. Cheap — just a cursor view, no
+	 * caching. The view keeps the caller's signing key isolated while reading
+	 * the shared venue write clock for every mutation.
 	 *
 	 * <p>Public so other adapters (e.g. {@code FileAdapter} routing a
 	 * {@code dlfs}-backed root) can obtain the same drive view the DLFS
 	 * adapter operations themselves use.</p>
 	 */
-	public DLFSLocal getDrive(RequestContext ctx, String driveName, AString ability) {
-		DLFSDrive drive;
-		if (Capability.CRUD_WRITE.equals(ability)) {
-			requireValidDriveName(driveName);
-			drive = engine.getDLFSDrives(ensureUserKeyPair(ctx)).getOrCreateDrive(driveName);
-			if (drive == null) throw new IllegalArgumentException(DRIVE_UNAVAILABLE + driveName);
-		} else {
-			drive = liveDrive(ctx, driveName);
-			if (drive == null) throw new IllegalArgumentException(DRIVE_NOT_FOUND + driveName);
-		}
+	public DLFSLocal getDrive(RequestContext ctx, String driveName) {
+		DLFSDrive drive = liveDrive(ctx, driveName);
+		if (drive == null) throw new IllegalArgumentException(DRIVE_NOT_FOUND + driveName);
+		return (DLFSLocal) drive.fileSystem();
+	}
+
+	/**
+	 * Creates the drive a DLFS reference ({@code [<owner>/]dlfs/<drive>[/<path>]})
+	 * names, unless it is live, once a write there is authorised exactly as
+	 * {@code dlfs:write} authorises one. This is for a component that names its
+	 * own drive: Vault's configured drive, a DLFS-backed file root, a messaging
+	 * provider's or speech's media drive. An operation on a drive its caller
+	 * names never creates it.
+	 */
+	public void ensureDrive(RequestContext ctx, String ref) {
+		DlfsFileRef fr = parseDlfsFileRef(ref);
+		if (fr == null) throw new IllegalArgumentException(INVALID_DRIVE_NAME);
+		openOrCreateDrive(authorise(ctx, fr, Capability.CRUD_WRITE), fr.drive());
+	}
+
+	/** Opens the user's drive, creating it if absent or deleted. Callers have authorised the creation. */
+	private DLFSLocal openOrCreateDrive(RequestContext ctx, String driveName) {
+		requireValidDriveName(driveName);
+		DLFSDrive drive = engine.getDLFSDrives(ensureUserKeyPair(ctx)).getOrCreateDrive(driveName);
+		if (drive == null) throw new IllegalArgumentException(DRIVE_UNAVAILABLE + driveName);
 		return (DLFSLocal) drive.fileSystem();
 	}
 
@@ -299,15 +314,23 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No DLFS sub-operation specified"));
 		}
-		return invokeBoundOperation(ctx, subOp, RT.castMap(input));
+		return invokeOperation(ctx, subOp, RT.castMap(input), false);
 	}
 
-	/** Typed delegation point for adapters such as Vault that bind a drive. */
+	/**
+	 * Typed delegation point for adapters such as Vault that bind a drive of
+	 * their own: a write there creates the bound drive if it is not live.
+	 */
 	CompletableFuture<ACell> invokeBoundOperation(RequestContext ctx, String subOp,
 			AMap<AString, ACell> input) {
+		return invokeOperation(ctx, subOp, input, true);
+	}
+
+	private CompletableFuture<ACell> invokeOperation(RequestContext ctx, String subOp,
+			AMap<AString, ACell> input, boolean boundDrive) {
 		return CompletableFuture.supplyAsync(() -> {
 			try {
-				return dispatch(ctx, subOp, input);
+				return dispatch(ctx, subOp, input, boundDrive);
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
@@ -440,28 +463,39 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		DlfsFileRef fr = parseDlfsFileRef(ref);
 		if (fr == null) return null;
 
-		RequestContext driveCtx = ctx;
-		boolean cross = fr.ownerDID() != null && !fr.ownerDID().equals(ctx.getUserDID());
-		if (cross) {
+		RequestContext driveCtx = authorise(ctx, fr, ability);
+		FileSystem fs = getDrive(driveCtx, fr.drive());
+		Path root = fs.getRootDirectories().iterator().next();
+		Path path = resolvePath(fs, fr.path());
+		String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
+			fr.path().isEmpty() ? null : Strings.create(fr.path()));
+		String binaryUrl = isCrossUser(ctx, fr) ? null : buildWebDAVUrl(fr.drive(), fr.path());
+		return new AuthorisedPath(root, path, resource, binaryUrl);
+	}
+
+	/**
+	 * Authorises {@code ability} on a DLFS file reference and returns the
+	 * context its drive opens under: the caller's for an own drive, checked
+	 * against the caller's grant scope; the owner's for another user's drive,
+	 * once the caller's proofs cover {@code <owner>/dlfs/<drive>/<path>}.
+	 */
+	private RequestContext authorise(RequestContext ctx, DlfsFileRef fr, AString ability) {
+		if (isCrossUser(ctx, fr)) {
 			String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
 				Strings.create(fr.path()));
 			boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
 			if (!ok) throw new IllegalStateException(
 				"Access denied: no " + ability + " capability for " + resource);
-			driveCtx = RequestContext.of(fr.ownerDID());
-		} else {
-			engine.requireAuthority(ctx, Strings.create(
-				dlfsResource(null, Strings.create(fr.drive()), Strings.create(fr.path()))),
-				ability);
+			return RequestContext.of(fr.ownerDID());
 		}
+		engine.requireAuthority(ctx, Strings.create(
+			dlfsResource(null, Strings.create(fr.drive()), Strings.create(fr.path()))),
+			ability);
+		return ctx;
+	}
 
-		FileSystem fs = getDrive(driveCtx, fr.drive(), ability);
-		Path root = fs.getRootDirectories().iterator().next();
-		Path path = resolvePath(fs, fr.path());
-		String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
-			fr.path().isEmpty() ? null : Strings.create(fr.path()));
-		String binaryUrl = cross ? null : buildWebDAVUrl(fr.drive(), fr.path());
-		return new AuthorisedPath(root, path, resource, binaryUrl);
+	private static boolean isCrossUser(RequestContext ctx, DlfsFileRef fr) {
+		return fr.ownerDID() != null && !fr.ownerDID().equals(ctx.getUserDID());
 	}
 
 	// ========== ContentProvider: DLFS as reference-addressed content storage ==========
@@ -591,15 +625,20 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	/** Job-free read with the same capability checks as {@code dlfs:listDrives}. */
 	public ACell listDrives(RequestContext ctx) throws IOException {
-		return dispatch(ctx, "listDrives", Maps.empty());
+		return dispatch(ctx, "listDrives", Maps.empty(), false);
 	}
 
 	/** Job-free read with the same capability checks as {@code dlfs:list}. */
 	public ACell listDirectory(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
-		return dispatch(ctx, "list", input);
+		return dispatch(ctx, "list", input, false);
 	}
 
-	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
+	/**
+	 * @param boundDrive the drive is the calling adapter's own (Vault), so an
+	 *                   authorised write creates it if it is not live
+	 */
+	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input,
+			boolean boundDrive) throws IOException {
 		if (input == null) input = Maps.empty();
 		// content.fileName is a destination shorthand for create. Materialise it
 		// before capability resolution so the authorised resource is the actual
@@ -632,6 +671,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			}
 		} else {
 			requireDlfsCap(ctx, subOp, input);
+		}
+		if (boundDrive && !target.crossUser() && target.driveName() != null
+				&& Capability.CRUD_WRITE.equals(abilityFor(subOp))) {
+			openOrCreateDrive(driveCtx, target.driveName());
 		}
 
 		return switch (subOp) {
@@ -668,8 +711,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (name == null) name = RT.ensureString(input.get(FIELD_DRIVE));
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 
-		// getDrive delegates creation/recreation to Convex's drive registry.
-		getDrive(ctx, name.toString(), Capability.CRUD_WRITE);
+		// Convex's drive registry creates the drive, or recreates a deleted one.
+		openOrCreateDrive(ctx, name.toString());
 		return Maps.of(
 			"created", CVMBool.TRUE,
 			"name", name
@@ -691,21 +734,21 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	// ==================== File Operations ====================
 
-	private DLFSLocal requireDrive(RequestContext ctx, AMap<AString, ACell> input, AString ability) {
+	private DLFSLocal requireDrive(RequestContext ctx, AMap<AString, ACell> input) {
 		AString driveCell = RT.ensureString(input.get(FIELD_DRIVE));
 		if (driveCell == null) throw new IllegalArgumentException("'drive' is required");
-		return getDrive(ctx, driveCell.toString(), ability);
+		return getDrive(ctx, driveCell.toString());
 	}
 
 	private ACell handleList(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
-		FileSystem fs = requireDrive(ctx, input, Capability.CRUD_READ);
+		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		Path dir = resolvePath(fs, pathCell != null ? pathCell.toString() : null);
 		return FileOperations.list(dir);
 	}
 
 	private ACell handleTree(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
-		FileSystem fs = requireDrive(ctx, input, Capability.CRUD_READ);
+		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		Path dir = resolvePath(fs, pathCell != null ? pathCell.toString() : null);
 
@@ -717,7 +760,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AString driveCell = RT.ensureString(input.get(FIELD_DRIVE));
 		if (driveCell == null) throw new IllegalArgumentException("'drive' is required");
 		String driveName = driveCell.toString();
-		FileSystem fs = getDrive(ctx, driveName, Capability.CRUD_READ);
+		FileSystem fs = getDrive(ctx, driveName);
 
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
@@ -738,7 +781,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 */
 	private ACell handleWrite(RequestContext ctx, RequestContext assetCtx,
 			AMap<AString, ACell> input, boolean append) throws IOException {
-		FileSystem fs = requireDrive(ctx, input, Capability.CRUD_WRITE);
+		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
@@ -748,7 +791,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 
 	private ACell handleCreate(RequestContext ctx, RequestContext contentCtx,
 			AMap<AString, ACell> input, DriveTarget target) throws IOException {
-		FileSystem fs = requireDrive(ctx, input, Capability.CRUD_WRITE);
+		FileSystem fs = requireDrive(ctx, input);
 		String pathArg = FileOperations.createPath(input);
 		Path path = resolvePath(fs, pathArg);
 		AMap<AString, ACell> result = RT.ensureMap(
@@ -759,7 +802,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	private ACell handleMkdir(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
-		FileSystem fs = requireDrive(ctx, input, Capability.CRUD_WRITE);
+		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 		Path path = resolvePath(fs, pathCell.toString());
@@ -767,7 +810,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
-		FileSystem fs = requireDrive(ctx, input, Capability.CRUD_DELETE);
+		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 		Path path = resolvePath(fs, pathCell.toString());
@@ -776,7 +819,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	private ACell handleStat(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
-		FileSystem fs = requireDrive(ctx, input, Capability.CRUD_READ);
+		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 

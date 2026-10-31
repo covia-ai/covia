@@ -812,6 +812,7 @@ public class TelegramAdapterTest {
 		byte[] bytes = "downloaded-content".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 		telegram.files.put("destination_test", bytes);
 		RequestContext owner = RequestContext.of(OWNER);
+		run(owner, "v/ops/dlfs/create-drive", Maps.of("name", "imports"));
 		ACell result = run(owner, "v/ops/telegram/download", Maps.of("file_id", "destination_test", "destination", "dlfs/imports", "fileName", "note.ogg"));
 		assertEquals(Strings.create("dlfs/imports/note.ogg"), RT.getIn(result, Fields.REF));
 		org.junit.jupiter.api.Assertions.assertArrayEquals(bytes,
@@ -873,6 +874,7 @@ public class TelegramAdapterTest {
 		byte[] bytes = "new-file".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 		telegram.files.put(fileId, bytes);
 		RequestContext owner = RequestContext.of(OWNER);
+		run(owner, "v/ops/dlfs/create-drive", Maps.of("name", "collisions"));
 		for (String directory : List.of("file://tmp", "dlfs/collisions")) {
 			String name = "collision-report.pdf";
 			AString original = Strings.create(directory + "/" + name);

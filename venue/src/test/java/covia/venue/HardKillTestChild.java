@@ -127,6 +127,8 @@ public class HardKillTestChild {
 		String path = parts[1];
 		String content = parts[2];
 
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", drive),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
 			"v/ops/dlfs/write",
 			Maps.of("drive", drive, "path", path, "content", content),

@@ -75,6 +75,10 @@ public class DLFSPersistenceTest {
 			Engine.addDemoAssets(engine);
 
 			// Write via DLFS adapter
+			for (String drive : new String[] {"test-drive", "deleted-drive"}) {
+				engine.jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", drive),
+					RequestContext.of(ALICE_DID)).awaitResult(5000);
+			}
 			ACell result = engine.jobs().invokeOperation(
 				"v/ops/dlfs/write",
 				Maps.of("drive", "test-drive", "path", "test.txt", "content", "persistent!"),

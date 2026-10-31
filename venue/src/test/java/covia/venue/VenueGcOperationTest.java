@@ -71,6 +71,8 @@ public class VenueGcOperationTest {
 	}
 
 	private static void writeFile(VenueServer venue, String text) {
+		venue.getEngine().jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", "checkpoint"),
+			RequestContext.of(USER)).awaitResult(5000);
 		venue.getEngine().jobs().invokeOperation("v/ops/dlfs/write",
 			Maps.of("drive", "checkpoint", "path", "proof.txt", "content", text),
 			RequestContext.of(USER)).awaitResult(5000);

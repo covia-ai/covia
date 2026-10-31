@@ -42,6 +42,21 @@ public class VaultAdapterTest {
 	}
 
 	@Test
+	public void testVaultCreatesItsDriveOnFirstWrite() {
+		// Vault names its own drive, so its first write creates it. Until then a
+		// read finds no drive and creates nothing.
+		var list = engine.jobs().invokeOperation("v/ops/vault/list", Maps.empty(),
+			RequestContext.of(aliceDID));
+		assertThrows(Exception.class, () -> list.awaitResult(5000));
+		assertTrue(list.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), list.getErrorMessage());
+		assertEquals(0, RT.ensureVector(RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
+
+		run("v/ops/vault/write", Maps.of("path", "first.txt", "content", "hello"));
+		assertEquals(convex.core.data.Vectors.of("vault"),
+			RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives"));
+	}
+
+	@Test
 	public void testWriteAndRead() {
 		// Write to vault — no drive parameter needed
 		ACell result = run("v/ops/vault/write", Maps.of(

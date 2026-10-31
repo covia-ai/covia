@@ -14,6 +14,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -93,6 +94,17 @@ public final class MessagingMedia {
 	/** A binding owner's private directory for a provider's attachments: {@code <owner>/dlfs/<drive>/}. */
 	public static String ownerDirectory(AString owner, String drive) {
 		return owner + "/dlfs/" + drive + "/";
+	}
+
+	/**
+	 * The {@link #ownerDirectory} to store an attachment in. The provider names
+	 * that drive, so it creates it when the owner has none, under the authority
+	 * of {@code writer}, the context that then writes there.
+	 */
+	public static String ensureOwnerDirectory(Engine engine, AString owner, String drive, RequestContext writer) {
+		String directory = ownerDirectory(owner, drive);
+		if (engine.getAdapter("dlfs") instanceof DLFSAdapter dlfs) dlfs.ensureDrive(writer, directory);
+		return directory;
 	}
 
 	/**

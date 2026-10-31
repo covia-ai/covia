@@ -59,12 +59,18 @@ under its custodial key occurs only after that check.
 Paths are normalised and jailed at the drive root before filesystem access.
 Drive names are one non-empty segment and cannot contain `/`, `\`, or `:`.
 
-Only `createDrive` and the write operations (`write`, `append`, `create`,
-`mkdir`) create a drive. Every other operation needs a live drive: reading,
-listing or deleting within a drive that is absent or deleted fails with no
-such drive, and leaves the owner's drives and keys as they were. Over WebDAV,
-`MKCOL /dlfs/<drive>/` creates a drive, and other requests to a missing drive
-answer 404.
+A drive the caller names must exist: only `createDrive` creates one (over
+WebDAV, `MKCOL /dlfs/<drive>/`). Every other operation, writes included, fails
+with no such drive on a drive that is absent or deleted, and leaves the owner's
+drives and keys as they were; over WebDAV it answers 404. This holds for `dlfs`
+operations, content references to `dlfs/<drive>/<path>`, and a caller's
+`destination`.
+
+A component that names its own drive creates it with its first write there,
+under the authority that write needs (`DLFSAdapter.ensureDrive`): Vault's
+configured drive, a DLFS-backed `file` root, and the drive a messaging provider
+or speech stores media in by default (`<owner>/dlfs/<provider>/`). Reads never
+create a drive.
 
 ## File adapter
 
@@ -86,7 +92,7 @@ injects the operator-configured `adapters.vault.drive`, which defaults to
 `vault`. Runtime behavior delegates through DLFS's typed operation boundary;
 there is no separate vault filesystem implementation or permission model.
 
-The configured vault drive is created by its first write; until then a read
+Vault creates its configured drive with its first write; until then a read
 finds no drive. Enabling Vault without a
 declared encrypted Etch policy emits an operator warning because DLFS content
 may otherwise be stored unencrypted at rest.

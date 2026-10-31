@@ -901,7 +901,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				name = spec.name().substring(0, Math.min(64, spec.name().length())) + "-" + Strings.create(fileId).getHash().toHexString() + extension;
 			}
 			String directory = destination == null
-				? MessagingMedia.ownerDirectory(spec.userDID(adapter.engine), TelegramAdapter.NAME) : destination.toString();
+				? MessagingMedia.ensureOwnerDirectory(adapter.engine, spec.userDID(adapter.engine), TelegramAdapter.NAME, writeContext)
+				: destination.toString();
 			AMap<AString, ACell> result = MessagingMedia.store(adapter.engine, bytes, contentType, directory, name, writeContext)
 				.assoc(Strings.intern("file_id"), Strings.create(fileId));
 			if (originalName != null) result = result.assoc(Strings.intern("file_name"), originalName);

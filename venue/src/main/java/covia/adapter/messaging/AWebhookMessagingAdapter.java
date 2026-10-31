@@ -166,11 +166,13 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		}
 		MessagingMedia.Fetched fetched = fetchMedia(bot, Maps.of("id", id));
 		AString owner = bot.spec().userDID(engine);
-		String directory = destination == null ? MessagingMedia.ownerDirectory(owner, getName()) : destination.toString();
+		RequestContext writer = destination == null ? RequestContext.of(owner) : ctx;
+		String directory = destination == null
+			? MessagingMedia.ensureOwnerDirectory(engine, owner, getName(), writer) : destination.toString();
 		String name = fileName == null ? MessagingMedia.fallbackName(bot.spec().name(), id, fetched.contentType()) : fileName.toString();
 		try {
 			return MessagingMedia.store(engine, fetched.bytes(), fetched.contentType(), directory, name,
-				destination == null ? RequestContext.of(owner) : ctx).assoc(MessagingSettings.key("media_id"), Strings.create(id));
+				writer).assoc(MessagingSettings.key("media_id"), Strings.create(id));
 		} catch (java.io.IOException e) {
 			throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
 		}

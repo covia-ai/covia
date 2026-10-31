@@ -491,7 +491,8 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		if (fileName != null && !MessagingMedia.safeFileName(fileName)) throw new IllegalArgumentException(MessagingMedia.INVALID_FILE_NAME);
 		Synthesised said = synthesise(ctx, s, in);
 		String destination = string(in, "destination");
-		String directory = destination != null ? destination : MessagingMedia.ownerDirectory(ctx.getUserDID(), DRIVE);
+		String directory = destination != null ? destination
+			: MessagingMedia.ensureOwnerDirectory(engine, ctx.getUserDID(), DRIVE, ctx);
 		String name = fileName != null ? fileName : MessagingMedia.fallbackName(DRIVE, UUID.randomUUID().toString(), said.mediaType());
 		AMap<AString, ACell> stored;
 		try {

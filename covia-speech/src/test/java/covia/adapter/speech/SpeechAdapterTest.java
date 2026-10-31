@@ -76,6 +76,8 @@ class SpeechAdapterTest {
 
 	String save(String name, byte[] bytes, String type) throws Exception {
 		String ref = owner + "/dlfs/media/" + name;
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive", Maps.of("name", "media"),
+			RequestContext.of(owner)).awaitResult(10_000);
 		assertTrue(engine.createContent(Strings.create(ref), new ByteArrayInputStream(bytes), type, RequestContext.of(owner)));
 		return ref;
 	}

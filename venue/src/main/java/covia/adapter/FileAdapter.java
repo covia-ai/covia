@@ -151,8 +151,11 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				throw new IllegalStateException(
 					"DLFS-backed root '" + driveName + "' requires the DLFS adapter to be registered");
 			}
-			// Only a write creates the drive; cheap cursor view per call.
-			Path driveRoot = dlfs.getDrive(ctx, driveName, ability)
+			// The root names its drive, so a write creates it; cheap cursor view per call.
+			if (Capability.CRUD_WRITE.equals(ability)) {
+				dlfs.ensureDrive(ctx, "dlfs/" + driveName + (subpath == null ? "" : "/" + subpath));
+			}
+			Path driveRoot = dlfs.getDrive(ctx, driveName)
 				.getRootDirectories().iterator().next();
 			if (subpath == null) return driveRoot;
 
@@ -455,8 +458,10 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		if (root instanceof DLFSRoot dr) {
 			String relative = joinDLFSPath(dr.subpath, userPath);
 			String ref = "dlfs/" + dr.driveName + (relative.isEmpty() ? "" : "/" + relative);
-			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
-				.resolveAuthorisedPath(ctx, ref, ability);
+			DLFSAdapter dlfs = requireDLFSAdapter();
+			// The root names its drive, so a write creates it.
+			if (Capability.CRUD_WRITE.equals(ability)) dlfs.ensureDrive(ctx, ref);
+			DLFSAdapter.AuthorisedPath target = dlfs.resolveAuthorisedPath(ctx, ref, ability);
 			Path logicalBase = FileOperations.resolve(target.root(), dr.subpath,
 				"DLFS root '" + rootName + "'", false);
 			if (!Files.exists(logicalBase) && Capability.CRUD_WRITE.equals(ability)) {

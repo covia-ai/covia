@@ -275,6 +275,7 @@ public class DLFSCrossUserTest {
 	public void testCrossUserReadsDoNotCreateDrives() {
 		// A read grant over all of Alice's drives reads the ones she has. A drive
 		// she never made, or deleted, is not found, and stays that way.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "old"), ALICE);
 		run("v/ops/dlfs/write", Maps.of("drive", "old", "path", "a.txt", "content", "old"), ALICE);
 		run("v/ops/dlfs/delete-drive", Maps.of("name", "old"), ALICE);
 		RequestContext bob = withProofs(BOB,
@@ -308,16 +309,22 @@ public class DLFSCrossUserTest {
 	}
 
 	@Test
-	public void testCrossUserWriteCreatesDrive() {
-		// A write grant may create the drive it writes into, as the owner's own
-		// write would.
+	public void testCrossUserWriteNeedsTheDrive() {
+		// A write grant writes into Alice's drives, but does not create one.
 		RequestContext bob = withProofs(BOB,
 			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs/", "crud/write", 3600));
+		assertTrue(failure("v/ops/dlfs/write", Maps.of(
+			"drive", ALICE_DID + "/inbox", "path", "note.md", "content", "from bob"), bob)
+			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		assertTrue(failure("v/ops/file/write", Maps.of(
+			"path", ALICE_DID + "/dlfs/inbox/note.md", "content", "from bob"), bob)
+			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		assertEquals(Vectors.of("docs"), aliceDrives());
+
 		run("v/ops/dlfs/write", Maps.of(
-			"drive", ALICE_DID + "/inbox", "path", "note.md", "content", "from bob"), bob);
-		assertEquals(Vectors.of("docs", "inbox"), aliceDrives());
+			"drive", aliceDocs, "path", "shared/note.md", "content", "from bob"), bob);
 		ACell result = run("v/ops/dlfs/read",
-			Maps.of("drive", "inbox", "path", "note.md"), ALICE);
+			Maps.of("drive", "docs", "path", "shared/note.md"), ALICE);
 		assertEquals("from bob", RT.getIn(result, "content").toString());
 	}
 
