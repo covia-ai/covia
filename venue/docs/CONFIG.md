@@ -1291,7 +1291,8 @@ drive. DLFS roots may be clamped to a provider-relative subtree:
 
 `subpath` is valid only with `dlfs`. It must be a non-empty relative path and
 cannot contain `..`; invalid roots are skipped rather than broadened to the
-whole drive. The subtree is created lazily on first file access. It is an
+whole drive. The first authorised write under the root creates the subtree,
+and the drive if need be, as the caller's; reads create nothing. It is an
 implementation boundary, not part of the client path: callers use
 `{ "root": "agent-documents", "path": "report.pdf" }`, while the provider
 stores the file at `vault/agent-output/report.pdf`. Because this is DLFS data,

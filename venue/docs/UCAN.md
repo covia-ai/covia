@@ -1038,9 +1038,9 @@ Two complementary checks apply, both built on the same `Capability.covers`
 matcher over canonical owner-scoped resources (§3.1):
 
 - **`CapabilityChecker`** enforces a *scope* — the agent's config `caps`
-  (§5.4) — on every operation (`enforceCaps` at job dispatch, and before each
-  tool call). A scope can only narrow.
-- **`CoviaAdapter.verifyProofs()`** authorises *cross-user* access against
+  (§5.4) — at each operation's point of action (`Engine.requireAuthority`),
+  tool calls included. A scope can only narrow.
+- **`Engine.crossUserAllows`** authorises *cross-user* access against
   presented proofs (§5.2). A proof grants reach into another namespace.
 
 The difference between agent models is which identity and caps the
