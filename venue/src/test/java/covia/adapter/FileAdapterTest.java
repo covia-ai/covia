@@ -1230,6 +1230,41 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testDLFSSubpathRootReadsCreateNothing() {
+		// Reads under a DLFS root's configured subtree find nothing until a write
+		// creates it, through file: and archive: alike.
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"reports", Maps.of("dlfs", "work", "subpath", "out/reports")
+			))
+		));
+		Engine.addDemoAssets(eng);
+		try {
+			RequestContext ctx = RequestContext.of(
+				Strings.create("did:key:z6Mk-test-FileAdapterTest-dlfs-subpath"));
+			eng.jobs().invokeOperation("v/ops/dlfs/create-drive",
+				Maps.of("name", "work"), ctx).awaitResult(2000);
+			for (String op : new String[] {"v/ops/file/read", "v/ops/archive/list"}) {
+				Job read = eng.jobs().invokeOperation(op,
+					Maps.of("root", "reports", "path", "bundle.zip"), ctx);
+				assertThrows(Exception.class, () -> read.awaitResult(2000), op);
+			}
+			ACell out = eng.jobs().invokeOperation("v/ops/dlfs/stat",
+				Maps.of("drive", "work", "path", "out"), ctx).awaitResult(2000);
+			assertFalse(RT.bool(RT.getIn(out, "exists")), "a read must not create the subtree");
+
+			eng.jobs().invokeOperation("v/ops/file/write",
+				Maps.of("root", "reports", "path", "q4.txt", "content", "done"), ctx).awaitResult(2000);
+			ACell written = eng.jobs().invokeOperation("v/ops/dlfs/stat",
+				Maps.of("drive", "work", "path", "out/reports/q4.txt"), ctx).awaitResult(2000);
+			assertTrue(RT.bool(RT.getIn(written, "exists")), "a write creates the subtree");
+		} finally {
+			eng.close();
+		}
+	}
+
+	@Test
 	public void testDLFSRootIsolatesPerCaller() {
 		// Each caller's drive view is signed with their own key — writes by
 		// one DID must not be visible to another.
