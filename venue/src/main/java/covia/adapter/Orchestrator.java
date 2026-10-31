@@ -25,6 +25,7 @@ import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.ResponseException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -443,7 +444,7 @@ public class Orchestrator extends AAdapter {
 			if (outputSchema == null || outputSchema.isEmpty()) return;
 			String err = JsonSchema.validate(outputSchema, output);
 			if (err != null) {
-				throw new RuntimeException(
+				throw new ResponseException(
 					"Step " + stepNum + " (" + opId + ") output schema violation: " + err);
 			}
 		}

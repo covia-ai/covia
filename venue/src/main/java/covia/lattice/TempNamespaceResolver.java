@@ -6,6 +6,7 @@ import convex.core.data.Blob;
 import convex.core.data.Strings;
 import convex.lattice.cursor.AForkableCursor;
 import covia.adapter.CoviaAdapter;
+import covia.exception.WrongScopeException;
 import covia.venue.RequestContext;
 
 /**
@@ -39,7 +40,7 @@ public class TempNamespaceResolver implements NamespaceResolver {
 		Blob jobId = ctx.getJobId();
 
 		if (taskId != null && agentId == null) {
-			throw new RuntimeException(
+			throw new IllegalStateException(
 				"Cannot use task-scoped 't/' without agentId on RequestContext");
 		}
 
@@ -47,7 +48,7 @@ public class TempNamespaceResolver implements NamespaceResolver {
 		// transition/trigger Job that may also be present on the cycle context.
 		Blob scopedJobId = (taskId != null) ? taskId : jobId;
 		if (scopedJobId == null) {
-			throw new RuntimeException(
+			throw new WrongScopeException(
 				"Cannot use 't/' prefix outside job or task scope (requires agentId+taskId or jobId on RequestContext)");
 		}
 

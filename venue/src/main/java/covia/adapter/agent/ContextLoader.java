@@ -1,6 +1,8 @@
 package covia.adapter.agent;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ABlob;
@@ -13,12 +15,15 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.adapter.AAdapter;
 import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -233,21 +238,15 @@ public class ContextLoader {
 		AString ref = RT.ensureString(entry.get(K_REF));
 		if (ref != null) {
 			String content = resolveReference(ref, ctx);
-			if (content == null) throw new RuntimeException("not found: " + ref);
+			if (content == null) throw new NotFoundException("not found: " + ref, ref.toString());
 			return content;
 		}
 		AString op = RT.ensureString(entry.get(K_OP));
 		if (op != null) {
-			ACell result;
-			try {
-				result = engine.jobs().invokeInternal(op, entry.get(K_INPUT), ctx)
-					.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
-			} catch (Exception e) {
-				throw new RuntimeException("operation " + op + " failed: " + rootMessage(e), e);
-			}
+			ACell result = await(engine.jobs().invokeInternal(op, entry.get(K_INPUT), ctx), op);
 			AString s = RT.ensureString(result);
 			if (s == null) {
-				throw new RuntimeException("operation " + op + " returned "
+				throw new InvalidInputException("operation " + op + " returned "
 					+ ((result == null) ? "nothing" : result.getClass().getSimpleName()) + ", not text");
 			}
 			return s.toString();
@@ -256,10 +255,10 @@ public class ContextLoader {
 		if (jobId != null) {
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(
 				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
-			if (jobData == null) throw new RuntimeException("job not found: " + jobId);
+			if (jobData == null) throw new NotFoundException("job not found: " + jobId, jobId.toString());
 			ACell status = jobData.get(Fields.STATUS);
 			if (!Strings.create("COMPLETE").equals(status)) {
-				throw new RuntimeException("job " + jobId + " is not complete (" + status + ")");
+				throw new ConflictException("job " + jobId + " is not complete (" + status + ")");
 			}
 			ACell output = jobData.get(Fields.OUTPUT);
 			AString path = RT.ensureString(entry.get(K_PATH));
@@ -270,7 +269,7 @@ public class ContextLoader {
 				}
 			}
 			AString s = RT.ensureString(output);
-			if (s == null) throw new RuntimeException("job " + jobId + " output is not text");
+			if (s == null) throw new InvalidInputException("job " + jobId + " output is not text");
 			return s.toString();
 		}
 		throw new InvalidInputException("entry declares none of ref, text, op, job");
@@ -310,7 +309,7 @@ public class ContextLoader {
 			try {
 				String content = resolveReference(ref, ctx);
 				if (content == null) {
-					if (required) throw new RuntimeException("Required context entry not found: " + ref);
+					if (required) throw new NotFoundException("Required context entry not found: " + ref, ref.toString());
 					return null;                          // absent/empty → skip
 				}
 				return resolved(labelStr, content, provenance);
@@ -383,18 +382,12 @@ public class ContextLoader {
 	 * cursor-based path resolution (same as WorkspaceRoot.read).
 	 */
 	String resolveWorkspacePath(String path, RequestContext ctx) {
-		try {
-			requireReadAccess(Strings.create(path), ctx);
-			CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-			if (covia == null) return null;
-			ACell value = covia.readContextValue(ctx, Strings.create(path));
-			if (value == null) return null;              // path absent → caller skips
-			return renderValue(value);
-		} catch (RuntimeException e) {
-			throw e;                                      // genuine read error → caller makes it visible
-		} catch (Exception e) {
-			throw new RuntimeException(e);
-		}
+		requireReadAccess(Strings.create(path), ctx);
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		if (covia == null) return null;
+		ACell value = covia.readContextValue(ctx, Strings.create(path));
+		if (value == null) return null;              // path absent → caller skips
+		return renderValue(value);
 	}
 
 	/**
@@ -447,10 +440,8 @@ public class ContextLoader {
 			}
 
 			return null;                                  // nothing usable → caller skips
-		} catch (RuntimeException e) {
-			throw e;                                      // genuine resolution error → caller makes it visible
-		} catch (Exception e) {
-			throw new RuntimeException(e);
+		} catch (IOException e) {
+			throw new UnavailableException("Could not read content of " + ref + ": " + e.getMessage(), e);
 		}
 	}
 
@@ -497,21 +488,20 @@ public class ContextLoader {
 			// invocation) and run pre-transition under the caller's identity.
 			// invokeInternal is the framework dispatch path — no cap check
 			// applied. Caps stay on ctx for audit.
-			ACell result = engine.jobs().invokeInternal(asset.meta(), input, ctx.withOp(op))
-				.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
+			ACell result = await(engine.jobs().invokeInternal(asset.meta(), input, ctx.withOp(op)), op);
 			if (result == null) {
-				if (required) throw new RuntimeException("Required context operation returned null: " + op);
+				if (required) throw new NotFoundException("Required context operation returned null: " + op, op.toString());
 				return null;                              // produced nothing → skip
 			}
 			return resolved(labelStr, renderValue(result), provenance);
 		} catch (RuntimeException e) {
 			if (required) throw e;
 			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
-		} catch (Exception e) {
-			if (required) throw new RuntimeException("Context operation failed: " + op + " — "
-				+ covia.adapter.AAdapter.describeFailure(e), e);
-			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		}
+	}
+
+	private static ACell await(CompletableFuture<ACell> result, AString op) {
+		return AAdapter.await(result, 10_000, "Context operation " + op);
 	}
 
 	/**
@@ -525,13 +515,13 @@ public class ContextLoader {
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(
 				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
 			if (jobData == null) {
-				if (required) throw new RuntimeException("Required context job not found: " + jobId);
+				if (required) throw new NotFoundException("Required context job not found: " + jobId, jobId.toString());
 				return null;
 			}
 
 			ACell status = jobData.get(Fields.STATUS);
 			if (!Strings.create("COMPLETE").equals(status)) {
-				if (required) throw new RuntimeException("Required context job not complete: " + jobId + " status=" + status);
+				if (required) throw new ConflictException("Required context job not complete: " + jobId + " status=" + status);
 				return null;
 			}
 
@@ -545,7 +535,7 @@ public class ContextLoader {
 			}
 
 			if (output == null) {
-				if (required) throw new RuntimeException("Required context job output is null: " + jobId);
+				if (required) throw new NotFoundException("Required context job output is null: " + jobId, jobId.toString());
 				return null;
 			}
 

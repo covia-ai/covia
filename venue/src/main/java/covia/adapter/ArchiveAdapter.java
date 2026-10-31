@@ -120,10 +120,8 @@ public class ArchiveAdapter extends AAdapter {
 					case "zip"     -> handleZip(ctx, in);
 					default -> throw new NotSupportedException("Unknown archive operation: " + subOp);
 				};
-			} catch (RuntimeException e) {
-				throw e;
-			} catch (Exception e) {
-				throw new RuntimeException(e.getMessage(), e);
+			} catch (IOException e) {
+				throw FileOperations.failure(e);
 			}
 		}, VIRTUAL_EXECUTOR);
 	}

@@ -585,7 +585,7 @@ public class HTTPAdapter extends AAdapter {
 			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions, unrestricted);
 
 		} catch (URISyntaxException e) {
-			throw new RuntimeException("Bad URI syntax: "+url,e);
+			throw new InvalidInputException("Bad URI syntax: "+url,e);
 		}
 	}
 

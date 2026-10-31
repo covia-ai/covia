@@ -44,6 +44,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Creating a workspace key, file, directory or drive needs `crud/write` on what holds it.
 - A cross-user write reaches only a user the venue already has.
 - Archive operations authorise as file operations do.
+- Refusals that were plain `RuntimeException`s are Covia exception types; a plain `RuntimeException` is a venue error.
+- `t/` outside a job or task reads as absent, as `n/` and `c/` do.
+- `VenueServer.launch` throws a startup failure as its own type.
 
 ### Removed
 

@@ -1,10 +1,12 @@
 package covia.grid.auth;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 
 import convex.auth.did.DID;
@@ -13,6 +15,8 @@ import convex.core.data.AString;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.AuthException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.grid.Grid;
 
 /**
@@ -153,8 +157,9 @@ public final class VenueDID {
 	 *
 	 * @param baseUrl the venue's base URL (e.g. {@code "https://venue.example"})
 	 * @return the venue's published DID string (validated as a well-formed DID)
-	 * @throws RuntimeException if the document cannot be fetched or does not
-	 *         carry a well-formed DID {@code id}
+	 * @throws UnavailableException if the venue cannot be reached
+	 * @throws ResponseException if the venue answers with an error or a
+	 *         document that does not carry a well-formed DID {@code id}
 	 */
 	public static String discover(String baseUrl) {
 		if (baseUrl == null) throw new IllegalArgumentException("baseUrl is required");
@@ -175,27 +180,25 @@ public final class VenueDID {
 				.build();
 			HttpResponse<String> resp = HTTP_CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
 			if (resp.statusCode() != 200) {
-				throw new RuntimeException("Venue DID discovery failed: " + base
-					+ "/.well-known/did.json returned HTTP " + resp.statusCode());
+				throw new ResponseException("Venue DID discovery failed: " + base
+					+ "/.well-known/did.json returned HTTP " + resp.statusCode(), resp);
 			}
 			ACell doc = JSON.parse(resp.body());
 			AString id = RT.ensureString(RT.getIn(doc, "id"));
 			if (id == null) {
-				throw new RuntimeException("Venue DID document has no id: " + base);
+				throw new ResponseException("Venue DID document has no id: " + base);
 			}
 			// Validate as a well-formed DID (throws on malformed input).
 			DID parsed = DID.fromString(id.toString());
 			if (parsed == null) {
-				throw new RuntimeException("Venue DID document id is not a valid DID: " + id);
+				throw new ResponseException("Venue DID document id is not a valid DID: " + id);
 			}
 			return id.toString();
-		} catch (RuntimeException e) {
-			throw e;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new RuntimeException("Venue DID discovery interrupted for " + base, e);
-		} catch (Exception e) {
-			throw new RuntimeException("Venue DID discovery failed for " + base + ": " + e.getMessage(), e);
+			throw new CancellationException("Venue DID discovery interrupted for " + base);
+		} catch (IOException e) {
+			throw new UnavailableException("Venue DID discovery failed for " + base + ": " + e.getMessage(), e);
 		}
 	}
 }

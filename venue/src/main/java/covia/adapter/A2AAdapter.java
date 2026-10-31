@@ -540,8 +540,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				.thenApply(resp -> {
 					int sc = resp.statusCode();
 					if (sc < 200 || sc >= 300) {
-						throw new RuntimeException("Agent card fetch failed: HTTP " + sc + ": "
-							+ conciseDetail(resp.body(), 512));
+						throw new ResponseException("Agent card fetch failed: HTTP " + sc + ": "
+							+ conciseDetail(resp.body(), 512), resp);
 					}
 					// Round-trip through the SDK mapper so the response is parsed
 					// (and any drift in upstream card format is flagged loudly).
@@ -615,22 +615,22 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 					// Per spec §9, JSON-RPC errors still arrive with HTTP 200;
 					// we only reject on non-2xx transport-level failures.
 					if (sc < 200 || sc >= 300) {
-						throw new RuntimeException("A2A RPC failed: HTTP " + sc + ": "
-							+ conciseDetail(resp.body(), 512));
+						throw new ResponseException("A2A RPC failed: HTTP " + sc + ": "
+							+ conciseDetail(resp.body(), 512), resp);
 					}
 					ACell parsed = JSON.parse(resp.body());
 					if (!(parsed instanceof AMap)) {
-						throw new RuntimeException("A2A response is not a JSON object");
+						throw new ResponseException("A2A response is not a JSON object", resp);
 					}
 					@SuppressWarnings("unchecked")
 					AMap<AString, ACell> parsedMap = (AMap<AString, ACell>) parsed;
 					ACell err = parsedMap.get(Fields.ERROR);
 					if (err != null) {
-						throw new RuntimeException("A2A error: " + conciseDetail(err, 512));
+						throw new ResponseException("A2A error: " + conciseDetail(err, 512), resp);
 					}
 					ACell result = parsedMap.get(Fields.RESULT);
 					if (result == null) {
-						throw new RuntimeException("A2A response has neither result nor error");
+						throw new ResponseException("A2A response has neither result nor error", resp);
 					}
 					// getTask / cancel both return a Task; unwrap if wrapped.
 					return unwrapKind(result, "task");
@@ -968,14 +968,14 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		HttpRequest req = postEnvelope(rpcUrl, envelope, auth);
 		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-			throw new covia.exception.ResponseException("Remote getTask failed: HTTP " + resp.statusCode(), resp);
+			throw new ResponseException("Remote getTask failed: HTTP " + resp.statusCode(), resp);
 		}
 		@SuppressWarnings("rawtypes")
 		Map envReply = JsonUtil.OBJECT_MAPPER.fromJson(resp.body(), Map.class);
 		Object error = envReply.get("error");
-		if (error != null) throw new RuntimeException("Remote getTask error: " + conciseDetail(error, 512));
+		if (error != null) throw new ResponseException("Remote getTask error: " + conciseDetail(error, 512), resp);
 		Object result = envReply.get("result");
-		if (result == null) throw new RuntimeException("Remote getTask response has neither result nor error");
+		if (result == null) throw new ResponseException("Remote getTask response has neither result nor error", resp);
 		String resultJson = JsonUtil.OBJECT_MAPPER.toJson(result);
 		ACell raw = unwrapKind(JSON.parse(resultJson), "task");
 		Task task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(raw).toString(), Task.class);

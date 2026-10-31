@@ -684,7 +684,7 @@ public class AgentAdapter extends AAdapter {
 					if (cause instanceof TimeoutException) {
 						return buildRequestSnapshot(taskJob, agentId, sessionId);
 					}
-					throw (ex instanceof RuntimeException re) ? re : new RuntimeException(cause);
+					throw (ex instanceof RuntimeException re) ? re : new java.util.concurrent.CompletionException(cause);
 				});
 	}
 
@@ -3819,7 +3819,7 @@ public class AgentAdapter extends AAdapter {
 				if (agent == null) {
 					run.end(AgentState.TERMINATED);
 					completion.completeExceptionally(
-						new RuntimeException("Agent not found: " + agentId));
+						new NotFoundException("Agent not found: " + agentId, agentId.toString()));
 					return;
 				}
 
@@ -4114,13 +4114,13 @@ public class AgentAdapter extends AAdapter {
 				// next boot. Suspending the agent or failing its tasks here would be
 				// wrong, and would write to a store that may already be closed.
 				run.end(AgentState.SLEEPING);
-				completion.completeExceptionally(new RuntimeException(failure, e));
+				completion.completeExceptionally(e);
 				return;
 			}
 			suspendOnError(ownerDID, agentId, e);
 			failAllPendingForAgent(ownerDID, agentId, failure);
 			run.end(AgentState.SUSPENDED);
-			completion.completeExceptionally(new RuntimeException(failure, e));
+			completion.completeExceptionally(e);
 		} finally {
 			// Release the launcher slot, then re-check for wakes that may
 			// have arrived while this loop was exiting. remove(key, value)

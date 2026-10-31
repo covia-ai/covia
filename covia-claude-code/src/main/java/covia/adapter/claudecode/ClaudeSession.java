@@ -5,6 +5,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,6 +36,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.exception.UnavailableException;
 
 /**
  * One Claude Code process: a conversation (Claude Code session) in a project
@@ -246,7 +248,7 @@ final class ClaudeSession {
 				}
 			}
 			current = null;
-			next.future.completeExceptionally(new RuntimeException("Could not start Claude Code turn: " + AAdapter.describeFailure(e), e));
+			next.future.completeExceptionally(new UnavailableException("Could not start Claude Code turn: " + AAdapter.describeFailure(e), e));
 			stopLocked("start failed");
 			// The remaining queue fails too: nothing will drain it.
 			failQueue("Claude Code session could not start: " + AAdapter.describeFailure(e));
@@ -278,7 +280,7 @@ final class ClaudeSession {
 
 	private void failQueue(String reason) {
 		Turn t;
-		while ((t = queue.poll()) != null) t.future.completeExceptionally(new RuntimeException(reason));
+		while ((t = queue.poll()) != null) t.future.completeExceptionally(new UnavailableException(reason));
 	}
 
 	// ---------------------------------------------------------------- process
@@ -318,7 +320,7 @@ final class ClaudeSession {
 			tempFiles.add(f);
 			return f.toString();
 		} catch (IOException e) {
-			throw new RuntimeException("Could not write Claude Code option file: " + e.getMessage(), e);
+			throw new UncheckedIOException("Could not write Claude Code option file: " + e.getMessage(), e);
 		}
 	}
 
@@ -524,7 +526,7 @@ final class ClaudeSession {
 			state = State.STOPPED;
 			String tail = stderrTail();
 			if (failed != null && !failed.future.isDone()) {
-				failed.future.completeExceptionally(new RuntimeException(
+				failed.future.completeExceptionally(new UnavailableException(
 					"Claude Code exited (code " + code + ") before finishing the turn"
 					+ (tail.isEmpty() ? "" : ": " + tail)
 					+ (sessionId != null ? " [session " + sessionId + "]" : "")));
@@ -573,7 +575,7 @@ final class ClaudeSession {
 		}
 		log.info("Stopping Claude Code process {} in project '{}': {}", p.pid(), project.name(), reason);
 		if (current != null && !current.future.isDone()) {
-			current.future.completeExceptionally(new RuntimeException("Claude Code session stopped: " + reason));
+			current.future.completeExceptionally(new UnavailableException("Claude Code session stopped: " + reason));
 			current = null;
 		}
 		failQueue("Claude Code session stopped: " + reason);

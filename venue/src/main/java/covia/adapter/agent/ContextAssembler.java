@@ -1215,7 +1215,7 @@ public final class ContextAssembler {
 	static AVector<ACell> contextVector(ACell raw, String which) {
 		if (raw == null) return null;
 		if (raw instanceof AVector) return (AVector<ACell>) raw;
-		throw new RuntimeException(which + " must be an array of context entries, got "
+		throw new InvalidInputException(which + " must be an array of context entries, got "
 			+ Types.get(raw) + " — fix the agent config");
 	}
 }

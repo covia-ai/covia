@@ -36,6 +36,11 @@ import static covia.lattice.WorkspaceRoot.buildSubPath;
 import static covia.lattice.WorkspaceRoot.parseStringPath;
 
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.Covia;
 import covia.lattice.NamespaceResolver;
@@ -222,7 +227,7 @@ public class CoviaAdapter extends AAdapter {
 		// Engine-startup code that needs venue-authority writes uses
 		// engine.venueContext() which has the venue's own DID as caller.
 		if (ctx.getCallerDID() == null) {
-			return CompletableFuture.failedFuture(new RuntimeException("Authentication required"));
+			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		try {
 			return switch (getSubOperation(meta)) {
@@ -236,7 +241,7 @@ public class CoviaAdapter extends AAdapter {
 				case "inspect" -> CompletableFuture.completedFuture(handleInspect(ctx, input));
 				case "aggregate" -> CompletableFuture.completedFuture(handleAggregate(ctx, input));
 				default -> CompletableFuture.failedFuture(
-					new RuntimeException("Unknown covia operation: " + getSubOperation(meta)));
+					new NotSupportedException("Unknown covia operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -525,7 +530,7 @@ public class CoviaAdapter extends AAdapter {
 			return slicePage(typeName, total, page, offset, input);
 
 		} else {
-			throw new RuntimeException(
+			throw new ConflictException(
 				"covia:slice requires a collection (vector, map, or set), got: " + typeName);
 		}
 	}
@@ -579,7 +584,7 @@ public class CoviaAdapter extends AAdapter {
 		// Read from source via the canonical universal resolver, checked above.
 		ACell value = engine.resolvePathUnchecked(from, ctx);
 		if (value == null) {
-			throw new RuntimeException("source not found: " + from);
+			throw new NotFoundException("source not found: " + from, from.toString());
 		}
 
 		// Delegate to handleWrite for the destination, which enforces
@@ -660,7 +665,7 @@ public class CoviaAdapter extends AAdapter {
 		// distinct from absent — covia:read reports exists:true). Removing an entry
 		// is covia:delete, not a null write.
 		if (!(input instanceof AMap) || !((AMap<?, ?>) input).containsKey(Fields.VALUE)) {
-			throw new RuntimeException(
+			throw new InvalidInputException(
 				"Write requires a 'value' field (received path only). Provide the value to "
 				+ "store (an explicit null stores a null value); to remove an entry use covia:delete.");
 		}
@@ -852,16 +857,17 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * Validates that a parsed path targets a writable namespace.
 	 *
-	 * @throws RuntimeException if path is too short or targets a non-writable namespace
+	 * @throws InvalidInputException if the path is too short
+	 * @throws NotSupportedException if the path targets a non-writable namespace
 	 */
 	private static void validateWritablePath(ACell[] jsonKeys) {
 		if (jsonKeys.length < 2) {
-			throw new RuntimeException(
+			throw new InvalidInputException(
 				"Path must include namespace and key, e.g. 'w/my-key'");
 		}
 		String namespace = jsonKeys[0].toString();
 		if (!WRITABLE_NAMESPACES.contains(namespace)) {
-			throw new RuntimeException(
+			throw new NotSupportedException(
 				"Namespace '" + namespace + "' is not writable (framework-managed). "
 				+ "Writable namespaces: w/ (workspace), o/ (operation pins); "
 				+ "n/ and t/ are writable within an agent or job run.");
@@ -886,7 +892,7 @@ public class CoviaAdapter extends AAdapter {
 			NamespaceResolver resolver = resolvers.get(jsonKeys[0].toString());
 			if (resolver != null) {
 				if (!resolver.canWrite(ctx)) {
-					throw new RuntimeException("Write permission denied for namespace: " + jsonKeys[0]);
+					throw new AuthException("Write permission denied for namespace: " + jsonKeys[0]);
 				}
 				return;
 			}
@@ -914,7 +920,7 @@ public class CoviaAdapter extends AAdapter {
 		if (jsonKeys.length > 0 && NS_SECRETS.equals(jsonKeys[0].toString())
 				&& resolvers.get(NS_SECRETS) == null) {
 			if (jsonKeys.length != 2) {
-				throw new RuntimeException(
+				throw new InvalidInputException(
 					"Secret deletion must address a whole record, e.g. 's/MY_KEY'");
 			}
 			return;

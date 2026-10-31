@@ -2,6 +2,7 @@ package covia.venue.server;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -204,7 +205,10 @@ public class VenueServer {
 				}
 				store = null;
 			}
-			throw new RuntimeException("Failed to create venue engine", e);
+			// A typed failure already says what is wrong; only a checked one needs wrapping
+			if (e instanceof RuntimeException failure) throw failure;
+			if (e instanceof IOException io) throw new UncheckedIOException("Failed to create venue engine", io);
+			throw new IllegalStateException("Failed to create venue engine", e);
 		}
 
 		LocalVenue localVenue=new LocalVenue(engine);

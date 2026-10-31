@@ -1,7 +1,9 @@
 package covia.venue;
 
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
@@ -534,10 +536,10 @@ public class Scheduler {
 		} catch (ExecutionException e) {
 			Throwable c = e.getCause();
 			if (c instanceof RuntimeException re) throw re;
-			throw new RuntimeException(c);
+			throw new CompletionException(c);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new RuntimeException(e);
+			throw new CancellationException("Interrupted awaiting the scheduler");
 		}
 	}
 }

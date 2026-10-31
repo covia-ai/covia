@@ -19,6 +19,8 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 import covia.venue.UcanJwtValidator;
@@ -70,14 +72,14 @@ public class UCANAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
 		if (ctx.getCallerDID() == null) {
-			return CompletableFuture.failedFuture(new RuntimeException("Authentication required"));
+			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		try {
 			return switch (getSubOperation(meta)) {
 				case "issue"  -> CompletableFuture.completedFuture(handleIssue(ctx, input));
 				case "verify" -> CompletableFuture.completedFuture(handleVerify(ctx, input));
 				default -> CompletableFuture.failedFuture(
-					new RuntimeException("Unknown ucan operation: " + getSubOperation(meta)));
+					new NotSupportedException("Unknown ucan operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -115,13 +117,13 @@ public class UCANAdapter extends AAdapter {
 
 		AString audDID = RT.ensureString(RT.getIn(input, UCAN.AUD));
 		if (audDID == null) {
-			throw new RuntimeException("aud (audience DID) is required");
+			throw new InvalidInputException("aud (audience DID) is required");
 		}
 
 		@SuppressWarnings("unchecked")
 		AVector<ACell> att = RT.getIn(input, UCAN.ATT);
 		if (att == null || att.count() == 0) {
-			throw new RuntimeException("att (attenuations) is required and must not be empty");
+			throw new InvalidInputException("att (attenuations) is required and must not be empty");
 		}
 
 		// prf passes on the venue's own authority, so no request but the
@@ -149,10 +151,10 @@ public class UCANAdapter extends AAdapter {
 		} else if (expCell != null) {
 			exp = expCell.longValue();
 			if (exp <= now) {
-				throw new RuntimeException("exp must be in the future, or null for no expiry");
+				throw new InvalidInputException("exp must be in the future, or null for no expiry");
 			}
 		} else {
-			throw new RuntimeException("exp must be unix seconds or null for no expiry");
+			throw new InvalidInputException("exp must be unix seconds or null for no expiry");
 		}
 
 		// Canonicalise + validate 'with' fields. A bare path names the ISSUER's
@@ -174,13 +176,13 @@ public class UCANAdapter extends AAdapter {
 			AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 			String w = (with != null) ? with.toString() : null;
 			if (cap == null || w == null || w.contains("://")) {
-				throw new RuntimeException("att[" + i + "].with must be a resource path — "
+				throw new InvalidInputException("att[" + i + "].with must be a resource path — "
 					+ "bare (scoped to your own namespace, e.g. w/) or a DID URL "
 					+ "(e.g. " + callerPrefix + "w/)");
 			}
 			AString can = RT.ensureString(cap.get(Capability.CAN));
 			if (can == null) {
-				throw new RuntimeException("att[" + i + "].can (ability) is required");
+				throw new InvalidInputException("att[" + i + "].can (ability) is required");
 			}
 			if (w.startsWith("did:")) {
 				// With prf, held grants authorise the entry instead (requireHeld)
@@ -192,7 +194,7 @@ public class UCANAdapter extends AAdapter {
 					AString grantAbility = Strings.create("grant/" + can);
 					AString resource = Strings.create(w);
 					if (!engine.proofsCover(ctx, resource, grantAbility, now)) {
-						throw new RuntimeException("att[" + i + "].with is outside your namespace "
+						throw new AuthException("att[" + i + "].with is outside your namespace "
 							+ "and your presented proofs do not establish the granting right "
 							+ grantAbility + " over " + w + " — present a delegation from the "
 							+ "resource owner through the transport ucans grant channel, or use "
@@ -206,7 +208,7 @@ public class UCANAdapter extends AAdapter {
 					// second time against an imaginary future invocation.
 					long horizon = (exp == null) ? Long.MAX_VALUE : exp - 1;
 					if (!engine.proofsStructurallyCover(ctx, resource, grantAbility, horizon)) {
-						throw new RuntimeException("att[" + i + "]: exp exceeds the validity of the "
+						throw new AuthException("att[" + i + "]: exp exceeds the validity of the "
 							+ "granting right enabling this issuance — minted authority must not "
 							+ "outlive the right it was minted under; request a shorter exp");
 					}
@@ -214,7 +216,7 @@ public class UCANAdapter extends AAdapter {
 			} else {
 				String path = w.startsWith("/") ? w.substring(1) : w;
 				if (path.isEmpty()) {
-					throw new RuntimeException("att[" + i + "].with must name a resource — "
+					throw new InvalidInputException("att[" + i + "].with must name a resource — "
 						+ "an empty path would grant your entire namespace; say so explicitly ("
 						+ callerPrefix + ") if that is intended");
 				}
@@ -333,7 +335,7 @@ public class UCANAdapter extends AAdapter {
 		AString tokenStr = RT.ensureString(RT.getIn(input, K_TOKEN));
 		AMap<AString, ACell> tokenMap = RT.castMap(RT.getIn(input, K_TOKEN));
 		if (tokenStr == null && tokenMap == null) {
-			throw new RuntimeException("token is required: a UCAN JWT string or token map");
+			throw new InvalidInputException("token is required: a UCAN JWT string or token map");
 		}
 
 		long now = System.currentTimeMillis() / 1000;

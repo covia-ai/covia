@@ -22,6 +22,7 @@ import convex.lattice.generic.JSONLattice;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
+import covia.exception.ConflictException;
 import covia.grid.Job;
 
 /**
@@ -368,7 +369,7 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 	 * atomic update lambda receives the value lattice's zero in place of
 	 * a missing path — see {@link convex.lattice.cursor.PathCursor}).
 	 *
-	 * @throws RuntimeException if current value is non-empty and non-vector
+	 * @throws ConflictException if current value is non-empty and non-vector
 	 */
 	@SuppressWarnings("unchecked")
 	private static ACell appendToVector(ACell current, ACell element) {
@@ -379,7 +380,7 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 		if (current instanceof AMap && ((AMap<?, ?>) current).isEmpty()) {
 			return Vectors.of(element);
 		}
-		throw new RuntimeException(
+		throw new ConflictException(
 			"Cannot append to non-vector value of type: " + current.getType());
 	}
 

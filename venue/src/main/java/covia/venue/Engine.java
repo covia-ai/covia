@@ -921,7 +921,7 @@ public class Engine {
 			publishApplicationRoot();
 			flushStore();
 		} catch (java.io.IOException e) {
-			throw new RuntimeException("flush failed", e);
+			throw new java.io.UncheckedIOException("flush failed", e);
 		}
 		lastFlushMillis = System.currentTimeMillis();
 	}

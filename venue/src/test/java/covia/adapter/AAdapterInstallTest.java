@@ -232,7 +232,7 @@ public class AAdapterInstallTest {
 		String detail = ProbeAdapter.probeFailure(
 			new RuntimeException("first line\n" + "x".repeat(2000)));
 		assertTrue(!detail.contains("\n"), detail);
-		assertTrue(detail.startsWith("first line "), detail);
+		assertTrue(detail.startsWith("RuntimeException: first line "), detail);
 		assertTrue(detail.length() <= 1025, "bounded diagnostic was " + detail.length() + " chars");
 	}
 

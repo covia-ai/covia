@@ -1481,7 +1481,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			ctx.res().flushBuffer();
 		} catch (java.io.IOException e) {
-			throw new RuntimeException(e);
+			throw new java.io.UncheckedIOException(e);
 		}
 		ctx.async(cfg -> cfg.timeout = 0L,
 			() -> sseServer.registerSSE.accept(new io.javalin.http.sse.SseClient(ctx)));
@@ -2318,7 +2318,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			ctx.res().flushBuffer();
 		} catch (java.io.IOException e) {
-			throw new RuntimeException(e);
+			throw new java.io.UncheckedIOException(e);
 		}
 		ctx.async(cfg -> cfg.timeout = 0L,
 			() -> sseServer.registerAgentSSE.accept(new io.javalin.http.sse.SseClient(ctx)));

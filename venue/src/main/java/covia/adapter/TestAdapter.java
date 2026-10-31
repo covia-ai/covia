@@ -2,6 +2,7 @@ package covia.adapter;
 
 import java.security.SecureRandom;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -24,6 +25,7 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.ATransformCursor;
 import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
+import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -508,7 +510,7 @@ public class TestAdapter extends AAdapter {
                 Thread.sleep(delay.longValue());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("taskcomplete interrupted", e);
+                throw new CancellationException("taskcomplete interrupted");
             }
         }
         AString readPath = RT.ensureString(RT.getIn(newInput, "readPath"));
@@ -1662,13 +1664,13 @@ public class TestAdapter extends AAdapter {
             "content", Strings.create("kicked self-message"));
     }
 
-    private RuntimeException handleError(ACell input) {
+    private JobFailedException handleError(ACell input) {
         // Always throw an error with the input message
         ACell message = RT.getIn(input, "message");
         if (message == null) {
             throw new IllegalArgumentException("Error operation requires a 'message' parameter");
         }
-        return new RuntimeException(RT.ensureString(message).toString());
+        return new JobFailedException(RT.ensureString(message).toString());
     }
     
     private ACell handleRandom(ACell input) {

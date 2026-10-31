@@ -77,9 +77,8 @@ public class EnginePersistenceTest {
 			application.host().flush();
 			before = store.getRootData();
 		}
-		var error = assertThrows(RuntimeException.class, () -> VenueServer.launch(config));
-		var cause = org.junit.jupiter.api.Assertions.assertInstanceOf(IllegalStateException.class, error.getCause());
-		assertEquals(VenueState.UNSUPPORTED_VERSION.formatted(future, VenueState.CURRENT_VERSION), cause.getMessage());
+		var error = assertThrows(UnsupportedVersionException.class, () -> VenueServer.launch(config));
+		assertEquals(VenueState.UNSUPPORTED_VERSION.formatted(future, VenueState.CURRENT_VERSION), error.getMessage());
 		try (var store = convex.etch.EtchStore.create(file)) {
 			assertEquals(before, store.getRootData());
 		}

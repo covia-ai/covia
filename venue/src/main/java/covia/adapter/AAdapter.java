@@ -2,7 +2,11 @@ package covia.adapter;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +24,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -1060,6 +1065,28 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Awaits an internal call's result for up to {@code timeoutMs}. A failure
+	 * the call states passes on as its own type; no answer in time is
+	 * {@link UnavailableException}; an interrupt cancels the wait. A checked
+	 * failure passes on wrapped, as the venue fault it is.
+	 *
+	 * @param what the call awaited, as named in the timeout's reason
+	 */
+	public static <T> T await(CompletableFuture<T> result, long timeoutMs, String what) {
+		try {
+			return result.get(timeoutMs, TimeUnit.MILLISECONDS);
+		} catch (ExecutionException e) {
+			if (e.getCause() instanceof RuntimeException failure) throw failure;
+			throw new CompletionException(e.getCause());
+		} catch (TimeoutException e) {
+			throw new UnavailableException(what + " did not answer within " + timeoutMs + "ms", e);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new CancellationException("Interrupted awaiting " + what);
+		}
+	}
+
+	/**
 	 * Render a Throwable into a non-empty diagnostic string for {@link Job#fail}:
 	 * unwrap async wrappers, use the message when present, else fall back to the
 	 * exception's {@code toString()} so a failure never surfaces as a blank error.
@@ -1104,7 +1131,6 @@ public abstract class AAdapter {
 	 */
 	public static boolean isSelfDescribing(Throwable t) {
 		return t instanceof covia.exception.CoviaException
-			|| t.getClass() == RuntimeException.class      // used as a plain message carrier throughout
 			|| t instanceof IllegalArgumentException
 			|| t instanceof IllegalStateException
 			|| t instanceof UnsupportedOperationException;

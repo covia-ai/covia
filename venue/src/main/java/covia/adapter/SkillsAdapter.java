@@ -3,7 +3,9 @@ package covia.adapter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 
 import convex.core.data.ABlob;
@@ -492,10 +494,10 @@ public class SkillsAdapter extends AAdapter {
 		} catch (ExecutionException e) {
 			Throwable cause = e.getCause();
 			if (cause instanceof RuntimeException re) throw re;
-			throw new RuntimeException(cause);
+			throw new CompletionException(cause);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new RuntimeException("interrupted while writing " + path, e);
+			throw new CancellationException("interrupted while writing " + path);
 		}
 	}
 

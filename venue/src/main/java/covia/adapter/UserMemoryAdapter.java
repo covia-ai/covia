@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
@@ -20,6 +19,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.venue.RequestContext;
 
 /**
@@ -110,7 +113,7 @@ public class UserMemoryAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		// Authentication required: memory is always scoped to a calling identity.
 		if (ctx.getCallerDID() == null) {
-			return CompletableFuture.failedFuture(new RuntimeException("Authentication required"));
+			return CompletableFuture.failedFuture(new AuthException("Authentication required"));
 		}
 		// The context-only operation fixes recall at the metadata boundary. The
 		// ordinary agent tool remains the compact command-dispatched editor.
@@ -122,7 +125,7 @@ public class UserMemoryAdapter extends AAdapter {
 				case "remember" -> CompletableFuture.completedFuture(mutate(ctx, () -> handleRemember(ctx, input)));
 				case "update"   -> CompletableFuture.completedFuture(mutate(ctx, () -> handleUpdate(ctx, input)));
 				case "forget"   -> CompletableFuture.completedFuture(mutate(ctx, () -> handleForget(ctx, input)));
-				default -> CompletableFuture.failedFuture(new RuntimeException(
+				default -> CompletableFuture.failedFuture(new InvalidInputException(
 					"memory requires command: recall | remember | update | forget"));
 			};
 		} catch (Exception e) {
@@ -179,7 +182,7 @@ public class UserMemoryAdapter extends AAdapter {
 	private ACell handleRemember(RequestContext ctx, ACell input) {
 		String path = path(input);
 		AString text = RT.ensureString(RT.getIn(input, "text"));
-		if (text == null) throw new RuntimeException("memory:remember requires 'text'");
+		if (text == null) throw new InvalidInputException("memory:remember requires 'text'");
 
 		AVector<ACell> list = readList(ctx, path);
 		AMap<AString, ACell> entry = Maps.of(K_TEXT, text, K_TS, CVMLong.create(System.currentTimeMillis()));
@@ -194,7 +197,7 @@ public class UserMemoryAdapter extends AAdapter {
 	private ACell handleUpdate(RequestContext ctx, ACell input) {
 		String path = path(input);
 		AString text = RT.ensureString(RT.getIn(input, "text"));
-		if (text == null) throw new RuntimeException("memory:update requires 'text'");
+		if (text == null) throw new InvalidInputException("memory:update requires 'text'");
 
 		AVector<ACell> list = readList(ctx, path);
 		long idx = index(input, list.count());
@@ -245,13 +248,16 @@ public class UserMemoryAdapter extends AAdapter {
 		return (p != null) ? p.toString() : DEFAULT_PATH;
 	}
 
-	/** Resolve a 1-based 'n' input to a 0-based index, validating range. */
+	/** Resolve a 1-based 'n' input to a 0-based index of an item in the list. */
 	private static long index(ACell input, long count) {
 		ACell nCell = RT.getIn(input, "n");
-		if (!(nCell instanceof CVMLong l)) throw new RuntimeException("requires a numeric 'n' (1-based item number)");
+		if (!(nCell instanceof CVMLong l) || l.longValue() < 1) {
+			throw new InvalidInputException("requires a numeric 'n' (1-based item number)");
+		}
 		long n = l.longValue();
-		if (n < 1 || n > count) {
-			throw new RuntimeException("item " + n + " out of range (list has " + count + " item" + (count == 1 ? "" : "s") + ")");
+		if (n > count) {
+			throw new NotFoundException("item " + n + " out of range (list has " + count + " item" + (count == 1 ? "" : "s") + ")",
+				Long.toString(n));
 		}
 		return n - 1;
 	}
@@ -278,7 +284,7 @@ public class UserMemoryAdapter extends AAdapter {
 		ACell value = readValue(ctx, path);
 		if (value == null) return Vectors.empty();
 		if (value instanceof AVector) return (AVector<ACell>) value;
-		throw new RuntimeException("memory at " + path + " is not a flat list — remember/update/forget "
+		throw new ConflictException("memory at " + path + " is not a flat list — remember/update/forget "
 			+ "operate on flat lists; edit a structured store with the covia tools");
 	}
 
@@ -326,10 +332,6 @@ public class UserMemoryAdapter extends AAdapter {
 	}
 
 	private ACell invokeCovia(String op, ACell input, RequestContext ctx) {
-		try {
-			return engine.jobs().invokeInternal(op, input, ctx).get(10_000, TimeUnit.MILLISECONDS);
-		} catch (Exception e) {
-			throw new RuntimeException("memory: internal " + op + " failed: " + describeFailure(e), e);
-		}
+		return await(engine.jobs().invokeInternal(op, input, ctx), 10_000, "memory: internal " + op);
 	}
 }

@@ -16,7 +16,6 @@ public class DescribeFailureTest {
 	public void testSelfDescribingMessagesPassThrough() {
 		assertEquals("no such db", AAdapter.describeFailure(new JobFailedException("no such db")));
 		assertEquals("chat_id is required", AAdapter.describeFailure(new IllegalArgumentException("chat_id is required")));
-		assertEquals("plain carrier", AAdapter.describeFailure(new RuntimeException("plain carrier")));
 		assertEquals("wrapped", AAdapter.describeFailure(new CompletionException(new IllegalStateException("wrapped"))));
 	}
 
@@ -27,6 +26,7 @@ public class DescribeFailureTest {
 		assertTrue(ncdfe.contains("restart the venue"), "linkage errors carry the actionable hint: " + ncdfe);
 		assertEquals("NullPointerException (no detail)", AAdapter.describeFailure(new NullPointerException()));
 		assertEquals("ClassCastException: x", AAdapter.describeFailure(new ClassCastException("x")));
+		assertEquals("RuntimeException: plain", AAdapter.describeFailure(new RuntimeException("plain")));
 		assertEquals("Operation failed without an error detail", AAdapter.describeFailure(null));
 	}
 }

@@ -3,7 +3,9 @@ package covia.adapter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
@@ -11,12 +13,14 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.zip.ZipException;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -65,6 +69,24 @@ final class FileOperations {
 	private static final int MAX_ENTRIES_CAP = 5000;
 
 	private FileOperations() {}
+
+	/**
+	 * An IO failure as the Covia type for what it says about the target. A
+	 * missing file is not found; an existing file where none may be, a
+	 * non-empty directory, a file where a directory is needed and a file that
+	 * is not a readable archive refuse the request as they stand. Anything
+	 * else is a venue fault.
+	 */
+	static RuntimeException failure(IOException e) {
+		if (e instanceof NoSuchFileException missing) {
+			return new NotFoundException(e.getMessage(), missing.getFile());
+		}
+		if (e instanceof FileAlreadyExistsException || e instanceof DirectoryNotEmptyException
+				|| e instanceof NotDirectoryException || e instanceof ZipException) {
+			return new ConflictException(e.getMessage());
+		}
+		return new UncheckedIOException(e.getMessage(), e);
+	}
 
 	@FunctionalInterface
 	interface AttributeReader {

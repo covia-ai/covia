@@ -404,10 +404,8 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		return CompletableFuture.supplyAsync(() -> {
 			try {
 				return dispatch(ctx, subOp, input, boundDrive);
-			} catch (RuntimeException e) {
-				throw e;   // already says what failed; only checked exceptions need wrapping
-			} catch (Exception e) {
-				throw new RuntimeException(e.getMessage(), e);
+			} catch (IOException e) {
+				throw FileOperations.failure(e);
 			}
 		}, VIRTUAL_EXECUTOR);
 	}
