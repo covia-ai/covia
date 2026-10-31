@@ -924,31 +924,31 @@ public final class Skills {
 	 *        address
 	 * @param inline copy the body into {@code content.inline} (self-contained)
 	 *        rather than bind it live through {@code content.ref}
-	 * @throws IllegalArgumentException when the text is not a skill — no
+	 * @throws InvalidInputException when the text is not a skill — no
 	 *         frontmatter, no description, or no name and no source to derive
 	 *         one from — with the reason
 	 */
 	public static ParsedSkill parseSkillText(String text, AString source, boolean inline) {
 		Frontmatter fm = parseFrontmatter(text);
 		if (fm == null) {
-			throw new IllegalArgumentException("not a SKILL.md: expected a leading '---' frontmatter block"
+			throw new InvalidInputException("not a SKILL.md: expected a leading '---' frontmatter block"
 				+ " declaring name and description");
 		}
 		String description = fm.description();
 		if (description == null || description.isEmpty()) {
-			throw new IllegalArgumentException("SKILL.md frontmatter declares no description");
+			throw new InvalidInputException("SKILL.md frontmatter declares no description");
 		}
 		String name = fm.name();
 		if (name == null || name.isEmpty()) name = (source != null) ? nameFromSource(source.toString()) : null;
 		if (name == null) {
-			throw new IllegalArgumentException("SKILL.md frontmatter declares no name,"
+			throw new InvalidInputException("SKILL.md frontmatter declares no name,"
 				+ " and none can be derived from the source");
 		}
 		if (name.contains("/") || name.chars().anyMatch(Character::isWhitespace)) {
-			throw new IllegalArgumentException("skill name must be one path segment, got '" + name + "'");
+			throw new InvalidInputException("skill name must be one path segment, got '" + name + "'");
 		}
 		if (!inline && source == null) {
-			throw new IllegalArgumentException("a content.ref binding needs a source to reference");
+			throw new InvalidInputException("a content.ref binding needs a source to reference");
 		}
 
 		AMap<AString, ACell> content = Maps.of(Fields.CONTENT_TYPE, MARKDOWN);
@@ -1627,7 +1627,7 @@ public final class Skills {
 		AString name = RT.ensureString(RT.getIn(toolInput, Fields.NAME));
 		AString ref = RT.ensureString(RT.getIn(toolInput, AbstractLLMAdapter.K_REF));
 		if ((name == null) == (ref == null)) {
-			throw new IllegalArgumentException("skill_load requires exactly one of 'name' or 'ref'");
+			throw new InvalidInputException("skill_load requires exactly one of 'name' or 'ref'");
 		}
 		SkillSources effective = effectiveSources(engine, ctx, sources, effectiveLoads);
 		if (ref != null && !isAdvertised(engine, ctx, effective, effectiveLoads, ref)) {
@@ -1658,7 +1658,7 @@ public final class Skills {
 		AMap<AString, ACell> entryMeta = buildSkillLoadMeta(budget, skill);
 		ACell volatileCell = RT.getIn(toolInput, Loads.K_VOLATILE);
 		if (volatileCell != null && !(volatileCell instanceof CVMBool)) {
-			throw new IllegalArgumentException("skill_load volatile must be a boolean");
+			throw new InvalidInputException("skill_load volatile must be a boolean");
 		}
 		if (volatileCell != null) entryMeta = entryMeta.assoc(Loads.K_VOLATILE, volatileCell);
 

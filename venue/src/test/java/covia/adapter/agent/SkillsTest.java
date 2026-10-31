@@ -746,13 +746,13 @@ public class SkillsTest {
 		assertEquals("pdf", Skills.parseSkillText("---\ndescription: d\n---\n", source, true).name());
 		assertEquals("notes", Skills.parseSkillText("---\ndescription: d\n---\n",
 			Strings.create("dlfs/drive/notes.md"), true).name());
-		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("---\ndescription: d\n---\n", null, true));
-		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("---\ndescription: d\n---\n",
+		assertThrows(InvalidInputException.class, () -> Skills.parseSkillText("---\ndescription: d\n---\n", null, true));
+		assertThrows(InvalidInputException.class, () -> Skills.parseSkillText("---\ndescription: d\n---\n",
 			Strings.create("a/" + "0".repeat(64)), true));
 		// Not a skill: no frontmatter, no description, a ref binding with no source.
-		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("plain text", source, true));
-		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText("---\nname: x\n---\n", source, true));
-		assertThrows(IllegalArgumentException.class, () -> Skills.parseSkillText(text, null, false));
+		assertThrows(InvalidInputException.class, () -> Skills.parseSkillText("plain text", source, true));
+		assertThrows(InvalidInputException.class, () -> Skills.parseSkillText("---\nname: x\n---\n", source, true));
+		assertThrows(InvalidInputException.class, () -> Skills.parseSkillText(text, null, false));
 	}
 
 	@Test

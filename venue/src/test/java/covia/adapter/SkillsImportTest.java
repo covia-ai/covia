@@ -31,6 +31,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -237,25 +238,25 @@ public class SkillsImportTest {
 
 	@Test
 	public void testParseRequiresExactlyOneInput() {
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.empty()));
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.of(
+		assertThrows(InvalidInputException.class, () -> parse(Maps.empty()));
+		assertThrows(InvalidInputException.class, () -> parse(Maps.of(
 			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), K_TEXT, Strings.create("---\n---\n"))));
 		// A ref binding needs something to bind to.
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.of(
+		assertThrows(InvalidInputException.class, () -> parse(Maps.of(
 			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\n"), Fields.CONTENT, Fields.REF)));
-		assertThrows(IllegalArgumentException.class, () -> parse(Maps.of(
+		assertThrows(InvalidInputException.class, () -> parse(Maps.of(
 			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), Fields.CONTENT, Strings.create("copy"))));
 	}
 
 	@Test
 	public void testParseRejectsNonSkillContent() {
-		IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+		InvalidInputException e = assertThrows(InvalidInputException.class,
 			() -> parse(Maps.of(K_SOURCE, Strings.create("file://work/notes.txt"))));
 		assertTrue(e.getMessage().contains("not a SKILL.md"), e.getMessage());
-		IllegalArgumentException noDesc = assertThrows(IllegalArgumentException.class,
+		InvalidInputException noDesc = assertThrows(InvalidInputException.class,
 			() -> parse(Maps.of(K_TEXT, Strings.create("---\nname: x\n---\nBody"))));
 		assertTrue(noDesc.getMessage().contains("description"), noDesc.getMessage());
-		IllegalArgumentException noName = assertThrows(IllegalArgumentException.class,
+		InvalidInputException noName = assertThrows(InvalidInputException.class,
 			() -> parse(Maps.of(K_TEXT, Strings.create("---\ndescription: y\n---\nBody"))));
 		assertTrue(noName.getMessage().contains("name"), noName.getMessage());
 	}
@@ -361,17 +362,17 @@ public class SkillsImportTest {
 		assertTrue(str(read, K_BODY).startsWith("Body here."));
 
 		// Exactly one of source/text; a live 'ref' still needs a source to bind to.
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
 			K_SOURCE, Strings.create("file://work/agent/SKILL.md"),
 			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\n"))));
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
 			K_TEXT, Strings.create("---\nname: x\ndescription: y\n---\nB\n"), Fields.CONTENT, Fields.REF)));
 	}
 
 	@Test
 	public void testImportWritesNothingOnABadSource() {
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.empty()));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.empty()));
+		assertThrows(InvalidInputException.class,
 			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://work/notes.txt"))));
 		assertThrows(RuntimeException.class,
 			() -> importSkill(Maps.of(K_SOURCE, Strings.create("file://work/absent/SKILL.md"))));
@@ -384,9 +385,9 @@ public class SkillsImportTest {
 
 	@Test
 	public void testImportRejectsMalformedSkillset() {
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
 			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), K_SKILLSET, Vectors.of(Strings.create("w/skills")))));
-		assertThrows(IllegalArgumentException.class, () -> importSkill(Maps.of(
+		assertThrows(InvalidInputException.class, () -> importSkill(Maps.of(
 			K_SOURCE, Strings.create("file://work/agent/SKILL.md"), K_SKILLSET, Strings.create("/"))));
 		// Namespace rules are the lattice write's: a read-only namespace is refused there.
 		assertThrows(RuntimeException.class, () -> importSkill(Maps.of(

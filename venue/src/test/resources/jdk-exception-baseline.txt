@@ -18,7 +18,7 @@ covia-core/src/main/java/covia/grid/impl/PathContent.java 1
 covia-core/src/main/java/covia/grid/impl/StreamContent.java 3
 venue/src/main/java/covia/adapter/A2AAdapter.java 45
 venue/src/main/java/covia/adapter/AAdapter.java 9
-venue/src/main/java/covia/adapter/AgentAdapter.java 40
+venue/src/main/java/covia/adapter/AgentAdapter.java 1
 venue/src/main/java/covia/adapter/ArchiveAdapter.java 15
 venue/src/main/java/covia/adapter/AssetAdapter.java 19
 venue/src/main/java/covia/adapter/AuthAdapter.java 9
@@ -46,7 +46,6 @@ venue/src/main/java/covia/adapter/RemoteAgentAdapter.java 2
 venue/src/main/java/covia/adapter/SchedulerAdapter.java 7
 venue/src/main/java/covia/adapter/SchemaAdapter.java 7
 venue/src/main/java/covia/adapter/SecretAdapter.java 13
-venue/src/main/java/covia/adapter/SkillsAdapter.java 17
 venue/src/main/java/covia/adapter/TestAdapter.java 16
 venue/src/main/java/covia/adapter/TextExtractor.java 1
 venue/src/main/java/covia/adapter/ToolCallArguments.java 1
@@ -55,14 +54,13 @@ venue/src/main/java/covia/adapter/UserAdapter.java 16
 venue/src/main/java/covia/adapter/VaultAdapter.java 3
 venue/src/main/java/covia/adapter/VenueAdapter.java 11
 venue/src/main/java/covia/adapter/VenueConnection.java 2
-venue/src/main/java/covia/adapter/agent/AbstractLLMAdapter.java 3
+venue/src/main/java/covia/adapter/agent/AbstractLLMAdapter.java 1
 venue/src/main/java/covia/adapter/agent/ContextAssembler.java 2
 venue/src/main/java/covia/adapter/agent/ConversationHistory.java 3
-venue/src/main/java/covia/adapter/agent/ConversationRenderer.java 6
+venue/src/main/java/covia/adapter/agent/ConversationRenderer.java 3
 venue/src/main/java/covia/adapter/agent/ExternalAgents.java 2
 venue/src/main/java/covia/adapter/agent/GoalTreeContext.java 14
 venue/src/main/java/covia/adapter/agent/LLMAgentAdapter.java 1
-venue/src/main/java/covia/adapter/agent/Skills.java 7
 venue/src/main/java/covia/adapter/agent/ToolCallIds.java 2
 venue/src/main/java/covia/adapter/agent/ToolPalette.java 2
 venue/src/main/java/covia/adapter/hitl/HitlValidation.java 25

@@ -913,7 +913,7 @@ public class ContextAssemblerTest {
 		AMap<AString, ACell> frame = Maps.of("conversation", Vectors.of(turn, Maps.of(K_ROLE, "assistant", K_CONTENT, "A picture")));
 		var history = ConversationRenderer.historical(frame, 10, 10_000);
 		assertTrue(RT.getIn(history.messages().get(0), K_CONTENT) instanceof AString);
-		assertThrows(IllegalArgumentException.class, () -> ConversationRenderer.toMessage(Maps.of(K_ROLE, "user", K_CONTENT,
+		assertThrows(InvalidInputException.class, () -> ConversationRenderer.toMessage(Maps.of(K_ROLE, "user", K_CONTENT,
 			Maps.of("content", Vectors.of(Maps.of("type", "system", "text", "untrusted")))) , null));
 	}
 

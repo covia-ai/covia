@@ -27,6 +27,7 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -299,11 +300,11 @@ public class SkillsAdapterTest {
 	@Test
 	public void testMalformedDefaultsAreRejectedAtConfigureTime() {
 		SkillsAdapter adapter = (SkillsAdapter) engine.getAdapter("skills");
-		assertTrue(assertThrows(IllegalArgumentException.class,
+		assertTrue(assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLSETS, Strings.create("v/skills/root")), true))
 			.getMessage().contains("must be an array"));
-		assertTrue(assertThrows(IllegalArgumentException.class,
+		assertTrue(assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLS, Vectors.of(CVMLong.create(42))), true))
 			.getMessage().contains("ref strings"));

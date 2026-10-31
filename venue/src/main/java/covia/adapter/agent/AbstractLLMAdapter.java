@@ -365,13 +365,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@code content} and/or {@code toolCalls}, each call given an id when it
 	 * has none and empty arguments when it has none. Null in, null out.
 	 *
-	 * @throws IllegalArgumentException when a call has no name, or the value is neither form
+	 * @throws InvalidInputException when a call has no name, or the value is neither form
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> stepAssistant(ACell raw) {
 		if (raw == null) return null;
 		if (raw instanceof AString text) return Maps.of(K_ROLE, ROLE_ASSISTANT, K_CONTENT, text);
-		if (!(raw instanceof AMap)) throw new IllegalArgumentException(
+		if (!(raw instanceof AMap)) throw new InvalidInputException(
 			"assistant must be a string or {content?, toolCalls?}");
 		AMap<AString, ACell> reply = ((AMap<AString, ACell>) raw).assoc(K_ROLE, ROLE_ASSISTANT);
 		AVector<ACell> calls = RT.ensureVector(reply.get(K_TOOL_CALLS));
@@ -380,7 +380,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		for (long i = 0; i < calls.count(); i++) {
 			AMap<AString, ACell> call = RT.ensureMap(calls.get(i));
 			AString name = (call != null) ? RT.ensureString(call.get(K_NAME)) : null;
-			if (name == null) throw new IllegalArgumentException(
+			if (name == null) throw new InvalidInputException(
 				"assistant.toolCalls[" + i + "] needs a name");
 			AString id = RT.ensureString(call.get(K_ID));
 			call = call.assoc(K_ID, (id != null)

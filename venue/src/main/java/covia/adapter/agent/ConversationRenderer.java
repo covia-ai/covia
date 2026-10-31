@@ -13,6 +13,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.venue.AgentState;
 
 /**
@@ -210,9 +211,9 @@ public final class ConversationRenderer {
 	public static HistoricalView historicalTurns(AMap<AString, ACell> frame, long from, long to,
 			int maxTurns, int maxChars, int skip) {
 		ConversationHistory history = ConversationHistory.open(frame);
-		if (from < 0 || to < from) throw new IllegalArgumentException("Turns run from a first to a last, from 0");
+		if (from < 0 || to < from) throw new InvalidInputException("Turns run from a first to a last, from 0");
 		if (to >= history.contextStart()) {
-			throw new IllegalArgumentException("Turns from " + history.contextStart() + " on are in the current context");
+			throw new InvalidInputException("Turns from " + history.contextStart() + " on are in the current context");
 		}
 		AVector<ACell> entries = history.read(from, to + 1, Integer.MAX_VALUE).entries();
 		return historical(Maps.of(GoalTreeContext.K_CONVERSATION, entries), maxTurns, maxChars, 0, skip);
@@ -353,7 +354,7 @@ public final class ConversationRenderer {
 					for (ACell block : blocks) {
 						ACell type = RT.getIn(block, "type");
 						if (!Strings.create("text").equals(type) && !Strings.create("image").equals(type)) {
-							throw new IllegalArgumentException("User content blocks must have type text or image");
+							throw new InvalidInputException("User content blocks must have type text or image");
 						}
 						rendered = rendered.conj(block);
 					}
