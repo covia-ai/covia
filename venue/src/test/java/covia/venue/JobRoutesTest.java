@@ -386,6 +386,12 @@ public class JobRoutesTest {
 	}
 
 	@Test
+	public void malformedDefinitionIsTheRequestsProblemNotTheVenues() {
+		assertEquals(400, covia.venue.api.ApiErrors.status(
+			new covia.exception.InvalidDefinitionException("Orchestration step 0 requires string field 'op'")));
+	}
+
+	@Test
 	public void nonArrayUcansIs400() throws Exception {
 		for (String route : new String[] {"invoke", "run"}) {
 			HttpResponse<String> r = send(HttpRequest.newBuilder()

@@ -52,9 +52,10 @@ public final class ApiErrors {
 		if (failure instanceof ConflictException) return 409;
 		if (failure instanceof RateLimitException) return 429;
 		if (failure instanceof RemoteFetchException || failure instanceof ResponseException) return 502;
-		if (failure instanceof UnavailableException || failure instanceof InvalidDefinitionException) return 503;
-		if (failure instanceof InvalidInputException || failure instanceof NotSupportedException
-				|| failure instanceof WrongScopeException) return 400;
+		if (failure instanceof UnavailableException) return 503;
+		// A malformed definition the request names is something it cannot use (COG-21)
+		if (failure instanceof InvalidInputException || failure instanceof InvalidDefinitionException
+				|| failure instanceof NotSupportedException || failure instanceof WrongScopeException) return 400;
 		return 500;
 	}
 
