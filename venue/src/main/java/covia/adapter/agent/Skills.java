@@ -285,10 +285,11 @@ public final class Skills {
 	}
 
 	/** The skills on the effective advertised surface that provide the tool
-	 * {@code toolName}, by index name, sorted. A skill provides it only when it
-	 * resolves and loading it would bind exactly that name: its operations are
-	 * bound as {@code skill_load} binds them. Answers a call to a tool whose
-	 * skill is not loaded (#643). */
+	 * {@code toolName}, by index name, sorted. A skill provides it when one of
+	 * its tool entries binds exactly that name, named as the palette names it.
+	 * Answers a call to a tool whose skill is not loaded (#643). Only a hint,
+	 * so it stays cheap: skills resolve without their bodies, and operation
+	 * definitions only from this venue, never fetched from another. */
 	static List<String> providersOf(Engine engine, RequestContext ctx,
 			SkillSources configured, AMap<AString, ACell> effectiveLoads,
 			String toolName) {
@@ -297,12 +298,11 @@ public final class Skills {
 		for (SkillIndexEntry entry : listSkills(engine, ctx, effective)) {
 			if (entry.error() != null) continue;
 			try {
-				ResolvedSkill skill = resolveRef(engine, ctx, entry.path());
-				AVector<ACell> bindings = ToolPalette.bindingsForOperations(
-					engine, ctx, skill.toolOps());
-				for (long i = 0; i < bindings.count(); i++) {
-					ACell name = RT.getIn(bindings.get(i), Fields.DEFINITION, Fields.NAME);
-					if (name != null && toolName.equals(name.toString())) {
+				ResolvedSkill skill = isContentRef(entry.path().toString())
+					? resolveRef(engine, ctx, entry.path())
+					: resolveRefLight(engine, ctx, entry.path());
+				for (long i = 0; i < skill.toolOps().count(); i++) {
+					if (toolName.equals(ToolPalette.localToolName(engine, ctx, skill.toolOps().get(i)))) {
 						out.add(entry.name());
 						break;
 					}

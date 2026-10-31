@@ -699,10 +699,13 @@ says why, and what would make it callable when that is certain:
 | Another runtime's harness tool | Not available under this runtime |
 | Equal to a callable tool up to case and `-`/`_` | The callable name |
 | Provided by an advertised skill, with `skill_load` offered | `skill_load` one of the skills that provide it |
-| Anything else | No such tool, and not an operation reference |
+| Anything else | No such tool, and not an operation reference; then that no tools are available, the tools by name when there are at most five, or to use the tool list |
 
-A skill counts as providing a tool only when it resolves and binding its
-operations as `skill_load` does yields exactly that name.
+A skill counts as providing a tool when one of its tool entries binds exactly
+that name, named as the palette names it. The lookup is only a hint, so it
+stays cheap: skills resolve without their bodies, and operation definitions
+only from this venue (`Engine.resolveLocalAsset`), never fetched from another.
+An operation reference is resolved once and dispatched as resolved.
 
 #### Additional tools
 

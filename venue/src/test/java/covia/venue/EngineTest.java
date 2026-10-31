@@ -447,6 +447,20 @@ public class EngineTest {
 	}
 
 	@Test
+	public void testResolveLocalAssetNeverFetches() {
+		RequestContext ctx = venue.venueContext();
+		// A definition held here resolves by its DID URL; one another venue
+		// publishes is absent rather than fetched.
+		assertNotNull(venue.resolveLocalAsset(
+			Strings.create(venue.getDIDString() + "/a/" + echoOpId.toHexString()), ctx));
+		Hash elsewhere = Hashing.sha3("held by no venue".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		assertNull(venue.resolveLocalAsset(
+			Strings.create("did:web:venue.example.com/a/" + elsewhere.toHexString()), ctx));
+		assertNull(venue.resolveLocalAsset(
+			Strings.create("did:web:venue.example.com/v/ops/elsewhere"), ctx));
+	}
+
+	@Test
 	public void testResolveAssetHashOperationName() {
 		Hash resolved = venue.resolveHash("v/test/ops/echo");
 		assertNotNull(resolved, "test:echo should resolve to an asset hash");
