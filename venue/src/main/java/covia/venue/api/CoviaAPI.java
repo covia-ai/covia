@@ -941,7 +941,13 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		boolean privateJob = CVMBool.TRUE.equals(privateCell);
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AVector<ACell> ucans = AuthMiddleware.bodyUcans(req);
+		AVector<ACell> ucans;
+		try {
+			ucans = AuthMiddleware.bodyUcans(req);
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		}
 		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		JobManager.Run run = engine().jobs().startRun(op, input, rctx, privateJob);
@@ -1054,7 +1060,13 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Authentication has already selected the caller. Body UCANs are grants
 		// only: they cannot authenticate, select a namespace, or instruct execution.
-		AVector<ACell> ucans = AuthMiddleware.bodyUcans(req);
+		AVector<ACell> ucans;
+		try {
+			ucans = AuthMiddleware.bodyUcans(req);
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		}
 		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		try {
@@ -1321,9 +1333,11 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
+		} catch (ConflictException e) {
+			buildError(ctx, 409, e.getMessage());
 		}
 	}
-	
+
 	@OpenApi(path = ROUTE + "jobs/{id}/pause",
 			methods = HttpMethod.PUT,
 			tags = { "Covia"},
@@ -1354,7 +1368,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1389,7 +1403,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
