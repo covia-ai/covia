@@ -879,7 +879,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		} catch (AuthException e) {
 			buildError(ctx,403,"Not authorised to store asset content: "+idString);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			this.buildError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
 		} catch (IOException e) {
 			this.buildError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());

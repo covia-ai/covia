@@ -808,7 +808,7 @@ public class EngineTest {
 			Hash tooLargeAsset = dlfsVenue.storeAsset(JSON.printPretty(Maps.of(
 				Fields.NAME, "too-large",
 				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256(tooLarge).toHexString()))), null);
-			IllegalArgumentException large = assertThrows(IllegalArgumentException.class, () ->
+			covia.exception.InvalidInputException large = assertThrows(covia.exception.InvalidInputException.class, () ->
 				dlfsVenue.putContent(dlfsVenue.getMetaValue(tooLargeAsset), new ByteArrayInputStream(tooLarge)));
 			assertTrue(large.getMessage().startsWith(Engine.CONTENT_TOO_LARGE), large.getMessage());
 			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(tooLargeAsset)));

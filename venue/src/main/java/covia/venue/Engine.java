@@ -83,7 +83,12 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.exception.RemoteFetchException;
+import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
@@ -2731,10 +2736,10 @@ public class Engine {
 		if (ref == null) return null;
 		String refString = ref.toString();
 		if (resolving.size() >= 32) {
-			throw new IllegalArgumentException("Content reference chain exceeds 32 hops at: " + refString);
+			throw new InvalidInputException("Content reference chain exceeds 32 hops at: " + refString);
 		}
 		if (!resolving.add(refString)) {
-			throw new IllegalArgumentException("Cyclic content reference: " + refString);
+			throw new InvalidInputException("Cyclic content reference: " + refString);
 		}
 		try {
 
@@ -2839,18 +2844,18 @@ public class Engine {
 			ACell block, RequestContext ctx, Set<String> resolving) throws IOException {
 		if (block == null) return null;
 		if (!(block instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("content must be an object");
+			throw new InvalidInputException("content must be an object");
 		}
 		AMap<AString, ACell> descriptor = (AMap<AString, ACell>) block;
 		AString inline = descriptorString(descriptor, Fields.INLINE);
 		AString ref = descriptorString(descriptor, Fields.REF);
 		AString dlfs = descriptorString(descriptor, Strings.intern("dlfs"));
 		if (ref != null && dlfs != null && !ref.equals(dlfs)) {
-			throw new IllegalArgumentException("content.ref conflicts with legacy content.dlfs");
+			throw new InvalidInputException("content.ref conflicts with legacy content.dlfs");
 		}
 		if (ref == null) ref = dlfs;
 		if (inline != null && ref != null) {
-			throw new IllegalArgumentException("content must specify only one of inline or ref");
+			throw new InvalidInputException("content must specify only one of inline or ref");
 		}
 
 		AString shaString = descriptorString(descriptor, Fields.SHA256);
@@ -2858,7 +2863,7 @@ public class Engine {
 		if (shaString != null) {
 			declaredHash = Hash.parse(shaString);
 			if (declaredHash == null) {
-				throw new IllegalArgumentException("content.sha256 must be a valid SHA-256 hash");
+				throw new InvalidInputException("content.sha256 must be a valid SHA-256 hash");
 			}
 		}
 		AString typeString = descriptorString(descriptor, Fields.CONTENT_TYPE);
@@ -2875,7 +2880,7 @@ public class Engine {
 		} else if (ref != null) {
 			resolved = resolveContent(ref, ctx, resolving);
 			if (resolved == null) {
-				throw new IllegalArgumentException("No content at ref: " + ref);
+				throw new NotFoundException("No content at ref: " + ref, ref.toString());
 			}
 			source = "content at '" + ref + "'";
 		} else if (declaredHash != null) {
@@ -2894,7 +2899,8 @@ public class Engine {
 			ABlob bytes = resolved.content().getBlob();
 			Hash actual = Hashing.sha256(bytes.getBytes());
 			if (!actual.equals(declaredHash)) {
-				throw new IllegalStateException("Content hash mismatch for " + source
+				// The declared hash does not describe the content it names.
+				throw new InvalidInputException("Content hash mismatch for " + source
 					+ ": expected " + declaredHash + ", got " + actual);
 			}
 			resolved = new covia.venue.storage.ContentProvider.Resolved(
@@ -2914,7 +2920,7 @@ public class Engine {
 		if (!descriptor.containsKey(field)) return null;
 		AString value = RT.ensureString(descriptor.get(field));
 		if (value == null) {
-			throw new IllegalArgumentException("content." + field + " must be a string");
+			throw new InvalidInputException("content." + field + " must be a string");
 		}
 		return value;
 	}
@@ -2990,17 +2996,17 @@ public class Engine {
 
 	public Hash putContent(Hash assetID, InputStream is) throws IOException {
 		AMap<AString, ACell> meta = getMetaValue(assetID);
-		if (meta==null) throw new IllegalArgumentException("No metadata");
+		if (meta==null) throw new InvalidInputException("No metadata");
 		return putContent(meta,is);
 	}
 
 	public Hash putContent(AMap<AString, ACell> meta, InputStream is) throws IOException {
-		if (meta==null) throw new IllegalArgumentException("No metadata");
+		if (meta==null) throw new InvalidInputException("No metadata");
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
-		if (content==null) throw new IllegalArgumentException("Metadata does not have content object specified");
+		if (content==null) throw new InvalidInputException("Metadata does not have content object specified");
 		Hash expectedHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
 		if (expectedHash==null) {
-			throw new IllegalArgumentException("Metadata does not have valid content hash");
+			throw new InvalidInputException("Metadata does not have valid content hash");
 		}
 
 		// The storage checks the SHA-256 as the content streams in and stores
@@ -3009,7 +3015,7 @@ public class Engine {
 		try {
 			contentStorage.storeVerified(expectedHash, new SizeLimitedStream(is, maxSize));
 		} catch (ContentTooLarge e) {
-			throw new IllegalArgumentException(CONTENT_TOO_LARGE + maxSize + " bytes");
+			throw new InvalidInputException(CONTENT_TOO_LARGE + maxSize + " bytes");
 		}
 		log.debug("Stored content with SHA256: "+expectedHash);
 		return expectedHash;
