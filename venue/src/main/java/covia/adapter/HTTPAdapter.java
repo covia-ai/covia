@@ -39,6 +39,12 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -134,7 +140,7 @@ public class HTTPAdapter extends AAdapter {
 			if (ua != null) {
 				AString s = RT.ensureString(ua);
 				if (s == null || s.toString().isBlank()) {
-					throw new IllegalArgumentException("adapters.http.userAgent must be a non-empty string");
+					throw new ConfigurationException("adapters.http.userAgent must be a non-empty string");
 				}
 				agent = s.toString().trim();
 			}
@@ -144,7 +150,7 @@ public class HTTPAdapter extends AAdapter {
 			if (max != null) {
 				CVMLong n = RT.ensureLong(max);
 				if (n == null || n.longValue() < 0 || n.longValue() > MAX_REDIRECTS_CEILING) {
-					throw new IllegalArgumentException("adapters.http.maxRedirects must be an integer from 0 to "
+					throw new ConfigurationException("adapters.http.maxRedirects must be an integer from 0 to "
 						+ MAX_REDIRECTS_CEILING + ", got: " + max);
 				}
 				hops = (int) n.longValue();
@@ -162,13 +168,13 @@ public class HTTPAdapter extends AAdapter {
 		if (raw == null) return Set.of();
 		AVector<ACell> values = RT.ensureVector(raw);
 		if (values == null) {
-			throw new IllegalArgumentException("adapters.http." + key + " must be an array of host names");
+			throw new ConfigurationException("adapters.http." + key + " must be an array of host names");
 		}
 		Set<String> out = new HashSet<>();
 		for (long i = 0; i < values.count(); i++) {
 			AString host = RT.ensureString(values.get(i));
 			if (host == null || host.toString().isBlank()) {
-				throw new IllegalArgumentException("adapters.http." + key
+				throw new ConfigurationException("adapters.http." + key
 					+ " entries must be host names, got: " + values.get(i));
 			}
 			out.add(GuardedResolver.hostKey(host.toString().trim()));
@@ -228,18 +234,18 @@ public class HTTPAdapter extends AAdapter {
 	 * never reach anything a direct HTTP call couldn't.
 	 *
 	 * @param url URL string to validate
-	 * @throws IllegalArgumentException if malformed, blocked or private
+	 * @throws InvalidInputException if malformed, blocked or private
 	 */
 	public void requireSafeUrl(String url) {
 		URI uri;
 		try {
 			uri = URI.create(url);
 		} catch (Exception e) {
-			throw new IllegalArgumentException("Malformed URL: " + url);
+			throw new InvalidInputException("Malformed URL: " + url);
 		}
 		String scheme = uri.getScheme();
 		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-			throw new IllegalArgumentException("URL must be http(s): " + url);
+			throw new InvalidInputException("URL must be http(s): " + url);
 		}
 		validateURL(uri, false);
 	}
@@ -268,18 +274,18 @@ public class HTTPAdapter extends AAdapter {
 	 * that passes is held to that rule for every later lookup.
 	 *
 	 * @param host Host name or address literal
-	 * @throws IllegalArgumentException if the host is blocked, private or unresolvable
-	 * @throws IllegalStateException if the JVM does not resolve through {@link GuardedResolver}
+	 * @throws InvalidInputException if the host is blocked, private or unresolvable
+	 * @throws ConfigurationException if the JVM does not resolve through {@link GuardedResolver}
 	 */
 	public void requireSafeHost(String host) {
 		if (host == null || host.isEmpty()) {
-			throw new IllegalArgumentException("No host to check");
+			throw new InvalidInputException("No host to check");
 		}
 		String key = GuardedResolver.hostKey(host);
 
 		// Block list always wins
 		if (blockList.contains(key) || configuredBlock.contains(key)) {
-			throw new IllegalArgumentException(BLOCKED_HOST + host);
+			throw new InvalidInputException(BLOCKED_HOST + host);
 		}
 
 		// Allow list bypasses SSRF checks
@@ -288,7 +294,7 @@ public class HTTPAdapter extends AAdapter {
 		}
 
 		if (!GuardedResolver.isActive()) {
-			throw new IllegalStateException(RESOLVER_INACTIVE);
+			throw new ConfigurationException(RESOLVER_INACTIVE);
 		}
 		requirePublic(host);
 		// Held from here on. Checking again covers an answer that changed
@@ -302,14 +308,14 @@ public class HTTPAdapter extends AAdapter {
 		try {
 			for (InetAddress addr : InetAddress.getAllByName(host)) {
 				if (GuardedResolver.isBlocked(addr)) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						PRIVATE_ADDRESS + host
 						+ " (resolved to " + addr.getHostAddress() + ")"
 						+ ". Add it to adapters.http.allowedHosts if this is intentional.");
 				}
 			}
 		} catch (UnknownHostException e) {
-			throw new IllegalArgumentException("Cannot resolve host: " + host);
+			throw new InvalidInputException("Cannot resolve host: " + host);
 		}
 	}
 
@@ -320,18 +326,18 @@ public class HTTPAdapter extends AAdapter {
 	 *
 	 * @param uri URI to validate
 	 * @param unrestricted Whether the caller may have the venue dial anywhere
-	 * @throws IllegalArgumentException if the URL targets a blocked or private address
+	 * @throws InvalidInputException if the URL targets a blocked or private address
 	 */
 	private void validateURL(URI uri, boolean unrestricted) {
 		String host = uri.getHost();
 		if (host == null) {
-			throw new IllegalArgumentException("URL has no host: " + uri);
+			throw new InvalidInputException("URL has no host: " + uri);
 		}
 
 		// Block non-HTTP(S) schemes
 		String scheme = uri.getScheme();
 		if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
-			throw new IllegalArgumentException("Only HTTP/HTTPS schemes are allowed, got: " + scheme);
+			throw new InvalidInputException("Only HTTP/HTTPS schemes are allowed, got: " + scheme);
 		}
 
 		if (!unrestricted) requireSafeHost(host);
@@ -456,7 +462,7 @@ public class HTTPAdapter extends AAdapter {
 		String subOp = getSubOperation(meta);
 
 		AString url=RT.ensureString(RT.getIn(input, Fields.URL));
-		if (url == null) throw new IllegalArgumentException("url is required");
+		if (url == null) throw new InvalidInputException("url is required");
 		AString methodField=RT.ensureString(RT.getIn(input, Fields.METHOD));
 		if ((methodField==null)&&(subOp!=null)) {
 			methodField=Strings.create(subOp);
@@ -475,7 +481,7 @@ public class HTTPAdapter extends AAdapter {
 				method = methodField.toString().trim().toUpperCase(Locale.ROOT);
 			}
 			if (!METHODS.contains(method)) {
-				throw new IllegalArgumentException("Unsupported HTTP method: " + method);
+				throw new InvalidInputException("Unsupported HTTP method: " + method);
 			}
 
 			// Build URL with query parameters. Inline {s/NAME} placeholders
@@ -534,12 +540,12 @@ public class HTTPAdapter extends AAdapter {
 					AString header = RT.ensureString(entry.getKey());
 					AString secret = RT.ensureString(entry.getValue());
 					if (header == null || header.isEmpty() || secret == null || secret.isEmpty()) {
-						throw new IllegalArgumentException(
+						throw new InvalidInputException(
 							"secretHeaders must map non-empty header names to secret references");
 					}
 					String canonical = header.toString().toLowerCase(Locale.ROOT);
 					if (!resolvedNames.add(canonical)) {
-						throw new IllegalArgumentException(
+						throw new InvalidInputException(
 							"secretHeaders contains the same header more than once: " + header);
 					}
 					putHeader(outHeaders, header.toString(), resolveSecret(secret, ctx, "secretHeaders", finalUrl));
@@ -551,7 +557,7 @@ public class HTTPAdapter extends AAdapter {
 			// Authorization rather than silently choosing one.
 			if (bearerSecret != null) {
 				if (resolvedNames.contains("authorization")) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"Specify Authorization in either secretHeaders or bearerSecret, not both");
 				}
 				String ref = bearerSecret.toString();
@@ -601,8 +607,8 @@ public class HTTPAdapter extends AAdapter {
 				try {
 					next = uri.resolve(location.trim());
 				} catch (IllegalArgumentException e) {
-					throw new IllegalArgumentException("Redirect from " + redact(uri.toString(), redactions)
-						+ " has a malformed Location: " + location);
+					throw new ResponseException("Redirect from " + redact(uri.toString(), redactions)
+						+ " has a malformed Location: " + location, response);
 				}
 				AMap<AString, ACell> hop = Maps.of(
 					Fields.STATUS, CVMLong.create(code),
@@ -610,15 +616,15 @@ public class HTTPAdapter extends AAdapter {
 					Fields.TO, Strings.create(redact(next.toString(), redactions)));
 				AVector<ACell> hops = trail.conj(hop);
 				if (hopsLeft <= 0) {
-					throw new IllegalArgumentException("Too many redirects (limit " + maxRedirects + "): " + chain(hops));
+					throw new ResponseException("Too many redirects (limit " + maxRedirects + "): " + chain(hops), response);
 				}
 				if (!visited.add(next)) {
-					throw new IllegalArgumentException("Redirect loop: " + chain(hops));
+					throw new ResponseException("Redirect loop: " + chain(hops), response);
 				}
 				try {
 					validateURL(next, unrestricted);
-				} catch (IllegalArgumentException e) {
-					throw new IllegalArgumentException("Redirect refused: " + e.getMessage() + " — " + chain(hops));
+				} catch (InvalidInputException e) {
+					throw new ResponseException("Redirect refused: " + e.getMessage() + " — " + chain(hops), response);
 				}
 				return send(next, request.follow(code, sameOrigin(uri, next)), true, hopsLeft - 1, hops, visited, redactions,
 					unrestricted);
@@ -671,7 +677,7 @@ public class HTTPAdapter extends AAdapter {
 		if (value instanceof CVMLong || value instanceof CVMDouble || value instanceof CVMBool) {
 			return value.toString();
 		}
-		throw new IllegalArgumentException(field + "." + key
+		throw new InvalidInputException(field + "." + key
 			+ " must be a string, number or boolean, got: " + value);
 	}
 
@@ -680,7 +686,7 @@ public class HTTPAdapter extends AAdapter {
 		ACell value = RT.getIn(input, field);
 		if (value == null) return null;
 		if (!(value instanceof AMap<?, ?> map)) {
-			throw new IllegalArgumentException(field + " must be an object");
+			throw new InvalidInputException(field + " must be an object");
 		}
 		return (AMap<AString, ACell>) map;
 	}
@@ -690,13 +696,13 @@ public class HTTPAdapter extends AAdapter {
 	private String connectionToken(RequestContext ctx, String provider, String destination) {
 		TokenSource source = (engine != null) ? engine.findAdapter(TokenSource.class) : null;
 		if (source == null) {
-			throw new IllegalStateException("bearerSecret \"oauth/" + provider
+			throw new NotSupportedException("bearerSecret \"oauth/" + provider
 				+ "\" needs the oauth adapter, which is not registered on this venue");
 		}
 		try {
 			return source.accessToken(ctx, provider, destination);
 		} catch (IOException e) {
-			throw new IllegalArgumentException("Could not obtain an access token for " + provider + ": " + e.getMessage());
+			throw new UnavailableException("Could not obtain an access token for " + provider + ": " + e.getMessage(), e);
 		}
 	}
 
@@ -756,8 +762,9 @@ public class HTTPAdapter extends AAdapter {
 		}
 		String resolved = engine.resolveSecret(reference.toString(), ctx, destination);
 		if (resolved == null) {
-			throw new IllegalArgumentException("Cannot resolve " + field + " reference '"
-				+ reference + "'; store it with secret:set or pass an existing s/<name> reference");
+			throw new NotFoundException("Cannot resolve " + field + " reference '"
+				+ reference + "'; store it with secret:set or pass an existing s/<name> reference",
+				reference.toString());
 		}
 		return resolved;
 	}

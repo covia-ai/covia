@@ -28,6 +28,7 @@ import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -1074,7 +1075,7 @@ public class LangChainAdapter extends AAdapter {
 		String url = urlParam.toString();
 		try {
 			engine.requireSafeUrl(ctx, url);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			return e.getMessage();
 		}
 		return null;

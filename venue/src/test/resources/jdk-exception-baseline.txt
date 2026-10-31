@@ -31,7 +31,7 @@ venue/src/main/java/covia/adapter/FileAdapter.java 35
 venue/src/main/java/covia/adapter/FileOperations.java 20
 venue/src/main/java/covia/adapter/GridAdapter.java 14
 venue/src/main/java/covia/adapter/HITLAdapter.java 26
-venue/src/main/java/covia/adapter/HTTPAdapter.java 29
+venue/src/main/java/covia/adapter/HTTPAdapter.java 2
 venue/src/main/java/covia/adapter/JSONAdapter.java 7
 venue/src/main/java/covia/adapter/JVMAdapter.java 1
 venue/src/main/java/covia/adapter/LangChainAdapter.java 23

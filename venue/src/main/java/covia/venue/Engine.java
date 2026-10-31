@@ -4350,7 +4350,7 @@ public class Engine {
 	 * {@link #requireSafeUrl(RequestContext, String)}.
 	 *
 	 * @param url URL string to validate
-	 * @throws IllegalArgumentException naming the rule when the URL is refused
+	 * @throws InvalidInputException naming the rule when the URL is refused
 	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(String url) {
@@ -4365,7 +4365,7 @@ public class Engine {
 	 *
 	 * @param ctx The caller that chose the target
 	 * @param url URL string to validate
-	 * @throws IllegalArgumentException naming the rule when the URL is refused
+	 * @throws InvalidInputException naming the rule when the URL is refused
 	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(RequestContext ctx, String url) {
@@ -4379,7 +4379,7 @@ public class Engine {
 	 *
 	 * @param ctx The caller that chose the target
 	 * @param host Host name or address literal
-	 * @throws IllegalArgumentException naming the rule when the host is refused
+	 * @throws InvalidInputException naming the rule when the host is refused
 	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeHost(RequestContext ctx, String host) {
@@ -4415,8 +4415,8 @@ public class Engine {
 	 * @param spec Venue URL or DID
 	 * @param auth Authentication the connection presents
 	 * @return The connected venue, not yet contacted
-	 * @throws IllegalArgumentException when the spec is malformed or its address is refused
-	 * @throws InvalidInputException when its transport cannot be checked
+	 * @throws IllegalArgumentException when the spec is malformed
+	 * @throws InvalidInputException when its address is refused or its transport cannot be checked
 	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
