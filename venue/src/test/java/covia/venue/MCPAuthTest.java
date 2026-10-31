@@ -237,6 +237,9 @@ public class MCPAuthTest {
 		String adminToken = namedToken(namedKey, namedDid, server);
 		String peerToken = namedToken(peerKey, peerDid, server);
 		String target = peerDid + "/w/delegated";
+		// A grant over the value changes it once it exists; the peer creates it
+		assertToolSuccess(toolCall(baseUrl, peerToken, "covia_write",
+			Maps.of(Fields.PATH, "w/delegated", Fields.VALUE, "peer-value")));
 
 		AMap<AString, ACell> ungranted = toolCall(baseUrl, adminToken, "covia_write",
 			Maps.of(Fields.PATH, target, Fields.VALUE, "must-not-land"));

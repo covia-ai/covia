@@ -92,9 +92,17 @@ public class CapabilityCheckerTest {
 			Capability.create(Strings.create("w/"), Capability.CRUD_READ)
 		);
 
-		RequestContext ctx = RequestContext.of(
-			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
-		).withCaps(caps);
+		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		RequestContext ctx = RequestContext.of(did).withCaps(caps);
+		// Creating w/allowed changes w, outside the grant: the uncapped user makes it
+		assertThrows(Exception.class, () ->
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "w/allowed/doc", Fields.VALUE, Strings.create("ok")), ctx)
+				.awaitResult(5000),
+			"A grant inside w/allowed must not create w/allowed");
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/allowed", Fields.VALUE, Maps.empty()), RequestContext.of(did))
+			.awaitResult(5000);
 
 		// Write to allowed path — should succeed
 		Job writeOk = engine.jobs().invokeOperation("v/ops/covia/write",
@@ -124,9 +132,11 @@ public class CapabilityCheckerTest {
 		AVector<ACell> caps = Vectors.of(
 			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE)
 		);
-		RequestContext gated = RequestContext.of(
-			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
-		).withCaps(caps);
+		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		RequestContext gated = RequestContext.of(did).withCaps(caps);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/allowed", Fields.VALUE, Maps.empty()), RequestContext.of(did))
+			.awaitResult(5000);
 
 		// User-facing path: capped ctx writing outside its scope — denied (Job fails).
 		assertThrows(Exception.class, () ->

@@ -39,7 +39,7 @@ Resources are DID URL paths into a user's namespace:
 |---------|-------|
 | `*` | Full delegation |
 | `crud/read` | Read data |
-| `crud/write` | Write data |
+| `crud/write` | Write data; creating a key or file also needs it on the map or directory that holds it |
 | `crud/delete` | Delete data |
 | `invoke` | Execute operations |
 | `agent/message` | Send messages to an agent |

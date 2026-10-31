@@ -195,6 +195,21 @@ public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext contex
 	}
 
 	/**
+	 * How many levels of the path {@code keys[from..]} are absent from
+	 * {@code root}: none when the leaf has an entry, otherwise the levels from
+	 * the first missing key down to the leaf. A write at the path creates
+	 * exactly these.
+	 */
+	public static int missingLevels(ACell root, ACell[] keys, int from) {
+		ACell node = root;
+		for (int i = from; i < keys.length; i++) {
+			if (!containsLeaf(node, keys[i])) return keys.length - i;
+			node = navigateInto(node, keys[i]);
+		}
+		return 0;
+	}
+
+	/**
 	 * True if the leaf key ({@code keys[length-1]}) already had an entry in
 	 * {@code root} before a mutation — the pre-state that distinguishes a
 	 * <em>created</em> write from a <em>replaced</em> one, and a real delete from a

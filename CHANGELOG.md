@@ -59,9 +59,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `dlfs:createDrive` and `deleteDrive` take the drive in `drive`, as other DLFS operations
   do; `name` remains an alias for a bare drive name.
 - `file:move` needs `crud/read` and `crud/delete` on its source, not `crud/write`.
-- Creating a file or directory, on a host, temp or DLFS root, needs `crud/write` on the
-  directory that holds it; a grant on an existing file only changes it. Archive operations
-  authorise through the file adapter, so DLFS-backed roots check their DLFS resource.
+- Creating a workspace key, file or directory needs `crud/write` on the map or directory
+  that holds it; a grant on an existing key or file only changes it. A user's namespaces
+  always exist. Archive operations authorise through the file adapter, so DLFS-backed
+  roots check their DLFS resource.
+- A cross-user `covia:write` or `covia:append` reaches only a user the venue already has.
 
 ### Deprecated
 

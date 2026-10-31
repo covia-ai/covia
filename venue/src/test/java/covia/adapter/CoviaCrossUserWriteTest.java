@@ -90,6 +90,7 @@ public class CoviaCrossUserWriteTest {
 	@Test
 	public void testCrossUserWriteWithProof() {
 		// Alice signs Bob a crud/write grant over her w/x; Bob writes there.
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("alice")), ALICE);
 		AMap<AString, ACell> grant = ownerToken(ALICE_KP, BOB_DID,
 			ALICE_DID + "/w/x", "crud/write", 3600);
 
@@ -105,7 +106,9 @@ public class CoviaCrossUserWriteTest {
 
 	@Test
 	public void testCrossUserWriteToDeepPathWithProof() {
-		// A grant over the top-level key covers a deeper write beneath it.
+		// A grant over the top-level key covers a deeper write beneath it,
+		// creating the levels below that key.
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/data", Fields.VALUE, Maps.empty()), ALICE);
 		AMap<AString, ACell> grant = ownerToken(ALICE_KP, BOB_DID,
 			ALICE_DID + "/w/data", "crud/write", 3600);
 
@@ -122,6 +125,7 @@ public class CoviaCrossUserWriteTest {
 	public void testBroaderCrudGrantCoversWrite() {
 		// A parent "crud" grant covers the narrower crud/write the op needs —
 		// authorisation goes through Capability.covers, not exact can matching.
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("alice")), ALICE);
 		AMap<AString, ACell> grant = ownerToken(ALICE_KP, BOB_DID,
 			ALICE_DID + "/w/x", "crud", 3600);
 
@@ -133,10 +137,58 @@ public class CoviaCrossUserWriteTest {
 			RT.getIn(run("v/ops/covia/read", Maps.of(Fields.PATH, "w/x"), ALICE), "value"));
 	}
 
+	@Test
+	public void testCrossUserGrantCreatesOnlyInsideAMapThatExists() {
+		// Creating a key changes the map that holds it. Alice's grant over w/x
+		// changes x once it exists; her grant over w/notes/ creates inside
+		// w/notes once she has made it, but not w/notes itself.
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/other", Fields.VALUE, Strings.create("alice")), ALICE);
+		AMap<AString, ACell> keyGrant = ownerToken(ALICE_KP, BOB_DID,
+			ALICE_DID + "/w/x", "crud/write", 3600);
+		Job key = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/x", Fields.VALUE, Strings.create("bob")),
+			withProofs(BOB, keyGrant));
+		assertThrows(Exception.class, () -> key.awaitResult(5000));
+		assertEquals(CVMBool.FALSE,
+			RT.getIn(run("v/ops/covia/read", Maps.of(Fields.PATH, "w/x"), ALICE), "exists"));
+
+		AMap<AString, ACell> mapGrant = ownerToken(ALICE_KP, BOB_DID,
+			ALICE_DID + "/w/notes/", "crud/write", 3600);
+		Job map = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/notes/today", Fields.VALUE, Strings.create("bob")),
+			withProofs(BOB, mapGrant));
+		assertThrows(Exception.class, () -> map.awaitResult(5000));
+		assertEquals(CVMBool.FALSE,
+			RT.getIn(run("v/ops/covia/read", Maps.of(Fields.PATH, "w/notes"), ALICE), "exists"));
+
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/notes", Fields.VALUE, Maps.empty()), ALICE);
+		run("v/ops/covia/write",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/notes/today", Fields.VALUE, Strings.create("bob")),
+			withProofs(BOB, mapGrant));
+		assertEquals(Strings.create("bob"),
+			RT.getIn(run("v/ops/covia/read", Maps.of(Fields.PATH, "w/notes/today"), ALICE), "value"));
+	}
+
+	@Test
+	public void testCrossUserWriteNeedsAKnownOwner() {
+		// The owner's record is an entry of the venue's users, which no grant of
+		// theirs covers: a write under it reaches only a user the venue has.
+		AMap<AString, ACell> grant = ownerToken(ALICE_KP, BOB_DID,
+			ALICE_DID + "/w/", "crud/write", 3600);
+		Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/x", Fields.VALUE, Strings.create("bob")),
+			withProofs(BOB, grant));
+		assertThrows(Exception.class, () -> write.awaitResult(5000));
+		assertTrue(write.getErrorMessage().contains(covia.venue.VenueState.UNKNOWN_USER),
+			write.getErrorMessage());
+		assertNull(engine.getVenueState().users().get(ALICE_DID));
+	}
+
 	// ========== Cross-user append (authorised) ==========
 
 	@Test
 	public void testCrossUserAppendWithProof() {
+		run("v/ops/covia/write", Maps.of(Fields.PATH, "w/events", Fields.VALUE, Vectors.empty()), ALICE);
 		AMap<AString, ACell> grant = ownerToken(ALICE_KP, BOB_DID,
 			ALICE_DID + "/w/events", "crud/write", 3600);
 

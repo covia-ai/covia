@@ -666,19 +666,27 @@ references with `secret/use` instead.
 
 ### 5.3 Enforcement Points
 
-Creating an entry changes the directory that holds it. A write that creates
-therefore also needs `crud/write` on that directory, or on the nearest one
-that exists when several levels are missing. A grant on an existing file
-changes it but creates nothing. This applies to files on host, temp and DLFS
-roots, including `archive:extract` and `archive:zip` destinations, and to DLFS
-drives, which are entries of `[<owner>/]dlfs`. A component's own drive (Vault's,
-a DLFS-backed root's, a messaging or speech media drive) counts as present: an
-authorised write there creates it as its owner.
+Creating an entry changes the directory or map that holds it. A write that
+creates therefore also needs `crud/write` there, or at the nearest level that
+exists when several are missing. A grant on an existing file or key changes it
+but creates nothing. This applies to:
+
+- workspace keys (`covia:write`, `covia:append`, `covia:copy` destinations),
+  checked within the write's atomic update;
+- files on host, temp and DLFS roots, including `archive:extract` and
+  `archive:zip` destinations;
+- DLFS drives, which are entries of `[<owner>/]dlfs`.
+
+A user's namespaces (`w`, `o`, …) always exist. So does a component's own drive
+(Vault's, a DLFS-backed root's, a messaging or speech media drive): an
+authorised write there creates it as its owner. A cross-user write reaches
+only a user the venue already has (`VenueState.UNKNOWN_USER`), since a user's
+record is an entry no grant of theirs covers.
 
 | Point | Required Capability |
 |-------|-------------------|
 | `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
-| `covia:write` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
+| `covia:write` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }`, and on the map that holds a new key |
 | `covia:delete` (cross-user) | `{ with: "<path>", can: "crud/delete" }` |
 | `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
 | `file:roots` | `{ with: "file://", can: "crud/read" }` |

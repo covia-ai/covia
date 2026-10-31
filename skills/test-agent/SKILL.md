@@ -39,6 +39,8 @@ agent_create  agentId=TestBot  config=[
 ]
 ```
 
+The grant covers what is inside `w/output`, not `w/`, so write an empty map `{}` at `w/output` before the agent's first write there.
+
 ### `test <name>` — Send a task and observe
 
 1. Send a task:
@@ -147,6 +149,7 @@ To test capability enforcement:
   {"with": "w/", "can": "crud/read"}
 ]
 ```
+and write an empty map `{}` at `w/allowed`, which the agent's grant cannot create
 
 2. Give it a task that tries to write outside the allowed path
 

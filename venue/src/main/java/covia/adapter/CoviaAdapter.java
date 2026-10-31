@@ -602,11 +602,41 @@ public class CoviaAdapter extends AAdapter {
 		// own namespace goes through the scope seam; another user's needs a proof
 		// (or public/venue-catalog policy), else a denial. Extension cursors also
 		// retain this authority check when accessing their adapter-provided view.
+		engine.requireLocalAccess(ctx, capResource(input), ability);
+	}
+
+	/** The resource a path-targeted op names: its path, with any owner DID. */
+	private static AString capResource(ACell input) {
 		ACell path = RT.getIn(input, Fields.PATH);
 		AString resource = RT.ensureString(path);
 		if (path instanceof AVector<?>) resource = Strings.create(buildSubPath(parsePath(path)));
 		if (resource != null && resource.startsWith(Strings.create("/"))) resource = resource.slice(1);
-		engine.requireLocalAccess(ctx, resource, ability);
+		return resource;
+	}
+
+	/**
+	 * Creating a key changes the map that holds it, so a write that creates
+	 * levels of its path is also authorised at the nearest level that exists.
+	 * A namespace always exists. This runs on the value the write applies to,
+	 * inside its atomic update, so the check always matches what the write
+	 * creates.
+	 */
+	private void requireCreateAccess(RequestContext ctx, ACell input, ACell[] keys,
+			ACell current, int from) {
+		int missing = WorkspaceRoot.missingLevels(current, keys, from);
+		if (missing == 0) return;
+		engine.requireLocalAccess(ctx, ancestor(capResource(input), missing), Capability.CRUD_WRITE);
+	}
+
+	/**
+	 * The resource {@code levels} levels above {@code resource}, never above its
+	 * namespace ({@code w}, or {@code <did>/w} for another user's).
+	 */
+	private static AString ancestor(AString resource, int levels) {
+		String[] segments = resource.toString().split("/", -1);
+		int namespace = resource.toString().startsWith("did:") ? 1 : 0;
+		int keep = Math.max(namespace + 1, segments.length - levels);
+		return Strings.create(String.join("/", java.util.Arrays.copyOf(segments, keep)));
 	}
 
 	/**
@@ -614,7 +644,8 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * <p>Physical writable namespaces are {@code w/} and {@code o/}; virtual
 	 * resolvers enforce their own policies, including opt-in {@code x/} views.
-	 * Deep paths create intermediate maps as needed within one atomic update.</p>
+	 * Deep paths create intermediate maps as needed within one atomic update,
+	 * authorised at the nearest level that exists ({@link #requireCreateAccess}).</p>
 	 *
 	 * @return {@code {existed, pathCreated?}} — {@code existed:false} created a new
 	 *         value, {@code true} replaced an existing one; {@code pathCreated:true}
@@ -650,6 +681,7 @@ public class CoviaAdapter extends AAdapter {
 		// (that is `existed`).
 		baseCursor.update(keys, target.requireExistingRecord(),
 			(current, from) -> {
+			requireCreateAccess(ctx, input, keys, current, from);
 			existed[0] = leafExisted(current, keys, from);
 			ACell next = deepSet(current, keys, from, value);
 			// pathCreated reports building a nested parent below the namespace;
@@ -789,6 +821,7 @@ public class CoviaAdapter extends AAdapter {
 		final long[] newSize = {0};
 		baseCursor.update(keys, target.requireExistingRecord(),
 			(current, from) -> {
+			requireCreateAccess(ctx, input, keys, current, from);
 			existed[0] = leafExisted(current, keys, from);
 			ACell next = deepAppend(current, keys, from, element);
 			built[0] = keys.length > 2 && !parentExisted(current, keys, from);
@@ -1320,7 +1353,14 @@ public class CoviaAdapter extends AAdapter {
 			if (virtual != null) return virtual;
 			return new NamespaceResolver.ResolvedNamespace(write ? ensureWorkspaceRoot(ctx) : getWorkspaceRoot(ctx), keys, false);
 		}
-		if (write) didTarget = engine.resolveUserPath(ctx, raw, true);
+		if (write && didTarget.user() == null) {
+			// Another user's record is an entry of the venue's users, which no grant
+			// of theirs covers, so a write reaches only a user the venue has
+			if (!didTarget.ownerDID().equals(ctx.getUserDID())) {
+				throw new IllegalArgumentException(covia.venue.VenueState.UNKNOWN_USER);
+			}
+			didTarget = engine.resolveUserPath(ctx, raw, true);
+		}
 		User user = didTarget.user();
 		return new NamespaceResolver.ResolvedNamespace(user == null ? null : user.workspaceRoot(), keys, false);
 	}
