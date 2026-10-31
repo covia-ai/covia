@@ -797,8 +797,12 @@ holds `auth.public.caps`, an agent-shaped DID holds nothing, and anyone else is
 unrestricted there. `context(owner, principal)` is a principal a record of
 `owner`'s names (a messaging binding, say): the owner, one of its agents under
 the agent's current `config.caps`, or the public principal; the owner comes
-from the record, never from the principal's name. Every inbound request starts
-from `context(caller)` (`AuthMiddleware.callerContext`).
+from the record, never from the principal's name. `context(owner, principal,
+proofs)` adds proofs it presented, and takes any other principal as a delegate
+of the owner, under the same `user/sudo` check as a live request; a scheduled
+event fires through it. Every inbound request starts from `context(caller)`
+(`AuthMiddleware.callerContext`), and an agent's step runs as that agent
+(`Engine.stepContext`, §5.4).
 
 An admitted user may never be agent-shaped (`Engine.admitUser` rejects one), so
 a name addressing an agent never also names a user. A bearer may authenticate a
@@ -863,9 +867,12 @@ which confers `agent/request` and `agent/message` on the agent (an older public
 `a2a.caps` reads as `accepts: "anyone"`). An agent may therefore create
 sub-agents, never more capable ones,
 and a delegated `agent/create` or `agent/write` confers nothing beyond the
-delegation. An update re-checks only the fields it changes. A direct
-`llmagent:chat` or `goaltree:chat` whose input `config.caps` would replace the
-caller's scope follows the same rule.
+delegation. An update re-checks only the fields it changes.
+
+**A step runs as its agent.** `llmagent:chat` and `goaltree:chat` always run
+as the agent they name, under its current `config.caps`, whoever invokes them
+and whatever `config` their input carries (`Engine.stepContext`). Only the
+agent's own run or its owner may invoke one, and only for an agent that exists.
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.

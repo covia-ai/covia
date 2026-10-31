@@ -45,6 +45,12 @@ public class GoalTreeAdapterTest {
 	}
 
 	private final Engine engine = TestEngine.ENGINE;
+
+	/** Runs a step directly, as its agent's owner: a step runs only for an agent that exists. */
+	private ACell step(GoalTreeAdapter a, Job job, RequestContext ctx, ACell input) {
+		LLMAgentAdapterTest.ensureAgent(engine, ctx, input);
+		return a.processGoal(job, ctx, input);
+	}
 	private AString ALICE_DID;
 	private RequestContext ALICE;
 
@@ -110,7 +116,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("use the alpha skill"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		assertTrue(response.toString().contains("SKILL_TOOL_RESULT"), response.toString());
@@ -192,7 +198,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("get more tools"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		assertTrue(response.toString().contains("MORE_TOOLS_RESULT"), response.toString());
@@ -391,7 +397,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Hello"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		assertNotNull(output);
 
 		// Should have state and result
@@ -410,7 +416,7 @@ public class GoalTreeAdapterTest {
 			"modelProfile", Maps.of("options",
 				Maps.of("toolCalling", CVMBool.FALSE)));
 
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "no-tool-calling-goal",
 			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
@@ -432,7 +438,7 @@ public class GoalTreeAdapterTest {
 				"model", "length-then-answer-test"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		assertEquals("complete after truncation retry", RT.getIn(output, Fields.RESPONSE).toString());
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
 		AVector<ACell> conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
@@ -458,7 +464,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
 				Fields.MESSAGE, Strings.create(unique))));
 
-		adapter.processGoal(null, ALICE.withAgentId(agentId), input);
+		step(adapter,null, ALICE.withAgentId(agentId), input);
 		ACell captured = TestAdapter.CAPTURED_LLM_INPUT.get(agentId);
 		assertNotNull(captured, "mock LLM input should be captured for this agent");
 		AVector<ACell> messages = RT.ensureVector(RT.getIn(captured, Fields.MESSAGES));
@@ -489,7 +495,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		ACell tokens = RT.getIn(output, Fields.TOKENS);
 		assertNotNull(tokens, "goal-tree cycle usage must ride the transition output");
 		long in = RT.ensureLong(RT.getIn(tokens, Fields.INPUT)).longValue();
@@ -512,7 +518,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response after tool loop");
 		assertTrue(response.toString().contains("Tool returned"),
@@ -535,7 +541,7 @@ public class GoalTreeAdapterTest {
 					Fields.JOB_ID, Strings.create("job-123"),
 					Fields.INPUT, Strings.create("Process this invoice"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		// test:llm echoes the last user message — which should be the task description
@@ -582,7 +588,7 @@ public class GoalTreeAdapterTest {
 					Fields.INPUT, Strings.create("Process this"))));
 
 		Exception thrown = assertThrows(Exception.class,
-			() -> adapter.processGoal(null, scopedCtx, input),
+			() -> step(adapter,null, scopedCtx, input),
 			"Venue op failure must propagate, not be silently swallowed");
 		String msg = thrown.getMessage();
 		assertNotNull(msg, "Exception must have a message");
@@ -608,7 +614,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
 				Fields.MESSAGE, Strings.create("return 42"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		assertEquals("42", RT.ensureString(RT.getIn(output, Fields.RESPONSE, "answer")).toString());
 
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
@@ -637,7 +643,7 @@ public class GoalTreeAdapterTest {
 		assertNull(RT.getIn(finalTurn, "toolCalls"));
 		assertTrue(String.valueOf(RT.getIn(finalTurn, "content")).contains("42"));
 
-		ACell followup = adapter.processGoal(null, ALICE, Maps.of(
+		ACell followup = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "explicit-complete-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
@@ -655,7 +661,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testTextualCompleteUsesSharedControlRecognition() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "textual-goal-complete-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
@@ -671,7 +677,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testEmptyCompleteUsesAssistantTurnText() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "empty-goal-complete-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
@@ -687,7 +693,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testToolFailuresRecordedOnTheCycle() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "goal-tool-failure-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
@@ -802,7 +808,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of("content", "refresh the loaded value")));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		assertEquals("LIVE_LOAD_STABLE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
 	}
@@ -810,7 +816,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testExplicitFail() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "explicit-fail-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
@@ -842,7 +848,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testMalformedTerminalCallDoesNotSuppressLaterSibling() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "malformed-terminal-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
@@ -869,7 +875,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testParallelNonTerminalCallsEachReceiveAResult() {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell output = adapter.processGoal(null, ALICE, Maps.of(
+		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "parallel-nonterminal-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
@@ -910,7 +916,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response after compact loop");
 		assertTrue(response.toString().contains("Compact verified"),
@@ -939,7 +945,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Hello"))));
 
-		ACell output = adapter.processGoal(job, ALICE, input);
+		ACell output = step(adapter,job, ALICE, input);
 		// Should still return output (failed result), not throw
 		assertNotNull(output);
 		ACell err = RT.getIn(output, Fields.ERROR);
@@ -985,7 +991,7 @@ public class GoalTreeAdapterTest {
 					Fields.JOB_ID, Strings.create("job-goal"),
 					Fields.INPUT, Strings.create("Tell me about penguins"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		// test:llm echoes the last user message
 		assertTrue(response.toString().contains("penguin"),
@@ -1173,7 +1179,7 @@ public class GoalTreeAdapterTest {
 				(ACell) Maps.of(Strings.create("content"),
 					Strings.create("anything"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		// Loop hits MAX_ITERATIONS — failure path emits `error`, not `response`.
 		AString err = RT.ensureString(RT.getIn(output, Fields.ERROR));
 		assertNotNull(err, "Failed transition should report error");
@@ -1217,7 +1223,7 @@ public class GoalTreeAdapterTest {
 				(ACell) Maps.of(Strings.create("content"),
 					Strings.create("This is plain text, not JSON."))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		// Error path: transition must report error, not response.
 		assertNotNull(RT.getIn(output, Fields.ERROR),
 			"Failed transition must report error");
@@ -1250,7 +1256,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("hello"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		assertNotNull(RT.getIn(output, Fields.RESPONSE),
 			"Successful transition must report response");
 		ACell framesOut = RT.getIn(output, Fields.FRAMES);
@@ -1289,7 +1295,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn one"))));
 
-		ACell out1 = adapter.processGoal(null, ALICE, input1);
+		ACell out1 = step(adapter,null, ALICE, input1);
 		assertNotNull(RT.getIn(out1, Fields.RESPONSE), "turn 1 should succeed");
 		@SuppressWarnings("unchecked")
 		AVector<ACell> frames1 = (AVector<ACell>) RT.getIn(out1, Fields.FRAMES);
@@ -1317,7 +1323,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn two"))));
 
-		ACell out2 = adapter.processGoal(null, ALICE, input2);
+		ACell out2 = step(adapter,null, ALICE, input2);
 		assertNotNull(RT.getIn(out2, Fields.RESPONSE), "turn 2 should succeed");
 		@SuppressWarnings("unchecked")
 		AVector<ACell> frames2 = (AVector<ACell>) RT.getIn(out2, Fields.FRAMES);
@@ -1360,7 +1366,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn three"))));
 
-		ACell out3 = adapter.processGoal(null, ALICE, input3);
+		ACell out3 = step(adapter,null, ALICE, input3);
 		@SuppressWarnings("unchecked")
 		AVector<ACell> frames3 = (AVector<ACell>) RT.getIn(out3, Fields.FRAMES);
 		assertNotNull(frames3);
@@ -1381,7 +1387,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		AMap<AString, ACell> oldConfig = Maps.of(
 			"llmOperation", "v/test/ops/llm", "systemPrompt", "OLD_GOAL_IDENTITY");
-		ACell first = adapter.processGoal(null, ALICE, Maps.of(
+		ACell first = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "config-generation-goal",
 			AgentState.KEY_CONFIG, oldConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "first turn"))));
@@ -1392,7 +1398,7 @@ public class GoalTreeAdapterTest {
 
 		AMap<AString, ACell> newConfig = Maps.of(
 			"llmOperation", "v/test/ops/llm", "systemPrompt", "NEW_GOAL_IDENTITY");
-		ACell second = adapter.processGoal(null, ALICE, Maps.of(
+		ACell second = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "config-generation-goal",
 			AgentState.KEY_CONFIG, newConfig,
 			Fields.SESSION, Maps.of(AgentState.KEY_FRAMES, firstFrames),
@@ -1442,7 +1448,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("hi"))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
 		assertNotNull(newState);
 		assertNull(RT.getIn(newState, AbstractLLMAdapter.K_CONFIG),
@@ -1477,7 +1483,7 @@ public class GoalTreeAdapterTest {
 				(ACell) Maps.of(Strings.create("content"),
 					Strings.create("This is plain text, not JSON."))));
 
-		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell output = step(adapter,null, ALICE, input);
 		// Loop hits MAX_ITERATIONS — failure path emits `error`, not `response`.
 		AString err = RT.ensureString(RT.getIn(output, Fields.ERROR));
 		assertNotNull(err, "Plain text should be rejected, producing failure");

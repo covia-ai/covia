@@ -128,26 +128,38 @@ public class SchedulerTest {
 		assertTrue(sched.list(ctx).isEmpty(), "triggered event should be removed");
 	}
 
-	/** A fire runs as the context that scheduled it: same caller, namespace and scope. */
+	/** A fire runs as its actor would invoke the operation now. */
 	@Test
-	public void testFireRebuildsTheSchedulingContext() {
-		RequestContext[] contexts = {
-			ctx,
-			RequestContext.ofAgent(did, s("worker")),
-			RequestContext.ofAgent(did, s("worker")).withCaps(Vectors.of(Maps.of(Capability.CAN, s("invoke")))),
-			// An authenticated agent-shaped subject, as AuthMiddleware.callerContext builds it.
-			RequestContext.of(s(did + ":u:alice:g:worker")).withCaps(Vectors.empty()),
-			// A delegate acting in this user's namespace, as user/sudo builds it.
-			RequestContext.of(s(did + "-delegate")).onBehalfOf(did),
-		};
-		for (RequestContext live : contexts) {
-			Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), live, future());
-			RequestContext fired = Scheduler.fireContext(engine.getVenueState().schedule().find(handle).rec());
-			assertEquals(live.getCallerDID(), fired.getCallerDID());
-			assertEquals(live.getUserDID(), fired.getUserDID());
-			assertEquals(live.getCaps(), fired.getCaps());
-			assertTrue(sched.cancel(handle, RequestContext.of(live.getUserDID())));
-		}
+	public void testFireRunsAsTheActorNow() {
+		AVector<ACell> invoke = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext worker = agent("worker", invoke);
+		Blob own = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future());
+		Blob agents = sched.schedule(s("v/test/ops/echo"), s("x"), worker, future());
+		ScheduleState state = engine.getVenueState().schedule();
+
+		RequestContext fired = sched.fireContext(state.find(own).rec());
+		assertEquals(did, fired.getCallerDID());
+		assertNull(fired.getCaps());
+
+		fired = sched.fireContext(state.find(agents).rec());
+		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(did, fired.getUserDID());
+		assertEquals(invoke, fired.getCaps());
+
+		// Narrowing the agent narrows what its queued work may do.
+		AVector<ACell> narrower = Vectors.of(Maps.of(Capability.CAN, s("crud/read")));
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ctx).awaitResult(5000);
+		assertEquals(narrower, sched.fireContext(state.find(agents).rec()).getCaps());
+
+		// A delegate fires only while a user/sudo delegation still authorises it.
+		RequestContext delegate = RequestContext.of(s(did + "-delegate")).onBehalfOf(did);
+		Blob delegated = sched.schedule(s("v/test/ops/echo"), s("x"), delegate, future());
+		assertThrows(AuthException.class, () -> sched.fireContext(state.find(delegated).rec()));
+
+		assertTrue(sched.cancel(own, ctx));
+		assertTrue(sched.cancel(agents, ctx));
+		assertTrue(sched.cancel(delegated, ctx));
 	}
 
 	@Test
@@ -288,12 +300,12 @@ public class SchedulerTest {
 
 	@Test
 	public void testListNeverShowsCapturedAuthority() {
-		AVector<ACell> caps = Vectors.of(Maps.of(s("with"), s("w/allowed"), s("can"), s("crud/read")));
-		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withCaps(caps), future());
-		assertEquals(caps, stored(handle).get(ScheduleState.K_CAPS), "caps are captured for replay");
+		AVector<ACell> proofs = Vectors.of(s("proof"));
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withProofs(proofs), future());
+		assertEquals(proofs, stored(handle).get(ScheduleState.K_PROOFS), "proofs are presented again when it fires");
+		assertFalse(stored(handle).containsKey(s("caps")), "a fire takes its actor's caps as they are then");
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertFalse(rec.containsKey(ScheduleState.K_CAPS), "caps are authority, not description");
 		assertFalse(rec.containsKey(ScheduleState.K_PROOFS), "proofs are authority, not description");
 		assertTrue(sched.cancel(handle, ctx));
 	}

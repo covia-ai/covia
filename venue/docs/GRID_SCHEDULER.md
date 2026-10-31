@@ -31,8 +31,8 @@ per-thread `AgentScheduler` that predated this service has been retired.
   - `created` — wall-clock millis at which it was scheduled.
   - `description` — optional caller-written display text saying what the event
     is for, at most 500 characters. Never interpreted.
-  - `proofs` — the UCAN proof(s) the owner presented when scheduling, captured so
-    firing runs with **exactly** that authority and cannot escalate (§5).
+  - `proofs` — the UCAN proof(s) the scheduler presented when scheduling,
+    presented again when it fires (§5).
   - `repeat` — optional recurrence spec; absent ⇒ one-shot. It is an object so
     richer forms can join later without renaming anything: today the only form
     is `{every: <millis>}`, a fixed interval (minimum 1 s). Calendar forms
@@ -73,7 +73,7 @@ The `:schedule` value is a single extensible `{ updated, events, byActor, ... }`
 
 ```
 events  = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
-          value = { op, input, owner, by, time, created, actor?, description?, proofs?, caps?,
+          value = { op, input, owner, by, time, created, actor?, description?, proofs?,
                     repeat?, track?, lastFired?, lastJob? }
 byActor = map from each actor DID to the set of keys of the events it scheduled
 updated = wall-clock stamp of the last mutation
@@ -171,8 +171,8 @@ costs nothing — there is no scan of sleeping events.
    claim and every other mutation run on this one thread, a `trigger` of the
    same event either already ran (drain skips it) or runs after. This gives
    **at-most-once** firing with no locking.
-3. Dispatch on a fresh virtual thread, **replaying the event's stapled
-   `proofs`/`caps`** and nothing more (§5): start the prepared Job (tracked) or
+3. Dispatch on a fresh virtual thread, **as the event's actor would invoke it
+   now, presenting its `proofs` again** (§5): start the prepared Job (tracked) or
    run the engine's transient-Job dispatch (untracked, §7). Fire-and-forget;
    any error is logged. The vthread keeps the operation's I/O off the timer
    thread — the timer only ever resolves the op and writes the lattice.
@@ -203,7 +203,7 @@ catch-up is a future concern).
 
 ---
 
-## 5. Captured authority — no capability escalation
+## 5. Authority at fire time — no capability escalation
 
 Every event records the `owner` DID taken from the `RequestContext` at schedule
 time. `cancel`, `trigger`, `inspect`, and `list` are restricted to the owner
@@ -212,26 +212,30 @@ proximity, not permission: a capability-scoped agent or delegate reaches only
 the events it scheduled itself (its `actor`). Scheduled events are not a
 capability resource, so no caps extend that reach.
 
-A scheduled event is a *deferred* invocation, and at fire time the owner is not
-present to supply credentials. The venue must **not** fire the operation under
-its own ambient authority, nor under the owner's ambient authority as it stands
-at fire time — either would let a caller schedule work that runs with more
-authority than they actually held, or with authority that should since have
-lapsed. That is a **capability-escalation vector**, and it is disallowed.
+A scheduled event is a *deferred* invocation by its actor: the agent or
+delegate that scheduled it, else the owner. The venue must **not** fire it
+under its own ambient authority, nor under anyone's but the actor's: either
+would let a caller schedule work that runs with more authority than they hold.
 
-**Invariant: capabilities are captured at schedule time and replayed at fire
-time, unchanged.** The owner's UCAN proof(s) for the operation — exactly as
-presented on the scheduling request — are stapled into the event's `proofs`
-field. Firing presents **those proofs and nothing more**. Consequences, all
-intended:
+**Invariant: a fire runs exactly as its actor would invoke the operation at
+fire time** (`Engine.context(owner, actor, proofs)`), in the owner's namespace,
+presenting again the UCAN proof(s) the actor presented when scheduling, which
+the event keeps in `proofs`. Consequences, all intended:
 
-- A scheduled invocation carries precisely the authority the owner held when
-  scheduling — no escalation.
-- An event cannot be scheduled for an operation the owner could not invoke
-  directly at schedule time (the proofs simply wouldn't authorise it).
-- A stapled proof's own bounds still apply at fire time: an expired, revoked, or
-  attenuated proof makes the deferred run fail exactly as it would an immediate
-  one. The scheduler never invents or refreshes authority.
+- An owner's fire has the owner's authority; an agent's has the agent's
+  `config.caps` as they are then, so narrowing an agent narrows its queued
+  work, and a deleted agent's work does not fire.
+- A delegate's fire passes the same `user/sudo` check a live request would, so
+  a revoked or expired delegation stops it.
+- The public principal's fire has `auth.public.caps` as they are then, and
+  none while public access is off.
+- A proof's own bounds still apply: an expired, revoked or attenuated proof
+  makes the deferred run fail exactly as it would an immediate one. The
+  scheduler never invents or keeps authority.
+
+Every context that can schedule is a principal's own as it stands, so this
+loses nothing: an agent's step always runs as that agent, under its record's
+caps, whatever its input names (`Engine.stepContext`).
 
 See [UCAN.md](./UCAN.md).
 
@@ -261,8 +265,7 @@ operations, described by intent:
   `secretFields` are hidden, resolved as a job record's `op` is, and `input`
   is withheld when the operation no longer resolves, since its secret fields
   are then unknown. The stored input is untouched, because firing replays it.
-  Captured `proofs` and `caps` are authority, not description, and are never
-  listed. Events stored before `by`, `created` and `description` were
+  Captured `proofs` are authority, not description, and are never listed. Events stored before `by`, `created` and `description` were
   recorded list without them.
 
 All operations are scoped to the caller's identity. Scheduling is itself an
@@ -358,8 +361,8 @@ A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transien
 
 **In scope:** per-venue `:schedule` record and its event index; `schedule` / `cancel` / `trigger` /
 `list`; one-shot and fixed-interval (`repeat.every`) events with handles stable
-across re-keying; **captured authority — stapled UCAN proofs replayed at fire
-time, no escalation (§5)**; transient or tracked fires per event and venue
+across re-keying; **fires run as their actor at fire time, presenting their
+recorded proofs, no escalation (§5)**; transient or tracked fires per event and venue
 policy, with `lastJob` as the sole link to execution records (§7);
 owner-scoped access; boot catch-up (one fire per event, missed slots skipped);
 claim-then-invoke (at-most-once); a 1 s floor on `repeat.every`.

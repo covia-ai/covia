@@ -257,6 +257,16 @@ public class RequestContext {
 	}
 
 	/**
+	 * This execution (its job, session, task, cancellation and invocation)
+	 * carried on by {@code principal}'s authority instead of the caller's. The
+	 * caller's transport tokens and authentication record stay with the caller.
+	 * Only {@link Engine#stepContext} hands a run to an agent this way.
+	 */
+	RequestContext actingAs(Authority principal) {
+		return new RequestContext(principal, executionScope, null, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, null);
+	}
+
+	/**
 	 * Returns a new context whose capability scope is replaced. Every operation
 	 * executed under this context is checked against that scope at the adapter's
 	 * point of action ({@link #requireCapability} / Engine's common gates), on

@@ -511,6 +511,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	private ACell goal(Job job, RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		// A step runs as its agent, under the agent's authority as it stands now,
+		// whoever invoked it and whatever its input's config names.
+		RequestContext capsCtx = engine.stepContext(ctx, agentId);
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		// S3c: prefer session.pending over agent-level messages when a session
 		// is in scope. effectiveMessages picks the right one (no duplication).
@@ -595,7 +598,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Authority, palette and the cycle's Spec. Harness tool names in
 		// config.tools are skipped by the palette — they're resolved separately
 		// by resolveHarnessTools / buildTypedRootHarnessTools.
-		RequestContext capsCtx = conferredCapsContext(recordConfig, agentId, ctx).withAgentId(agentId);
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		boolean cachePrefix = promptCaching(profile, l3Config);
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx,

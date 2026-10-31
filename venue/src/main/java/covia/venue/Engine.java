@@ -4064,16 +4064,60 @@ public class Engine {
 		if (principal == null || principal.equals(owner) || isPublicPrincipal(principal)) {
 			return context(principal);
 		}
-		AString agentId = covia.grid.Principals.agentIdOf(principal);
-		if (owner == null || agentId == null
-				|| !principal.equals(covia.grid.Principals.agentDID(owner, agentId))) {
-			throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal, owner));
-		}
+		AString agentId = agentIdIn(owner, principal);
+		if (agentId == null) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal, owner));
 		AgentState agent = getAgent(owner, agentId);
 		AVector<ACell> caps = (agent == null) ? Vectors.empty()
 			: RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS));
 		RequestContext ctx = RequestContext.ofAgent(owner, agentId);
 		return (caps == null) ? ctx : ctx.withCaps(caps);
+	}
+
+	/**
+	 * The context {@code principal} acts under now for {@code owner}, presenting
+	 * {@code proofs}, as a live request of its own would: the owner, one of its
+	 * agents or the public principal as {@link #context(AString, AString)}, and
+	 * any other principal only as a {@code user/sudo} delegate whose proofs still
+	 * authorise it ({@link #sudoContext}). A recorded request, such as a
+	 * scheduled event, is rebuilt this way when it runs.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString)} or {@link #sudoContext}
+	 */
+	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs) {
+		boolean own = principal == null || principal.equals(owner) || isPublicPrincipal(principal)
+			|| agentIdIn(owner, principal) != null;
+		RequestContext ctx = own ? context(owner, principal) : context(principal);
+		if (proofs != null) ctx = ctx.withProofs(proofs);
+		return own ? ctx : sudoContext(ctx, owner);
+	}
+
+	/**
+	 * The context agent {@code agentId}'s step runs under: the agent itself as it
+	 * stands now ({@link #context(AString, AString)}), carrying on {@code ctx}'s
+	 * execution. A step runs only for an agent that exists, and only the agent's
+	 * own run or its owner may make it act. A step's input never sets its
+	 * authority.
+	 *
+	 * @throws AuthException when the caller may not make that agent act, or it does not exist
+	 */
+	public RequestContext stepContext(RequestContext ctx, AString agentId) {
+		AString owner = ctx.getUserDID();
+		AString caller = ctx.getCallerDID();
+		AString agentDID = (owner == null || agentId == null) ? null
+			: covia.grid.Principals.agentDID(owner, agentId);
+		if (agentDID == null || !(agentDID.equals(caller) || owner.equals(caller))) {
+			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
+		}
+		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
+		return ctx.actingAs(context(owner, agentDID).getAuthority()).withAgentId(agentId);
+	}
+
+	/** The id of {@code principal} as one of {@code owner}'s agents, or null when it is not one. */
+	static AString agentIdIn(AString owner, AString principal) {
+		if (owner == null || principal == null) return null;
+		AString agentId = covia.grid.Principals.agentIdOf(principal);
+		return (agentId != null && principal.equals(covia.grid.Principals.agentDID(owner, agentId)))
+			? agentId : null;
 	}
 
 	/**
@@ -4095,6 +4139,12 @@ public class Engine {
 
 	/** Why a record cannot act as a principal: it is neither the owner nor one of the owner's agents. */
 	public static final String FOREIGN_PRINCIPAL = "%s acts neither as %s nor as one of its agents";
+
+	/** Why a step did not run: only the agent's own run, or its owner, may make an agent act. */
+	public static final String NOT_AGENTS_STEP = "%s cannot run a step of agent %s: only the agent's own run or its owner can make it act";
+
+	/** Why a step did not run: it names no agent that exists here. */
+	public static final String NO_SUCH_AGENT = "%s is not an agent here";
 
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
 	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A

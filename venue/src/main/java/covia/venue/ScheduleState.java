@@ -90,7 +90,7 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 	}
 
 	public Blob schedule(AString op, ACell input, AString owner, AString actor, AString by,
-			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime,
+			AVector<ACell> proofs, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description, long created) {
 		Blob key = mintKey(wakeTime);
 		AMap<AString, ACell> rec = Maps.of(K_OP, op, K_OWNER, owner, K_BY, by,
@@ -99,7 +99,6 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		if (description != null) rec = rec.assoc(K_DESCRIPTION, validateDescription(description));
 		if (input != null) rec = rec.assoc(K_INPUT, input);
 		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
-		if (caps != null) rec = rec.assoc(K_CAPS, caps);
 		if (repeat != null) rec = rec.assoc(K_REPEAT, validateRepeat(repeat));
 		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
 		var record = rec;
@@ -175,7 +174,7 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		}
 		return earliest <= 0 ? null : schedule(AgentState.TRIGGER_OP,
 			Maps.of(Fields.AGENT_ID, agentId, Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE),
-			owner, null, owner, null, null, earliest, null, false, null,
+			owner, null, owner, null, earliest, null, false, null,
 			context.currentTimestamp().longValue());
 	}
 
@@ -203,10 +202,8 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 	/** Event record field: wall-clock millis at which the event was scheduled
 	 *  (CVMLong). Absent on events stored before it was recorded. */
 	static final AString K_CREATED = Fields.CREATED;
-	/** Event record field: captured UCAN proofs (AVector), replayed at fire time. */
+	/** Event record field: the UCAN proofs (AVector) the scheduler presented, presented again at fire time. */
 	static final AString K_PROOFS = Strings.intern("proofs");
-	/** Event record field: captured capability attenuations (AVector). */
-	static final AString K_CAPS = Strings.intern("caps");
 	/** Event record field: absolute wake time in millis (CVMLong). */
 	static final AString K_TIME = Strings.intern("time");
 	/** Event record field: recurrence spec (AMap, see {@link #validateRepeat});

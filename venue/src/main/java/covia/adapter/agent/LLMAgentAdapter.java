@@ -332,6 +332,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	private ACell chat(RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		// A step runs as its agent, under the agent's authority as it stands now,
+		// whoever invoked it and whatever its input's config names.
+		RequestContext capsCtx = engine.stepContext(ctx, agentId);
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		// S3c: prefer session.pending over agent-level messages when a session
 		// is in scope. Both carry the same envelopes (S3b dual-write); reading
@@ -373,7 +376,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		AVector<ACell> sessionFrames = store.frames();
 		AMap<AString, ACell> frameLoads = GoalTreeContext.rootLoads(sessionFrames);
-		RequestContext capsCtx = conferredCapsContext(recordConfig, agentId, ctx).withAgentId(agentId);
 		AMap<AString, ACell> config = effectiveModelConfig(recordConfig, ctx);
 		AString llmOperation = getLLMOperation(config);
 		ModelProfile profile = modelProfileFor(config, ctx);

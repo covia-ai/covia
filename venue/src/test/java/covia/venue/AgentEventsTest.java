@@ -311,6 +311,7 @@ public class AgentEventsTest {
 	public void testTransitionOutsideRunLoopEmitsNothing() {
 		// A direct harness invocation carries no cycle handle, so nothing is
 		// attributed to the agent — the tap is a run-loop surface.
+		createAgent("direct-agent", Maps.of("llmOperation", "v/test/ops/toolllm"));
 		Capture c = new Capture();
 		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(c)) {
 			ACell out = engine.jobs().invokeOperation("v/ops/llmagent/chat", Maps.of(
