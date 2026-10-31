@@ -44,6 +44,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   read unless the venue sends a length.
 - A `claudecode:session` opened without a prompt takes no pool slot until its first turn.
 - Connected accounts no longer appear in `secret:list` or a user export.
+- A connected account is stored by `oauth:complete` from the account that started the
+  connect, with the one-time code the callback hands the browser. `returnTo` names an
+  app under an `adapters.oauth.returnTo` prefix, never a venue path.
+  `OAuthAdapter.complete` is now `callback`, and stores nothing.
 - Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
 - Each venue migration step is a class, listed in order in `VenueMigrations.STEPS`.
 - `RemoteFetchException.malformedVenue` is `invalidVenue`, which also reports a

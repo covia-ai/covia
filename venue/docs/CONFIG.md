@@ -1627,15 +1627,27 @@ The public principal has none.
 - The venue's callback is `<baseUrl>/auth/connect/<provider>/callback`;
   register it with the provider's client. A local venue uses a loopback URL,
   which Google accepts for a "Desktop app" client on any port.
-- `returnTo` — URL prefixes a connect may name to send the browser back to
-  an app after approval; venue-relative paths are always allowed.
-- `pendingTtlSecs` — how long a started connect may wait for approval
-  (default 600).
+- `returnTo` — URL prefixes of the apps a connect may name to send the
+  browser back to after approval, with the completion code added as
+  `?code=`. List only apps that complete the connect under their own
+  sign-in. A prefix matches up to a path, query or fragment boundary, and
+  venue paths are never allowed.
+- `pendingTtlSecs` — how long a started connect may wait for approval, and
+  an approved one for completion (default 600).
 
 Flow: `v/ops/oauth/connect {provider, scopes?, returnTo?}` returns the URL
-the user opens; the callback exchanges the code (PKCE, one-time state bound
-to the caller) and stores the grant. A callback for an account deleted since
-the connect began stores nothing and revokes what it was issued.
+the user opens. Approval at the provider connects nothing by itself. The
+venue has no browser session, so the callback cannot tell whose browser it
+is in. Instead it consumes the one-time state (PKCE, bound to the caller)
+and gives the browser a one-time completion code. The browser takes the code
+to the `returnTo` app, or without one the page shows it, naming the venue
+account it connects to, for the user to give to the app that asked.
+`v/ops/oauth/complete {code}`, from the account that started the connect,
+exchanges the provider's code and stores the grant. Any other account is
+refused and the code is used up. A completion code lapses after
+`pendingTtlSecs`, and in practice sooner, when the provider's own code
+expires. A completion for an account deleted since the connect began stores
+nothing and revokes what it was issued.
 `http:get` / `http:post` with `bearerSecret: "oauth/<provider>"` then attach a
 fresh access token — refreshed when expired — that never reaches a model or a
 job record. `oauth:status` lists connections without tokens;
@@ -1653,7 +1665,8 @@ outright. A capability-scoped caller such as an agent needs, on it:
 - `oauth/use` to attach its token, which an `nb.url` caveat limits to a
   destination;
 - `crud/read` for `oauth:status` (on `oauth/` to list them all);
-- `oauth/connect` and `oauth/disconnect`, which a `crud` grant does not cover;
+- `oauth/connect` (for `oauth:connect` and `oauth:complete`) and
+  `oauth/disconnect`, which a `crud` grant does not cover;
 - or `oauth`, which covers all of these.
 
 Provider policy is the operator's problem, not the venue's: Google's Gmail

@@ -149,7 +149,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
 | `oauth` | every `oauth/*` | All connected-account operations |
 | `oauth/use` | — | Send a connected account's token in a request without seeing it; bindable to a destination with `nb.url` |
-| `oauth/connect` | — | Connect an account: whoever approves the returned URL becomes the connection |
+| `oauth/connect` | — | Connect an account: start a connect, and complete one the provider approved, for the account that started it |
 | `oauth/disconnect` | — | Disconnect an account, revoking its grant at the provider |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
@@ -686,6 +686,7 @@ references with `secret/use` instead.
 | `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
 | `oauth:status` | `{ with: "oauth/", can: "crud/read" }`, or `oauth/<provider>` for one provider |
 | `oauth:connect` | `{ with: "oauth/<provider>", can: "oauth/connect" }` |
+| `oauth:complete` | `{ with: "oauth/<provider>", can: "oauth/connect" }`, and only by the account that started the connect |
 | `oauth:disconnect` | `{ with: "oauth/<provider>", can: "oauth/disconnect" }` |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |

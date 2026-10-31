@@ -105,7 +105,7 @@ AUTH_REQUIRED).
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
 | `scheduler` | Deferred grid-op invocation, one-shot or `repeat.every`; tracked fires are durable Jobs (`docs/GRID_SCHEDULER.md`) | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication and identity | `whoami`, `identity-token` (caller-only bearer saved as a secret) |
-| `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `status`, `disconnect` |
+| `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `complete`, `status`, `disconnect` |
 | `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
@@ -152,7 +152,7 @@ Base path: `/api/v1/`
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
 | `/.well-known/oauth-authorization-server` | GET | OAuth 2.1 AS metadata (RFC 8414) when `auth.oauth.provider` is enabled |
 | `/oauth/{authorize,token,revoke}` | — | OAuth 2.1 authorization server: code+PKCE flow issuing venue bearers (`auth.oauth.provider`) |
-| `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval (`adapters.oauth`; not `/api/v1`) |
+| `/auth/connect/{provider}/callback` | GET | OAuth connection callback — the provider redirects the user here after approval; it hands the browser a one-time completion code for `oauth:complete` (`adapters.oauth`; not `/api/v1`) |
 
 MCP endpoint at `/mcp`; A2A is opt-in with an `a2a` config block.
 
