@@ -40,6 +40,12 @@ import convex.auth.ucan.Capability;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.lattice.Namespace;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
@@ -275,11 +281,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			ACell raw = config.get(K_PROVIDERS);
 			if (raw != null) {
 				AMap<AString, ACell> map = RT.ensureMap(raw);
-				if (map == null) throw new IllegalArgumentException("adapters.oauth.providers must be a map of provider name to settings");
+				if (map == null) throw new ConfigurationException("adapters.oauth.providers must be a map of provider name to settings");
 				for (var entry : map.entrySet()) {
 					String name = RT.ensureString(entry.getKey()) != null ? entry.getKey().toString() : null;
 					if (name == null || !PROVIDER_NAME.matcher(name).matches()) {
-						throw new IllegalArgumentException("adapters.oauth.providers: provider names are lowercase letters, digits and dashes, got: " + entry.getKey());
+						throw new ConfigurationException("adapters.oauth.providers: provider names are lowercase letters, digits and dashes, got: " + entry.getKey());
 					}
 					parsed.put(name, provider(name, RT.ensureMap(entry.getValue())));
 				}
@@ -287,11 +293,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			ACell rt = config.get(K_RETURN_TO);
 			if (rt != null) {
 				AVector<ACell> v = RT.ensureVector(rt);
-				if (v == null) throw new IllegalArgumentException("adapters.oauth.returnTo must be an array of URL prefixes");
+				if (v == null) throw new ConfigurationException("adapters.oauth.returnTo must be an array of URL prefixes");
 				List<String> prefixes = new ArrayList<>();
 				for (long i = 0; i < v.count(); i++) {
 					AString s = RT.ensureString(v.get(i));
-					if (s == null || s.toString().isBlank()) throw new IllegalArgumentException("adapters.oauth.returnTo entries must be URL prefixes");
+					if (s == null || s.toString().isBlank()) throw new ConfigurationException("adapters.oauth.returnTo entries must be URL prefixes");
 					prefixes.add(s.toString().trim());
 				}
 				allow = List.copyOf(prefixes);
@@ -300,7 +306,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			if (ttlCell != null) {
 				CVMLong n = RT.ensureLong(ttlCell);
 				if (n == null || n.longValue() < 30 || n.longValue() > 3600) {
-					throw new IllegalArgumentException("adapters.oauth.pendingTtlSecs must be from 30 to 3600");
+					throw new ConfigurationException("adapters.oauth.pendingTtlSecs must be from 30 to 3600");
 				}
 				ttl = n.longValue() * 1000;
 			}
@@ -312,20 +318,20 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	}
 
 	private static Provider provider(String name, AMap<AString, ACell> settings) {
-		if (settings == null) throw new IllegalArgumentException("adapters.oauth.providers." + name + " must be a settings object");
+		if (settings == null) throw new ConfigurationException("adapters.oauth.providers." + name + " must be a settings object");
 		Provider base = preset(name);
 		String clientId = text(settings, K_CLIENT_ID);
-		if (clientId == null) throw new IllegalArgumentException("adapters.oauth.providers." + name + ".clientId is required");
+		if (clientId == null) throw new ConfigurationException("adapters.oauth.providers." + name + ".clientId is required");
 		String secretRef = text(settings, K_CLIENT_SECRET);
 		if (secretRef != null && !Engine.isSecretRef(secretRef)) {
-			throw new IllegalArgumentException("adapters.oauth.providers." + name
+			throw new ConfigurationException("adapters.oauth.providers." + name
 				+ ".clientSecret must be an s/NAME reference to a venue secret, never the literal secret");
 		}
 		String authz = or(text(settings, K_AUTHORIZATION_ENDPOINT), base != null ? base.authorizationEndpoint() : null);
 		String token = or(text(settings, K_TOKEN_ENDPOINT), base != null ? base.tokenEndpoint() : null);
 		String revoke = or(text(settings, K_REVOCATION_ENDPOINT), base != null ? base.revocationEndpoint() : null);
 		if (authz == null || token == null) {
-			throw new IllegalArgumentException("adapters.oauth.providers." + name
+			throw new ConfigurationException("adapters.oauth.providers." + name
 				+ " needs authorizationEndpoint and tokenEndpoint (only google, microsoft and github are presets)");
 		}
 		requireHttps(name, K_AUTHORIZATION_ENDPOINT, authz);
@@ -334,11 +340,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		ACell scopesCell = settings.get(K_SCOPES);
 		if (scopesCell != null) {
 			AVector<ACell> v = RT.ensureVector(scopesCell);
-			if (v == null) throw new IllegalArgumentException("adapters.oauth.providers." + name + ".scopes must be an array of strings");
+			if (v == null) throw new ConfigurationException("adapters.oauth.providers." + name + ".scopes must be an array of strings");
 			List<String> list = new ArrayList<>();
 			for (long i = 0; i < v.count(); i++) {
 				AString s = RT.ensureString(v.get(i));
-				if (s == null || s.toString().isBlank()) throw new IllegalArgumentException("adapters.oauth.providers." + name + ".scopes entries must be strings");
+				if (s == null || s.toString().isBlank()) throw new ConfigurationException("adapters.oauth.providers." + name + ".scopes entries must be strings");
 				list.add(s.toString().trim());
 			}
 			scopes = List.copyOf(list);
@@ -346,17 +352,17 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		boolean pkce = (base != null) ? base.pkce() : true;
 		ACell pkceCell = settings.get(K_PKCE);
 		if (pkceCell != null) {
-			if (!(pkceCell instanceof CVMBool b)) throw new IllegalArgumentException("adapters.oauth.providers." + name + ".pkce must be a boolean");
+			if (!(pkceCell instanceof CVMBool b)) throw new ConfigurationException("adapters.oauth.providers." + name + ".pkce must be a boolean");
 			pkce = b.booleanValue();
 		}
 		Map<String, String> params = new LinkedHashMap<>(base != null ? base.params() : Map.of());
 		ACell paramsCell = settings.get(K_PARAMS);
 		if (paramsCell != null) {
 			AMap<AString, ACell> pm = RT.ensureMap(paramsCell);
-			if (pm == null) throw new IllegalArgumentException("adapters.oauth.providers." + name + ".params must be a map of strings");
+			if (pm == null) throw new ConfigurationException("adapters.oauth.providers." + name + ".params must be a map of strings");
 			for (var e : pm.entrySet()) {
 				AString v = RT.ensureString(e.getValue());
-				if (v == null) throw new IllegalArgumentException("adapters.oauth.providers." + name + ".params values must be strings");
+				if (v == null) throw new ConfigurationException("adapters.oauth.providers." + name + ".params values must be strings");
 				params.put(e.getKey().toString(), v.toString());
 			}
 		}
@@ -369,12 +375,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		try {
 			uri = URI.create(url);
 		} catch (Exception e) {
-			throw new IllegalArgumentException("adapters.oauth.providers." + name + "." + key + " is not a URL: " + url);
+			throw new ConfigurationException("adapters.oauth.providers." + name + "." + key + " is not a URL: " + url);
 		}
 		String scheme = uri.getScheme();
 		boolean loopback = uri.getHost() != null && (uri.getHost().equals("localhost") || uri.getHost().equals("127.0.0.1"));
 		if (!"https".equalsIgnoreCase(scheme) && !("http".equalsIgnoreCase(scheme) && loopback)) {
-			throw new IllegalArgumentException("adapters.oauth.providers." + name + "." + key + " must be https (http only for loopback): " + url);
+			throw new ConfigurationException("adapters.oauth.providers." + name + "." + key + " must be https (http only for loopback): " + url);
 		}
 	}
 
@@ -416,7 +422,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 				case "complete" -> handleComplete(ctx, input);
 				case "status" -> handleStatus(ctx, input);
 				case "disconnect" -> handleDisconnect(ctx, input);
-				default -> throw new IllegalArgumentException("Unknown oauth operation: " + subOp);
+				default -> throw new NotSupportedException("Unknown oauth operation: " + subOp);
 			};
 			return CompletableFuture.completedFuture(result);
 		} catch (IOException e) {
@@ -426,11 +432,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	private Provider providerFor(ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, K_PROVIDER));
-		if (name == null || name.isEmpty()) throw new IllegalArgumentException("provider is required");
+		if (name == null || name.isEmpty()) throw new InvalidInputException("provider is required");
 		Provider p = providers.get(name.toString());
 		if (p == null) {
-			throw new IllegalArgumentException("No OAuth provider '" + name + "' is configured on this venue"
-				+ (providers.isEmpty() ? " (adapters.oauth.providers is empty)" : "; configured: " + String.join(", ", providers.keySet())));
+			throw new NotFoundException("No OAuth provider '" + name + "' is configured on this venue"
+				+ (providers.isEmpty() ? " (adapters.oauth.providers is empty)" : "; configured: " + String.join(", ", providers.keySet())),
+				name.toString());
 		}
 		return p;
 	}
@@ -438,9 +445,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	/** A provider name an operation names, whether or not it is configured. */
 	private static String providerName(ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, K_PROVIDER));
-		if (name == null || name.isEmpty()) throw new IllegalArgumentException("provider is required");
+		if (name == null || name.isEmpty()) throw new InvalidInputException("provider is required");
 		if (!PROVIDER_NAME.matcher(name.toString()).matches()) {
-			throw new IllegalArgumentException("provider names are lowercase letters, digits and dashes, got: " + name);
+			throw new InvalidInputException("provider names are lowercase letters, digits and dashes, got: " + name);
 		}
 		return name.toString();
 	}
@@ -452,9 +459,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	private AString userOf(RequestContext ctx, String op) {
 		if (ctx == null || ctx.isAnonymous() || ctx.getUserDID() == null) {
-			throw new IllegalArgumentException(op + " needs an authenticated caller — a connection belongs to a venue user");
+			throw new AuthException(op + " needs an authenticated caller — a connection belongs to a venue user");
 		}
-		if (engine.isPublicPrincipal(ctx.getUserDID())) throw new IllegalArgumentException(PUBLIC_HAS_NO_CONNECTIONS);
+		if (engine.isPublicPrincipal(ctx.getUserDID())) throw new AuthException(PUBLIC_HAS_NO_CONNECTIONS);
 		return ctx.getUserDID();
 	}
 
@@ -467,11 +474,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		ACell scopesCell = RT.getIn(input, K_SCOPES);
 		if (scopesCell != null) {
 			AVector<ACell> v = RT.ensureVector(scopesCell);
-			if (v == null) throw new IllegalArgumentException("scopes must be an array of strings");
+			if (v == null) throw new InvalidInputException("scopes must be an array of strings");
 			List<String> list = new ArrayList<>();
 			for (long i = 0; i < v.count(); i++) {
 				AString s = RT.ensureString(v.get(i));
-				if (s == null || s.toString().isBlank()) throw new IllegalArgumentException("scopes entries must be strings");
+				if (s == null || s.toString().isBlank()) throw new InvalidInputException("scopes entries must be strings");
 				list.add(s.toString().trim());
 			}
 			scopes = List.copyOf(list);
@@ -480,7 +487,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 		sweepPending();
 		if (pending.size() + approved.size() >= MAX_PENDING) {
-			throw new IllegalStateException("Too many connections awaiting approval; try again later");
+			throw new UnavailableException("Too many connections awaiting approval; try again later");
 		}
 		engine.getVenueState().users().ensure(userDID);
 		AdapterState connections = adapterState(userDID);
@@ -506,7 +513,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (raw == null || raw.isEmpty()) return null;
 		String value = raw.toString().trim();
 		for (String prefix : returnToAllow) if (under(value, prefix)) return value;
-		throw new IllegalArgumentException(RETURN_TO_REFUSED);
+		throw new InvalidInputException(RETURN_TO_REFUSED);
 	}
 
 	/** Whether {@code url} is {@code prefix} or below it: the prefix ends where a path, query or fragment begins. */
@@ -586,27 +593,27 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	private ACell handleComplete(RequestContext ctx, ACell input) {
 		AString userDID = userOf(ctx, "oauth:complete");
 		AString raw = RT.ensureString(RT.getIn(input, K_CODE));
-		if (raw == null || raw.toString().isBlank()) throw new IllegalArgumentException("code is required");
+		if (raw == null || raw.toString().isBlank()) throw new InvalidInputException("code is required");
 		Approved app = approved.remove(raw.toString().trim());
-		if (app == null || app.expiresAt() < System.currentTimeMillis()) throw new IllegalArgumentException(UNKNOWN_COMPLETION);
+		if (app == null || app.expiresAt() < System.currentTimeMillis()) throw new InvalidInputException(UNKNOWN_COMPLETION);
 		Pending pend = app.pending();
-		if (!pend.userDID().equals(userDID)) throw new IllegalArgumentException(ANOTHER_ACCOUNT);
+		if (!pend.userDID().equals(userDID)) throw new AuthException(ANOTHER_ACCOUNT);
 		engine.requireAuthority(ctx, resource(pend.provider()), Abilities.OAUTH_CONNECT);
 		Provider p = providers.get(pend.provider());
-		if (p == null) throw new IllegalArgumentException("Provider '" + pend.provider() + "' is no longer configured");
+		if (p == null) throw new UnavailableException("Provider '" + pend.provider() + "' is no longer configured");
 		AMap<AString, ACell> tokens;
 		try {
 			tokens = exchange(p, app.code(), pend.verifier());
 		} catch (Exception e) {
 			log.warn("OAuth token exchange with {} failed: {}", p.name(), describeFailure(e));
-			throw new IllegalArgumentException("Token exchange with " + p.name() + " failed: " + describeFailure(e));
+			throw new UnavailableException("Token exchange with " + p.name() + " failed: " + describeFailure(e), e);
 		}
 		try {
 			return summary(storeGrant(pend, p, tokens));
 		} catch (AuthException gone) {
 			// Issued for an account deleted since the connect began: kept nowhere, so left live nowhere
 			revokeGrant(p, str(tokens, Strings.intern("refresh_token")), str(tokens, Strings.intern("access_token")));
-			throw new IllegalArgumentException(ACCOUNT_GONE);
+			throw new NotFoundException(ACCOUNT_GONE, userDID.toString());
 		}
 	}
 
@@ -639,7 +646,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			taken.set(RT.ensureMap(draft.read(path)));
 			if (taken.get() != null) draft.delete(path);
 		});
-		if (taken.get() == null) throw new IllegalArgumentException(NOT_CONNECTED + provider);
+		if (taken.get() == null) throw new NotFoundException(NOT_CONNECTED + provider, provider);
 		boolean revoked = revokeSealed(providers.get(provider), taken.get().get(C_TOKENS));
 		return Maps.of(
 			K_PROVIDER, Strings.create(provider),
@@ -647,8 +654,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			K_REVOKED, CVMBool.create(revoked));
 	}
 
-	private static IllegalArgumentException notConnected(String provider) {
-		return new IllegalArgumentException(NOT_CONNECTED + provider + " — run oauth:connect and approve in the browser");
+	private static NotFoundException notConnected(String provider) {
+		return new NotFoundException(NOT_CONNECTED + provider + " — run oauth:connect and approve in the browser", provider);
 	}
 
 	// ========== TokenSource ==========
@@ -675,15 +682,15 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			String refreshToken = str(tokens, G_REFRESH_TOKEN);
 			Provider p = providers.get(provider);
 			if (refreshToken == null || p == null) {
-				throw new IllegalArgumentException("The connection to " + provider
+				throw new ConflictException("The connection to " + provider
 					+ " has expired and cannot be refreshed — reconnect with oauth:connect");
 			}
 			AMap<AString, ACell> refreshed;
 			try {
 				refreshed = refresh(p, refreshToken);
 			} catch (Exception e) {
-				throw new IllegalArgumentException("The connection to " + provider
-					+ " could not be refreshed (" + describeFailure(e) + ") — reconnect with oauth:connect");
+				throw new UnavailableException("The connection to " + provider
+					+ " could not be refreshed (" + describeFailure(e) + ") — reconnect with oauth:connect", e);
 			}
 			AMap<AString, ACell> fresh = tokens
 				.assoc(G_ACCESS_TOKEN, Strings.create(str(refreshed, Strings.intern("access_token"))));
@@ -741,7 +748,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (p.clientSecretRef() == null) return;
 		String secret = engine.resolveSecret(p.clientSecretRef(), engine.venueContext());
 		if (secret == null) {
-			throw new IllegalStateException("adapters.oauth.providers." + p.name() + ".clientSecret references "
+			throw new ConfigurationException("adapters.oauth.providers." + p.name() + ".clientSecret references "
 				+ p.clientSecretRef() + ", which is not set in the venue's secret store");
 		}
 		form.append("&client_secret=").append(enc(secret));

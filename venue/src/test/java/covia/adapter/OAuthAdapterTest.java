@@ -49,6 +49,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -822,18 +823,18 @@ public class OAuthAdapterTest {
 		assertTrue(adapter.authorizationUrl(google, "st", "ver", List.of("a")).contains("prompt=consent"));
 		assertEquals(Strings.create("google"), RT.getIn(RT.ensureVector(RT.getIn(adapter.info(), "providers")).get(0), "name"));
 
-		IllegalArgumentException literal = assertThrows(IllegalArgumentException.class, () -> adapter.configure(
+		ConfigurationException literal = assertThrows(ConfigurationException.class, () -> adapter.configure(
 			Maps.of("providers", Maps.of("google", Maps.of("clientId", "g", "clientSecret", "plaintext"))), false));
 		assertTrue(literal.getMessage().contains("s/NAME"), literal.getMessage());
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(
+		assertThrows(ConfigurationException.class, () -> adapter.configure(
 			Maps.of("providers", Maps.of("custom", Maps.of("clientId", "c"))), false), "unknown providers need endpoints");
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(
+		assertThrows(ConfigurationException.class, () -> adapter.configure(
 			Maps.of("providers", Maps.of("custom", Maps.of("clientId", "c",
 				"authorizationEndpoint", "http://idp.example/authorize", "tokenEndpoint", "https://idp.example/token"))), false),
 			"plain http is only for loopback");
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(
+		assertThrows(ConfigurationException.class, () -> adapter.configure(
 			Maps.of("providers", Maps.of("Bad Name", Maps.of("clientId", "c"))), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("pendingTtlSecs", 5), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("pendingTtlSecs", 5), false));
 
 		assertTrue(adapter.configure(Maps.of("providers", Maps.of("custom", Maps.of("clientId", "c",
 			"authorizationEndpoint", "https://idp.example/authorize", "tokenEndpoint", "https://idp.example/token",

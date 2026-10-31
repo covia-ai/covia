@@ -22,9 +22,11 @@ public interface TokenSource {
 	 * expired, for a request to {@code destination}. Releasing it is a use of
 	 * the connection {@code <did>/oauth/<provider>}, so a capability-scoped
 	 * caller needs {@code oauth/use} there, with any {@code nb.url} covering
-	 * {@code destination}. Throws {@link IllegalArgumentException} with an
-	 * actionable message when the caller has no connection to the provider or
-	 * the connection can no longer be refreshed.
+	 * {@code destination}. Refusals carry an actionable message.
+	 *
+	 * @throws covia.exception.NotFoundException if the caller has no connection to the provider
+	 * @throws covia.exception.ConflictException if the connection has expired and cannot be refreshed
+	 * @throws covia.exception.UnavailableException if the provider did not refresh it
 	 */
 	String accessToken(RequestContext ctx, String provider, String destination) throws IOException;
 
