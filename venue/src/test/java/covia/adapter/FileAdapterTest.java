@@ -875,42 +875,57 @@ public class FileAdapterTest {
 	}
 
 	@Test
-	public void testMoveRequiresWriteOnBothEndpointsButNotDelete() throws IOException {
+	public void testMoveRequiresReadAndDeleteOnSourceAndWriteOnDestination() throws IOException {
 		Files.createDirectories(workspace.resolve("cap-move/source"));
 		Files.createDirectories(workspace.resolve("cap-move/target"));
 		Files.writeString(workspace.resolve("cap-move/source/item.txt"), "item");
 
-		var sourceWrite = convex.auth.ucan.Capability.create(
-			convex.core.data.Strings.create("file://work/cap-move/source/item.txt"),
-			convex.auth.ucan.Capability.CRUD_WRITE);
-		var targetWrite = convex.auth.ucan.Capability.create(
-			convex.core.data.Strings.create("file://work/cap-move/target/item.txt"),
-			convex.auth.ucan.Capability.CRUD_WRITE);
-		RequestContext both = RequestContext.of(convex.core.data.Strings.create(DID))
-			.withCaps(convex.core.data.Vectors.of(sourceWrite, targetWrite));
+		RequestContext allowed = RequestContext.of(Strings.create(DID))
+			.withCaps(Vectors.of(
+				fileCap("cap-move/source/item.txt", Capability.CRUD_READ),
+				fileCap("cap-move/source/item.txt", Capability.CRUD_DELETE),
+				fileCap("cap-move/target/item.txt", Capability.CRUD_WRITE)));
 
 		Job moved = engine.jobs().invokeOperation("v/ops/file/move", Maps.of(
 			"root", "work",
 			"from", "cap-move/source/item.txt",
-			"to", "cap-move/target/item.txt"), both);
+			"to", "cap-move/target/item.txt"), allowed);
 		moved.awaitResult(5000);
 		assertEquals(Status.COMPLETE, moved.getStatus());
 		assertEquals("item", Files.readString(workspace.resolve("cap-move/target/item.txt")));
+		assertFalse(Files.exists(workspace.resolve("cap-move/source/item.txt")));
 
+		// Writing both ends is not enough: a move reads its source and removes it
 		Files.writeString(workspace.resolve("cap-move/source/denied.txt"), "denied");
-		RequestContext sourceOnly = RequestContext.of(convex.core.data.Strings.create(DID))
-			.withCaps(convex.core.data.Vectors.of(
-				convex.auth.ucan.Capability.create(
-					convex.core.data.Strings.create("file://work/cap-move/source/denied.txt"),
-					convex.auth.ucan.Capability.CRUD_WRITE)));
+		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
+			fileCap("cap-move/source/denied.txt", Capability.CRUD_WRITE),
+			fileCap("cap-move/target/denied.txt", Capability.CRUD_WRITE));
+		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
+			fileCap("cap-move/source/denied.txt", Capability.CRUD_DELETE),
+			fileCap("cap-move/target/denied.txt", Capability.CRUD_WRITE));
+		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
+			fileCap("cap-move/source/denied.txt", Capability.CRUD_READ),
+			fileCap("cap-move/target/denied.txt", Capability.CRUD_WRITE));
+		assertMoveDenied("cap-move/source/denied.txt", "cap-move/target/denied.txt",
+			fileCap("cap-move/source/denied.txt", Capability.CRUD_READ),
+			fileCap("cap-move/source/denied.txt", Capability.CRUD_DELETE));
+		assertEquals("denied", Files.readString(workspace.resolve("cap-move/source/denied.txt")));
+		assertFalse(Files.exists(workspace.resolve("cap-move/target/denied.txt")));
+	}
+
+	private static AMap<AString, ACell> fileCap(String path, AString ability) {
+		return Capability.create(Strings.create("file://work/" + path), ability);
+	}
+
+	@SafeVarargs
+	private void assertMoveDenied(String from, String to, AMap<AString, ACell>... caps) {
+		RequestContext capped = RequestContext.of(Strings.create(DID))
+			.withCaps(Vectors.of((Object[]) caps));
 		String denied = capDenialOf(() -> engine.jobs().invokeOperation(
-			"v/ops/file/move", Maps.of(
-				"root", "work",
-				"from", "cap-move/source/denied.txt",
-				"to", "cap-move/target/denied.txt"), sourceOnly));
-		assertNotNull(denied);
-		assertTrue(denied.contains("Capability denied"));
-		assertTrue(Files.exists(workspace.resolve("cap-move/source/denied.txt")));
+			"v/ops/file/move", Maps.of("root", "work", "from", from, "to", to), capped));
+		assertNotNull(denied, "move should be denied");
+		assertTrue(denied.contains("Capability denied"),
+			"expected capability denial, got: " + denied);
 	}
 
 	@Test

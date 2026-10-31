@@ -669,11 +669,12 @@ references with `secret/use` instead.
 | Point | Required Capability |
 |-------|-------------------|
 | `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
-| `covia:write` / `covia:delete` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
+| `covia:write` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
+| `covia:delete` (cross-user) | `{ with: "<path>", can: "crud/delete" }` |
 | `file:read` / `file:list` / `file:stat` | `crud/read` on the resolved resource: `file://<root>/<path>` for host/temp roots, canonical `dlfs/<drive>/<path>` for DLFS targets |
 | `file:roots` | `{ with: "file://", can: "crud/read" }` |
 | `file:write` / `file:append` / `file:mkdir` | `crud/write` on the resolved file or DLFS resource |
-| `file:move` | `crud/write` on both resolved source and destination resources |
+| `file:move` | `crud/read` and `crud/delete` on the resolved source, `crud/write` on the resolved destination |
 | `file:copy` | `crud/read` on the resolved source and `crud/write` on the resolved destination |
 | `file:delete` | `crud/delete` on the resolved file or DLFS resource |
 | `dlfs:read` / `dlfs:list` / `dlfs:tree` / `dlfs:stat` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |

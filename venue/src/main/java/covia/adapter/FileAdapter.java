@@ -864,8 +864,10 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		rejectArchiveEntry(fromArg, "move");
 		rejectArchiveEntry(toArg, "move to");
 
+		// A move is a copy and a delete: the source is read, then removed.
+		resolveTarget(ctx, sourceRef.rootName(), sourceRef.path(), Capability.CRUD_READ, false);
 		FileTarget sourceTarget = resolveTarget(ctx, sourceRef.rootName(), sourceRef.path(),
-			Capability.CRUD_WRITE, false);
+			Capability.CRUD_DELETE, false);
 		FileTarget destinationTarget = resolveTarget(ctx, targetRef.rootName(), targetRef.path(),
 			Capability.CRUD_WRITE, false);
 		destinationTarget = rebindDestinationIfSameFilesystem(

@@ -58,6 +58,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   it is triggered. `FileAdapter.resolve` takes the operation's ability.
 - `dlfs:createDrive` and `deleteDrive` take the drive in `drive`, as other DLFS operations
   do; `name` remains an alias for a bare drive name.
+- `file:move` needs `crud/read` and `crud/delete` on its source, not `crud/write`.
 
 ### Deprecated
 
