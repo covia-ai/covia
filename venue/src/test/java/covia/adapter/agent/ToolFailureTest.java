@@ -53,6 +53,8 @@ public class ToolFailureTest {
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(wrapped, "op"));
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(
 			new CompletionException(new ExecutionException(new IllegalStateException(reason))), "op"));
+		assertTrue(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new AuthException(reason))));
+		assertFalse(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new NullPointerException(reason))));
 	}
 
 	@Test

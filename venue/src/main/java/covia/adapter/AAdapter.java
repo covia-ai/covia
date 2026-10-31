@@ -1087,12 +1087,14 @@ public abstract class AAdapter {
 
 	/**
 	 * Whether a failure was expected: a self-describing type carrying its
-	 * reason (#644). Anything else reaching a caller — including an expected
-	 * type thrown without a reason — is a runtime or venue bug.
+	 * reason (#644), looking through async wrappers. Anything else reaching a
+	 * caller — including an expected type thrown without a reason — is a
+	 * runtime or venue bug.
 	 */
 	public static boolean isExpectedFailure(Throwable t) {
-		String message = t.getMessage();
-		return message != null && !message.isBlank() && isSelfDescribing(t);
+		Throwable cause = unwrap(t);
+		String message = cause.getMessage();
+		return message != null && !message.isBlank() && isSelfDescribing(cause);
 	}
 
 	/**
