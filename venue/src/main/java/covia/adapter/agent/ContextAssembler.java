@@ -22,6 +22,7 @@ import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -1215,7 +1216,7 @@ public final class ContextAssembler {
 	static AVector<ACell> contextVector(ACell raw, String which) {
 		if (raw == null) return null;
 		if (raw instanceof AVector) return (AVector<ACell>) raw;
-		throw new InvalidInputException(which + " must be an array of context entries, got "
+		throw new InvalidDefinitionException(which + " must be an array of context entries, got "
 			+ Types.get(raw) + " — fix the agent config");
 	}
 }

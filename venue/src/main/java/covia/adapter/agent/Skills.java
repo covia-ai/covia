@@ -22,6 +22,7 @@ import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -562,7 +563,7 @@ public final class Skills {
 				}
 				return resolveValue(engine, ctx, path, s, target, needBody);
 			}
-			throw new InvalidInputException("skill at " + path
+			throw new InvalidDefinitionException("skill at " + path
 				+ " is not a skill (expected asset metadata or a reference; inline bodies go in content.inline)");
 		}
 
@@ -581,7 +582,7 @@ public final class Skills {
 			// The skill facet — loadable extras, mirroring the operation facet.
 			ACell facetCell = meta.get(K_SKILL);
 			if (facetCell != null && !(facetCell instanceof AMap)) {
-				throw new InvalidInputException("skill facet at " + path + " must be a map");
+				throw new InvalidDefinitionException("skill facet at " + path + " must be a map");
 			}
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> facet = (AMap<AString, ACell>) facetCell;
@@ -592,7 +593,7 @@ public final class Skills {
 			long budget = (facet != null && facet.get(K_BUDGET) instanceof CVMLong l) ? l.longValue() : 0;
 			for (long i = 0; i < tools.count(); i++) {
 				if (RT.ensureString(tools.get(i)) == null) {
-					throw new InvalidInputException("skill.tools entries at " + path + " must be operation ref strings");
+					throw new InvalidDefinitionException("skill.tools entries at " + path + " must be operation ref strings");
 				}
 			}
 			requireRefStrings(childSkills, K_SKILLS, path);
@@ -638,7 +639,7 @@ public final class Skills {
 				childSkills, childSkillsets, budget, path, meta.getHash());
 		}
 
-		throw new InvalidInputException("skill at " + path
+		throw new InvalidDefinitionException("skill at " + path
 			+ " is not a skill (expected asset metadata, a reference, or markdown text)");
 	}
 
@@ -659,7 +660,7 @@ public final class Skills {
 		ACell v = facet.get(key);
 		if (v == null) return Vectors.empty();
 		AVector<ACell> vec = RT.ensureVector(v);
-		if (vec == null) throw new InvalidInputException("skill." + key + " at " + path + " must be an array");
+		if (vec == null) throw new InvalidDefinitionException("skill." + key + " at " + path + " must be an array");
 		return vec;
 	}
 
@@ -678,8 +679,8 @@ public final class Skills {
 		}
 	}
 
-	private static InvalidInputException missingDescription(AString path) {
-		return new InvalidInputException("missing description");
+	private static InvalidDefinitionException missingDescription(AString path) {
+		return new InvalidDefinitionException("missing description");
 	}
 
 	// ========== SKILL.md frontmatter ==========
@@ -1027,7 +1028,7 @@ public final class Skills {
 	private static void requireRefStrings(AVector<ACell> refs, AString key, AString path) {
 		for (long i = 0; i < refs.count(); i++) {
 			if (RT.ensureString(refs.get(i)) == null) {
-				throw new InvalidInputException("skill." + key + " entries at " + path
+				throw new InvalidDefinitionException("skill." + key + " entries at " + path
 					+ " must be " + (K_SKILLSETS.equals(key) ? "skillset" : "skill") + " ref strings");
 			}
 		}
@@ -1156,7 +1157,7 @@ public final class Skills {
 		}
 		AVector<ACell> refs = RT.ensureVector(raw);
 		if (refs == null) {
-			throw new InvalidInputException("loaded skill." + key + " at " + entryKey + " must be an array");
+			throw new InvalidDefinitionException("loaded skill." + key + " at " + entryKey + " must be an array");
 		}
 		return appendSources(out, refs, seen, "loaded skill." + key + " at " + entryKey, key);
 	}
@@ -1167,7 +1168,7 @@ public final class Skills {
 		for (long i = 0; i < sources.count(); i++) {
 			AString source = RT.ensureString(sources.get(i));
 			if (source == null) {
-				throw new InvalidInputException(label + " entries must be "
+				throw new InvalidDefinitionException(label + " entries must be "
 					+ (K_SKILLSETS.equals(kind) ? "skillset" : "skill") + " ref strings");
 			}
 			if (seen.add(source.toString())) out = out.conj(source);
@@ -1558,13 +1559,13 @@ public final class Skills {
 		if (raw == null) return Vectors.empty();
 		String kind = K_SKILLSETS.equals(key) ? "skillset" : "skill";
 		if (!(raw instanceof AVector)) {
-			throw new InvalidInputException("config." + key + " must be an array of " + kind
+			throw new InvalidDefinitionException("config." + key + " must be an array of " + kind
 				+ " refs, got " + convex.core.data.type.Types.get(raw) + " — fix the agent config");
 		}
 		AVector<ACell> sources = (AVector<ACell>) raw;
 		for (long i = 0; i < sources.count(); i++) {
 			if (RT.ensureString(sources.get(i)) == null) {
-				throw new InvalidInputException("config." + key + " entries must be " + kind
+				throw new InvalidDefinitionException("config." + key + " entries must be " + kind
 					+ " ref strings, got " + convex.core.data.type.Types.get(sources.get(i))
 					+ " — fix the agent config");
 			}

@@ -21,6 +21,7 @@ import covia.adapter.CoviaAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.ConflictException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.UnavailableException;
@@ -246,7 +247,7 @@ public class ContextLoader {
 			ACell result = await(engine.jobs().invokeInternal(op, entry.get(K_INPUT), ctx), op);
 			AString s = RT.ensureString(result);
 			if (s == null) {
-				throw new InvalidInputException("operation " + op + " returned "
+				throw new InvalidDefinitionException("operation " + op + " returned "
 					+ ((result == null) ? "nothing" : result.getClass().getSimpleName()) + ", not text");
 			}
 			return s.toString();
@@ -269,7 +270,7 @@ public class ContextLoader {
 				}
 			}
 			AString s = RT.ensureString(output);
-			if (s == null) throw new InvalidInputException("job " + jobId + " output is not text");
+			if (s == null) throw new InvalidDefinitionException("job " + jobId + " output is not text");
 			return s.toString();
 		}
 		throw new InvalidInputException("entry declares none of ref, text, op, job");
