@@ -18,7 +18,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -32,10 +35,12 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
 import covia.adapter.TestAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.server.AuthMiddleware;
 
 /**
  * Tests for the per-venue grid {@link Scheduler}. Firing is exercised
@@ -173,6 +178,48 @@ public class SchedulerTest {
 		assertNotNull(fired, "the fire ran in the owner's namespace");
 		assertEquals(agent.getCallerDID(), fired.getCallerDID());
 		assertEquals(caps, fired.getCaps());
+	}
+
+	/** A delegate's event fires in the owner's namespace while its user/sudo grant authorises it. */
+	@Test
+	public void testADelegatedEventFiresUnderItsGrant() throws Exception {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AKeyPair delegateKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
+		engine.getVenueState().users().create(owner);
+		engine.getVenueState().users().create(delegate);
+		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
+			(System.currentTimeMillis() / 1000) + 3600,
+			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
+			Vectors.empty()).toJWT(ownerKey);
+		RequestContext sudo = engine.sudoContext(AuthMiddleware.withTransportGrants(
+			RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX), owner);
+
+		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), sudo, future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		sched.trigger(handle, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
+		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
+		assertNotNull(fired, "the fire ran in the owner's namespace");
+		assertEquals(delegate, fired.getCallerDID());
+	}
+
+	/** An agent's step acts as the agent, so what it schedules fires as the agent. */
+	@Test
+	public void testAStepSchedulesAsItsAgent() {
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext worker = agent("stepper", caps);
+		RequestContext step = engine.stepContext(ctx, s("stepper"));
+		assertEquals(worker.getCallerDID(), step.getCallerDID());
+		assertEquals(did, step.getUserDID());
+		assertEquals(caps, step.getCaps());
+
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), step, future());
+		RequestContext fired = sched.fireContext(engine.getVenueState().schedule().find(handle).rec());
+		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(caps, fired.getCaps());
+		assertTrue(sched.cancel(handle, ctx));
 	}
 
 	@Test
