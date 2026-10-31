@@ -676,9 +676,12 @@ references with `secret/use` instead.
 | `file:move` | `crud/write` on both resolved source and destination resources |
 | `file:copy` | `crud/read` on the resolved source and `crud/write` on the resolved destination |
 | `file:delete` | `crud/delete` on the resolved file or DLFS resource |
-| `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
-| `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
-| `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
+| `dlfs:read` / `dlfs:list` / `dlfs:tree` / `dlfs:stat` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
+| `dlfs:listDrives` | `{ with: "dlfs", can: "crud/read" }` |
+| `dlfs:write` / `dlfs:append` / `dlfs:create` / `dlfs:mkdir` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
+| `dlfs:createDrive`, and a component creating the drive it names | `{ with: "dlfs/<drive>", can: "crud/write" }` |
+| `dlfs:delete` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
+| `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |

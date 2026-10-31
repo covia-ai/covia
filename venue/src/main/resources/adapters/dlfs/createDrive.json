@@ -1,6 +1,6 @@
 {
   "name": "Create DLFS Drive",
-  "description": "Create a new named DLFS drive for the caller. Each drive is an independent file system with CRDT merge semantics.",
+  "description": "Create a named DLFS drive; other DLFS operations need their drive to exist. Each drive is an independent file system with CRDT merge semantics.",
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:createDrive",
@@ -9,9 +9,9 @@
     "input": {
       "type": "object",
       "properties": {
-        "name": { "type": "string", "description": "Drive name (e.g. 'documents')" }
-      },
-      "required": ["name"]
+        "drive": { "type": "string", "description": "Drive name (e.g. 'documents') or authorised DID-scoped drive reference" },
+        "name": { "type": "string", "description": "Alias for a bare drive name" }
+      }
     },
     "output": {
       "type": "object",

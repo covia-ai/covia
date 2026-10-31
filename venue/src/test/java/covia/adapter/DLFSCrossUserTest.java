@@ -327,6 +327,13 @@ public class DLFSCrossUserTest {
 			.contains(DLFSAdapter.INVALID_DRIVE_NAME));
 
 		assertEquals(Vectors.of("docs", "inbox"), aliceDrives());
+
+		// Deleting the drive names it the same way, under crud/delete over it.
+		failure("v/ops/dlfs/delete-drive", Maps.of("drive", ALICE_DID + "/inbox"), bob);
+		RequestContext remover = withProofs(BOB,
+			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs/inbox/", "crud/delete", 3600));
+		run("v/ops/dlfs/delete-drive", Maps.of("drive", ALICE_DID + "/inbox"), remover);
+		assertEquals(Vectors.of("docs"), aliceDrives());
 	}
 
 	@Test

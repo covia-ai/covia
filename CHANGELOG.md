@@ -54,7 +54,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A DLFS drive is created before use: an operation on a missing or deleted drive fails,
   and only `createDrive` and WebDAV `MKCOL` create one (#641). Vault, DLFS-backed file
   roots, and messaging and speech media create their own drive with their first write
-  there (`DLFSAdapter.ensureDrive`). `FileAdapter.resolve` takes the operation's ability.
+  there (`DLFSAdapter.ensureDrive`). Creating a drive needs `crud/write` over it, however
+  it is triggered. `FileAdapter.resolve` takes the operation's ability.
+- `dlfs:createDrive` and `deleteDrive` take the drive in `drive`, as other DLFS operations
+  do; `name` remains an alias for a bare drive name.
 
 ### Deprecated
 

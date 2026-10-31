@@ -475,17 +475,38 @@ public class DLFSAdapterTest {
 
 	@Test
 	public void testEnsureDriveCreatesOnlyUnderWriteAuthority() {
-		// A component that names its own drive creates it, but only where the
-		// caller could write.
+		// A component that names its own drive creates it only where its caller
+		// may write over the drive itself, as createDrive needs. A grant over one
+		// file in the drive passes once the drive exists.
 		DLFSAdapter adapter = (DLFSAdapter) engine.getAdapter("dlfs");
 		RequestContext reader = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
 			Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+		RequestContext fileWriter = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/owned/a.txt"), Capability.CRUD_WRITE)));
 		assertThrows(Exception.class, () -> adapter.ensureDrive(reader, "dlfs/owned"));
+		assertThrows(Exception.class, () -> adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt"));
 		assertEquals(0, driveNames().count());
 
 		adapter.ensureDrive(RequestContext.of(ALICE_DID), "dlfs/owned");
 		adapter.ensureDrive(RequestContext.of(ALICE_DID), "dlfs/owned");
+		adapter.ensureDrive(fileWriter, "dlfs/owned/a.txt");
 		assertEquals(Vectors.of("owned"), driveNames());
+	}
+
+	@Test
+	public void testDriveOperationsNameTheDriveInDrive() {
+		// createDrive and deleteDrive take the drive in `drive`, as every other
+		// operation does; `name` is an alias for a bare name.
+		run("v/ops/dlfs/create-drive", Maps.of("drive", "by-drive"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "by-name"));
+		assertEquals(Vectors.of("by-drive", "by-name"), driveNames());
+
+		assertTrue(failure("v/ops/dlfs/create-drive", Maps.of("drive", "one", "name", "two"),
+			RequestContext.of(ALICE_DID)).contains(DLFSAdapter.DRIVE_NAME_CONFLICT));
+
+		run("v/ops/dlfs/delete-drive", Maps.of("drive", "by-drive"));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "by-name"));
+		assertEquals(0, driveNames().count());
 	}
 
 	@Test

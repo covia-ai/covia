@@ -98,8 +98,8 @@ public final class MessagingMedia {
 
 	/**
 	 * The {@link #ownerDirectory} to store an attachment in. The provider names
-	 * that drive, so it creates it when the owner has none, under the authority
-	 * of {@code writer}, the context that then writes there.
+	 * that drive, so it creates it when the owner has none and {@code writer},
+	 * the context that then writes there, may write over the drive.
 	 */
 	public static String ensureOwnerDirectory(Engine engine, AString owner, String drive, RequestContext writer) {
 		String directory = ownerDirectory(owner, drive);

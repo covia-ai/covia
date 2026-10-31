@@ -66,10 +66,18 @@ drives and keys as they were; over WebDAV it answers 404. This holds for `dlfs`
 operations, content references to `dlfs/<drive>/<path>`, and a caller's
 `destination`.
 
+Creating a drive changes the drive itself, so it needs `crud/write` over
+`[<owner>/]dlfs/<drive>`, however it is triggered; a grant over
+`<owner>/dlfs/<drive>/` covers it, and one over `<owner>/dlfs/` covers any name.
+Operations name the drive in `drive`: a bare name, or `<ownerDID>/<drive>` for
+another user's drive under their grant. `createDrive` and `deleteDrive` also
+accept `name` as an alias for a bare name.
+
 A component that names its own drive creates it with its first write there,
-under the authority that write needs (`DLFSAdapter.ensureDrive`): Vault's
-configured drive, a DLFS-backed `file` root, and the drive a messaging provider
-or speech stores media in by default (`<owner>/dlfs/<provider>/`). Reads never
+through `DLFSAdapter.ensureDrive`: Vault's configured drive, a DLFS-backed
+`file` root, and the drive a messaging provider or speech stores media in by
+default (`<owner>/dlfs/<provider>/`). The write is authorised as usual, and the
+creation needs `crud/write` over the drive, as `createDrive` does. Reads never
 create a drive.
 
 ## File adapter
