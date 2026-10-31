@@ -1228,7 +1228,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
 					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
-					@OpenApiResponse(status = "400", description = "The id is not a job ID, or the body is not JSON"),
+					@OpenApiResponse(status = "400", description = "The id is not a job ID, the body is not JSON, or the job's agent definition is malformed"),
 					@OpenApiResponse(status = "409", description = "Job has finished, is not active, does not take messages, or its adapter refused the message"),
 					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown"),
 					@OpenApiResponse(status = "503", description = "The job's backend is not available on this venue")
@@ -1267,7 +1267,9 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
-		} catch (UnavailableException | InvalidDefinitionException e) {
+		} catch (InvalidDefinitionException e) {
+			buildError(ctx, 400, e.getMessage());
+		} catch (UnavailableException e) {
 			buildError(ctx, 503, e.getMessage());
 		}
 	}
