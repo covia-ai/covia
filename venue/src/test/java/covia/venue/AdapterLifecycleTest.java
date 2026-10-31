@@ -273,8 +273,8 @@ public class AdapterLifecycleTest {
 			assertTrue(engine.disableAdapter("grid"));
 			assertNull(engine.getAdapter("grid"));
 			assertTrue(engine.enableAdapter("grid"));
-			assertThrows(IllegalArgumentException.class, () -> engine.disableAdapter("no-such-adapter"));
-			assertThrows(IllegalArgumentException.class, () -> engine.enableAdapter("no-such-adapter"));
+			assertThrows(covia.exception.NotFoundException.class, () -> engine.disableAdapter("no-such-adapter"));
+			assertThrows(covia.exception.NotFoundException.class, () -> engine.enableAdapter("no-such-adapter"));
 		} finally {
 			engine.close();
 		}
@@ -357,7 +357,7 @@ public class AdapterLifecycleTest {
 				"static config object is untouched");
 
 			// A declined configuration changes nothing
-			assertThrows(IllegalArgumentException.class, () -> engine.configureAdapter(
+			assertThrows(covia.exception.InvalidInputException.class, () -> engine.configureAdapter(
 				"configurable", Maps.of(Strings.create("reject"), CVMBool.TRUE)));
 			assertEquals(runtime, engine.adapterConfig("configurable"));
 			assertEquals(runtime, adapter.seen);
@@ -368,7 +368,7 @@ public class AdapterLifecycleTest {
 			engine.configureAdapter("configurable", later);
 			assertEquals(later, adapter.seen);
 
-			assertThrows(IllegalArgumentException.class,
+			assertThrows(covia.exception.NotFoundException.class,
 				() -> engine.configureAdapter("no-such-adapter", Maps.empty()));
 		} finally {
 			engine.close();
@@ -385,7 +385,7 @@ public class AdapterLifecycleTest {
 			assertNull(engine.getAdapter("configurable"));
 			assertTrue(engine.getDisabledAdapterNames().contains("configurable"));
 			// Still declining → enable refuses; accept → enable installs and activates
-			assertThrows(IllegalStateException.class, () -> engine.enableAdapter("configurable"));
+			assertThrows(covia.exception.ConfigurationException.class, () -> engine.enableAdapter("configurable"));
 			engine.configureAdapter("configurable", Maps.empty());
 			assertTrue(engine.enableAdapter("configurable"));
 			assertNotNull(engine.getAdapter("configurable"));

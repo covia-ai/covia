@@ -1501,6 +1501,17 @@ public class Engine {
 		return adapterRegistryVersion.get();
 	}
 
+	/** An adapter name this venue has not registered; the name follows. */
+	public static final String UNKNOWN_ADAPTER = "Unknown adapter: ";
+	/** The venue's own configuration, refused by the adapter it is for. */
+	public static final String ADAPTER_DECLINED_CONFIG = "Adapter '%s' declined its configuration";
+	/** A configuration supplied for an adapter, refused by it. */
+	public static final String ADAPTER_REJECTED_CONFIG = "Adapter '%s' rejected the configuration";
+
+	private static NotFoundException unknownAdapter(String name) {
+		return new NotFoundException(UNKNOWN_ADAPTER + name, name);
+	}
+
 	/**
 	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
 	 * record and stop dispatching to it. Durable catalog metadata remains. The instance
@@ -1512,13 +1523,13 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was active and is now disabled; false if it
 	 *         was already disabled
-	 * @throws IllegalArgumentException if the adapter is unknown
+	 * @throws NotFoundException if the adapter is unknown
 	 */
 	public synchronized boolean disableAdapter(String name) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
 			if (disabledAdapters.containsKey(name)) return false;
-			throw new IllegalArgumentException("Unknown adapter: " + name);
+			throw unknownAdapter(name);
 		}
 		retractAdapter(name);
 		disabledAdapters.put(name, adapter);
@@ -1534,17 +1545,17 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was disabled and is now active; false if it
 	 *         was already active
-	 * @throws IllegalArgumentException if the adapter is unknown
-	 * @throws IllegalStateException if the adapter declines its configuration
+	 * @throws NotFoundException if the adapter is unknown
+	 * @throws ConfigurationException if the adapter declines the venue's configuration for it
 	 */
 	public synchronized boolean enableAdapter(String name) {
 		AAdapter adapter = disabledAdapters.get(name);
 		if (adapter == null) {
 			if (adapters.containsKey(name)) return false;
-			throw new IllegalArgumentException("Unknown adapter: " + name);
+			throw unknownAdapter(name);
 		}
 		if (adapter.engine == null && !adapter.configure(adapterConfig(name), config.isStrictConfig())) {
-			throw new IllegalStateException("Adapter '" + name + "' declined its configuration");
+			throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
 		}
 		activate(adapter, null);
 		return true;
@@ -1558,15 +1569,16 @@ public class Engine {
 	 *
 	 * @param name Adapter name
 	 * @param cfg The complete new effective configuration
-	 * @throws IllegalArgumentException if the adapter is unknown or rejects the config
+	 * @throws NotFoundException if the adapter is unknown
+	 * @throws InvalidInputException if the adapter rejects the configuration
 	 */
 	public synchronized void configureAdapter(String name, AMap<AString, ACell> cfg) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) adapter = disabledAdapters.get(name);
-		if (adapter == null) throw new IllegalArgumentException("Unknown adapter: " + name);
+		if (adapter == null) throw unknownAdapter(name);
 		if (cfg == null) cfg = Maps.empty();
 		if (!adapter.configure(cfg, config.isStrictConfig())) {
-			throw new IllegalArgumentException("Adapter '" + name + "' rejected the configuration");
+			throw new InvalidInputException(String.format(ADAPTER_REJECTED_CONFIG, name));
 		}
 		runtimeAdapterConfig.put(name, cfg);
 		// Authentication finishing under the previous configuration must retry.
