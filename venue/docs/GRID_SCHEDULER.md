@@ -26,7 +26,8 @@ per-thread `AgentScheduler` that predated this service has been retired.
     only; it repeats `actor` for an agent.
   - `actor` — the agent or delegate that scheduled it, when not the owner;
     the event fires as `actor` in `owner`'s namespace when set, otherwise as
-    `owner`.
+    `owner`. An agent's events go with it: deleting the agent removes them, and
+    one that comes due after its agent is gone is dropped without firing.
   - `created` — wall-clock millis at which it was scheduled.
   - `description` — optional caller-written display text saying what the event
     is for, at most 500 characters. Never interpreted.
@@ -68,12 +69,13 @@ It is a plain field of the venue `:value`, alongside `:assets`, `:storage`,
                                 └── :user-data → <DID> → { j, g, s, w, o, h, a }
 ```
 
-The `:schedule` value is a single extensible `{ updated, events, ... }` map:
+The `:schedule` value is a single extensible `{ updated, events, byActor, ... }` map:
 
 ```
-events = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
-         value = { op, input, owner, by, time, created, actor?, description?, proofs?, caps?,
-                   repeat?, track?, lastFired?, lastJob? }
+events  = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
+          value = { op, input, owner, by, time, created, actor?, description?, proofs?, caps?,
+                    repeat?, track?, lastFired?, lastJob? }
+byActor = map from each actor DID to the set of keys of the events it scheduled
 updated = wall-clock stamp of the last mutation
 ```
 
@@ -83,6 +85,12 @@ updated = wall-clock stamp of the last mutation
   `O(log n)` insert, remove, head-peek. The `id` suffix disambiguates events
   sharing a `time` and gives each a stable identity (minted at schedule time,
   same generator as Job IDs).
+- `byActor` is the reverse index from an event's `actor`, written in the same
+  transaction as every change to `events` (schedule, cancel, fire, re-key), so
+  the two never disagree. Deleting an agent removes its events through it
+  (`Scheduler.cancelActor`) without scanning `events`. An event that comes due
+  after its agent is gone, such as one scheduled before the index recorded it,
+  is removed and fails with `Scheduler.AGENT_GONE`.
 
 **Why removals survive external merge.** Local scheduler changes update the
 Engine's connected root directly; no lattice merge occurs between successive

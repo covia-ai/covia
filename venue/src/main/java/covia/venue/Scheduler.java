@@ -86,6 +86,8 @@ public class Scheduler {
 	/** Refusal for a capability-scoped agent reaching an event it did not schedule. */
 	public static final String EVENT_ACCESS_DENIED =
 		"A capability-scoped agent manages only the scheduled events it created";
+	/** Why an event did not fire: the agent that scheduled it has been deleted, so it was dropped. */
+	public static final String AGENT_GONE = "%s no longer exists, so its scheduled event was dropped";
 
 	private final Engine engine;
 	private final LongSupplier clock;
@@ -207,6 +209,15 @@ public class Scheduler {
 	void cancelUser(AString did) {
 		onTimer(() -> {
 			state().cancelUser(did);
+			armNext();
+			return null;
+		});
+	}
+
+	/** Remove the events a deleted agent scheduled, found through the reverse index. */
+	public void cancelActor(AString agentDID) {
+		onTimer(() -> {
+			state().cancelActor(agentDID);
 			armNext();
 			return null;
 		});
@@ -358,8 +369,16 @@ public class Scheduler {
 	 * If the Job cannot be prepared (unresolvable op, capability
 	 * denied), the event is still claimed exactly as an untracked failure
 	 * would be, and the error travels with the claim for the caller to see.
+	 * An event whose scheduling agent no longer exists is removed, recurring or
+	 * not, and fails the same way: nothing fires as a deleted agent.
 	 */
 	private Claimed claim(Blob key, AMap<AString, ACell> rec, long now, boolean advance) {
+		AString gone = goneAgent(rec);
+		if (gone != null) {
+			state().remove(key);
+			armNext();
+			return new Claimed(rec, null, new IllegalStateException(AGENT_GONE.formatted(gone)));
+		}
 		JobManager.Prepared job = null;
 		RuntimeException error = null;
 		boolean tracked = isTracked(rec);
@@ -443,6 +462,21 @@ public class Scheduler {
 		AMap<AString, ACell> rec = c.rec();
 		return engine.jobs().invokeInternal(
 			RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+	}
+
+	/**
+	 * The agent that scheduled {@code rec} when it is one of the owner's agents
+	 * and no longer exists, else null. Deleting an agent removes its events
+	 * ({@link #cancelActor}); this catches any that outlived it, such as those
+	 * scheduled before the reverse index recorded them.
+	 */
+	private AString goneAgent(AMap<AString, ACell> rec) {
+		AString actor = RT.ensureString(rec.get(K_ACTOR));
+		AString owner = RT.ensureString(rec.get(K_OWNER));
+		if (actor == null || owner == null) return null;
+		AString agentId = covia.grid.Principals.agentIdOf(actor);
+		if (agentId == null || !actor.equals(covia.grid.Principals.agentDID(owner, agentId))) return null;
+		return (engine.getAgent(owner, agentId) == null) ? actor : null;
 	}
 
 	/** The identity and stapled authority a fire runs under (design §5). */

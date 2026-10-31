@@ -52,8 +52,12 @@ public class ScheduledEventAccessTest {
 		return job;
 	}
 
+	/** A real agent of alice's, acting as it does now: nothing fires as an agent that does not exist. */
 	private RequestContext agent(String id, AVector<ACell> caps) {
-		return RequestContext.ofAgent(alice, Strings.create(id)).withCaps(caps);
+		Job created = run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Config.CAPS, caps)), ALICE);
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+		return engine.context(alice, covia.grid.Principals.agentDID(alice, Strings.create(id)));
 	}
 
 	private static AVector<ACell> invokeOnly() {

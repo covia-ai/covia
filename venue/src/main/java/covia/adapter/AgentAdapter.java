@@ -2676,6 +2676,9 @@ public class AgentAdapter extends AAdapter {
 					"Agent deleted: " + agentId, "delete")) return null;
 		}
 		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
+		// Nothing the agent scheduled outlives it.
+		Scheduler scheduler = engine.gridScheduler();
+		if (scheduler != null) scheduler.cancelActor(Principals.agentDID(target.ownerDID(), agentId));
 		if (remove) {
 			user.removeAgent(agentId);
 			return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));

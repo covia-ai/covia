@@ -65,6 +65,18 @@ public class SchedulerTest {
 
 	private long future() { return System.currentTimeMillis() + HOUR; }
 
+	/** A real agent of the test's user, acting as it does now: nothing fires as an agent that does not exist. */
+	private RequestContext agent(String id, AVector<ACell> caps) {
+		AMap<AString, ACell> config = (caps == null) ? Maps.empty() : Maps.of(Config.CAPS, caps);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config), ctx).awaitResult(5000);
+		return engine.context(did, covia.grid.Principals.agentDID(did, s(id)));
+	}
+
+	private void deleteAgent(String id) {
+		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000);
+	}
+
 	private static AMap<AString, ACell> everyHour() {
 		return Maps.of(ScheduleState.K_EVERY, CVMLong.create(HOUR));
 	}
@@ -141,7 +153,7 @@ public class SchedulerTest {
 	@Test
 	public void testAgentFireRunsInItsOwnersNamespace() throws Exception {
 		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
-		RequestContext agent = RequestContext.ofAgent(did, s("worker")).withCaps(caps);
+		RequestContext agent = agent("worker", caps);
 		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), agent, future());
 		TestAdapter.CAPTURED_CTX.remove(did);
 		sched.trigger(handle, agent).get(5, TimeUnit.SECONDS);
@@ -149,6 +161,50 @@ public class SchedulerTest {
 		assertNotNull(fired, "the fire ran in the owner's namespace");
 		assertEquals(agent.getCallerDID(), fired.getCallerDID());
 		assertEquals(caps, fired.getCaps());
+	}
+
+	@Test
+	public void testDeletingAnAgentRemovesItsEvents() {
+		RequestContext agent = agent("leaver", null);
+		Blob once = sched.schedule(s("v/test/ops/echo"), s("once"), agent, future());
+		Blob hourly = sched.schedule(s("v/test/ops/echo"), s("hourly"), agent, future(), everyHour(), null);
+		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
+		ScheduleState state = engine.getVenueState().schedule();
+		assertEquals(convex.core.data.Sets.of(once, hourly), state.scheduledBy(agent.getCallerDID()));
+
+		deleteAgent("leaver");
+		assertNull(state.find(once));
+		assertNull(state.find(hourly));
+		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+		assertNotNull(state.find(mine), "the owner's own events stay");
+		assertTrue(sched.cancel(mine, ctx));
+	}
+
+	@Test
+	public void testTheReverseIndexFollowsARecurringEvent() {
+		RequestContext agent = agent("repeater", null);
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("tick"), agent, future(), everyHour(), null);
+		ScheduleState state = engine.getVenueState().schedule();
+		state.recordFire(state.find(handle), System.currentTimeMillis(), true, null);
+		Blob moved = state.find(handle).key();
+		assertNotEquals(handle, moved, "a recurring fire re-keys the event at its next slot");
+		assertEquals(convex.core.data.Sets.of(moved), state.scheduledBy(agent.getCallerDID()));
+
+		assertTrue(sched.cancel(handle, ctx));
+		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+	}
+
+	@Test
+	public void testAnEventOutlivingItsAgentIsDroppedWhenItComesDue() {
+		// No agent record, as for an event scheduled before the reverse index recorded it.
+		RequestContext ghost = RequestContext.ofAgent(did, s("ghost"));
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("boo"), ghost, future(), everyHour(), null);
+		ExecutionException ex = assertThrows(ExecutionException.class,
+			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
+		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getCallerDID()), ex.getCause().getMessage());
+		ScheduleState state = engine.getVenueState().schedule();
+		assertNull(state.find(handle), "a recurring event is dropped, not rescheduled");
+		assertTrue(state.scheduledBy(ghost.getCallerDID()).isEmpty());
 	}
 
 	@Test
@@ -360,7 +416,7 @@ public class SchedulerTest {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
 			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.ofAgent(did, s("scoped")).withCaps(caps);
+		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/forbidden/x")), capCtx, future());
@@ -376,7 +432,7 @@ public class SchedulerTest {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
 			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.ofAgent(did, s("scoped")).withCaps(caps);
+		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/allowed/nothing")), capCtx, future());

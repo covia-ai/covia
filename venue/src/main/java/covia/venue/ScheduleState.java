@@ -5,11 +5,13 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.UnaryOperator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.ASet;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.Sets;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
@@ -55,6 +57,38 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 			update.apply(value instanceof Index<?, ?> ? (Index<Blob, ACell>) value : Index.none()));
 	}
 
+	/** The keys of the events {@code actor} scheduled, from the reverse index. */
+	@SuppressWarnings("unchecked")
+	public ASet<Blob> scheduledBy(AString actor) {
+		ACell keys = RT.getIn(cursor().path(K_BY_ACTOR).get(), actor);
+		return (keys instanceof ASet<?> s) ? (ASet<Blob>) s : Sets.empty();
+	}
+
+	@SuppressWarnings("unchecked")
+	private void updateActor(AString actor, UnaryOperator<ASet<Blob>> update) {
+		cursor().withDefault(Maps.empty()).path(K_BY_ACTOR).updateAndGet(value -> {
+			AMap<AString, ACell> byActor = (value instanceof AMap<?, ?>) ? asMap(value) : Maps.empty();
+			ACell held = byActor.get(actor);
+			ASet<Blob> keys = update.apply((held instanceof ASet<?> s) ? (ASet<Blob>) s : Sets.empty());
+			return keys.isEmpty() ? byActor.dissoc(actor) : byActor.assoc(actor, keys);
+		});
+	}
+
+	/** Stores {@code rec} at {@code key} and indexes it under its actor. The caller commits. */
+	private void put(Blob key, AMap<AString, ACell> rec) {
+		updateEvents(events -> events.assoc(key, rec));
+		AString actor = RT.ensureString(rec.get(K_ACTOR));
+		if (actor != null) updateActor(actor, keys -> keys.include(key));
+	}
+
+	/** Removes the event at {@code key} and its actor's index entry. The caller commits. */
+	private void drop(Blob key) {
+		ACell rec = events().get(key);
+		updateEvents(events -> events.dissoc(key));
+		AString actor = (rec instanceof AMap<?, ?>) ? RT.ensureString(asMap(rec).get(K_ACTOR)) : null;
+		if (actor != null) updateActor(actor, keys -> keys.exclude(key));
+	}
+
 	public Blob schedule(AString op, ACell input, AString owner, AString actor, AString by,
 			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description, long created) {
@@ -69,11 +103,11 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		if (repeat != null) rec = rec.assoc(K_REPEAT, validateRepeat(repeat));
 		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
 		var record = rec;
-		updateEvents(events -> events.assoc(key, record));
+		transact(draft -> draft.put(key, record));
 		return key;
 	}
 
-	void remove(Blob key) { updateEvents(events -> events.dissoc(key)); }
+	void remove(Blob key) { transact(draft -> draft.drop(key)); }
 
 	public boolean cancel(Blob handle, AString owner) {
 		boolean[] cancelled = {false};
@@ -82,17 +116,23 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 			cancelled[0] = entry != null;
 			if (entry == null) return;
 			requireOwner(entry.rec(), owner);
-			draft.remove(entry.key());
+			draft.drop(entry.key());
 		});
 		return cancelled[0];
 	}
 
 	void cancelUser(AString owner) {
-		updateEvents(events -> {
-			for (var entry : events.entrySet()) {
-				if (owner.equals(RT.getIn(entry.getValue(), K_OWNER))) events = events.dissoc(entry.getKey());
+		transact(draft -> {
+			for (var entry : draft.events().entrySet()) {
+				if (owner.equals(RT.getIn(entry.getValue(), K_OWNER))) draft.drop(entry.getKey());
 			}
-			return events;
+		});
+	}
+
+	/** Removes every event {@code actor} scheduled, through the reverse index. */
+	void cancelActor(AString actor) {
+		transact(draft -> {
+			for (Blob key : draft.scheduledBy(actor)) draft.drop(key);
 		});
 	}
 
@@ -106,7 +146,7 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 	void recordFire(Entry entry, long now, boolean advance, Blob jobId) {
 		var rec = entry.rec();
 		var repeat = repeatOf(rec);
-		if (repeat == null) { updateEvents(events -> events.dissoc(entry.key())); return; }
+		if (repeat == null) { remove(entry.key()); return; }
 		var next = rec.assoc(K_LAST_FIRED, CVMLong.create(now));
 		if (jobId != null) next = next.assoc(K_LAST_JOB, jobId);
 		Blob nextKey = entry.key();
@@ -117,7 +157,10 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		}
 		var key = nextKey;
 		var record = next;
-		updateEvents(events -> events.dissoc(entry.key()).assoc(key, record));
+		transact(draft -> {
+			draft.drop(entry.key());
+			draft.put(key, record);
+		});
 	}
 
 	/** Called with the agent on the same venue draft; the venue owns the compound commit. */
@@ -127,7 +170,7 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 			if (old != null && owner.equals(old.rec().get(K_OWNER))
 					&& AgentState.TRIGGER_OP.equals(old.rec().get(K_OP))
 					&& agentId.equals(RT.getIn(old.rec(), K_INPUT, Fields.AGENT_ID))) {
-				updateEvents(events -> events.dissoc(old.key()));
+				drop(old.key());
 			}
 		}
 		return earliest <= 0 ? null : schedule(AgentState.TRIGGER_OP,
@@ -183,6 +226,9 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 	static final AString K_LAST_JOB = Strings.intern("lastJob");
 	/** Scheduler-record field holding the time-ordered events {@link Index}. */
 	static final AString K_EVENTS = Strings.intern("events");
+	/** Scheduler-record field: the reverse index from each {@link #K_ACTOR} to the
+	 *  keys of the events it scheduled, so an agent's events go with it. */
+	static final AString K_BY_ACTOR = Strings.intern("byActor");
 	/** List-result field: the event handle (its index key). */
 	static final AString K_HANDLE = Strings.intern("handle");
 
