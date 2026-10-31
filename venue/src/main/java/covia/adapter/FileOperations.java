@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
@@ -73,16 +74,17 @@ final class FileOperations {
 	/**
 	 * An IO failure as the Covia type for what it says about the target. A
 	 * missing file is not found; an existing file where none may be, a
-	 * non-empty directory, a file where a directory is needed and a file that
-	 * is not a readable archive refuse the request as they stand. Anything
-	 * else is a venue fault.
+	 * non-empty directory, a file where a directory is needed, a file the
+	 * system will not open and a file that is not a readable archive refuse
+	 * the request as they stand. Anything else is a venue fault.
 	 */
 	static RuntimeException failure(IOException e) {
 		if (e instanceof NoSuchFileException missing) {
 			return new NotFoundException(e.getMessage(), missing.getFile());
 		}
 		if (e instanceof FileAlreadyExistsException || e instanceof DirectoryNotEmptyException
-				|| e instanceof NotDirectoryException || e instanceof ZipException) {
+				|| e instanceof NotDirectoryException || e instanceof AccessDeniedException
+				|| e instanceof ZipException) {
 			return new ConflictException(e.getMessage());
 		}
 		return new UncheckedIOException(e.getMessage(), e);
