@@ -1741,12 +1741,14 @@ public class Engine {
 		return id;
 	}
 
+	public static final String STORE_UNAUTHENTICATED = "Authentication required to store assets";
+
 	/**
 	 * Stores an asset in the caller's per-user CAS namespace.
 	 */
 	public Hash storeUserAsset(AString meta, ACell content, RequestContext ctx) {
 		AString callerDID = ctx.getUserDID();
-		if (callerDID == null) throw new IllegalArgumentException("Authentication required to store assets");
+		if (callerDID == null) throw new AuthException(STORE_UNAUTHENTICATED);
 		User user = getVenueState().users().ensure(callerDID);
 		Hash id = user.assets().store(meta, content);
 		log.info("Stored user asset {} : {} (user: {})", id, RT.getIn(JSON.parse(meta), Fields.NAME), callerDID);
@@ -1935,6 +1937,7 @@ public class Engine {
 		return locateUserPath(parsed, create);
 	}
 
+	public static final String USER_PATH_UNAUTHENTICATED = "User path resolution requires an authenticated user";
 	public static final String USER_PATH_EMPTY = "User path must not be empty";
 	public static final String USER_PATH_NO_NAMESPACE = "User path must include a namespace";
 	/** Opening of the refusal for a did: path that is not a valid DID URL. */
@@ -1942,7 +1945,7 @@ public class Engine {
 
 	private ParsedUserPath parseUserPath(RequestContext ctx, AString ref) {
 		if (ctx == null || ctx.getUserDID() == null) {
-			throw new IllegalArgumentException("User path resolution requires an authenticated user");
+			throw new AuthException(USER_PATH_UNAUTHENTICATED);
 		}
 		if (ref == null || ref.isEmpty()) {
 			throw new InvalidInputException(USER_PATH_EMPTY);
@@ -2085,7 +2088,7 @@ public class Engine {
 			UserPathTarget target;
 			try {
 				target = resolveUserPath(ctx, ref, false);
-			} catch (InvalidInputException | IllegalArgumentException e) {
+			} catch (AuthException | InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
 			if (covia.adapter.CoviaAdapter.isExtensionPath(target.pathKeys())) {

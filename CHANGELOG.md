@@ -20,6 +20,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - A venue shutting down answers 503.
+- Storing an asset or reading a user path unauthenticated answers 403, not 400.
 - A chat bot that is not running says whether it is starting, retrying or stopped.
 - Compaction summaries name the turns they stand for.
 - Session titles are the first message's words, not its JSON.

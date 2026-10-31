@@ -38,6 +38,7 @@ import convex.core.util.Utils;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
@@ -473,6 +474,16 @@ public class EngineTest {
 		InvalidInputException malformed = assertThrows(InvalidInputException.class,
 			() -> venue.resolveUserPath(ctx, Strings.create("did:"), false));
 		assertTrue(malformed.getMessage().startsWith(Engine.INVALID_DID_URL), malformed.getMessage());
+	}
+
+	@Test
+	public void testUnauthenticatedCallersAreRefusedAsAuthFailures() {
+		AuthException path = assertThrows(AuthException.class,
+			() -> venue.resolveUserPath(RequestContext.ANONYMOUS, Strings.create("w/notes"), false));
+		assertEquals(Engine.USER_PATH_UNAUTHENTICATED, path.getMessage());
+		AuthException store = assertThrows(AuthException.class,
+			() -> venue.storeUserAsset(Strings.create("{\"name\":\"anon\"}"), null, RequestContext.ANONYMOUS));
+		assertEquals(Engine.STORE_UNAUTHENTICATED, store.getMessage());
 	}
 
 	@Test
