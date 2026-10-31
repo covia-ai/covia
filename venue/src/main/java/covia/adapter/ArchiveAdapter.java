@@ -175,7 +175,7 @@ public class ArchiveAdapter extends AAdapter {
 
 		if (root != null && path != null) {
 			engine.requireAuthority(ctx, Strings.create(schemeResource("file", root, path)), Capability.CRUD_READ);
-			Path file = files().resolve(ctx, root.toString(), path.toString(), true);
+			Path file = files().resolve(ctx, root.toString(), path.toString(), Capability.CRUD_READ, true);
 			if (!Files.isRegularFile(file)) {
 				throw new IllegalArgumentException("Archive is not a regular file: " + path);
 			}
@@ -242,7 +242,8 @@ public class ArchiveAdapter extends AAdapter {
 		}
 		engine.requireAuthority(ctx, Strings.create(schemeResource("file", destRoot, destPath)), Capability.CRUD_WRITE);
 		files().requireWritableRoot(destRoot.toString());
-		Path destDir = files().resolve(ctx, destRoot.toString(), destPath != null ? destPath.toString() : null, false);
+		Path destDir = files().resolve(ctx, destRoot.toString(), destPath != null ? destPath.toString() : null,
+			Capability.CRUD_WRITE, false);
 		Files.createDirectories(destDir);
 		Path destReal = destDir.toRealPath();
 
@@ -338,7 +339,7 @@ public class ArchiveAdapter extends AAdapter {
 		for (String rel : relPaths) {
 			engine.requireAuthority(ctx,
 				Strings.create(schemeResource("file", srcRoot, Strings.create(rel))), Capability.CRUD_READ);
-			Path p = files().resolve(ctx, srcRoot.toString(), rel, true);
+			Path p = files().resolve(ctx, srcRoot.toString(), rel, Capability.CRUD_READ, true);
 			srcFiles.add(p);
 			// Entry name preserves the caller-supplied relative path (zip -r style).
 			srcEntryBases.add(rel.replace('\\', '/').replaceAll("^/+", ""));
@@ -350,7 +351,7 @@ public class ArchiveAdapter extends AAdapter {
 			engine.requireAuthority(ctx,
 				Strings.create(schemeResource("file", destRoot, destPath)), Capability.CRUD_WRITE);
 			files().requireWritableRoot(destRoot.toString());
-			destFile = files().resolve(ctx, destRoot.toString(), destPath.toString(), false);
+			destFile = files().resolve(ctx, destRoot.toString(), destPath.toString(), Capability.CRUD_WRITE, false);
 			Path parent = destFile.getParent();
 			if (parent != null && !Files.exists(parent)) {
 				throw new java.nio.file.NoSuchFileException("Parent directory does not exist: " + parent);

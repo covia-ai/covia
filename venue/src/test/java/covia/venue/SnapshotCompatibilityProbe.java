@@ -3,6 +3,7 @@ package covia.venue;
 import java.nio.file.Files;
 import java.util.Objects;
 
+import convex.auth.ucan.Capability;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.Blob;
@@ -30,7 +31,7 @@ public final class SnapshotCompatibilityProbe {
             var user = engine.getVenueState().users().ensure(did);
             var secrets = SecretStore.keys(key);
             var drive = ((DLFSAdapter) engine.getAdapter("dlfs"))
-                .getDriveForIdentity(did.toString(), "rehearsal");
+                .getDrive(ctx, "rehearsal", Capability.CRUD_WRITE);
             if (!"-".equals(args[1])) {
                 equal(args[1], RT.getIn(run(engine, ctx, "covia/read",
                     Maps.of("path", "w/rehearsal")), "value").toString());

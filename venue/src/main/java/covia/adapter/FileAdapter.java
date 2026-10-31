@@ -110,7 +110,8 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			this.readOnly = readOnly;
 			this.description = description;
 		}
-		abstract Path baseFor(RequestContext ctx) throws IOException;
+		/** The root's base for an operation needing {@code ability}. */
+		abstract Path baseFor(RequestContext ctx, AString ability) throws IOException;
 		abstract String displayPath();
 		abstract String kind();
 	}
@@ -123,7 +124,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			this.canonical = canonical;
 			this.temp = temp;
 		}
-		@Override Path baseFor(RequestContext ctx) { return canonical; }
+		@Override Path baseFor(RequestContext ctx, AString ability) { return canonical; }
 		@Override String displayPath() { return canonical.toString(); }
 		@Override String kind() { return temp ? "temp" : "host"; }
 	}
@@ -139,7 +140,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			this.subpath = subpath;
 			this.engine = engine;
 		}
-		@Override Path baseFor(RequestContext ctx) throws IOException {
+		@Override Path baseFor(RequestContext ctx, AString ability) throws IOException {
 			if (ctx == null || ctx.getCallerDID() == null) {
 				throw new IllegalArgumentException(
 					"DLFS-backed root '" + driveName + "' requires authenticated caller");
@@ -150,8 +151,8 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				throw new IllegalStateException(
 					"DLFS-backed root '" + driveName + "' requires the DLFS adapter to be registered");
 			}
-			// Drives auto-create on first connect; cheap cursor view per call.
-			Path driveRoot = dlfs.getDrive(ctx, driveName)
+			// Only a write creates the drive; cheap cursor view per call.
+			Path driveRoot = dlfs.getDrive(ctx, driveName, ability)
 				.getRootDirectories().iterator().next();
 			if (subpath == null) return driveRoot;
 
@@ -168,11 +169,12 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				throw new IllegalArgumentException(
 					"DLFS root subpath escapes drive: " + subpath);
 			}
-			// The drive itself is lazy-created; its configured subtree follows the
-			// same rule. This setup is independent of the root's API-level readOnly
-			// policy, which still rejects caller-requested mutations.
-			Files.createDirectories(base);
-			if (!Files.isDirectory(base)) {
+			// A write creates the configured subtree along with the drive; a read
+			// of a missing subtree finds nothing under it. This setup is
+			// independent of the root's API-level readOnly policy, which still
+			// rejects caller-requested mutations.
+			if (Capability.CRUD_WRITE.equals(ability)) Files.createDirectories(base);
+			if (Files.exists(base) && !Files.isDirectory(base)) {
 				throw new IOException("DLFS root subpath is not a directory: " + subpath);
 			}
 			return base;
@@ -385,7 +387,8 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	 * provider's separator conventions. Symlink walks only run on default-FS
 	 * roots — DLFS and other lattice-backed providers don't have symlinks.
 	 */
-	private Path resolvePath(RequestContext ctx, String rootName, String userPath, boolean mustExist) throws IOException {
+	private Path resolvePath(RequestContext ctx, String rootName, String userPath, AString ability,
+			boolean mustExist) throws IOException {
 		if (rootName == null || rootName.isEmpty()) {
 			throw new IllegalArgumentException("'root' is required");
 		}
@@ -395,7 +398,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				+ "'. Configured: " + roots.keySet());
 		}
 
-		return resolvePath(rootName, userPath, mustExist, root.baseFor(ctx));
+		return resolvePath(rootName, userPath, mustExist, root.baseFor(ctx, ability));
 	}
 
 	/**
@@ -467,7 +470,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 				root.readOnly, target.binaryUrl(), rootName);
 		}
 
-		Path base = root.baseFor(ctx);
+		Path base = root.baseFor(ctx, ability);
 		// Resolve the lexical/jail target without observing target existence, then
 		// authorise the canonical resource. Existence errors must not precede the
 		// capability gate (or leak whether an inaccessible path exists).
@@ -635,10 +638,13 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 	 * named root, for reuse by sibling adapters. Throws on an unknown root or a
 	 * path that escapes the root (lexically or via a symlink).
 	 *
+	 * @param ability the ability the caller has checked; only {@code crud/write}
+	 *                creates a DLFS-backed root's drive
 	 * @param mustExist require the resolved path to exist (else {@link NoSuchFileException})
 	 */
-	public Path resolve(RequestContext ctx, String root, String path, boolean mustExist) throws IOException {
-		return resolvePath(ctx, root, path, mustExist);
+	public Path resolve(RequestContext ctx, String root, String path, AString ability,
+			boolean mustExist) throws IOException {
+		return resolvePath(ctx, root, path, ability, mustExist);
 	}
 
 	/** True if the named root is read-only; throws if the root is unknown. */

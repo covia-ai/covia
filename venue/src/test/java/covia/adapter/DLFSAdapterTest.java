@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import convex.auth.ucan.Capability;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -25,9 +26,13 @@ import convex.core.data.AVector;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.fs.impl.DLFSLocal;
+import covia.grid.Job;
 import covia.lattice.Covia;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
@@ -64,6 +69,22 @@ public class DLFSAdapterTest {
 		return engine.jobs().invokeOperation(
 			op, input, RequestContext.of(ALICE_DID)
 		).awaitResult(5000);
+	}
+
+	/** The error message of an operation that must fail. */
+	private String failure(String op, ACell input, RequestContext ctx) {
+		Job job = engine.jobs().invokeOperation(op, input, ctx);
+		assertThrows(Exception.class, () -> job.awaitResult(5000), op + " " + input);
+		return job.getErrorMessage();
+	}
+
+	private AVector<?> driveNames() {
+		return RT.ensureVector(RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives"));
+	}
+
+	/** A drive view to write into, creating the drive if needed. */
+	private DLFSLocal writableDrive(DLFSAdapter adapter, String name) {
+		return adapter.getDrive(RequestContext.of(ALICE_DID), name, Capability.CRUD_WRITE);
 	}
 
 	@Test
@@ -260,9 +281,9 @@ public class DLFSAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			var drive = writableDrive(adapter, "deleted");
 			Files.writeString(drive.getPath("/old.txt"), "must stay deleted");
-			var kept = adapter.getDriveForIdentity(ALICE_DID.toString(), "kept");
+			var kept = writableDrive(adapter, "kept");
 			Files.writeString(kept.getPath("/keep.txt"), "keep");
 			var root = isolated.getRootCursor();
 			CountDownLatch saving = new CountDownLatch(1);
@@ -292,7 +313,7 @@ public class DLFSAdapterTest {
 			assertEquals(convex.core.data.Vectors.of("kept"), RT.getIn(
 				adapter.listDrives(RequestContext.of(ALICE_DID)), "drives"));
 			var deleted = root.get();
-			var recreated = adapter.getDriveForIdentity(ALICE_DID.toString(), "deleted");
+			var recreated = writableDrive(adapter, "deleted");
 			Files.writeString(recreated.getPath("/new.txt"), "new");
 			application.merge(deleted);
 			assertEquals("new", Files.readString(recreated.getPath("/new.txt")));
@@ -316,7 +337,7 @@ public class DLFSAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "legacy");
+			var drive = writableDrive(adapter, "legacy");
 			Files.writeString(drive.getPath("/old.txt"), "legacy content");
 			var root = isolated.getRootCursor();
 			var legacy = root.get();
@@ -343,7 +364,7 @@ public class DLFSAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "shared");
+			var drive = writableDrive(adapter, "shared");
 			var root = isolated.getRootCursor();
 			var base = root.get();
 			Files.writeString(drive.getPath("/left.txt"), "left");
@@ -382,13 +403,78 @@ public class DLFSAdapterTest {
 
 		ACell result = run("v/ops/dlfs/delete-drive", Maps.of("name", "test-remove"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
-		assertEquals(0, RT.ensureVector(RT.getIn(
-			run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
+		assertEquals(0, driveNames().count());
 
-		// Re-accessing creates a fresh empty drive.
+		// Reading the deleted drive does not bring it back.
+		assertTrue(failure("v/ops/dlfs/list", Maps.of("drive", "test-remove"),
+			RequestContext.of(ALICE_DID)).contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		assertEquals(0, driveNames().count());
+
+		// Creating it again gives a fresh empty drive.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-remove"));
 		result = run("v/ops/dlfs/list", Maps.of("drive", "test-remove"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
-		assertEquals(0, entries.count(), "Deleted drive should be empty when re-accessed");
+		assertEquals(0, entries.count(), "Recreated drive should be empty");
+	}
+
+	@Test
+	public void testReadsNeedALiveDrive() {
+		// Only createDrive and writes create a drive. Reads, and deletes within a
+		// drive, fail on a drive that is absent or deleted, and leave it so.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		run("v/ops/dlfs/create-drive", Maps.of("name", "kept"));
+		run("v/ops/dlfs/write", Maps.of("drive", "gone", "path", "a.txt", "content", "old"));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "gone"));
+
+		for (String drive : new String[] {"missing", "gone"}) {
+			for (String op : new String[] {"list", "tree", "stat", "read", "delete"}) {
+				assertTrue(failure("v/ops/dlfs/" + op, Maps.of("drive", drive, "path", "a.txt"), alice)
+					.contains(DLFSAdapter.DRIVE_NOT_FOUND), op + " on " + drive);
+			}
+			assertTrue(failure("v/ops/file/read", Maps.of("path", "dlfs/" + drive + "/a.txt"), alice)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "file:read on " + drive);
+		}
+		assertEquals(Vectors.of("kept"), driveNames());
+
+		// A write still creates the drive it names.
+		run("v/ops/dlfs/write", Maps.of("drive", "fresh", "path", "a.txt", "content", "new"));
+		assertEquals(Vectors.of("fresh", "kept"), driveNames());
+	}
+
+	@Test
+	public void testReadOnlyAgentCannotCreateDrives() {
+		// An agent whose caps allow only crud/read on its owner's drives reads
+		// them, but brings no drive into being, new or deleted.
+		run("v/ops/dlfs/write", Maps.of("drive", "notes", "path", "a.txt", "content", "hello"));
+		run("v/ops/dlfs/write", Maps.of("drive", "gone", "path", "a.txt", "content", "old"));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "gone"));
+		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+
+		ACell read = engine.jobs().invokeOperation("v/ops/dlfs/read",
+			Maps.of("drive", "notes", "path", "a.txt"), reader).awaitResult(5000);
+		assertEquals("hello", RT.getIn(read, "content").toString());
+		for (String drive : new String[] {"missing", "gone"}) {
+			assertTrue(failure("v/ops/dlfs/stat", Maps.of("drive", drive, "path", "a.txt"), reader)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "stat on " + drive);
+			assertTrue(failure("v/ops/dlfs/list", Maps.of("drive", drive), reader)
+				.contains(DLFSAdapter.DRIVE_NOT_FOUND), "list on " + drive);
+		}
+		assertEquals(Vectors.of("notes"), driveNames());
+	}
+
+	@Test
+	public void testReadsMintNoDriveKey() {
+		// A user who has never written to DLFS has no drives. Listing, reading and
+		// deleting a drive find none, and none of them generates the user's DLFS key.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		assertEquals(0, driveNames().count());
+		assertTrue(failure("v/ops/dlfs/list", Maps.of("drive", "docs"), alice)
+			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
+		run("v/ops/dlfs/delete-drive", Maps.of("name", "docs"));
+		var user = engine.getVenueState().users().get(ALICE_DID);
+		assertTrue(user == null || user.secrets().list().longIndexOf(
+			Strings.create(DLFSAdapter.DLFS_KEY_SECRET)) < 0, "no DLFS key");
 	}
 
 	@Test
@@ -411,7 +497,7 @@ public class DLFSAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter dlfs = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = dlfs.getDriveForIdentity(ALICE_DID.toString(), "publish");
+			var drive = writableDrive(dlfs, "publish");
 			Files.writeString(drive.getPath("/test.txt"), "host publication");
 			isolated.flush();
 			assertEquals(application.cursor().get(), application.host().store().getRootData());
@@ -434,8 +520,7 @@ public class DLFSAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			Path file = adapter.getDriveForIdentity(
-				ALICE_DID.toString(), "recreate-under-sync").getPath("/entry.txt");
+			Path file = writableDrive(adapter, "recreate-under-sync").getPath("/entry.txt");
 
 			Files.writeString(file, "first");
 			Files.delete(file);
@@ -494,7 +579,7 @@ public class DLFSAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			var adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
-			var drive = adapter.getDriveForIdentity(ALICE_DID.toString(), "clock");
+			var drive = writableDrive(adapter, "clock");
 			Files.writeString(drive.getPath("/first"), "first");
 			long before = Files.getLastModifiedTime(drive.getPath("/first")).toMillis();
 			time.addAndGet(100);
@@ -511,9 +596,8 @@ public class DLFSAdapterTest {
 
 	@Test
 	public void testDriveNotFound() {
-		assertThrows(Exception.class, () ->
-			run("v/ops/dlfs/read", Maps.of("drive", "nonexistent", "path", "foo.txt"))
-		);
+		assertTrue(failure("v/ops/dlfs/read", Maps.of("drive", "nonexistent", "path", "foo.txt"),
+			RequestContext.of(ALICE_DID)).contains(DLFSAdapter.DRIVE_NOT_FOUND));
 	}
 
 	@Test

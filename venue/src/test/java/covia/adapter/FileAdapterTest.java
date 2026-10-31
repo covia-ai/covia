@@ -957,7 +957,7 @@ public class FileAdapterTest {
 	// Default (no config) inertness
 
 	@Test
-	public void testDLFSBackedRoot() {
+	public void testDLFSBackedRoot() throws Exception {
 		// Configure a file: root that points at a DLFS drive. Operations should
 		// route through DLFS but use the same file: surface as host roots.
 		Engine eng = Engine.createTemp(Maps.of(
@@ -979,6 +979,19 @@ public class FileAdapterTest {
 			assertEquals(1, rootsList.count());
 			assertEquals("dlfs", RT.ensureString(RT.getIn(rootsList.get(0), "kind")).toString());
 			assertEquals("shared", RT.ensureString(RT.getIn(rootsList.get(0), "name")).toString());
+
+			// Reads of the root before its drive exists find no drive, and do not
+			// create it — through file:, and through archive: on the same root.
+			for (String op : new String[] {"v/ops/file/list", "v/ops/archive/list"}) {
+				Job read = eng.jobs().invokeOperation(op,
+					Maps.of("root", "shared", "path", "bundle.zip"), RequestContext.of(did));
+				assertThrows(Exception.class, () -> read.awaitResult(2000), op);
+				assertTrue(read.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND),
+					op + ": " + read.getErrorMessage());
+			}
+			DLFSAdapter dlfs = (DLFSAdapter) eng.getAdapter("dlfs");
+			assertEquals(0, RT.ensureVector(RT.getIn(
+				dlfs.listDrives(RequestContext.of(did)), "drives")).count());
 
 			// Write through file: surface
 			Job writeJob = eng.jobs().invokeOperation(
@@ -1237,13 +1250,23 @@ public class FileAdapterTest {
 				Maps.of("root", "private", "path", "secret.txt", "content", "alice's note"),
 				RequestContext.of(alice)).awaitResult(2000);
 
-			// Bob's view of the same drive name must be empty.
+			// Bob has no drive of that name: his list finds none, not Alice's.
 			Job bobList = eng.jobs().invokeOperation(
 				"v/ops/file/list", Maps.of("root", "private"),
 				RequestContext.of(bob));
-			bobList.awaitResult(2000);
-			AVector<?> entries = RT.ensureVector(RT.getIn(bobList.getOutput(), "entries"));
-			assertEquals(0, entries.count(), "Bob should not see Alice's drive contents");
+			assertThrows(Exception.class, () -> bobList.awaitResult(2000));
+			assertTrue(bobList.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND),
+				bobList.getErrorMessage());
+
+			// Once Bob writes, his view of the drive holds only his own file.
+			eng.jobs().invokeOperation("v/ops/file/write",
+				Maps.of("root", "private", "path", "bob.txt", "content", "bob's note"),
+				RequestContext.of(bob)).awaitResult(2000);
+			AVector<?> entries = RT.ensureVector(RT.getIn(eng.jobs().invokeOperation(
+				"v/ops/file/list", Maps.of("root", "private"),
+				RequestContext.of(bob)).awaitResult(2000), "entries"));
+			assertEquals(1, entries.count(), "Bob should not see Alice's drive contents");
+			assertEquals("bob.txt", RT.getIn(entries.get(0), "name").toString());
 		} finally {
 			eng.close();
 		}

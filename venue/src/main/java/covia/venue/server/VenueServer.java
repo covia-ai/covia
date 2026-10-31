@@ -873,6 +873,8 @@ public class VenueServer {
 				return (identity != null) ? identity : publicDID;
 			}
 
+			// Opens an existing drive only: a missing one is null, which WebDAV
+			// answers with 404. MKCOL on the drive creates it.
 			@Override
 			public java.nio.file.FileSystem getDrive(String identity, String driveName) {
 				DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
@@ -891,7 +893,14 @@ public class VenueServer {
 
 			@Override
 			public boolean createDrive(String identity, String driveName) {
-				return getDrive(identity, driveName) != null; // auto-creates via DLFS.connect
+				DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+				if (dlfs == null) return false; // adapter not registered (yet)
+				try {
+					return dlfs.createDriveForIdentity(resolveIdentity(identity), driveName);
+				} catch (Exception e) {
+					log.warn("WebDAV drive creation failed for {}: {}", driveName, e.toString());
+					return false;
+				}
 			}
 		};
 

@@ -51,6 +51,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `Engine.requireSafeUrl` and `requireSafeHost` take the `RequestContext` of the
   caller that chose the target, and `Engine.fetchRemoteAsset`, `fetchRemoteNamedAsset`
   and `fetchRemoteContent` the caller whose reference names the publisher.
+- Only `createDrive`, writes and WebDAV `MKCOL` create a DLFS drive; reading a missing
+  or deleted drive fails (#641). `DLFSAdapter.getDrive` and `FileAdapter.resolve`
+  take the operation's ability.
 
 ### Deprecated
 

@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -309,7 +310,8 @@ public class EtchV3VenueTest {
 		try {
 			Engine engine = first.getEngine();
 			DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
-			Path uploads = driveRoot(dlfs, userDID, driveName).resolve("Uploads");
+			Path uploads = dlfs.getDrive(RequestContext.of(userDID), driveName, Capability.CRUD_WRITE)
+				.getPath("/").resolve("Uploads");
 			Files.createDirectories(uploads);
 
 			CountDownLatch ready = new CountDownLatch(writerCount);
