@@ -28,6 +28,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -171,7 +172,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		// rather than minting one of its own, which would orphan it from every
 		// drive the owner has.
 		AString callerDID = ctx.getUserDID();
-		if (callerDID == null) throw new IllegalArgumentException("Authentication required for DLFS access");
+		if (callerDID == null) throw new AuthException("Authentication required for DLFS access");
 
 		User user = engine.getVenueState().users().ensure(callerDID);
 		SecretStore.Keys encKey = SecretStore.keys(engine.getKeyPair());
@@ -267,8 +268,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			try {
 				return dispatch(ctx, subOp, input);
 			} catch (RuntimeException e) {
-				if (!isExpectedFailure(e)) throw e;
-				throw new RuntimeException(e.getMessage(), e);
+				throw e;   // already says what failed; only checked exceptions need wrapping
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
@@ -407,7 +407,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
 				Strings.create(fr.path()));
 			boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
-			if (!ok) throw new IllegalStateException(
+			if (!ok) throw new AuthException(
 				"Access denied: no " + ability + " capability for " + resource);
 			driveCtx = RequestContext.of(fr.ownerDID());
 		} else {
@@ -546,7 +546,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AString pathCell = RT.ensureString(RT.getIn(input, FIELD_PATH));
 		String resource = dlfsResource(target.ownerDID(), Strings.create(target.driveName()), pathCell);
 		boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
-		if (!ok) throw new IllegalStateException(
+		if (!ok) throw new AuthException(
 			"Access denied: no " + ability + " capability for " + resource);
 	}
 

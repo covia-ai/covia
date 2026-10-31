@@ -120,6 +120,17 @@ public class InvokeWaitTest {
 	}
 
 	@Test
+	public void testRunRefusedInsideTheOperationIsAJobFailure() throws Exception {
+		// The venue accepted the run; the operation's own authority check then
+		// refused it. That is the job's failure, answered like any other, not 403.
+		String path = TestServer.ENGINE.getDIDString() + "/w/run-refused";
+		HttpResponse<String> resp = run(
+			"{\"operation\":\"v/ops/covia/write\",\"input\":{\"path\":\"" + path + "\",\"value\":1}}");
+		assertEquals(400, resp.statusCode(), resp.body());
+		assertTrue(resp.body().contains("Error running operation"), resp.body());
+	}
+
+	@Test
 	public void testInvokeOfUnresolvableOperationIsBadRequest() throws Exception {
 		HttpResponse<String> resp = invoke("", "{\"operation\":\"v/does/not/exist\",\"input\":{}}");
 		assertEquals(400, resp.statusCode(), resp.body());

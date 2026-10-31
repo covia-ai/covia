@@ -25,8 +25,7 @@ venue/src/main/java/covia/adapter/ConnectionsAdapter.java 9
 venue/src/main/java/covia/adapter/ConvexAdapter.java 1
 venue/src/main/java/covia/adapter/CoviaAdapter.java 16
 venue/src/main/java/covia/adapter/CryptoAdapter.java 1
-venue/src/main/java/covia/adapter/DLFSAdapter.java 4
-venue/src/main/java/covia/adapter/FileAdapter.java 1
+venue/src/main/java/covia/adapter/DLFSAdapter.java 1
 venue/src/main/java/covia/adapter/GridAdapter.java 14
 venue/src/main/java/covia/adapter/HITLAdapter.java 26
 venue/src/main/java/covia/adapter/HTTPAdapter.java 2

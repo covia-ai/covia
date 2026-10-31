@@ -24,6 +24,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -146,7 +147,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 		@Override Path baseFor(RequestContext ctx) throws IOException {
 			if (ctx == null || ctx.getCallerDID() == null) {
-				throw new IllegalArgumentException(
+				throw new AuthException(
 					"DLFS-backed root '" + driveName + "' requires authenticated caller");
 			}
 			// Lazy adapter lookup — FileAdapter may register before DLFSAdapter.
@@ -670,8 +671,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			try {
 				return dispatch(ctx, subOp, RT.castMap(input));
 			} catch (RuntimeException e) {
-				if (!isExpectedFailure(e)) throw e;
-				throw new RuntimeException(e.getMessage(), e);
+				throw e;   // already says what failed; only checked exceptions need wrapping
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}

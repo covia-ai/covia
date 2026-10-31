@@ -54,6 +54,7 @@ import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
 import covia.venue.AssetStore;
 import covia.venue.Config;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.server.AuthMiddleware;
@@ -908,8 +909,11 @@ public class CoviaAPI extends ACoviaAPI {
 			responses = {
 				@OpenApiResponse(status = "200", description = "Operation output",
 					content = @OpenApiContent(type = "application/json", from = Object.class)),
-				@OpenApiResponse(status = "400", description = "Malformed request or operation"),
-				@OpenApiResponse(status = "403", description = "Operation not authorised"),
+				@OpenApiResponse(status = "400", description = "Malformed request, or the operation ran "
+					+ "and failed; the message gives its reason, whatever the failure, an authority "
+					+ "check inside the operation included"),
+				@OpenApiResponse(status = "403", description = "The venue refused the run before the operation started"),
+				@OpenApiResponse(status = "500", description = "The operation failed unexpectedly: a venue error"),
 				@OpenApiResponse(status = "503", description = "Venue shutting down; retry once it is back")
 			})
 	protected void runOperation(Context ctx) {
@@ -939,12 +943,22 @@ public class CoviaAPI extends ACoviaAPI {
 		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
 		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
+		JobManager.Run run = engine().jobs().startRun(op, input, rctx, privateJob);
 		try {
-			ACell result = engine().jobs().runOperation(op, input, rctx, privateJob).join();
+			ACell result = run.result().join();
 			buildResult(ctx, 200, result);
 		} catch (java.util.concurrent.CompletionException e) {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			if (cause instanceof AuthException) {
+			if (run.job() != null) {
+				// The venue accepted the run; the operation then failed. However
+				// it failed, that is the job's outcome, not an HTTP refusal.
+				if (AAdapter.isExpectedFailure(cause)) {
+					buildError(ctx, 400, "Error running operation: " + cause.getMessage());
+				} else {
+					log.error("Unexpected failure running operation {}", op, cause);
+					buildError(ctx, 500, "Operation failed: " + AAdapter.describeFailure(cause));
+				}
+			} else if (cause instanceof AuthException) {
 				buildError(ctx, 403, cause.getMessage());
 			} else if (cause instanceof ShuttingDownException) {
 				buildError(ctx, 503, cause.getMessage());

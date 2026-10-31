@@ -29,7 +29,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Records that name only their caller act for an owner only through an existing agent.
 - A venue shutting down answers 503.
 - A message to an external agent whose backend is unloaded or whose definition no longer validates answers 503, not 404.
-- Storing an asset or reading a user path unauthenticated answers 403, not 400.
+- Storing an asset or reading a user path unauthenticated through the REST routes answers 403, not 400.
+- `/run` answers 403 only when the venue refuses the run; an operation that starts and is then refused fails with 400.
 - A chat bot that is not running says whether it is starting, retrying or stopped.
 - Compaction summaries name the turns they stand for.
 - Session titles are the first message's words, not its JSON.

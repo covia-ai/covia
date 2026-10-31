@@ -535,6 +535,11 @@ public class JobManager {
 		}
 	}
 
+	/** {@link #runOperation(AString, ACell, RequestContext, boolean)}, keeping the Job. */
+	public Run startRun(AString ref, ACell input, RequestContext ctx, boolean privateJob) {
+		return startOperation(ref, input, ctx, privateJob, Invocation.RUN);
+	}
+
 	/** {@link #runToolOperation}, keeping the Job. */
 	public Run startToolOperation(AString ref, ACell input, RequestContext ctx) {
 		return startOperation(ref, input, ctx, false, Invocation.TOOL);
