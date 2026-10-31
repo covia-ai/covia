@@ -55,7 +55,7 @@ public abstract class AAdapter {
 	}
 
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
-	private static final int MAX_FAILURE_CHARS = 1024;
+	protected static final int MAX_FAILURE_CHARS = 1024;
 
 	/**
 	 * Virtual thread executor for IO-bound blocking operations.

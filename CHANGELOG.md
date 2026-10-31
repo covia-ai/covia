@@ -302,6 +302,10 @@ These changes require Convex 0.8.18.
 
 ### Fixed
 
+- A tool called before its skill is loaded names the skills that provide it,
+  and runs nothing (#643).
+- Tool failures no longer show Java class names for expected errors; unexpected
+  ones are logged and reported as venue errors.
 - Secret operations expose distinct refusal constants for an existing name,
   a missing secret and a decryption failure, including unreadable key versions
   and malformed records (#586).
