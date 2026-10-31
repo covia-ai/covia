@@ -11,6 +11,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 
 /** Pure tests for the preview reader; no running venue or provider. */
 public class ConversationHistoryTest {
@@ -135,7 +136,7 @@ public class ConversationHistoryTest {
 		}
 		var malformed = GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""),
 			Maps.of("summary", "bad", "turns", 1L, "historyRange", Vectors.of(0L, 1L)));
-		assertEquals(GoalTreeContext.INVALID_HISTORY_RANGE, assertThrows(IllegalArgumentException.class,
+		assertEquals(GoalTreeContext.INVALID_HISTORY_RANGE, assertThrows(InvalidInputException.class,
 			() -> ConversationHistory.open(malformed)).getMessage());
 	}
 }

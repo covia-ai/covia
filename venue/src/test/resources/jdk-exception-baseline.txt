@@ -59,7 +59,6 @@ venue/src/main/java/covia/adapter/agent/ContextAssembler.java 2
 venue/src/main/java/covia/adapter/agent/ConversationHistory.java 3
 venue/src/main/java/covia/adapter/agent/ConversationRenderer.java 3
 venue/src/main/java/covia/adapter/agent/ExternalAgents.java 2
-venue/src/main/java/covia/adapter/agent/GoalTreeContext.java 14
 venue/src/main/java/covia/adapter/agent/LLMAgentAdapter.java 1
 venue/src/main/java/covia/adapter/agent/ToolCallIds.java 2
 venue/src/main/java/covia/adapter/agent/ToolPalette.java 2
