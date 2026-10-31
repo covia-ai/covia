@@ -940,7 +940,7 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		boolean privateJob = CVMBool.TRUE.equals(privateCell);
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
+		AVector<ACell> ucans = AuthMiddleware.bodyUcans(req);
 		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		JobManager.Run run = engine().jobs().startRun(op, input, rctx, privateJob);
@@ -1053,7 +1053,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Authentication has already selected the caller. Body UCANs are grants
 		// only: they cannot authenticate, select a namespace, or instruct execution.
-		AVector<ACell> ucans = RT.getIn(req, "ucans");
+		AVector<ACell> ucans = AuthMiddleware.bodyUcans(req);
 		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 
 		try {
@@ -1227,12 +1227,17 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
 					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
-					@OpenApiResponse(status = "409", description = "Job is in terminal state, or its adapter refused the message"),
+					@OpenApiResponse(status = "400", description = "The id is not a job ID, or the body is not JSON"),
+					@OpenApiResponse(status = "409", description = "Job has finished, is not active, does not take messages, or its adapter refused the message"),
 					@OpenApiResponse(status = "502", description = "The remote end of a mirrored job did not acknowledge the message; delivery is unknown"),
 					@OpenApiResponse(status = "503", description = "The job's backend is not available on this venue")
 					})
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
+		if (id == null) {
+			buildError(ctx, 400, "Message delivery requires a job ID as a valid hex string");
+			return;
+		}
 		// A malformed body is the caller's error: 400, never the generic 500.
 		ACell message;
 		try {
@@ -1309,7 +1314,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1342,7 +1347,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1377,7 +1382,7 @@ public class CoviaAPI extends ACoviaAPI {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
@@ -1411,7 +1416,7 @@ public class CoviaAPI extends ACoviaAPI {
 			if (deleted) {
 				ctx.status(200);
 			} else {
-				ctx.status(404);
+				buildError(ctx, 404, JobManager.JOB_NOT_FOUND + id.toHexString());
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());

@@ -1010,6 +1010,49 @@ public class JobManagerTest {
 	}
 
 	@Test
+	public void testControlOfEvictedTerminalJob() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.empty(), ctx);
+		job.awaitResult(5000);
+		engine.jobs().evictActive(job.getID());
+
+		AMap<AString, ACell> cancelled = engine.jobs().cancelJob(job.getID(), ctx);
+		assertNotNull(cancelled, "cancelling a finished job answers its record (COG-8)");
+		assertEquals(Status.COMPLETE, RT.ensureString(cancelled.get(Fields.STATUS)));
+
+		ConflictException pause = assertThrows(ConflictException.class,
+			() -> engine.jobs().pauseJob(job.getID(), ctx));
+		assertTrue(pause.getMessage().startsWith(JobManager.JOB_TERMINAL), pause.getMessage());
+		ConflictException resume = assertThrows(ConflictException.class,
+			() -> engine.jobs().resumeJob(job.getID(), ctx));
+		assertTrue(resume.getMessage().startsWith(JobManager.JOB_TERMINAL), resume.getMessage());
+	}
+
+	@Test
+	public void testDeliverMessageToSingleTurnJobIsRefused() {
+		engine.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "single-turn-test"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return new CompletableFuture<>();
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("single-turn-test:run")));
+		Job job = engine.jobs().invokeOperation(meta, null, ctx);
+		try {
+			assertFalse(job.isFinished());
+			ConflictException ex = assertThrows(ConflictException.class, () ->
+				engine.jobs().deliverMessage(job.getID(),
+					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
+				"a message the job's operation cannot take is refused, not dropped");
+			assertTrue(ex.getMessage().startsWith(JobManager.JOB_NO_MESSAGES), ex.getMessage());
+		} finally {
+			job.cancel();
+		}
+	}
+
+	@Test
 	public void testJobRecordOpFallsBackToHashForInlineDefinition() {
 		AMap<AString, ACell> meta = echoMeta();
 		Job job = engine.jobs().invokeOperation(meta, Maps.empty(), ctx);

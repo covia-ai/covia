@@ -648,7 +648,7 @@ public class MCP extends McpServer {
 
 				// Authentication selected the caller before dispatch. The `ucans`
 				// argument carries additive grants only.
-				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
+				AVector<ACell> ucans = AuthMiddleware.bodyUcans(arguments);
 				rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
 				// `ucans` is transport authority, not operation input. Never let
 				// raw proof JWTs enter durable Job records, adapter logs, or agent

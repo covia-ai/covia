@@ -54,6 +54,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Fixed
 
 - Cancel, pause, resume and messages by id reach a just-submitted job.
+- REST errors share one JSON body, `{"error": reason}` (COG-21).
+- Cancelling a finished job answers its record, even once it has left memory.
+- A message to a job that does not take messages answers 409 instead of being dropped.
+- A malformed job id or `ucans` field answers 400.
 
 ### Security
 

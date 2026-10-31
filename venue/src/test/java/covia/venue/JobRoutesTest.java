@@ -20,6 +20,8 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -345,6 +347,67 @@ public class JobRoutesTest {
 				"terminal record must be delivered to a late subscriber: " + frames);
 		}
 		assertEquals(legacy, storage.get(), "REST and SSE reads must not rewrite an old record");
+	}
+
+	/** The REST error body (COG-21): every refusal is {@code {"error": reason}}. */
+	private static String errorOf(HttpResponse<String> r) {
+		assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith("application/json"),
+			"error bodies are JSON: " + r.body());
+		AString error = RT.ensureString(RT.getIn(JSON.parse(r.body()), "error"));
+		assertNotNull(error, "error body carries its reason: " + r.body());
+		return error.toString();
+	}
+
+	private HttpResponse<String> send(HttpRequest.Builder request) throws Exception {
+		return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+	}
+
+	@Test
+	public void refusalsShareTheErrorBody() throws Exception {
+		String unknown = "00112233445566778899aabbccddeeff";
+		HttpResponse<String> cancel = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/" + unknown + "/cancel"))
+			.PUT(HttpRequest.BodyPublishers.noBody()));
+		assertEquals(404, cancel.statusCode(), cancel.body());
+		assertTrue(errorOf(cancel).startsWith(JobManager.JOB_NOT_FOUND), cancel.body());
+
+		HttpResponse<String> message = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/not-a-job-id"))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString("{\"content\":\"hi\"}")));
+		assertEquals(400, message.statusCode(), message.body());
+		errorOf(message);
+
+		// A refusal Javalin raises inside a handler gets the same body
+		HttpResponse<String> limit = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs?limit=-1")).GET());
+		assertEquals(400, limit.statusCode(), limit.body());
+		errorOf(limit);
+	}
+
+	@Test
+	public void nonArrayUcansIs400() throws Exception {
+		for (String route : new String[] {"invoke", "run"}) {
+			HttpResponse<String> r = send(HttpRequest.newBuilder()
+				.uri(new URI(base + "/api/v1/" + route))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(
+					"{\"operation\":\"v/test/ops/echo\",\"input\":{},\"ucans\":\"not-an-array\"}")));
+			assertEquals(400, r.statusCode(), route + ": " + r.body());
+			assertEquals(covia.venue.server.AuthMiddleware.UCANS_NOT_ARRAY, errorOf(r), route);
+		}
+	}
+
+	@Test
+	public void cancelOfFinishedJobAnswersItsRecord() throws Exception {
+		String id = invoke("v/test/ops/echo");
+		awaitHttpStatus(id, "COMPLETE");
+		TestServer.ENGINE.jobs().evictActive(Blob.parse(id));
+		HttpResponse<String> cancel = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/" + id + "/cancel"))
+			.PUT(HttpRequest.BodyPublishers.noBody()));
+		assertEquals(200, cancel.statusCode(), cancel.body());
+		assertEquals("COMPLETE", RT.ensureString(RT.getIn(JSON.parse(cancel.body()), "status")).toString());
 	}
 
 	/** An unparseable job id is a plain 400, before any stream is committed. */

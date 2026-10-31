@@ -80,10 +80,12 @@ public class JobManager {
 	public static final String ADAPTER_NOT_AVAILABLE = "Adapter not available: ";
 	/** A job id that names no job the caller can see; the id follows. */
 	public static final String JOB_NOT_FOUND = "Job not found: ";
-	/** A message to a job that has finished; the id follows. */
+	/** A message or control to a job that has finished; the id follows. */
 	public static final String JOB_TERMINAL = "Job is in terminal state: ";
-	/** A message to a recorded job with no live handle; the id follows. */
+	/** A message or control to a recorded job with no live handle; the id follows. */
 	public static final String JOB_NOT_ACTIVE = "Job is not active: ";
+	/** A message to a job whose operation does not take messages; the id follows. */
+	public static final String JOB_NO_MESSAGES = "Job does not accept messages: ";
 	/** A private run on a venue that does not enable them. */
 	public static final String PRIVATE_RUNS_DISABLED =
 		"Private runs are disabled on this venue (enablePrivateJobs=false)";
@@ -1139,7 +1141,12 @@ public class JobManager {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only, not read-delegable
-		return cancelJob(id, reason);
+		AMap<AString, ACell> cancelled = cancelJob(id, reason);
+		if (cancelled != null) return cancelled;
+		// Cancelling a finished job changes nothing and answers its record (COG-8),
+		// whether or not its live handle has been evicted
+		if (Job.isFinished(data)) return data;
+		throw notLive(id, data);
 	}
 
 	public AMap<AString, ACell> cancelJob(Blob id) {
@@ -1162,7 +1169,7 @@ public class JobManager {
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = liveJob(id);
-		if (job == null) return null;
+		if (job == null) throw notLive(id, data);
 		job.pause();
 		return job.getData();
 	}
@@ -1176,9 +1183,18 @@ public class JobManager {
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = liveJob(id);
-		if (job == null) return null;
+		if (job == null) throw notLive(id, data);
 		job.resume();
 		return job.getData();
+	}
+
+	/**
+	 * Refusal for a recorded job with no live handle to act on: it has finished,
+	 * or it is not running on this venue now.
+	 */
+	private static ConflictException notLive(Blob id, AMap<AString, ACell> data) {
+		return new ConflictException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE)
+			+ id.toHexString());
 	}
 
 	/**
@@ -1226,8 +1242,7 @@ public class JobManager {
 			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData(), Capability.CRUD_WRITE)) {
 				throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 			}
-			throw new ConflictException((recorded.isFinished() ? JOB_TERMINAL : JOB_NOT_ACTIVE)
-				+ jobID.toHexString());
+			throw notLive(jobID, recorded.getData());
 		}
 		if (!engine.getAccessControl().canAccessJob(ctx, job.getData(), Capability.CRUD_WRITE)) {
 			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
@@ -1238,6 +1253,11 @@ public class JobManager {
 	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
 		Blob jobID = job.getID();
 		if (job.isFinished()) throw new ConflictException(JOB_TERMINAL + jobID.toHexString());
+		// Only a multi-turn adapter takes messages; any other job would drop it
+		AAdapter adapter = resolveJobAdapter(job);
+		if (adapter == null || !adapter.supportsMultiTurn()) {
+			throw new ConflictException(JOB_NO_MESSAGES + jobID.toHexString());
+		}
 
 		long ts = Utils.getCurrentTimestamp();
 		Blob msgId = generateJobID(ts);
@@ -1250,13 +1270,7 @@ public class JobManager {
 			record = record.assoc(Fields.SOURCE, source);
 		}
 
-		// Dispatch to adapter if it supports multi-turn. The message record is
-		// passed directly — Job no longer buffers a per-job message queue (the
-		// previous queue was write-only and never drained).
-		AAdapter adapter = resolveJobAdapter(job);
-		if (adapter != null && adapter.supportsMultiTurn()) {
-			adapter.handleMessage(job, record);
-		}
+		adapter.handleMessage(job, record);
 	}
 
 	// ========== History ==========

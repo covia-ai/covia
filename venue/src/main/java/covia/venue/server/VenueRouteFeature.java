@@ -90,6 +90,11 @@ public enum VenueRouteFeature implements RouteRole {
 		return roles != null && roles.contains(feature);
 	}
 
+	/** A route of the REST API (COG-21), whose errors share one JSON body. */
+	static boolean isRestApi(Set<RouteRole> roles) {
+		return has(roles, COVIA_API) || has(roles, COVIA_DISCOVERY);
+	}
+
 	static boolean usesRateLimit(Set<RouteRole> roles) {
 		return has(roles, RATE_LIMITED)
 			|| has(roles, COVIA_API)

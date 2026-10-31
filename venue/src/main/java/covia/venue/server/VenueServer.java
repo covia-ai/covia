@@ -58,6 +58,7 @@ import convex.dlfs.DLFSDrives;
 import convex.dlfs.DLFSWebDAV;
 import covia.adapter.DLFSAdapter;
 import covia.venue.api.A2A;
+import covia.venue.api.ApiErrors;
 import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
 import covia.venue.api.UserAPI;
@@ -1111,10 +1112,21 @@ public class VenueServer {
 		// First, so every later handler and log line sees the request's id.
 		routes.before(requestLog::begin);
 
-		routes.exception(HttpResponseException.class,
-			(e, ctx) -> renderHttpError(e, ctx));
+		routes.exception(HttpResponseException.class, (e, ctx) -> {
+			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) ApiErrors.respond(ctx, e);
+			else renderHttpError(e, ctx);
+		});
 
 		routes.exception(Exception.class, (e, ctx) -> {
+			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) {
+				// A Covia type is a refusal the route left unanswered; anything
+				// else is a venue error, logged with its stack.
+				if (ApiErrors.status(e) == 500) {
+					log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
+				}
+				ApiErrors.respond(ctx, e);
+				return;
+			}
 			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			// A generic title with the exception under details: the class and
 			// message stay visible by design, because operators debug from the
@@ -1217,6 +1229,11 @@ public class VenueServer {
 			.replace("'", "&#39;");
 	}
 
+	/** Reason given to an origin the CORS policy refuses. */
+	public static final String CORS_ORIGIN_DENIED = "CORS origin denied";
+	/** Opening of the reason given to a caller over its request rate; the wait follows. */
+	public static final String RATE_LIMITED = "Rate limit exceeded; retry after ";
+
 	/** Applies CORS before routing so a denied origin cannot reach a handler. */
 	private void applyCorsPolicy(Context ctx, Config.CorsPolicy policy,
 			boolean allowPrivateNetwork) {
@@ -1238,7 +1255,7 @@ public class VenueServer {
 
 		String allowed = policy.allowedOriginHeader(origin);
 		if (allowed == null) {
-			ctx.status(403).result("CORS origin denied");
+			ApiErrors.write(ctx, 403, CORS_ORIGIN_DENIED);
 			ctx.skipRemainingHandlers();
 			return;
 		}
@@ -1284,7 +1301,7 @@ public class VenueServer {
 		if (!rateLimiter.tryAcquire(key)) {
 			long retry = rateLimiter.retryAfterSeconds(key);
 			ctx.header("Retry-After", Long.toString(retry));
-			ctx.status(429).result("Rate limit exceeded. Retry after " + retry + "s.");
+			ApiErrors.write(ctx, 429, RATE_LIMITED + retry + "s");
 			ctx.skipRemainingHandlers();
 		}
 	}

@@ -3,11 +3,9 @@ package covia.venue.server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import java.util.concurrent.Semaphore;
 
-import convex.api.ContentTypes;
 import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.UCAN;
 import convex.core.data.ACell;
@@ -17,9 +15,10 @@ import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.core.util.JSON;
+import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.venue.Audit;
 import covia.venue.Auth;
 import covia.venue.Config;
@@ -27,6 +26,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.UcanJwtValidator;
 import covia.venue.api.ACoviaAPI;
+import covia.venue.api.ApiErrors;
 import covia.venue.auth.VenueAuthenticator;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
@@ -183,10 +183,7 @@ public class AuthMiddleware {
 	private void reject(Context ctx, int status, String message) {
 		// RFC 7235: a 401 names its challenge; the MCP path has already set a richer one.
 		if (status == 401 && ctx.res().getHeader("WWW-Authenticate") == null) ctx.header("WWW-Authenticate", "Bearer");
-		String body = "{\"error\": \"" + JSON.escape(message) + "\"}";
-		ctx.status(status)
-			.header("Content-Type", ContentTypes.JSON + "; charset=utf-8")
-			.result(body.getBytes(StandardCharsets.UTF_8));
+		ApiErrors.write(ctx, status, message);
 		ctx.skipRemainingHandlers();
 	}
 
@@ -366,6 +363,25 @@ public class AuthMiddleware {
 			AVector<ACell> ucans) {
 		return withTransportGrants(rctx, ucans, DIDVerifier.CONVEX);
 	}
+
+	/**
+	 * The {@code ucans} array of a request body or tool arguments, in the vector
+	 * shape {@link #withTransportGrants} takes.
+	 *
+	 * @param request the request body, or null
+	 * @return the presented proofs, or null when there are none
+	 * @throws InvalidInputException if {@code ucans} is present but not an array
+	 */
+	public static AVector<ACell> bodyUcans(ACell request) {
+		ACell ucans = RT.getIn(request, Fields.UCANS);
+		if (ucans == null) return null;
+		AVector<ACell> vector = RT.ensureVector(ucans);
+		if (vector == null) throw new InvalidInputException(UCANS_NOT_ARRAY);
+		return vector;
+	}
+
+	/** Why a request's {@code ucans} field was refused. */
+	public static final String UCANS_NOT_ARRAY = "'ucans' must be an array of UCAN tokens";
 
 	/**
 	 * Raw JWT strings from the {@code X-Covia-Ucans} header (comma-separated),

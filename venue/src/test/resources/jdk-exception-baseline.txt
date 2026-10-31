@@ -103,7 +103,6 @@ venue/src/main/java/covia/venue/VenueRelauncher.java 2
 venue/src/main/java/covia/venue/VenueState.java 8
 venue/src/main/java/covia/venue/api/A2A.java 2
 venue/src/main/java/covia/venue/api/A2ACodec.java 3
-venue/src/main/java/covia/venue/api/ACoviaAPI.java 1
 venue/src/main/java/covia/venue/api/CoviaAPI.java 15
 venue/src/main/java/covia/venue/auth/AuthMethods.java 7
 venue/src/main/java/covia/venue/auth/EvidencePolicy.java 4

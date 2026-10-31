@@ -368,7 +368,8 @@ public class VenueServerTest {
 			for (String origin : new String[] {"https://evil.example", "null"}) {
 				HttpResponse<String> denied = corsGet(server, origin);
 				assertEquals(403, denied.statusCode(), origin);
-				assertEquals("CORS origin denied", denied.body());
+				assertEquals(VenueServer.CORS_ORIGIN_DENIED,
+					RT.ensureString(RT.getIn(JSON.parse(denied.body()), "error")).toString());
 				assertTrue(denied.headers().firstValue("access-control-allow-origin").isEmpty());
 			}
 
