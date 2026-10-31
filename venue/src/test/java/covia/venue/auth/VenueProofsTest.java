@@ -25,6 +25,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.AAdapter;
+import covia.exception.ConfigurationException;
 import covia.grid.Venue;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -95,7 +96,7 @@ public class VenueProofsTest {
 			String reason = proofs.prove(TARGET, DID, NO_DIAL);
 			assertTrue(reason != null && reason.contains(VenueProofs.UNAVAILABLE), reason);
 			assertEquals(1, PROBE.asked.get(), "a withdrawn mechanism is not asked, nor its earlier proof reused");
-			assertThrows(IllegalArgumentException.class, proofs::validate, "a listed mechanism must be available at startup");
+			assertThrows(ConfigurationException.class, proofs::validate, "a listed mechanism must be available at startup");
 		} finally {
 			ENGINE.enableAdapter(PROBE.getName());
 		}
@@ -133,7 +134,7 @@ public class VenueProofsTest {
 				Vectors.of(Maps.of(AuthMethods.ADAPTER, "auth")),
 				Vectors.of(Maps.of(AuthMethods.ADAPTER, "auth", AuthMethods.IMPLEMENTATION, "")),
 				Vectors.of(Maps.of(AuthMethods.ADAPTER, "auth", AuthMethods.IMPLEMENTATION, "address", "order", 1))}) {
-			IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+			ConfigurationException refused = assertThrows(ConfigurationException.class,
 				() -> VenueProofs.validateConfig(Maps.of(VenueProofs.VENUE_PROOF, invalid)), invalid.toString());
 			assertTrue(refused.getMessage().startsWith(VenueProofs.INVALID_CONFIG), refused.getMessage());
 		}

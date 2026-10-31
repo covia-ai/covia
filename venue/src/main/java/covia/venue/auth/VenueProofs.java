@@ -15,6 +15,7 @@ import convex.core.data.AVector;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.adapter.AuthAdapter;
+import covia.exception.ConfigurationException;
 import covia.grid.Venue;
 import covia.venue.Engine;
 
@@ -81,8 +82,8 @@ public final class VenueProofs {
 		return List.copyOf(bindings);
 	}
 
-	private static IllegalArgumentException invalid(Object field) {
-		return new IllegalArgumentException(INVALID_CONFIG + field);
+	private static ConfigurationException invalid(Object field) {
+		return new ConfigurationException(INVALID_CONFIG + field);
 	}
 
 	/** Validate explicit entries once all host adapters are installed, before serving requests. */
@@ -90,7 +91,7 @@ public final class VenueProofs {
 		if (!explicit) return;
 		synchronized (engine) {
 			for (Binding binding : bindings) {
-				if (resolve(binding) == null) throw new IllegalArgumentException(UNAVAILABLE + ": " + binding);
+				if (resolve(binding) == null) throw new ConfigurationException(UNAVAILABLE + ": " + binding);
 			}
 		}
 	}
@@ -102,10 +103,10 @@ public final class VenueProofs {
 
 	private static Map<AString, VenueProofMethods.Method> declarations(AAdapter adapter) {
 		Map<AString, VenueProofMethods.Method> methods = ((VenueProofMethods) adapter).venueProofMethods();
-		if (methods == null) throw new IllegalArgumentException(INVALID_DECLARATION + adapter.getName());
+		if (methods == null) throw new ConfigurationException(INVALID_DECLARATION + adapter.getName());
 		for (var entry : methods.entrySet()) {
 			if (entry.getKey() == null || entry.getKey().toString().isBlank() || entry.getValue() == null) {
-				throw new IllegalArgumentException(INVALID_DECLARATION + adapter.getName());
+				throw new ConfigurationException(INVALID_DECLARATION + adapter.getName());
 			}
 		}
 		return methods;
