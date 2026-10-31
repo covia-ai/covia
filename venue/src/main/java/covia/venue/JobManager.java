@@ -30,7 +30,13 @@ import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.RateLimitException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
@@ -56,6 +62,49 @@ public class JobManager {
 
 	private static final Logger log = LoggerFactory.getLogger(JobManager.class);
 	private static final String JOB_ID_EXISTS = "Job ID already exists: ";
+
+	/** An invocation that names no operation. */
+	public static final String OPERATION_REQUIRED = "Operation must be specified";
+	/** An operation reference that resolves to nothing; the reference follows. */
+	public static final String CANNOT_RESOLVE_OPERATION = "Cannot resolve operation: ";
+	/** A reference that resolves to an asset which is not an operation; its id follows. */
+	public static final String NOT_AN_OPERATION = "Asset is not an operation: ";
+
+	/** Operation metadata without the adapter to dispatch to. */
+	public static final String NO_ADAPTER_FIELD = "Metadata must contain operation.adapter field";
+	/** Input that fails a strict operation's schema; the violation follows. */
+	public static final String INPUT_SCHEMA_VIOLATION = "Input schema violation: ";
+	/** Output that fails the operation's own schema under strict validation; the violation follows. */
+	public static final String OUTPUT_SCHEMA_VIOLATION = "Output schema violation: ";
+	/** An operation whose adapter this venue does not run; the adapter follows. */
+	public static final String ADAPTER_NOT_AVAILABLE = "Adapter not available: ";
+	/** A job id that names no job the caller can see; the id follows. */
+	public static final String JOB_NOT_FOUND = "Job not found: ";
+	/** A message to a job that has finished; the id follows. */
+	public static final String JOB_TERMINAL = "Job is in terminal state: ";
+	/** A message to a recorded job with no live handle; the id follows. */
+	public static final String JOB_NOT_ACTIVE = "Job is not active: ";
+	/** A private run on a venue that does not enable them. */
+	public static final String PRIVATE_RUNS_DISABLED =
+		"Private runs are disabled on this venue (enablePrivateJobs=false)";
+	/** New work refused while the venue shuts down. */
+	public static final String SHUTTING_DOWN = "Venue is shutting down; new operations are not accepted";
+
+	private static NotFoundException jobNotFound(Blob jobID) {
+		return new NotFoundException(JOB_NOT_FOUND + jobID.toHexString(), jobID.toHexString());
+	}
+
+	private static InvalidInputException operationRequired() {
+		return new InvalidInputException(OPERATION_REQUIRED);
+	}
+
+	private static NotFoundException unresolved(AString ref) {
+		return new NotFoundException(CANNOT_RESOLVE_OPERATION + ref, ref.toString());
+	}
+
+	private static InvalidInputException notAnOperation(Asset asset) {
+		return new InvalidInputException(NOT_AN_OPERATION + asset.getID());
+	}
 
 	private final Engine engine;
 
@@ -292,17 +341,13 @@ public class JobManager {
 
 	/** Resolve a reference to an operation definition, failing fast otherwise. */
 	private Operation resolveOperation(AString ref, RequestContext ctx) {
-		if (ref == null) throw new IllegalArgumentException("Operation must be specified");
+		if (ref == null) throw operationRequired();
 
 		Asset asset = engine.resolveAsset(ref, ctx);
-		if (asset == null) {
-			throw new IllegalArgumentException("Cannot resolve operation: " + ref);
-		}
+		if (asset == null) throw unresolved(ref);
 
 		Operation op = Operation.from(asset);
-		if (op == null) {
-			throw new IllegalArgumentException("Asset is not an operation: " + asset.getID());
-		}
+		if (op == null) throw notAnOperation(asset);
 		return op;
 	}
 
@@ -502,15 +547,12 @@ public class JobManager {
 
 	private Run startOperation(AString ref, ACell input,
 			RequestContext ctx, boolean privateJob, Invocation invocation) {
-		if (ref == null) return Run.failed(
-			new IllegalArgumentException("Operation must be specified"));
+		if (ref == null) return Run.failed(operationRequired());
 		try {
 			Asset asset = engine.resolveAsset(ref, ctx);
-			if (asset == null) return Run.failed(
-				new IllegalArgumentException("Cannot resolve operation: " + ref));
+			if (asset == null) return Run.failed(unresolved(ref));
 			Operation op = Operation.from(asset);
-			if (op == null) return Run.failed(
-				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
+			if (op == null) return Run.failed(notAnOperation(asset));
 			return startOperation(op.meta(), input, ctx.withOp(ref), privateJob, invocation);
 		} catch (Exception e) {
 			return Run.failed(e);
@@ -536,8 +578,7 @@ public class JobManager {
 			ACell input, RequestContext ctx, boolean privateJob, Invocation invocation) {
 		try {
 			if (privateJob && !engine.config().isPrivateJobsEnabled()) {
-				return Run.failed(new IllegalStateException(
-					"Private runs are disabled on this venue (enablePrivateJobs=false)"));
+				return Run.failed(new NotSupportedException(PRIVATE_RUNS_DISABLED));
 			}
 			boolean memoryOnly = privateJob || (isReadOnly(meta)
 				&& allowsInternal(meta)
@@ -590,10 +631,7 @@ public class JobManager {
 	 */
 	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx,
 			Consumer<Job> watch) {
-		if (ref == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Operation must be specified"));
-		}
+		if (ref == null) return CompletableFuture.failedFuture(operationRequired());
 
 		Asset asset;
 		try {
@@ -601,16 +639,10 @@ public class JobManager {
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
-		if (asset == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Cannot resolve operation: " + ref));
-		}
+		if (asset == null) return CompletableFuture.failedFuture(unresolved(ref));
 
 		Operation op = Operation.from(asset);
-		if (op == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-		}
+		if (op == null) return CompletableFuture.failedFuture(notAnOperation(asset));
 		return invokeInternal(ref, op, input, ctx, watch);
 	}
 
@@ -764,7 +796,8 @@ public class JobManager {
 		String err = JsonSchema.validate(outputSchema, result);
 		if (err == null) return;
 		if ("strict".equals(mode)) {
-			throw new IllegalArgumentException("Output schema violation: " + err);
+			// The operation broke its own declared contract, not the caller's input.
+			throw new CoviaException(OUTPUT_SCHEMA_VIOLATION + err);
 		}
 		log.warn("Output schema violation for {}: {}", AAdapter.getAdapterName(meta), err);
 	}
@@ -775,10 +808,10 @@ public class JobManager {
 	 * {@link #invokeOperation(AMap, ACell, RequestContext)} and result-oriented
 	 * {@link #invokeInternal(AMap, ACell, RequestContext)} dispatch.
 	 *
-	 * @throws IllegalArgumentException invalid meta or schema violation
+	 * @throws InvalidInputException invalid meta or schema violation
 	 * @throws AuthException caller not authenticated
 	 * @throws RuntimeException capability denied
-	 * @throws IllegalStateException adapter not registered
+	 * @throws NotSupportedException adapter not registered
 	 */
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (ctx.getJob() instanceof VenueJob parent) parent.requireAccount();
@@ -794,25 +827,19 @@ public class JobManager {
 		engine.admitUser(ctx.getUserDID());
 
 		String adapterName = AAdapter.getAdapterName(meta);
-		if (adapterName == null) {
-			throw new IllegalArgumentException("Metadata must contain operation.adapter field");
-		}
+		if (adapterName == null) throw new InvalidInputException(NO_ADAPTER_FIELD);
 
 		// Validate input against operation schema when strict mode is enabled
 		if (CVMBool.TRUE.equals(RT.getIn(meta, Fields.OPERATION, K_STRICT))) {
 			AMap<AString, ACell> inputSchema = getMap(RT.getIn(meta, Fields.OPERATION, Fields.INPUT));
 			if (inputSchema != null && !inputSchema.isEmpty()) {
 				String schemaErr = JsonSchema.validate(inputSchema, input);
-				if (schemaErr != null) {
-					throw new IllegalArgumentException("Input schema violation: " + schemaErr);
-				}
+				if (schemaErr != null) throw new InvalidInputException(INPUT_SCHEMA_VIOLATION + schemaErr);
 			}
 		}
 
 		AAdapter adapter = engine.getAdapter(adapterName);
-		if (adapter == null) {
-			throw new IllegalStateException("Adapter not available: " + adapterName);
-		}
+		if (adapter == null) throw new NotSupportedException(ADAPTER_NOT_AVAILABLE + adapterName);
 		return adapter;
 	}
 
@@ -1176,13 +1203,12 @@ public class JobManager {
 			// but inactive job has no live handle to dispatch to, so that is an
 			// error too, just an honest one.
 			Job recorded = getJob(jobID, ctx);
-			if (recorded == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+			if (recorded == null) throw jobNotFound(jobID);
 			if (!engine.getAccessControl().canAccessJob(ctx, recorded.getData(), Capability.CRUD_WRITE)) {
 				throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
 			}
-			throw new IllegalStateException(recorded.isFinished()
-				? "Job is in terminal state: " + jobID.toHexString()
-				: "Job is not active: " + jobID.toHexString());
+			throw new ConflictException((recorded.isFinished() ? JOB_TERMINAL : JOB_NOT_ACTIVE)
+				+ jobID.toHexString());
 		}
 		if (!engine.getAccessControl().canAccessJob(ctx, job.getData(), Capability.CRUD_WRITE)) {
 			throw new AuthException(JOB_ACCESS_DENIED + jobID.toHexString());
@@ -1192,7 +1218,7 @@ public class JobManager {
 
 	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
 		Blob jobID = job.getID();
-		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID.toHexString());
+		if (job.isFinished()) throw new ConflictException(JOB_TERMINAL + jobID.toHexString());
 
 		long ts = Utils.getCurrentTimestamp();
 		Blob msgId = generateJobID(ts);
@@ -1235,7 +1261,7 @@ public class JobManager {
 	 */
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
 		AMap<AString, ACell> current = getJobData(jobID, ctx);
-		if (current == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		if (current == null) throw jobNotFound(jobID);
 		requireJobOwner(ctx, jobID, current);
 		appendToHistory(jobID, ctx.getUserDID(), record);
 	}
@@ -1543,7 +1569,7 @@ public class JobManager {
 		}
 		closeAdmission();
 		for (Job job : activeJobs.values()) {
-			if (!job.isFinished()) job.pollingFailed(new IllegalStateException(AAdapter.VENUE_SHUT_DOWN));
+			if (!job.isFinished()) job.pollingFailed(new UnavailableException(AAdapter.VENUE_SHUT_DOWN));
 		}
 	}
 
@@ -1581,8 +1607,6 @@ public class JobManager {
 
 	private void requireAccepting(boolean topLevel) {
 		AtomicBoolean gate = topLevel ? acceptingTopLevel : acceptingInternal;
-		if (!gate.get()) {
-			throw new IllegalStateException("Venue is shutting down; new operations are not accepted");
-		}
+		if (!gate.get()) throw new UnavailableException(SHUTTING_DOWN);
 	}
 }

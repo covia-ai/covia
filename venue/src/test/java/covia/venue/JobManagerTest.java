@@ -29,6 +29,10 @@ import covia.api.Fields;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -411,7 +415,7 @@ public class JobManagerTest {
 			(String) null, Maps.empty(), ctx);
 		assertTrue(f.isCompletedExceptionally());
 		ExecutionException ex = assertThrows(ExecutionException.class, f::get);
-		assertInstanceOf(IllegalArgumentException.class, ex.getCause());
+		assertInstanceOf(InvalidInputException.class, ex.getCause());
 	}
 
 	@Test
@@ -420,9 +424,8 @@ public class JobManagerTest {
 			"v/does/not/exist", Maps.empty(), ctx);
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> f.get(5, TimeUnit.SECONDS));
-		assertInstanceOf(IllegalArgumentException.class, ex.getCause());
-		assertTrue(ex.getCause().getMessage().contains("Cannot resolve")
-			|| ex.getCause().getMessage().contains("not an operation"));
+		NotFoundException missing = assertInstanceOf(NotFoundException.class, ex.getCause());
+		assertEquals("v/does/not/exist", missing.getRef());
 	}
 
 	// ========== Capability enforcement ==========
@@ -523,8 +526,8 @@ public class JobManagerTest {
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> f.get(5, TimeUnit.SECONDS));
-		assertInstanceOf(IllegalArgumentException.class, ex.getCause());
-		assertTrue(ex.getCause().getMessage().contains("schema"),
+		assertInstanceOf(InvalidInputException.class, ex.getCause());
+		assertTrue(ex.getCause().getMessage().startsWith(JobManager.INPUT_SCHEMA_VIOLATION),
 			"Expected schema-violation message, got: " + ex.getCause().getMessage());
 	}
 
@@ -614,7 +617,7 @@ public class JobManagerTest {
 	public void testOutputValidationStrictFailsBadResult() {
 		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
 		try {
-			assertThrows(IllegalArgumentException.class,
+			assertThrows(CoviaException.class,
 				() -> eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object")));
 			// A conforming result (an object) passes.
 			eng.jobs().validateOutput(metaWithObjectOutput(), Maps.empty());
@@ -995,12 +998,12 @@ public class JobManagerTest {
 		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
 		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
 
-		IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+		ConflictException ex = assertThrows(ConflictException.class, () ->
 			engine.jobs().deliverMessage(job.getID(),
 				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
-		assertTrue(ex.getMessage().contains("terminal"), ex.getMessage());
+		assertTrue(ex.getMessage().startsWith(JobManager.JOB_TERMINAL), ex.getMessage());
 
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(NotFoundException.class, () ->
 			engine.jobs().deliverMessage(Blob.parse("0x00112233445566778899aabbccddeeff"),
 				Maps.empty(), ctx),
 			"an id nobody has ever seen is still not found");

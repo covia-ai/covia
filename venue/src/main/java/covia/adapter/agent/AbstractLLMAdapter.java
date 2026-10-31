@@ -1148,9 +1148,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static String toolFailure(Throwable failure, String toolName) {
 		Throwable cause = unwrap(failure);
 		String message = cause.getMessage();
-		boolean explained = message != null && !message.isBlank();
-		if (explained && isSelfDescribing(cause)) return conciseDetail(message, MAX_FAILURE_CHARS);
+		if (isExpectedFailure(cause)) return conciseDetail(message, MAX_FAILURE_CHARS);
 		log.error("Unexpected failure in tool {}", toolName, cause);
+		boolean explained = message != null && !message.isBlank();
 		String detail = cause.getClass().getSimpleName() + (explained ? ": " + message : "");
 		return conciseDetail(UNEXPECTED_TOOL_FAILURE + " (" + detail + ")", MAX_FAILURE_CHARS);
 	}

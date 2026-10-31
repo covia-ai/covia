@@ -506,7 +506,8 @@ public class ContextLoader {
 			if (required) throw e;
 			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		} catch (Exception e) {
-			if (required) throw new RuntimeException("Context operation failed: " + op + " — " + e.getMessage(), e);
+			if (required) throw new RuntimeException("Context operation failed: " + op + " — "
+				+ covia.adapter.AAdapter.describeFailure(e), e);
 			return failed(labelStr, rootMessage(e), provenance);   // errored → visible
 		}
 	}
