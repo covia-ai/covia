@@ -16,7 +16,8 @@ public class VenueAuthTest {
 
 	private static HttpRequest request(VenueAuth auth) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create("https://venue.example/status"));
-		auth.apply(builder);
+		// A strategy that signs nothing for the venue never asks for its DID.
+		auth.apply(builder, () -> { throw new AssertionError("non-signing strategy asked for the venue DID"); });
 		return builder.GET().build();
 	}
 
@@ -26,7 +27,7 @@ public class VenueAuthTest {
 		assertSame(auth, VenueAuth.none());
 		assertFalse(request(auth).headers().firstValue("Authorization").isPresent());
 		assertNull(auth.getDID());
-		assertThrows(UnsupportedOperationException.class, auth::mintToken);
+		assertThrows(UnsupportedOperationException.class, () -> auth.mintToken("did:key:z6MkVenue"));
 	}
 
 	@Test
@@ -37,7 +38,7 @@ public class VenueAuthTest {
 			request.headers().firstValue("Authorization").orElseThrow());
 		assertEquals(1, request.headers().allValues("Authorization").size());
 		assertNull(auth.getDID());
-		assertThrows(UnsupportedOperationException.class, auth::mintToken);
+		assertThrows(UnsupportedOperationException.class, () -> auth.mintToken("did:key:z6MkVenue"));
 	}
 
 	@Test
@@ -53,7 +54,7 @@ public class VenueAuthTest {
 		VenueAuth auth = VenueAuth.local(did);
 		assertEquals(did, auth.getDID());
 		assertFalse(request(auth).headers().firstValue("Authorization").isPresent());
-		assertThrows(UnsupportedOperationException.class, auth::mintToken);
+		assertThrows(UnsupportedOperationException.class, () -> auth.mintToken("did:key:z6MkVenue"));
 	}
 
 	@Test

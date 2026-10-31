@@ -48,6 +48,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Each venue migration step is a class, listed in order in `VenueMigrations.STEPS`.
 - `RemoteFetchException.malformedVenue` is `invalidVenue`, which also reports a
   target the outbound guard refuses.
+- `VenueAuth` key-pair strategies hold no audience: the connection names its venue as
+  each token's `aud`. `keyPair(kp, did)` and `identityKeyPair` are gone, `mintToken`
+  takes the venue's DID, and `apply` takes the connection's venue DID.
 - `Engine.requireSafeUrl` and `requireSafeHost` take the `RequestContext` of the
   caller that chose the target, and `Engine.fetchRemoteAsset`, `fetchRemoteNamedAsset`
   and `fetchRemoteContent` the caller whose reference names the publisher.
@@ -89,6 +92,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   and also refuses IPv6 unique local and IPv4-carrying forms, `100.64.0.0/10` and `0.0.0.0/8`.
 - `http.allowedHosts` and `http.blockedHosts` match a host name with or without its trailing dot.
 - A bearer credential must name the venue in `aud` unless `auth.requireAud` is off.
+- A client connection signs credentials only for the DID it was opened with, or one the
+  venue proves at its address, and sends none to a venue presenting another DID.
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.

@@ -691,7 +691,7 @@ who is acting; admission and capabilities separately authorize actions.
 Issue the bearer with the existing client helper:
 
 ```java
-VenueAuth.namedKeyPair(installKey, installDID + ":u:alice:g:worker", targetDID, 300).mintToken();
+VenueAuth.namedKeyPair(installKey, installDID + ":u:alice:g:worker", 300).mintToken(targetDID);
 ```
 
 The signing key must match the exact base DID. Existing signature, audience,

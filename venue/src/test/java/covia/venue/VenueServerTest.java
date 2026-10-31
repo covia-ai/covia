@@ -1020,12 +1020,12 @@ public class VenueServerTest {
 	 */
 	@Test
 	public void testOperationNameResolvesAsCaller() throws Exception {
-		VenueAuth alice = VenueAuth.keyPair(AKeyPair.generate(), venue.getDIDString().toString());
+		VenueAuth alice = VenueAuth.keyPair(AKeyPair.generate());
 		AString aliceDID = Strings.create(alice.getDID());
 		venue.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, "o/private-op",
 			Fields.VALUE, Maps.of("name", "Private op", "operation", Maps.of("adapter", "test:echo"))),
 			RequestContext.of(aliceDID)).awaitResult(5000);
-		VenueAuth bob = VenueAuth.keyPair(AKeyPair.generate(), venue.getDIDString().toString());
+		VenueAuth bob = VenueAuth.keyPair(AKeyPair.generate());
 
 		HttpResponse<String> own = getOperation("o/private-op", alice);
 		assertEquals(200, own.statusCode(), own.body());
@@ -1040,7 +1040,7 @@ public class VenueServerTest {
 		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
 		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
 			.uri(new URI(BASE_URL + "/api/v1/operations/" + encoded))
-			.header("Authorization", "Bearer " + auth.mintToken())
+			.header("Authorization", "Bearer " + auth.mintToken(venue.getDIDString().toString()))
 			.GET().timeout(Duration.ofSeconds(10)).build(), HttpResponse.BodyHandlers.ofString());
 	}
 

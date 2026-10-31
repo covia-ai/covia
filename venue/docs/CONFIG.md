@@ -1215,15 +1215,17 @@ audit tombstone and takes effect on the next request.
 Java clients use the same key without hand-building JWTs:
 
 ```java
-VenueAuth auth = VenueAuth.namedKeyPair(
-    keyPair,
-    "did:web:venue.example:u:alice",
-    venueDID);
+VenueAuth auth = VenueAuth.namedKeyPair(keyPair, "did:web:venue.example:u:alice");
 Venue venue = Grid.connect("https://venue.example", auth);
 ```
 
-The strategy signs a fresh short-lived, audience-bound token for each request;
-`mintToken()` is available for transports that need the raw bearer credential.
+The strategy signs a fresh short-lived token for each request, audienced to the
+venue the connection reaches. The connection fixes that DID: the one it was
+opened with (`Grid.connect(did, auth)`, or a URL with the DID named), or else
+the DID the venue proves at its address — a `did:web` at its own https address,
+or any DID on loopback. A venue that presents another DID gets no credential,
+and `alsoKnownAs` never re-binds one. `mintToken(venueDID)` is available for
+transports that need the raw bearer credential.
 
 Registering a full external DID admits that identity to use the venue; it does
 not transfer control of the DID to the venue. A self-sovereign user signs their

@@ -1,9 +1,7 @@
 package covia.adapter;
 
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import convex.auth.did.DID;
 import convex.auth.ucan.UCAN;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -15,7 +13,6 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.grid.Grid;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
@@ -53,6 +50,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 
 		VenueAuth auth;
 		AString principal;
+		String targetDID = null;
 		AMap<AString, ACell> saved = Maps.of(AUTHENTICATE_AS, Strings.create(mode));
 		if (unrestricted) saved = saved.assoc(OUTBOUND_ANY, CVMBool.TRUE);
 		switch (mode) {
@@ -61,8 +59,9 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				principal = null;
 			}
 			case "caller" -> {
-				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec, unrestricted));
-				String credential = GridAdapter.identityCredential(ctx, tokens, ctx.getCallerDID(), targetDID);
+				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
+				String credential = GridAdapter.identityCredential(ctx, tokens, ctx.getCallerDID(),
+					Strings.create(targetDID));
 				if (credential == null) {
 					throw new AuthException("authenticateAs=caller requires an in-date, empty-att "
 						+ "identity credential issued by the caller to " + targetDID);
@@ -73,17 +72,16 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			}
 			case "venue" -> {
 				if (!engine.isDirectVenue(ctx)) throw new AuthException(VENUE_MODE_DENIED);
-				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec, unrestricted));
-				auth = VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
-					targetDID.toString());
-				saved = saved.assoc(Fields.VENUE, targetDID);
+				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
+				auth = VenueAuth.namedKeyPair(engine.getKeyPair(), venueDID.toString());
+				saved = saved.assoc(Fields.VENUE, Strings.create(targetDID));
 				principal = venueDID;
 			}
 			default -> throw new IllegalArgumentException(
 				"authenticateAs must be one of: anonymous, caller, venue");
 		}
 
-		Venue venue = engine.connectVenue(venueSpec.toString(), auth, unrestricted);
+		Venue venue = engine.connectVenue(venueSpec.toString(), targetDID, auth, unrestricted);
 		List<String> grants = GridAdapter.admissibleGrants(ctx, tokens, principal);
 		venue.setUcans(grants);
 		if (grants != null) saved = saved.assoc(Fields.UCANS, convex.core.data.Vectors.create(grants.stream().map(Strings::create).toList()));
@@ -100,11 +98,12 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		VenueAuth auth = switch (mode) {
 			case "anonymous" -> VenueAuth.none();
 			case "caller" -> VenueAuth.bearer(RT.ensureString(saved.get(Fields.BEARER_TOKEN)).toString());
-			case "venue" -> VenueAuth.identityKeyPair(engine.getKeyPair(), engine.getDIDString().toString(),
-				RT.ensureString(saved.get(Fields.VENUE)).toString());
+			case "venue" -> VenueAuth.namedKeyPair(engine.getKeyPair(), engine.getDIDString().toString());
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};
-		Venue venue = engine.connectVenue(target.toString(), auth, CVMBool.TRUE.equals(saved.get(OUTBOUND_ANY)));
+		AString targetDID = RT.ensureString(saved.get(Fields.VENUE));
+		Venue venue = engine.connectVenue(target.toString(), targetDID == null ? null : targetDID.toString(),
+			auth, CVMBool.TRUE.equals(saved.get(OUTBOUND_ANY)));
 		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
 		if (grants != null) {
 			List<String> raw = new ArrayList<>();
@@ -130,36 +129,10 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			if (!unrestricted) engine.requireSafeUrl(target);
 			did = VenueDID.discover(target);
 		}
-		if (engine.config().isRequireVenueProof() && !proven(target, did)) {
+		if (engine.config().isRequireVenueProof() && !VenueDID.provenAt(target, did)) {
 			throw new AuthException(VENUE_UNPROVEN + did + " at " + target);
 		}
 		return did;
-	}
-
-	/**
-	 * Whether connecting to {@code target} proves the venue holds {@code did}.
-	 * A did:web venue proves itself at its own address ({@link Grid#webDIDAddress}),
-	 * by TLS or on loopback; a target named by that DID is reached there. No other
-	 * DID is proven at an address.
-	 */
-	static boolean proven(String target, String did) {
-		if (!did.startsWith("did:web:")) return false;
-		if (target.equals(did)) return true;
-		try {
-			URI expected = Grid.webDIDAddress(DID.fromString(did));
-			URI actual = URI.create(target.trim());
-			return expected.getScheme().equalsIgnoreCase(actual.getScheme())
-				&& expected.getHost() != null
-				&& expected.getHost().equalsIgnoreCase(actual.getHost())
-				&& port(expected) == port(actual);
-		} catch (IllegalArgumentException e) {
-			return false;
-		}
-	}
-
-	private static int port(URI uri) {
-		if (uri.getPort() >= 0) return uri.getPort();
-		return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
 	}
 
 }

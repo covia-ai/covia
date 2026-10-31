@@ -24,6 +24,7 @@ import covia.adapter.relay.RelayHandler;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.grid.auth.VenueAuth;
+import covia.grid.auth.VenueDID;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -41,7 +42,7 @@ class RelayRoutesTest {
 		try (HttpClient client = HttpClient.newHttpClient()) {
 			URI endpoint = URI.create("http://127.0.0.1:" + server.port() + "/relay/test-relay/c-main/echo");
 			AKeyPair key = AKeyPair.generate();
-			VenueAuth auth = VenueAuth.keyPair(key, server.getEngine().getDIDString().toString());
+			VenueAuth auth = VenueAuth.keyPair(key);
 
 			assertEquals(401, send(client, endpoint, "{}", null).statusCode(), "anonymous callers are refused");
 			assertEquals(404, send(client, endpoint, "{}", auth).statusCode(), "no relay adapter yet");
@@ -54,8 +55,7 @@ class RelayRoutesTest {
 			assertTrue(answered.body().startsWith("c-main|echo|POST"));
 
 			String agentDID = auth.getDID() + ":u:alice:g:worker";
-			VenueAuth agentAuth = VenueAuth.namedKeyPair(key, agentDID,
-				server.getEngine().getDIDString().toString(), 300);
+			VenueAuth agentAuth = VenueAuth.namedKeyPair(key, agentDID, 300);
 			HttpResponse<String> agentReply = send(client, endpoint, "{}", agentAuth);
 			assertEquals(200, agentReply.statusCode(), agentReply.body());
 			assertEquals(agentDID, agentReply.body().split("\\|")[3],
@@ -86,7 +86,7 @@ class RelayRoutesTest {
 	private static HttpRequest request(URI endpoint, String body, VenueAuth auth) {
 		HttpRequest.Builder b = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(10))
 			.POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
-		if (auth != null) auth.apply(b);
+		if (auth != null) auth.apply(b, () -> VenueDID.discover(endpoint.getScheme() + "://" + endpoint.getRawAuthority()));
 		return b.build();
 	}
 

@@ -152,7 +152,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods {
 		}
 		AString name = params.get(Fields.NAME) instanceof AString s ? s : null;
 		AString token = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(),
-			caller.toString(), audience.toString(), lifetime).mintToken());
+			caller.toString(), lifetime).mintToken(audience.toString()));
 		// Reuse the secret/write gate, encrypted storage, collision handling and audit.
 		SecretAdapter.storeSecret(engine, ctx, name, token, CVMBool.TRUE.equals(params.get(OVERWRITE)));
 		return Maps.of(SECRET, Strings.create("s/" + name), JWT.SUB, caller, JWT.AUD, audience,

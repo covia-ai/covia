@@ -4280,18 +4280,20 @@ public class Engine {
 	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
-		return connectVenue(spec, auth, outboundUnrestricted(ctx));
+		return connectVenue(spec, null, auth, outboundUnrestricted(ctx));
 	}
 
 	/**
 	 * {@link #connectVenue(RequestContext, String, VenueAuth)} for a caller whose
 	 * standing was decided when the connection was first authorised, such as a
-	 * recovered job's.
+	 * recovered job's, to a venue whose DID may already be known.
 	 *
+	 * @param venueDID The target's DID, as the hop proved it; credentials the
+	 *        connection signs are audienced to it. Null when none is signed.
 	 * @param unrestricted Whether that caller could have the venue dial anywhere
 	 */
-	public Venue connectVenue(String spec, VenueAuth auth, boolean unrestricted) {
-		Venue venue = Grid.connect(spec, auth);
+	public Venue connectVenue(String spec, String venueDID, VenueAuth auth, boolean unrestricted) {
+		Venue venue = Grid.connect(spec, venueDID, auth);
 		if (unrestricted) return venue;
 		if (!(venue instanceof VenueHTTP http)) {
 			throw new IllegalArgumentException(UNGUARDED_VENUE_TRANSPORT + spec);
