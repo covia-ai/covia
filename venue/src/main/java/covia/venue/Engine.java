@@ -1935,18 +1935,28 @@ public class Engine {
 		return locateUserPath(parsed, create);
 	}
 
+	public static final String USER_PATH_EMPTY = "User path must not be empty";
+	public static final String USER_PATH_NO_NAMESPACE = "User path must include a namespace";
+	/** Opening of the refusal for a did: path that is not a valid DID URL. */
+	public static final String INVALID_DID_URL = "Invalid DID URL: ";
+
 	private ParsedUserPath parseUserPath(RequestContext ctx, AString ref) {
 		if (ctx == null || ctx.getUserDID() == null) {
 			throw new IllegalArgumentException("User path resolution requires an authenticated user");
 		}
 		if (ref == null || ref.isEmpty()) {
-			throw new IllegalArgumentException("User path must not be empty");
+			throw new InvalidInputException(USER_PATH_EMPTY);
 		}
 
 		AString ownerDID;
 		ACell[] pathKeys;
 		if (ref.startsWith(NS_DID)) {
-			DIDURL didURL = DIDURL.create(ref.toString());
+			DIDURL didURL;
+			try {
+				didURL = DIDURL.create(ref.toString());
+			} catch (IllegalArgumentException e) {
+				throw new InvalidInputException(INVALID_DID_URL + ref + " (" + e.getMessage() + ")", e);
+			}
 			ownerDID = Strings.create(didURL.getDID().toString());
 			pathKeys = WorkspaceRoot.parseStringPath(didURL.getPath());
 		} else {
@@ -1955,7 +1965,7 @@ public class Engine {
 		}
 
 		if (pathKeys.length == 0) {
-			throw new IllegalArgumentException("User path must include a namespace");
+			throw new InvalidInputException(USER_PATH_NO_NAMESPACE);
 		}
 
 		StringBuilder resource = new StringBuilder(ownerDID.toString());
@@ -2075,7 +2085,7 @@ public class Engine {
 			UserPathTarget target;
 			try {
 				target = resolveUserPath(ctx, ref, false);
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
 			if (covia.adapter.CoviaAdapter.isExtensionPath(target.pathKeys())) {

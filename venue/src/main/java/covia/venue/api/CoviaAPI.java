@@ -1762,7 +1762,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			path = expandValueScope(ctx, rctx, path);
 			input = buildValueInput(ctx, path);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -1810,7 +1810,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, result);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			// Bad request parameters (e.g. a fields projection on a non-keyed
 			// node, or over the field cap) — the caller's error, not the venue's.
 			buildError(ctx, 400, e.getMessage());
@@ -2055,7 +2055,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -2083,7 +2083,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.list(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (RuntimeException e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2158,7 +2158,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.authenticationList(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (RuntimeException e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2182,7 +2182,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDrives(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (Exception e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2219,7 +2219,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDirectory(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (Exception e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2261,7 +2261,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}

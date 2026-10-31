@@ -38,6 +38,7 @@ import convex.core.util.Utils;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
 import covia.grid.Assets;
@@ -458,6 +459,20 @@ public class EngineTest {
 			Strings.create("did:web:venue.example.com/a/" + elsewhere.toHexString()), ctx));
 		assertNull(venue.resolveLocalAsset(
 			Strings.create("did:web:venue.example.com/v/ops/elsewhere"), ctx));
+	}
+
+	@Test
+	public void testMalformedUserPathsAreInvalidInput() {
+		RequestContext ctx = venue.venueContext();
+		InvalidInputException empty = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.EMPTY, false));
+		assertEquals(Engine.USER_PATH_EMPTY, empty.getMessage());
+		InvalidInputException bare = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.create(venue.getDIDString()), false));
+		assertEquals(Engine.USER_PATH_NO_NAMESPACE, bare.getMessage());
+		InvalidInputException malformed = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.create("did:"), false));
+		assertTrue(malformed.getMessage().startsWith(Engine.INVALID_DID_URL), malformed.getMessage());
 	}
 
 	@Test
