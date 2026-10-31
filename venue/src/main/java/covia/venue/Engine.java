@@ -84,7 +84,6 @@ import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
-import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.RemoteFetchException;
@@ -3449,7 +3448,7 @@ public class Engine {
 
 	/** Activation holds the registry monitor: never wait for a deletion that needs it. */
 	private void resumeAdapterUserDeletions(AAdapter adapter) {
-		if (!userDeletionLock.tryLock()) throw new ConflictException(USER_DELETION_IN_PROGRESS);
+		if (!userDeletionLock.tryLock()) throw new UnavailableException(USER_DELETION_IN_PROGRESS);
 		try {
 			String name = adapter.getName();
 			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);

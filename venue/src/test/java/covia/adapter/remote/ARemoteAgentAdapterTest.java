@@ -8,7 +8,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import convex.core.data.*;
 import covia.api.Fields;
-import covia.exception.ConflictException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -57,7 +57,7 @@ class ARemoteAgentAdapterTest {
 		assertNull(adapter.interaction(job));
 		ARemoteAgentAdapter.publishProgress(job, "late", Maps.of("late", true));
 		assertNull(job.getData().get(ARemoteAgentAdapter.PROGRESS));
-		assertThrows(ConflictException.class, () -> adapter.handleMessage(job, record));
+		assertThrows(NotSupportedException.class, () -> adapter.handleMessage(job, record));
 	}
 
 	@Test void cancellationBeforeAndAfterAcceptance() {
@@ -95,7 +95,7 @@ class ARemoteAgentAdapterTest {
 	@Test void refusesMissingBindingsAndPreservesAdministrativeDispatch() {
 		Job job = job();
 		assertEquals(ARemoteAgentAdapter.NO_INTERACTION,
-			assertThrows(ConflictException.class, () -> adapter.handleMessage(job, Maps.empty())).getMessage());
+			assertThrows(NotSupportedException.class, () -> adapter.handleMessage(job, Maps.empty())).getMessage());
 		adapter.invoke(job, engine.venueContext(), meta("admin"), null);
 		assertEquals(Strings.create("admin"), job.future().join());
 		assertEquals(1, adapter.ordinary.get()); assertEquals(0, adapter.starts.get());

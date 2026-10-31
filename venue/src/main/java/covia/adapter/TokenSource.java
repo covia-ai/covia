@@ -25,7 +25,7 @@ public interface TokenSource {
 	 * {@code destination}. Refusals carry an actionable message.
 	 *
 	 * @throws covia.exception.NotFoundException if the caller has no connection to the provider
-	 * @throws covia.exception.ConflictException if the connection has expired and cannot be refreshed
+	 * @throws covia.exception.AuthException if the connection has expired and cannot be refreshed
 	 * @throws covia.exception.UnavailableException if the provider did not refresh it
 	 */
 	String accessToken(RequestContext ctx, String provider, String destination) throws IOException;

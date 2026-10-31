@@ -35,7 +35,6 @@ import covia.adapter.remote.RemoteInteraction;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.exception.ConflictException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -855,7 +854,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			throw unacknowledged(e);
 		}
 		if (!link.remoteTaskId().equals(task.id())) {
-			throw new ConflictException("Remote agent answered for a different task");
+			throw new ResponseException("Remote agent answered for a different task");
 		}
 		// Same fence as the initial send: apply the response and re-arm the
 		// observer under the Job lock, so a poll answered before the remote saw
@@ -898,7 +897,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		int code = resp.statusCode();
 		if (code >= 500 || code == 408) throw unacknowledged(null);
 		if (code < 200 || code >= 300) {
-			throw new ConflictException("Remote agent rejected the message: HTTP " + code
+			throw new NotSupportedException("Remote agent rejected the message: HTTP " + code
 				+ ": " + conciseDetail(resp.body(), 512));
 		}
 		AMap<AString, ACell> reply;
@@ -909,7 +908,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		}
 		ACell error = reply == null ? null : reply.get(Fields.ERROR);
 		if (error != null) {
-			throw new ConflictException("Remote agent rejected the message: "
+			throw new NotSupportedException("Remote agent rejected the message: "
 				+ conciseDetail(JSON.print(error), 512));
 		}
 		AMap<AString, ACell> result = reply == null ? null : RT.ensureMap(reply.get(Fields.RESULT));

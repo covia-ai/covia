@@ -42,6 +42,7 @@ import covia.exception.ConflictException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Venue;
@@ -571,7 +572,7 @@ public class A2A extends ACoviaAPI {
 		} catch (NotFoundException | IllegalArgumentException e) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
 			return;
-		} catch (ConflictException | IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException | IllegalStateException e) {
 			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
 			return;
 		} catch (AuthException e) {
@@ -675,7 +676,7 @@ public class A2A extends ACoviaAPI {
 		}
 		try {
 			engine().jobs().cancelJob(task.id(), rctx);
-		} catch (ConflictException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE, e.getMessage());
 			return;
 		} catch (Exception e) {
@@ -779,7 +780,7 @@ public class A2A extends ACoviaAPI {
 			} catch (NotFoundException | IllegalArgumentException e) {
 				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
 				return;
-			} catch (ConflictException | IllegalStateException e) {
+			} catch (ConflictException | NotSupportedException | IllegalStateException e) {
 				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
 				return;
 			} catch (AuthException e) {

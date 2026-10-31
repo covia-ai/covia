@@ -29,10 +29,10 @@ import covia.api.Fields;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
-import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -999,7 +999,7 @@ public class JobManagerTest {
 		assertNull(engine.jobs().getJobData(job.getID()), "gone from the active cache");
 		assertNotNull(engine.jobs().getJobData(job.getID(), ctx), "still readable from the lattice");
 
-		ConflictException ex = assertThrows(ConflictException.class, () ->
+		NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
 			engine.jobs().deliverMessage(job.getID(),
 				Maps.of(Strings.create("content"), Strings.create("more")), ctx));
 		assertTrue(ex.getMessage().startsWith(JobManager.JOB_TERMINAL), ex.getMessage());
@@ -1020,10 +1020,10 @@ public class JobManagerTest {
 		assertNotNull(cancelled, "cancelling a finished job answers its record (COG-8)");
 		assertEquals(Status.COMPLETE, RT.ensureString(cancelled.get(Fields.STATUS)));
 
-		ConflictException pause = assertThrows(ConflictException.class,
+		NotSupportedException pause = assertThrows(NotSupportedException.class,
 			() -> engine.jobs().pauseJob(job.getID(), ctx));
 		assertTrue(pause.getMessage().startsWith(JobManager.JOB_TERMINAL), pause.getMessage());
-		ConflictException resume = assertThrows(ConflictException.class,
+		NotSupportedException resume = assertThrows(NotSupportedException.class,
 			() -> engine.jobs().resumeJob(job.getID(), ctx));
 		assertTrue(resume.getMessage().startsWith(JobManager.JOB_TERMINAL), resume.getMessage());
 	}
@@ -1043,7 +1043,7 @@ public class JobManagerTest {
 		Job job = engine.jobs().invokeOperation(meta, null, ctx);
 		try {
 			assertFalse(job.isFinished());
-			ConflictException ex = assertThrows(ConflictException.class, () ->
+			NotSupportedException ex = assertThrows(NotSupportedException.class, () ->
 				engine.jobs().deliverMessage(job.getID(),
 					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
 				"a message the job's operation cannot take is refused, not dropped");

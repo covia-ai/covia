@@ -1589,7 +1589,7 @@ public class AgentAdapter extends AAdapter {
 				Job parent = engine.jobs().getJob(Job.parseID(task));
 				if (parent != null) sid = parseSessionId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
 			}
-			if (sid == null) throw new ConflictException(ExternalAgents.NO_ACTIVE_TURN);
+			if (sid == null) throw new NotSupportedException(ExternalAgents.NO_ACTIVE_TURN);
 			externalAgents().deliver(agent, task, sid, messageContent);
 			job.setStatus(Status.STARTED);
 			job.completeWith(identify(target, Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
@@ -3432,7 +3432,7 @@ public class AgentAdapter extends AAdapter {
 		if (!externalAgents().owns(job)) { super.handleMessage(job, messageRecord); return; }
 		ACell childId = job.getData().get(ExternalAgents.CHILD);
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId));
-		if (child == null) throw new ConflictException(ExternalAgents.MISSING_CHILD);
+		if (child == null) throw new NotSupportedException(ExternalAgents.MISSING_CHILD);
 		AString owner = RT.ensureString(job.getData().get(Strings.intern("agentOwner")));
 		AgentState agent = getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		externalAgents().backend(externalAgents().stored(agent)).handleMessage(child, messageRecord);

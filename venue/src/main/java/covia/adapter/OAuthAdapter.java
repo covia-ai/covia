@@ -41,7 +41,6 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
-import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -682,7 +681,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			String refreshToken = str(tokens, G_REFRESH_TOKEN);
 			Provider p = providers.get(provider);
 			if (refreshToken == null || p == null) {
-				throw new ConflictException("The connection to " + provider
+				throw new AuthException("The connection to " + provider
 					+ " has expired and cannot be refreshed — reconnect with oauth:connect");
 			}
 			AMap<AString, ACell> refreshed;

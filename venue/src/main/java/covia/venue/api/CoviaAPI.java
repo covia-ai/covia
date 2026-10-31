@@ -43,6 +43,7 @@ import covia.exception.CoviaException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.ShuttingDownException;
 import covia.exception.UnavailableException;
 import covia.grid.AContent;
@@ -1275,7 +1276,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 403, e.getMessage());
 		} catch (NotFoundException | IllegalArgumentException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (ConflictException | IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException | IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
@@ -1333,7 +1334,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1368,7 +1369,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException | IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException | IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1403,7 +1404,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException | IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException | IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}

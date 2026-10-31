@@ -438,7 +438,7 @@ class A2AAdapterTest {
 					RT.ensureString(awaitStable(seed.getID()).get(Fields.STATUS)));
 
 			// A JSON-RPC error is a definite refusal: 409 to the deliverer.
-			assertThrows(covia.exception.ConflictException.class,
+			assertThrows(covia.exception.NotSupportedException.class,
 					() -> covia.sendMessage(jobId, coviaMessageRecord("refused")));
 			assertEquals(Strings.create("a2a-remote"), RT.getIn(continuation.get(), "taskId"),
 					"the continuation addresses the mirrored remote task");

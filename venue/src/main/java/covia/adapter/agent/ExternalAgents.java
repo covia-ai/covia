@@ -192,9 +192,9 @@ public final class ExternalAgents {
 		Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
 		if (parent == null || !owns(parent) || parent.isFinished()
 				|| !parent.getID().equals(RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.JOB_ID)))
-			throw new ConflictException(NO_ACTIVE_TURN);
+			throw new NotSupportedException(NO_ACTIVE_TURN);
 		Job child = engine.jobs().getJob(Job.parseID(parent.getData().get(CHILD)));
-		if (child == null) throw new ConflictException(MISSING_CHILD);
+		if (child == null) throw new NotSupportedException(MISSING_CHILD);
 		backend(stored(agent)).handleMessage(child, Maps.of(Fields.MESSAGE, content));
 	}
 }

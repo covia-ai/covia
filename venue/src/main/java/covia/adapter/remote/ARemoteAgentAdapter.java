@@ -11,7 +11,6 @@ import convex.core.data.Blob;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
-import covia.exception.ConflictException;
 import covia.exception.JobFailedException;
 import covia.exception.NotSupportedException;
 import covia.grid.Job;
@@ -148,14 +147,14 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 	public final void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
 		I live;
 		synchronized (job) {
-			if (job.isFinished()) throw new ConflictException(INTERACTION_ENDED);
+			if (job.isFinished()) throw new NotSupportedException(INTERACTION_ENDED);
 			live = interaction(job);
 			if (live == null) {
 				live = restoreInteraction(job);
 				if (live != null) live = bindInteraction(job, live);
 			}
 		}
-		if (live == null) throw new ConflictException(NO_INTERACTION);
+		if (live == null) throw new NotSupportedException(NO_INTERACTION);
 		live.deliver(messageRecord);
 	}
 

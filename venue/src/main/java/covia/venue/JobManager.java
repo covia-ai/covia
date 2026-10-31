@@ -30,7 +30,6 @@ import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -1193,8 +1192,8 @@ public class JobManager {
 	 * Refusal for a recorded job with no live handle to act on: it has finished,
 	 * or it is not running on this venue now.
 	 */
-	private static ConflictException notLive(Blob id, AMap<AString, ACell> data) {
-		return new ConflictException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE)
+	private static NotSupportedException notLive(Blob id, AMap<AString, ACell> data) {
+		return new NotSupportedException((Job.isFinished(data) ? JOB_TERMINAL : JOB_NOT_ACTIVE)
 			+ id.toHexString());
 	}
 
@@ -1253,11 +1252,11 @@ public class JobManager {
 
 	private void deliverMessage(Job job, AMap<AString, ACell> message, AString source) {
 		Blob jobID = job.getID();
-		if (job.isFinished()) throw new ConflictException(JOB_TERMINAL + jobID.toHexString());
+		if (job.isFinished()) throw new NotSupportedException(JOB_TERMINAL + jobID.toHexString());
 		// Only a multi-turn adapter takes messages; any other job would drop it
 		AAdapter adapter = resolveJobAdapter(job);
 		if (adapter == null || !adapter.supportsMultiTurn()) {
-			throw new ConflictException(JOB_NO_MESSAGES + jobID.toHexString());
+			throw new NotSupportedException(JOB_NO_MESSAGES + jobID.toHexString());
 		}
 
 		long ts = Utils.getCurrentTimestamp();

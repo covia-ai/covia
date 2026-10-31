@@ -47,6 +47,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Refusals that were plain `RuntimeException`s are Covia exception types; a plain `RuntimeException` is a venue error.
 - `t/` outside a job or task reads as absent, as `n/` and `c/` do.
 - `VenueServer.launch` throws a startup failure as its own type.
+- `ConflictException` means two values that cannot both stand; a job, session or interaction that does not take the request is `NotSupportedException`, still 409.
+- A remote agent that answers for a different task answers 502.
 
 ### Removed
 
