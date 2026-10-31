@@ -25,6 +25,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
@@ -212,7 +213,7 @@ class A2AAdapterTest {
 	@Test
 	void bearerInputs_areMutuallyExclusive() {
 		A2AAdapter adapter = (A2AAdapter) TestServer.ENGINE.getAdapter("a2a");
-		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+		InvalidInputException error = assertThrows(InvalidInputException.class,
 				() -> adapter.resolveBearer(Maps.of(
 						Fields.BEARER_SECRET, Strings.create("s/PARTNER_TOKEN"),
 						Fields.BEARER_TOKEN, Strings.create("literal-token")),

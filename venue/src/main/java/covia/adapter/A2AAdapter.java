@@ -34,7 +34,12 @@ import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.adapter.remote.RemoteInteraction;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -184,7 +189,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(
-					new IllegalArgumentException("No sub-operation in a2a adapter metadata"));
+					new NotSupportedException("No sub-operation in a2a adapter metadata"));
 		}
 		return switch (subOp) {
 			case "importAgent"  -> importAgent(input, ctx);
@@ -204,7 +209,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				yield job.future().thenApply(x -> x);
 			}
 			default -> CompletableFuture.failedFuture(
-					new IllegalArgumentException("Unknown a2a sub-operation: " + subOp));
+					new NotSupportedException("Unknown a2a sub-operation: " + subOp));
 		};
 	}
 
@@ -248,7 +253,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private CompletableFuture<ACell> importAgent(ACell input, RequestContext ctx) {
 		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (nameCell == null || !nameCell.toString().matches("[a-z0-9-]{1,64}")) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'name' is required and must match [a-z0-9-]{1,64}"));
 		}
 		String alias = nameCell.toString();
@@ -257,7 +262,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		AString coviaAgentCell = RT.ensureString(RT.getIn(input, K_COVIA_AGENT));
 		if ((urlCell == null) == (coviaAgentCell == null)) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"Specify exactly one of 'url' or 'coviaAgent'"));
 		}
 
@@ -280,7 +285,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			} else {
 				boolean localReference = coviaAgentCell.toString().startsWith("g/");
 				AString venueCell = RT.ensureString(RT.getIn(input, K_VENUE));
-				if (venueCell == null && !localReference) throw new IllegalArgumentException(
+				if (venueCell == null && !localReference) throw new InvalidInputException(
 					"'venue' is required with a remote coviaAgent address");
 				String address = normaliseCoviaAgentAddress(coviaAgentCell.toString(), ctx);
 				String venue = stripTrailingSlash(venueCell != null
@@ -307,7 +312,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 		return fetchAgentCardUrl(ctx, cardBase, discoveryAuth).thenApply(cardCell -> {
 			if (!(cardCell instanceof AMap<?, ?>)) {
-				throw new IllegalArgumentException("Remote Agent Card is not a JSON object");
+				throw new ResponseException("Remote Agent Card is not a JSON object");
 			}
 			AMap<AString, ACell> card = (AMap<AString, ACell>) cardCell;
 			String endpoint = endpointFromCard(card);
@@ -349,19 +354,19 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private static AMap<AString, ACell> parseStoredAuth(ACell input) {
 		ACell raw = RT.getIn(input, K_AUTH);
 		if (raw == null) return null;
-		if (!(raw instanceof AMap<?, ?>)) throw new IllegalArgumentException("'auth' must be an object");
+		if (!(raw instanceof AMap<?, ?>)) throw new InvalidInputException("'auth' must be an object");
 		AMap<AString, ACell> auth = (AMap<AString, ACell>) raw;
 		AString secret = RT.ensureString(auth.get(K_SECRET));
 		if (secret == null || !Engine.isSecretRef(secret.toString())) {
-			throw new IllegalArgumentException("auth.secret must be a SecretStore reference such as s/PARTNER_KEY");
+			throw new InvalidInputException("auth.secret must be a SecretStore reference such as s/PARTNER_KEY");
 		}
 		AString kind = RT.ensureString(auth.get(K_KIND));
 		AString scheme = RT.ensureString(auth.get(K_SCHEME));
 		if ((kind == null) == (scheme == null)) {
-			throw new IllegalArgumentException("auth must specify exactly one of 'kind' or 'scheme'");
+			throw new InvalidInputException("auth must specify exactly one of 'kind' or 'scheme'");
 		}
 		if (kind != null && !"bearer".equalsIgnoreCase(kind.toString())) {
-			throw new IllegalArgumentException("Unsupported direct auth kind '" + kind + "'; supported: bearer");
+			throw new NotSupportedException("Unsupported direct auth kind '" + kind + "'; supported: bearer");
 		}
 		return auth;
 	}
@@ -369,18 +374,18 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private static String normaliseCoviaAgentAddress(String value, RequestContext ctx) {
 		String address = value;
 		if (address.startsWith("g/")) {
-			if (ctx.getUserDID() == null) throw new IllegalArgumentException(
+			if (ctx.getUserDID() == null) throw new AuthException(
 				"A local g/<agentId> reference requires an authenticated user");
 			address = ctx.getUserDID() + "/" + address;
 		}
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint("/a2a/" + address);
-		if (ref == null) throw new IllegalArgumentException(
+		if (ref == null) throw new InvalidInputException(
 			"coviaAgent must be g/<agentId> or <ownerDID>/g/<agentId>");
 		return ref.gridAddress();
 	}
 
 	private static String stripTrailingSlash(String value) {
-		if (value == null || value.isBlank()) throw new IllegalArgumentException("URL must not be empty");
+		if (value == null || value.isBlank()) throw new InvalidInputException("URL must not be empty");
 		return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
 	}
 
@@ -389,7 +394,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		ACell ref = RT.getIn(input, K_AGENT);
 		if (ref == null) {
 			if (allowRaw) return resolveRawTarget(input, ctx);
-			throw new IllegalArgumentException("'agent' is required; import one with v/ops/a2a/import-agent");
+			throw new InvalidInputException("'agent' is required; import one with v/ops/a2a/import-agent");
 		}
 
 		ACell value;
@@ -397,29 +402,29 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			value = ref;
 		} else {
 			AString path = RT.ensureString(ref);
-			if (path == null) throw new IllegalArgumentException("'agent' must be an asset reference");
+			if (path == null) throw new InvalidInputException("'agent' must be an asset reference");
 			value = engine.resolvePath(path, ctx);
 		}
 		if (!(value instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("Cannot resolve A2A agent asset: " + ref);
+			throw new NotFoundException("Cannot resolve A2A agent asset: " + ref, String.valueOf(ref));
 		}
 		AMap<AString, ACell> metadata = (AMap<AString, ACell>) value;
 		AMap<AString, ACell> a2a;
 		if (metadata.containsKey(K_AGENT)) {
 			a2a = RT.ensureMap(metadata.get(K_AGENT));
 			if (a2a == null || !Strings.create("a2a").equals(a2a.get(Fields.ADAPTER)))
-				throw new IllegalArgumentException(INVALID_AGENT_DEFINITION + "expected a2a adapter");
+				throw new InvalidDefinitionException(INVALID_AGENT_DEFINITION + "expected a2a adapter");
 		} else {
 			if (!TYPE_A2A_AGENT.equals(RT.ensureString(metadata.get(Fields.TYPE)))) {
-				throw new IllegalArgumentException("Asset is not type 'a2a-agent': " + ref);
+				throw new InvalidInputException("Asset is not type 'a2a-agent': " + ref);
 			}
 			a2a = RT.ensureMap(metadata.get(Fields.A2A));
 		}
-		if (a2a == null) throw new IllegalArgumentException("A2A agent asset has no 'a2a' profile");
+		if (a2a == null) throw new InvalidDefinitionException("A2A agent asset has no 'a2a' profile");
 		AString endpoint = RT.ensureString(a2a.get(K_ENDPOINT));
 		AMap<AString, ACell> card = RT.ensureMap(a2a.get(K_CARD));
 		if (endpoint == null || card == null) {
-			throw new IllegalArgumentException("A2A agent asset requires a card and endpoint");
+			throw new InvalidDefinitionException("A2A agent asset requires a card and endpoint");
 		}
 		engine.requireSafeUrl(ctx, endpoint.toString());
 		AMap<AString, ACell> authBinding = RT.ensureMap(a2a.get(K_AUTH));
@@ -429,7 +434,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	private AgentTarget resolveRawTarget(ACell input, RequestContext ctx) {
 		AString url = RT.ensureString(RT.getIn(input, Fields.URL));
-		if (url == null) throw new IllegalArgumentException("'agent' is required (or 'url' on a raw A2A operation)");
+		if (url == null) throw new InvalidInputException("'agent' is required (or 'url' on a raw A2A operation)");
 		String rpcUrl = normaliseRpcUrl(url.toString());
 		engine.requireSafeUrl(ctx, rpcUrl);
 		return new AgentTarget(rpcUrl, null, RequestAuth.bearer(resolveBearer(input, ctx, rpcUrl)), null);
@@ -453,7 +458,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AMap<AString, ACell> schemes = RT.ensureMap(card.get(K_SECURITY_SCHEMES));
 		ACell schemeCell = schemes != null ? schemes.get(schemeName) : null;
 		if (!(schemeCell instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("Agent Card does not declare security scheme '" + schemeName + "'");
+			throw new InvalidInputException("Agent Card does not declare security scheme '" + schemeName + "'");
 		}
 		AMap<AString, ACell> scheme = (AMap<AString, ACell>) schemeCell;
 		String secret = resolveSecretRef(auth, ctx, destination);
@@ -465,7 +470,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			if (location == null || name == null
 					|| !("header".equals(location.toString()) || "query".equals(location.toString())
 						|| "cookie".equals(location.toString()))) {
-				throw new IllegalArgumentException("API-key scheme '" + schemeName
+				throw new InvalidInputException("API-key scheme '" + schemeName
 					+ "' must declare location header, query, or cookie and a name");
 			}
 			return new RequestAuth(location.toString(), name.toString(), secret);
@@ -476,15 +481,15 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (httpScheme != null && "bearer".equalsIgnoreCase(httpScheme.toString())) {
 			return RequestAuth.bearer(secret);
 		}
-		throw new IllegalArgumentException("Unsupported Agent Card security scheme '" + schemeName
+		throw new NotSupportedException("Unsupported Agent Card security scheme '" + schemeName
 			+ "'; supported: API key and HTTP Bearer");
 	}
 
 	private String resolveSecretRef(AMap<AString, ACell> auth, RequestContext ctx, String destination) {
 		AString ref = RT.ensureString(auth.get(K_SECRET));
 		String value = ref != null ? engine.resolveSecret(ref.toString(), ctx, destination) : null;
-		if (value == null) throw new IllegalArgumentException(
-			"Cannot resolve A2A auth secret '" + ref + "' from the caller's SecretStore");
+		if (value == null) throw new NotFoundException(
+			"Cannot resolve A2A auth secret '" + ref + "' from the caller's SecretStore", String.valueOf(ref));
 		return value;
 	}
 
@@ -501,7 +506,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		// Compatibility with pre-1.0 cards that advertised one top-level URL.
 		AString legacy = RT.ensureString(card.get(Fields.URL));
 		if (legacy != null) return legacy.toString();
-		throw new IllegalArgumentException("Agent Card has no supported interface URL");
+		throw new ResponseException("Agent Card has no supported interface URL");
 	}
 
 	// ==================== getAgentCard ====================
@@ -514,11 +519,11 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				return CompletableFuture.failedFuture(e);
 			}
 		}
-		if (!allowRaw) return CompletableFuture.failedFuture(new IllegalArgumentException(
+		if (!allowRaw) return CompletableFuture.failedFuture(new InvalidInputException(
 			"'agent' is required; import one with v/ops/a2a/import-agent"));
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (urlCell == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'url' is required (remote A2A base or RPC URL)"));
 		}
 		try {
@@ -554,7 +559,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	private static String normaliseAgentCardUrl(String url) {
 		if (url == null || url.isBlank()) {
-			throw new IllegalArgumentException("url must not be empty");
+			throw new InvalidInputException("url must not be empty");
 		}
 		if (url.endsWith(AGENT_CARD_PATH)) return url;
 		// Strip a single trailing slash so we don't double it.
@@ -571,7 +576,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private static Map<String, Object> idParams(ACell input) {
 		AString id = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (id == null) {
-			throw new IllegalArgumentException("'id' is required (remote A2A task ID)");
+			throw new InvalidInputException("'id' is required (remote A2A task ID)");
 		}
 		Map<String, Object> p = new LinkedHashMap<>();
 		p.put("id", id.toString());
@@ -639,7 +644,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	static String normaliseRpcUrl(String url) {
 		if (url == null || url.isBlank()) {
-			throw new IllegalArgumentException("url must not be empty");
+			throw new InvalidInputException("url must not be empty");
 		}
 		if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
 		// Already an A2A endpoint — the venue front door (…/a2a) or a
@@ -850,7 +855,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			throw unacknowledged(e);
 		}
 		if (!link.remoteTaskId().equals(task.id())) {
-			throw new IllegalStateException("Remote agent answered for a different task");
+			throw new ConflictException("Remote agent answered for a different task");
 		}
 		// Same fence as the initial send: apply the response and re-arm the
 		// observer under the Job lock, so a poll answered before the remote saw
@@ -893,7 +898,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		int code = resp.statusCode();
 		if (code >= 500 || code == 408) throw unacknowledged(null);
 		if (code < 200 || code >= 300) {
-			throw new IllegalStateException("Remote agent rejected the message: HTTP " + code
+			throw new ConflictException("Remote agent rejected the message: HTTP " + code
 				+ ": " + conciseDetail(resp.body(), 512));
 		}
 		AMap<AString, ACell> reply;
@@ -904,7 +909,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		}
 		ACell error = reply == null ? null : reply.get(Fields.ERROR);
 		if (error != null) {
-			throw new IllegalStateException("Remote agent rejected the message: "
+			throw new ConflictException("Remote agent rejected the message: "
 				+ conciseDetail(JSON.print(error), 512));
 		}
 		AMap<AString, ACell> result = reply == null ? null : RT.ensureMap(reply.get(Fields.RESULT));
@@ -1085,20 +1090,20 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AString secret = RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
 		AString literal = RT.ensureString(RT.getIn(input, Fields.BEARER_TOKEN));
 		if (secret != null && literal != null) {
-			throw new IllegalArgumentException("Specify only one of 'bearerSecret' or 'bearerToken'");
+			throw new InvalidInputException("Specify only one of 'bearerSecret' or 'bearerToken'");
 		}
 		if (literal != null) {
 			String token = literal.toString();
-			if (token.isBlank()) throw new IllegalArgumentException("'bearerToken' must not be empty");
+			if (token.isBlank()) throw new InvalidInputException("'bearerToken' must not be empty");
 			return token;
 		}
 		if (secret == null) return null;
 		String ref = secret.toString();
-		if (ref.isBlank()) throw new IllegalArgumentException("'bearerSecret' must not be empty");
+		if (ref.isBlank()) throw new InvalidInputException("'bearerSecret' must not be empty");
 		String token = engine.resolveSecret(ref, ctx, destination);
 		if (token == null) {
-			throw new IllegalArgumentException("Cannot resolve bearerSecret '" + ref
-				+ "'; store it with secret:set or pass an existing s/<name> reference");
+			throw new NotFoundException("Cannot resolve bearerSecret '" + ref
+				+ "'; store it with secret:set or pass an existing s/<name> reference", ref);
 		}
 		return token;
 	}

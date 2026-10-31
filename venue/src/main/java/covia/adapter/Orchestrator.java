@@ -25,7 +25,11 @@ import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Abilities;
 import covia.api.Fields;
-import covia.exception.ResponseException;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -131,12 +135,12 @@ public class Orchestrator extends AAdapter {
 				// instanceof — RT.ensureMap(null) returns an empty map, which
 				// would swallow the error case and fail confusingly downstream.
 				if (!(steps.get(i) instanceof AMap<?,?> sm)) {
-					throw new IllegalArgumentException("Orchestration step " + i + " must be an object");
+					throw new InvalidDefinitionException("Orchestration step " + i + " must be an object");
 				}
 				@SuppressWarnings("unchecked")
 				AMap<AString, ACell> step = (AMap<AString, ACell>) sm;
 				if (RT.ensureString(step.get(Fields.OP)) == null) {
-					throw new IllegalArgumentException(
+					throw new InvalidDefinitionException(
 						"Orchestration step " + i + " requires string field 'op'");
 				}
 				SubTask task=new SubTask(i,step);
@@ -269,19 +273,19 @@ public class Orchestrator extends AAdapter {
 		private ACell computeInput(ACell inputSpec, AVector<ACell> path, IterationContext iteration) {
 			if (inputSpec instanceof AVector v) {
 				long n=v.count();
-				if (n==0) throw new IllegalStateException("Empty vector in input spec");
+				if (n==0) throw new InvalidDefinitionException("Empty vector in input spec at " + path);
 				ACell code=v.get(0);
 				if (code instanceof CVMLong cvmix) {
 					int ix=Utils.checkedInt(cvmix.longValue());
 					if (ix < 0 || ix >= subTasks.size()) {
-						throw new IllegalArgumentException("Input spec at " + path + " references step " + ix
+						throw new InvalidDefinitionException("Input spec at " + path + " references step " + ix
 							+ "; valid range is 0.." + (subTasks.size() - 1));
 					}
 					SubTask source=subTasks.get(ix);
 					ACell value=RT.getIn(source.output, v.subVector(1,n-1).toCellArray());
 					return value;
 				} else if (Fields.CONST.equals(code)) {
-					if (n < 2) throw new IllegalArgumentException(
+					if (n < 2) throw new InvalidDefinitionException(
 						"Constant input spec at " + path + " requires a value");
 					ACell value=v.get(1);
 					return value;
@@ -309,23 +313,23 @@ public class Orchestrator extends AAdapter {
 					return out;
 				} else if (Fields.ITEM.equals(code)) {
 					if (iteration == null) {
-						throw new IllegalArgumentException(
+						throw new InvalidDefinitionException(
 							"Item binding at " + path + " is only valid inside a foreach step input");
 					}
 					if (n == 1) return iteration.item();
 					return RT.getIn(iteration.item(), v.subVector(1,n-1).toCellArray());
 				} else if (Fields.INDEX.equals(code)) {
 					if (iteration == null) {
-						throw new IllegalArgumentException(
+						throw new InvalidDefinitionException(
 							"Index binding at " + path + " is only valid inside a foreach step input");
 					}
 					if (n != 1) {
-						throw new IllegalArgumentException(
+						throw new InvalidDefinitionException(
 							"Index binding at " + path + " does not accept a path");
 					}
 					return iteration.index();
 				} else {
-					throw new IllegalArgumentException("Unrecognised input source at " + path + ": "
+					throw new InvalidDefinitionException("Unrecognised input source at " + path + ": "
 						+ conciseDetail(v, 256));
 				}
 			} else if (inputSpec instanceof AMap m) {
@@ -341,7 +345,7 @@ public class Orchestrator extends AAdapter {
 				}
 				return m;
 			} else {
-				throw new IllegalArgumentException("Unrecognised input spec at " + path + ": "
+				throw new InvalidDefinitionException("Unrecognised input spec at " + path + ": "
 					+ conciseDetail(inputSpec, 256));
 			}
 		}
@@ -377,18 +381,18 @@ public class Orchestrator extends AAdapter {
 			if (spec == null) return accDeps;
 			if (spec instanceof AVector v) {
 				long vn=v.count();
-				if (vn==0) throw new IllegalArgumentException("Empty vector in input spec at " + path);
+				if (vn==0) throw new InvalidDefinitionException("Empty vector in input spec at " + path);
 				ACell code=v.get(0);
 				if (code instanceof CVMLong cvmix) {
 					int ix=Utils.checkedInt(cvmix.longValue());
 					if ((ix<0)||(ix>=stepLimit)) {
-						throw new IllegalArgumentException("Input spec at " + path + " references step " + ix
+						throw new InvalidDefinitionException("Input spec at " + path + " references step " + ix
 							+ "; only steps 0.." + (stepLimit-1) + " are available here"
 							+ (stepLimit==0 ? " (the first step can reference no earlier step)" : ""));
 					}
 					accDeps.add(ix);
 				} else if (Fields.CONST.equals(code)) {
-					if (vn<2) throw new IllegalArgumentException(
+					if (vn<2) throw new InvalidDefinitionException(
 						"Constant input spec at " + path + " requires a value");
 					// Frozen subtree — intentionally not recursed into.
 				} else if (Fields.INPUT.equals(code)) {
@@ -403,20 +407,20 @@ public class Orchestrator extends AAdapter {
 					}
 				} else if (Fields.ITEM.equals(code)) {
 					if (!allowIterationBindings) {
-						throw new IllegalArgumentException(
+						throw new InvalidDefinitionException(
 							"Item binding at " + path + " is only valid inside a foreach step input");
 					}
 				} else if (Fields.INDEX.equals(code)) {
 					if (!allowIterationBindings) {
-						throw new IllegalArgumentException(
+						throw new InvalidDefinitionException(
 							"Index binding at " + path + " is only valid inside a foreach step input");
 					}
 					if (vn != 1) {
-						throw new IllegalArgumentException(
+						throw new InvalidDefinitionException(
 							"Index binding at " + path + " does not accept a path");
 					}
 				} else {
-					throw new IllegalArgumentException("Unrecognised input source at " + path + ": "
+					throw new InvalidDefinitionException("Unrecognised input source at " + path + ": "
 						+ conciseDetail(v, 256));
 				}
 			} else if (spec instanceof AMap m) {
@@ -427,7 +431,7 @@ public class Orchestrator extends AAdapter {
 					scanSpec(accDeps, me.getValue(), stepLimit, path.append(me.getKey()), allowIterationBindings);
 				}
 			} else {
-				throw new IllegalArgumentException("Unrecognised input spec at " + path + ": "
+				throw new InvalidDefinitionException("Unrecognised input spec at " + path + ": "
 					+ conciseDetail(spec, 256));
 			}
 			return accDeps;
@@ -444,7 +448,7 @@ public class Orchestrator extends AAdapter {
 			if (outputSchema == null || outputSchema.isEmpty()) return;
 			String err = JsonSchema.validate(outputSchema, output);
 			if (err != null) {
-				throw new ResponseException(
+				throw new JobFailedException(
 					"Step " + stepNum + " (" + opId + ") output schema violation: " + err);
 			}
 		}
@@ -479,7 +483,7 @@ public class Orchestrator extends AAdapter {
 					return;
 				}
 				if (!(foreachCell instanceof AMap<?,?> fm)) {
-					throw new IllegalArgumentException(
+					throw new InvalidDefinitionException(
 						"Orchestration step " + i + " field 'foreach' must be an object");
 				}
 				@SuppressWarnings("unchecked")
@@ -488,7 +492,7 @@ public class Orchestrator extends AAdapter {
 
 				ACell sourceSpec=foreachSpec.get(Fields.IN);
 				if (sourceSpec == null) {
-					throw new IllegalArgumentException(
+					throw new InvalidDefinitionException(
 						"Orchestration step " + i + " foreach requires field 'in'");
 				}
 				scanSpec(deps,sourceSpec,i,Vectors.of(Fields.FOREACH,Fields.IN),false);
@@ -499,14 +503,14 @@ public class Orchestrator extends AAdapter {
 					if (!(requestedCell instanceof CVMLong requested)
 							|| requested.longValue() < 1
 							|| requested.longValue() > Integer.MAX_VALUE) {
-						throw new IllegalArgumentException(
+						throw new InvalidDefinitionException(
 							"Orchestration step " + i
 								+ " foreach.maxConcurrency must be a positive integer");
 					}
 					int configuredMax=configuredForeachLimit(
 						Fields.MAX_CONCURRENCY,DEFAULT_FOREACH_MAX_CONCURRENCY);
 					if (requested.longValue() > configuredMax) {
-						throw new IllegalArgumentException(
+						throw new NotSupportedException(
 							"Orchestration step " + i + " foreach.maxConcurrency "
 								+ requested.longValue() + " exceeds the venue limit " + configuredMax);
 					}
@@ -557,14 +561,14 @@ public class Orchestrator extends AAdapter {
 					foreach.get(Fields.IN),Vectors.of(Fields.FOREACH,Fields.IN),null);
 				if (!(source instanceof ADataStructure<?> data)) {
 					String actual=(source == null) ? "null" : source.getClass().getSimpleName();
-					throw new IllegalArgumentException(
+					throw new InvalidDefinitionException(
 						"foreach.in expected an ADataStructure, got " + actual);
 				}
 
 				Long maxItems=configuredForeachMaxItems();
 				long count=data.count();
 				if (maxItems != null && count > maxItems) {
-					throw new IllegalArgumentException(
+					throw new NotSupportedException(
 						"foreach.in contains " + count + " items; venue limit is " + maxItems);
 				}
 				int itemCount=Utils.checkedInt(count);
@@ -719,15 +723,15 @@ public class Orchestrator extends AAdapter {
 						asset=venue.resolveAsset(opId.toString());
 					}
 					if (asset == null) {
-						throw new IllegalArgumentException(
+						throw new NotFoundException(
 							"Strict step " + stepNum + " (" + opId + ") requires readable "
-								+ "operation metadata on " + target);
+								+ "operation metadata on " + target, opId.toString());
 					}
 					return asset;
 				} catch (RuntimeException e) {
 					throw e;
 				} catch (Exception e) {
-					throw new IllegalStateException(
+					throw new UnavailableException(
 						"Strict step " + stepNum + " (" + opId + ") could not resolve "
 							+ "operation metadata on " + target + ": " + describeFailure(e),e);
 				}

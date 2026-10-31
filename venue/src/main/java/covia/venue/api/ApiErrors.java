@@ -7,6 +7,7 @@ import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -51,7 +52,7 @@ public final class ApiErrors {
 		if (failure instanceof ConflictException) return 409;
 		if (failure instanceof RateLimitException) return 429;
 		if (failure instanceof RemoteFetchException || failure instanceof ResponseException) return 502;
-		if (failure instanceof UnavailableException) return 503;
+		if (failure instanceof UnavailableException || failure instanceof InvalidDefinitionException) return 503;
 		if (failure instanceof InvalidInputException || failure instanceof NotSupportedException
 				|| failure instanceof WrongScopeException) return 400;
 		return 500;
