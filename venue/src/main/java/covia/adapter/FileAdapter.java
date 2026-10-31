@@ -632,8 +632,7 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			try {
 				return dispatch(ctx, subOp, RT.castMap(input));
 			} catch (RuntimeException e) {
-				if (!isExpectedFailure(e)) throw e;
-				throw new RuntimeException(e.getMessage(), e);
+				throw e;   // already says what failed; only checked exceptions need wrapping
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}

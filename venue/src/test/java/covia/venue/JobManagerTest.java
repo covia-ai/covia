@@ -842,7 +842,7 @@ public class JobManagerTest {
 				try {
 					engine.jobs().appendToHistory(job.getID(), message, ctx);
 					return true;
-				} catch (IllegalArgumentException deletedFirst) {
+				} catch (NotFoundException deletedFirst) {
 					return false;
 				}
 			},
