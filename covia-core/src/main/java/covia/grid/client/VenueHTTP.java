@@ -35,7 +35,6 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
-import covia.exception.ConversionException;
 import covia.exception.RateLimitException;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
@@ -402,7 +401,7 @@ public class VenueHTTP extends Venue {
 			ACell body=JSON.parseJSON5(response.body());
 			Hash v=Hash.parse(body);
 			if (v!=null) return v;
-			throw new ConversionException("Result did not contain a valid Hash: got "+body); 
+			throw new ResponseException("Result did not contain a valid Hash: got "+body, response);
 		});
 	} 
 
@@ -775,7 +774,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
-				throw new ConversionException("assets API returned status: "+code);
+				throw new ResponseException("assets API returned status: "+code, response);
 			}
 			ACell body=JSON.parseJSON5(response.body());
 			AVector<?> items=null;
@@ -787,14 +786,14 @@ public class VenueHTTP extends Venue {
 			} 
 			
 			if (items==null) {
-				throw new ConversionException("assets API did not return a list of assets");
+				throw new ResponseException("assets API did not return a list of assets", response);
 			}
 			
 			ArrayList<String> al=new ArrayList<>();
 			long n=items.count();
 			for (int i=0; i<n; i++) {
 				AString ref=RT.ensureString(items.get(i));
-				if (ref==null) throw new ConversionException("assets API returned a non-string reference");
+				if (ref==null) throw new ResponseException("assets API returned a non-string reference", response);
 				al.add(ref.toString());
 			}
 			return al;
@@ -940,7 +939,7 @@ public class VenueHTTP extends Venue {
 						return hash;
 					}
 				}
-				throw new ConversionException("Failed to parse content hash from response: " + response.body());
+				throw new ResponseException("Failed to parse content hash from response: " + response.body(), response);
 			} else {
 				throw new ResponseException("Failed to add content: " + response.statusCode() + " - " + response.body(), response);
 			}

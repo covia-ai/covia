@@ -28,10 +28,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `outbound/any` on `<venueDID>/outbound`: the venue's own standing to dial any HTTP,
   MCP, A2A, model, Convex peer or venue target unchecked, delegable by a venue-issued grant.
 - `Grid.webDIDAddress`: the address a `did:web` venue is reached at.
+- Expected-failure exceptions: `InvalidInputException`, `NotFoundException`,
+  `ConflictException`, `NotSupportedException`, `UnavailableException`,
+  `ConfigurationException` (#644).
 - `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
 
 ### Changed
 
+- `RemoteFetchException` is an `UnavailableException`.
 - A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
   it stands for by position in the frame's history. A legacy frame renders as it will
   once migrated, so migration still leaves the model's input unchanged.
@@ -64,6 +68,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The `venue/relay` ability and `UcanTokens.relayDelegation`: users hop with
   `authenticateAs: "caller"` and grants.
 - `auth.audience`: `auth.requireAud` replaces it.
+- `ConversionException`: a malformed venue response is a `ResponseException`.
 
 ### Security
 
