@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.UnavailableException;
 
 class AdapterUserDeletionTest {
 	private static final AString OWNER = Strings.create("did:test:deleted-owner");
@@ -130,7 +131,7 @@ class AdapterUserDeletionTest {
 			engine.registerAdapter(new Probe());
 			AdapterState state = seed(engine);
 			engine.removeAdapter(NAME);
-			IllegalStateException pending = assertThrows(IllegalStateException.class,
+			UnavailableException pending = assertThrows(UnavailableException.class,
 				() -> engine.deleteUser(engine.venueContext(), OWNER));
 			assertEquals(Engine.USER_DELETION_PENDING, pending.getMessage());
 			assertEquals(VALUE, state.read(state.userPath(OWNER, "bots/old")), "only the adapter can interpret its data");

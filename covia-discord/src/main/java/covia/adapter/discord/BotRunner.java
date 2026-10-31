@@ -34,6 +34,8 @@ import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.StillStartingException;
+import covia.exception.UnavailableException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -44,6 +46,21 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static final AString K_STATE=Strings.intern("state"),K_USERNAME=Strings.intern("username"),K_BOT_ID=Strings.intern("bot_id"),K_TARGET=Strings.intern("target"),K_RECEIVED=Strings.intern("received"),K_SENT=Strings.intern("sent"),K_FAILED=Strings.intern("failed"),K_MANAGED=Strings.intern("managed");
 	private static final AString K_BOT=Strings.intern("bot"),K_FROM=Strings.intern("from"),K_GUILD=Strings.intern("guild"),K_CHANNEL_ID=Strings.intern("channel_id"),K_NAME=Strings.intern("name"),K_ID=Strings.intern("id"),K_ATTACHMENTS=Strings.intern("attachments");
 	enum State {STARTING,PENDING,RUNNING,STOPPED}
+	/** A REST call while the bot's first start is in flight; the bot's name follows. */
+	static final String BOT_STARTING="Discord bot '%s' is starting; try again shortly";
+	/** A REST call while the bot retries a failed start; its name, then why. */
+	static final String BOT_PENDING="Discord bot '%s' is not running (%s); it keeps retrying";
+	/** A REST call to a stopped bot; its name follows. */
+	static final String BOT_STOPPED="Discord bot '%s' is stopped";
+	/** Why the bot cannot call the REST API now. */
+	private UnavailableException notRunning(){
+		if(stopped)return new UnavailableException(BOT_STOPPED.formatted(spec.name()));
+		return switch(state){
+			case STARTING->new StillStartingException(BOT_STARTING.formatted(spec.name()));
+			case PENDING->new UnavailableException(BOT_PENDING.formatted(spec.name(),error));
+			default->new UnavailableException(BOT_STOPPED.formatted(spec.name()));
+		};
+	}
 	/** Shared by every bot: each HttpClient holds a selector thread for its lifetime. */
 	private static final HttpClient HTTP=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).executor(AAdapter.VIRTUAL_EXECUTOR).build();
 	private final DiscordAdapter adapter;
@@ -126,7 +143,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private ACell send(String channel,String text,String reply){AMap<AString,ACell> body=Maps.of(Strings.intern("content"),Strings.create(text));if(reply!=null)body=body.assoc(Strings.intern("message_reference"),Maps.of(Strings.intern("message_id"),Strings.create(reply),Strings.intern("fail_if_not_exists"),CVMBool.FALSE));return sendMessage(channel,body);}
 	private void sendQuietly(String channel,String text,String reply){try{send(channel,text,reply);}catch(RuntimeException e){log.debug("Discord bot '{}': notice failed: {}",spec.name(),concise(e));}}
 
-	ACell call(String method,String route,ACell body){HttpClient client=http;String tok=token;if(client==null||tok==null)throw new IllegalStateException("Discord bot '"+spec.name()+"' is not running"+(error!=null?": "+error:""));return execute(client,tok,method,route,body,true);}
+	ACell call(String method,String route,ACell body){HttpClient client=http;String tok=token;if(client==null||tok==null)throw notRunning();return execute(client,tok,method,route,body,true);}
 	private ACell execute(HttpClient client,String tok,String method,String route,ACell body,boolean retry429){
 		try{HttpRequest.Builder b=HttpRequest.newBuilder(URI.create(apiUrl+route)).timeout(Duration.ofSeconds(45)).header("Authorization","Bot "+tok).header("User-Agent","DiscordBot (https://covia.ai, "+Engine.jarVersion()+")");String json=body==null?"":JSON.print(body).toString();if(body!=null)b.header("Content-Type","application/json");b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(json));HttpResponse<String> r=client.send(b.build(),HttpResponse.BodyHandlers.ofString());
 			if(r.statusCode()==429&&retry429){long wait=1000;try{ACell parsed=JSON.parse(r.body());Object ra=JSON.json(RT.getIn(parsed,Strings.intern("retry_after")));if(ra instanceof Number n)wait=Math.min(30_000,Math.max(100,Math.round(n.doubleValue()*1000)));}catch(RuntimeException ignored){}Thread.sleep(wait);return execute(client,tok,method,route,body,false);}

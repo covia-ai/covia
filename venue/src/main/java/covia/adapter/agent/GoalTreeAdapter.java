@@ -151,6 +151,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		HARNESS_NAMES = java.util.Set.copyOf(names);
 	}
 
+	@Override
+	protected java.util.Set<String> harnessToolNames() {
+		return HARNESS_NAMES;
+	}
+
 	/** Everything a cycle holds constant across its frames and inferences;
 	 *  each frame adds its index and fixed base-tool projection. */
 	record Cycle(AMap<AString, ACell> config, AString llmOperation,
@@ -410,6 +415,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameToolContext frameTools = new FrameToolContext(null, store, 0, p.baseTools(), cycle);
 		frameTools.activeFrame = activeFrame;
 		frameTools.adoptLoadSnapshot(p.loads());
+		frameTools.fixedNames = ToolPalette.names(p.spec().tools());
 		ToolCycleEngine.Registry<FrameToolContext> registry = frameTools.registry()
 			.register(TOOL_SUBGOAL, (call, ignored) ->
 				ToolCycleEngine.ToolOutcome.result(Strings.create(STEP_SUBGOAL_NOTE)));
@@ -739,6 +745,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> toolIndex;
 		int baseToolStart;
 		int baseToolEnd;
+		/** Names of this frame's fixed tools offered: task, harness and configured. */
+		java.util.Set<String> fixedNames = java.util.Set.of();
 		AMap<AString, ACell> iterationToolIndex = Maps.empty();
 		AMap<AString, ACell> pinnedToolIndex = Maps.empty();
 		AMap<AString, ACell> activeFrame;
@@ -795,7 +803,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		private ACell dispatchActiveTool(String name, ACell input) {
 			AString operation = ToolPalette.operation(iterationToolIndex, name);
 			if (operation == null) operation = ToolPalette.operation(toolIndex, name);
-			return dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
+			if (operation != null) return dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
+			java.util.Set<String> callable = ToolPalette.names(iterationToolIndex);
+			callable.addAll(fixedNames);
+			return dispatchUnbound(name, input, ctx,
+				new HarnessTools.ToolSurface(loadScope(), callable), toolCallTimeoutMs);
 		}
 
 		private boolean excludesLoadName(String name, AString owner) {
@@ -1227,6 +1239,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> fixedTools = (AVector<ACell>) taskTools.concat(harnessForFrame).concat(frameTools.baseTools);
 		frameTools.baseToolStart = Math.toIntExact(taskTools.count() + harnessForFrame.count());
 		frameTools.baseToolEnd = Math.toIntExact(frameTools.baseToolStart + frameTools.baseTools.count());
+		frameTools.fixedNames = ToolPalette.names(fixedTools);
 		boolean materialiseLive = ContextAssembler.rendered(
 			stack, frameTools.cycleSpec.sourceConfig(),
 			frameTools.cycleSpec.cachePrefix()) == null;

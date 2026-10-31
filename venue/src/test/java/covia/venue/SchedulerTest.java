@@ -626,7 +626,7 @@ public class SchedulerTest {
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
-		assertTrue(ex.getCause() instanceof IllegalArgumentException, String.valueOf(ex.getCause()));
+		assertInstanceOf(covia.exception.NotFoundException.class, ex.getCause());
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
 		assertTrue(rec.get(ScheduleState.K_LAST_FIRED) instanceof CVMLong, "the fire was claimed");

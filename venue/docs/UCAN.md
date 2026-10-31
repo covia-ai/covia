@@ -149,7 +149,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
 | `oauth` | every `oauth/*` | All connected-account operations |
 | `oauth/use` | — | Send a connected account's token in a request without seeing it; bindable to a destination with `nb.url` |
-| `oauth/connect` | — | Connect an account: whoever approves the returned URL becomes the connection |
+| `oauth/connect` | — | Connect an account: start a connect, and complete one the provider approved, for the account that started it |
 | `oauth/disconnect` | — | Disconnect an account, revoking its grant at the provider |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
@@ -686,6 +686,7 @@ references with `secret/use` instead.
 | `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
 | `oauth:status` | `{ with: "oauth/", can: "crud/read" }`, or `oauth/<provider>` for one provider |
 | `oauth:connect` | `{ with: "oauth/<provider>", can: "oauth/connect" }` |
+| `oauth:complete` | `{ with: "oauth/<provider>", can: "oauth/connect" }`, and only by the account that started the connect |
 | `oauth:disconnect` | `{ with: "oauth/<provider>", can: "oauth/disconnect" }` |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
@@ -1211,13 +1212,16 @@ the authentication channel. The three concerns never infer one another:
   A grant a target made to this venue reaches a user the same way: the venue
   passes on part of it with `ucan:issue` and `prf` (§4.1).
 - **Target identity** — a credential (`caller` or `venue`) is sent only to a
-  venue proven to hold the DID it is audienced to: a `did:web` venue at its own
-  address, `https://<host>` or plain http on loopback, whether the hop names it
-  by that DID or by that address. A target named by URL states its DID at
-  `/.well-known/did.json`; a DID it cannot prove there — another host's
-  `did:web`, or a `did:key` — is refused before any credential leaves.
-  `auth.requireVenueProof: false` takes the stated DID instead, for test venues
-  whose `did:web` name is served elsewhere.
+  venue proven to hold the DID it is audienced to, by a mechanism the operator
+  lists in `auth.venueProof` (CONFIG.md). By default that is its address — a
+  `did:web` venue at `https://<host>` or plain http on loopback, whether the hop
+  names it by that DID or by that address — and then a challenge, which proves
+  a `did:key` venue that answers a fresh nonce with a proof naming the address
+  dialled. A target named by URL states its DID at `/.well-known/did.json`; a
+  DID no listed mechanism proves there is refused before any credential leaves,
+  and a recovered job proves its target again before re-sending a saved
+  credential. `auth.requireVenueProof: false` takes the stated DID instead, for
+  test venues.
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context

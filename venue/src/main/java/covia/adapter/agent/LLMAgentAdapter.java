@@ -102,6 +102,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	@Override
+	protected java.util.Set<String> harnessToolNames() {
+		return HARNESS_TOOL_NAMES;
+	}
+
+	@Override
 	public String getName() {
 		return "llmagent";
 	}
@@ -483,6 +488,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		toolCtx.skillSources = Skills.sourcesOf(config);
 		toolCtx.baseToolStart = Math.toIntExact(TaskTools.DEFINITIONS.count() + fixed.harness().count());
 		toolCtx.baseToolEnd = Math.toIntExact(toolCtx.baseToolStart + fixed.baseTools().count());
+		toolCtx.fixedNames = ToolPalette.names(fixed.tools());
 		return toolCtx;
 	}
 
@@ -738,8 +744,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	private ACell dispatchActiveTool(String name, ACell input, ToolContext toolCtx) {
-		return dispatchTool(name, input, toolCtx.operation(name),
-			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
+		AString operation = toolCtx.operation(name);
+		if (operation != null) return dispatchTool(name, input, operation, toolCtx.ctx, toolCtx.toolCallTimeoutMs);
+		return dispatchUnbound(name, input, toolCtx.ctx, new HarnessTools.ToolSurface(
+			loadScope(toolCtx, ""), toolCtx.callableNames()), toolCtx.toolCallTimeoutMs);
 	}
 
 	// ========== Built-in tool execution ==========
@@ -962,6 +970,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		Skills.SkillSources skillSources = Skills.SkillSources.EMPTY;
 		int baseToolStart;
 		int baseToolEnd;
+		/** Names of the fixed tools offered: task, harness and configured. */
+		java.util.Set<String> fixedNames = java.util.Set.of();
 		private AMap<AString, ACell> currentLoadToolIndex = Maps.empty();
 		private AMap<AString, ACell> currentPinnedToolIndex = Maps.empty();
 
@@ -994,6 +1004,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AString operation(String name) {
 			AString operation = ToolPalette.operation(currentLoadToolIndex, name);
 			return (operation != null) ? operation : ToolPalette.operation(toolIndex, name);
+		}
+
+		/** Every tool name offered: the fixed tools and those the loads added. */
+		java.util.Set<String> callableNames() {
+			java.util.Set<String> names = ToolPalette.names(currentLoadToolIndex);
+			names.addAll(fixedNames);
+			return names;
 		}
 
 		String activityLabel(String name) {

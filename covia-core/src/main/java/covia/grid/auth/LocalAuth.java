@@ -1,6 +1,7 @@
 package covia.grid.auth;
 
 import java.net.http.HttpRequest;
+import java.util.function.Supplier;
 
 /**
  * Local (trusted) authentication that sets a user identity without
@@ -23,7 +24,7 @@ class LocalAuth extends VenueAuth {
 	}
 
 	@Override
-	public void apply(HttpRequest.Builder builder) {
+	public void apply(HttpRequest.Builder builder, Supplier<String> venueDID) {
 		// No HTTP credentials — identity is trusted locally
 	}
 

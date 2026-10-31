@@ -2,6 +2,7 @@ package covia.adapter.agent;
 
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -171,9 +172,13 @@ final class TaskTools {
 						Maps.of(failed ? Fields.ERROR : Fields.RESULT, value), ctx)
 						.get(timeoutMs, TimeUnit.MILLISECONDS);
 					if (r != null) opResult = r;
+				} catch (TimeoutException e) {
+					return ToolCycleEngine.ToolOutcome.result(AbstractLLMAdapter.toolTimeout(timeoutMs));
+				} catch (InterruptedException e) {
+					return ToolCycleEngine.ToolOutcome.result(AbstractLLMAdapter.toolInterrupted());
 				} catch (Exception e) {
 					return ToolCycleEngine.ToolOutcome.result(
-						Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage()));
+						Strings.create("Error: " + AbstractLLMAdapter.toolFailure(e, tool)));
 				}
 			}
 			if (results == null) results = Maps.empty();

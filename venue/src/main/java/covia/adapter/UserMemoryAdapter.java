@@ -329,7 +329,7 @@ public class UserMemoryAdapter extends AAdapter {
 		try {
 			return engine.jobs().invokeInternal(op, input, ctx).get(10_000, TimeUnit.MILLISECONDS);
 		} catch (Exception e) {
-			throw new RuntimeException("memory: internal " + op + " failed: " + e.getMessage(), e);
+			throw new RuntimeException("memory: internal " + op + " failed: " + describeFailure(e), e);
 		}
 	}
 }

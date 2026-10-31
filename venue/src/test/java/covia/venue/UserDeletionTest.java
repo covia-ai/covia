@@ -18,6 +18,7 @@ import covia.adapter.UserAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.server.AuthMiddleware;
@@ -53,9 +54,9 @@ class UserDeletionTest {
 			assertThrows(AuthException.class, () -> engine.deleteUser(ctx, target));
 		}
 		assertNotNull(engine.getVenueState().users().get(target));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> engine.deleteUser(engine.venueContext(), engine.getDIDString()));
-		assertThrows(IllegalArgumentException.class, () -> engine.deleteUser(engine.venueContext(),
+		assertThrows(InvalidInputException.class, () -> engine.deleteUser(engine.venueContext(),
 			Strings.create(engine.getDIDString() + ":public")));
 	}
 

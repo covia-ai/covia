@@ -178,7 +178,7 @@ public class JobRoutesTest {
 	 */
 	@Test
 	public void jobSseEndsWhenTheJobCanNoLongerBeRead() throws Exception {
-		VenueAuth auth = VenueAuth.keyPair(AKeyPair.generate(), TestServer.ENGINE.getDIDString().toString());
+		VenueAuth auth = VenueAuth.keyPair(AKeyPair.generate());
 		RequestContext owner = RequestContext.of(Strings.create(auth.getDID()));
 		Job job = TestServer.ENGINE.jobs().invokeOperation("v/test/ops/never",
 			Maps.of(Fields.MESSAGE, "deleted-while-streaming"), owner);
@@ -187,7 +187,7 @@ public class JobRoutesTest {
 			HttpResponse<InputStream> sse = http.send(HttpRequest.newBuilder()
 				.uri(new URI(base + "/api/v1/jobs/" + id + "/sse"))
 				.header("Accept", "text/event-stream")
-				.header("Authorization", "Bearer " + auth.mintToken())
+				.header("Authorization", "Bearer " + auth.mintToken(TestServer.ENGINE.getDIDString().toString()))
 				.GET().build(), HttpResponse.BodyHandlers.ofInputStream());
 			try (InputStream in = sse.body()) {
 				assertEquals(200, sse.statusCode());
@@ -268,12 +268,12 @@ public class JobRoutesTest {
 	@Test
 	public void jobSseAcceptsBearerAuthenticationAndUsesCallerOwnership() throws Exception {
 		AKeyPair keyPair = AKeyPair.generate();
-		VenueAuth auth = VenueAuth.keyPair(keyPair, TestServer.ENGINE.getDIDString().toString());
+		VenueAuth auth = VenueAuth.keyPair(keyPair);
 		RequestContext owner = RequestContext.of(Strings.create(auth.getDID()));
 		Job job = TestServer.ENGINE.jobs().invokeOperation("v/test/ops/never",
 			Maps.of(Fields.MESSAGE, "authenticated-sse"), owner);
 		String id = job.getID().toHexString();
-		String token = auth.mintToken();
+		String token = auth.mintToken(TestServer.ENGINE.getDIDString().toString());
 
 		try {
 			HttpResponse<String> anonymous = http.send(HttpRequest.newBuilder()

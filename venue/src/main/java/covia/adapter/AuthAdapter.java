@@ -3,6 +3,7 @@ package covia.adapter;
 import java.util.concurrent.CompletableFuture;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import convex.auth.did.DID;
 import convex.auth.jwt.JWT;
@@ -15,20 +16,34 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
+import covia.grid.auth.VenueChallenge;
+import covia.grid.auth.VenueDID;
+import covia.grid.client.VenueHTTP;
 import covia.venue.RequestContext;
 import covia.venue.auth.AuthenticationMethods;
 import covia.venue.auth.AuthResult;
 import covia.venue.auth.VenueAuthenticator;
+import covia.venue.auth.VenueProofMethods;
 
 /**
- * Built-in authentication, identity introspection and caller token issuance.
+ * Built-in authentication, venue identity proof, identity introspection and
+ * caller token issuance.
  *
  * <p>{@code auth:whoami} — returns the caller DID as resolved by the venue's
  * auth middleware. Useful for diagnostics and for tests that need to verify
  * which identity the venue authenticated a request as.</p>
  */
-public class AuthAdapter extends AAdapter implements AuthenticationMethods {
+public class AuthAdapter extends AAdapter implements AuthenticationMethods, VenueProofMethods {
+	/** Venue proof by address: a did:web venue at its own address ({@link VenueDID#provenAt}). */
+	public static final AString ADDRESS_PROOF = Strings.intern("address");
+	/** Venue proof by challenge ({@link VenueChallenge}). */
+	public static final AString CHALLENGE_PROOF = Strings.intern("challenge");
+	/** Seconds for which a challenge proof is reused for the same target and DID. */
+	public static final long CHALLENGE_REUSE = 120;
 	public static final long DEFAULT_IDENTITY_LIFETIME = 300;
 	public static final long MAX_IDENTITY_LIFETIME = 3600;
 	public static final String IDENTITY_AUTH_REQUIRED = "An authenticated non-public caller is required";
@@ -46,12 +61,39 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods {
 	private static final Set<AString> IDENTITY_FIELDS = Set.of(JWT.AUD, Fields.NAME, LIFETIME, OVERWRITE);
 	private VenueAuthenticator verifier;
 	private Map<AString, Verifier> methods = Map.of();
+	private Map<AString, VenueProofMethods.Method> proofs = Map.of();
 
 	/** Built-in verification stays in the existing venue authentication service. */
 	protected VenueAuthenticator createAuthenticator() { return new VenueAuthenticator(engine); }
 
 	@Override
 	public Map<AString, Verifier> authenticationMethods() { return methods; }
+
+	@Override
+	public Map<AString, VenueProofMethods.Method> venueProofMethods() { return proofs; }
+
+	private static Map<AString, VenueProofMethods.Method> builtInProofs() {
+		VenueProofMethods.Method address = (target, did, connection) ->
+			VenueDID.provenAt(target, did) ? null : VenueDID.NOT_ITS_ADDRESS;
+		VenueProofMethods.Method challenge = new VenueProofMethods.Method() {
+			@Override
+			public String prove(String target, String did, Supplier<Venue> connection) {
+				Venue venue;
+				try {
+					venue = connection.get();
+				} catch (InvalidInputException | ConfigurationException
+						| IllegalArgumentException | IllegalStateException e) {
+					// Refused by the outbound guard, or no address to dial
+					return VenueChallenge.Reason.UNREACHABLE + e.getMessage();
+				}
+				return venue instanceof VenueHTTP http ? VenueChallenge.prove(http, did) : VenueChallenge.Reason.NOT_HTTP;
+			}
+
+			@Override
+			public long reuseSeconds() { return CHALLENGE_REUSE; }
+		};
+		return Map.of(ADDRESS_PROOF, address, CHALLENGE_PROOF, challenge);
+	}
 
 	/** Legacy venue JWTs have unknown origin and are not a named method. */
 	public AuthResult verifyLegacyCredential(ACell input) { return verifier.verifyLegacyCredential(input); }
@@ -74,6 +116,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods {
 	protected void installAssets() {
 		verifier = createAuthenticator();
 		methods = verifier.builtInMethods();
+		proofs = builtInProofs();
 		// The adapter's own skill: v/skills/auth lives and dies with this adapter.
 		installSkill("auth/auth", "/skills/auth.json");
 		installSkill("root/auth", "/skills/auth.json");
@@ -152,7 +195,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods {
 		}
 		AString name = params.get(Fields.NAME) instanceof AString s ? s : null;
 		AString token = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(),
-			caller.toString(), audience.toString(), lifetime).mintToken());
+			caller.toString(), lifetime).mintToken(audience.toString()));
 		// Reuse the secret/write gate, encrypted storage, collision handling and audit.
 		SecretAdapter.storeSecret(engine, ctx, name, token, CVMBool.TRUE.equals(params.get(OVERWRITE)));
 		return Maps.of(SECRET, Strings.create("s/" + name), JWT.SUB, caller, JWT.AUD, audience,

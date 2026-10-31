@@ -1,6 +1,6 @@
 {
   "name": "Connect an account",
-  "description": "Starts connecting the caller's account at an OAuth provider (google, microsoft, github, or any provider the operator configured). Returns the URL the user must open and approve; the provider then calls the venue back and the grant is stored for the caller. Nothing is connected until the user approves. Afterwards, call the provider's API with http:get / http:post and bearerSecret \"oauth/<provider>\" — the access token never appears in your context.",
+  "description": "Starts connecting the caller's account at an OAuth provider (google, microsoft, github, or any provider the operator configured). Returns the URL the user must open and approve. Approval alone connects nothing: the venue then gives the browser a one-time completion code, and oauth:complete with that code, from this same account, stores the grant. With returnTo the browser takes the code to that app; without it the venue's page shows the code for the user to give back. Afterwards, call the provider's API with http:get / http:post and bearerSecret \"oauth/<provider>\" — the access token never appears in your context.",
   "operation": {
     "adapter": "oauth:connect",
     "readOnly": false,
@@ -9,7 +9,7 @@
       "properties": {
         "provider": { "type": "string", "description": "A configured provider name — see v/info/adapters/oauth" },
         "scopes": { "type": "array", "items": { "type": "string" }, "description": "Scopes to request; the provider's configured defaults when omitted" },
-        "returnTo": { "type": "string", "description": "Where the browser goes after approval: a venue-relative path, or a URL under an operator-allowed prefix (adapters.oauth.returnTo)" }
+        "returnTo": { "type": "string", "description": "The app the browser returns to after approval, with ?code=<completion code> added: a URL under an operator-allowed prefix (adapters.oauth.returnTo)" }
       },
       "required": ["provider"]
     },

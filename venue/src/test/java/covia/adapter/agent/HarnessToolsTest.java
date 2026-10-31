@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashSet;
+import java.util.Set;
+
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
@@ -128,5 +131,19 @@ public class HarnessToolsTest {
 		HarnessTools.Invocation inv = HarnessTools.invocation(Maps.of("input", Maps.of("path", "w/x")));
 		assertNotNull(inv.error());
 		assertTrue(inv.error().toString().contains("requires the exact added tool name"));
+	}
+
+	/** A name nothing provides ends with what the session can call (#643). */
+	@Test
+	public void testNoSuchToolNamesWhatCanBeCalled() {
+		String head = String.format(HarnessTools.NO_SUCH_TOOL, "x") + "; ";
+		assertEquals(head + HarnessTools.NO_TOOLS, HarnessTools.noSuchTool("x", Set.of()));
+		assertEquals(head + String.format(HarnessTools.ONLY_TOOLS, "a, b"),
+			HarnessTools.noSuchTool("x", Set.of("b", "a")), "a short list is named, sorted");
+		Set<String> many = new HashSet<>();
+		for (int i = 0; i <= HarnessTools.MAX_NAMED; i++) many.add("t" + i);
+		assertEquals(head + HarnessTools.USE_TOOL_LIST, HarnessTools.noSuchTool("x", many));
+		assertEquals(head + HarnessTools.USE_TOOL_LIST, HarnessTools.noSuchTool("x", null),
+			"an unknown tool list is referred to, not guessed");
 	}
 }

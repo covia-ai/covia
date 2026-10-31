@@ -98,6 +98,21 @@ public class TelegramAdapterTest {
 	// ------------------------------------------------------------ config parsing
 
 	@Test
+	public void aBotThatIsNotRunningSaysWhetherItIsStillStarting() {
+		// A runner not yet started is STARTING: callers may simply retry shortly.
+		BotRunner idle = new BotRunner(adapter, BotSpec.parse("idle", botConfig(FakeTelegramServer.TOKEN,
+			OWNER.toString(), "operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID))), false),
+			telegram.apiUrl(), covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		assertThrows(covia.exception.StillStartingException.class, () -> idle.call("getMe", java.util.Map.of()));
+
+		// A stopped bot is unavailable, and not about to become available.
+		idle.stop();
+		covia.exception.UnavailableException stopped = assertThrows(covia.exception.UnavailableException.class,
+			() -> idle.call("getMe", java.util.Map.of()));
+		assertFalse(stopped instanceof covia.exception.StillStartingException, stopped.getMessage());
+	}
+
+	@Test
 	public void preparedEngineDefersBotWorkersUntilActivation() throws Exception {
 		try (FakeTelegramServer fake = new FakeTelegramServer()) {
 			var key = convex.core.crypto.AKeyPair.generate();

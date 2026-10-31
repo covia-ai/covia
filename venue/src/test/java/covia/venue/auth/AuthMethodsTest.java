@@ -189,7 +189,7 @@ class AuthMethodsTest {
 			engine.registerAdapter(new Fixture(true));
 			VenueAuthenticator service = new VenueAuthenticator(engine);
 			long version = engine.adapterRegistryVersion();
-			assertThrows(IllegalArgumentException.class,
+			assertThrows(covia.exception.InvalidInputException.class,
 				() -> engine.configureAdapter("auth-fixture", Maps.of("label", 123)));
 			assertEquals(version, engine.adapterRegistryVersion());
 			assertEquals(Strings.create("original"), call(service, FIRST).authentication().details().get(Strings.create("label")));

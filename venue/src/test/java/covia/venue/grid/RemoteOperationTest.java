@@ -234,7 +234,7 @@ public class RemoteOperationTest {
 			"ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100");
 		RequestContext caller = RequestContext.of(Strings.create("did:key:zCallerRejected"));
 
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(covia.exception.NotFoundException.class, () ->
 			TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
 				didWebRefB(absent), Maps.of("first", "x", "second", "y"), caller));
 
@@ -299,7 +299,7 @@ public class RemoteOperationTest {
 		RequestContext caller = RequestContext.of(Strings.create("did:key:zCallerKeyScope"));
 		String didKeyRef = "did:key:z6MkNotAFetchableVenue/a/" + opId.toHexString();
 
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(covia.exception.NotFoundException.class, () ->
 			TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
 				didKeyRef, Maps.of("first", "x", "second", "y"), caller));
 	}

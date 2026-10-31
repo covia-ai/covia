@@ -42,13 +42,36 @@ public class AudienceBoundAuthTest {
 		// Cached idempotently.
 		assertEquals(venueDID, VenueDID.discover(TestServer.BASE_URL));
 
-		// A token audienced to this venue authenticates normally.
+		// A connection by URL alone audiences its tokens to the DID the venue
+		// presents (on loopback), and they authenticate normally.
 		AKeyPair kp = AKeyPair.generate();
 		VenueHTTP client = VenueHTTP.create(
-			URI.create(TestServer.BASE_URL), VenueAuth.keyPair(kp, venueDID));
+			URI.create(TestServer.BASE_URL), VenueAuth.keyPair(kp));
 		Job job = client.invokeAndWait(Strings.create("v/test/ops/echo"),
 			Maps.of(Fields.VALUE, Strings.create("bound")));
 		assertEquals(Status.COMPLETE, job.getStatus());
+		assertEquals(venueDID, client.venueDID());
+
+		// So does a connection opened for the DID the venue presents.
+		VenueHTTP named = VenueHTTP.create(
+			URI.create(TestServer.BASE_URL), venueDID, VenueAuth.keyPair(kp));
+		assertEquals(Status.COMPLETE, named.invokeAndWait(Strings.create("v/test/ops/echo"),
+			Maps.of(Fields.VALUE, Strings.create("named"))).getStatus());
+	}
+
+	@Test
+	public void testConnectionForAnotherDIDSendsNoCredential() {
+		// A connection opened for another venue's DID is refused before any
+		// credential goes out: the venue reached presents a different DID, and
+		// the connection never re-binds to it.
+		String otherVenueDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString();
+		VenueHTTP client = VenueHTTP.create(
+			URI.create(TestServer.BASE_URL), otherVenueDID, VenueAuth.keyPair(AKeyPair.generate()));
+		covia.exception.AuthException refused =
+			assertThrows(covia.exception.AuthException.class, client::venueDID);
+		assertTrue(refused.getMessage().contains(VenueDID.PRESENTS_OTHER));
+		assertThrows(covia.exception.AuthException.class, () -> client.startJobAsync(
+			Strings.create("v/test/ops/echo"), Maps.of(Fields.VALUE, Strings.create("x"))));
 	}
 
 	@Test
@@ -61,7 +84,7 @@ public class AudienceBoundAuthTest {
 			convex.core.crypto.util.Multikey.encodePublicKey(otherVenueKP.getAccountKey());
 
 		VenueHTTP client = VenueHTTP.create(
-			URI.create(TestServer.BASE_URL), VenueAuth.keyPair(kp, otherVenueDID));
+			URI.create(TestServer.BASE_URL), VenueAuth.bearer(VenueAuth.keyPair(kp).mintToken(otherVenueDID)));
 		Throwable t = assertThrows(Throwable.class, () ->
 			client.invokeAndWait(Strings.create("v/test/ops/echo"),
 				Maps.of(Fields.VALUE, Strings.create("replayed"))));
@@ -79,8 +102,8 @@ public class AudienceBoundAuthTest {
 		String path = "w/auth-subject-private";
 		AString secret = Strings.create("victim-only");
 
-		VenueHTTP victim = VenueHTTP.create(URI.create(TestServer.BASE_URL),
-			VenueAuth.keyPair(victimKey, venueDID));
+		VenueHTTP victim = VenueHTTP.create(URI.create(TestServer.BASE_URL), venueDID,
+			VenueAuth.keyPair(victimKey));
 		victim.setTimeout(5000);
 		victim.invokeAndWait(Strings.create("v/ops/covia/write"),
 			Maps.of(Fields.PATH, path, Fields.VALUE, secret));

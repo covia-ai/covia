@@ -38,6 +38,11 @@ import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.ShuttingDownException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -874,9 +879,9 @@ public class CoviaAPI extends ACoviaAPI {
 
 		} catch (AuthException e) {
 			buildError(ctx,403,"Not authorised to store asset content: "+idString);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			this.buildError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
-		} catch (IOException | OutOfMemoryError e) {
+		} catch (IOException e) {
 			this.buildError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
 		}
 	}
@@ -903,7 +908,8 @@ public class CoviaAPI extends ACoviaAPI {
 				@OpenApiResponse(status = "200", description = "Operation output",
 					content = @OpenApiContent(type = "application/json", from = Object.class)),
 				@OpenApiResponse(status = "400", description = "Malformed request or operation"),
-				@OpenApiResponse(status = "403", description = "Operation not authorised")
+				@OpenApiResponse(status = "403", description = "Operation not authorised"),
+				@OpenApiResponse(status = "503", description = "Venue shutting down; retry once it is back")
 			})
 	protected void runOperation(Context ctx) {
 		// Direct operation results may contain owner-requested plaintext secrets.
@@ -939,16 +945,19 @@ public class CoviaAPI extends ACoviaAPI {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 			if (cause instanceof AuthException) {
 				buildError(ctx, 403, cause.getMessage());
+			} else if (cause instanceof ShuttingDownException) {
+				buildError(ctx, 503, cause.getMessage());
 			} else if (cause instanceof covia.exception.RemoteFetchException) {
 				buildError(ctx, 502, cause.getMessage());
 			} else if (cause instanceof covia.exception.RateLimitException rate) {
 				ctx.header("Retry-After", Long.toString(rate.getRetryAfterSeconds()));
 				buildError(ctx, 429, rate.getMessage());
-			} else if (cause instanceof IllegalArgumentException
-					|| cause instanceof IllegalStateException) {
+			} else if (AAdapter.isExpectedFailure(cause)) {
+				// The operation ran and failed for its own stated reason.
 				buildError(ctx, 400, "Error running operation: " + cause.getMessage());
 			} else {
-				buildError(ctx, 500, "Operation failed: " + cause.getMessage());
+				log.error("Unexpected failure running operation {}", op, cause);
+				buildError(ctx, 500, "Operation failed: " + AAdapter.describeFailure(cause));
 			}
 		} catch (Exception e) {
 			buildError(ctx, 500, "Unexpected failure running operation: " + e);
@@ -1056,19 +1065,22 @@ public class CoviaAPI extends ACoviaAPI {
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
+		} catch (ShuttingDownException e) {
+			this.buildError(ctx, 503, e.getMessage());
 		} catch (covia.exception.RemoteFetchException e) {
 			// Resolving the operation required fetching a definition from another
 			// venue, and that upstream fetch failed — a gateway error, not "the
 			// operation does not exist" (#174). The message names the venue.
 			this.buildError(ctx, 502, e.getMessage());
-		} catch (IllegalArgumentException | IllegalStateException e) {
-			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
-			return;
 		} catch (covia.exception.RateLimitException e) {
 			// Caller is over an admission/rate limit (e.g. concurrent-job cap) and
 			// the bounded wait elapsed — standard backpressure: 429 + Retry-After.
 			ctx.header("Retry-After", Long.toString(e.getRetryAfterSeconds()));
 			this.buildError(ctx, 429, e.getMessage());
+			return;
+		} catch (CoviaException | IllegalArgumentException | IllegalStateException e) {
+			// Any other expected refusal of the invocation.
+			this.buildError(ctx, 400, "Error invoking operation: " + e.getMessage());
 			return;
 		} catch (Exception e) {
 			this.buildError(ctx, 500, "Unexpected failure invoking operation: "+e);
@@ -1177,8 +1189,6 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx,200,status);
 		} catch (AuthException e) {
 			buildError(ctx,403,e.getMessage());
-		} catch (Exception e) {
-			buildError(ctx,404,"Job not found: "+id);
 		}
 	}
 	
@@ -1229,9 +1239,9 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 202, response);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException | IllegalArgumentException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
@@ -1752,7 +1762,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			path = expandValueScope(ctx, rctx, path);
 			input = buildValueInput(ctx, path);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -1800,7 +1810,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, result);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			// Bad request parameters (e.g. a fields projection on a non-keyed
 			// node, or over the field cap) — the caller's error, not the venue's.
 			buildError(ctx, 400, e.getMessage());
@@ -2045,7 +2055,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -2073,7 +2083,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.list(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (RuntimeException e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2120,7 +2130,9 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (RuntimeException e) {
 			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
 			buildError(ctx, cause instanceof AuthException ? 403
-				: cause instanceof IllegalArgumentException ? 400 : 500, cause.getMessage());
+				: cause instanceof ShuttingDownException ? 503
+				: (cause instanceof IllegalArgumentException || cause instanceof InvalidInputException
+					|| cause instanceof NotFoundException) ? 400 : 500, cause.getMessage());
 		}
 	}
 
@@ -2146,7 +2158,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.authenticationList(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (RuntimeException e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2170,7 +2182,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDrives(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (Exception e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2207,7 +2219,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDirectory(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 		} catch (Exception e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
@@ -2249,7 +2261,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}

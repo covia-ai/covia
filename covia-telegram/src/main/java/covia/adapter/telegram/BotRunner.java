@@ -61,6 +61,8 @@ import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.StillStartingException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -112,6 +114,23 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private static final AString K_MEDIA_GROUP = Strings.intern("media_group_id");
 
 	enum State { STARTING, PENDING, RUNNING, STOPPED }
+
+	/** A Bot API call while the bot's first start is in flight; the bot's name follows. */
+	static final String BOT_STARTING = "Telegram bot '%s' is starting; try again shortly";
+	/** A Bot API call while the bot retries a failed start; its name, then why. */
+	static final String BOT_PENDING = "Telegram bot '%s' is not running (%s); it keeps retrying";
+	/** A Bot API call to a stopped bot; its name follows. */
+	static final String BOT_STOPPED = "Telegram bot '%s' is stopped";
+
+	/** Why the bot cannot call the Bot API now. */
+	private UnavailableException notRunning() {
+		if (stopped) return new UnavailableException(String.format(BOT_STOPPED, spec.name()));
+		return switch (state) {
+			case STARTING -> new StillStartingException(String.format(BOT_STARTING, spec.name()));
+			case PENDING -> new UnavailableException(String.format(BOT_PENDING, spec.name(), error));
+			default -> new UnavailableException(String.format(BOT_STOPPED, spec.name()));
+		};
+	}
 
 	private final TelegramAdapter adapter;
 	final BotSpec spec;
@@ -879,7 +898,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		String base = apiUrl.substring(0, apiUrl.length() - 4) + "/file/bot";
 		OkHttpClient client = http;
 		String liveToken = token;
-		if (client == null || liveToken == null) throw new IllegalStateException("Telegram bot is not running");
+		if (client == null || liveToken == null) throw notRunning();
 		Request request = new Request.Builder().url(base + liveToken + "/" + path).build();
 		try (Response response = client.newCall(request).execute()) {
 			if (!response.isSuccessful() || response.body() == null) throw new JobFailedException(TelegramMedia.DOWNLOAD_FAILED);
@@ -1061,7 +1080,8 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * {@code true} for most others). Subject to {@link #requireAllowedTarget}.
 	 *
 	 * @throws JobFailedException when Telegram answers {@code ok: false}
-	 * @throws IllegalStateException when the bot is not running
+	 * @throws UnavailableException when the bot is not running; a
+	 *         {@link StillStartingException} while it is starting
 	 */
 	record Upload(String filename, String contentType, byte[] bytes) {}
 
@@ -1160,10 +1180,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private ApiResponse execute(String method, Map<String, Object> params, Map<String, Upload> uploads) {
 		OkHttpClient c = http;
 		String tok = token;
-		if (c == null || tok == null) {
-			throw new IllegalStateException("Telegram bot '" + spec.name() + "' is not running"
-				+ (error != null ? ": " + error : ""));
-		}
+		if (c == null || tok == null) throw notRunning();
 		FormBody.Builder form = new FormBody.Builder();
 		if (params != null) {
 			for (Map.Entry<String, Object> e : params.entrySet()) {
