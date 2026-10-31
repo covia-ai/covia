@@ -7,11 +7,15 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -49,6 +53,23 @@ class MessagingMediaTest {
 			.content().getInputStream().readAllBytes(), "the first is untouched");
 		assertEquals(MessagingMedia.INVALID_DESTINATION, assertThrows(IllegalArgumentException.class,
 			() -> MessagingMedia.store(TestEngine.ENGINE, first, null, " ", "x.bin", RequestContext.of(owner))).getMessage());
+	}
+
+	@Test void theOwnersMediaDriveNeedsWriteOverTheDrive(TestInfo info) throws Exception {
+		// A provider creates the owner's media drive when its writer may write over
+		// that drive, dlfs/<drive>/; a grant over one file in it is not enough.
+		AString owner = TestEngine.uniqueDID(info);
+		DLFSAdapter dlfs = (DLFSAdapter) TestEngine.ENGINE.getAdapter("dlfs");
+		RequestContext fileWriter = RequestContext.of(owner).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/media-grant/note.ogg"), Capability.CRUD_WRITE)));
+		assertThrows(Exception.class,
+			() -> MessagingMedia.ensureOwnerDirectory(TestEngine.ENGINE, owner, "media-grant", fileWriter));
+		assertEquals(0, RT.ensureVector(RT.getIn(dlfs.listDrives(RequestContext.of(owner)), "drives")).count());
+
+		RequestContext driveWriter = RequestContext.of(owner).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/media-grant/"), Capability.CRUD_WRITE)));
+		MessagingMedia.ensureOwnerDirectory(TestEngine.ENGINE, owner, "media-grant", driveWriter);
+		assertEquals(Vectors.of("media-grant"), RT.getIn(dlfs.listDrives(RequestContext.of(owner)), "drives"));
 	}
 
 	@Test void theMediaHookAddsTextButNeverReplacesTheReference() {

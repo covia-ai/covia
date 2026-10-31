@@ -309,6 +309,27 @@ public class DLFSCrossUserTest {
 	}
 
 	@Test
+	public void testCrossUserCreateDriveNeedsWriteOverThatDrive() {
+		// Bob creates a drive in Alice's space by naming it <alice>/<drive> in
+		// `drive`, under her grant of crud/write over that drive. The grant creates
+		// the drive it names and no other; a read grant over all her drives creates none.
+		RequestContext bob = withProofs(BOB,
+			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs/inbox/", "crud/write", 3600));
+		run("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/inbox"), bob);
+		failure("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/other"), bob);
+
+		RequestContext reader = withProofs(BOB,
+			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs/", "crud/read", 3600));
+		failure("v/ops/dlfs/create-drive", Maps.of("drive", ALICE_DID + "/notes"), reader);
+
+		// `name` takes a bare drive name only, so it never reaches another user's space.
+		assertTrue(failure("v/ops/dlfs/create-drive", Maps.of("name", ALICE_DID + "/inbox2"), bob)
+			.contains(DLFSAdapter.INVALID_DRIVE_NAME));
+
+		assertEquals(Vectors.of("docs", "inbox"), aliceDrives());
+	}
+
+	@Test
 	public void testCrossUserWriteNeedsTheDrive() {
 		// A write grant writes into Alice's drives, but does not create one.
 		RequestContext bob = withProofs(BOB,

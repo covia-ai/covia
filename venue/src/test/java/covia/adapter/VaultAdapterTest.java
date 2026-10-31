@@ -12,11 +12,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -52,7 +55,20 @@ public class VaultAdapterTest {
 		assertEquals(0, RT.ensureVector(RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
 
 		run("v/ops/vault/write", Maps.of("path", "first.txt", "content", "hello"));
-		assertEquals(convex.core.data.Vectors.of("vault"),
+		assertEquals(Vectors.of("vault"),
+			RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives"));
+	}
+
+	@Test
+	public void testFileGrantLetsVaultCreateItsDrive() {
+		// Vault creates its drive under the authority of the write it makes, so a
+		// grant over one file in the vault is enough. dlfs:createDrive would need
+		// crud/write over the drive itself.
+		RequestContext writer = RequestContext.of(aliceDID).withCaps(Vectors.of(
+			Capability.create(Strings.create("dlfs/vault/note.txt"), Capability.CRUD_WRITE)));
+		engine.jobs().invokeOperation("v/ops/vault/write",
+			Maps.of("path", "note.txt", "content", "hi"), writer).awaitResult(5000);
+		assertEquals(Vectors.of("vault"),
 			RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives"));
 	}
 

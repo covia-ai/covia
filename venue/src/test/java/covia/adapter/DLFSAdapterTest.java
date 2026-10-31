@@ -452,6 +452,28 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	public void testAgentCreatesOnlyTheDrivesItsGrantCovers() {
+		// dlfs:createDrive needs crud/write over the drive itself, dlfs/<name>. An
+		// agent granted that creates the named drive and no other. A grant over a
+		// file inside the drive, or crud/read over every drive, creates none.
+		RequestContext maker = RequestContext.ofAgent(ALICE_DID, Strings.create("maker"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/reports"), Capability.CRUD_WRITE)));
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive",
+			Maps.of("name", "reports"), maker).awaitResult(5000);
+		failure("v/ops/dlfs/create-drive", Maps.of("name", "other"), maker);
+
+		RequestContext fileWriter = RequestContext.ofAgent(ALICE_DID, Strings.create("logger"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/logs/today.txt"), Capability.CRUD_WRITE)));
+		failure("v/ops/dlfs/create-drive", Maps.of("name", "logs"), fileWriter);
+
+		RequestContext reader = RequestContext.ofAgent(ALICE_DID, Strings.create("reader"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/"), Capability.CRUD_READ)));
+		failure("v/ops/dlfs/create-drive", Maps.of("name", "notes"), reader);
+
+		assertEquals(Vectors.of("reports"), driveNames());
+	}
+
+	@Test
 	public void testEnsureDriveCreatesOnlyUnderWriteAuthority() {
 		// A component that names its own drive creates it, but only where the
 		// caller could write.
