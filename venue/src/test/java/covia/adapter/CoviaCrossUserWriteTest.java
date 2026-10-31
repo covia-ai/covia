@@ -450,9 +450,9 @@ public class CoviaCrossUserWriteTest {
 	public void testAgentReachesOwnerNamespaceViaExplicitDid() {
 		// An agent sub-principal (<owner>:g:carol) works inside its OWNER's
 		// namespace. A write to <owner>/w/… by explicit DID must be treated as own
-		// (getUserDID projects the agent to its owner), landing where the owner's
-		// bare reads look — not gated as cross-user.
-		RequestContext agent = RequestContext.of(Strings.create(ALICE_DID.toString() + ":g:carol"));
+		// (the venue builds the agent's context in its owner's namespace), landing
+		// where the owner's bare reads look — not gated as cross-user.
+		RequestContext agent = RequestContext.ofAgent(ALICE_DID, Strings.create("carol"));
 		run("v/ops/covia/write",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/agentnote", Fields.VALUE, Strings.create("by carol")), agent);
 		ACell read = run("v/ops/covia/read", Maps.of(Fields.PATH, "w/agentnote"), ALICE);

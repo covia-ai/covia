@@ -239,7 +239,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	 */
 	public final String resolveCredential(String reference, MessagingBot<?> bot, String destination) {
 		if (!isSecretReference(reference)) return reference;
-		String value = engine.resolveSecret(reference, RequestContext.of(bot.spec().userDID(engine)), destination);
+		String value = engine.resolveSecret(reference, engine.context(bot.spec().userDID(engine)), destination);
 		if (value != null || bot.managed() != Managed.CONFIG) return value;
 		return engine.resolveSecret(reference, engine.venueContext(), destination);
 	}

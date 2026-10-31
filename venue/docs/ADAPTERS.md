@@ -223,6 +223,15 @@ explicit allow-list and defaults to publishing nothing; the helper
 private endpoints, allow-lists, and other operator-private values must not
 appear there.
 
+Adapters can implement `covia.venue.auth.VenueProofMethods` to contribute named
+venue identity proof mechanisms for operators to list in `auth.venueProof`
+(CONFIG.md). A mechanism returns null when the venue reached at a target holds
+a DID, or the reason it does not, and may let a success be reused for a period.
+It dials the target only through the connection it is given, which passes the
+outbound guard. Any listed mechanism suffices, so each must be sound on its
+own. Declarations are immutable for the installed instance, and a disabled
+adapter's mechanisms are withdrawn.
+
 Adapters can implement `covia.venue.auth.AuthenticationMethods` to contribute
 named trusted verifiers (`Map<AString, Verifier>`). Each verifier receives the
 selected venue method id and transient `ACell` input, returns an `AuthResult`

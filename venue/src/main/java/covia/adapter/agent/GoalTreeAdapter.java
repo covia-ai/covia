@@ -16,6 +16,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
@@ -149,6 +150,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		java.util.Set<String> names = new java.util.HashSet<>(HARNESS_TOOL_REGISTRY.keySet());
 		names.addAll(TaskTools.NAMES);
 		HARNESS_NAMES = java.util.Set.copyOf(names);
+	}
+
+	@Override
+	protected java.util.Set<String> harnessToolNames() {
+		return HARNESS_NAMES;
 	}
 
 	/** Everything a cycle holds constant across its frames and inferences;
@@ -410,6 +416,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameToolContext frameTools = new FrameToolContext(null, store, 0, p.baseTools(), cycle);
 		frameTools.activeFrame = activeFrame;
 		frameTools.adoptLoadSnapshot(p.loads());
+		frameTools.fixedNames = ToolPalette.names(p.spec().tools());
 		ToolCycleEngine.Registry<FrameToolContext> registry = frameTools.registry()
 			.register(TOOL_SUBGOAL, (call, ignored) ->
 				ToolCycleEngine.ToolOutcome.result(Strings.create(STEP_SUBGOAL_NOTE)));
@@ -511,6 +518,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	private ACell goal(Job job, RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		// A step runs as its agent, under the agent's authority as it stands now,
+		// whoever invoked it and whatever its input's config names.
+		RequestContext capsCtx = engine.stepContext(ctx, agentId);
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		// S3c: prefer session.pending over agent-level messages when a session
 		// is in scope. effectiveMessages picks the right one (no duplication).
@@ -595,7 +605,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Authority, palette and the cycle's Spec. Harness tool names in
 		// config.tools are skipped by the palette — they're resolved separately
 		// by resolveHarnessTools / buildTypedRootHarnessTools.
-		RequestContext capsCtx = conferredCapsContext(recordConfig, agentId, ctx).withAgentId(agentId);
 		ModelProfile profile = modelProfileFor(l3Config, ctx);
 		boolean cachePrefix = promptCaching(profile, l3Config);
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
@@ -737,6 +746,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> toolIndex;
 		int baseToolStart;
 		int baseToolEnd;
+		/** Names of this frame's fixed tools offered: task, harness and configured. */
+		java.util.Set<String> fixedNames = java.util.Set.of();
 		AMap<AString, ACell> iterationToolIndex = Maps.empty();
 		AMap<AString, ACell> pinnedToolIndex = Maps.empty();
 		AMap<AString, ACell> activeFrame;
@@ -793,7 +804,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		private ACell dispatchActiveTool(String name, ACell input) {
 			AString operation = ToolPalette.operation(iterationToolIndex, name);
 			if (operation == null) operation = ToolPalette.operation(toolIndex, name);
-			return dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
+			if (operation != null) return dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
+			java.util.Set<String> callable = ToolPalette.names(iterationToolIndex);
+			callable.addAll(fixedNames);
+			return dispatchUnbound(name, input, ctx,
+				new HarnessTools.ToolSurface(loadScope(), callable), toolCallTimeoutMs);
 		}
 
 		private boolean excludesLoadName(String name, AString owner) {
@@ -933,7 +948,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				ACell declaredCell = RT.getIn(call.input(), Fields.LOADS);
 				declared = (declaredCell != null)
 					? ContextChain.declaredLoads(declaredCell, "subgoal loads") : Maps.empty();
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				return ToolCycleEngine.ToolOutcome.result(Strings.create("Error: " + e.getMessage()));
 			}
 			for (var entry : declared.entrySet()) {
@@ -1225,6 +1240,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> fixedTools = (AVector<ACell>) taskTools.concat(harnessForFrame).concat(frameTools.baseTools);
 		frameTools.baseToolStart = Math.toIntExact(taskTools.count() + harnessForFrame.count());
 		frameTools.baseToolEnd = Math.toIntExact(frameTools.baseToolStart + frameTools.baseTools.count());
+		frameTools.fixedNames = ToolPalette.names(fixedTools);
 		boolean materialiseLive = ContextAssembler.rendered(
 			stack, frameTools.cycleSpec.sourceConfig(),
 			frameTools.cycleSpec.cachePrefix()) == null;

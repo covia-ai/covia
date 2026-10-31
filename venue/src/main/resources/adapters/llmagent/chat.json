@@ -11,7 +11,7 @@
 				"agentId": { "type": "string", "description": "Agent identifier" },
 				"state": { "description": "Previous runtime state (null on first run) — loads and other runtime data. Configuration (llmOperation, model, systemPrompt) arrives separately via 'config' (#144)." },
 				"messages": { "type": "array", "description": "Inbox messages to process as user turns" },
-				"config": { "type": "object", "description": "Agent config at fire time: llmOperation, model, systemPrompt, tools, caps (#144)" },
+				"config": { "type": "object", "description": "Agent config at fire time: llmOperation, model, systemPrompt, tools (#144). The step runs under its agent's own caps, never this config's" },
 				"session": { "description": "The session this cycle runs in" },
 				"newInput": { "description": "Continuation input delivered to the picked task since the last cycle" },
 				"jobId": { "type": "string", "description": "The cycle's job id, for live timeline events" }

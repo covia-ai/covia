@@ -63,7 +63,8 @@ public class LocalVenue extends Venue {
 	/** Builds the request context for this venue's user, carrying any authority. */
 	private RequestContext context() {
 		if (requestContext != null) return requestContext;
-		return RequestContext.of(getUser(), proofs);
+		if (getUser() == null) return RequestContext.ANONYMOUS;
+		return engine.context(getUser()).withProofs(proofs);
 	}
 
 	@Override

@@ -41,8 +41,7 @@ class UserAdmissionTest {
 			AKeyPair keyPair = AKeyPair.generate();
 			AString did = UCAN.toDIDKey(keyPair.getAccountKey());
 			VenueHTTP client = VenueHTTP.create(
-				URI.create("http://localhost:" + server.port()),
-				VenueAuth.keyPair(keyPair, server.getEngine().getDIDString().toString()));
+				URI.create("http://localhost:" + server.port()), VenueAuth.keyPair(keyPair));
 
 			CompletionException failure = assertThrows(CompletionException.class,
 				() -> client.startJobAsync(Strings.create("v/test/ops/echo"), Maps.empty()).join());
@@ -61,8 +60,7 @@ class UserAdmissionTest {
 		try {
 			AKeyPair keyPair = AKeyPair.generate();
 			AString did = UCAN.toDIDKey(keyPair.getAccountKey());
-			String token = VenueAuth.keyPair(keyPair,
-				server.getEngine().getDIDString().toString(), 300).mintToken();
+			String token = VenueAuth.keyPair(keyPair, 300).mintToken(server.getEngine().getDIDString().toString());
 			HttpClient http = TestHTTP.CLIENT;
 			String requestBody = "{\"operation\":\"v/test/ops/echo\",\"input\":{}}";
 
@@ -142,13 +140,11 @@ class UserAdmissionTest {
 
 	@Test
 	void agentShapedDIDIsNeverAdmittedAsAUser() {
-		// <owner>:g:<id> resolves to the owner's namespace, so letting an external
-		// principal authenticate as one would hand its bearer that whole account —
-		// the sharp edge of a parseable sub-principal name. admitUser is the
-		// authentication boundary (AuthMiddleware.markAuthenticated calls it with
-		// the raw presented DID), so the guard belongs there and nowhere else.
-		// Rejected even with autoCreate on, the configuration where an unknown DID
-		// would otherwise self-register.
+		// <owner>:g:<id> also addresses agent <id> of <owner>, so admitting one as a
+		// user would make one name mean two principals. admitUser is the admission
+		// boundary, so the guard belongs there and nowhere else. Rejected even with
+		// autoCreate on, the configuration where an unknown DID would otherwise
+		// self-register.
 		Engine engine = configuredEngine(true);
 		try {
 			AString owner = newDID();
@@ -159,12 +155,12 @@ class UserAdmissionTest {
 			assertNull(engine.getVenueState().users().get(impostor),
 				"an agent-shaped DID must never gain a user record");
 
-			// Deliberately NOT guarded: a RequestContext built in-process is
-			// trusted by construction, and a sub-principal context is exactly what
-			// AgentAdapter.wakeAgent must be able to build. Such a context admits
-			// through its OWNER, which is the intended behaviour — an agent runs
-			// inside an account that already exists.
-			assertEquals(owner, RequestContext.of(impostor).getUserDID());
+			// The name alone is its own namespace. The venue builds an agent's
+			// context in its owner's namespace (as AgentAdapter.wakeAgent does), so
+			// that context admits through its OWNER: an agent runs inside an
+			// account that already exists.
+			assertEquals(impostor, RequestContext.of(impostor).getUserDID());
+			assertEquals(owner, RequestContext.ofAgent(owner, Strings.create("pwn")).getUserDID());
 		} finally {
 			engine.close();
 		}

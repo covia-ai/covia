@@ -1010,21 +1010,50 @@ further ahead than this. Deliberately unset by default, since a cap is a
 nuisance in development. Worth setting on a production venue — for example
 30 days (`2592000`), the frontend's longest identity-token option, or lower.
 
-## Venue identity proof (`auth.requireVenueProof`)
+## Venue identity proof (`auth.venueProof`, `auth.requireVenueProof`)
 
 ```json
 {
-  "auth": { "requireVenueProof": true }
+  "auth": {
+    "venueProof": [
+      { "adapter": "auth", "implementation": "address" },
+      { "adapter": "auth", "implementation": "challenge" }
+    ]
+  }
 }
 ```
 
-`requireVenueProof` (default `true`): an authenticated grid or remote-agent hop
-(`authenticateAs` `caller` or `venue`) sends its credential only to a venue
-proven to hold the DID the credential is audienced to — a `did:web` venue at
-its own `https://<host>` address, or plain http on loopback. A venue reached at
-any other address, or one with a `did:key`, is refused before the credential
-leaves. Turn it off only for test venues whose `did:web` name is served
-elsewhere; the venue then takes the DID a target states at its address. See
+An authenticated grid or remote-agent hop (`authenticateAs` `caller` or
+`venue`) sends its credential only to a venue proven to hold the DID the
+credential is audienced to. `venueProof` lists the mechanisms that may prove
+it, in order. The first that proves the DID wins; if none does, the hop is
+refused with each mechanism's reason before the credential leaves. The example
+is the default.
+
+- `address`: a `did:web` venue at its own address, `https://<host>`, or plain
+  http on loopback.
+- `challenge`: the venue answers a fresh nonce sent to `POST /api/v1/challenge`
+  with a proof signed by its DID's key that names the address dialled. It
+  proves a `did:key`. A proof is reused for two minutes for the same target and
+  DID; a failure is not. This build verifies challenge proofs but does not
+  answer challenges, so other venues prove it only by `address`.
+
+Any listed mechanism is enough, so the list is as strong as its weakest member:
+list only mechanisms you trust on their own. An unlisted mechanism is never
+tried, and `[]` proves nothing, so every authenticated hop is refused while
+anonymous hops are unaffected. Each entry names an adapter and one of its
+implementations; an adapter contributes them by implementing
+`VenueProofMethods` (ADAPTERS.md). Every entry must be available when the
+venue starts, and an entry whose adapter is disabled proves nothing. A
+mechanism dials the target through the outbound guard, as the hop does.
+
+A recovered job proves its target again before re-sending a saved credential.
+If the target is no longer proven, the job waits for authority
+(`auth-required`) and the credential is not sent.
+
+`requireVenueProof` (default `true`): `false` skips proof and takes the DID a
+target states at its address, for test venues whose DID cannot be proven where
+they are served. It sits outside the list because it proves nothing. See
 UCAN.md §5.6.
 
 ## Public access (`auth.public`)
@@ -1215,15 +1244,17 @@ audit tombstone and takes effect on the next request.
 Java clients use the same key without hand-building JWTs:
 
 ```java
-VenueAuth auth = VenueAuth.namedKeyPair(
-    keyPair,
-    "did:web:venue.example:u:alice",
-    venueDID);
+VenueAuth auth = VenueAuth.namedKeyPair(keyPair, "did:web:venue.example:u:alice");
 Venue venue = Grid.connect("https://venue.example", auth);
 ```
 
-The strategy signs a fresh short-lived, audience-bound token for each request;
-`mintToken()` is available for transports that need the raw bearer credential.
+The strategy signs a fresh short-lived token for each request, audienced to the
+venue the connection reaches. The connection fixes that DID: the one it was
+opened with (`Grid.connect(did, auth)`, or a URL with the DID named), or else
+the DID the venue proves at its address — a `did:web` at its own https address,
+or any DID on loopback. A venue that presents another DID gets no credential,
+and `alsoKnownAs` never re-binds one. `mintToken(venueDID)` is available for
+transports that need the raw bearer credential.
 
 Registering a full external DID admits that identity to use the venue; it does
 not transfer control of the DID to the venue. A self-sovereign user signs their
@@ -1627,15 +1658,27 @@ The public principal has none.
 - The venue's callback is `<baseUrl>/auth/connect/<provider>/callback`;
   register it with the provider's client. A local venue uses a loopback URL,
   which Google accepts for a "Desktop app" client on any port.
-- `returnTo` — URL prefixes a connect may name to send the browser back to
-  an app after approval; venue-relative paths are always allowed.
-- `pendingTtlSecs` — how long a started connect may wait for approval
-  (default 600).
+- `returnTo` — URL prefixes of the apps a connect may name to send the
+  browser back to after approval, with the completion code added as
+  `?code=`. List only apps that complete the connect under their own
+  sign-in. A prefix matches up to a path, query or fragment boundary, and
+  venue paths are never allowed.
+- `pendingTtlSecs` — how long a started connect may wait for approval, and
+  an approved one for completion (default 600).
 
 Flow: `v/ops/oauth/connect {provider, scopes?, returnTo?}` returns the URL
-the user opens; the callback exchanges the code (PKCE, one-time state bound
-to the caller) and stores the grant. A callback for an account deleted since
-the connect began stores nothing and revokes what it was issued.
+the user opens. Approval at the provider connects nothing by itself. The
+venue has no browser session, so the callback cannot tell whose browser it
+is in. Instead it consumes the one-time state (PKCE, bound to the caller)
+and gives the browser a one-time completion code. The browser takes the code
+to the `returnTo` app, or without one the page shows it, naming the venue
+account it connects to, for the user to give to the app that asked.
+`v/ops/oauth/complete {code}`, from the account that started the connect,
+exchanges the provider's code and stores the grant. Any other account is
+refused and the code is used up. A completion code lapses after
+`pendingTtlSecs`, and in practice sooner, when the provider's own code
+expires. A completion for an account deleted since the connect began stores
+nothing and revokes what it was issued.
 `http:get` / `http:post` with `bearerSecret: "oauth/<provider>"` then attach a
 fresh access token — refreshed when expired — that never reaches a model or a
 job record. `oauth:status` lists connections without tokens;
@@ -1653,7 +1696,8 @@ outright. A capability-scoped caller such as an agent needs, on it:
 - `oauth/use` to attach its token, which an `nb.url` caveat limits to a
   destination;
 - `crud/read` for `oauth:status` (on `oauth/` to list them all);
-- `oauth/connect` and `oauth/disconnect`, which a `crud` grant does not cover;
+- `oauth/connect` (for `oauth:connect` and `oauth:complete`) and
+  `oauth/disconnect`, which a `crud` grant does not cover;
 - or `oauth`, which covers all of these.
 
 Provider policy is the operator's problem, not the venue's: Google's Gmail

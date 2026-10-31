@@ -55,7 +55,7 @@ public abstract class AAdapter {
 	}
 
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
-	private static final int MAX_FAILURE_CHARS = 1024;
+	protected static final int MAX_FAILURE_CHARS = 1024;
 
 	/**
 	 * Virtual thread executor for IO-bound blocking operations.
@@ -1083,6 +1083,18 @@ public abstract class AAdapter {
 				+ "was running, restart the venue";
 		}
 		return conciseDetail(text, MAX_FAILURE_CHARS);
+	}
+
+	/**
+	 * Whether a failure was expected: a self-describing type carrying its
+	 * reason (#644), looking through async wrappers. Anything else reaching a
+	 * caller — including an expected type thrown without a reason — is a
+	 * runtime or venue bug.
+	 */
+	public static boolean isExpectedFailure(Throwable t) {
+		Throwable cause = unwrap(t);
+		String message = cause.getMessage();
+		return message != null && !message.isBlank() && isSelfDescribing(cause);
 	}
 
 	/**

@@ -98,6 +98,21 @@ public class TelegramAdapterTest {
 	// ------------------------------------------------------------ config parsing
 
 	@Test
+	public void aBotThatIsNotRunningSaysWhetherItIsStillStarting() {
+		// A runner not yet started is STARTING: callers may simply retry shortly.
+		BotRunner idle = new BotRunner(adapter, BotSpec.parse("idle", botConfig(FakeTelegramServer.TOKEN,
+			OWNER.toString(), "operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID))), false),
+			telegram.apiUrl(), covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		assertThrows(covia.exception.StillStartingException.class, () -> idle.call("getMe", java.util.Map.of()));
+
+		// A stopped bot is unavailable, and not about to become available.
+		idle.stop();
+		covia.exception.UnavailableException stopped = assertThrows(covia.exception.UnavailableException.class,
+			() -> idle.call("getMe", java.util.Map.of()));
+		assertFalse(stopped instanceof covia.exception.StillStartingException, stopped.getMessage());
+	}
+
+	@Test
 	public void preparedEngineDefersBotWorkersUntilActivation() throws Exception {
 		try (FakeTelegramServer fake = new FakeTelegramServer()) {
 			var key = convex.core.crypto.AKeyPair.generate();
@@ -315,7 +330,7 @@ public class TelegramAdapterTest {
 				Strings.create("modes"), base.assoc(BotSpec.K_REPLY, convex.core.data.prim.CVMBool.FALSE)));
 			awaitState("modes", BotRunner.State.RUNNING, 10_000);
 			// The stranger is anonymous, so the Job is the public principal's, not the bot user's.
-			RequestContext anonymous = RequestContext.of(engine.publicContext().getCallerDID());
+			RequestContext anonymous = RequestContext.of(engine.publicPrincipal());
 			Set<Blob> jobsBefore = new HashSet<>(engine.jobs().getJobs(anonymous).keySet());
 			telegram.push(token, 6001L, "private", STRANGER_ID, null, "quiet");
 			Job quiet = awaitNewJob(anonymous, jobsBefore, 10_000);

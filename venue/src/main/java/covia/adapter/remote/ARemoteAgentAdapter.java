@@ -11,7 +11,9 @@ import convex.core.data.Blob;
 import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.exception.ConflictException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -50,7 +52,10 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 	public static final String UNSUPPORTED_AGENT_OPERATION = "Agent adapter does not support this operation: ";
 	public static final String INVALID_AGENT_DEFINITION = "Invalid agent definition: ";
 
-	/** Validate adapter-specific data without contacting the provider or resolving secrets. */
+	/**
+	 * Validate adapter-specific data without contacting the provider or
+	 * resolving secrets, throwing {@code InvalidInputException} with the reason.
+	 */
 	public void validateAgent(AMap<AString, ACell> definition) {}
 
 	/** A private backend invocation, dispatched through the ordinary Job machinery. */
@@ -59,7 +64,7 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 	/** Translate the common agent API; provider configuration comes only from the definition. */
 	public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,
 		ACell content, ACell session) {
-		throw new UnsupportedOperationException(UNSUPPORTED_AGENT_OPERATION + operation);
+		throw new NotSupportedException(UNSUPPORTED_AGENT_OPERATION + operation);
 	}
 
 	/** Provider conversation identity, independent of the Covia session and task IDs. */
@@ -143,14 +148,14 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 	public final void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
 		I live;
 		synchronized (job) {
-			if (job.isFinished()) throw new IllegalStateException(INTERACTION_ENDED);
+			if (job.isFinished()) throw new ConflictException(INTERACTION_ENDED);
 			live = interaction(job);
 			if (live == null) {
 				live = restoreInteraction(job);
 				if (live != null) live = bindInteraction(job, live);
 			}
 		}
-		if (live == null) throw new IllegalStateException(NO_INTERACTION);
+		if (live == null) throw new ConflictException(NO_INTERACTION);
 		live.deliver(messageRecord);
 	}
 

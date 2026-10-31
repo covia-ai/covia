@@ -27,6 +27,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.NotFoundException;
 import covia.grid.Asset;
 import covia.venue.ScheduleState.Entry;
 import static covia.venue.ScheduleState.*;
@@ -69,11 +70,12 @@ import static covia.venue.ScheduleState.*;
  * the adapter start, off-thread. Job preparation and schedule claim are two
  * ordered record updates because they have different lattice owners.</p>
  *
- * <p><b>No escalation.</b> An event captures the owner's DID plus the proofs and
- * caps presented at schedule time, and firing replays exactly those via
- * {@link JobManager#invokeInternal} / {@link JobManager#prepareTracked} (§5 of
- * the design), which enforce that scope on dispatch. The scheduler never
- * invents authority.</p>
+ * <p><b>No escalation.</b> An event records its owner, its actor and the proofs
+ * presented at schedule time. A fire runs as that actor would invoke the
+ * operation now ({@link Engine#context(AString, AString, AVector)}), presenting
+ * those proofs again, via {@link JobManager#invokeInternal} /
+ * {@link JobManager#prepareTracked} (§5 of the design), which enforce that scope
+ * on dispatch. The scheduler never invents or keeps authority.</p>
  */
 public class Scheduler {
 
@@ -86,6 +88,8 @@ public class Scheduler {
 	/** Refusal for a capability-scoped agent reaching an event it did not schedule. */
 	public static final String EVENT_ACCESS_DENIED =
 		"A capability-scoped agent manages only the scheduled events it created";
+	/** Why an event did not fire: the agent that scheduled it has been deleted, so it was dropped. */
+	public static final String AGENT_GONE = "%s no longer exists, so its scheduled event was dropped";
 
 	private final Engine engine;
 	private final LongSupplier clock;
@@ -150,8 +154,8 @@ public class Scheduler {
 
 	/**
 	 * Schedule a one-shot {@code opRef(input)} to fire at absolute {@code wakeTime}
-	 * millis, running as the caller with the proofs/caps carried in {@code ctx}
-	 * captured for replay, tracked per the venue default. Returns the event
+	 * millis, as the caller would invoke it then, presenting again the proofs
+	 * {@code ctx} carries, tracked per the venue default. Returns the event
 	 * handle (its index key).
 	 */
 	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime) {
@@ -160,8 +164,8 @@ public class Scheduler {
 
 	/**
 	 * Schedule {@code opRef(input)} to fire at absolute {@code wakeTime} millis,
-	 * running as the caller with the proofs/caps carried in {@code ctx} captured
-	 * for replay. Returns the event handle (its index key).
+	 * as the caller would invoke it then, presenting again the proofs {@code ctx}
+	 * carries. Returns the event handle (its index key).
 	 *
 	 * @param repeat recurrence spec (validated by {@link #validateRepeat}), or
 	 *        null for a one-shot event
@@ -191,8 +195,7 @@ public class Scheduler {
 		AString actor = ctx.isSubPrincipal() ? ctx.getCallerDID() : null;
 		AString by = ctx.getCallerDID();
 		AVector<ACell> proofs = ctx.getProofs();
-		AVector<ACell> caps = ctx.getCaps();
-		return onTimer(() -> doSchedule(opRef, input, owner, actor, by, proofs, caps, wakeTime, rep, track, desc));
+		return onTimer(() -> doSchedule(opRef, input, owner, actor, by, proofs, wakeTime, rep, track, desc));
 	}
 
 	/**
@@ -212,12 +215,21 @@ public class Scheduler {
 		});
 	}
 
+	/** Remove the events a deleted agent scheduled, found through the reverse index. */
+	public void cancelActor(AString agentDID) {
+		onTimer(() -> {
+			state().cancelActor(agentDID);
+			armNext();
+			return null;
+		});
+	}
+
 	/**
 	 * Fire a scheduled event now, ahead of its time. Owner-only; a
 	 * capability-scoped agent triggers only events it scheduled. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
-	 * due time. Returns the invocation's result future (run with the event's
-	 * stapled authority). The deterministic test hook as well as a real "run it
+	 * due time. Returns the invocation's result future (run as the event's actor
+	 * would invoke it now). The deterministic test hook as well as a real "run it
 	 * now".
 	 */
 	public CompletableFuture<ACell> trigger(Blob handle, RequestContext ctx) {
@@ -241,8 +253,8 @@ public class Scheduler {
 	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
 	 * the effective tracking that the next fire will use; {@code input} is
 	 * shown as the owner's job history would show it ({@link #listedInput}).
-	 * Captured {@code proofs} and {@code caps} are authority, not description,
-	 * and are never listed.
+	 * Captured {@code proofs} are authority, not description, and are never
+	 * listed.
 	 */
 	public AVector<ACell> list(RequestContext ctx) {
 		AccessControl access = engine.getAccessControl();
@@ -306,10 +318,10 @@ public class Scheduler {
 	// ------------------------------------------------------- timer-thread bodies
 
 	private Blob doSchedule(AString opRef, ACell input, AString owner, AString actor, AString by,
-			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime,
+			AVector<ACell> proofs, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description) {
 		engine.getVenueState().users().requireNotDeleted(owner);
-		Blob key = state().schedule(opRef, input, owner, actor, by, proofs, caps, wakeTime,
+		Blob key = state().schedule(opRef, input, owner, actor, by, proofs, wakeTime,
 			repeat, track, description, clock.getAsLong());
 		armNext();
 		return key;
@@ -358,8 +370,16 @@ public class Scheduler {
 	 * If the Job cannot be prepared (unresolvable op, capability
 	 * denied), the event is still claimed exactly as an untracked failure
 	 * would be, and the error travels with the claim for the caller to see.
+	 * An event whose scheduling agent no longer exists is removed, recurring or
+	 * not, and fails the same way: nothing fires as a deleted agent.
 	 */
 	private Claimed claim(Blob key, AMap<AString, ACell> rec, long now, boolean advance) {
+		AString gone = goneAgent(rec);
+		if (gone != null) {
+			state().remove(key);
+			armNext();
+			return new Claimed(rec, null, new NotFoundException(AGENT_GONE.formatted(gone), gone.toString()));
+		}
 		JobManager.Prepared job = null;
 		RuntimeException error = null;
 		boolean tracked = isTracked(rec);
@@ -427,37 +447,46 @@ public class Scheduler {
 	/**
 	 * Run a claimed fire. Tracked: start the Job prepared at claim time (its
 	 * ID is already on the record). Untracked: a transient Job via
-	 * {@code invokeInternal} (design §7). Either way the dispatch runs under the
-	 * owner's stapled caps, which JobManager enforces — so a scheduled fire
-	 * cannot exceed the authority the owner captured at schedule time.
+	 * {@code invokeInternal} (design §7). Either way the dispatch runs as its
+	 * actor would invoke it now ({@link #fireContext}), which JobManager
+	 * enforces — so a fire never has authority its actor has since lost.
 	 */
 	private CompletableFuture<ACell> fire(Claimed c) {
 		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
-		if (c.job() != null) {
-			try {
-				return c.job().start().future();
-			} catch (RuntimeException e) {
-				return CompletableFuture.failedFuture(e);
-			}
+		try {
+			if (c.job() != null) return c.job().start().future();
+			AMap<AString, ACell> rec = c.rec();
+			return engine.jobs().invokeInternal(
+				RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+		} catch (RuntimeException e) {
+			return CompletableFuture.failedFuture(e);
 		}
-		AMap<AString, ACell> rec = c.rec();
-		return engine.jobs().invokeInternal(
-			RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
 	}
 
-	/** The identity and stapled authority a fire runs under (design §5). */
-	private static RequestContext fireContext(AMap<AString, ACell> rec) {
-		AString owner = RT.ensureString(rec.get(K_OWNER));
-		// Fire as the scheduling agent when there was one. Authority.of recovers
-		// the owning namespace from the agent DID, so a replayed sub-principal
-		// still resolves the owner's secrets and workspace.
+	/**
+	 * The agent that scheduled {@code rec} when it is one of the owner's agents
+	 * and no longer exists, else null. Deleting an agent removes its events
+	 * ({@link #cancelActor}); this catches any that outlived it, such as those
+	 * scheduled before the reverse index recorded them.
+	 */
+	private AString goneAgent(AMap<AString, ACell> rec) {
 		AString actor = RT.ensureString(rec.get(K_ACTOR));
-		RequestContext ctx = RequestContext.of((actor != null) ? actor : owner);
-		AVector<ACell> proofs = asVector(rec.get(K_PROOFS));
-		if (proofs != null) ctx = ctx.withProofs(proofs);
-		AVector<ACell> caps = asVector(rec.get(K_CAPS));
-		if (caps != null) ctx = ctx.withCaps(caps);
-		return ctx;
+		AString owner = RT.ensureString(rec.get(K_OWNER));
+		AString agentId = Engine.agentIdIn(owner, actor);
+		return (agentId != null && engine.getAgent(owner, agentId) == null) ? actor : null;
+	}
+
+	/**
+	 * The context a fire runs under (design §5): its actor (the scheduling agent
+	 * or delegate, else the owner) as it would invoke the operation now, in the
+	 * owner's namespace, presenting again the proofs it presented when scheduling.
+	 *
+	 * @throws AuthException when the actor could not invoke it now
+	 */
+	RequestContext fireContext(AMap<AString, ACell> rec) {
+		AString owner = RT.ensureString(rec.get(K_OWNER));
+		AString actor = RT.ensureString(rec.get(K_ACTOR));
+		return engine.context(owner, (actor != null) ? actor : owner, asVector(rec.get(K_PROOFS)));
 	}
 
 	/**

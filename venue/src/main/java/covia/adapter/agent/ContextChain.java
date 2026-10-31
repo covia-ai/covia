@@ -8,6 +8,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 
 /**
  * The context scope chain (#142): agent ({@code config.loads}) → frame
@@ -125,7 +126,7 @@ public class ContextChain {
 			boolean stampMissingTimestamp, boolean operatorOwned) {
 		if (raw == null) return Maps.empty();
 		if (!(raw instanceof AMap)) {
-			throw new IllegalArgumentException(which + " must be a map of key → {budget?, …}, got "
+			throw new InvalidInputException(which + " must be a map of key → {budget?, …}, got "
 				+ Types.get(raw));
 		}
 		AMap<AString, ACell> loads = (AMap<AString, ACell>) raw;
@@ -140,18 +141,18 @@ public class ContextChain {
 				continue;
 			}
 			if (!(spec instanceof AMap)) {
-				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+				throw new InvalidInputException(which + " entry '" + entry.getKey()
 					+ "' must be a map (e.g. {budget: 500}), got " + Types.get(spec));
 			}
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) spec;
 			ACell label = meta.get(labelKey);
 			if (label != null && !(label instanceof AString)) {
-				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+				throw new InvalidInputException(which + " entry '" + entry.getKey()
 					+ "' label must be a string, got " + Types.get(label));
 			}
 			ACell ts = meta.get(tsKey);
 			if (ts != null && !(ts instanceof CVMLong)) {
-				throw new IllegalArgumentException(which + " entry '" + entry.getKey()
+				throw new InvalidInputException(which + " entry '" + entry.getKey()
 					+ "' ts must be an integer, got " + Types.get(ts));
 			}
 			Loads.validateSpec(meta, which, entry.getKey());

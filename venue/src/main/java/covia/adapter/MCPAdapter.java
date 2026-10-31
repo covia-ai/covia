@@ -20,6 +20,7 @@ import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.CoviaException;
 import covia.exception.JobFailedException;
 import covia.api.Abilities;
 import covia.venue.Engine;
@@ -189,7 +190,7 @@ public class MCPAdapter extends AAdapter {
 						default -> throw new UnsupportedOperationException(
 							"Unsupported server function: " + function);
 					};
-				} catch (JobFailedException | IllegalArgumentException e) {
+				} catch (CoviaException | IllegalArgumentException e) {
 					throw e;
 				} catch (Exception e) {
 					throw new JobFailedException(e);
@@ -210,7 +211,7 @@ public class MCPAdapter extends AAdapter {
 						default -> throw new UnsupportedOperationException(
 							"Unsupported tool function: " + function);
 					};
-				} catch (JobFailedException | IllegalArgumentException e) {
+				} catch (CoviaException | IllegalArgumentException e) {
 					throw e;
 				} catch (Exception e) {
 					throw new JobFailedException(e);

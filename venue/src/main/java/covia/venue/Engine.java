@@ -83,7 +83,12 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.exception.RemoteFetchException;
+import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
@@ -265,6 +270,7 @@ public class Engine {
 		this.lastFlushMillis = System.currentTimeMillis();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
+		this.venueProofs = new covia.venue.auth.VenueProofs(this);
 	}
 
 	/** Accepts the external JSON configuration form. */
@@ -481,6 +487,7 @@ public class Engine {
 			}
 			checkLaunchCancellation();
 			new covia.venue.auth.AuthMethods(this).validate();
+			venueProofs.validate();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
 			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
@@ -650,21 +657,21 @@ public class Engine {
 			AMap<AString, ACell> existingUser = auth.getUser(id);
 			if (existingUser != null
 					&& !did.equals(RT.ensureString(existingUser.get(Fields.DID)))) {
-				throw new IllegalStateException("Named user " + id
+				throw new ConfigurationException("Named user " + id
 					+ " is already bound to a different DID");
 			}
 			AMap<AString, ACell> spec = RT.ensureMap(entry.getValue());
 			AVector<ACell> keys = (spec != null)
 				? RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS)) : null;
 			if (keys == null || keys.isEmpty()) {
-				throw new IllegalArgumentException("users.bootstrap." + id
+				throw new ConfigurationException("users.bootstrap." + id
 					+ " requires a non-empty authenticationKeys array");
 			}
 			for (long i = 0; i < keys.count(); i++) {
 				AString key = RT.ensureString(keys.get(i));
 				AuthState.requireValidAuthenticationKey(key);
 				if (!declaredKeys.add(key)) {
-					throw new IllegalArgumentException(
+					throw new ConfigurationException(
 						"One authentication key cannot bootstrap two named users");
 				}
 				AMap<AString, AMap<AString, ACell>> known = auth.getUsers();
@@ -674,7 +681,7 @@ public class Engine {
 						AMap<AString, ACell> otherKeys = RT.ensureMap(
 							other.getValue().get(Fields.AUTHENTICATION_KEYS));
 						if (otherKeys != null && otherKeys.containsKey(key)) {
-							throw new IllegalArgumentException(
+							throw new ConfigurationException(
 								Auth.KEY_ALREADY_BOUND
 								+ other.getKey());
 						}
@@ -736,14 +743,14 @@ public class Engine {
 			return new MemoryStorage();
 		} else if (Config.STORAGE_TYPE_FILE.equals(storageType)) {
 			if (storagePath == null || storagePath.isEmpty()) {
-				throw new IllegalArgumentException("File storage requires 'path' configuration");
+				throw new ConfigurationException("File storage requires 'path' configuration");
 			}
 			Path path = Paths.get(storagePath);
 			if (!Files.exists(path)) {
 				try {
 					Files.createDirectories(path);
 				} catch (IOException e) {
-					throw new IllegalArgumentException("Failed to create storage directory: " + storagePath, e);
+					throw new ConfigurationException("Failed to create storage directory: " + storagePath, e);
 				}
 			}
 			log.info("Using file storage at: {}", storagePath);
@@ -831,7 +838,7 @@ public class Engine {
 			ACell did = RT.getIn(e.getValue(), Keywords.VALUE, Covia.DID);
 			sb.append(did != null ? did : "key " + e.getKey());
 		}
-		throw new IllegalStateException(
+		throw new ConfigurationException(
 			"Venue key mismatch: this store already holds venue state for [" + sb
 			+ "] but the configured key gives " + getDIDString()
 			+ ". Starting anyway would create a fresh empty venue and orphan the existing"
@@ -1425,6 +1432,7 @@ public class Engine {
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
 		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
+		covia.venue.auth.VenueProofs.validateAdapter(adapter);
 		if (catalogPublished) {
 			if (previous == null) {
 				VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
@@ -1493,6 +1501,17 @@ public class Engine {
 		return adapterRegistryVersion.get();
 	}
 
+	/** An adapter name this venue has not registered; the name follows. */
+	public static final String UNKNOWN_ADAPTER = "Unknown adapter: ";
+	/** The venue's own configuration, refused by the adapter it is for. */
+	public static final String ADAPTER_DECLINED_CONFIG = "Adapter '%s' declined its configuration";
+	/** A configuration supplied for an adapter, refused by it. */
+	public static final String ADAPTER_REJECTED_CONFIG = "Adapter '%s' rejected the configuration";
+
+	private static NotFoundException unknownAdapter(String name) {
+		return new NotFoundException(UNKNOWN_ADAPTER + name, name);
+	}
+
 	/**
 	 * Disable an active adapter: retract its {@code v/info/adapters/<name>}
 	 * record and stop dispatching to it. Durable catalog metadata remains. The instance
@@ -1504,13 +1523,13 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was active and is now disabled; false if it
 	 *         was already disabled
-	 * @throws IllegalArgumentException if the adapter is unknown
+	 * @throws NotFoundException if the adapter is unknown
 	 */
 	public synchronized boolean disableAdapter(String name) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) {
 			if (disabledAdapters.containsKey(name)) return false;
-			throw new IllegalArgumentException("Unknown adapter: " + name);
+			throw unknownAdapter(name);
 		}
 		retractAdapter(name);
 		disabledAdapters.put(name, adapter);
@@ -1526,17 +1545,17 @@ public class Engine {
 	 * @param name Adapter name
 	 * @return true if the adapter was disabled and is now active; false if it
 	 *         was already active
-	 * @throws IllegalArgumentException if the adapter is unknown
-	 * @throws IllegalStateException if the adapter declines its configuration
+	 * @throws NotFoundException if the adapter is unknown
+	 * @throws ConfigurationException if the adapter declines the venue's configuration for it
 	 */
 	public synchronized boolean enableAdapter(String name) {
 		AAdapter adapter = disabledAdapters.get(name);
 		if (adapter == null) {
 			if (adapters.containsKey(name)) return false;
-			throw new IllegalArgumentException("Unknown adapter: " + name);
+			throw unknownAdapter(name);
 		}
 		if (adapter.engine == null && !adapter.configure(adapterConfig(name), config.isStrictConfig())) {
-			throw new IllegalStateException("Adapter '" + name + "' declined its configuration");
+			throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
 		}
 		activate(adapter, null);
 		return true;
@@ -1550,15 +1569,16 @@ public class Engine {
 	 *
 	 * @param name Adapter name
 	 * @param cfg The complete new effective configuration
-	 * @throws IllegalArgumentException if the adapter is unknown or rejects the config
+	 * @throws NotFoundException if the adapter is unknown
+	 * @throws InvalidInputException if the adapter rejects the configuration
 	 */
 	public synchronized void configureAdapter(String name, AMap<AString, ACell> cfg) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) adapter = disabledAdapters.get(name);
-		if (adapter == null) throw new IllegalArgumentException("Unknown adapter: " + name);
+		if (adapter == null) throw unknownAdapter(name);
 		if (cfg == null) cfg = Maps.empty();
 		if (!adapter.configure(cfg, config.isStrictConfig())) {
-			throw new IllegalArgumentException("Adapter '" + name + "' rejected the configuration");
+			throw new InvalidInputException(String.format(ADAPTER_REJECTED_CONFIG, name));
 		}
 		runtimeAdapterConfig.put(name, cfg);
 		// Authentication finishing under the previous configuration must retry.
@@ -1721,12 +1741,14 @@ public class Engine {
 		return id;
 	}
 
+	public static final String STORE_UNAUTHENTICATED = "Authentication required to store assets";
+
 	/**
 	 * Stores an asset in the caller's per-user CAS namespace.
 	 */
 	public Hash storeUserAsset(AString meta, ACell content, RequestContext ctx) {
 		AString callerDID = ctx.getUserDID();
-		if (callerDID == null) throw new IllegalArgumentException("Authentication required to store assets");
+		if (callerDID == null) throw new AuthException(STORE_UNAUTHENTICATED);
 		User user = getVenueState().users().ensure(callerDID);
 		Hash id = user.assets().store(meta, content);
 		log.info("Stored user asset {} : {} (user: {})", id, RT.getIn(JSON.parse(meta), Fields.NAME), callerDID);
@@ -1915,18 +1937,29 @@ public class Engine {
 		return locateUserPath(parsed, create);
 	}
 
+	public static final String USER_PATH_UNAUTHENTICATED = "User path resolution requires an authenticated user";
+	public static final String USER_PATH_EMPTY = "User path must not be empty";
+	public static final String USER_PATH_NO_NAMESPACE = "User path must include a namespace";
+	/** Opening of the refusal for a did: path that is not a valid DID URL. */
+	public static final String INVALID_DID_URL = "Invalid DID URL: ";
+
 	private ParsedUserPath parseUserPath(RequestContext ctx, AString ref) {
 		if (ctx == null || ctx.getUserDID() == null) {
-			throw new IllegalArgumentException("User path resolution requires an authenticated user");
+			throw new AuthException(USER_PATH_UNAUTHENTICATED);
 		}
 		if (ref == null || ref.isEmpty()) {
-			throw new IllegalArgumentException("User path must not be empty");
+			throw new InvalidInputException(USER_PATH_EMPTY);
 		}
 
 		AString ownerDID;
 		ACell[] pathKeys;
 		if (ref.startsWith(NS_DID)) {
-			DIDURL didURL = DIDURL.create(ref.toString());
+			DIDURL didURL;
+			try {
+				didURL = DIDURL.create(ref.toString());
+			} catch (IllegalArgumentException e) {
+				throw new InvalidInputException(INVALID_DID_URL + ref + " (" + e.getMessage() + ")", e);
+			}
 			ownerDID = Strings.create(didURL.getDID().toString());
 			pathKeys = WorkspaceRoot.parseStringPath(didURL.getPath());
 		} else {
@@ -1935,7 +1968,7 @@ public class Engine {
 		}
 
 		if (pathKeys.length == 0) {
-			throw new IllegalArgumentException("User path must include a namespace");
+			throw new InvalidInputException(USER_PATH_NO_NAMESPACE);
 		}
 
 		StringBuilder resource = new StringBuilder(ownerDID.toString());
@@ -2055,7 +2088,7 @@ public class Engine {
 			UserPathTarget target;
 			try {
 				target = resolveUserPath(ctx, ref, false);
-			} catch (IllegalArgumentException e) {
+			} catch (AuthException | InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
 			if (covia.adapter.CoviaAdapter.isExtensionPath(target.pathKeys())) {
@@ -2148,14 +2181,27 @@ public class Engine {
 		return resolveAsset(ref, ctx, false);
 	}
 
+	/**
+	 * {@link #resolveAsset} from what this venue holds, never fetching from
+	 * another venue: a remote DID URL resolves only to a definition held here,
+	 * and is otherwise null. For lookups that must stay cheap, such as hints.
+	 */
+	public Asset resolveLocalAsset(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, true, false);
+	}
+
 	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked) {
+		return resolveAsset(ref, ctx, checked, true);
+	}
+
+	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
 		if (ref == null) return null;
 
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no
 		// venue — execution, if any, is local. See resolveDIDURL.
 		if (ref.startsWith(NS_DID)) {
-			Asset asset = resolveDIDURL(ref, ctx, checked);
+			Asset asset = resolveDIDURL(ref, ctx, checked, fetch);
 			if (asset != null) return asset;
 			// Fall through — DID URL might be unresolvable but other forms
 			// could match (rare; defensive).
@@ -2328,16 +2374,18 @@ public class Engine {
 	 * other resolution forms or surface a clean error.</p>
 	 */
 	private Asset resolveDIDURL(AString ref, RequestContext ctx) {
-		return resolveDIDURL(ref, ctx, true);
+		return resolveDIDURL(ref, ctx, true, true);
 	}
 
-	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked) {
+	/** {@code fetch} false resolves only a definition held here. */
+	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null) return null;
 		if (r.name() != null) {
 			// Named refs are publisher-scoped bindings — OUR v/ops/x is not
 			// THEIR v/ops/x, so there is no local-copy shortcut.
-			return "web".equals(r.method()) ? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
+			return (fetch && "web".equals(r.method()))
+				? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
 		}
 		Asset local = lookupLocalAsset(r);
 		if (local != null) {
@@ -2347,7 +2395,7 @@ public class Engine {
 			if (checked) requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
 			return local;
 		}
-		return "web".equals(r.method()) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
+		return (fetch && "web".equals(r.method())) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
 	}
 
 	/**
@@ -2398,7 +2446,8 @@ public class Engine {
 	private Venue publisherVenue(RequestContext ctx, String venueConn) {
 		try {
 			return connectVenue(ctx, venueConn, VenueAuth.none());
-		} catch (IllegalArgumentException | IllegalStateException e) {
+		} catch (InvalidInputException | ConfigurationException
+				| IllegalArgumentException | IllegalStateException e) {
 			throw RemoteFetchException.invalidVenue(venueConn, e);
 		}
 	}
@@ -2713,10 +2762,10 @@ public class Engine {
 		if (ref == null) return null;
 		String refString = ref.toString();
 		if (resolving.size() >= 32) {
-			throw new IllegalArgumentException("Content reference chain exceeds 32 hops at: " + refString);
+			throw new InvalidInputException("Content reference chain exceeds 32 hops at: " + refString);
 		}
 		if (!resolving.add(refString)) {
-			throw new IllegalArgumentException("Cyclic content reference: " + refString);
+			throw new InvalidInputException("Cyclic content reference: " + refString);
 		}
 		try {
 
@@ -2821,18 +2870,18 @@ public class Engine {
 			ACell block, RequestContext ctx, Set<String> resolving) throws IOException {
 		if (block == null) return null;
 		if (!(block instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("content must be an object");
+			throw new InvalidInputException("content must be an object");
 		}
 		AMap<AString, ACell> descriptor = (AMap<AString, ACell>) block;
 		AString inline = descriptorString(descriptor, Fields.INLINE);
 		AString ref = descriptorString(descriptor, Fields.REF);
 		AString dlfs = descriptorString(descriptor, Strings.intern("dlfs"));
 		if (ref != null && dlfs != null && !ref.equals(dlfs)) {
-			throw new IllegalArgumentException("content.ref conflicts with legacy content.dlfs");
+			throw new InvalidInputException("content.ref conflicts with legacy content.dlfs");
 		}
 		if (ref == null) ref = dlfs;
 		if (inline != null && ref != null) {
-			throw new IllegalArgumentException("content must specify only one of inline or ref");
+			throw new InvalidInputException("content must specify only one of inline or ref");
 		}
 
 		AString shaString = descriptorString(descriptor, Fields.SHA256);
@@ -2840,7 +2889,7 @@ public class Engine {
 		if (shaString != null) {
 			declaredHash = Hash.parse(shaString);
 			if (declaredHash == null) {
-				throw new IllegalArgumentException("content.sha256 must be a valid SHA-256 hash");
+				throw new InvalidInputException("content.sha256 must be a valid SHA-256 hash");
 			}
 		}
 		AString typeString = descriptorString(descriptor, Fields.CONTENT_TYPE);
@@ -2857,7 +2906,7 @@ public class Engine {
 		} else if (ref != null) {
 			resolved = resolveContent(ref, ctx, resolving);
 			if (resolved == null) {
-				throw new IllegalArgumentException("No content at ref: " + ref);
+				throw new NotFoundException("No content at ref: " + ref, ref.toString());
 			}
 			source = "content at '" + ref + "'";
 		} else if (declaredHash != null) {
@@ -2876,7 +2925,8 @@ public class Engine {
 			ABlob bytes = resolved.content().getBlob();
 			Hash actual = Hashing.sha256(bytes.getBytes());
 			if (!actual.equals(declaredHash)) {
-				throw new IllegalStateException("Content hash mismatch for " + source
+				// The declared hash does not describe the content it names.
+				throw new InvalidInputException("Content hash mismatch for " + source
 					+ ": expected " + declaredHash + ", got " + actual);
 			}
 			resolved = new covia.venue.storage.ContentProvider.Resolved(
@@ -2896,7 +2946,7 @@ public class Engine {
 		if (!descriptor.containsKey(field)) return null;
 		AString value = RT.ensureString(descriptor.get(field));
 		if (value == null) {
-			throw new IllegalArgumentException("content." + field + " must be a string");
+			throw new InvalidInputException("content." + field + " must be a string");
 		}
 		return value;
 	}
@@ -2972,17 +3022,17 @@ public class Engine {
 
 	public Hash putContent(Hash assetID, InputStream is) throws IOException {
 		AMap<AString, ACell> meta = getMetaValue(assetID);
-		if (meta==null) throw new IllegalArgumentException("No metadata");
+		if (meta==null) throw new InvalidInputException("No metadata");
 		return putContent(meta,is);
 	}
 
 	public Hash putContent(AMap<AString, ACell> meta, InputStream is) throws IOException {
-		if (meta==null) throw new IllegalArgumentException("No metadata");
+		if (meta==null) throw new InvalidInputException("No metadata");
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
-		if (content==null) throw new IllegalArgumentException("Metadata does not have content object specified");
+		if (content==null) throw new InvalidInputException("Metadata does not have content object specified");
 		Hash expectedHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
 		if (expectedHash==null) {
-			throw new IllegalArgumentException("Metadata does not have valid content hash");
+			throw new InvalidInputException("Metadata does not have valid content hash");
 		}
 
 		// The storage checks the SHA-256 as the content streams in and stores
@@ -2991,7 +3041,7 @@ public class Engine {
 		try {
 			contentStorage.storeVerified(expectedHash, new SizeLimitedStream(is, maxSize));
 		} catch (ContentTooLarge e) {
-			throw new IllegalArgumentException(CONTENT_TOO_LARGE + maxSize + " bytes");
+			throw new InvalidInputException(CONTENT_TOO_LARGE + maxSize + " bytes");
 		}
 		log.debug("Stored content with SHA256: "+expectedHash);
 		return expectedHash;
@@ -3089,7 +3139,7 @@ public class Engine {
 	 * and all auth paths just work against the venue's DID directly.</p>
 	 */
 	public RequestContext venueContext() {
-		return RequestContext.of(getDIDString());
+		return context(getDIDString());
 	}
 
 	/**
@@ -3138,14 +3188,14 @@ public class Engine {
 			AString derived = Strings.create("did:key:"
 				+ Multikey.encodePublicKey(keyPair.getAccountKey()));
 			if (!derived.equals(declared)) {
-				throw new IllegalStateException("Declared venue identity " + declared
+				throw new ConfigurationException("Declared venue identity " + declared
 					+ " does not match the venue key pair (" + derived
 					+ ") — wrong seed or keystore?");
 			}
 		} else if (d.startsWith("did:web:")) {
 			AString web = config.getWebDID();
 			if (!declared.equals(web)) {
-				throw new IllegalStateException("Declared venue identity " + declared
+				throw new ConfigurationException("Declared venue identity " + declared
 					+ " does not match the venue's did:web form ("
 					+ (web == null ? "no public hostname" : web) + ")");
 			}
@@ -3202,15 +3252,15 @@ public class Engine {
 	 */
 	public AString managedUserDID(AString username) {
 		if (username == null || username.isEmpty()) {
-			throw new IllegalArgumentException("username is required");
+			throw new InvalidInputException("username is required");
 		}
 		if (!username.toString().matches("[A-Za-z0-9._-]+")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"username may contain only letters, numbers, '.', '_' and '-'");
 		}
 		AString base = config.getWebDID();
 		if (base == null) {
-			throw new IllegalStateException("Venue-managed usernames require a public hostname "
+			throw new ConfigurationException("Venue-managed usernames require a public hostname "
 				+ "so they can use did:web; pass a full user DID instead");
 		}
 		return Strings.create(base + ":u:" + username);
@@ -3337,7 +3387,7 @@ public class Engine {
 		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
 		requireNotSubPrincipal(did);
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
-			throw new IllegalArgumentException(PROTECTED_USER);
+			throw new InvalidInputException(PROTECTED_USER);
 		}
 		userDeletionLock.lock();
 		try {
@@ -3377,7 +3427,7 @@ public class Engine {
 		flush();
 		if (failure != null) throw failure;
 		if (venueState.users().isDeleting(did)) {
-			throw new IllegalStateException(USER_DELETION_PENDING);
+			throw new UnavailableException(USER_DELETION_PENDING);
 		}
 		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
 		return deleted.tombstone();
@@ -3399,7 +3449,7 @@ public class Engine {
 
 	/** Activation holds the registry monitor: never wait for a deletion that needs it. */
 	private void resumeAdapterUserDeletions(AAdapter adapter) {
-		if (!userDeletionLock.tryLock()) throw new IllegalStateException(USER_DELETION_IN_PROGRESS);
+		if (!userDeletionLock.tryLock()) throw new ConflictException(USER_DELETION_IN_PROGRESS);
 		try {
 			String name = adapter.getName();
 			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
@@ -3419,15 +3469,14 @@ public class Engine {
 	/**
 	 * Rejects an agent-shaped DID where a <em>user</em> identity is required.
 	 *
-	 * <p>An agent DID is {@code <owner>:g:<agentId>}, and that nesting is
-	 * load-bearing: {@code Principals.userOf} resolves it to the owner's
-	 * namespace. Admitting such a DID as a user in its own right would therefore
-	 * hand its bearer the namespace of whoever the prefix names. Agents are
-	 * minted by the venue as sub-principals of an existing account, never
-	 * registered as users. A credential may authenticate an agent-shaped subject
-	 * on an identity-only route, but that does not admit a user or establish a
-	 * local owner relationship. This admission guard keeps such subjects out of
-	 * native user routes and records.</p>
+	 * <p>An agent DID is {@code <owner>:g:<agentId>}, and that name also
+	 * addresses agent {@code agentId} of the owner its prefix names. Admitting
+	 * such a DID as a user in its own right would make one name mean two
+	 * principals. Agents are minted by the venue as sub-principals of an existing
+	 * account, never registered as users. A credential may authenticate an
+	 * agent-shaped subject on an identity-only route, but that does not admit a
+	 * user or establish a local owner relationship. This admission guard keeps
+	 * such subjects out of native user routes and records.</p>
 	 *
 	 * <p>Self-issued subjects may use any installed DID method, so this check is
 	 * an intentional method-independent admission invariant rather than an
@@ -3782,7 +3831,7 @@ public class Engine {
 				|| isPublicPrincipal(ctx.getCallerDID())) {
 			throw new AuthException("Authentication required for user/sudo");
 		}
-		if (userDID == null) throw new IllegalArgumentException("Target user DID is required");
+		if (userDID == null) throw new InvalidInputException("Target user DID is required");
 		requireNotSubPrincipal(userDID);
 		if (userDID.equals(ctx.getUserDID())) return ctx;
 		if (!crossUserAllows(ctx, userDID, Abilities.USER_SUDO)) {
@@ -4012,53 +4061,61 @@ public class Engine {
 		return web != null && value.equals(web + ":public");
 	}
 
-	/**
-	 * The anonymous principal as every door presents it: {@code <venue>:public}
-	 * under the operator's public scope ({@code auth.public.caps}). Null when
-	 * public access is off.
-	 */
-	public RequestContext publicContext() {
-		if (!config.isPublicAccess()) return null;
-		AString publicDID = publicPrincipal();
-		return RequestContext.of(publicDID).withCaps(auth.getPublicScope(publicDID));
-	}
-
 	/** The venue's public (anonymous) principal, {@code <venue>:public}. */
 	public AString publicPrincipal() {
 		return Strings.create(getDIDString() + ":public");
 	}
 
 	/**
-	 * The context a request authenticated through a channel binding runs under
-	 * (COG-3 §7): its identified principal as it acts now
-	 * ({@link #principalContext}), carrying the result's record without its
-	 * {@code userDID}. The one place a request context gains an authentication
-	 * record.
+	 * The context {@code principal} acts under now, in its own namespace. This
+	 * and {@link #context(AString, AString)} are where the venue decides, from
+	 * its own state, what a principal may do; {@link RequestContext#of} only
+	 * builds a context already decided or recorded.
 	 *
+	 * <ul>
+	 *   <li>The public principal, as every door presents it
+	 *       ({@code <venue>:public}), holds the operator's public scope
+	 *       ({@code auth.public.caps}).</li>
+	 *   <li>An agent-shaped DID holds nothing: its name establishes no
+	 *       relationship with the owner it names, so its authority comes only
+	 *       from proofs it presents.</li>
+	 *   <li>Any other principal, the venue included, is unrestricted in its own
+	 *       namespace.</li>
+	 * </ul>
+	 *
+	 * @param principal the acting DID, or null for anonymous
 	 * @throws AuthException for the public principal while public access is off
 	 */
-	public RequestContext channelContext(covia.venue.auth.AuthResult result) {
-		return principalContext(result.userDID())
-			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+	public RequestContext context(AString principal) {
+		if (principal == null) return RequestContext.ANONYMOUS;
+		if (isPublicPrincipal(principal)) {
+			if (!auth.isPublicAccessEnabled()) throw new AuthException(PUBLIC_ACCESS_OFF);
+			AString publicDID = publicPrincipal();
+			return RequestContext.of(publicDID, null, auth.getPublicScope(publicDID));
+		}
+		if (covia.grid.Principals.isAgentDID(principal)) {
+			return RequestContext.of(principal, null, Vectors.empty());
+		}
+		return RequestContext.of(principal);
 	}
 
 	/**
-	 * The context a stored principal acts under now: an agent as itself, bounded
-	 * by its record's current {@code caps} (none once the agent is gone); the
-	 * public principal as {@link #publicContext()}; any other principal as
-	 * itself.
+	 * The context {@code principal} acts under now for {@code owner}, whose
+	 * record (a binding, say) names it: the owner itself; one of the owner's
+	 * agents, as itself in the owner's namespace, bounded by its current
+	 * {@code config.caps} (none once it is gone); or the public principal, which
+	 * acts only as itself. The owner comes from the record, never from the
+	 * principal's name.
 	 *
-	 * @throws AuthException for the public principal while public access is off
+	 * @throws AuthException for any other principal, or for the public principal
+	 *         while public access is off
 	 */
-	public RequestContext principalContext(AString principal) {
-		if (isPublicPrincipal(principal)) {
-			RequestContext anonymous = publicContext();
-			if (anonymous == null) throw new AuthException(PUBLIC_ACCESS_OFF);
-			return anonymous;
+	public RequestContext context(AString owner, AString principal) {
+		if (principal == null || principal.equals(owner) || isPublicPrincipal(principal)) {
+			return context(principal);
 		}
-		if (!covia.grid.Principals.isAgentDID(principal)) return RequestContext.of(principal);
-		AString owner = covia.grid.Principals.userOf(principal);
-		AString agentId = covia.grid.Principals.agentIdOf(principal);
+		AString agentId = agentIdIn(owner, principal);
+		if (agentId == null) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal, owner));
 		AgentState agent = getAgent(owner, agentId);
 		AVector<ACell> caps = (agent == null) ? Vectors.empty()
 			: RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS));
@@ -4066,8 +4123,90 @@ public class Engine {
 		return (caps == null) ? ctx : ctx.withCaps(caps);
 	}
 
+	/**
+	 * The context {@code principal} acts under now for {@code owner}, presenting
+	 * {@code proofs}, as a live request of its own would: the owner, one of its
+	 * agents or the public principal as {@link #context(AString, AString)}, and
+	 * any other principal only as a {@code user/sudo} delegate whose proofs still
+	 * authorise it ({@link #sudoContext}). A recorded request, such as a
+	 * scheduled event, is rebuilt this way when it runs.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString)} or {@link #sudoContext}
+	 */
+	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs) {
+		boolean own = principal == null || principal.equals(owner) || isPublicPrincipal(principal)
+			|| agentIdIn(owner, principal) != null;
+		RequestContext ctx = own ? context(owner, principal) : context(principal);
+		if (proofs != null) ctx = ctx.withProofs(proofs);
+		return own ? ctx : sudoContext(ctx, owner);
+	}
+
+	/**
+	 * The context agent {@code agentId}'s step runs under: the agent itself as it
+	 * stands now ({@link #context(AString, AString)}), carrying on {@code ctx}'s
+	 * execution. A step runs only for an agent that exists, and only the agent's
+	 * own run or its owner may make it act. A step's input never sets its
+	 * authority.
+	 *
+	 * @throws AuthException when the caller may not make that agent act, or it does not exist
+	 */
+	public RequestContext stepContext(RequestContext ctx, AString agentId) {
+		AString owner = ctx.getUserDID();
+		AString caller = ctx.getCallerDID();
+		AString agentDID = (owner == null || agentId == null) ? null
+			: covia.grid.Principals.agentDID(owner, agentId);
+		if (agentDID == null || !(agentDID.equals(caller) || owner.equals(caller))) {
+			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
+		}
+		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
+		return ctx.actingAs(context(owner, agentDID).getAuthority()).withAgentId(agentId);
+	}
+
+	/**
+	 * The namespace of a record that names only its caller, as records from
+	 * before 0.10.0 do: its owner's when the caller is one of this venue's agents
+	 * that still exists, else the caller's own. A name alone never puts a
+	 * principal in another namespace.
+	 */
+	public AString legacyNamespace(AString caller) {
+		AString owner = covia.grid.Principals.userOf(caller);
+		AString agentId = agentIdIn(owner, caller);
+		return (agentId != null && getAgent(owner, agentId) != null) ? owner : caller;
+	}
+
+	/** The id of {@code principal} as one of {@code owner}'s agents, or null when it is not one. */
+	static AString agentIdIn(AString owner, AString principal) {
+		if (owner == null || principal == null) return null;
+		AString agentId = covia.grid.Principals.agentIdOf(principal);
+		return (agentId != null && principal.equals(covia.grid.Principals.agentDID(owner, agentId)))
+			? agentId : null;
+	}
+
+	/**
+	 * The context a request authenticated through {@code owner}'s channel
+	 * binding runs under (COG-3 §7): its identified principal as it acts now
+	 * ({@link #context(AString, AString)}), carrying the result's record without
+	 * its {@code userDID}. The one place a request context gains an
+	 * authentication record.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString)}
+	 */
+	public RequestContext channelContext(AString owner, covia.venue.auth.AuthResult result) {
+		return context(owner, result.userDID())
+			.withAuthentication(result.toData().dissoc(covia.venue.auth.AuthResult.USER_DID));
+	}
+
 	/** Why the public principal cannot act: the operator has public access off. */
 	public static final String PUBLIC_ACCESS_OFF = "Anonymous callers are not served: the venue's public access is off";
+
+	/** Why a record cannot act as a principal: it is neither the owner nor one of the owner's agents. */
+	public static final String FOREIGN_PRINCIPAL = "%s acts neither as %s nor as one of its agents";
+
+	/** Why a step did not run: only the agent's own run, or its owner, may make an agent act. */
+	public static final String NOT_AGENTS_STEP = "%s cannot run a step of agent %s: only the agent's own run or its owner can make it act";
+
+	/** Why a step did not run: it names no agent that exists here. */
+	public static final String NO_SUCH_AGENT = "%s is not an agent here";
 
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
 	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
@@ -4211,8 +4350,8 @@ public class Engine {
 	 * {@link #requireSafeUrl(RequestContext, String)}.
 	 *
 	 * @param url URL string to validate
-	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws InvalidInputException naming the rule when the URL is refused
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(String url) {
 		ssrfGuard().requireSafeUrl(url);
@@ -4226,8 +4365,8 @@ public class Engine {
 	 *
 	 * @param ctx The caller that chose the target
 	 * @param url URL string to validate
-	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws InvalidInputException naming the rule when the URL is refused
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(RequestContext ctx, String url) {
 		if (!outboundUnrestricted(ctx)) requireSafeUrl(url);
@@ -4240,8 +4379,8 @@ public class Engine {
 	 *
 	 * @param ctx The caller that chose the target
 	 * @param host Host name or address literal
-	 * @throws IllegalArgumentException naming the rule when the host is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws InvalidInputException naming the rule when the host is refused
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeHost(RequestContext ctx, String host) {
 		if (!outboundUnrestricted(ctx)) ssrfGuard().requireSafeHost(host);
@@ -4276,33 +4415,68 @@ public class Engine {
 	 * @param spec Venue URL or DID
 	 * @param auth Authentication the connection presents
 	 * @return The connected venue, not yet contacted
-	 * @throws IllegalArgumentException when the spec is malformed or its address is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws IllegalArgumentException when the spec is malformed
+	 * @throws InvalidInputException when its address is refused or its transport cannot be checked
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
-		return connectVenue(spec, auth, outboundUnrestricted(ctx));
+		return connectVenue(spec, null, auth, outboundUnrestricted(ctx));
 	}
 
 	/**
 	 * {@link #connectVenue(RequestContext, String, VenueAuth)} for a caller whose
 	 * standing was decided when the connection was first authorised, such as a
-	 * recovered job's.
+	 * recovered job's, to a venue whose DID may already be known.
 	 *
+	 * @param venueDID The target's DID, as the hop proved it; credentials the
+	 *        connection signs are audienced to it. Null when none is signed.
 	 * @param unrestricted Whether that caller could have the venue dial anywhere
 	 */
-	public Venue connectVenue(String spec, VenueAuth auth, boolean unrestricted) {
-		Venue venue = Grid.connect(spec, auth);
+	public Venue connectVenue(String spec, String venueDID, VenueAuth auth, boolean unrestricted) {
+		Venue venue = Grid.connect(spec, venueDID, auth);
 		if (unrestricted) return venue;
 		if (!(venue instanceof VenueHTTP http)) {
-			throw new IllegalArgumentException(UNGUARDED_VENUE_TRANSPORT + spec);
+			throw new InvalidInputException(UNGUARDED_VENUE_TRANSPORT + spec);
 		}
 		requireSafeUrl(http.getBaseURI().toString());
 		return venue;
 	}
 
+	private final covia.venue.auth.VenueProofs venueProofs;
+
+	/**
+	 * Why a credential audienced to {@code did} may not be sent to the venue
+	 * reached at {@code target}, or null when it may: the venue there is
+	 * proven to hold {@code did} by one of the operator's proof mechanisms,
+	 * tried in order ({@code auth.venueProof}). A mechanism dials the target
+	 * only through {@link #connectVenue}, so the outbound guard applies unless
+	 * the caller may have the venue dial anywhere. With
+	 * {@code auth.requireVenueProof} off, every target may.
+	 *
+	 * @param ctx The caller that chose the target
+	 * @param target Venue URL or DID
+	 * @param did The DID the credential is audienced to
+	 * @return null, or every mechanism's reason for not proving {@code did}
+	 */
+	public String venueProof(RequestContext ctx, String target, String did) {
+		return venueProof(target, did, outboundUnrestricted(ctx));
+	}
+
+	/**
+	 * {@link #venueProof(RequestContext, String, String)} for a caller whose
+	 * standing was decided when the connection was first authorised, such as
+	 * a recovered job's.
+	 *
+	 * @param unrestricted Whether that caller could have the venue dial anywhere
+	 */
+	public String venueProof(String target, String did, boolean unrestricted) {
+		if (!config().isRequireVenueProof()) return null;
+		return venueProofs.prove(target, did, () -> connectVenue(target, null, VenueAuth.none(), unrestricted));
+	}
+
 	private HTTPAdapter ssrfGuard() {
 		if (!(getAdapter("http") instanceof HTTPAdapter http)) {
-			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
+			throw new ConfigurationException("SSRF validation unavailable: http adapter not registered");
 		}
 		return http;
 	}

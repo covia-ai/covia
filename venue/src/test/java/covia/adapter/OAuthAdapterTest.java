@@ -14,6 +14,8 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +29,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
 
@@ -53,13 +57,15 @@ import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.TestServer;
 import covia.venue.User;
+import covia.venue.server.VenueServer;
 
 /**
  * Connected accounts end to end against a fake OAuth 2.0 provider: connect
- * (state + PKCE), the callback exchanging the code and storing the grant,
- * {@code http:*} resolving {@code bearerSecret: "oauth/<provider>"} to a
- * token the model never sees, refresh on expiry, and disconnect with
- * revocation — plus every way the flow is refused.
+ * (state + PKCE), the callback holding the approval under a completion code,
+ * {@code oauth:complete} from the starting account exchanging the code and
+ * storing the grant, {@code http:*} resolving {@code bearerSecret:
+ * "oauth/<provider>"} to a token the model never sees, refresh on expiry,
+ * and disconnect with revocation — plus every way the flow is refused.
  */
 public class OAuthAdapterTest {
 
@@ -158,23 +164,31 @@ public class OAuthAdapterTest {
 		}
 	}
 
+	private static AMap<AString, ACell> oauthConfig(FakeProvider fake) {
+		return Maps.of("oauth", Maps.of(
+			"providers", Maps.of("fake", Maps.of(
+				"clientId", "cid",
+				"clientSecret", "s/FAKE_SECRET",
+				"authorizationEndpoint", fake.base() + "/authorize",
+				"tokenEndpoint", fake.base() + "/token",
+				"revocationEndpoint", fake.base() + "/revoke",
+				"scopes", Vectors.of("read"))),
+			"returnTo", Vectors.of("app://done")));
+	}
+
 	private static Engine engine(FakeProvider fake) {
 		Engine engine = Engine.createTemp(Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			Config.ADAPTERS, Maps.of("oauth", Maps.of(
-				"providers", Maps.of("fake", Maps.of(
-					"clientId", "cid",
-					"clientSecret", "s/FAKE_SECRET",
-					"authorizationEndpoint", fake.base() + "/authorize",
-					"tokenEndpoint", fake.base() + "/token",
-					"revocationEndpoint", fake.base() + "/revoke",
-					"scopes", Vectors.of("read"))),
-				"returnTo", Vectors.of("app://done")))));
+			Config.ADAPTERS, oauthConfig(fake)));
 		Engine.addDemoAssets(engine);
 		((HTTPAdapter) engine.getAdapter("http")).addAllowedHost("localhost");
+		storeClientSecret(engine);
+		return engine;
+	}
+
+	private static void storeClientSecret(Engine engine) {
 		User venueUser = engine.getVenueState().users().ensure(engine.getDIDString());
 		venueUser.secrets().store("FAKE_SECRET", "shh", SecretStore.keys(engine.getKeyPair()));
-		return engine;
 	}
 
 	private static Job run(Engine engine, String op, ACell input, RequestContext ctx) {
@@ -231,7 +245,7 @@ public class OAuthAdapterTest {
 
 				// connect: a one-time state and a PKCE challenge, bound to the caller.
 				ACell started = ok(run(engine, "v/ops/oauth/connect",
-					Maps.of("provider", "fake", "returnTo", "/settings"), alice));
+					Maps.of("provider", "fake", "returnTo", "app://done/settings"), alice));
 				String url = RT.getIn(started, "url").toString();
 				assertTrue(url.startsWith(fake.base() + "/authorize?"), url);
 				Map<String, String> q = query(url);
@@ -243,12 +257,24 @@ public class OAuthAdapterTest {
 				assertEquals(RT.getIn(started, "state").toString(), q.get("state"));
 				fake.expectedChallenge = q.get("code_challenge");
 
-				// The provider calls back: the code is exchanged, the grant stored, the state consumed.
-				OAuthAdapter.Completion done = adapter.complete("fake", q.get("state"), "code-1", null, null);
+				// The provider calls back: the state is consumed and the approval held, nothing exchanged or stored.
+				OAuthAdapter.Callback done = adapter.callback("fake", q.get("state"), "code-1", null, null);
 				assertTrue(done.ok(), done.message());
-				assertEquals("/settings", done.returnTo());
+				assertEquals("app://done/settings", done.returnTo());
+				assertNotNull(done.code());
+				assertEquals("app://done/settings?code=" + done.code(), done.redirect());
+				assertFalse(adapter.callback("fake", q.get("state"), "code-1", null, null).ok(), "a state is one-time");
+				assertTrue(fake.tokenRequests.isEmpty(), "the callback exchanges nothing");
+				assertEquals(0, connections(engine, alice).count());
+
+				// Alice completes: the code is exchanged and the grant stored; a completion code is one-time.
+				ACell completed = ok(run(engine, "v/ops/oauth/complete", Maps.of("code", done.code()), alice));
+				assertEquals(Strings.create("fake"), RT.getIn(completed, "provider"));
+				assertEquals(CVMBool.TRUE, RT.getIn(completed, "refreshable"));
+				assertNull(RT.getIn(completed, "tokens"), "a completion never carries tokens");
 				assertEquals("shh", fake.tokenRequests.get(0).get("client_secret"), "the client secret came from the venue secret store");
-				assertFalse(adapter.complete("fake", q.get("state"), "code-1", null, null).ok(), "a state is one-time");
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", done.code()), alice))
+					.contains(OAuthAdapter.UNKNOWN_COMPLETION));
 
 				AVector<ACell> after = connections(engine, alice);
 				assertEquals(1, after.count());
@@ -278,7 +304,8 @@ public class OAuthAdapterTest {
 				ACell again = ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake"), alice));
 				Map<String, String> q2 = query(RT.getIn(again, "url").toString());
 				fake.expectedChallenge = q2.get("code_challenge");
-				assertTrue(adapter.complete("fake", q2.get("state"), "code-1", null, null).ok());   // access-2, expires now
+				ok(run(engine, "v/ops/oauth/complete",
+					Maps.of("code", adapter.callback("fake", q2.get("state"), "code-1", null, null).code()), alice));   // access-2, expires now
 				assertEquals("Bearer access-3", RT.getIn(ok(run(engine, "v/ops/http/get",
 					Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake"), alice)), "body").toString());
 				Map<String, String> refresh = fake.tokenRequests.get(fake.tokenRequests.size() - 1);
@@ -308,11 +335,68 @@ public class OAuthAdapterTest {
 		}
 	}
 
-	private static void connectFake(Engine engine, FakeProvider fake, RequestContext ctx) {
+	/** The completion code a provider's approval of a connect started by {@code ctx} yields. */
+	private static String approve(Engine engine, FakeProvider fake, RequestContext ctx) {
 		ACell started = ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake"), ctx));
 		Map<String, String> q = query(RT.getIn(started, "url").toString());
 		fake.expectedChallenge = q.get("code_challenge");
-		assertTrue(engine.findAdapter(OAuthAdapter.class).complete("fake", q.get("state"), "code-1", null, null).ok());
+		OAuthAdapter.Callback approved = engine.findAdapter(OAuthAdapter.class).callback("fake", q.get("state"), "code-1", null, null);
+		assertTrue(approved.ok(), approved.message());
+		return approved.code();
+	}
+
+	private static void connectFake(Engine engine, FakeProvider fake, RequestContext ctx) {
+		ok(run(engine, "v/ops/oauth/complete", Maps.of("code", approve(engine, fake, ctx)), ctx));
+	}
+
+	@Test
+	public void testOnlyTheStartingAccountCompletes() throws Exception {
+		try (FakeProvider fake = new FakeProvider()) {
+			Engine engine = engine(fake);
+			try {
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+				RequestContext bob = RequestContext.of(Strings.create("did:test:oauth:bob"));
+
+				// Alice starts a connect and someone approves it; Bob's completion stores nothing anywhere.
+				String code = approve(engine, fake, alice);
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", code), bob))
+					.contains(OAuthAdapter.ANOTHER_ACCOUNT));
+				assertTrue(fake.tokenRequests.isEmpty(), "nothing was exchanged");
+				assertEquals(0, connections(engine, alice).count());
+				assertEquals(0, connections(engine, bob).count());
+				// The attempt used the code up, for Alice too.
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", code), alice))
+					.contains(OAuthAdapter.UNKNOWN_COMPLETION));
+				assertEquals(0, connections(engine, alice).count());
+
+				// Signed-out callers complete nothing.
+				String another = approve(engine, fake, alice);
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", another), RequestContext.ANONYMOUS))
+					.toLowerCase().contains("authenticat"));
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", another),
+					RequestContext.of(Strings.create(engine.getDIDString() + ":public")))).contains(OAuthAdapter.PUBLIC_HAS_NO_CONNECTIONS));
+
+				// Alice's own completion stores the grant for her, as connecting always has.
+				ok(run(engine, "v/ops/oauth/complete", Maps.of("code", approve(engine, fake, alice)), alice));
+				assertEquals(1, connections(engine, alice).count());
+				assertEquals(0, connections(engine, bob).count());
+
+				// An agent of Alice's completes for her only under oauth/connect.
+				String agentCode = approve(engine, fake, alice);
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", agentCode), agent(aliceDID)))
+					.contains(Abilities.OAUTH_CONNECT.toString()));
+				RequestContext connects = agent(aliceDID, Capability.create(OAuthAdapter.resource("fake"), Abilities.OAUTH_CONNECT));
+				ok(run(engine, "v/ops/oauth/complete", Maps.of("code", approve(engine, fake, alice)), connects));
+				assertEquals(1, connections(engine, alice).count());
+
+				// A connect her agent started, Alice completes in her own app.
+				ok(run(engine, "v/ops/oauth/complete", Maps.of("code", approve(engine, fake, connects)), alice));
+				assertEquals(1, connections(engine, alice).count());
+			} finally {
+				engine.close();
+			}
+		}
 	}
 
 	private static final AMap<AString, ACell> INVOKE_ANY = Maps.of(Capability.CAN, Strings.create("invoke"));
@@ -589,24 +673,20 @@ public class OAuthAdapterTest {
 	}
 
 	@Test
-	public void testCallbackForADeletedAccountStoresNothing() throws Exception {
+	public void testCompletionForADeletedAccountStoresNothing() throws Exception {
 		try (FakeProvider fake = new FakeProvider()) {
 			Engine engine = engine(fake);
 			try {
-				OAuthAdapter adapter = engine.findAdapter(OAuthAdapter.class);
 				AString bobDID = Strings.create("did:test:oauth:bob");
 				RequestContext bob = RequestContext.of(bobDID);
-				ACell started = ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake"), bob));
-				Map<String, String> q = query(RT.getIn(started, "url").toString());
-				fake.expectedChallenge = q.get("code_challenge");
+				String code = approve(engine, fake, bob);
 
-				// Bob's account is deleted, and a new one made under his DID, before the provider calls back.
+				// Bob's account is deleted, and a new one made under his DID, before he completes.
 				engine.deleteUser(engine.venueContext(), bobDID);
 				engine.getVenueState().users().create(bobDID);
 
-				OAuthAdapter.Completion done = adapter.complete("fake", q.get("state"), "code-1", null, null);
-				assertFalse(done.ok());
-				assertEquals(OAuthAdapter.ACCOUNT_GONE, done.message());
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", code), bob))
+					.contains(OAuthAdapter.ACCOUNT_GONE));
 				assertEquals("refresh-1", fake.revoked.get().get("token"), "the tokens issued for it are revoked");
 				assertNull(engine.adapterState("oauth").read("users/" + bobDID), "nothing reaches the new account");
 			} finally {
@@ -646,34 +726,52 @@ public class OAuthAdapterTest {
 				RequestContext alice = RequestContext.of(Strings.create("did:test:oauth:alice2"));
 				OAuthAdapter adapter = engine.findAdapter(OAuthAdapter.class);
 
-				OAuthAdapter.Completion unknown = adapter.complete("fake", "no-such-state", "code-1", null, null);
+				OAuthAdapter.Callback unknown = adapter.callback("fake", "no-such-state", "code-1", null, null);
 				assertFalse(unknown.ok());
-				assertTrue(unknown.message().contains("unknown or has expired"), unknown.message());
-				assertFalse(adapter.complete("fake", null, "code-1", null, null).ok());
+				assertEquals(OAuthAdapter.UNKNOWN_REQUEST, unknown.message());
+				assertNull(unknown.code());
+				assertFalse(adapter.callback("fake", null, "code-1", null, null).ok());
 
 				// Provider mismatch: the state was minted for fake.
 				String state = query(RT.getIn(ok(run(engine, "v/ops/oauth/connect",
 					Maps.of("provider", "fake"), alice)), "url").toString()).get("state");
-				OAuthAdapter.Completion mismatch = adapter.complete("other", state, "code-1", null, null);
+				OAuthAdapter.Callback mismatch = adapter.callback("other", state, "code-1", null, null);
 				assertFalse(mismatch.ok());
 				assertTrue(mismatch.message().contains("another provider"), mismatch.message());
 
 				// The user declined at the provider: reported, and the return address kept.
 				state = query(RT.getIn(ok(run(engine, "v/ops/oauth/connect",
 					Maps.of("provider", "fake", "returnTo", "app://done/x"), alice)), "url").toString()).get("state");
-				OAuthAdapter.Completion denied = adapter.complete("fake", state, null, "access_denied", "user said no");
+				OAuthAdapter.Callback denied = adapter.callback("fake", state, null, "access_denied", "user said no");
 				assertFalse(denied.ok());
 				assertTrue(denied.message().contains("access_denied") && denied.message().contains("user said no"), denied.message());
 				assertEquals("app://done/x", denied.returnTo());
+				assertNull(denied.code());
+				assertNull(denied.redirect(), "a refusal is shown, not sent to the app");
 
-				// A code the provider rejects fails with the provider's reason.
+				// An approval's code joins the returnTo query, ahead of any fragment.
+				state = query(RT.getIn(ok(run(engine, "v/ops/oauth/connect",
+					Maps.of("provider", "fake", "returnTo", "app://done/x?tab=1#top"), alice)), "url").toString()).get("state");
+				OAuthAdapter.Callback fragment = adapter.callback("fake", state, "code-1", null, null);
+				assertEquals("app://done/x?tab=1&code=" + fragment.code() + "#top", fragment.redirect());
+
+				// A code the provider rejects fails the completion with the provider's reason.
 				Map<String, String> q = query(RT.getIn(ok(run(engine, "v/ops/oauth/connect",
 					Maps.of("provider", "fake"), alice)), "url").toString());
 				fake.expectedChallenge = q.get("code_challenge");
-				OAuthAdapter.Completion rejected = adapter.complete("fake", q.get("state"), "wrong-code", null, null);
-				assertFalse(rejected.ok());
-				assertTrue(rejected.message().contains("invalid_grant") && rejected.message().contains("bad exchange"), rejected.message());
+				OAuthAdapter.Callback held = adapter.callback("fake", q.get("state"), "wrong-code", null, null);
+				assertTrue(held.ok(), "the callback cannot tell a code the provider will reject");
+				String rejected = failed(run(engine, "v/ops/oauth/complete", Maps.of("code", held.code()), alice));
+				assertTrue(rejected.contains("invalid_grant") && rejected.contains("bad exchange"), rejected);
 				assertEquals(0, connections(engine, alice).count(), "nothing stored on failure");
+
+				// A completion needs a code the callback issued.
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.empty(), alice)).contains("code is required"));
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", "no-such-code"), alice))
+					.contains(OAuthAdapter.UNKNOWN_COMPLETION));
+				String live = RT.getIn(ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake"), alice)), "state").toString();
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", live), alice))
+					.contains(OAuthAdapter.UNKNOWN_COMPLETION), "a state is not a completion code");
 			} finally {
 				engine.close();
 			}
@@ -691,9 +789,16 @@ public class OAuthAdapterTest {
 				String unknown = failed(run(engine, "v/ops/oauth/connect", Maps.of("provider", "nope"), alice));
 				assertTrue(unknown.contains("No OAuth provider 'nope'") && unknown.contains("fake"), unknown);
 				assertTrue(failed(run(engine, "v/ops/oauth/connect", Maps.empty(), alice)).contains("provider is required"));
-				String badReturn = failed(run(engine, "v/ops/oauth/connect",
-					Maps.of("provider", "fake", "returnTo", "https://evil.example/steal"), alice));
-				assertTrue(badReturn.contains("returnTo"), badReturn);
+				// returnTo is an app under an operator prefix: not elsewhere, not a lookalike, not a venue path.
+				for (String refused : List.of("https://evil.example/steal", "app://done.evil.example/x", "app://donex", "/settings")) {
+					assertTrue(failed(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake", "returnTo", refused), alice))
+						.contains(OAuthAdapter.RETURN_TO_REFUSED), refused);
+				}
+				for (String allowed : List.of("app://done", "app://done/x", "app://done?tab=1", "app://done#x")) {
+					ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake", "returnTo", allowed), alice));
+				}
+				assertTrue(OAuthAdapter.under("https://app.example/x", "https://app.example/"));
+				assertFalse(OAuthAdapter.under("https://app.example.evil/x", "https://app.example"));
 				// Caller-chosen scopes replace the defaults.
 				String url = RT.getIn(ok(run(engine, "v/ops/oauth/connect",
 					Maps.of("provider", "fake", "scopes", Vectors.of("read", "write")), alice)), "url").toString();
@@ -747,7 +852,56 @@ public class OAuthAdapterTest {
 			.uri(URI.create(TestServer.BASE_URL + "/auth/connect/fake/callback?state=nope&code=x")).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
 		assertEquals(400, r.statusCode(), r.body());
-		assertTrue(r.body().contains("unknown or has expired"), r.body());
+		assertTrue(r.body().contains(OAuthAdapter.UNKNOWN_REQUEST), r.body());
 		assertTrue(r.headers().firstValue("Content-Type").orElse("").contains("text/html"));
+	}
+
+	private static final Pattern PAGE_CODE = Pattern.compile("<code>([A-Za-z0-9_-]+)</code>");
+
+	@Test
+	public void testCallbackHandsTheCompletionCodeToTheBrowser() throws Exception {
+		try (FakeProvider fake = new FakeProvider(); HttpClient browser = HttpClient.newHttpClient()) {
+			VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
+				Config.STORE, "memory", Config.USERS, Maps.of(Config.AUTO_CREATE, true), Config.ADAPTERS, oauthConfig(fake)));
+			try {
+				Engine engine = server.getEngine();
+				storeClientSecret(engine);
+				AString aliceDID = Strings.create("did:test:oauth:alice");
+				RequestContext alice = RequestContext.of(aliceDID);
+
+				// With an app to return to, the browser takes the code there; the app completes as Alice.
+				Map<String, String> q = query(RT.getIn(ok(run(engine, "v/ops/oauth/connect",
+					Maps.of("provider", "fake", "returnTo", "app://done/x?tab=1"), alice)), "url").toString());
+				fake.expectedChallenge = q.get("code_challenge");
+				HttpResponse<String> back = browser.send(callback(server, q.get("state")), HttpResponse.BodyHandlers.ofString());
+				assertEquals(302, back.statusCode(), back.body());
+				String location = back.headers().firstValue("Location").orElseThrow();
+				assertTrue(location.startsWith("app://done/x?tab=1&code="), location);
+				assertEquals("no-store", back.headers().firstValue("Cache-Control").orElse(null));
+				assertEquals(0, connections(engine, alice).count(), "the redirect connects nothing");
+				ok(run(engine, "v/ops/oauth/complete", Maps.of("code", query(location).get("code")), alice));
+				assertEquals(1, connections(engine, alice).count());
+
+				// Without one, the page shows the code and the account it connects to; nobody else can use it.
+				q = query(RT.getIn(ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake"), alice)), "url").toString());
+				fake.expectedChallenge = q.get("code_challenge");
+				HttpResponse<String> page = browser.send(callback(server, q.get("state")), HttpResponse.BodyHandlers.ofString());
+				assertEquals(200, page.statusCode(), page.body());
+				assertTrue(page.body().contains(aliceDID.toString()), page.body());
+				assertEquals("no-store", page.headers().firstValue("Cache-Control").orElse(null));
+				Matcher shown = PAGE_CODE.matcher(page.body());
+				assertTrue(shown.find(), page.body());
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", shown.group(1)),
+					RequestContext.of(Strings.create("did:test:oauth:bob")))).contains(OAuthAdapter.ANOTHER_ACCOUNT));
+			} finally {
+				server.close();
+			}
+		}
+	}
+
+	/** The provider's redirect back to the venue, approving with the fake's one good code. */
+	private static HttpRequest callback(VenueServer server, String state) {
+		return HttpRequest.newBuilder().uri(URI.create("http://127.0.0.1:" + server.port()
+			+ "/auth/connect/fake/callback?state=" + URLEncoder.encode(state, StandardCharsets.UTF_8) + "&code=code-1")).GET().build();
 	}
 }

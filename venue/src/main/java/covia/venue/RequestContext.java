@@ -182,11 +182,20 @@ public class RequestContext {
 	}
 
 	/**
-	 * Creates a RequestContext with caller DID and UCAN proofs.
+	 * Creates a RequestContext for {@code callerDID} acting in the namespace of
+	 * {@code userDID} under the given capability scope
+	 * ({@link Authority#of(AString, AString, AVector)}). This rebuilds a stored
+	 * context: one that persists records both DIDs, since neither can be
+	 * recovered from the other. Deciding what a principal may do now is
+	 * {@link covia.venue.Engine#context(AString, AString)}.
+	 *
+	 * @param callerDID who acted, or null for anonymous
+	 * @param userDID the namespace it acted in; null or {@code callerDID} for its own
+	 * @param caps the scope, or null for unrestricted
 	 */
-	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
+	public static RequestContext of(AString callerDID, AString userDID, AVector<ACell> caps) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(Authority.of(callerDID).withProofs(proofs));
+		return new RequestContext(Authority.of(callerDID, userDID, caps));
 	}
 
 	/**
@@ -245,6 +254,16 @@ public class RequestContext {
 		Authority delegated = authority.onBehalfOf(userDID);
 		if (delegated == authority) return this;
 		return new RequestContext(delegated, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication);
+	}
+
+	/**
+	 * This execution (its job, session, task, cancellation and invocation)
+	 * carried on by {@code principal}'s authority instead of the caller's. The
+	 * caller's transport tokens and authentication record stay with the caller.
+	 * Only {@link Engine#stepContext} hands a run to an agent this way.
+	 */
+	RequestContext actingAs(Authority principal) {
+		return new RequestContext(principal, executionScope, null, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, null);
 	}
 
 	/**

@@ -74,8 +74,13 @@ import covia.venue.User;
  * <p><b>Flow.</b> {@code oauth:connect} mints a one-time {@code state} and a
  * PKCE verifier bound to the caller and returns the provider's authorisation
  * URL. The user approves in a browser; the provider redirects to
- * {@code /auth/connect/{provider}/callback}, which {@link #complete} serves:
- * the code is exchanged for tokens and the grant stored. Thereafter
+ * {@code /auth/connect/{provider}/callback}, which {@link #callback} serves.
+ * The venue has no browser session, so nothing there says whose browser it
+ * is: the callback holds the provider's code under a one-time completion
+ * code, which the browser takes to the app the connect named in
+ * {@code returnTo}, or shows for the user to enter in the app that asked.
+ * {@code oauth:complete} with it, from the account that started the connect
+ * and no other, exchanges the code and stores the grant. Thereafter
  * {@code http:*} with {@code bearerSecret: "oauth/<provider>"} resolves a
  * fresh access token through {@link TokenSource}, refreshing when expired;
  * {@code oauth:status} reports connections without tokens; {@code
@@ -107,9 +112,24 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	public static final String PUBLIC_HAS_NO_CONNECTIONS =
 		"Connected accounts belong to a signed-in user, and the public principal has none";
 
-	/** A callback for an account deleted since its connect began. */
+	/** A completion for an account deleted since its connect began. */
 	public static final String ACCOUNT_GONE =
 		"The account that started this connection no longer exists; nothing was connected";
+
+	/** A callback whose state no connect is waiting on. */
+	public static final String UNKNOWN_REQUEST =
+		"This connection request is unknown or has expired; start again with oauth:connect";
+
+	/** A completion code no approved connect is waiting on. */
+	public static final String UNKNOWN_COMPLETION =
+		"This completion code is unknown, used or expired; start again with oauth:connect";
+
+	/** A completion by an account other than the one that started the connect. */
+	public static final String ANOTHER_ACCOUNT =
+		"This connection was started by another account on this venue; nothing was connected";
+
+	/** A {@code returnTo} outside the operator's prefixes. */
+	public static final String RETURN_TO_REFUSED = "returnTo must start with one of adapters.oauth.returnTo";
 
 	/** Opening of the refusal for a provider the user has no connection to. */
 	public static final String NOT_CONNECTED = "Not connected to ";
@@ -145,6 +165,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	static final AString K_DISCONNECTED = Strings.intern("disconnected");
 	static final AString K_REVOKED = Strings.intern("revoked");
 	static final AString K_SCOPE = Strings.intern("scope");
+	static final AString K_CODE = Strings.intern("code");
 
 	// Stored grant keys
 	static final AString G_PROVIDER = K_PROVIDER;
@@ -169,14 +190,31 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	private record Pending(String provider, AString userDID, AdapterState connections, String verifier,
 			List<String> scopes, String returnTo, long expiresAt) {}
 
-	/** The outcome of a callback, for the route that renders it. */
-	public record Completion(boolean ok, String provider, String message, String returnTo) {}
+	/** A connect its provider approved, holding the provider's code until the account that started it
+	 *  completes: nothing is exchanged for anyone else. */
+	private record Approved(Pending pending, String code, long expiresAt) {}
+
+	/**
+	 * The outcome of a callback, for the route that renders it. On approval,
+	 * {@code code} is the one-time completion code, for the browser to take to
+	 * {@code returnTo} or, without one, for the page to show.
+	 */
+	public record Callback(boolean ok, String provider, String message, String returnTo, String code) {
+		/** Where an approval sends the browser: {@code returnTo} with the code in its query; null to show the page. */
+		public String redirect() {
+			if (!ok || returnTo == null) return null;
+			int hash = returnTo.indexOf('#');
+			String url = (hash < 0) ? returnTo : returnTo.substring(0, hash);
+			return url + (url.contains("?") ? '&' : '?') + "code=" + enc(code) + ((hash < 0) ? "" : returnTo.substring(hash));
+		}
+	}
 
 	private volatile Map<String, Provider> providers = Map.of();
 	private volatile List<String> returnToAllow = List.of();
 	private volatile long pendingTtlMillis = DEFAULT_PENDING_TTL_MILLIS;
 
 	private final ConcurrentHashMap<String, Pending> pending = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, Approved> approved = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<String, Object> refreshLocks = new ConcurrentHashMap<>();
 	private final SecureRandom random = new SecureRandom();
 	/** Shared by every venue in the process: each client holds a selector thread for its lifetime. */
@@ -201,6 +239,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	protected void installAssets() {
 		installSkill("auth/oauth", "/skills/oauth.json");
 		installAsset("oauth/connect", "/adapters/oauth/connect.json");
+		installAsset("oauth/complete", "/adapters/oauth/complete.json");
 		installAsset("oauth/status", "/adapters/oauth/status.json");
 		installAsset("oauth/disconnect", "/adapters/oauth/disconnect.json");
 	}
@@ -374,6 +413,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		try {
 			ACell result = switch (subOp == null ? "" : subOp) {
 				case "connect" -> handleConnect(ctx, input);
+				case "complete" -> handleComplete(ctx, input);
 				case "status" -> handleStatus(ctx, input);
 				case "disconnect" -> handleDisconnect(ctx, input);
 				default -> throw new IllegalArgumentException("Unknown oauth operation: " + subOp);
@@ -439,7 +479,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		String returnTo = returnTo(RT.ensureString(RT.getIn(input, K_RETURN_TO)));
 
 		sweepPending();
-		if (pending.size() >= MAX_PENDING) {
+		if (pending.size() + approved.size() >= MAX_PENDING) {
 			throw new IllegalStateException("Too many connections awaiting approval; try again later");
 		}
 		engine.getVenueState().users().ensure(userDID);
@@ -457,13 +497,24 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			K_SCOPES, strings(scopes));
 	}
 
-	/** Where the browser goes after the callback: a venue-relative path, or an operator-allowed prefix. */
+	/**
+	 * The app the browser takes the completion code to: a URL under an
+	 * operator-allowed prefix. Never a venue path, which could be a route
+	 * that hands what it receives to someone else.
+	 */
 	private String returnTo(AString raw) {
 		if (raw == null || raw.isEmpty()) return null;
 		String value = raw.toString().trim();
-		if (value.startsWith("/") && !value.startsWith("//")) return value;
-		for (String prefix : returnToAllow) if (value.startsWith(prefix)) return value;
-		throw new IllegalArgumentException("returnTo must be a venue-relative path or start with one of adapters.oauth.returnTo");
+		for (String prefix : returnToAllow) if (under(value, prefix)) return value;
+		throw new IllegalArgumentException(RETURN_TO_REFUSED);
+	}
+
+	/** Whether {@code url} is {@code prefix} or below it: the prefix ends where a path, query or fragment begins. */
+	static boolean under(String url, String prefix) {
+		if (!url.startsWith(prefix)) return false;
+		if (url.length() == prefix.length() || prefix.endsWith("/")) return true;
+		char next = url.charAt(prefix.length());
+		return next == '/' || next == '?' || next == '#';
 	}
 
 	String authorizationUrl(Provider p, String state, String verifier, List<String> scopes) {
@@ -493,52 +544,70 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	}
 
 	/**
-	 * The provider's callback: consumes the one-time state, exchanges the code
-	 * and stores the grant for the user who started the connect. Every
-	 * failure is a {@link Completion} the route renders — never an exception
-	 * in the user's browser.
+	 * The provider's callback: consumes the one-time state and holds the
+	 * provider's code under a fresh one-time completion code, which only this
+	 * browser receives. Nothing is exchanged or stored here: the browser that
+	 * approved need not belong to the account that started the connect, so
+	 * {@code oauth:complete} from that account finishes it. Every failure is a
+	 * {@link Callback} the route renders — never an exception in the user's
+	 * browser.
 	 */
-	public Completion complete(String providerName, String state, String code, String error, String errorDescription) {
+	public Callback callback(String providerName, String state, String code, String error, String errorDescription) {
 		Pending pend = (state != null && !state.isBlank()) ? pending.remove(state) : null;
-		if (pend == null || pend.expiresAt() < System.currentTimeMillis()) {
-			return new Completion(false, providerName,
-				"This connection request is unknown or has expired; start again with oauth:connect", null);
+		long now = System.currentTimeMillis();
+		if (pend == null || pend.expiresAt() < now) {
+			return new Callback(false, providerName, UNKNOWN_REQUEST, null, null);
 		}
 		if (!pend.provider().equals(providerName)) {
-			return new Completion(false, providerName, "This connection request was for another provider", null);
+			return new Callback(false, providerName, "This connection request was for another provider", null, null);
 		}
 		if (error != null && !error.isBlank()) {
-			return new Completion(false, providerName, "The provider refused the connection: " + error
+			return new Callback(false, providerName, "The provider refused the connection: " + error
 				+ ((errorDescription != null && !errorDescription.isBlank()) ? " — " + errorDescription : ""),
-				pend.returnTo());
+				pend.returnTo(), null);
 		}
 		if (code == null || code.isBlank()) {
-			return new Completion(false, providerName, "The provider sent no authorization code", pend.returnTo());
+			return new Callback(false, providerName, "The provider sent no authorization code", pend.returnTo(), null);
 		}
-		Provider p = providers.get(providerName);
-		if (p == null) {
-			return new Completion(false, providerName, "Provider '" + providerName + "' is no longer configured", pend.returnTo());
-		}
+		String completion = randomToken(24);
+		approved.put(completion, new Approved(pend, code, now + pendingTtlMillis));
+		return new Callback(true, providerName, "Approved at " + providerName + ". To finish connecting your "
+			+ providerName + " account to the venue account " + pend.userDID() + ", enter this code in the app that"
+			+ " asked you to connect it. Never give it to anyone else: whoever holds that venue account and this code"
+			+ " can use your " + providerName + " account.", pend.returnTo(), completion);
+	}
+
+	/**
+	 * {@code oauth:complete}: finishes a connect its provider approved, for the
+	 * account that started it and no other, by exchanging the code the
+	 * callback held. A completion code is used up by any attempt, so one that
+	 * reached the wrong account cannot be tried again.
+	 */
+	private ACell handleComplete(RequestContext ctx, ACell input) {
+		AString userDID = userOf(ctx, "oauth:complete");
+		AString raw = RT.ensureString(RT.getIn(input, K_CODE));
+		if (raw == null || raw.toString().isBlank()) throw new IllegalArgumentException("code is required");
+		Approved app = approved.remove(raw.toString().trim());
+		if (app == null || app.expiresAt() < System.currentTimeMillis()) throw new IllegalArgumentException(UNKNOWN_COMPLETION);
+		Pending pend = app.pending();
+		if (!pend.userDID().equals(userDID)) throw new IllegalArgumentException(ANOTHER_ACCOUNT);
+		engine.requireAuthority(ctx, resource(pend.provider()), Abilities.OAUTH_CONNECT);
+		Provider p = providers.get(pend.provider());
+		if (p == null) throw new IllegalArgumentException("Provider '" + pend.provider() + "' is no longer configured");
 		AMap<AString, ACell> tokens;
 		try {
-			tokens = exchange(p, code, pend.verifier());
+			tokens = exchange(p, app.code(), pend.verifier());
 		} catch (Exception e) {
-			log.warn("OAuth token exchange with {} failed: {}", providerName, describeFailure(e));
-			return new Completion(false, providerName,
-				"Token exchange with " + providerName + " failed: " + describeFailure(e), pend.returnTo());
+			log.warn("OAuth token exchange with {} failed: {}", p.name(), describeFailure(e));
+			throw new IllegalArgumentException("Token exchange with " + p.name() + " failed: " + describeFailure(e));
 		}
 		try {
-			storeGrant(pend, p, tokens);
+			return summary(storeGrant(pend, p, tokens));
 		} catch (AuthException gone) {
 			// Issued for an account deleted since the connect began: kept nowhere, so left live nowhere
 			revokeGrant(p, str(tokens, Strings.intern("refresh_token")), str(tokens, Strings.intern("access_token")));
-			return new Completion(false, providerName, ACCOUNT_GONE, pend.returnTo());
-		} catch (RuntimeException e) {
-			log.warn("Storing the {} connection failed: {}", providerName, describeFailure(e));
-			return new Completion(false, providerName,
-				"The connection to " + providerName + " could not be stored: " + describeFailure(e), pend.returnTo());
+			throw new IllegalArgumentException(ACCOUNT_GONE);
 		}
-		return new Completion(true, providerName, "Connected to " + providerName, pend.returnTo());
 	}
 
 	/** {@code oauth:status}: the caller's connections, without their tokens. */
@@ -749,8 +818,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	// ========== Connections ==========
 
-	/** Stores the grant a callback obtained, for the account that started the connect. */
-	private void storeGrant(Pending pend, Provider p, AMap<AString, ACell> tokens) {
+	/** Stores the grant a completion obtained, for the account that started the connect; returns it as stored. */
+	private AMap<AString, ACell> storeGrant(Pending pend, Provider p, AMap<AString, ACell> tokens) {
 		AMap<AString, ACell> grant = Maps.of(
 			G_PROVIDER, Strings.create(p.name()),
 			G_ACCESS_TOKEN, Strings.create(str(tokens, Strings.intern("access_token"))),
@@ -763,7 +832,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		String type = str(tokens, Strings.intern("token_type"));
 		if (type != null) grant = grant.assoc(G_TOKEN_TYPE, Strings.create(type));
 		AdapterState state = pend.connections();
-		state.write(state.userPath(pend.userDID(), p.name()), connection(grant));
+		AMap<AString, ACell> stored = connection(grant);
+		state.write(state.userPath(pend.userDID(), p.name()), stored);
+		return stored;
 	}
 
 	private static long expiresAt(AMap<AString, ACell> tokens) {
@@ -976,6 +1047,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	private void sweepPending() {
 		long now = System.currentTimeMillis();
 		pending.entrySet().removeIf(e -> e.getValue().expiresAt() < now);
+		approved.entrySet().removeIf(e -> e.getValue().expiresAt() < now);
 	}
 
 	private String randomToken(int bytes) {

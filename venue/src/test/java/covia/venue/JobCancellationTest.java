@@ -2,6 +2,9 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -10,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
@@ -348,6 +352,35 @@ public class JobCancellationTest {
 		assertNull(engine.jobs().cancelJob(fakeId));
 	}
 
+	@Test
+	public void testCancelByIdWaitsForAcceptanceInProgress() throws Exception {
+		// Acceptance writes a recorded job's row, then registers its live handle,
+		// both under the account monitor. A caller can list the row in between and
+		// cancel it by id; that cancel must wait for the handle, not miss it and be
+		// lost. Hold the half-state by hand: the monitor held, a row, no handle.
+		Object acceptance = engine.getAuth();
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		Blob id = Blob.createRandom(new java.util.Random(), 16);
+		CompletableFuture<AMap<AString, ACell>> cancelled = new CompletableFuture<>();
+		Thread canceller;
+		try {
+			synchronized (acceptance) {
+				assertTrue(user.createJob(id, Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
+					Fields.CALLER, ALICE_DID)));
+				canceller = Thread.ofPlatform().start(
+					() -> cancelled.complete(engine.jobs().cancelJob(id)));
+				awaitBlockedOnOrDone(canceller, acceptance);
+				assertFalse(cancelled.isDone(),
+					"Cancel by id must wait out the acceptance in progress, not miss its handle");
+			}
+			canceller.join();
+			// No handle was ever registered here, so there is nothing live to cancel.
+			assertNull(cancelled.join());
+		} finally {
+			user.removeJob(id);
+		}
+	}
+
 	// ========== Cancel agent:trigger with wait ==========
 
 	@Test
@@ -365,8 +398,8 @@ public class JobCancellationTest {
 		// caller can never cancel its own trigger. Run it on a background thread
 		// and cancel by id from the test thread — exactly how a separate cancel
 		// request cancels it in production. With a cancellable wait this returns
-		// in milliseconds; the 30s WAIT only elapses if the fix regresses (caught
-		// by the bounded get below, not by a 30s hang).
+		// in milliseconds; the 30s WAIT only elapses if the wait or the cancel
+		// regresses (caught by the bounded get below, not by a 30s hang).
 		java.util.HashSet<Blob> before = new java.util.HashSet<>();
 		for (var e : engine.jobs().getJobs(ctx).entrySet()) before.add(e.getKey());
 
@@ -388,7 +421,9 @@ public class JobCancellationTest {
 		assertNotNull(triggerId, "Trigger job should be submitted and visible");
 
 		long cancelTime = System.currentTimeMillis();
-		engine.jobs().cancelJob(triggerId);
+		// The id was read from the listing, which can run ahead of the live
+		// handle; the cancel must still reach the job.
+		assertNotNull(engine.jobs().cancelJob(triggerId), "Cancel must find the listed trigger job");
 
 		Job triggerJob = triggerDone.get(5, java.util.concurrent.TimeUnit.SECONDS);
 		long elapsed = System.currentTimeMillis() - cancelTime;
@@ -473,6 +508,19 @@ public class JobCancellationTest {
 		// The agent's run creates a transition job — look for it
 		// by checking active jobs. This is a best-effort helper.
 		return null; // Not critical for the test assertions
+	}
+
+	/** Yields until {@code thread} is blocked entering {@code monitor}, or has finished. */
+	private static void awaitBlockedOnOrDone(Thread thread, Object monitor) {
+		ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+		int lock = System.identityHashCode(monitor);
+		while (thread.isAlive()) {
+			ThreadInfo info = threads.getThreadInfo(thread.threadId());
+			if (info != null && info.getThreadState() == Thread.State.BLOCKED
+					&& info.getLockInfo() != null
+					&& info.getLockInfo().getIdentityHashCode() == lock) return;
+			Thread.yield();
+		}
 	}
 
 	/** Polls the caller's job index for the first job id not in {@code known}. */

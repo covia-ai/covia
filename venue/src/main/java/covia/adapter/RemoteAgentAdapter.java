@@ -13,6 +13,8 @@ import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.adapter.remote.RemoteInteraction;
 import covia.adapter.remote.VenueRemoteAgent;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -39,13 +41,13 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	@Override protected boolean isInteractionOperation(String operation) { return "request".equals(operation) || "chat".equals(operation); }
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
-		if (!isInteractionOperation(getSubOperation(meta))) throw new IllegalArgumentException(UNKNOWN_OPERATION);
+		if (!isInteractionOperation(getSubOperation(meta))) throw new NotSupportedException(UNKNOWN_OPERATION);
 		return engine.jobs().invokeInternal(meta, input, ctx);
 	}
 
 	@Override public void validateAgent(AMap<AString, ACell> definition) {
 		AString id = RT.ensureString(definition.get(Fields.AGENT_ID));
-		if (id == null || id.toString().isBlank()) throw new IllegalArgumentException(INVALID_INPUT);
+		if (id == null || id.toString().isBlank()) throw new InvalidInputException(INVALID_INPUT);
 	}
 
 	@Override public AgentInvocation agentInvocation(String operation, AMap<AString, ACell> definition,
@@ -70,7 +72,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AMap<AString, ACell> params = RT.ensureMap(input);
 		AString agent = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (params == null || agent == null || agent.toString().isBlank()
-			|| ("request".equals(getSubOperation(meta)) && RT.ensureMap(params.get(Fields.INPUT)) == null)) throw new IllegalArgumentException(INVALID_INPUT);
+			|| ("request".equals(getSubOperation(meta)) && RT.ensureMap(params.get(Fields.INPUT)) == null)) throw new InvalidInputException(INVALID_INPUT);
 		AString target = RT.ensureString(params.get(Fields.VENUE));
 		Venue venue;
 		AMap<AString, ACell> credentials;

@@ -20,6 +20,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -154,6 +155,84 @@ final class HarnessTools {
 	/** Decoded request for the fixed dynamic-tool dispatcher. */
 	record Invocation(String name, ACell input, ACell error) {}
 
+	/** A tool whose skill is not loaded: the tool, then the skills that provide it. */
+	static final String TOOL_NOT_LOADED = "tool '%s' is not loaded; call skill_load with one of %s first";
+	/** A name that differs from a callable tool only by case or separator. */
+	static final String TOOL_NEAR_MISS = "no tool named '%s'; did you mean '%s'?";
+	/** A name nothing on this agent's surface provides; a tail follows. */
+	static final String NO_SUCH_TOOL = "no tool named '%s', and it is not an operation reference";
+	/** The tail when the session has no tools at all. */
+	static final String NO_TOOLS = "no tools are available";
+	/** The tail naming a short tool list. */
+	static final String ONLY_TOOLS = "your only tools are: %s";
+	/** The tail when the tool list is long, or not known here. */
+	static final String USE_TOOL_LIST = "call only the tools in your tool list";
+	/** At most this many providing skills, or callable tools, are named. */
+	static final int MAX_NAMED = 5;
+
+	/**
+	 * What a session can call and acquire, for answering a tool name it cannot
+	 * call: the load scope it would load into, and every tool name it was
+	 * offered — the fixed tools and those its loads added.
+	 */
+	record ToolSurface(LoadScope scope, Set<String> callable) {}
+
+	/**
+	 * Why {@code name}, which binds no tool and resolves to no operation,
+	 * cannot be called, and what would make it callable when that is certain
+	 * (#643). A near miss of a callable name is named; a tool is hinted for
+	 * {@code skill_load} only when this agent is offered it and an advertised
+	 * skill would bind exactly that name. A null surface knows nothing to hint.
+	 */
+	static String unboundTool(String name, ToolSurface surface) {
+		if (surface == null) return noSuchTool(name, null);
+		String near = nearMiss(name, surface.callable());
+		if (near != null) return String.format(TOOL_NEAR_MISS, name, near);
+		LoadScope scope = surface.scope();
+		if (offers(scope.config, SKILL_LOAD)) {
+			List<String> providers = Skills.providersOf(scope.engine, scope.context,
+				scope.skillSources, ContextChain.effective(scope.outerLoads, scope.loads), name);
+			if (!providers.isEmpty()) {
+				List<String> named = providers.subList(0, Math.min(providers.size(), MAX_NAMED));
+				String list = "[" + String.join(", ", named)
+					+ (providers.size() > named.size() ? ", …" : "") + "]";
+				return String.format(TOOL_NOT_LOADED, name, list);
+			}
+		}
+		return noSuchTool(name, surface.callable());
+	}
+
+	/** The answer for a name nothing provides, ending with what the session
+	 *  can call: none, a short list, or its tool list; null when not known. */
+	static String noSuchTool(String name, Set<String> callable) {
+		String tail;
+		if (callable == null || callable.size() > MAX_NAMED) tail = USE_TOOL_LIST;
+		else if (callable.isEmpty()) tail = NO_TOOLS;
+		else tail = String.format(ONLY_TOOLS, String.join(", ", new java.util.TreeSet<>(callable)));
+		return String.format(NO_SUCH_TOOL, name) + "; " + tail;
+	}
+
+	/** The callable name equal to {@code name} up to case and {@code -}/{@code _}, if one. */
+	private static String nearMiss(String name, Set<String> callable) {
+		String key = name.toLowerCase(java.util.Locale.ROOT).replace('-', '_');
+		for (String candidate : callable) {
+			if (!candidate.equals(name)
+					&& candidate.toLowerCase(java.util.Locale.ROOT).replace('-', '_').equals(key)) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	/** Whether the shared rule ({@link #offered}) offers this agent a harness tool. */
+	private static boolean offers(AMap<AString, ACell> config, String tool) {
+		AVector<ACell> defs = offered(config, SHARED);
+		for (long i = 0; i < defs.count(); i++) {
+			if (Strings.create(tool).equals(RT.getIn(defs.get(i), AbstractLLMAdapter.K_NAME))) return true;
+		}
+		return false;
+	}
+
 	/**
 	 * Decodes an {@code invoke_tool} call. {@code input} is the target tool's
 	 * arguments, and a tool's arguments are an object under every tool protocol
@@ -282,7 +361,7 @@ final class HarnessTools {
 				}
 			}
 		} catch (RuntimeException e) {
-			return Strings.create("Error: more_tools denied: " + describe(e));
+			return Strings.create("Error: more_tools denied: " + AbstractLLMAdapter.toolFailure(e, MORE_TOOLS));
 		}
 		AVector<ACell> resolved = ToolPalette.bindingsForOperations(
 			scope.engine, scope.context, requested);
@@ -393,7 +472,7 @@ final class HarnessTools {
 			try {
 				new ContextLoader(scope.engine).requireReadAccess(path, scope.context);
 			} catch (RuntimeException e) {
-				return Strings.create("Error: context_load denied: " + describe(e));
+				return Strings.create("Error: context_load denied: " + AbstractLLMAdapter.toolFailure(e, CONTEXT_LOAD));
 			}
 		} else {
 			key = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_ID));
@@ -485,14 +564,8 @@ final class HarnessTools {
 			}
 			return outcome.result();
 		} catch (RuntimeException e) {
-			return Strings.create("Error: skill_load failed: " + describe(e));
+			return Strings.create("Error: skill_load failed: " + AbstractLLMAdapter.toolFailure(e, SKILL_LOAD));
 		}
 	}
 
-	private static String describe(Throwable failure) {
-		Throwable cause = AbstractLLMAdapter.unwrap(failure);
-		String message = cause.getMessage();
-		return (message == null || message.isBlank())
-			? cause.getClass().getSimpleName() : message;
-	}
 }

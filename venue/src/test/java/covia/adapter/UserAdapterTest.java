@@ -30,6 +30,7 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -157,7 +158,7 @@ class UserAdapterTest {
 
 		ExecutionException badUsername = assertThrows(ExecutionException.class,
 			() -> create(Maps.of("username", "alice/admin")));
-		assertInstanceOf(IllegalArgumentException.class, badUsername.getCause());
+		assertInstanceOf(InvalidInputException.class, badUsername.getCause());
 	}
 
 	@Test

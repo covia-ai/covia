@@ -26,9 +26,9 @@ import convex.core.data.Strings;
  * granting authority. It does <em>not</em> answer <em>whose namespace a bare
  * lattice path names</em>: {@code w/foo} in an agent's {@code config.caps} still
  * means the <em>owner's</em> workspace, because that is the namespace the agent
- * lives and works in. {@link #userOf} is that projection, and
- * {@code Authority.getUserDID()} carries it authoritatively rather than
- * re-deriving it by parsing.</p>
+ * lives and works in. {@code Authority.getUserDID()} carries that namespace,
+ * set when the venue builds the agent's context; it is never re-derived by
+ * parsing a name, since anyone may present a DID shaped like an agent's.</p>
  *
  * <p>This class is deliberately syntax-only: it mints and destructures names and
  * compares them. It grants nothing and checks no capability — an agent is bounded
@@ -80,12 +80,13 @@ public final class Principals {
 	}
 
 	/**
-	 * The user whose namespace this principal lives in: the owner for an agent
-	 * DID, the principal itself otherwise.
+	 * The user an agent DID names as its owner, or the DID itself when it names
+	 * no agent.
 	 *
-	 * <p>This is the projection used to resolve bare lattice paths, per-user
-	 * state (secrets, workspace, jobs, inbox) and same-user trust. A DID that is
-	 * not an agent DID is its own user, so this is safe to apply unconditionally.</p>
+	 * <p>This reads the name only: it addresses an agent ({@code did:…:g:<id>}
+	 * is agent {@code <id>} of that user) and classifies relations. It does not
+	 * decide whose namespace a context acts in — that is the context's own
+	 * {@code Authority.getUserDID()}.</p>
 	 *
 	 * @param did any principal DID (may be null)
 	 * @return the owning user's DID, or {@code did} unchanged when it names no agent

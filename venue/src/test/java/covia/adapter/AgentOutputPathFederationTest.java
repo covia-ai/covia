@@ -8,16 +8,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.exception.JobFailedException;
 import covia.venue.RequestContext;
 import covia.venue.TwoVenueTestServer;
@@ -82,7 +86,7 @@ public class AgentOutputPathFederationTest {
 		AString agent = Strings.create("worker");
 		RequestContext context = RequestContext.of(caller).onBehalfOf(owner)
 			.withAgentId(agent).withSessionId(Blob.fromHex("1234"));
-		RequestContext restored = AgentAdapter.restoreOutputContext(AgentAdapter.snapshotOutputContext(context));
+		RequestContext restored = agents().restoreOutputContext(AgentAdapter.snapshotOutputContext(context));
 		assertEquals(caller, restored.getCallerDID());
 		assertEquals(owner, restored.getUserDID());
 		assertEquals(context.getExecutionScope(), restored.getExecutionScope());
@@ -92,11 +96,47 @@ public class AgentOutputPathFederationTest {
 
 		// Old snapshots retain their caller-relative interpretation without a scan
 		// or rewrite. A malformed explicit owner cannot use that fallback.
-		RequestContext legacy = AgentAdapter.restoreOutputContext(Maps.of(
+		RequestContext legacy = agents().restoreOutputContext(Maps.of(
 			Fields.CALLER, caller, Fields.AGENT_ID, agent));
 		assertEquals(caller, legacy.getExecutionScope().ownerDID());
 		assertEquals(agent, legacy.getAgentId());
-		assertNull(AgentAdapter.restoreOutputContext(Maps.of(Fields.CALLER, caller, "user", null)));
+		assertNull(agents().restoreOutputContext(Maps.of(Fields.CALLER, caller, "user", null)));
+	}
+
+	@Test
+	public void outputContextRecoveryKeepsAnAgentsScopeAndASubjectsOwnNamespace() {
+		AString owner = Strings.create("did:key:zOwner");
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, Strings.create("invoke")));
+		RequestContext agent = RequestContext.ofAgent(owner, Strings.create("worker")).withCaps(caps);
+		RequestContext restored = agents().restoreOutputContext(AgentAdapter.snapshotOutputContext(agent));
+		assertEquals(agent.getCallerDID(), restored.getCallerDID());
+		assertEquals(owner, restored.getUserDID());
+		assertEquals(caps, restored.getCaps());
+
+		// An authenticated agent-shaped subject stays in its own namespace.
+		AString subject = Strings.create(owner + ":u:alice:g:worker");
+		RequestContext external = agents().restoreOutputContext(AgentAdapter.snapshotOutputContext(
+			RequestContext.of(subject).withCaps(Vectors.empty())));
+		assertEquals(subject, external.getUserDID());
+		assertEquals(Vectors.empty(), external.getCaps());
+
+		// Snapshots from before 0.10.0 name only the caller: an agent of this venue
+		// that exists is restored in its owner's namespace, any other agent-shaped
+		// name in its own.
+		AString legacyOwner = Strings.create("did:key:zLegacySnapshotOwner");
+		TwoVenueTestServer.ENGINE_A.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "worker", Fields.CONFIG, Maps.empty()),
+			RequestContext.of(legacyOwner)).awaitResult(10_000);
+		AString worker = Principals.agentDID(legacyOwner, Strings.create("worker"));
+		RequestContext legacy = agents().restoreOutputContext(Maps.of(Fields.CALLER, worker, "caps", caps));
+		assertEquals(legacyOwner, legacy.getUserDID());
+		assertEquals(caps, legacy.getCaps());
+		AString ghost = Principals.agentDID(legacyOwner, Strings.create("ghost"));
+		assertEquals(ghost, agents().restoreOutputContext(Maps.of(Fields.CALLER, ghost)).getUserDID());
+	}
+
+	private static AgentAdapter agents() {
+		return (AgentAdapter) TwoVenueTestServer.ENGINE_A.getAdapter("agent");
 	}
 
 	@Test

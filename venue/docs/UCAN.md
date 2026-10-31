@@ -149,7 +149,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `secret/extract` | — | Reveal an owned secret through a direct owner call |
 | `oauth` | every `oauth/*` | All connected-account operations |
 | `oauth/use` | — | Send a connected account's token in a request without seeing it; bindable to a destination with `nb.url` |
-| `oauth/connect` | — | Connect an account: whoever approves the returned URL becomes the connection |
+| `oauth/connect` | — | Connect an account: start a connect, and complete one the provider approved, for the account that started it |
 | `oauth/disconnect` | — | Disconnect an account, revoking its grant at the provider |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
@@ -707,6 +707,7 @@ record is an entry no grant of theirs covers.
 | `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
 | `oauth:status` | `{ with: "oauth/", can: "crud/read" }`, or `oauth/<provider>` for one provider |
 | `oauth:connect` | `{ with: "oauth/<provider>", can: "oauth/connect" }` |
+| `oauth:complete` | `{ with: "oauth/<provider>", can: "oauth/connect" }`, and only by the account that started the connect |
 | `oauth:disconnect` | `{ with: "oauth/<provider>", can: "oauth/disconnect" }` |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
@@ -795,7 +796,7 @@ Two questions must not be conflated, and the context answers them separately:
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside
-agent execution. For an agent, `w/foo` still means the **owner's** workspace —
+agent execution and delegation (`user/sudo`). For an agent, `w/foo` still means the **owner's** workspace —
 that is the namespace it lives and works in — while the agent remains a
 distinct principal. `RequestContext.grantsDenial` canonicalises bare paths
 against `getUserDID()`, applying the same DID to the request resource and to
@@ -803,16 +804,33 @@ every grant's `with`, so agent `config.caps` written as `w/decisions/` keep
 their meaning. The proof path is unaffected: a bare `with` in a token binds to
 that token's signed `iss`.
 
-The nesting is recoverable by parsing (`Principals.userOf`), and
-`Authority.of(did)` uses it, so reconstructing a context from a stored DID is
-lossless — a scheduled event or capability gate that replays as
-`<owner>:g:<agent>` still resolves the owner's namespace. That parse is
-therefore load-bearing for authorisation, which is why an admitted user may
-never be agent-shaped: `Engine.admitUser` rejects one at the admission
-boundary. A bearer may authenticate a nested agent identity on an identity-only
-route (AUTH.md section 5.2), but it establishes no local execution relationship.
-`AuthMiddleware.callerContext` keeps that full subject as both actor and
-namespace with an empty capability scope, so the name grants no owner access.
+The namespace is never parsed from a name: `Authority.of(did)` makes every DID
+its own namespace, agent-shaped or not. Only the venue puts a principal in
+another namespace, from a relationship it holds — running its own agent
+(`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `user/sudo`
+does). Whatever persists a context records the namespace beside the caller:
+a job's `caller` is its namespace and its `actor` who acted, a scheduled
+event's `owner` and `actor` likewise, and `RequestContext.of(caller, user, caps)`
+rebuilds a stored triple as it ran.
+
+What a principal may do *now* is decided in one place, `Engine.context`.
+`context(principal)` is a principal in its own namespace: the public principal
+holds `auth.public.caps`, an agent-shaped DID holds nothing, and anyone else is
+unrestricted there. `context(owner, principal)` is a principal a record of
+`owner`'s names (a messaging binding, say): the owner, one of its agents under
+the agent's current `config.caps`, or the public principal; the owner comes
+from the record, never from the principal's name. `context(owner, principal,
+proofs)` adds proofs it presented, and takes any other principal as a delegate
+of the owner, under the same `user/sudo` check as a live request; a scheduled
+event fires through it. Every inbound request starts from `context(caller)`
+(`AuthMiddleware.callerContext`), and an agent's step runs as that agent
+(`Engine.stepContext`, §5.4).
+
+An admitted user may never be agent-shaped (`Engine.admitUser` rejects one), so
+a name addressing an agent never also names a user. A bearer may authenticate a
+nested agent identity on an identity-only route (AUTH.md section 5.2), but it
+establishes no local execution relationship: the full subject is both actor and
+namespace, with an empty capability scope, so the name grants no owner access.
 Explicit authorization is required to act within another namespace.
 
 Being a sub-principal is **proximity, not permission**.
@@ -871,9 +889,12 @@ which confers `agent/request` and `agent/message` on the agent (an older public
 `a2a.caps` reads as `accepts: "anyone"`). An agent may therefore create
 sub-agents, never more capable ones,
 and a delegated `agent/create` or `agent/write` confers nothing beyond the
-delegation. An update re-checks only the fields it changes. A direct
-`llmagent:chat` or `goaltree:chat` whose input `config.caps` would replace the
-caller's scope follows the same rule.
+delegation. An update re-checks only the fields it changes.
+
+**A step runs as its agent.** `llmagent:chat` and `goaltree:chat` always run
+as the agent they name, under its current `config.caps`, whoever invokes them
+and whatever `config` their input carries (`Engine.stepContext`). Only the
+agent's own run or its owner may invoke one, and only for an agent that exists.
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.
@@ -1212,13 +1233,16 @@ the authentication channel. The three concerns never infer one another:
   A grant a target made to this venue reaches a user the same way: the venue
   passes on part of it with `ucan:issue` and `prf` (§4.1).
 - **Target identity** — a credential (`caller` or `venue`) is sent only to a
-  venue proven to hold the DID it is audienced to: a `did:web` venue at its own
-  address, `https://<host>` or plain http on loopback, whether the hop names it
-  by that DID or by that address. A target named by URL states its DID at
-  `/.well-known/did.json`; a DID it cannot prove there — another host's
-  `did:web`, or a `did:key` — is refused before any credential leaves.
-  `auth.requireVenueProof: false` takes the stated DID instead, for test venues
-  whose `did:web` name is served elsewhere.
+  venue proven to hold the DID it is audienced to, by a mechanism the operator
+  lists in `auth.venueProof` (CONFIG.md). By default that is its address — a
+  `did:web` venue at `https://<host>` or plain http on loopback, whether the hop
+  names it by that DID or by that address — and then a challenge, which proves
+  a `did:key` venue that answers a fresh nonce with a proof naming the address
+  dialled. A target named by URL states its DID at `/.well-known/did.json`; a
+  DID no listed mechanism proves there is refused before any credential leaves,
+  and a recovered job proves its target again before re-sending a saved
+  credential. `auth.requireVenueProof: false` takes the stated DID instead, for
+  test venues.
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context

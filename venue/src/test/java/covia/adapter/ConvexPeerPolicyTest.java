@@ -27,6 +27,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.grid.Job;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -190,11 +191,11 @@ class ConvexPeerPolicyTest {
 	@Test
 	void peerSettingsAreValidated() {
 		ConvexAdapter adapter = new ConvexAdapter();
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("peers", "localhost:1"), true), "unknown setting under strict config");
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("anyPeer", "yes"), false), "anyPeer is a boolean");
-		IllegalArgumentException badPeer = assertThrows(IllegalArgumentException.class,
+		ConfigurationException badPeer = assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("peer", "https://peer.example"), false));
 		assertTrue(badPeer.getMessage().contains(ConvexAdapter.NOT_A_PEER), badPeer.getMessage());
 		assertTrue(adapter.configure(Maps.of("peer", "peer.example:18888", "anyPeer", CVMBool.FALSE), true));

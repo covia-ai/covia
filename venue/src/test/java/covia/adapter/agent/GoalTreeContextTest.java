@@ -15,6 +15,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
 
 /**
  * Tests for GoalTreeContext — the pure rendering functions for the goal tree.
@@ -135,15 +137,15 @@ public class GoalTreeContextTest {
 	public void historyRejectsDowngradesRewritesAndForwardReferences() {
 		AMap<AString, ACell> first = GoalTreeContext.appendTurn(GoalTreeContext.createFrame(""), Maps.of("content", "first"));
 		AMap<AString, ACell> later = GoalTreeContext.appendTurn(first, Maps.of("content", "later"));
-		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(IllegalArgumentException.class,
+		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(ConflictException.class,
 			() -> GoalTreeContext.validateFrameUpdate(later, first)).getMessage());
-		assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.validateFrameUpdate(first, legacyFrame("")));
+		assertThrows(ConflictException.class, () -> GoalTreeContext.validateFrameUpdate(first, legacyFrame("")));
 		AMap<AString, ACell> invalid = GoalTreeContext.appendTurn(first,
 			Maps.of("summary", "invalid", "turns", 1L, "historyRange", Vectors.of(0L, 2L)));
-		assertEquals(GoalTreeContext.INVALID_HISTORY_RANGE, assertThrows(IllegalArgumentException.class,
+		assertEquals(GoalTreeContext.INVALID_HISTORY_RANGE, assertThrows(InvalidInputException.class,
 			() -> GoalTreeContext.migrateFrame(invalid)).getMessage());
-		assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.validateFrameUpdate(first, invalid));
-		assertEquals(GoalTreeContext.INVALID_HISTORY_VERSION, assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class, () -> GoalTreeContext.validateFrameUpdate(first, invalid));
+		assertEquals(GoalTreeContext.INVALID_HISTORY_VERSION, assertThrows(InvalidInputException.class,
 			() -> GoalTreeContext.migrateFrame(first.assoc(GoalTreeContext.K_HISTORY_VERSION, CVMLong.create(2)))).getMessage());
 	}
 
@@ -356,23 +358,23 @@ public class GoalTreeContextTest {
 		for (ACell start : new ACell[] {null, CVMLong.create(-1), CVMLong.create(2),
 				CVMLong.create(Long.MAX_VALUE), Strings.create("0")}) {
 			assertEquals(GoalTreeContext.INVALID_CONTEXT_START,
-				assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+				assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 					frame.assoc(GoalTreeContext.K_CONTEXT_START, start))).getMessage());
 		}
 		assertEquals(GoalTreeContext.INVALID_CONTEXT_START,
-			assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(frame)).getMessage());
+			assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(frame)).getMessage());
 		for (ACell history : new ACell[] {null, Strings.create("not a sequence")}) {
 			assertEquals(GoalTreeContext.INVALID_HISTORY,
-				assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+				assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 					Maps.of(GoalTreeContext.K_HISTORY, history, GoalTreeContext.K_CONTEXT_START, CVMLong.ZERO)))
 					.getMessage());
 		}
 		assertEquals(GoalTreeContext.INVALID_HISTORY,
-			assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+			assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 				frame.assoc(GoalTreeContext.K_CONTEXT_START, CVMLong.ZERO)
 					.assoc(GoalTreeContext.K_CONVERSATION, Vectors.empty()))).getMessage());
 		assertEquals(GoalTreeContext.CONTEXT_START_WITHOUT_HISTORY,
-			assertThrows(IllegalArgumentException.class, () -> GoalTreeContext.activeConversation(
+			assertThrows(InvalidInputException.class, () -> GoalTreeContext.activeConversation(
 				legacyFrame("legacy").assoc(GoalTreeContext.K_CONTEXT_START, CVMLong.ZERO)))
 				.getMessage());
 	}

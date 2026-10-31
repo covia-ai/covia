@@ -509,7 +509,7 @@ public class HITLAdapter extends AAdapter {
 				Maps.of(Strings.intern("aud"), requester,
 					Strings.intern("att"), approved,
 					Hitl.EXP, (exp == null) ? null : CVMLong.create(exp)),
-				RequestContext.of(responder)).get(30, TimeUnit.SECONDS);
+				engine.context(responder)).get(30, TimeUnit.SECONDS);
 			AString token = RT.ensureString(RT.getIn(result, Hitl.TOKEN));
 			if (token == null) throw new IllegalStateException("ucan:issue returned no token");
 			return token;
@@ -686,7 +686,7 @@ public class HITLAdapter extends AAdapter {
 			if (agentId == null || sidHex == null) return; // Human/API requester.
 			Blob sid = Blob.fromHex(sidHex.toString());
 			AString owner = RT.ensureString(record.get(K_REQUESTER_USER));
-			if (owner == null) owner = Principals.userOf(RT.ensureString(record.get(Hitl.FROM)));
+			if (owner == null) owner = engine.legacyNamespace(RT.ensureString(record.get(Hitl.FROM)));
 			// The result carries the request ID. This is an independent message,
 			// not a chat waiter tied to the now-terminal HITL Job.
 			if (owner != null && sid != null && agents != null

@@ -1,9 +1,7 @@
 package covia.adapter;
 
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import convex.auth.did.DID;
 import convex.auth.ucan.UCAN;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -15,7 +13,6 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.grid.Grid;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
@@ -37,12 +34,19 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		"authenticateAs=venue is only for the venue itself; use authenticateAs=caller with your own credential and grants";
 
 	/**
-	 * Opening of the refusal to send a credential to a venue whose DID the
-	 * connection cannot prove. A did:web venue proves itself at its own https
-	 * address (plain http on loopback).
+	 * Opening of the refusal to send a credential to a venue whose DID is not
+	 * proven at the address it is reached by ({@link Engine#venueProof}). The
+	 * DID, the target and every proof mechanism's reason follow.
 	 */
 	public static final String VENUE_UNPROVEN =
-		"No credential is sent to a venue whose DID is unproven; a did:web venue is proven only at its own https address. Unproven: ";
+		"No credential is sent to a venue whose DID is not proven where it is reached (auth.venueProof). Unproven: ";
+
+	/**
+	 * Refusal to re-send a saved credential when the job saved no DID for its
+	 * target, so the target cannot be proven again.
+	 */
+	public static final String NO_SAVED_DID =
+		"No credential is re-sent to a venue whose DID the job did not save: ";
 
 	public static VenueConnection connect(Engine engine, RequestContext ctx, AString venueSpec, ACell input) {
 		AString venueDID = engine.getDIDString();
@@ -53,6 +57,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 
 		VenueAuth auth;
 		AString principal;
+		String targetDID = null;
 		AMap<AString, ACell> saved = Maps.of(AUTHENTICATE_AS, Strings.create(mode));
 		if (unrestricted) saved = saved.assoc(OUTBOUND_ANY, CVMBool.TRUE);
 		switch (mode) {
@@ -61,29 +66,30 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				principal = null;
 			}
 			case "caller" -> {
-				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec, unrestricted));
-				String credential = GridAdapter.identityCredential(ctx, tokens, ctx.getCallerDID(), targetDID);
+				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
+				String credential = GridAdapter.identityCredential(ctx, tokens, ctx.getCallerDID(),
+					Strings.create(targetDID));
 				if (credential == null) {
 					throw new AuthException("authenticateAs=caller requires an in-date, empty-att "
 						+ "identity credential issued by the caller to " + targetDID);
 				}
 				auth = VenueAuth.bearer(credential);
-				saved = saved.assoc(Fields.BEARER_TOKEN, Strings.create(credential));
+				saved = saved.assoc(Fields.BEARER_TOKEN, Strings.create(credential))
+					.assoc(Fields.VENUE, Strings.create(targetDID));
 				principal = ctx.getCallerDID();
 			}
 			case "venue" -> {
 				if (!engine.isDirectVenue(ctx)) throw new AuthException(VENUE_MODE_DENIED);
-				AString targetDID = Strings.create(targetVenueDID(engine, venueSpec, unrestricted));
-				auth = VenueAuth.identityKeyPair(engine.getKeyPair(), venueDID.toString(),
-					targetDID.toString());
-				saved = saved.assoc(Fields.VENUE, targetDID);
+				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
+				auth = VenueAuth.namedKeyPair(engine.getKeyPair(), venueDID.toString());
+				saved = saved.assoc(Fields.VENUE, Strings.create(targetDID));
 				principal = venueDID;
 			}
 			default -> throw new IllegalArgumentException(
 				"authenticateAs must be one of: anonymous, caller, venue");
 		}
 
-		Venue venue = engine.connectVenue(venueSpec.toString(), auth, unrestricted);
+		Venue venue = engine.connectVenue(venueSpec.toString(), targetDID, auth, unrestricted);
 		List<String> grants = GridAdapter.admissibleGrants(ctx, tokens, principal);
 		venue.setUcans(grants);
 		if (grants != null) saved = saved.assoc(Fields.UCANS, convex.core.data.Vectors.create(grants.stream().map(Strings::create).toList()));
@@ -93,18 +99,28 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	/**
 	 * Rebuilds observation of a job {@link #connect} already authorised; grants
 	 * nothing new. The target passes the outbound guard again, as it stands now,
-	 * unless the original caller could have the venue dial anywhere.
+	 * unless the original caller could have the venue dial anywhere, and a
+	 * saved credential is re-sent only once the target is proven again to hold
+	 * the DID saved with it.
+	 *
+	 * @throws AuthException if the target is not proven to hold the saved DID
 	 */
 	public static Venue restore(Engine engine, AString target, AMap<AString, ACell> saved) {
 		String mode = RT.ensureString(saved.get(AUTHENTICATE_AS)).toString();
+		boolean unrestricted = CVMBool.TRUE.equals(saved.get(OUTBOUND_ANY));
+		AString savedDID = RT.ensureString(saved.get(Fields.VENUE));
+		String targetDID = savedDID == null ? null : savedDID.toString();
+		if (!"anonymous".equals(mode)) {
+			if (targetDID == null) throw new AuthException(NO_SAVED_DID + target);
+			requireProven(engine, target.toString(), targetDID, unrestricted);
+		}
 		VenueAuth auth = switch (mode) {
 			case "anonymous" -> VenueAuth.none();
 			case "caller" -> VenueAuth.bearer(RT.ensureString(saved.get(Fields.BEARER_TOKEN)).toString());
-			case "venue" -> VenueAuth.identityKeyPair(engine.getKeyPair(), engine.getDIDString().toString(),
-				RT.ensureString(saved.get(Fields.VENUE)).toString());
+			case "venue" -> VenueAuth.namedKeyPair(engine.getKeyPair(), engine.getDIDString().toString());
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};
-		Venue venue = engine.connectVenue(target.toString(), auth, CVMBool.TRUE.equals(saved.get(OUTBOUND_ANY)));
+		Venue venue = engine.connectVenue(target.toString(), targetDID, auth, unrestricted);
 		AVector<ACell> grants = RT.ensureVector(saved.get(Fields.UCANS));
 		if (grants != null) {
 			List<String> raw = new ArrayList<>();
@@ -118,8 +134,8 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	 * Resolve the target identity once for audience-bound venue authentication.
 	 * Discovery dials the target itself, so it passes the outbound guard first
 	 * unless the caller could have the venue dial anywhere. A credential goes
-	 * only to a venue proven to hold the DID it is audienced to, unless the
-	 * operator turns proof off ({@code auth.requireVenueProof}).
+	 * only to a venue proven to hold the DID it is audienced to
+	 * ({@link Engine#venueProof}).
 	 */
 	private static String targetVenueDID(Engine engine, AString venueSpec, boolean unrestricted) {
 		String target = venueSpec.toString();
@@ -130,36 +146,13 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 			if (!unrestricted) engine.requireSafeUrl(target);
 			did = VenueDID.discover(target);
 		}
-		if (engine.config().isRequireVenueProof() && !proven(target, did)) {
-			throw new AuthException(VENUE_UNPROVEN + did + " at " + target);
-		}
+		requireProven(engine, target, did, unrestricted);
 		return did;
 	}
 
-	/**
-	 * Whether connecting to {@code target} proves the venue holds {@code did}.
-	 * A did:web venue proves itself at its own address ({@link Grid#webDIDAddress}),
-	 * by TLS or on loopback; a target named by that DID is reached there. No other
-	 * DID is proven at an address.
-	 */
-	static boolean proven(String target, String did) {
-		if (!did.startsWith("did:web:")) return false;
-		if (target.equals(did)) return true;
-		try {
-			URI expected = Grid.webDIDAddress(DID.fromString(did));
-			URI actual = URI.create(target.trim());
-			return expected.getScheme().equalsIgnoreCase(actual.getScheme())
-				&& expected.getHost() != null
-				&& expected.getHost().equalsIgnoreCase(actual.getHost())
-				&& port(expected) == port(actual);
-		} catch (IllegalArgumentException e) {
-			return false;
-		}
-	}
-
-	private static int port(URI uri) {
-		if (uri.getPort() >= 0) return uri.getPort();
-		return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+	private static void requireProven(Engine engine, String target, String did, boolean unrestricted) {
+		String reason = engine.venueProof(target, did, unrestricted);
+		if (reason != null) throw new AuthException(VENUE_UNPROVEN + did + " at " + target + ": " + reason);
 	}
 
 }

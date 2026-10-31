@@ -37,6 +37,9 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
@@ -310,7 +313,7 @@ public class HTTPTest {
 
 	@Test public void testUrlSecretUnresolvedFailsClearly() {
 		AString caller = Strings.create("did:test:http:url-secret-missing:" + System.nanoTime());
-		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+		NotFoundException error = assertThrows(NotFoundException.class,
 			() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
 				Fields.URL, "https://api.telegram.org/bot{s/NO_SUCH_SECRET}/getMe"),
 				RequestContext.of(caller)));
@@ -325,7 +328,7 @@ public class HTTPTest {
 		user.secrets().store("AUTH", "complete-header", key);
 		user.secrets().store("TOKEN", "bearer-token", key);
 
-		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+		InvalidInputException error = assertThrows(InvalidInputException.class,
 			() -> TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
 				Fields.URL, TestServer.BASE_URL + "/api/v1/status",
 				Fields.SECRET_HEADERS, Maps.of("Authorization", "s/AUTH"),
@@ -342,7 +345,7 @@ public class HTTPTest {
 		HTTPAdapter adapter = new HTTPAdapter();
 
 		// localhost should be blocked by default (resolves to loopback)
-		assertThrows(IllegalArgumentException.class, () -> {
+		assertThrows(InvalidInputException.class, () -> {
 			// Access the private validateURL via reflection, or invoke the adapter
 			// which calls validateURL internally. We test via invokeFuture which
 			// wraps the exception.
@@ -416,12 +419,12 @@ public class HTTPTest {
 	@Test public void testSSRFListsMatchANameWithOrWithoutItsTrailingDot() {
 		HTTPAdapter adapter = new HTTPAdapter();
 		adapter.addBlockedHost("blocked.example");
-		IllegalArgumentException dotted = assertThrows(IllegalArgumentException.class,
+		InvalidInputException dotted = assertThrows(InvalidInputException.class,
 			() -> adapter.requireSafeUrl("http://Blocked.Example./x"));
 		assertTrue(dotted.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), dotted.getMessage());
 
 		assertTrue(adapter.configure(Maps.of("blockedHosts", Vectors.of("configured.example.")), false));
-		IllegalArgumentException bare = assertThrows(IllegalArgumentException.class,
+		InvalidInputException bare = assertThrows(InvalidInputException.class,
 			() -> adapter.requireSafeUrl("http://configured.example/"));
 		assertTrue(bare.getMessage().startsWith(HTTPAdapter.BLOCKED_HOST), bare.getMessage());
 
@@ -498,7 +501,7 @@ public class HTTPTest {
 		HTTPAdapter adapter = new HTTPAdapter();
 		adapter.requireSafeUrl("http://203.0.113.9/x");
 		assertTrue(GuardedResolver.isHeld("203.0.113.9"));
-		assertThrows(IllegalArgumentException.class, () -> adapter.requireSafeUrl("http://10.9.8.7/"));
+		assertThrows(InvalidInputException.class, () -> adapter.requireSafeUrl("http://10.9.8.7/"));
 		assertFalse(GuardedResolver.isHeld("10.9.8.7"));
 
 		// Allowing a host releases it, and the guard never holds an allowed host
@@ -540,7 +543,7 @@ public class HTTPTest {
 		HTTPAdapter adapter = new HTTPAdapter();
 		for (String url : List.of("http://[fd00:ec2::254]/latest/", "http://[::ffff:169.254.169.254]/",
 				"http://100.100.100.200/", "http://0.0.0.0:8080/")) {
-			IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> adapter.requireSafeUrl(url));
+			InvalidInputException e = assertThrows(InvalidInputException.class, () -> adapter.requireSafeUrl(url));
 			assertTrue(e.getMessage().startsWith(HTTPAdapter.PRIVATE_ADDRESS), e.getMessage());
 		}
 	}
@@ -652,7 +655,7 @@ public class HTTPTest {
 	@Test public void testHTTPAdapterUnsupportedMethod() {
 		HTTPAdapter adapter = new HTTPAdapter();
 
-		// TRACE is not supported — should get IllegalArgumentException
+		// TRACE is not supported — should get InvalidInputException
 		assertThrows(RuntimeException.class, () -> {
 			adapter.invokeFuture(null, Maps.of(), Maps.of(
 				"url", TestServer.BASE_URL + "/api/v1/status",
@@ -863,7 +866,7 @@ public class HTTPTest {
 
 	/** Runs a GET through the shared engine and returns the failure message —
 	 *  whether the request was refused before it left (a synchronous
-	 *  IllegalArgumentException) or failed once in flight (a FAILED job). */
+	 *  InvalidInputException) or failed once in flight (a FAILED job). */
 	private static String failureOf(ACell input) {
 		return failureOf(TestServer.ENGINE, RequestContext.of(Strings.create("did:test:http:redirects")), input);
 	}
@@ -1090,24 +1093,24 @@ public class HTTPTest {
 		// Configured lists drive the guard: allowed skips the loopback refusal,
 		// blocked is refused before any resolution.
 		adapter.requireSafeUrl("http://localhost:1/");
-		IllegalArgumentException blocked = assertThrows(IllegalArgumentException.class,
+		InvalidInputException blocked = assertThrows(InvalidInputException.class,
 			() -> adapter.requireSafeUrl("https://Blocked.example/x"));
 		assertTrue(blocked.getMessage().contains("blocked"), blocked.getMessage());
 		// Published for discovery.
 		assertEquals("MyApp/1.0 (+https://example.com)", RT.getIn(adapter.info(), "userAgent").toString());
 		assertEquals(Vectors.of(Strings.create("localhost")), RT.getIn(adapter.info(), "allowedHosts"));
 
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxRedirects", 99), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxRedirects", -1), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("userAgent", "  "), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("allowedHosts", "not-a-list"), false));
-		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(1)), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxRedirects", 99), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxRedirects", -1), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("userAgent", "  "), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("allowedHosts", "not-a-list"), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(1)), false));
 
 		// Reconfiguring with nothing restores the defaults.
 		assertTrue(adapter.configure(Maps.empty(), false));
 		assertEquals(HTTPAdapter.defaultUserAgent(), adapter.getUserAgent());
 		assertEquals(HTTPAdapter.DEFAULT_MAX_REDIRECTS, adapter.getMaxRedirects());
-		assertThrows(IllegalArgumentException.class, () -> adapter.requireSafeUrl("http://localhost:1/"));
+		assertThrows(InvalidInputException.class, () -> adapter.requireSafeUrl("http://localhost:1/"));
 	}
 
 	@Test public void testSameOriginRule() throws Exception {

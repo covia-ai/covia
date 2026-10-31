@@ -18,6 +18,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.did.DIDVerifier;
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -30,10 +34,14 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
+import covia.adapter.TestAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.server.AuthMiddleware;
 
 /**
  * Tests for the per-venue grid {@link Scheduler}. Firing is exercised
@@ -62,6 +70,18 @@ public class SchedulerTest {
 	}
 
 	private long future() { return System.currentTimeMillis() + HOUR; }
+
+	/** A real agent of the test's user, acting as it does now: nothing fires as an agent that does not exist. */
+	private RequestContext agent(String id, AVector<ACell> caps) {
+		AMap<AString, ACell> config = (caps == null) ? Maps.empty() : Maps.of(Config.CAPS, caps);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, id, Fields.CONFIG, config), ctx).awaitResult(5000);
+		return engine.context(did, covia.grid.Principals.agentDID(did, s(id)));
+	}
+
+	private void deleteAgent(String id) {
+		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5000);
+	}
 
 	private static AMap<AString, ACell> everyHour() {
 		return Maps.of(ScheduleState.K_EVERY, CVMLong.create(HOUR));
@@ -112,6 +132,140 @@ public class SchedulerTest {
 
 		// Event consumed — gone from the owner's list.
 		assertTrue(sched.list(ctx).isEmpty(), "triggered event should be removed");
+	}
+
+	/** A fire runs as its actor would invoke the operation now. */
+	@Test
+	public void testFireRunsAsTheActorNow() {
+		AVector<ACell> invoke = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext worker = agent("worker", invoke);
+		Blob own = sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future());
+		Blob agents = sched.schedule(s("v/test/ops/echo"), s("x"), worker, future());
+		ScheduleState state = engine.getVenueState().schedule();
+
+		RequestContext fired = sched.fireContext(state.find(own).rec());
+		assertEquals(did, fired.getCallerDID());
+		assertNull(fired.getCaps());
+
+		fired = sched.fireContext(state.find(agents).rec());
+		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(did, fired.getUserDID());
+		assertEquals(invoke, fired.getCaps());
+
+		// Narrowing the agent narrows what its queued work may do.
+		AVector<ACell> narrower = Vectors.of(Maps.of(Capability.CAN, s("crud/read")));
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ctx).awaitResult(5000);
+		assertEquals(narrower, sched.fireContext(state.find(agents).rec()).getCaps());
+
+		// A delegate fires only while a user/sudo delegation still authorises it.
+		RequestContext delegate = RequestContext.of(s(did + "-delegate")).onBehalfOf(did);
+		Blob delegated = sched.schedule(s("v/test/ops/echo"), s("x"), delegate, future());
+		assertThrows(AuthException.class, () -> sched.fireContext(state.find(delegated).rec()));
+
+		assertTrue(sched.cancel(own, ctx));
+		assertTrue(sched.cancel(agents, ctx));
+		assertTrue(sched.cancel(delegated, ctx));
+	}
+
+	@Test
+	public void testAgentFireRunsInItsOwnersNamespace() throws Exception {
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext agent = agent("worker", caps);
+		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), agent, future());
+		TestAdapter.CAPTURED_CTX.remove(did);
+		sched.trigger(handle, agent).get(5, TimeUnit.SECONDS);
+		RequestContext fired = TestAdapter.CAPTURED_CTX.get(did);
+		assertNotNull(fired, "the fire ran in the owner's namespace");
+		assertEquals(agent.getCallerDID(), fired.getCallerDID());
+		assertEquals(caps, fired.getCaps());
+	}
+
+	/** A delegate's event fires in the owner's namespace while its user/sudo grant authorises it. */
+	@Test
+	public void testADelegatedEventFiresUnderItsGrant() throws Exception {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AKeyPair delegateKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
+		engine.getVenueState().users().create(owner);
+		engine.getVenueState().users().create(delegate);
+		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(),
+			(System.currentTimeMillis() / 1000) + 3600,
+			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
+			Vectors.empty()).toJWT(ownerKey);
+		RequestContext sudo = engine.sudoContext(AuthMiddleware.withTransportGrants(
+			RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX), owner);
+
+		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), sudo, future());
+		TestAdapter.CAPTURED_CTX.remove(owner);
+		sched.trigger(handle, RequestContext.of(owner)).get(5, TimeUnit.SECONDS);
+		RequestContext fired = TestAdapter.CAPTURED_CTX.get(owner);
+		assertNotNull(fired, "the fire ran in the owner's namespace");
+		assertEquals(delegate, fired.getCallerDID());
+	}
+
+	/** An agent's step acts as the agent, so what it schedules fires as the agent. */
+	@Test
+	public void testAStepSchedulesAsItsAgent() {
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, s("invoke")));
+		RequestContext worker = agent("stepper", caps);
+		RequestContext step = engine.stepContext(ctx, s("stepper"));
+		assertEquals(worker.getCallerDID(), step.getCallerDID());
+		assertEquals(did, step.getUserDID());
+		assertEquals(caps, step.getCaps());
+
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), step, future());
+		RequestContext fired = sched.fireContext(engine.getVenueState().schedule().find(handle).rec());
+		assertEquals(worker.getCallerDID(), fired.getCallerDID());
+		assertEquals(caps, fired.getCaps());
+		assertTrue(sched.cancel(handle, ctx));
+	}
+
+	@Test
+	public void testDeletingAnAgentRemovesItsEvents() {
+		RequestContext agent = agent("leaver", null);
+		Blob once = sched.schedule(s("v/test/ops/echo"), s("once"), agent, future());
+		Blob hourly = sched.schedule(s("v/test/ops/echo"), s("hourly"), agent, future(), everyHour(), null);
+		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
+		ScheduleState state = engine.getVenueState().schedule();
+		assertEquals(convex.core.data.Sets.of(once, hourly), state.scheduledBy(agent.getCallerDID()));
+
+		deleteAgent("leaver");
+		assertNull(state.find(once));
+		assertNull(state.find(hourly));
+		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+		assertNotNull(state.find(mine), "the owner's own events stay");
+		assertTrue(sched.cancel(mine, ctx));
+	}
+
+	@Test
+	public void testTheReverseIndexFollowsARecurringEvent() {
+		RequestContext agent = agent("repeater", null);
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("tick"), agent, future(), everyHour(), null);
+		ScheduleState state = engine.getVenueState().schedule();
+		state.recordFire(state.find(handle), System.currentTimeMillis(), true, null);
+		Blob moved = state.find(handle).key();
+		assertNotEquals(handle, moved, "a recurring fire re-keys the event at its next slot");
+		assertEquals(convex.core.data.Sets.of(moved), state.scheduledBy(agent.getCallerDID()));
+
+		assertTrue(sched.cancel(handle, ctx));
+		assertTrue(state.scheduledBy(agent.getCallerDID()).isEmpty());
+	}
+
+	@Test
+	public void testAnEventOutlivingItsAgentIsDroppedWhenItComesDue() {
+		// No agent record, as for an event scheduled before the reverse index recorded it.
+		RequestContext ghost = RequestContext.ofAgent(did, s("ghost"));
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("boo"), ghost, future(), everyHour(), null);
+		ExecutionException ex = assertThrows(ExecutionException.class,
+			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
+		assertInstanceOf(NotFoundException.class, ex.getCause());
+		assertEquals(Scheduler.AGENT_GONE.formatted(ghost.getCallerDID()), ex.getCause().getMessage());
+		ScheduleState state = engine.getVenueState().schedule();
+		assertNull(state.find(handle), "a recurring event is dropped, not rescheduled");
+		assertTrue(state.scheduledBy(ghost.getCallerDID()).isEmpty());
 	}
 
 	@Test
@@ -195,12 +349,12 @@ public class SchedulerTest {
 
 	@Test
 	public void testListNeverShowsCapturedAuthority() {
-		AVector<ACell> caps = Vectors.of(Maps.of(s("with"), s("w/allowed"), s("can"), s("crud/read")));
-		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withCaps(caps), future());
-		assertEquals(caps, stored(handle).get(ScheduleState.K_CAPS), "caps are captured for replay");
+		AVector<ACell> proofs = Vectors.of(s("proof"));
+		Blob handle = sched.schedule(s("v/test/ops/echo"), s("x"), ctx.withProofs(proofs), future());
+		assertEquals(proofs, stored(handle).get(ScheduleState.K_PROOFS), "proofs are presented again when it fires");
+		assertFalse(stored(handle).containsKey(s("caps")), "a fire takes its actor's caps as they are then");
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertFalse(rec.containsKey(ScheduleState.K_CAPS), "caps are authority, not description");
 		assertFalse(rec.containsKey(ScheduleState.K_PROOFS), "proofs are authority, not description");
 		assertTrue(sched.cancel(handle, ctx));
 	}
@@ -323,7 +477,7 @@ public class SchedulerTest {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
 			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.ofAgent(did, s("scoped")).withCaps(caps);
+		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/forbidden/x")), capCtx, future());
@@ -339,7 +493,7 @@ public class SchedulerTest {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			s("with"), s("w/allowed"),
 			s("can"),  s("crud/read")));
-		RequestContext capCtx = RequestContext.ofAgent(did, s("scoped")).withCaps(caps);
+		RequestContext capCtx = agent("scoped", caps);
 
 		Blob handle = sched.schedule(s("v/ops/covia/read"),
 			Maps.of(s("path"), s("w/allowed/nothing")), capCtx, future());
@@ -474,7 +628,7 @@ public class SchedulerTest {
 
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> sched.trigger(handle, ctx).get(5, TimeUnit.SECONDS));
-		assertTrue(ex.getCause() instanceof IllegalArgumentException, String.valueOf(ex.getCause()));
+		assertInstanceOf(covia.exception.NotFoundException.class, ex.getCause());
 
 		AMap<AString, ACell> rec = only(sched.list(ctx));
 		assertTrue(rec.get(ScheduleState.K_LAST_FIRED) instanceof CVMLong, "the fire was claimed");

@@ -38,6 +38,10 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.adapter.AgentAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.AgentState;
@@ -366,7 +370,7 @@ public class A2A extends ACoviaAPI {
 				input = input.assoc(Fields.SESSION_ID, Strings.create(incoming.contextId()));
 			}
 			job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | NotFoundException | IllegalArgumentException e) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
 				"Agent intake failed: " + e.getMessage());
 			return;
@@ -531,7 +535,7 @@ public class A2A extends ACoviaAPI {
 			try {
 				ACell input = Maps.of(Fields.MESSAGE, record);
 				job = engine().jobs().invokeOperation(defaultChatOp, input, rctx);
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | NotFoundException | IllegalArgumentException e) {
 				writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
 						"Default chat op not resolvable: " + e.getMessage());
 				return;
@@ -563,14 +567,17 @@ public class A2A extends ACoviaAPI {
 			// Persist to Task history first, then dispatch to the adapter.
 			engine().jobs().appendToHistory(taskId, record, rctx);
 			engine().jobs().deliverMessage(taskId, record, rctx);
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException | IllegalArgumentException e) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
 			return;
-		} catch (IllegalStateException e) {
+		} catch (ConflictException | IllegalStateException e) {
 			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
 			return;
 		} catch (AuthException e) {
 			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
+			return;
+		} catch (UnavailableException e) {
+			writeError(ctx, id, A2AErrorCodes.INTERNAL, e.getMessage());
 			return;
 		}
 
@@ -743,7 +750,7 @@ public class A2A extends ACoviaAPI {
 			try {
 				ACell input = Maps.of(Fields.MESSAGE, record);
 				job = engine().jobs().invokeOperation(defaultChatOp, input, rctx);
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | NotFoundException | IllegalArgumentException e) {
 				writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
 						"Default chat op not resolvable: " + e.getMessage());
 				return;
@@ -765,14 +772,17 @@ public class A2A extends ACoviaAPI {
 			try {
 				engine().jobs().appendToHistory(taskId, record, rctx);
 				engine().jobs().deliverMessage(taskId, record, rctx);
-			} catch (IllegalArgumentException e) {
+			} catch (NotFoundException | IllegalArgumentException e) {
 				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
 				return;
-			} catch (IllegalStateException e) {
+			} catch (ConflictException | IllegalStateException e) {
 				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
 				return;
 			} catch (AuthException e) {
 				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
+				return;
+			} catch (UnavailableException e) {
+				writeError(ctx, id, A2AErrorCodes.INTERNAL, e.getMessage());
 				return;
 			}
 		}

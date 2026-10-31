@@ -150,6 +150,26 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void aVenueShuttingDownAnswers503() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
+			Config.BIND_ADDRESS, "127.0.0.1"));
+		try {
+			// Admission closes first in a shutdown, while the listener may still answer.
+			server.getEngine().jobs().beginShutdown();
+			for (String route : new String[] { "invoke", "run" }) {
+				HttpRequest request = HttpRequest.newBuilder()
+					.uri(new URI("http://127.0.0.1:" + server.port() + "/api/v1/" + route))
+					.header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(
+						"{\"operation\":\"v/ops/covia/read\",\"input\":{\"path\":\"w/x\"}}"))
+					.timeout(Duration.ofSeconds(5)).build();
+				HttpResponse<String> resp = TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+				assertEquals(503, resp.statusCode(), route + ": " + resp.body());
+			}
+		} finally { server.close(); }
+	}
+
+	@Test
 	public void closingAVenueClosesTheHostItOpened() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
@@ -1020,12 +1040,12 @@ public class VenueServerTest {
 	 */
 	@Test
 	public void testOperationNameResolvesAsCaller() throws Exception {
-		VenueAuth alice = VenueAuth.keyPair(AKeyPair.generate(), venue.getDIDString().toString());
+		VenueAuth alice = VenueAuth.keyPair(AKeyPair.generate());
 		AString aliceDID = Strings.create(alice.getDID());
 		venue.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, "o/private-op",
 			Fields.VALUE, Maps.of("name", "Private op", "operation", Maps.of("adapter", "test:echo"))),
 			RequestContext.of(aliceDID)).awaitResult(5000);
-		VenueAuth bob = VenueAuth.keyPair(AKeyPair.generate(), venue.getDIDString().toString());
+		VenueAuth bob = VenueAuth.keyPair(AKeyPair.generate());
 
 		HttpResponse<String> own = getOperation("o/private-op", alice);
 		assertEquals(200, own.statusCode(), own.body());
@@ -1040,7 +1060,7 @@ public class VenueServerTest {
 		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
 		return TestHTTP.CLIENT.send(HttpRequest.newBuilder()
 			.uri(new URI(BASE_URL + "/api/v1/operations/" + encoded))
-			.header("Authorization", "Bearer " + auth.mintToken())
+			.header("Authorization", "Bearer " + auth.mintToken(venue.getDIDString().toString()))
 			.GET().timeout(Duration.ofSeconds(10)).build(), HttpResponse.BodyHandlers.ofString());
 	}
 

@@ -38,6 +38,8 @@ import convex.core.util.Utils;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
 import covia.grid.Assets;
@@ -425,7 +427,7 @@ public class EngineTest {
 		Engine closedEngine = Engine.createTemp(null);
 		Engine.addDemoAssets(closedEngine);
 		closedEngine.close();
-		assertThrows(IllegalStateException.class, () -> closedEngine.jobs().invokeOperation(
+		assertThrows(covia.exception.ShuttingDownException.class, () -> closedEngine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext()));
 		assertTrue(closedEngine.jobs().invokeInternal(
 			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext())
@@ -444,6 +446,44 @@ public class EngineTest {
 		String didUrl = "did:web:venue.example.com/a/" + echoOpId.toHexString();
 		Hash resolved = venue.resolveHash(didUrl);
 		assertEquals(echoOpId, resolved);
+	}
+
+	@Test
+	public void testResolveLocalAssetNeverFetches() {
+		RequestContext ctx = venue.venueContext();
+		// A definition held here resolves by its DID URL; one another venue
+		// publishes is absent rather than fetched.
+		assertNotNull(venue.resolveLocalAsset(
+			Strings.create(venue.getDIDString() + "/a/" + echoOpId.toHexString()), ctx));
+		Hash elsewhere = Hashing.sha3("held by no venue".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		assertNull(venue.resolveLocalAsset(
+			Strings.create("did:web:venue.example.com/a/" + elsewhere.toHexString()), ctx));
+		assertNull(venue.resolveLocalAsset(
+			Strings.create("did:web:venue.example.com/v/ops/elsewhere"), ctx));
+	}
+
+	@Test
+	public void testMalformedUserPathsAreInvalidInput() {
+		RequestContext ctx = venue.venueContext();
+		InvalidInputException empty = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.EMPTY, false));
+		assertEquals(Engine.USER_PATH_EMPTY, empty.getMessage());
+		InvalidInputException bare = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.create(venue.getDIDString()), false));
+		assertEquals(Engine.USER_PATH_NO_NAMESPACE, bare.getMessage());
+		InvalidInputException malformed = assertThrows(InvalidInputException.class,
+			() -> venue.resolveUserPath(ctx, Strings.create("did:"), false));
+		assertTrue(malformed.getMessage().startsWith(Engine.INVALID_DID_URL), malformed.getMessage());
+	}
+
+	@Test
+	public void testUnauthenticatedCallersAreRefusedAsAuthFailures() {
+		AuthException path = assertThrows(AuthException.class,
+			() -> venue.resolveUserPath(RequestContext.ANONYMOUS, Strings.create("w/notes"), false));
+		assertEquals(Engine.USER_PATH_UNAUTHENTICATED, path.getMessage());
+		AuthException store = assertThrows(AuthException.class,
+			() -> venue.storeUserAsset(Strings.create("{\"name\":\"anon\"}"), null, RequestContext.ANONYMOUS));
+		assertEquals(Engine.STORE_UNAUTHENTICATED, store.getMessage());
 	}
 
 	@Test
@@ -794,7 +834,7 @@ public class EngineTest {
 			Hash tooLargeAsset = dlfsVenue.storeAsset(JSON.printPretty(Maps.of(
 				Fields.NAME, "too-large",
 				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256(tooLarge).toHexString()))), null);
-			IllegalArgumentException large = assertThrows(IllegalArgumentException.class, () ->
+			covia.exception.InvalidInputException large = assertThrows(covia.exception.InvalidInputException.class, () ->
 				dlfsVenue.putContent(dlfsVenue.getMetaValue(tooLargeAsset), new ByteArrayInputStream(tooLarge)));
 			assertTrue(large.getMessage().startsWith(Engine.CONTENT_TOO_LARGE), large.getMessage());
 			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(tooLargeAsset)));
@@ -869,5 +909,41 @@ public class EngineTest {
 
 		// Whatever this build carries, the venue never reports a blank version.
 		assertFalse(Engine.jarVersion().isBlank());
+	}
+
+	@Test
+	public void contextDecidesWhatAPrincipalMayDoNow() {
+		AString owner = TestEngine.uniqueDID("context-owner");
+		venue.getVenueState().users().ensure(owner);
+		AVector<ACell> caps = Vectors.of(Maps.of(convex.auth.ucan.Capability.CAN, Strings.create("invoke")));
+		venue.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, caps)), RequestContext.of(owner)).awaitResult(5000);
+		AString worker = covia.grid.Principals.agentDID(owner, Strings.create("worker"));
+
+		// In its own namespace a user is unrestricted, and an agent-shaped name holds nothing.
+		assertEquals(owner, venue.context(owner).getUserDID());
+		assertNull(venue.context(owner).getCaps());
+		assertEquals(worker, venue.context(worker).getUserDID());
+		assertEquals(Vectors.empty(), venue.context(worker).getCaps());
+
+		// For its owner, the owner's agent acts as itself in the owner's namespace, under its own caps.
+		RequestContext agent = venue.context(owner, worker);
+		assertEquals(worker, agent.getCallerDID());
+		assertEquals(owner, agent.getUserDID());
+		assertEquals(caps, agent.getCaps());
+		assertNull(venue.context(owner, owner).getCaps());
+		assertEquals(Vectors.empty(), venue.context(owner,
+			covia.grid.Principals.agentDID(owner, Strings.create("gone"))).getCaps(), "an agent that is gone holds nothing");
+
+		// The owner comes from the record: anyone else's agent, or any other user, is refused.
+		AString other = TestEngine.uniqueDID("context-other");
+		assertThrows(covia.exception.AuthException.class, () -> venue.context(other, worker));
+		assertThrows(covia.exception.AuthException.class, () -> venue.context(owner, other));
+
+		// The public principal acts only as itself, under the public scope.
+		AString publicDID = venue.publicPrincipal();
+		RequestContext anonymous = venue.context(owner, publicDID);
+		assertEquals(publicDID, anonymous.getUserDID());
+		assertEquals(venue.getAuth().getPublicScope(publicDID), anonymous.getCaps());
 	}
 }

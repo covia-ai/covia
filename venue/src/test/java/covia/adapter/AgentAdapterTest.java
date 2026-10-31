@@ -404,7 +404,7 @@ public class AgentAdapterTest {
 			new AuthResult.Credential(Strings.create("provider-session"), null, null),
 			new AuthResult.Authentication(Strings.create("test"), Strings.create(ALICE_DID + "/test/bot"), null,
 				Sets.empty(), details), null, null);
-		RequestContext viaChannel = engine.channelContext(result);
+		RequestContext viaChannel = engine.channelContext(ALICE_DID, result);
 		assertEquals(ALICE_DID, viaChannel.getCallerDID());
 		assertEquals(result.toData().dissoc(AuthResult.USER_DID), viaChannel.getAuthentication());
 		assertNull(alice.getAuthentication(), "only a channel context carries a record");

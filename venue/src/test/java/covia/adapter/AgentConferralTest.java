@@ -209,35 +209,38 @@ public class AgentConferralTest {
 	}
 
 	@Test
-	public void testDirectChatCannotBorrowAnotherAgentsCaps() {
+	public void testOnlyAnAgentOrItsOwnerRunsItsStep() {
 		AVector<ACell> everything = Vectors.of(Maps.of(Capability.CAN, Capability.TOP));
 		assertComplete(run("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "wide", Fields.CONFIG, config(everything)), ALICE));
 		RequestContext sibling = RequestContext.ofAgent(alice, Strings.create("sibling")).withCaps(Vectors.of(
 			cap("v/ops/llmagent/chat", INVOKE), cap("v/test/ops/toolllm", INVOKE)));
-		assertNotConferrable(run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "wide",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm", "caps", everything),
-			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo"))), sibling));
+		Job borrowed = run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "wide",
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo"))), sibling);
+		assertEquals(Status.FAILED, borrowed.getStatus());
+		assertTrue(borrowed.getErrorMessage().contains(
+			Engine.NOT_AGENTS_STEP.formatted(sibling.getCallerDID(), "wide")), borrowed.getErrorMessage());
 	}
 
 	@Test
-	public void testDirectChatCannotWidenCallerScope() {
-		RequestContext scoped = RequestContext.ofAgent(alice, Strings.create("narrow")).withCaps(Vectors.of(
-			cap("v/ops/llmagent/chat", INVOKE), cap("v/test/ops/toolllm", INVOKE)));
+	public void testAStepRunsUnderItsAgentsOwnCaps() {
+		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "narrow",
+			Fields.CONFIG, config(Vectors.of(cap("v/test/ops/toolllm", INVOKE)))), ALICE));
+		// Whatever caps the step's input names, it runs under the agent's record.
 		ACell widened = Maps.of(Fields.AGENT_ID, "narrow",
 			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm",
 				"caps", Vectors.of(Maps.of(Capability.CAN, Capability.TOP))),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo")));
-		assertNotConferrable(run("v/ops/llmagent/chat", widened, scoped));
-
-		// Caps the caller holds may still be named
-		ACell held = Maps.of(Fields.AGENT_ID, "narrow",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm",
-				"caps", Vectors.of(cap("v/test/ops/toolllm", INVOKE))),
-			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo")));
-		Job chat = run("v/ops/llmagent/chat", held, scoped);
+		Job chat = run("v/ops/llmagent/chat", widened, ALICE);
 		assertComplete(chat);
 		assertTrue(RT.getIn(chat.getOutput(), Fields.RESPONSE).toString().contains("Capability denied"),
-			"the tool stays outside the caller's scope");
+			"the tool stays outside the agent's caps");
+
+		Job none = run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "absent",
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))), ALICE);
+		assertEquals(Status.FAILED, none.getStatus());
+		assertTrue(none.getErrorMessage().contains(Engine.NO_SUCH_AGENT.formatted(
+			covia.grid.Principals.agentDID(alice, Strings.create("absent")))), none.getErrorMessage());
 	}
 }

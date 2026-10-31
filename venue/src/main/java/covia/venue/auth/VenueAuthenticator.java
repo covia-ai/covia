@@ -51,6 +51,7 @@ public final class VenueAuthenticator {
 	private static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	private static final String VENUE_USER_ATTR = "callerDID";
 	private static final String AUTH_RESULT_ATTR = "covia.authResult";
+	private static final String ENGINE_ATTR = "covia.engine";
 
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
@@ -200,6 +201,20 @@ public final class VenueAuthenticator {
 	public void bindIdentity(Context context, AString authenticatedIdentity,
 			AString venueUserDID) {
 		setRequestIdentity(context, authenticatedIdentity, venueUserDID);
+		bindEngine(context, engine);
+	}
+
+	/**
+	 * Binds the venue serving a request, through whose {@link Engine#context}
+	 * its caller acts.
+	 */
+	public static void bindEngine(Context context, Engine engine) {
+		context.attribute(ENGINE_ATTR, engine);
+	}
+
+	/** Returns the venue serving a request, or null when none is bound. */
+	public static Engine engineOf(Context context) {
+		return context.attribute(ENGINE_ATTR);
 	}
 
 	/** Shared identity-only binding for the legacy middleware and embedder APIs. */
@@ -226,6 +241,7 @@ public final class VenueAuthenticator {
 		if (result == null) throw new IllegalArgumentException(RESULT_REQUIRED);
 		setRequestIdentity(context, result.authenticatedIdentity(), result.userDID());
 		context.attribute(AUTH_RESULT_ATTR, result);
+		bindEngine(context, engine);
 	}
 
 	/** Returns request authentication evidence, or null when none is bound. */

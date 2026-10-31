@@ -22,6 +22,7 @@ import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -763,7 +764,7 @@ public final class ContextAssembler {
 		if (!(entry instanceof AMap<?, ?> map)) return false;
 		ACell value = map.get(Loads.K_VOLATILE);
 		if (value != null && !(value instanceof CVMBool)) {
-			throw new IllegalArgumentException(which + " volatile must be a boolean");
+			throw new InvalidInputException(which + " volatile must be a boolean");
 		}
 		return Loads.isVolatile(entry);
 	}
@@ -907,7 +908,7 @@ public final class ContextAssembler {
 		ACell value = map.get(Loads.K_TRUSTED);
 		if (value == null) return defaultValue;
 		if (value instanceof CVMBool flag) return flag.booleanValue();
-		throw new IllegalArgumentException(which + " trusted must be a boolean");
+		throw new InvalidInputException(which + " trusted must be a boolean");
 	}
 
 	/**

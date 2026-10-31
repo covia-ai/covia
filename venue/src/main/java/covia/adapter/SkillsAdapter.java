@@ -18,6 +18,11 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
 import covia.venue.storage.ContentProvider;
 
@@ -102,12 +107,12 @@ public class SkillsAdapter extends AAdapter {
 		if (raw == null) return;
 		AVector<ACell> refs = RT.ensureVector(raw);
 		if (refs == null) {
-			throw new IllegalArgumentException("adapters.skills." + key
+			throw new ConfigurationException("adapters.skills." + key
 				+ " must be an array of refs");
 		}
 		for (long i = 0; i < refs.count(); i++) {
 			if (RT.ensureString(refs.get(i)) == null) {
-				throw new IllegalArgumentException("adapters.skills." + key
+				throw new ConfigurationException("adapters.skills." + key
 					+ " entries must be ref strings, got: " + refs.get(i));
 			}
 		}
@@ -227,7 +232,7 @@ public class SkillsAdapter extends AAdapter {
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 				case "parse" -> CompletableFuture.completedFuture(handleParse(ctx, input));
 				case "import" -> CompletableFuture.completedFuture(handleImport(ctx, input));
-				default -> CompletableFuture.failedFuture(new IllegalArgumentException(
+				default -> CompletableFuture.failedFuture(new NotSupportedException(
 					"Unknown skills operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
@@ -256,7 +261,7 @@ public class SkillsAdapter extends AAdapter {
 	private ACell handleList(RequestContext ctx, ACell input) {
 		AString named = RT.ensureString(RT.getIn(input, K_SKILLSET));
 		if (named == null && RT.getIn(input, K_SKILLSET) != null) {
-			throw new IllegalArgumentException("skillset must be a single path string,"
+			throw new InvalidInputException("skillset must be a single path string,"
 				+ " e.g. 'v/skills/data' — list one skillset per call");
 		}
 		AVector<ACell> skillsets = (named != null)
@@ -300,7 +305,7 @@ public class SkillsAdapter extends AAdapter {
 	private ACell handleRead(RequestContext ctx, ACell input) {
 		AString ref = RT.ensureString(RT.getIn(input, K_SKILL));
 		if (ref == null) {
-			throw new IllegalArgumentException("skill must be a single path or asset ref,"
+			throw new InvalidInputException("skill must be a single path or asset ref,"
 				+ " e.g. 'v/skills/data/workspace' or 'a/<hash>' — read one skill per call"
 				+ " (list a skillset to find its path)");
 		}
@@ -343,13 +348,13 @@ public class SkillsAdapter extends AAdapter {
 		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
 		AString text = RT.ensureString(RT.getIn(input, Fields.TEXT));
 		if ((source == null) == (text == null)) {
-			throw new IllegalArgumentException("provide exactly one of 'source' (one content reference to a"
+			throw new InvalidInputException("provide exactly one of 'source' (one content reference to a"
 				+ " SKILL.md, e.g. file://<root>/<dir>/SKILL.md, dlfs/<drive>/<path> or a/<hash>)"
 				+ " or 'text' (the SKILL.md itself)");
 		}
 		boolean inline = inlineBody(input);
 		if (!inline && source == null) {
-			throw new IllegalArgumentException("content 'ref' binds the body to a source —"
+			throw new InvalidInputException("content 'ref' binds the body to a source —"
 				+ " give a 'source', or keep content 'inline' for text");
 		}
 		String skillText = (source != null) ? readSkillText(ctx, source) : text.toString();
@@ -383,23 +388,23 @@ public class SkillsAdapter extends AAdapter {
 		AString source = RT.ensureString(RT.getIn(input, Fields.SOURCE));
 		AString text = RT.ensureString(RT.getIn(input, Fields.TEXT));
 		if ((source == null) == (text == null)) {
-			throw new IllegalArgumentException("provide exactly one of 'source' (one content reference to a"
+			throw new InvalidInputException("provide exactly one of 'source' (one content reference to a"
 				+ " SKILL.md, e.g. file://<root>/<dir>/SKILL.md, dlfs/<drive>/<path> or a/<hash>)"
 				+ " or 'text' (the SKILL.md itself). Import one skill per call: a directory is not a source.");
 		}
 		ACell rawSkillset = RT.getIn(input, K_SKILLSET);
 		AString skillset = RT.ensureString(rawSkillset);
 		if (skillset == null && rawSkillset != null) {
-			throw new IllegalArgumentException("skillset must be one writable directory path, e.g. 'w/skills'");
+			throw new InvalidInputException("skillset must be one writable directory path, e.g. 'w/skills'");
 		}
 		String dir = (skillset == null) ? DEFAULT_IMPORT_SKILLSET : skillset.toString().strip();
 		while (dir.endsWith("/")) dir = dir.substring(0, dir.length() - 1);
 		if (dir.isEmpty()) {
-			throw new IllegalArgumentException("skillset must be a directory path such as 'w/skills'");
+			throw new InvalidInputException("skillset must be a directory path such as 'w/skills'");
 		}
 		boolean inline = inlineBody(input);
 		if (!inline && source == null) {
-			throw new IllegalArgumentException("content 'ref' binds the body to a source —"
+			throw new InvalidInputException("content 'ref' binds the body to a source —"
 				+ " give a 'source', or keep content 'inline' for text");
 		}
 
@@ -411,7 +416,7 @@ public class SkillsAdapter extends AAdapter {
 		} else if (text != null) {
 			skillText = text.toString();
 		} else {
-			throw new IllegalArgumentException("provide exactly one of 'source' or 'text'");
+			throw new InvalidInputException("provide exactly one of 'source' or 'text'");
 		}
 		Skills.ParsedSkill parsed = Skills.parseSkillText(skillText, source, inline);
 		AString path = Strings.create(dir + "/" + parsed.name());
@@ -446,7 +451,7 @@ public class SkillsAdapter extends AAdapter {
 		AString form = RT.ensureString(raw);
 		if (Fields.INLINE.equals(form)) return true;
 		if (Fields.REF.equals(form)) return false;
-		throw new IllegalArgumentException("content must be 'inline' (copy the body) or 'ref' (bind it live to the source)");
+		throw new InvalidInputException("content must be 'inline' (copy the body) or 'ref' (bind it live to the source)");
 	}
 
 	/**
@@ -463,14 +468,14 @@ public class SkillsAdapter extends AAdapter {
 		try {
 			ContentProvider.Resolved resolved = engine.resolveContent(source, ctx);
 			if (resolved == null || resolved.content() == null) {
-				throw new IllegalArgumentException("source has no content: " + source);
+				throw new NotFoundException("source has no content: " + source, source.toString());
 			}
 			blob = resolved.content().getBlob();
 		} catch (IOException e) {
-			throw new IllegalArgumentException("cannot read source " + source + ": " + e.getMessage(), e);
+			throw new InvalidInputException("cannot read source " + source + ": " + e.getMessage(), e);
 		}
 		if (blob == null || blob.count() == 0) {
-			throw new IllegalArgumentException("source is empty: " + source);
+			throw new InvalidInputException("source is empty: " + source);
 		}
 		return new String(blob.getBytes(), StandardCharsets.UTF_8);
 	}
@@ -480,7 +485,7 @@ public class SkillsAdapter extends AAdapter {
 	private ACell write(RequestContext ctx, AString path, ACell value) {
 		AAdapter raw = engine.getAdapter("covia");
 		if (!(raw instanceof CoviaAdapter covia)) {
-			throw new IllegalStateException("covia adapter is unavailable — nothing to write the skill with");
+			throw new UnavailableException("covia adapter is unavailable — nothing to write the skill with");
 		}
 		try {
 			return covia.writeResolvedPath(ctx, path, value).get();

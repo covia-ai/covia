@@ -43,6 +43,20 @@ import covia.venue.User;
 public class LLMAgentAdapterTest {
 
 	private final Engine engine = TestEngine.ENGINE;
+
+	/** Runs a step directly, as its agent's owner: a step runs only for an agent that exists. */
+	private ACell step(LLMAgentAdapter a, RequestContext ctx, ACell input) {
+		ensureAgent(engine, ctx, input);
+		return a.processChat(ctx, input);
+	}
+
+	/** The agent the step's input names, created under its input config when absent. */
+	static void ensureAgent(Engine engine, RequestContext ctx, ACell input) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null || ctx.getUserDID() == null) return;
+		engine.getVenueState().users().ensure(ctx.getUserDID())
+			.ensureAgent(agentId, RT.ensureMap(RT.getIn(input, AgentState.KEY_CONFIG)), null);
+	}
 	// ALICE_DID is per-test (not static) so each test sees a fresh user
 	// namespace within the shared engine.
 	private AString ALICE_DID;
@@ -74,7 +88,7 @@ public class LLMAgentAdapterTest {
 		long start = System.currentTimeMillis();
 		covia.exception.JobFailedException e = assertThrows(
 			covia.exception.JobFailedException.class,
-			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+			() -> step(adapter,RequestContext.of(ALICE_DID), input));
 		assertTrue(e.getMessage().contains("timed out"),
 			"expected a timeout failure, got: " + e.getMessage());
 		assertTrue(System.currentTimeMillis() - start < 60_000,
@@ -105,7 +119,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "Hello world"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
@@ -130,7 +144,7 @@ public class LLMAgentAdapterTest {
 				"model", "length-then-answer-test"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertEquals("complete after truncation retry", RT.getIn(output, Fields.RESPONSE).toString());
 		AVector<ACell> turns = RT.ensureVector(RT.getIn(output, Fields.TURNS));
 		assertNotNull(turns);
@@ -152,7 +166,7 @@ public class LLMAgentAdapterTest {
 
 		covia.exception.JobFailedException failure = assertThrows(
 			covia.exception.JobFailedException.class,
-			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+			() -> step(adapter,RequestContext.of(ALICE_DID), input));
 		assertTrue(failure.getMessage().contains("Increase maxTokens"), failure.getMessage());
 	}
 
@@ -179,7 +193,7 @@ public class LLMAgentAdapterTest {
 
 		covia.exception.JobFailedException ex = assertThrows(
 			covia.exception.JobFailedException.class,
-			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+			() -> step(adapter,RequestContext.of(ALICE_DID), input));
 		assertTrue(ex.getMessage() != null && ex.getMessage().contains("API key not found"),
 			"Failure should name the missing API key, was: " + ex.getMessage());
 	}
@@ -194,7 +208,7 @@ public class LLMAgentAdapterTest {
 			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "first message"))
 		);
-		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), input1);
+		ACell output1 = step(adapter,RequestContext.of(ALICE_DID), input1);
 		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
 
 		// Second turn — pass state from first turn; config rides on the input
@@ -205,7 +219,7 @@ public class LLMAgentAdapterTest {
 			AgentState.KEY_STATE, state1,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "second message"))
 		);
-		ACell output2 = adapter.processChat(RequestContext.of(ALICE_DID), input2);
+		ACell output2 = step(adapter,RequestContext.of(ALICE_DID), input2);
 		ACell state2 = RT.getIn(output2, AgentState.KEY_STATE);
 
 		AString response = RT.ensureString(RT.getIn(output2, Fields.RESPONSE));
@@ -228,7 +242,7 @@ public class LLMAgentAdapterTest {
 				AgentState.KEY_STATE, state,
 				Fields.MESSAGES, Vectors.of(Maps.of("content", "turn " + i))
 			);
-			ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+			ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 			state = RT.getIn(output, AgentState.KEY_STATE);
 
 			AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
@@ -251,7 +265,7 @@ public class LLMAgentAdapterTest {
 			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))
 		);
-		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), input1);
+		ACell output1 = step(adapter,RequestContext.of(ALICE_DID), input1);
 		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
 
 		// Verify processChat completed and produced a response
@@ -279,7 +293,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 
 		// test:llm echoes last user message
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
@@ -303,7 +317,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "ahoy"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		// Custom system prompt applied — verify response is still produced
@@ -439,7 +453,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		// Verify processChat completes and produces a response
@@ -530,7 +544,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "do something"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
@@ -550,7 +564,7 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testProviderStatePersistsAndReachesNextInferenceWithinCycle() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "provider-state-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/toolllm",
@@ -569,7 +583,7 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testCompactUsesSharedFrameRepresentation() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "flat-compact-agent",
 			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "compact this"))));
@@ -611,7 +625,7 @@ public class LLMAgentAdapterTest {
 
 		for (String prompt : new String[] {"issue-334-read", "issue-334-list"}) {
 			ACell output = java.util.concurrent.CompletableFuture.supplyAsync(() ->
-				adapter.processChat(ctx, Maps.of(
+				step(adapter,ctx, Maps.of(
 					Fields.AGENT_ID, "issue-334-agent",
 					AgentState.KEY_CONFIG, config,
 					Fields.MESSAGES, Vectors.of(Maps.of("content", prompt)))))
@@ -824,7 +838,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello")));
 
 		RuntimeException e = assertThrows(RuntimeException.class,
-			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+			() -> step(adapter,RequestContext.of(ALICE_DID), input));
 		assertTrue(e.getMessage().contains("config.skills"), e.getMessage());
 	}
 
@@ -1016,7 +1030,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "use the alpha skill")),
 			Fields.SESSION, Maps.of(Fields.ID, Strings.create("s1")));
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		assertTrue(response.toString().contains("SKILL_TOOL_RESULT"), response.toString());
@@ -1046,7 +1060,7 @@ public class LLMAgentAdapterTest {
 				"content", "run generic context lifecycle")),
 			Fields.SESSION, Maps.of(Fields.ID, Strings.create("context-session")));
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertEquals("CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
 		AVector<ACell> turns = RT.ensureVector(RT.getIn(output, Fields.TURNS));
@@ -1193,7 +1207,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "summarise this"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		// Config is not carried in state (#144) — the responseFormat reaching
@@ -1214,7 +1228,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "give me json"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
@@ -1467,7 +1481,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "refresh the loaded value")),
 			Fields.SESSION, Maps.of(Fields.ID, Strings.create("live-load-session")));
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertEquals("LIVE_LOAD_STABLE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
 	}
@@ -1562,7 +1576,7 @@ public class LLMAgentAdapterTest {
 			.agent(agentId.toString());
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of("task", "fail deliberately"));
-		ACell output = adapter.processChat(
+		ACell output = step(adapter,
 			RequestContext.of(ALICE_DID).withAgentId(agentId).withTaskId(taskId),
 			Maps.of(
 				Fields.AGENT_ID, agentId,
@@ -1588,7 +1602,7 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testFailedTerminalLookingTaskCallDoesNotSuppressSibling() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "failed-terminal-looking-agent",
 			AgentState.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/taskllm",
@@ -1687,7 +1701,7 @@ public class LLMAgentAdapterTest {
 			Fields.AGENT_ID, "tokens-direct-agent",
 			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/llm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello tokens")));
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		AMap<AString, ACell> tokens = (AMap<AString, ACell>) RT.getIn(output, Fields.TOKENS);
 		assertNotNull(tokens, "measured usage must ride the transition output");
 		long in = RT.ensureLong(RT.getIn(tokens, Fields.INPUT)).longValue();
@@ -2125,7 +2139,7 @@ public class LLMAgentAdapterTest {
 		RequestContext ctx = RequestContext.of(ALICE_DID).withAgentId(agentId);
 
 		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
-		adapter.processChat(ctx.withTaskId(taskId), Maps.of(
+		step(adapter,ctx.withTaskId(taskId), Maps.of(
 			Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
 			Fields.TASKS, Vectors.of(Maps.of(
 				Fields.JOB_ID, Strings.create(taskId.toHexString()),
@@ -2135,7 +2149,7 @@ public class LLMAgentAdapterTest {
 			.contains(ContextAssembler.REPLY_NOTICE), "a task turn is not told it");
 
 		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
-		adapter.processChat(ctx, Maps.of(
+		step(adapter,ctx, Maps.of(
 			Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of((ACell) Maps.of(Fields.MESSAGE, Strings.create("hello")))));
 		assertTrue(TestAdapter.CAPTURED_LLM_INPUT.get(agentId).toString()
@@ -2181,7 +2195,7 @@ public class LLMAgentAdapterTest {
 			.withAgentId(agentId)
 			.withTaskId(taskId);
 
-		ACell output = adapter.processChat(ctx, input);
+		ACell output = step(adapter,ctx, input);
 		assertNotNull(output);
 
 		// New contract: the LLM tool wrapper invokes the venue op (which
@@ -2212,7 +2226,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "call a tool"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
@@ -2264,7 +2278,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		// The LLM should still respond normally with default tools present
@@ -2621,7 +2635,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 		// Should complete without error — tools resolved successfully
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
@@ -2647,7 +2661,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertEquals("test", response.toString());
@@ -2672,7 +2686,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 	}
 
@@ -2691,7 +2705,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertEquals("test", response.toString());
@@ -2713,7 +2727,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 	}
 
@@ -2726,7 +2740,7 @@ public class LLMAgentAdapterTest {
 			"modelProfile", Maps.of("options",
 				Maps.of("toolCalling", CVMBool.FALSE)));
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "no-tool-calling-agent",
 			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
@@ -2760,7 +2774,7 @@ public class LLMAgentAdapterTest {
 		);
 
 		// Should not throw — invalid entries silently skipped
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 	}
 
@@ -2897,7 +2911,7 @@ public class LLMAgentAdapterTest {
 		AMap<AString, ACell> tier = Maps.of(Strings.create("w/notes"),
 			Maps.of(Strings.create("budget"), CVMLong.create(300)));
 
-		ACell withSession = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+		ACell withSession = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "loads-agent",
 			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.SESSION, Maps.of(Fields.SESSION_ID, Strings.create("aa00"), Fields.LOADS, tier),
@@ -2907,7 +2921,7 @@ public class LLMAgentAdapterTest {
 		assertNull(RT.getIn(withSession, Fields.LOADS),
 			"the obsolete session-level projection is not emitted");
 
-		ACell withoutSession = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+		ACell withoutSession = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "loads-agent",
 			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))));
@@ -2933,23 +2947,21 @@ public class LLMAgentAdapterTest {
 		assertTrue(msg.contains("goaltree harness tool"), msg);
 		assertTrue(msg.contains("llmagent"), msg);
 
-		// The reverse direction: llmagent's harness names under goaltree.
+		// A runtime's own harness tool reaches dispatch only through
+		// invoke_tool, and is told to call it directly. Every llmagent harness
+		// name is also goaltree's: the shared tools and the task tools.
+		ACell own = adapter.dispatchTool("context_load", Maps.empty(), null, ctx, 1000);
+		assertEquals("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, "context_load"),
+			RT.ensureString(own).toString());
 		GoalTreeAdapter goaltree = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell reverse = goaltree.dispatchTool("complete_task", Maps.empty(), null, ctx, 1000);
-		String reverseMsg = RT.ensureString(reverse).toString();
-		assertTrue(reverseMsg.contains("llmagent harness tool"), reverseMsg);
-		assertTrue(reverseMsg.contains("goaltree"), reverseMsg);
+		ACell task = goaltree.dispatchTool(TaskTools.COMPLETE, Maps.empty(), null, ctx, 1000);
+		assertEquals("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, TaskTools.COMPLETE),
+			RT.ensureString(task).toString());
 
-		// A name shared by both runtimes reports both providers.
-		ACell shared = adapter.dispatchTool("context_load", Maps.empty(), null, ctx, 1000);
-		String sharedMsg = RT.ensureString(shared).toString();
-		assertTrue(sharedMsg.contains("goaltree, llmagent"), sharedMsg);
-
-		// A genuinely unknown name keeps the ordinary resolution failure.
+		// A genuinely unknown name is neither a tool nor an operation reference.
 		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), null, ctx, 1000);
-		String unknownMsg = RT.ensureString(unknown).toString();
-		assertTrue(unknownMsg.startsWith("Error:"), unknownMsg);
-		assertFalse(unknownMsg.contains("harness tool"), unknownMsg);
+		assertEquals("Error: " + HarnessTools.noSuchTool("no_such_tool_xyz", null),
+			RT.ensureString(unknown).toString());
 	}
 
 	// ========== agent:context includes loads-derived exchanges (#418) ==========

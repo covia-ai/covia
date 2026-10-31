@@ -199,7 +199,8 @@ class SecretAdapterTest {
 
 	@Test void extractionRefusesAgentsSessionsTasksAndMcpTools() {
 		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("mina"));
-		for (RequestContext ctx : new RequestContext[] { agent, RequestContext.of(agent.getCallerDID()),
+		for (RequestContext ctx : new RequestContext[] { agent,
+			RequestContext.of(agent.getCallerDID(), owner.getUserDID(), null),
 			agent.withCaps(Vectors.of(Capability.create(null, Strings.create("*")))),
 			owner.withSessionId(Blob.fromHex("01")), owner.withTaskId(Blob.fromHex("02")) }) {
 			assertEquals(SecretAdapter.EXTRACT_DIRECT_ONLY, failure(run("extract", Maps.of("name", "KEY"), ctx)).getMessage());

@@ -384,7 +384,7 @@ class RemoteDelegationTest {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
 				Job recovered = second.jobs().getJob(job.getID(), user);
-				assertEquals(Strings.create(IllegalArgumentException.class.getSimpleName()),
+				assertEquals(Strings.create(covia.exception.InvalidInputException.class.getSimpleName()),
 					RemoteJobs.descriptor(recovered).get(RemoteJobs.ERROR_TYPE), "the guard refuses the reconnection");
 				assertFalse(recovered.isFinished());
 				assertEquals(1, peer.submits.get());

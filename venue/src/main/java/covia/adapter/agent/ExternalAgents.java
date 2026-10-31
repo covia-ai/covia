@@ -7,7 +7,13 @@ import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.*;
 
@@ -21,6 +27,7 @@ public final class ExternalAgents {
 	public static final String MISSING_CHILD = "External agent backend job is unavailable; submission will not be replayed";
 	public static final String IMMUTABLE_DEFINITION = "Changing agent metadata requires creating a new agent";
 	public static final String NO_ACTIVE_TURN = "External agent message requires an active task or session turn";
+	public static final String MISCONFIGURED = "Agent is misconfigured and cannot be reached until it is recreated: ";
 	public static final AString CHILD = Strings.intern("agentBackendJob");
 	private static final AString KIND = Strings.intern("agentInteraction");
 	private static final AString OWNER = Strings.intern("agentOwner");
@@ -28,20 +35,35 @@ public final class ExternalAgents {
 
 	public ExternalAgents(Engine engine) { this.engine = engine; }
 
+	/** Checks a definition offered for a new agent: a bad one is the caller's input. */
 	public AMap<AString, ACell> validate(ACell value) {
 		AMap<AString, ACell> definition = RT.ensureMap(value);
 		AString name = definition == null ? null : RT.ensureString(definition.get(Fields.ADAPTER));
 		if (name == null || name.toString().isBlank() || name.toString().contains(":"))
-			throw new IllegalArgumentException(INVALID);
+			throw new InvalidInputException(INVALID);
 		backend(definition).validateAgent(definition);
 		return definition;
+	}
+
+	/**
+	 * An existing agent's definition, checked again before use. It passed
+	 * {@link #validate} when the agent was created and cannot change, so a
+	 * failure now is the agent's, not the caller's: the agent cannot be
+	 * reached until it is recreated.
+	 */
+	public AMap<AString, ACell> stored(AgentState agent) {
+		try {
+			return validate(agent.getRecord().get(AgentState.KEY_AGENT));
+		} catch (InvalidInputException e) {
+			throw new UnavailableException(MISCONFIGURED + e.getMessage(), e);
+		}
 	}
 
 	public ARemoteAgentAdapter<?> backend(AMap<AString, ACell> definition) {
 		AString name = definition == null ? null : RT.ensureString(definition.get(Fields.ADAPTER));
 		AAdapter adapter = name == null ? null : engine.getAdapter(name.toString());
 		if (!(adapter instanceof ARemoteAgentAdapter<?> remote))
-			throw new IllegalArgumentException(UNAVAILABLE + name);
+			throw new UnavailableException(UNAVAILABLE + name);
 		return remote;
 	}
 
@@ -52,19 +74,19 @@ public final class ExternalAgents {
 
 	public void start(Job job, RequestContext caller, AString owner, AString id, AString address,
 			AgentState agent, String operation, ACell input, Blob sid, boolean supplied) {
-		AMap<AString, ACell> definition = validate(agent.getRecord().get(AgentState.KEY_AGENT));
+		AMap<AString, ACell> definition = stored(agent);
 		ARemoteAgentAdapter<?> adapter = backend(definition);
 		for (String option : new String[]{"loads", "outputPath", "responseSchema", "strict"}) {
-			if (RT.getIn(input, option) != null) throw new IllegalArgumentException(UNSUPPORTED + option);
+			if (RT.getIn(input, option) != null) throw new NotSupportedException(UNSUPPORTED + option);
 		}
-		if (supplied && agent.getSession(sid) == null) throw new IllegalArgumentException(UNKNOWN_SESSION);
+		if (supplied && agent.getSession(sid) == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
 			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())).assoc(OWNER, owner)
 			.assoc(KIND, Strings.create(operation)));
 		if (job.isFinished()) return;
 		if (!agent.claimExternalTurn(sid, job.getID(), caller.getCallerDID(), content, !supplied))
-			throw new IllegalStateException(SESSION_BUSY);
+			throw new ConflictException(SESSION_BUSY);
 		if (job.isFinished()) { agent.session(sid).finishExternalTurn(job.getID(), null, null); return; }
 		try {
 			ACell remoteSession = RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.SESSION_ID);
@@ -72,7 +94,7 @@ public final class ExternalAgents {
 			AString backendOp = Strings.create(adapter.getName() + ":" + invocation.operation());
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, backendOp));
 			// The resident agent's configured authority applies, never the waking caller's grants.
-			RequestContext execution = AbstractLLMAdapter.capsContext(agent.getConfig(), RequestContext.ofAgent(owner, id)).withJob(job)
+			RequestContext execution = engine.context(owner, Principals.agentDID(owner, id)).withJob(job)
 				.withOp(Strings.create("v/ops/" + adapter.getName() + "/" + invocation.operation()));
 			var prepared = engine.jobs().prepareAgentInteraction(meta, invocation.input(), execution);
 			Job child = prepared.job();
@@ -134,14 +156,14 @@ public final class ExternalAgents {
 		User user = owner == null ? null : engine.getVenueState().users().get(owner);
 		AgentState agent = user == null ? null : user.agent(RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		ACell childId = job.getData().get(CHILD);
-		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), RequestContext.of(owner));
+		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);
 			if (agent != null) agent.session(Job.parseID(job.getData().get(Fields.SESSION_ID))).finishExternalTurn(job.getID(), null, null);
 			return true;
 		}
 		attach(job, child, agent, Job.parseID(job.getData().get(Fields.SESSION_ID)),
-			backend(validate(agent.getRecord().get(AgentState.KEY_AGENT))));
+			backend(stored(agent)));
 		return true;
 	}
 
@@ -169,9 +191,9 @@ public final class ExternalAgents {
 		Job parent = id == null ? null : engine.jobs().getJob(Job.parseID(id));
 		if (parent == null || !owns(parent) || parent.isFinished()
 				|| !parent.getID().equals(RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.JOB_ID)))
-			throw new IllegalArgumentException(NO_ACTIVE_TURN);
+			throw new ConflictException(NO_ACTIVE_TURN);
 		Job child = engine.jobs().getJob(Job.parseID(parent.getData().get(CHILD)));
-		if (child == null) throw new IllegalArgumentException(MISSING_CHILD);
-		backend(validate(agent.getRecord().get(AgentState.KEY_AGENT))).handleMessage(child, Maps.of(Fields.MESSAGE, content));
+		if (child == null) throw new ConflictException(MISSING_CHILD);
+		backend(stored(agent)).handleMessage(child, Maps.of(Fields.MESSAGE, content));
 	}
 }

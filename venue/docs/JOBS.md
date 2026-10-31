@@ -28,7 +28,10 @@ boolean isPaused();                        // paused family?
 from a record snapshot). `VenueJob` is the execution handle for a recorded venue
 job; its data comes directly from `user.job(id)`, a `JobState` lattice component.
 `JobManager` owns execution, recovery and admission. Transient handles and remote
-client snapshots retain local backing records.
+client snapshots retain local backing records. Acceptance writes a recorded job's
+row before it registers the live handle, both under the account monitor; a lookup
+by id that misses re-checks under that monitor, so a job a caller has just listed
+is always reachable by cancel, pause, resume and message delivery.
 
 ## Lifecycle and status semantics
 

@@ -341,7 +341,7 @@ final class ToolCycleEngine {
 			toolInput = AbstractLLMAdapter.parseToolArguments(
 				RT.getIn(rawCall, AbstractLLMAdapter.K_ARGUMENTS));
 		} catch (IllegalArgumentException e) {
-			String detail = describe(e);
+			String detail = AbstractLLMAdapter.toolFailure(e, name);
 			early = ToolOutcome.result(Strings.create("Error: " + detail));
 			log.warn("Tool call {} has malformed arguments: {}", name, detail);
 		}
@@ -370,7 +370,7 @@ final class ToolCycleEngine {
 						"Error: tool handler returned no outcome: " + call.name()));
 				}
 			} catch (Exception e) {
-				String detail = describe(e);
+				String detail = AbstractLLMAdapter.toolFailure(e, call.name());
 				outcome = ToolOutcome.result(Strings.create("Error: " + detail));
 				log.warn("Tool execution failed: {} — {}", call.name(), detail);
 			} finally {
@@ -415,7 +415,7 @@ final class ToolCycleEngine {
 			} catch (ExecutionException e) {
 				// execute() turns handler exceptions into outcomes; only an Error
 				// escapes to here. Report it like any other failed call.
-				String detail = describe((e.getCause() != null) ? e.getCause() : e);
+				String detail = AbstractLLMAdapter.toolFailure(e, call.name());
 				log.warn("Tool call {} failed outside its handler: {}", call.name(), detail);
 				out.add(failed(call, "Error: " + detail, tap, depth));
 			}
@@ -482,12 +482,5 @@ final class ToolCycleEngine {
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> stamped(AMap<AString, ACell> message) {
 		return (AMap<AString, ACell>) AbstractLLMAdapter.stampTs(message);
-	}
-
-	private static String describe(Throwable failure) {
-		Throwable cause = AbstractLLMAdapter.unwrap(failure);
-		String message = cause.getMessage();
-		return (message == null || message.isBlank())
-			? cause.getClass().getSimpleName() : message;
 	}
 }

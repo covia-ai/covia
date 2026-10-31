@@ -44,8 +44,15 @@ import covia.adapter.agent.Skills;
 import covia.adapter.agent.ContextLoader;
 import covia.adapter.agent.Loads;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.adapter.agent.ExternalAgents;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Admission;
 import covia.venue.AgentState;
@@ -90,7 +97,7 @@ public class AgentAdapter extends AAdapter {
 
 	private void requireNative(AgentState agent, String operation) {
 		if (externalAgents().isExternal(agent))
-			throw new UnsupportedOperationException(ExternalAgents.UNSUPPORTED + operation);
+			throw new NotSupportedException(ExternalAgents.UNSUPPORTED + operation);
 	}
 
 	private boolean externalTurn(Job job, RequestContext ctx, AgentTarget target,
@@ -304,7 +311,7 @@ public class AgentAdapter extends AAdapter {
 	private AgentTarget resolveAgentTarget(RequestContext ctx, AString ref,
 			AString ability, boolean createOwner) {
 		if (ref == null || ref.isEmpty()) {
-			throw new IllegalArgumentException("agentId is required");
+			throw new InvalidInputException("agentId is required");
 		}
 		String value = ref.toString();
 		AString path = (value.startsWith("did:") || value.startsWith("g/") || value.startsWith("/g/"))
@@ -312,11 +319,11 @@ public class AgentAdapter extends AAdapter {
 		Engine.UserPathTarget resolved = engine.requireUserPath(ctx, path, ability, createOwner);
 		ACell[] keys = resolved.pathKeys();
 		if (keys.length != 2 || !"g".equals(keys[0].toString())) {
-			throw new IllegalArgumentException("Agent reference must resolve to g/<agentId>: " + ref);
+			throw new InvalidInputException("Agent reference must resolve to g/<agentId>: " + ref);
 		}
 		AString agentId = RT.ensureString(keys[1]);
 		if (agentId == null || agentId.isEmpty() || agentId.toString().contains(":")) {
-			throw new IllegalArgumentException("agentId must be a non-empty path segment without ':'");
+			throw new InvalidInputException("agentId must be a non-empty path segment without ':'");
 		}
 		return new AgentTarget(resolved.ownerDID(), resolved.user(), agentId, resolved.resource());
 	}
@@ -338,7 +345,8 @@ public class AgentAdapter extends AAdapter {
 		AgentTarget target;
 		try {
 			target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
-		} catch (covia.exception.AuthException | IllegalArgumentException refused) {
+		} catch (covia.exception.AuthException | covia.exception.InvalidInputException
+				| IllegalArgumentException refused) {
 			return describeFailure(refused);
 		}
 		AgentState agent = getAgent(target.ownerDID(), target.agentId());
@@ -364,7 +372,7 @@ public class AgentAdapter extends AAdapter {
 	private AgentTarget resolveAgentTarget(RequestContext ctx, ACell input,
 			AString field, AString ability, boolean createOwner) {
 		AString ref = RT.ensureString(RT.getIn(input, field));
-		if (ref == null) throw new IllegalArgumentException(field + " is required");
+		if (ref == null) throw new InvalidInputException(field + " is required");
 		return resolveAgentTarget(ctx, ref, ability, createOwner);
 	}
 
@@ -587,13 +595,14 @@ public class AgentAdapter extends AAdapter {
 					AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 					if (agentId == null) {
 						return CompletableFuture.failedFuture(
-							new IllegalArgumentException("agentId is required"));
+							new InvalidInputException("agentId is required"));
 					}
 					AMap<AString, ACell> summary = agentInfo(ctx, agentId);
 					if (summary == null) {
 						return CompletableFuture.failedFuture(
-							new IllegalArgumentException("Agent '" + agentId
-								+ "' was not found or is terminated; use agent:list or agent:create"));
+							new NotFoundException("Agent '" + agentId
+								+ "' was not found or is terminated; use agent:list or agent:create",
+								agentId.toString()));
 					}
 					return CompletableFuture.completedFuture(summary);
 				}
@@ -820,7 +829,7 @@ public class AgentAdapter extends AAdapter {
 			requireConferrable(ctx, target, config, null);
 			AgentState created = user.createAgent(agentId, config,
 				RT.getIn(input, AgentState.KEY_STATE), definition);
-			if (created == null) throw new IllegalArgumentException("Agent already exists: " + agentId);
+			if (created == null) throw new ConflictException("Agent already exists: " + agentId);
 			job.setStatus(Status.STARTED);
 			job.completeWith(identify(target, Maps.of(Fields.STATUS, created.getStatus(), AgentState.KEY_AGENT, definition)));
 			return;
@@ -830,7 +839,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> config;
 		try {
 			config = parseConfigArg(configArg, ctx);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e)); return;
 		}
 		// A genuinely omitted config means "give me the useful platform
@@ -877,7 +886,7 @@ public class AgentAdapter extends AAdapter {
 			try {
 				defConfig = resolveConfigValue(defMeta, ctx, new ArrayList<>(), 0,
 					"definition '" + definitionRef + "'");
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				job.fail("Invalid agent definition " + definitionRef + ": " + e.getMessage());
 				return;
 			}
@@ -932,7 +941,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		try {
 			validateComposedConfig(config);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return;
 		}
@@ -1412,7 +1421,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> overrideConfig;
 		try {
 			overrideConfig = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e)); return;
 		}
 		AMap<AString, ACell> sourceConfig = RT.ensureMap(
@@ -1421,7 +1430,7 @@ public class AgentAdapter extends AAdapter {
 			: (sourceConfig != null ? mergeConfigMaps(sourceConfig, overrideConfig) : overrideConfig);
 		try {
 			validateComposedConfig(forkConfig);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return;
 		}
@@ -1580,7 +1589,7 @@ public class AgentAdapter extends AAdapter {
 				Job parent = engine.jobs().getJob(Job.parseID(task));
 				if (parent != null) sid = parseSessionId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
 			}
-			if (sid == null) throw new IllegalArgumentException(ExternalAgents.NO_ACTIVE_TURN);
+			if (sid == null) throw new ConflictException(ExternalAgents.NO_ACTIVE_TURN);
 			externalAgents().deliver(agent, task, sid, messageContent);
 			job.setStatus(Status.STARTED);
 			job.completeWith(identify(target, Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
@@ -1839,7 +1848,7 @@ public class AgentAdapter extends AAdapter {
 				if (job.isFinished()) throw new java.util.concurrent.CancellationException();
 				AMap<AString, ACell> saved = snapshot.agent().saveSessionSummary(
 					snapshot.sessionId(), snapshot.session(), instruction, queryDetails(output, includeSteps));
-				if (saved == null) throw new IllegalStateException(SUMMARISE_UNAVAILABLE);
+				if (saved == null) throw new ConflictException(SUMMARISE_UNAVAILABLE);
 				return saved;
 			})));
 	}
@@ -1918,10 +1927,10 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> tokens = RT.ensureMap(RT.getIn(result, Fields.TOKENS));
 			if (tokens != null) attachTokens(job, tokens);
 			ACell error = RT.getIn(result, Fields.ERROR);
-			if (error != null) throw new IllegalStateException(error.toString());
+			if (error != null) throw new JobFailedException(error.toString());
 			AMap<AString, ACell> output = RT.ensureMap(result);
 			if (output == null || !output.containsKey(Fields.RESPONSE)) {
-				throw new IllegalStateException(QUERY_NO_RESPONSE);
+				throw new JobFailedException(QUERY_NO_RESPONSE);
 			}
 			return output;
 		});
@@ -2128,7 +2137,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> assistant;
 		try {
 			assistant = AbstractLLMAdapter.stepAssistant(RT.getIn(input, K_ASSISTANT));
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(e.getMessage());
 			return;
 		}
@@ -2344,7 +2353,7 @@ public class AgentAdapter extends AAdapter {
 		int skip = boundedInt(input, K_SKIP, 0, 0, Integer.MAX_VALUE);
 		ACell current = RT.getIn(input, K_CURRENT);
 		if (current != null && !(current instanceof CVMBool)) {
-			throw new IllegalArgumentException("current must be a boolean");
+			throw new InvalidInputException("current must be a boolean");
 		}
 		if (CVMBool.TRUE.equals(current)) return doCurrentSessionRead(ctx, access, input, maxTurns, maxChars, archiveDepth, skip);
 
@@ -2357,7 +2366,7 @@ public class AgentAdapter extends AAdapter {
 		} else {
 			Blob sid = parseSessionId(requested);
 			if (sid == null || sid.count() != 16) {
-				throw new IllegalArgumentException("sessionId must be a 16-byte hex string");
+				throw new InvalidInputException("sessionId must be a 16-byte hex string");
 			}
 			summary = summarizeSession(ctx, access, sid, access.agent().getSession(sid));
 			if (summary == null) return sessionNotFound();
@@ -2390,18 +2399,18 @@ public class AgentAdapter extends AAdapter {
 			int maxTurns, int maxChars, int archiveDepth, int skip) {
 		Blob sid = ctx.getSessionId();
 		if (RT.getIn(input, Fields.SESSION_ID) != null) {
-			throw new IllegalArgumentException("current reads the caller's own session; omit sessionId");
+			throw new InvalidInputException("current reads the caller's own session; omit sessionId");
 		}
 		if (sid == null || access.excludedSession() == null || !sid.equals(access.excludedSession())) {
-			throw new IllegalArgumentException("current is only for an agent reading the session it is in");
+			throw new InvalidInputException("current is only for an agent reading the session it is in");
 		}
 		AMap<AString, ACell> session = access.agent().getSession(sid);
 		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
 		if (frame == null) return sessionNotFound();
 		ACell from = RT.getIn(input, K_FROM_TURN), to = RT.getIn(input, K_TO_TURN);
-		if ((from == null) != (to == null)) throw new IllegalArgumentException("from and to go together");
+		if ((from == null) != (to == null)) throw new InvalidInputException("from and to go together");
 		if (from != null && (!(from instanceof CVMLong) || !(to instanceof CVMLong))) {
-			throw new IllegalArgumentException("from and to must be turn numbers");
+			throw new InvalidInputException("from and to must be turn numbers");
 		}
 		ConversationRenderer.HistoricalView view = (from != null)
 			? ConversationRenderer.historicalTurns(frame, ((CVMLong) from).longValue(), ((CVMLong) to).longValue(),
@@ -2421,13 +2430,13 @@ public class AgentAdapter extends AAdapter {
 		ACell rawTarget = RT.getIn(input, Fields.AGENT_ID);
 		AString requested = RT.ensureString(rawTarget);
 		if (rawTarget != null && requested == null) {
-			throw new IllegalArgumentException("agentId must be a string");
+			throw new InvalidInputException("agentId must be a string");
 		}
 		if (requested != null) {
 			AgentTarget target = resolveAgentTarget(ctx, requested, Capability.CRUD_READ, false);
 			AgentState agent = (target.user() != null) ? target.user().agent(target.agentId()) : null;
 			if (agent == null || !agent.exists()) {
-				throw new IllegalArgumentException("Agent not found: " + target.address());
+				throw new NotFoundException("Agent not found: " + target.address(), target.address().toString());
 			}
 			Blob excluded = target.ownerDID().equals(ctx.getUserDID())
 					&& target.agentId().equals(ctx.getAgentId()) ? ctx.getSessionId() : null;
@@ -2437,13 +2446,13 @@ public class AgentAdapter extends AAdapter {
 		AString owner = ctx.getUserDID();
 		AString agentId = ctx.getAgentId();
 		if (owner == null || agentId == null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Past-session operations require an agent execution context");
 		}
 		User user = engine.getVenueState().users().get(owner);
 		AgentState agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null || !agent.exists()) {
-			throw new IllegalArgumentException("Current agent was not found");
+			throw new NotFoundException("Current agent was not found", agentId.toString());
 		}
 		AgentTarget target = new AgentTarget(owner, user, agentId,
 			Strings.create(owner + "/g/" + agentId));
@@ -2515,11 +2524,11 @@ public class AgentAdapter extends AAdapter {
 		ACell value = RT.getIn(input, field);
 		if (value == null) return defaultValue;
 		if (!(value instanceof CVMLong number)) {
-			throw new IllegalArgumentException(field + " must be an integer");
+			throw new InvalidInputException(field + " must be an integer");
 		}
 		long n = number.longValue();
 		if (n < min || n > max) {
-			throw new IllegalArgumentException(field + " must be between " + min + " and " + max);
+			throw new InvalidInputException(field + " must be between " + min + " and " + max);
 		}
 		return (int) n;
 	}
@@ -2546,7 +2555,7 @@ public class AgentAdapter extends AAdapter {
 		DeleteRequest request;
 		try {
 			request = parseDeleteRequest(input);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(e.getMessage());
 			return;
 		}
@@ -2611,31 +2620,31 @@ public class AgentAdapter extends AAdapter {
 		ACell singleCell = RT.getIn(input, Fields.AGENT_ID);
 		ACell batchCell = RT.getIn(input, K_AGENT_IDS);
 		if (singleCell != null && batchCell != null) {
-			throw new IllegalArgumentException("Specify exactly one of agentId or agentIds");
+			throw new InvalidInputException("Specify exactly one of agentId or agentIds");
 		}
 		if (singleCell != null) {
 			if (!(singleCell instanceof AString agentId)) {
-				throw new IllegalArgumentException("agentId must be a string");
+				throw new InvalidInputException("agentId must be a string");
 			}
 			return new DeleteRequest(Vectors.of(agentId), false);
 		}
 		if (!(batchCell instanceof AVector<?> raw)) {
-			throw new IllegalArgumentException("Specify agentId or a non-empty agentIds array");
+			throw new InvalidInputException("Specify agentId or a non-empty agentIds array");
 		}
 		if (raw.count() == 0) {
-			throw new IllegalArgumentException("agentIds must not be empty");
+			throw new InvalidInputException("agentIds must not be empty");
 		}
 		if (raw.count() > MAX_DELETE_BATCH) {
-			throw new IllegalArgumentException("agentIds supports at most " + MAX_DELETE_BATCH + " agents per call");
+			throw new InvalidInputException("agentIds supports at most " + MAX_DELETE_BATCH + " agents per call");
 		}
 		AVector<AString> ids = Vectors.empty();
 		HashSet<String> seen = new HashSet<>();
 		for (long i = 0; i < raw.count(); i++) {
 			if (!(raw.get(i) instanceof AString id)) {
-				throw new IllegalArgumentException("agentIds[" + i + "] must be a string");
+				throw new InvalidInputException("agentIds[" + i + "] must be a string");
 			}
 			if (!seen.add(id.toString())) {
-				throw new IllegalArgumentException("agentIds contains duplicate: " + id);
+				throw new InvalidInputException("agentIds contains duplicate: " + id);
 			}
 			ids = ids.conj(id);
 		}
@@ -2675,6 +2684,9 @@ public class AgentAdapter extends AAdapter {
 					"Agent deleted: " + agentId, "delete")) return null;
 		}
 		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
+		// Nothing the agent scheduled outlives it.
+		Scheduler scheduler = engine.gridScheduler();
+		if (scheduler != null) scheduler.cancelActor(Principals.agentDID(target.ownerDID(), agentId));
 		if (remove) {
 			user.removeAgent(agentId);
 			return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
@@ -2692,7 +2704,7 @@ public class AgentAdapter extends AAdapter {
 
 		ACell reason = RT.getIn(input, Fields.REASON);
 		if (reason != null && !(reason instanceof AString)) {
-			throw new IllegalArgumentException(SUSPEND_REASON_INVALID);
+			throw new InvalidInputException(SUSPEND_REASON_INVALID);
 		}
 		AMap<AString, ACell> stopped = agent.suspend(ctx.getCallerDID(), (AString) reason);
 		if (stopped == null) {
@@ -2747,7 +2759,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, target);
 		if (agent == null) return;
 		if (RT.ensureMap(input).containsKey(AgentState.KEY_AGENT))
-			throw new IllegalArgumentException(ExternalAgents.IMMUTABLE_DEFINITION);
+			throw new InvalidInputException(ExternalAgents.IMMUTABLE_DEFINITION);
 		// Config changes apply to future transitions: a transition already
 		// running keeps the snapshot it fired with (transitionInput.config) and
 		// the next cycle re-reads the record. State is merged by the run loop as
@@ -2764,7 +2776,7 @@ public class AgentAdapter extends AAdapter {
 			try {
 				AMap<AString, ACell> resolved = parseConfigArg(configInput, ctx);
 				newConfig = mergeConfigMaps(agent.getConfig(), resolved);
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				job.fail(describeFailure(e));
 				return;
 			}
@@ -2777,7 +2789,7 @@ public class AgentAdapter extends AAdapter {
 		if (newConfig != null) {
 			try {
 				validateComposedConfig(newConfig);
-			} catch (IllegalArgumentException e) {
+			} catch (InvalidInputException | IllegalArgumentException e) {
 				job.fail(describeFailure(e));
 				return;
 			}
@@ -3111,7 +3123,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
 		if (agentId == null || taskId == null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"agent:completeTask requires task scope (agentId + taskId in RequestContext)");
 		}
 
@@ -3119,7 +3131,7 @@ public class AgentAdapter extends AAdapter {
 		long expectedRevision = ctx.getTaskRevision();
 		ACell currentTask = agent.getTasks().get(taskId);
 		if (currentTask == null) {
-			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
 		}
 		if (expectedRevision >= 0
 				&& (AgentState.taskRevision(currentTask) != expectedRevision
@@ -3141,7 +3153,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> schema = RT.ensureMap(
 				RT.getIn(currentTask, Fields.RESPONSE_SCHEMA));
 			if (schema == null) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Strict task has no response schema: " + taskId.toHexString());
 			}
 			ACell candidate = result;
@@ -3156,7 +3168,7 @@ public class AgentAdapter extends AAdapter {
 			}
 			String schemaError = JsonSchema.validate(schema, candidate);
 			if (schemaError != null) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Result does not conform to this task's response schema — " + schemaError);
 			}
 			result = candidate;
@@ -3175,7 +3187,7 @@ public class AgentAdapter extends AAdapter {
 					Fields.STATUS, Status.STARTED,
 					Fields.REASON, Strings.create("Task received continuation input; process the updated task before completing"));
 			}
-			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
 		}
 
 		parkCompletion(ctx.getUserDID(), agentId, task, taskId, Status.COMPLETE, Fields.OUTPUT, result);
@@ -3205,7 +3217,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
 		if (agentId == null || taskId == null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"agent:failTask requires task scope (agentId + taskId in RequestContext)");
 		}
 
@@ -3224,7 +3236,7 @@ public class AgentAdapter extends AAdapter {
 						Fields.STATUS, Status.STARTED,
 						Fields.REASON, Strings.create("Task received continuation input; process the updated task before failing"));
 			}
-			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
 		}
 
 		ACell errorCell = RT.getIn(input, Fields.ERROR);
@@ -3327,7 +3339,7 @@ public class AgentAdapter extends AAdapter {
 				CompletableFuture<ACell> write;
 				try {
 					CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-					if (covia == null) throw new IllegalStateException("covia adapter is unavailable");
+					if (covia == null) throw new UnavailableException("covia adapter is unavailable");
 					write = covia.writeResolvedPath(outputCtx, outputPath, output);
 				} catch (Exception ex) {
 					write = CompletableFuture.failedFuture(ex);
@@ -3370,25 +3382,25 @@ public class AgentAdapter extends AAdapter {
 	 * reconstructed: raw bearer credentials are never persisted.
 	 */
 	@SuppressWarnings("unchecked")
-	static RequestContext restoreOutputContext(ACell snapshotCell) {
+	RequestContext restoreOutputContext(ACell snapshotCell) {
 		if (!(snapshotCell instanceof AMap<?, ?> raw)) return null;
 		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
 		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
 		if (caller == null) return null;
-		RequestContext ctx = RequestContext.of(caller);
+		AVector<ACell> caps = null;
 		if (snapshot.containsKey(K_CONTEXT_CAPS)) {
-			AVector<ACell> caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
+			caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
 			if (caps == null) return null;
-			ctx = ctx.withCaps(caps);
 		}
-		// Legacy snapshots implicitly used the caller's namespace. New snapshots
-		// bind local execution IDs explicitly; changing the owner must retain the
-		// proof-only boundary (bearer credentials are deliberately not restored).
+		// Snapshots record the namespace; those from before 0.10.0 name only the
+		// caller. Bearer credentials are deliberately not restored: a delegate's
+		// recorded empty scope leaves it proof-bounded.
+		AString owner = engine.legacyNamespace(caller);
 		if (snapshot.containsKey(K_CONTEXT_USER)) {
-			AString owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
+			owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
 			if (owner == null) return null;
-			ctx = ctx.onBehalfOf(owner);
 		}
+		RequestContext ctx = RequestContext.of(caller, owner, caps);
 		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
 		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
 		ACell jobId = snapshot.get(K_CONTEXT_JOB_ID);
@@ -3420,11 +3432,10 @@ public class AgentAdapter extends AAdapter {
 		if (!externalAgents().owns(job)) { super.handleMessage(job, messageRecord); return; }
 		ACell childId = job.getData().get(ExternalAgents.CHILD);
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId));
-		if (child == null) throw new IllegalStateException(ExternalAgents.MISSING_CHILD);
+		if (child == null) throw new ConflictException(ExternalAgents.MISSING_CHILD);
 		AString owner = RT.ensureString(job.getData().get(Strings.intern("agentOwner")));
 		AgentState agent = getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
-		externalAgents().backend(externalAgents().validate(agent.getRecord().get(AgentState.KEY_AGENT)))
-			.handleMessage(child, messageRecord);
+		externalAgents().backend(externalAgents().stored(agent)).handleMessage(child, messageRecord);
 	}
 
 	/**
@@ -5024,8 +5035,8 @@ public class AgentAdapter extends AAdapter {
 
 	private AgentState requireAgent(AString callerDID, AString agentId) {
 		AgentState agent = getAgent(callerDID, agentId);
-		if (agent == null) throw new IllegalArgumentException("Agent '" + agentId
-			+ "' was not found or is terminated; use agent:list or agent:create");
+		if (agent == null) throw new NotFoundException("Agent '" + agentId
+			+ "' was not found or is terminated; use agent:list or agent:create", agentId.toString());
 		return agent;
 	}
 
@@ -5066,12 +5077,12 @@ public class AgentAdapter extends AAdapter {
 	private AMap<AString, ACell> resolveConfigValue(ACell value, RequestContext ctx,
 			List<String> resolving, int depth, String location) {
 		if (depth > MAX_CONFIG_LAYER_DEPTH) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				location + " exceeds the maximum config composition depth of "
 					+ MAX_CONFIG_LAYER_DEPTH + "; simplify the layer/reference chain");
 		}
 		if (value == null) {
-			throw new IllegalArgumentException(location + " is null; remove this layer. "
+			throw new InvalidInputException(location + " is null; remove this layer. "
 				+ "To clear an inherited field, set that field to null inside a config map");
 		}
 
@@ -5094,7 +5105,7 @@ public class AgentAdapter extends AAdapter {
 				try {
 					parsed = JSON.parse(text);
 				} catch (RuntimeException e) {
-					throw new IllegalArgumentException(location
+					throw new InvalidInputException(location
 						+ " looks like inline JSON but could not be parsed: "
 						+ describeFailure(e));
 				}
@@ -5113,14 +5124,14 @@ public class AgentAdapter extends AAdapter {
 		ACell facetCell = map.get(K_AGENT_FACET);
 		if (map.containsKey(K_AGENT_FACET)) {
 			if (!(facetCell instanceof AMap<?,?> rawFacet)) {
-				throw new IllegalArgumentException(location
+				throw new InvalidInputException(location
 					+ ".agent must be a map containing config and optionally operation/state; got "
 					+ configValueType(facetCell));
 			}
 			AMap<AString, ACell> facet = (AMap<AString, ACell>) rawFacet;
 			if (!facet.containsKey(Fields.CONFIG) && !facet.containsKey(Fields.OPERATION)
 					&& !facet.containsKey(AgentState.KEY_STATE)) {
-				throw new IllegalArgumentException(location
+				throw new InvalidInputException(location
 					+ ".agent must contain at least one of config, operation, or state");
 			}
 			AMap<AString, ACell> config = facet.containsKey(Fields.CONFIG)
@@ -5129,7 +5140,7 @@ public class AgentAdapter extends AAdapter {
 				: Maps.empty();
 			ACell operationCell = facet.get(Fields.OPERATION);
 			if (operationCell != null && !(operationCell instanceof AString)) {
-				throw new IllegalArgumentException(location
+				throw new InvalidInputException(location
 					+ ".agent.operation must be a string operation path; got "
 					+ configValueType(operationCell));
 			}
@@ -5159,7 +5170,7 @@ public class AgentAdapter extends AAdapter {
 		if (cycleStart >= 0) {
 			List<String> cycle = new ArrayList<>(resolving.subList(cycleStart, resolving.size()));
 			cycle.add(key);
-			throw new IllegalArgumentException(location + " has a cyclic config reference: "
+			throw new InvalidInputException(location + " has a cyclic config reference: "
 				+ String.join(" -> ", cycle));
 		}
 		resolving.add(key);
@@ -5168,8 +5179,9 @@ public class AgentAdapter extends AAdapter {
 			try {
 				resolved = engine.resolvePath(ref, ctx);
 			} catch (RuntimeException e) {
-				throw new IllegalArgumentException(location + " could not resolve config reference '"
-					+ key + "': " + describeFailure(e));
+				if (!isExpectedFailure(e)) throw e;
+				throw new InvalidInputException(location + " could not resolve config reference '"
+					+ key + "': " + describeFailure(e), e);
 			}
 			// Pure path resolution intentionally does not fetch remote DID assets.
 			// Config assets are definitions, so a remote content-addressed or named
@@ -5179,13 +5191,14 @@ public class AgentAdapter extends AAdapter {
 				try {
 					remote = engine.resolveAsset(ref, ctx);
 				} catch (RuntimeException e) {
-					throw new IllegalArgumentException(location + " could not fetch remote config asset '"
-						+ key + "': " + describeFailure(e));
+					if (!isExpectedFailure(e)) throw e;
+					throw new InvalidInputException(location + " could not fetch remote config asset '"
+						+ key + "': " + describeFailure(e), e);
 				}
 				if (remote != null) resolved = remote.meta();
 			}
 			if (resolved == null) {
-				throw new IllegalArgumentException(location + " references '" + key
+				throw new InvalidInputException(location + " references '" + key
 					+ "', but it was not found; check the path and the caller's read capability. "
 					+ "String config layers are references; put prompt text inside {systemPrompt: ...}");
 			}
@@ -5196,8 +5209,8 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	private static IllegalArgumentException invalidConfigShape(String location, ACell value) {
-		return new IllegalArgumentException(location
+	private static InvalidInputException invalidConfigShape(String location, ACell value) {
+		return new InvalidInputException(location
 			+ " must be a config map or a string reference (for example "
 			+ "'v/agents/templates/worker'); got " + configValueType(value));
 	}
@@ -5229,7 +5242,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> entry = (AMap<AString, ACell>) pm;
 			Loads.validateSpec(entry, "config", K_SYSTEM_PROMPT);
 			if (!Loads.declaresSource(entry)) {
-				throw new IllegalArgumentException("config.systemPrompt must be a string, or an entry"
+				throw new InvalidInputException("config.systemPrompt must be a string, or an entry"
 					+ " declaring one of ref, text, op, job; got a map with none");
 			}
 		} else {
@@ -5244,7 +5257,7 @@ public class AgentAdapter extends AAdapter {
 		// runtime must fail loudly here instead (#447).
 		String admissionProblem = Admission.configProblem(config);
 		if (admissionProblem != null) {
-			throw new IllegalArgumentException("config." + admissionProblem);
+			throw new InvalidInputException("config." + admissionProblem);
 		}
 		requireConfigType(config, K_CONTEXT, AVector.class, "an array of context entries");
 		requireConfigType(config, Fields.LOADS, AMap.class, "a map of path to load options");
@@ -5254,28 +5267,28 @@ public class AgentAdapter extends AAdapter {
 		ACell responseFormat = config.get(K_RESPONSE_FORMAT);
 		if (responseFormat != null && !(responseFormat instanceof AString)
 				&& !(responseFormat instanceof AMap<?,?>)) {
-			throw new IllegalArgumentException("config.responseFormat must be a string or map; got "
+			throw new InvalidInputException("config.responseFormat must be a string or map; got "
 				+ configValueType(responseFormat));
 		}
 
 		ACell toolsCell = config.get(K_TOOLS);
 		if (toolsCell == null) return;
 		if (!(toolsCell instanceof AVector<?> tools)) {
-			throw new IllegalArgumentException("config.tools must be an array of string operation paths "
+			throw new InvalidInputException("config.tools must be an array of string operation paths "
 				+ "or {operation, name?, description?} maps; got " + configValueType(toolsCell));
 		}
 		for (long i = 0; i < tools.count(); i++) {
 			ACell entry = (ACell) tools.get(i);
 			if (entry instanceof AString) continue;
 			if (!(entry instanceof AMap<?,?> rawTool)) {
-				throw new IllegalArgumentException("config.tools[" + i + "] must be a string operation "
+				throw new InvalidInputException("config.tools[" + i + "] must be a string operation "
 					+ "path/harness tool name or an {operation, name?, description?} map; got "
 					+ configValueType(entry));
 			}
 			AMap<AString, ACell> tool = (AMap<AString, ACell>) rawTool;
 			ACell operation = tool.get(Fields.OPERATION);
 			if (!(operation instanceof AString)) {
-				throw new IllegalArgumentException("config.tools[" + i
+				throw new InvalidInputException("config.tools[" + i
 					+ "].operation is required and must be a string operation path; got "
 					+ configValueType(operation));
 			}
@@ -5289,14 +5302,14 @@ public class AgentAdapter extends AAdapter {
 		ACell value = config.get(key);
 		// Null is the merge model's explicit "clear inherited optional value".
 		if (value == null || expected.isInstance(value)) return;
-		throw new IllegalArgumentException("config." + key + " must be "
+		throw new InvalidInputException("config." + key + " must be "
 			+ expectedDescription + "; got " + configValueType(value));
 	}
 
 	private static void requireToolText(AMap<AString, ACell> tool, AString key, long index) {
 		ACell value = tool.get(key);
 		if (value != null && !(value instanceof AString)) {
-			throw new IllegalArgumentException("config.tools[" + index + "]." + key
+			throw new InvalidInputException("config.tools[" + index + "]." + key
 				+ " must be a string when present; got " + configValueType(value));
 		}
 	}
@@ -5363,7 +5376,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return null;
 		}
@@ -5386,7 +5399,7 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Parses the optional mint-time {@code loads} input ({@code {path: {budget?}}},
 	 * the session tier's declared loads, #142). Returns null when absent;
-	 * throws {@link IllegalArgumentException} on a malformed value.
+	 * throws {@link InvalidInputException} on a malformed value.
 	 */
 	private static AMap<AString, ACell> mintLoads(ACell input) {
 		ACell raw = RT.getIn(input, Fields.LOADS);
@@ -5404,7 +5417,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException | IllegalArgumentException e) {
 			job.fail(describeFailure(e));
 			return null;
 		}

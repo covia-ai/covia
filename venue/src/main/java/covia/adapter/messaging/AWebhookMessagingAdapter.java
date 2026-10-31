@@ -166,7 +166,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		}
 		MessagingMedia.Fetched fetched = fetchMedia(bot, Maps.of("id", id));
 		AString owner = bot.spec().userDID(engine);
-		RequestContext writer = destination == null ? RequestContext.of(owner) : ctx;
+		RequestContext writer = destination == null ? engine.context(owner) : ctx;
 		String directory = destination == null
 			? MessagingMedia.ensureOwnerDirectory(engine, owner, getName(), writer) : destination.toString();
 		String name = fileName == null ? MessagingMedia.fallbackName(bot.spec().name(), id, fetched.contentType()) : fileName.toString();

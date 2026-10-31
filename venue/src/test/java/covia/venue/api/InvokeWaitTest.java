@@ -110,6 +110,45 @@ public class InvokeWaitTest {
 	}
 
 	@Test
+	public void testRunOperationFailureIsBadRequestWithItsReason() throws Exception {
+		// The operation ran and failed for its own stated reason: the request
+		// gets 400 with that reason, as documented, not a server error.
+		HttpResponse<String> resp = run(
+			"{\"operation\":\"v/test/ops/error\",\"input\":{\"message\":\"deliberate failure\"}}");
+		assertEquals(400, resp.statusCode(), resp.body());
+		assertTrue(resp.body().contains("deliberate failure"), resp.body());
+	}
+
+	@Test
+	public void testInvokeOfUnresolvableOperationIsBadRequest() throws Exception {
+		HttpResponse<String> resp = invoke("", "{\"operation\":\"v/does/not/exist\",\"input\":{}}");
+		assertEquals(400, resp.statusCode(), resp.body());
+		assertFalse(resp.body().contains("Exception"), "no exception class in the message: " + resp.body());
+	}
+
+	@Test
+	public void testMessageStatusesNameTheJobResource() throws Exception {
+		// No such job → 404; a finished job refuses messages → 409.
+		assertEquals(404, message("0x00112233445566778899aabbccddeeff").statusCode());
+
+		HttpResponse<String> done = invoke("?wait=5000",
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":1}}");
+		assertEquals(200, done.statusCode(), done.body());
+		String id = RT.getIn(JSON.parse(done.body()), "id").toString();
+		HttpResponse<String> late = message(id);
+		assertEquals(409, late.statusCode(), late.body());
+	}
+
+	private static HttpResponse<String> message(String jobId) throws Exception {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(URI.create(TestServer.BASE_URL + "/api/v1/jobs/" + jobId))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString("{\"content\":\"more\"}"))
+			.build();
+		return covia.venue.TestHTTP.CLIENT.send(req, HttpResponse.BodyHandlers.ofString());
+	}
+
+	@Test
 	public void testIntegerWaitReturnsFinishedRecord() throws Exception {
 		HttpResponse<String> resp = invoke("?wait=5000",
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":1}}");

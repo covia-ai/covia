@@ -26,6 +26,8 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.agent.GoalTreeContext;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
 
 /**
  * Unit tests for the session cycle-epoch primitives (lattice-resident frames,
@@ -90,7 +92,7 @@ public class AgentStateSessionCycleTest {
 		agent.session(sid).appendPending(envelope("pending"));
 		agent.session(sid).beginCycle(EPOCH_A, null, 0);
 		ACell before = agent.getRecord();
-		assertThrows(IllegalArgumentException.class, () -> agent.mergeRunResult(
+		assertThrows(InvalidInputException.class, () -> agent.mergeRunResult(
 			null, Maps.of("changed", true), Maps.of(task.toHexString(), "done"),
 			Maps.of("event", "complete"), sid, Vectors.of(turn("response")), 1,
 			Vectors.of(CVMLong.ONE), Maps.of(Fields.TOTAL, 10)));
@@ -149,9 +151,9 @@ public class AgentStateSessionCycleTest {
 		AMap<AString, ACell> before = agent.getSession(sid).assoc(Fields.FRAMES, frames)
 			.assoc(Strings.intern("pending"), Vectors.of(envelope("waiting")));
 		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(sid, before)));
-		assertThrows(IllegalArgumentException.class, () -> agent.session(sid).migrateHistory(frames));
+		assertThrows(InvalidInputException.class, () -> agent.session(sid).migrateHistory(frames));
 		assertEquals(before, agent.getSession(sid));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> agent.session(sid).beginCycle(EPOCH_B, Vectors.of(turn("new")), 1));
 		assertEquals(before, agent.getSession(sid));
 	}
@@ -166,13 +168,13 @@ public class AgentStateSessionCycleTest {
 			GoalTreeContext.compactFrame(GoalTreeContext.appendTurn(RT.ensureMap(frames.get(0)), turn("later")), "all"))));
 		assertEquals(CVMLong.create(2), RT.getIn(agent.getSession(sid), "meta", "turns"));
 		AMap<AString, ACell> saved = agent.getSession(sid);
-		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(IllegalArgumentException.class,
+		assertEquals(GoalTreeContext.HISTORY_REWRITE, assertThrows(ConflictException.class,
 			() -> agent.session(sid).updateFrames(EPOCH_A, frames -> snapshot)).getMessage());
 		assertEquals(saved, agent.getSession(sid));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConflictException.class,
 			() -> agent.session(sid).updateFrames(EPOCH_A, frames -> Vectors.empty()));
 		AMap<AString, ACell> record = agent.getRecord();
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConflictException.class,
 			() -> agent.mergeRunResult(null, null, null, Maps.empty(), sid, null, 0, snapshot, null));
 		assertEquals(record, agent.getRecord(), "stale cycle completion must not publish even its timeline entry");
 	}

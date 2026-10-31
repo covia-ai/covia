@@ -192,11 +192,12 @@ public final class ConversationRouter {
 	/** Call within the same queue as chat, so a reset cannot race an in-flight turn. */
 	public void reset(String conversation) { sessions.remove(conversation); }
 
-	/** The binding's principal as it acts now ({@link Engine#principalContext}):
-	 * who its listed senders, and its own work, come from. */
+	/** The binding's principal as it acts now for the binding's user
+	 * ({@link Engine#context(AString, AString)}): who its listed senders, and its
+	 * own work, come from. */
 	public RequestContext context() {
 		sessions.requireCurrentUser();
-		return engine.principalContext(principal());
+		return engine.context(spec.userDID(engine), principal());
 	}
 
 	private AString principal() {
@@ -219,9 +220,9 @@ public final class ConversationRouter {
 		sessions.requireCurrentUser();
 		if (channel == null) {
 			if (!spec.open()) throw new AuthException(ChannelAuthentication.NOT_ADMITTED);
-			return engine.principalContext(engine.publicPrincipal());
+			return engine.context(engine.publicPrincipal());
 		}
-		return engine.channelContext(ChannelAuthentication.authenticate(engine, spec, principal(),
+		return engine.channelContext(spec.userDID(engine), ChannelAuthentication.authenticate(engine, spec, principal(),
 			lists.test(channel.sender()), channel));
 	}
 
@@ -251,7 +252,7 @@ public final class ConversationRouter {
 		AString self = principal();
 		if (!self.equals(owner) && !self.equals(agent)) return context();
 		sessions.requireCurrentUser();
-		return engine.principalContext(agent);
+		return engine.context(owner, agent);
 	}
 
 	/** Run an operation as the binding's own work. */

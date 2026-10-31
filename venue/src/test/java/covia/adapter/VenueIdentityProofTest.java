@@ -2,50 +2,95 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import convex.auth.jwt.JWT;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.lang.RT;
+import convex.core.util.JSON;
+import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.Root;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.Status;
+import covia.grid.auth.VenueChallenge;
+import covia.grid.auth.VenueDID;
+import covia.grid.client.VenueHTTP;
 import covia.venue.Config;
 import covia.venue.Engine;
+import covia.venue.RemoteJobs;
+import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.auth.AuthMethods;
+import covia.venue.auth.VenueAuthenticator;
+import covia.venue.auth.VenueProofs;
 
 /**
  * An authenticated connection sends a credential only to a venue proven to
- * hold the DID the credential is audienced to: a did:web venue at its own
- * address ({@code https://<host>}, or plain http on loopback). A target that
- * claims any other DID gets nothing but the discovery request, unless the
- * operator turns proof off with {@code auth.requireVenueProof}.
+ * hold the DID the credential is audienced to, by a mechanism the operator
+ * lists in {@code auth.venueProof} — by default its address, then a
+ * challenge. A did:web venue is proven at its own address; any venue whose
+ * key the DID encodes is proven by answering a fresh challenge with a proof
+ * that names the address dialled. A target that proves nothing receives only
+ * discovery and the challenge, unless the operator turns proof off with
+ * {@code auth.requireVenueProof}.
  */
 public class VenueIdentityProofTest {
 
 	private static final String GRID_RUN = "v/ops/grid/run";
+	private static final String REMOTE_ID = "00112233445566778899aabbccddeeff";
+	private static final String UNPROVABLE_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 
-	/** Proof on, the default. */
+	/** Proof by the default mechanisms. */
 	private static final Engine ENGINE = TestEngine.ENGINE;
 
-	/** An operator who turns proof off. */
-	private static final Engine UNPROVEN = unprovenEngine();
+	/** An operator who turns proof off, and accepts bearer credentials without an audience. */
+	private static final Engine LAX = engine(Maps.of(
+		Config.REQUIRE_VENUE_PROOF, CVMBool.FALSE, Config.REQUIRE_AUD, CVMBool.FALSE));
+
+	/** An operator who lists proof by address only. */
+	private static final Engine ADDRESS_ONLY = engine(Maps.of(VenueProofs.VENUE_PROOF,
+		Vectors.of(Maps.of(AuthMethods.ADAPTER, "auth", AuthMethods.IMPLEMENTATION, AuthAdapter.ADDRESS_PROOF))));
+
+	/** An operator who lists no proof mechanism. */
+	private static final Engine NO_PROOF = engine(Maps.of(VenueProofs.VENUE_PROOF, Vectors.empty()));
 
 	@AfterAll
-	static void closeUnproven() {
-		UNPROVEN.close();
+	static void closeEngines() {
+		LAX.close();
+		ADDRESS_ONLY.close();
+		NO_PROOF.close();
 	}
 
 	@Test
@@ -57,26 +102,114 @@ public class VenueIdentityProofTest {
 	}
 
 	@Test
-	void didKeyClaimIsRefused() throws IOException {
+	void didKeyVenueAnsweringNoChallengeIsRefusedWithEveryReason() throws IOException {
 		try (Peer peer = new Peer()) {
-			peer.claims = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-			assertRefused(ENGINE, peer, peer.url());
+			peer.claims = UNPROVABLE_DID;
+			String refusal = assertRefused(ENGINE, peer, peer.url());
+			assertTrue(refusal.contains(VenueDID.NOT_ITS_ADDRESS), refusal);
+			assertTrue(refusal.contains(VenueChallenge.Reason.NO_ANSWER), refusal);
+		}
+	}
+
+	@Test
+	void didKeyVenueAnsweringTheChallengeIsProven() throws IOException {
+		try (Peer peer = Peer.withKey()) {
+			assertAuthenticated(ENGINE, peer, peer.url());
+			assertEquals(1, peer.challenges.get(), "its address proves nothing, so the challenge is tried");
+		}
+	}
+
+	@Test
+	void aChallengeProofIsReusedAndAFailureIsNot() throws IOException {
+		try (Peer proven = Peer.withKey(); Peer unproven = new Peer()) {
+			unproven.claims = UNPROVABLE_DID;
+			assertAuthenticated(ENGINE, proven, proven.url());
+			assertAuthenticated(ENGINE, proven, proven.url());
+			assertEquals(1, proven.challenges.get());
+			assertRefused(ENGINE, unproven, unproven.url());
+			assertRefused(ENGINE, unproven, unproven.url());
+			assertEquals(2, unproven.challenges.get());
+		}
+	}
+
+	@Test
+	void anAddressForwardingToTheVenueIsRefusedAndReceivesNoCredential() throws IOException {
+		try (Peer venue = Peer.withKey(); Peer forwarder = new Peer()) {
+			forwarder.forwardTo = venue;
+			String refusal = assertRefused(ENGINE, forwarder, forwarder.url());
+			assertTrue(refusal.contains(VenueChallenge.Reason.OTHER_BASE), refusal);
+			assertEquals(1, venue.challenges.get(), "the venue answered the challenge sent to the forwarder");
+			assertEquals(0, venue.credentialed.get());
+		}
+	}
+
+	@Test
+	void aProofGivenForAnEarlierChallengeIsRefused() throws IOException {
+		try (Peer venue = Peer.withKey()) {
+			// The address answers every challenge with a proof the venue gave earlier
+			venue.replay = venue.proof(VenueChallenge.nonce());
+			String refusal = assertRefused(ENGINE, venue, venue.url());
+			assertTrue(refusal.contains(VenueChallenge.Reason.OTHER_NONCE), refusal);
+		}
+	}
+
+	@Test
+	void anUnlistedMechanismIsNeverConsulted() throws IOException {
+		try (Peer peer = Peer.withKey()) {
+			assertRefused(ADDRESS_ONLY, peer, peer.url());
+			assertEquals(0, peer.challenges.get());
+		}
+	}
+
+	@Test
+	void withNoMechanismListedOnlyAnonymousHopsProceed() throws IOException {
+		try (Peer peer = Peer.withKey()) {
+			String refusal = assertRefused(NO_PROOF, peer, peer.url());
+			assertTrue(refusal.contains(VenueProofs.NONE_LISTED), refusal);
+			Job job = NO_PROOF.jobs().invokeOperation(GRID_RUN, input(peer.url(), null), NO_PROOF.venueContext());
+			assertThrows(Exception.class, () -> job.awaitResult(5000));
+			assertTrue(peer.calls.get() > 0, "the anonymous hop reaches the venue");
+			assertEquals(0, peer.credentialed.get());
+		}
+	}
+
+	@Test
+	void proofDialsOnlyThroughTheOutboundGuard() throws IOException {
+		try (Peer peer = Peer.withKey()) {
+			RequestContext user = RequestContext.of(TestEngine.uniqueDID("venue-proof-guard"));
+			String reason = ENGINE.venueProof(user, peer.url(), peer.claims);
+			assertTrue(reason != null && reason.contains(VenueChallenge.Reason.UNREACHABLE), reason);
+			assertEquals(0, peer.challenges.get(), "the guard refuses a loopback target to a user");
+			assertNull(ENGINE.venueProof(ENGINE.venueContext(), peer.url(), peer.claims));
 		}
 	}
 
 	@Test
 	void didWebAtItsOwnLoopbackAddressIsProven() throws IOException {
 		try (Peer peer = new Peer()) {
-			peer.claims = peer.did();
+			peer.claims = peer.webDID();
 			assertAuthenticated(ENGINE, peer, peer.url());
+			assertEquals(0, peer.challenges.get(), "the address proves it, so no challenge is sent");
 		}
 	}
 
 	@Test
 	void venueNamedByItsDidWebIsProven() throws IOException {
 		try (Peer peer = new Peer()) {
-			assertAuthenticated(ENGINE, peer, peer.did());
-			assertEquals(0, peer.discoveries.get(), "a did:web target needs no discovery");
+			peer.claims = peer.webDID();
+			assertAuthenticated(ENGINE, peer, peer.webDID());
+			assertEquals(1, peer.discoveries.get(),
+				"the connection checks once that the venue presents the DID it was opened for");
+		}
+	}
+
+	@Test
+	void venueNamedByItsDidWebPresentingAnotherGetsNoCredential() throws IOException {
+		try (Peer peer = new Peer()) {
+			peer.claims = UNPROVABLE_DID;
+			String refusal = refusal(ENGINE, input(peer.webDID(), "venue"));
+			assertTrue(refusal != null && refusal.contains(VenueDID.PRESENTS_OTHER), refusal);
+			assertEquals(0, peer.calls.get(), "a venue presenting another DID receives no call");
 		}
 	}
 
@@ -84,90 +217,258 @@ public class VenueIdentityProofTest {
 	void proofOffTakesTheClaimedDid() throws IOException {
 		try (Peer peer = new Peer()) {
 			peer.claims = "did:web:venue.example.com";
-			assertAuthenticated(UNPROVEN, peer, peer.url());
+			assertAuthenticated(LAX, peer, peer.url());
 		}
 	}
 
 	@Test
 	void proofMatchesSchemeHostAndPort() {
-		assertTrue(VenueConnection.proven("https://venue.example.com", "did:web:venue.example.com"));
-		assertTrue(VenueConnection.proven("https://Venue.Example.com:443/", "did:web:venue.example.com"));
-		assertTrue(VenueConnection.proven("https://venue.example.com:8443", "did:web:venue.example.com%3A8443"));
-		assertTrue(VenueConnection.proven("http://localhost:8080", "did:web:localhost%3A8080"));
-		assertFalse(VenueConnection.proven("http://venue.example.com", "did:web:venue.example.com"));
-		assertFalse(VenueConnection.proven("https://venue.example.com:8443", "did:web:venue.example.com"));
-		assertFalse(VenueConnection.proven("https://evil.example", "did:web:venue.example.com"));
-		assertFalse(VenueConnection.proven("https://venue.example.com", "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"));
+		assertTrue(VenueDID.provenAt("https://venue.example.com", "did:web:venue.example.com"));
+		assertTrue(VenueDID.provenAt("https://Venue.Example.com:443/", "did:web:venue.example.com"));
+		assertTrue(VenueDID.provenAt("https://venue.example.com:8443", "did:web:venue.example.com%3A8443"));
+		assertTrue(VenueDID.provenAt("http://localhost:8080", "did:web:localhost%3A8080"));
+		assertFalse(VenueDID.provenAt("http://venue.example.com", "did:web:venue.example.com"));
+		assertFalse(VenueDID.provenAt("https://venue.example.com:8443", "did:web:venue.example.com"));
+		assertFalse(VenueDID.provenAt("https://evil.example", "did:web:venue.example.com"));
+		assertFalse(VenueDID.provenAt("https://venue.example.com", UNPROVABLE_DID));
 	}
 
-	private static AMap<AString, ACell> venueInput(String venue) {
-		return Maps.of(Fields.VENUE, venue, Fields.OPERATION, "v/test/ops/echo",
-			Fields.INPUT, Maps.of("message", "hello"), "authenticateAs", "venue");
+	@Test
+	void aProofIsNotABearerCredential() {
+		// At the venue whose key signed it, and that requires an audience
+		assertTrue(bearerRefusal(ENGINE, ENGINE).contains(VenueAuthenticator.Reason.AUDIENCE_REQUIRED));
+		// At the venue whose key signed it, without an audience requirement
+		assertTrue(bearerRefusal(LAX, LAX).contains(VenueAuthenticator.Reason.MISSING_SUBJECT));
+		// At any other venue
+		assertTrue(bearerRefusal(ENGINE, ADDRESS_ONLY).contains(VenueAuthenticator.Reason.UNRECOGNISED));
 	}
 
-	/** The venue's own authenticated call is refused as unproven, and no request after discovery reached the peer. */
-	private static void assertRefused(Engine engine, Peer peer, String venue) {
-		String refusal;
-		try {
-			Job job = engine.jobs().invokeOperation(GRID_RUN, venueInput(venue), engine.venueContext());
-			assertThrows(Exception.class, () -> job.awaitResult(5000));
-			refusal = job.getErrorMessage();
-		} catch (RuntimeException e) {
-			refusal = e.getMessage();
+	@Test
+	void restoreSendsNoCredentialToAVenueNoLongerProven() throws IOException {
+		try (Peer peer = new Peer()) {
+			peer.claims = UNPROVABLE_DID;
+			AMap<AString, ACell> saved = Maps.of("authenticateAs", "venue", Fields.VENUE, UNPROVABLE_DID,
+				"outboundAny", CVMBool.TRUE);
+			AuthException refused = assertThrows(AuthException.class,
+				() -> VenueConnection.restore(ENGINE, Strings.create(peer.url()), saved));
+			assertTrue(refused.getMessage().contains(VenueConnection.VENUE_UNPROVEN), refused.getMessage());
+			AMap<AString, ACell> unnamed = Maps.of("authenticateAs", "caller", Fields.BEARER_TOKEN, "a.b.c");
+			refused = assertThrows(AuthException.class,
+				() -> VenueConnection.restore(ENGINE, Strings.create(peer.url()), unnamed));
+			assertTrue(refused.getMessage().startsWith(VenueConnection.NO_SAVED_DID), refused.getMessage());
+			assertEquals(0, peer.credentialed.get());
 		}
+	}
+
+	@Test
+	void aRecoveredJobWhoseVenueIsNoLongerProvenAwaitsAuthorityWithoutResendingItsCredential() throws Exception {
+		try (Peer peer = Peer.withKey()) {
+			peer.acceptsJobs = true;
+			Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
+			AKeyPair key = AKeyPair.generate();
+			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine.addDemoAssets(first);
+			Job job;
+			try {
+				job = first.jobs().invokeOperation(GRID_RUN, input(peer.url(), "venue"), first.venueContext());
+				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			} finally { first.close(); }
+			assertTrue(peer.credentialed.get() > 0, "the proven venue received the job with a credential");
+			// The address no longer answers challenges
+			peer.key = null;
+			int credentialed = peer.credentialed.get();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			try {
+				Engine.addDemoAssets(second);
+				second.jobs().recoverJobs();
+				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());
+				assertEquals(Strings.create("auth-required"), RemoteJobs.descriptor(recovered).get(RemoteJobs.OBSERVATION));
+				assertEquals(Strings.create(AuthException.class.getSimpleName()),
+					RemoteJobs.descriptor(recovered).get(RemoteJobs.ERROR_TYPE));
+				assertEquals(Status.STARTED, recovered.getStatus());
+				assertEquals(credentialed, peer.credentialed.get(), "no credential is re-sent");
+			} finally { second.close(); }
+		}
+	}
+
+	private static AMap<AString, ACell> input(String venue, String authenticateAs) {
+		AMap<AString, ACell> input = Maps.of(Fields.VENUE, venue, Fields.OPERATION, "v/test/ops/echo",
+			Fields.INPUT, Maps.of("message", "hello"));
+		return authenticateAs == null ? input : input.assoc(Strings.create("authenticateAs"), Strings.create(authenticateAs));
+	}
+
+	/** The refusal of the venue's own call, at submission or as the job's error. */
+	private static String refusal(Engine engine, AMap<AString, ACell> input) {
+		try {
+			Job job = engine.jobs().invokeOperation(GRID_RUN, input, engine.venueContext());
+			assertThrows(Exception.class, () -> job.awaitResult(5000));
+			return job.getErrorMessage();
+		} catch (RuntimeException e) {
+			return e.getMessage();
+		}
+	}
+
+	/** The venue's own authenticated call is refused as unproven, and nothing but discovery and the challenge reached the peer. */
+	private static String assertRefused(Engine engine, Peer peer, String venue) {
+		String refusal = refusal(engine, input(venue, "venue"));
 		assertTrue(refusal != null && refusal.contains(VenueConnection.VENUE_UNPROVEN), refusal);
 		assertEquals(0, peer.calls.get(), "an unproven venue receives no call");
+		assertEquals(0, peer.credentialed.get(), "an unproven venue receives no credential");
+		return refusal;
 	}
 
 	/** The venue's own authenticated call reaches the peer carrying a credential. */
 	private static void assertAuthenticated(Engine engine, Peer peer, String venue) {
-		Job job = engine.jobs().invokeOperation(GRID_RUN, venueInput(venue), engine.venueContext());
+		Job job = engine.jobs().invokeOperation(GRID_RUN, input(venue, "venue"), engine.venueContext());
 		// The peer is no venue, so the call itself fails once it has arrived
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(peer.authenticated.get() > 0, "the credential reaches the venue");
+		assertTrue(peer.authenticated.get() > 0, "the credential reaches the venue: " + job.getErrorMessage());
 	}
 
-	private static Engine unprovenEngine() {
-		Engine engine = Engine.createTemp(Maps.of(
-			Config.AUTH, Maps.of(Config.REQUIRE_VENUE_PROOF, CVMBool.FALSE)));
+	/** Why {@code verifier} refuses, as a bearer credential, a challenge proof signed by {@code signer}'s key. */
+	private static String bearerRefusal(Engine signer, Engine verifier) {
+		AKeyPair key = signer.getKeyPair();
+		String did = UCAN.toDIDKey(key.getAccountKey()).toString();
+		String proof = sign(key, header(did), claims(did, "http://127.0.0.1:8080", VenueChallenge.nonce()));
+		AuthException refused = assertThrows(AuthException.class,
+			() -> new VenueAuthenticator(verifier).authenticate(Strings.create(proof)));
+		return refused.getMessage();
+	}
+
+	private static AMap<AString, ACell> header(String did) {
+		return Maps.of(JWT.ALG, "EdDSA", JWT.TYP, VenueChallenge.TYP,
+			JWT.KID, did + "#" + did.substring("did:key:".length()));
+	}
+
+	private static AMap<AString, ACell> claims(String did, String base, String nonce) {
+		long now = System.currentTimeMillis() / 1000;
+		return Maps.of(JWT.ISS, did, VenueChallenge.BASE, base, VenueChallenge.NONCE, nonce,
+			JWT.IAT, now, JWT.EXP, now + 60);
+	}
+
+	/** A JWT signed with {@code key} over exactly this header and these claims. */
+	private static String sign(AKeyPair key, AMap<AString, ACell> header, AMap<AString, ACell> claims) {
+		AString signingInput = JWT.encode(JWT.claims(header)).append(".").append(JWT.encode(JWT.claims(claims)));
+		return signingInput.append(".")
+			.append(JWT.encode(key.sign(Blob.wrap(signingInput.getBytes())).getBytes())).toString();
+	}
+
+	private static Engine engine(AMap<AString, ACell> auth) {
+		Engine engine = Engine.createTemp(Maps.of(Config.AUTH, auth));
 		Engine.addDemoAssets(engine);
 		return engine;
 	}
 
+	private static void await(java.util.function.BooleanSupplier condition) throws Exception {
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
+		assertTrue(condition.getAsBoolean());
+	}
+
 	/**
 	 * A loopback listener that answers discovery with the DID it is told to
-	 * claim, and counts the calls that follow and those carrying a credential.
+	 * claim and, holding a key, challenges with proofs signed by it. It counts
+	 * discoveries, challenges, the calls that follow, and every request
+	 * carrying a credential or grants. Told to, it answers each challenge with
+	 * one fixed proof, accepts jobs, or forwards every request to another peer.
 	 */
 	private static final class Peer implements AutoCloseable {
+		private static final HttpClient CLIENT = HttpClient.newHttpClient();
+
 		final HttpServer server;
 		final AtomicInteger discoveries = new AtomicInteger();
+		final AtomicInteger challenges = new AtomicInteger();
 		final AtomicInteger calls = new AtomicInteger();
 		final AtomicInteger authenticated = new AtomicInteger();
+		final AtomicInteger credentialed = new AtomicInteger();
 		volatile String claims;
+		volatile AKeyPair key;
+		volatile String replay;
+		volatile boolean acceptsJobs;
+		volatile Peer forwardTo;
+
+		/** A venue holding its own did:key. */
+		static Peer withKey() throws IOException {
+			Peer peer = new Peer();
+			peer.key = AKeyPair.generate();
+			peer.claims = UCAN.toDIDKey(peer.key.getAccountKey()).toString();
+			return peer;
+		}
 
 		Peer() throws IOException {
 			server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 			server.createContext("/", exchange -> {
-				exchange.getRequestBody().readAllBytes();
-				if (exchange.getRequestURI().getPath().equals("/.well-known/did.json")) {
-					discoveries.incrementAndGet();
-					byte[] body = ("{\"id\":\"" + claims + "\"}").getBytes(StandardCharsets.UTF_8);
-					exchange.sendResponseHeaders(200, body.length);
-					try (var out = exchange.getResponseBody()) { out.write(body); }
-					return;
+				byte[] body = exchange.getRequestBody().readAllBytes();
+				String path = exchange.getRequestURI().getPath();
+				String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+				if (authorization != null || exchange.getRequestHeaders().getFirst(VenueHTTP.UCANS_HEADER) != null
+						|| new String(body, StandardCharsets.UTF_8).contains("\"ucans\"")) {
+					credentialed.incrementAndGet();
 				}
-				calls.incrementAndGet();
-				if (exchange.getRequestHeaders().getFirst("Authorization") != null) authenticated.incrementAndGet();
-				exchange.sendResponseHeaders(404, -1);
-				exchange.close();
+				boolean discovery = path.equals("/.well-known/did.json");
+				boolean challenge = path.equals("/api/v1/" + VenueChallenge.PATH);
+				if (discovery) discoveries.incrementAndGet();
+				else if (challenge) challenges.incrementAndGet();
+				else {
+					calls.incrementAndGet();
+					if (authorization != null) authenticated.incrementAndGet();
+				}
+				Peer target = forwardTo;
+				if (target != null) forward(exchange, target, body);
+				else if (discovery) respond(exchange, 200, "{\"id\":\"" + claims + "\"}");
+				else if (challenge) answerChallenge(exchange, body);
+				else if (acceptsJobs && (path.endsWith("/invoke") || path.endsWith("/jobs/" + REMOTE_ID))) {
+					respond(exchange, path.endsWith("/invoke") ? 201 : 200,
+						"{\"id\":\"" + REMOTE_ID + "\",\"status\":\"STARTED\"}");
+				}
+				else respond(exchange, 404, "");
 			});
 			server.start();
 		}
 
+		private void answerChallenge(HttpExchange exchange, byte[] body) throws IOException {
+			String proof = replay;
+			if (proof == null && key != null) {
+				AString nonce = RT.ensureString(RT.getIn(JSON.parse(new String(body, StandardCharsets.UTF_8)), VenueChallenge.NONCE));
+				proof = proof(nonce == null ? null : nonce.toString());
+			}
+			if (proof == null) respond(exchange, 404, "");
+			else respond(exchange, 200, "{\"proof\":\"" + proof + "\"}");
+		}
+
+		/** A proof for {@code nonce}, signed by this peer's key and naming its own address. */
+		String proof(String nonce) {
+			return sign(key, header(claims), VenueIdentityProofTest.claims(claims, url(), nonce));
+		}
+
+		/** Passes the request on to {@code target}, which sees its own host as the request's. */
+		private static void forward(HttpExchange exchange, Peer target, byte[] body) throws IOException {
+			HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(target.url() + exchange.getRequestURI()))
+				.method(exchange.getRequestMethod(), HttpRequest.BodyPublishers.ofByteArray(body));
+			for (String header : List.of("Authorization", "Content-Type", VenueHTTP.UCANS_HEADER)) {
+				String value = exchange.getRequestHeaders().getFirst(header);
+				if (value != null) request.header(header, value);
+			}
+			try {
+				HttpResponse<String> response = CLIENT.send(request.build(), HttpResponse.BodyHandlers.ofString());
+				respond(exchange, response.statusCode(), response.body());
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				respond(exchange, 502, "");
+			}
+		}
+
+		private static void respond(HttpExchange exchange, int code, String text) throws IOException {
+			byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(code, bytes.length == 0 ? -1 : bytes.length);
+			try (var out = exchange.getResponseBody()) { out.write(bytes); }
+		}
+
 		String url() { return "http://127.0.0.1:" + server.getAddress().getPort(); }
 
-		/** The DID this listener can prove: did:web at its own loopback address. */
-		String did() { return "did:web:127.0.0.1%3A" + server.getAddress().getPort(); }
+		/** The did:web this listener can prove by its address: its own loopback address. */
+		String webDID() { return "did:web:127.0.0.1%3A" + server.getAddress().getPort(); }
 
 		@Override public void close() { server.stop(0); }
 	}

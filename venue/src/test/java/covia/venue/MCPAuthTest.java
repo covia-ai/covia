@@ -225,8 +225,7 @@ public class MCPAuthTest {
 		assertEquals(401, post("not-a-jwt").statusCode(),
 			"malformed credentials must fail rather than downgrade to public access");
 
-		String signingKeyAsSubject = VenueAuth.keyPair(
-			namedKey, venueDid.toString(), 300).mintToken();
+		String signingKeyAsSubject = VenueAuth.keyPair(namedKey, 300).mintToken(venueDid.toString());
 		assertEquals(403, post(signingKeyAsSubject).statusCode(),
 			"registering a key for a named user must not allow its did:key "
 				+ "principal through the named-subject MCP allowlist");
@@ -526,11 +525,8 @@ public class MCPAuthTest {
 
 	private String namedToken(AKeyPair key, AString subject,
 			VenueServer target) {
-		return VenueAuth.namedKeyPair(
-			key,
-			subject.toString(),
-			target.getEngine().getDIDString().toString(),
-			3600).mintToken();
+		return VenueAuth.namedKeyPair(key, subject.toString(), 3600)
+			.mintToken(target.getEngine().getDIDString().toString());
 	}
 
 	private static String namedClaimsToken(AKeyPair key, AString subject,

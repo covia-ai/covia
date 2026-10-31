@@ -25,9 +25,12 @@ import covia.adapter.AAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
 import covia.grid.Asset;
 import covia.grid.Job;
+import covia.grid.Operation;
 import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
@@ -197,35 +200,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * {@link #capsContext} for a transition's input config, which its caller
-	 * supplies: the caps it names replace the caller's scope, so the caller must
-	 * hold each of them ({@link covia.venue.Engine#requireConferrable}). An agent
-	 * running under the caps its own record holds confers nothing: they were
-	 * checked against their author when written, and are not re-checked against
-	 * the agent, which holds none of that author's grants.
-	 */
-	protected RequestContext conferredCapsContext(AMap<AString, ACell> config, AString agentId,
-			RequestContext ctx) {
-		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		// No engine only in adapters constructed directly by unit tests (as requireInvoke).
-		if (caps != null && engine != null && !isOwnRecordScope(ctx, agentId, caps)) {
-			engine.requireConferrable(ctx, ctx.getUserDID(), caps);
-		}
-		return capsContext(config, ctx);
-	}
-
-	/** Whether the caller is agent {@code agentId} itself and {@code caps} are its stored caps. */
-	private boolean isOwnRecordScope(RequestContext ctx, AString agentId, AVector<ACell> caps) {
-		AString owner = ctx.getUserDID();
-		if (agentId == null || owner == null
-				|| !covia.grid.Principals.agentDID(owner, agentId).equals(ctx.getCallerDID())) {
-			return false;
-		}
-		AgentState agent = engine.getAgent(owner, agentId);
-		return agent != null && caps.equals(RT.getIn(agent.getConfig(), K_CAPS));
-	}
-
-	/**
 	 * What the model declares that assembly needs: its context budget in
 	 * bytes, its label dialect, whether it can call tools at all, and whether
 	 * its provider should receive a persistent cache prefix — with
@@ -283,7 +257,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** Resolves the data shared by provider-edge rendering and agent assembly. */
 	public static ResolvedModel resolveModel(Engine engine, Asset selected, AString requestedModel,
 			AMap<AString, ACell> config, RequestContext ctx) {
-		if (selected == null) throw new IllegalArgumentException("LLM operation does not resolve");
+		if (selected == null) throw new NotFoundException("LLM operation does not resolve", null);
 		AMap<AString, ACell> selectedMeta = selected.meta();
 		AMap<AString, ACell> selectedFacet = modelFacet(selectedMeta);
 		AString selectedId = RT.ensureString(selectedFacet.get(K_MODEL_ID));
@@ -294,8 +268,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		AString providerRef = RT.ensureString(selectedFacet.get(K_MODEL_PROVIDER));
 		if (providerRef != null) {
 			provider = engine.resolveAsset(providerRef, ctx);
-			if (provider == null) throw new IllegalArgumentException(
-				"Model provider does not resolve: " + providerRef);
+			if (provider == null) throw new NotFoundException(
+				"Model provider does not resolve: " + providerRef, providerRef.toString());
 		}
 
 		AMap<AString, ACell> execution = modelProfile(provider.meta(), modelId);
@@ -345,7 +319,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			String text = new ContextLoader(engine).resolveText(entry, ctx);
 			return config.assoc(K_SYSTEM_PROMPT, Strings.create(text));
 		} catch (RuntimeException e) {
-			throw new IllegalStateException("config.systemPrompt did not resolve — " + entry
+			if (!isExpectedFailure(e)) throw e;
+			throw new InvalidInputException("config.systemPrompt did not resolve — " + entry
 				+ ": " + ContextLoader.rootMessage(e), e);
 		}
 	}
@@ -390,13 +365,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@code content} and/or {@code toolCalls}, each call given an id when it
 	 * has none and empty arguments when it has none. Null in, null out.
 	 *
-	 * @throws IllegalArgumentException when a call has no name, or the value is neither form
+	 * @throws InvalidInputException when a call has no name, or the value is neither form
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> stepAssistant(ACell raw) {
 		if (raw == null) return null;
 		if (raw instanceof AString text) return Maps.of(K_ROLE, ROLE_ASSISTANT, K_CONTENT, text);
-		if (!(raw instanceof AMap)) throw new IllegalArgumentException(
+		if (!(raw instanceof AMap)) throw new InvalidInputException(
 			"assistant must be a string or {content?, toolCalls?}");
 		AMap<AString, ACell> reply = ((AMap<AString, ACell>) raw).assoc(K_ROLE, ROLE_ASSISTANT);
 		AVector<ACell> calls = RT.ensureVector(reply.get(K_TOOL_CALLS));
@@ -405,7 +380,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		for (long i = 0; i < calls.count(); i++) {
 			AMap<AString, ACell> call = RT.ensureMap(calls.get(i));
 			AString name = (call != null) ? RT.ensureString(call.get(K_NAME)) : null;
-			if (name == null) throw new IllegalArgumentException(
+			if (name == null) throw new InvalidInputException(
 				"assistant.toolCalls[" + i + "] needs a name");
 			AString id = RT.ensureString(call.get(K_ID));
 			call = call.assoc(K_ID, (id != null)
@@ -918,8 +893,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *
 	 * @param toolName the tool name as returned by the LLM
 	 * @param input the tool call arguments
-	 * @param operation resolved operation route, or null when the tool name is
-	 *        itself an operation reference
+	 * @param operation resolved operation route, or null when the palette binds
+	 *        no route ({@link #dispatchUnbound}, knowing no surface to hint from)
 	 * @param ctx request context for the tool dispatch — carries the agent's
 	 *        grant scope ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
@@ -929,31 +904,57 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
 			AString operation, RequestContext ctx, long timeoutMs) {
+		if (operation == null) return dispatchUnbound(toolName, input, ctx, null, timeoutMs);
 		// Capability enforcement happens at the operation's own enforcement point
 		// under the agent's grant scope carried on ctx — no name-keyed gate here.
 		// The host's guards come first: a call they refuse never runs.
-		if (operation != null) {
-			String refused = guard(toolName, operation, input, ctx, timeoutMs);
-			if (refused != null) return Strings.create("Error: " + refused);
-			return invokeOperation(operation, input, ctx, timeoutMs);
-		}
+		String refused = guard(toolName, operation, input, ctx, timeoutMs);
+		if (refused != null) return Strings.create("Error: " + refused);
+		return invokeOperation(operation, input, ctx, timeoutMs);
+	}
 
-		// A harness pseudo-tool name reaching grid dispatch belongs to another
-		// runtime — this runtime's own harness tools were intercepted by the
-		// subclass before falling through. It exists in no catalog, so fail the
-		// call with the actual reason instead of a generic resolution miss (#143).
+	/** A harness tool of this runtime named through {@code invoke_tool}. */
+	static final String CALL_HARNESS_DIRECTLY = "'%s' is a harness tool; call it directly, not through invoke_tool";
+
+	/**
+	 * Dispatches a tool name the active palette binds to no route (#643). The
+	 * name is either an operation reference, dispatched as one, or nothing this
+	 * session can call: then nothing runs, and the model is told why and, when
+	 * {@code surface} shows it for certain, how to make the tool callable
+	 * ({@link HarnessTools#unboundTool}).
+	 *
+	 * @param surface what the session can call and acquire; null when unknown
+	 */
+	protected ACell dispatchUnbound(String toolName, ACell input, RequestContext ctx,
+			HarnessTools.ToolSurface surface, long timeoutMs) {
+		// This runtime intercepts its own harness tools by name, so one arriving
+		// here came through invoke_tool.
+		if (harnessToolNames().contains(toolName)) {
+			return Strings.create("Error: " + String.format(CALL_HARNESS_DIRECTLY, toolName));
+		}
+		// Another runtime's harness tool exists in no catalog: name the actual
+		// reason rather than a resolution miss (#143).
 		String provider = HarnessNames.PROVIDERS.get(toolName);
 		if (provider != null) {
 			return Strings.create("Error: '" + toolName + "' is a " + provider
 				+ " harness tool — not available under this agent's runtime (" + getName() + ")");
 		}
 
-		// Fall through to grid dispatch
 		AString named = Strings.create(toolName);
+		Operation op;
+		try {
+			op = Operation.from(engine.resolveAsset(named, ctx));
+		} catch (Exception e) {
+			return Strings.create("Error: " + toolFailure(e, toolName));
+		}
+		if (op == null) return Strings.create("Error: " + HarnessTools.unboundTool(toolName, surface));
 		String refused = guard(toolName, named, input, ctx, timeoutMs);
 		if (refused != null) return Strings.create("Error: " + refused);
-		return invokeOperation(named, input, ctx, timeoutMs);
+		return invokeOperation(named, op, input, ctx, timeoutMs);
 	}
+
+	/** This runtime's own harness tool names, which its cycle intercepts. */
+	protected abstract java.util.Set<String> harnessToolNames();
 
 	/** The host's tool guards on this call: null to run it, else why not. */
 	private String guard(String toolName, AString operation, ACell input, RequestContext ctx, long timeoutMs) {
@@ -1017,6 +1018,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * announced against the tool call that invoked it.
 	 */
 	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
+		return invokeOperation(operation, null, input, ctx, timeoutMs);
+	}
+
+	/** As {@link #invokeOperation(AString, ACell, RequestContext, long)}, with
+	 *  the operation already resolved from {@code operation} when non-null. */
+	private ACell invokeOperation(AString operation, Operation resolved, ACell input,
+			RequestContext ctx, long timeoutMs) {
 		// Internal dispatch preserves types exactly — no coercion here. Tool
 		// arguments were already normalised once at the LLM wire boundary
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
@@ -1039,14 +1047,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
 				return receipt;
 			}
-			ACell result = engine.jobs().invokeInternal(operation, input, ctx,
-					(relay != null) ? relay::watch : null)
+			java.util.function.Consumer<Job> watch = (relay != null) ? relay::watch : null;
+			ACell result = ((resolved != null)
+					? engine.jobs().invokeInternal(operation, resolved, input, ctx, watch)
+					: engine.jobs().invokeInternal(operation, input, ctx, watch))
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
-			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
+			return toolTimeout(timeoutMs);
+		} catch (InterruptedException e) {
+			return toolInterrupted();
 		} catch (Exception e) {
-			return Strings.create("Error: " + unwrap(e).getMessage());
+			return Strings.create("Error: " + toolFailure(e, operation.toString()));
 		} finally {
 			if (relay != null) relay.close();
 		}
@@ -1096,16 +1108,37 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return DEFAULT_LLM_TIMEOUT_MS;
 	}
 
+	/** Opens the tool result for a failure the venue did not expect (#644). */
+	public static final String UNEXPECTED_TOOL_FAILURE =
+		"unexpected venue error, not caused by this call's input; it has been logged";
+
 	/**
-	 * Unwraps a {@link java.util.concurrent.CompletionException} to expose the
-	 * adapter's original exception — otherwise error messages read
-	 * "java.util.concurrent.CompletionException: ...".
+	 * Explains a failed tool call to the model. An expected failure
+	 * ({@link AAdapter#isSelfDescribing}) is its own reason. Anything else —
+	 * including an expected type thrown without a reason — is a runtime or
+	 * venue bug: it is logged here at ERROR with its stack, and the model is
+	 * told it was unexpected, the class and message kept for debugging.
 	 */
-	public static Throwable unwrap(Throwable t) {
-		if (t instanceof java.util.concurrent.CompletionException && t.getCause() != null) {
-			return t.getCause();
-		}
-		return t;
+	public static String toolFailure(Throwable failure, String toolName) {
+		Throwable cause = unwrap(failure);
+		String message = cause.getMessage();
+		if (isExpectedFailure(cause)) return conciseDetail(message, MAX_FAILURE_CHARS);
+		log.error("Unexpected failure in tool {}", toolName, cause);
+		boolean explained = message != null && !message.isBlank();
+		String detail = cause.getClass().getSimpleName() + (explained ? ": " + message : "");
+		return conciseDetail(UNEXPECTED_TOOL_FAILURE + " (" + detail + ")", MAX_FAILURE_CHARS);
+	}
+
+	/** The result of a tool call whose operation outran its budget. */
+	static AString toolTimeout(long timeoutMs) {
+		return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
+	}
+
+	/** The result of a tool call abandoned because its cycle was interrupted;
+	 *  the thread's interrupt status is restored for the cycle to observe. */
+	static AString toolInterrupted() {
+		Thread.currentThread().interrupt();
+		return Strings.create("Error: tool call interrupted — the agent cycle is stopping");
 	}
 
 	// ========== Tool result message construction ==========

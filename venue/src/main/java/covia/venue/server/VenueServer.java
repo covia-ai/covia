@@ -1291,10 +1291,11 @@ public class VenueServer {
 
 	/**
 	 * The OAuth <em>connection</em> callback (not login): the provider redirects
-	 * the user's browser here after approval; the {@code oauth} adapter
-	 * exchanges the code and stores the grant for the user who started the
-	 * connect. Unauthenticated by nature — the one-time {@code state} is the
-	 * capability — and every outcome is rendered, never thrown.
+	 * the user's browser here after approval. Unauthenticated by nature, so it
+	 * connects nothing: the {@code oauth} adapter holds the approval under a
+	 * one-time completion code, which goes to the connect's {@code returnTo}
+	 * app or onto the page, and {@code oauth:complete} from the account that
+	 * started the connect finishes it. Every outcome is rendered, never thrown.
 	 */
 	private void handleOAuthConnectCallback(Context ctx) {
 		covia.adapter.OAuthAdapter oauth = engine.findAdapter(covia.adapter.OAuthAdapter.class);
@@ -1302,19 +1303,21 @@ public class VenueServer {
 			ctx.status(404).result("OAuth connections are not enabled on this venue");
 			return;
 		}
-		covia.adapter.OAuthAdapter.Completion done = oauth.complete(ctx.pathParam("provider"),
+		// The response carries a one-time code: kept out of caches and Referer headers
+		ctx.header("Cache-Control", "no-store").header("Referrer-Policy", "no-referrer");
+		covia.adapter.OAuthAdapter.Callback done = oauth.callback(ctx.pathParam("provider"),
 			ctx.queryParam("state"), ctx.queryParam("code"),
 			ctx.queryParam("error"), ctx.queryParam("error_description"));
-		if (done.ok() && done.returnTo() != null) {
-			ctx.redirect(done.returnTo());
+		if (done.redirect() != null) {
+			ctx.redirect(done.redirect());
 			return;
 		}
-		String title = done.ok() ? "Connected" : "Not connected";
-		String message = done.message().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+		String title = done.ok() ? "Approved" : "Not connected";
 		ctx.status(done.ok() ? 200 : 400).html("<!doctype html><html><head><meta charset=\"utf-8\"><title>" + title
 			+ "</title></head><body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem\">"
-			+ "<h1>" + title + "</h1><p>" + message + "</p>"
-			+ (done.ok() ? "<p>You can close this window.</p>" : "") + "</body></html>");
+			+ "<h1>" + title + "</h1><p>" + escapeHtml(done.message()) + "</p>"
+			+ (done.ok() ? "<p style=\"font-size:1.25rem;user-select:all\"><code>" + escapeHtml(done.code()) + "</code></p>" : "")
+			+ "</body></html>");
 	}
 
 	private void addLoginRoutes(RoutesConfig app) {

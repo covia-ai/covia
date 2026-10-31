@@ -35,6 +35,9 @@ import convex.core.exceptions.BadFormatException;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -139,7 +142,7 @@ public class CryptoAdapter extends AAdapter {
 			AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> {
-			if (!(input instanceof AMap<?, ?>)) throw new IllegalArgumentException(INVALID_INPUT);
+			if (!(input instanceof AMap<?, ?>)) throw new InvalidInputException(INVALID_INPUT);
 			return switch (getSubOperation(meta)) {
 				case "hash" -> hash(input);
 				case "generate-key" -> storeKey(ctx, input, AKeyPair.generate());
@@ -154,7 +157,7 @@ public class CryptoAdapter extends AAdapter {
 				case "jwt-sign" -> jwtSign(ctx, input);
 				case "jwt-verify" -> jwtVerify(ctx, input);
 				case "jwt-decode" -> jwtDecode(ctx, input);
-				default -> throw new IllegalArgumentException(UNKNOWN_OPERATION);
+				default -> throw new NotSupportedException(UNKNOWN_OPERATION);
 			};
 		}, VIRTUAL_EXECUTOR);
 	}
@@ -169,7 +172,7 @@ public class CryptoAdapter extends AAdapter {
 		else if (SHA512.equals(algorithm)) {
 			try { digest = Blob.wrap(MessageDigest.getInstance("SHA-512").digest(bytes)); }
 			catch (NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
-		} else throw new IllegalArgumentException(INVALID_ALGORITHM);
+		} else throw new InvalidInputException(INVALID_ALGORITHM);
 		return Maps.of(ALGORITHM, algorithm, DIGEST, digest);
 	}
 
@@ -189,7 +192,7 @@ public class CryptoAdapter extends AAdapter {
 
 	private ACell verify(ACell input) {
 		Blob signature = blob(RT.getIn(input, SIGNATURE), MAX_BYTES);
-		if (signature.count() != 64) throw new IllegalArgumentException(INVALID_SIGNATURE);
+		if (signature.count() != 64) throw new InvalidInputException(INVALID_SIGNATURE);
 		boolean valid = ASignature.fromBlob(signature).verify(data(input), accountKey(input));
 		return Maps.of(VALID, valid);
 	}
@@ -200,30 +203,30 @@ public class CryptoAdapter extends AAdapter {
 	}
 
 	private ACell jwtSign(RequestContext ctx, ACell input) {
-		if (!(RT.getIn(input, CLAIMS) instanceof AMap<?, ?> supplied)) throw new IllegalArgumentException(INVALID_CLAIMS);
+		if (!(RT.getIn(input, CLAIMS) instanceof AMap<?, ?> supplied)) throw new InvalidInputException(INVALID_CLAIMS);
 		for (ACell key : supplied.getKeys()) {
-			if (!(key instanceof AString)) throw new IllegalArgumentException(INVALID_CLAIMS);
+			if (!(key instanceof AString)) throw new InvalidInputException(INVALID_CLAIMS);
 		}
 		AString json = JSON.toAString(supplied);
-		if (json.count() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+		if (json.count() > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 		// Use the JSON projection consistently, including for native blob claim values.
 		AMap<AString, ACell> claims = RT.castMap(JSON.parse(json));
 		String reason = jwtClaimShape(claims);
-		if (reason != null) throw new IllegalArgumentException(reason);
+		if (reason != null) throw new InvalidInputException(reason);
 		AString kid = optionalText(input, JWT.KID);
-		if (kid != null && kid.count() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+		if (kid != null && kid.count() > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 		boolean storeOutput = ((AMap<?, ?>) input).containsKey(NAME);
 		if (storeOutput) text(input, NAME, null);
 		AKeyPair key = keyPair(ctx, input);
 		AString token = kid == null ? JWT.signPublic(claims, key) : JWT.signPublic(claims, key, kid);
-		if (token.count() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+		if (token.count() > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 		return storeOutput ? publicKey(key).assoc(SECRET, store(ctx, input, token))
 			: publicKey(key).assoc(TOKEN, token);
 	}
 
 	private ACell jwtDecode(RequestContext ctx, ACell input) {
 		JWT jwt = JWT.parse(jwtToken(ctx, input));
-		if (jwt == null) throw new IllegalArgumentException(INVALID_JWT);
+		if (jwt == null) throw new InvalidInputException(INVALID_JWT);
 		// Decoding proves nothing about the signature, claims, or signing authority.
 		AMap<AString, ACell> decoded = Maps.of(VERIFIED, false, HEADER, jwt.getHeader(), CLAIMS, jwt.getClaims());
 		// A stored token's signature is its bearer credential: the token could be
@@ -238,10 +241,10 @@ public class CryptoAdapter extends AAdapter {
 		AString audience = optionalText(input, EXPECTED_AUDIENCE);
 		ACell required = RT.getIn(input, REQUIRE_EXPIRATION);
 		if (((AMap<?, ?>) input).containsKey(REQUIRE_EXPIRATION) && !(required instanceof CVMBool)) {
-			throw new IllegalArgumentException(INVALID_REQUIRE_EXPIRATION);
+			throw new InvalidInputException(INVALID_REQUIRE_EXPIRATION);
 		}
 		JWT jwt = JWT.parse(jwtToken(ctx, input));
-		if (jwt == null) throw new IllegalArgumentException(INVALID_JWT);
+		if (jwt == null) throw new InvalidInputException(INVALID_JWT);
 		String reason = jwtVerificationReason(jwt, trustedKey, issuer, audience, CVMBool.TRUE.equals(required));
 		// Only successful verification releases claims. Reasons never echo token data.
 		if (reason != null) return Maps.of(VALID, false, REASON, reason);
@@ -250,13 +253,13 @@ public class CryptoAdapter extends AAdapter {
 
 	private AString jwtToken(RequestContext ctx, ACell input) {
 		AMap<?, ?> map = (AMap<?, ?>) input;
-		if (map.containsKey(TOKEN) == map.containsKey(TOKEN_SECRET)) throw new IllegalArgumentException(INVALID_JWT_SOURCE);
+		if (map.containsKey(TOKEN) == map.containsKey(TOKEN_SECRET)) throw new InvalidInputException(INVALID_JWT_SOURCE);
 		AString token = map.containsKey(TOKEN_SECRET) ? secret(ctx, input, TOKEN_SECRET) : text(input, TOKEN, null);
-		if (token.count() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+		if (token.count() > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 		// Compact JWS uses unpadded base64url; reject extra segments and whitespace.
 		// Empty signatures may be decoded, but never pass Ed25519 verification.
 		if (!token.toString().matches("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]*")) {
-			throw new IllegalArgumentException(INVALID_JWT);
+			throw new InvalidInputException(INVALID_JWT);
 		}
 		return token;
 	}
@@ -313,13 +316,13 @@ public class CryptoAdapter extends AAdapter {
 		// returning plaintext (in particular, name:null).
 		if (storeOutput) text(input, NAME, null);
 		AString encoding = text(input, ENCODING, BLOB);
-		if (!BLOB.equals(encoding) && !isTextEncoding(encoding)) throw new IllegalArgumentException(INVALID_OUTPUT_ENCODING);
+		if (!BLOB.equals(encoding) && !isTextEncoding(encoding)) throw new InvalidInputException(INVALID_OUTPUT_ENCODING);
 		Blob envelope = blob(RT.getIn(input, CIPHERTEXT), MAX_BYTES + ECIES.OVERHEAD);
 		Blob plaintext;
 		try { plaintext = ECIES.decrypt(keyPair(ctx, input), envelope); }
 		catch (BadFormatException e) {
 			// No provider exception or decrypted material enters the Job error.
-			throw new IllegalArgumentException(DECRYPT_FAILED);
+			throw new InvalidInputException(DECRYPT_FAILED);
 		}
 		if (storeOutput) {
 			// SecretStore is currently string-valued. Its binary representation
@@ -333,7 +336,7 @@ public class CryptoAdapter extends AAdapter {
 	private ACell generateMnemonic(RequestContext ctx, ACell input) {
 		ACell supplied = RT.getIn(input, WORDS);
 		long words = supplied == null ? 12 : supplied instanceof CVMLong n ? n.longValue() : -1;
-		if (!validWordCount(words)) throw new IllegalArgumentException(INVALID_WORDS);
+		if (!validWordCount(words)) throw new InvalidInputException(INVALID_WORDS);
 		AString phrase = Strings.create(BIP39.createSecureMnemonic((int) words));
 		return Maps.of(SECRET, store(ctx, input, phrase), WORDS, words);
 	}
@@ -347,7 +350,7 @@ public class CryptoAdapter extends AAdapter {
 		AString path = text(input, PATH, DEFAULT_PATH);
 		int[] indexes = parsePath(path);
 		String phrase = mnemonic(ctx, input);
-		if (!validMnemonic(phrase)) throw new IllegalArgumentException(INVALID_MNEMONIC);
+		if (!validMnemonic(phrase)) throw new InvalidInputException(INVALID_MNEMONIC);
 		// BIP39's normalisation/KDF API requires Java strings.
 		String passphrase = RT.getIn(input, PASSPHRASE_SECRET) == null ? "" : secret(ctx, input, PASSPHRASE_SECRET).toString();
 		AKeyPair key = SLIP10.deriveKeyPair(BIP39.getSeed(phrase, passphrase), indexes);
@@ -357,17 +360,17 @@ public class CryptoAdapter extends AAdapter {
 	}
 
 	private static int[] parsePath(AString value) {
-		if (value.count() > 3061) throw new IllegalArgumentException(INVALID_PATH);
+		if (value.count() > 3061) throw new InvalidInputException(INVALID_PATH);
 		String path = value.toString(); // Java split and integer parsing implement path syntax.
 		String[] parts = path.split("/", -1);
-		if (!parts[0].equals("m") || parts.length > 256) throw new IllegalArgumentException(INVALID_PATH);
+		if (!parts[0].equals("m") || parts.length > 256) throw new InvalidInputException(INVALID_PATH);
 		int[] indexes = new int[parts.length - 1];
 		for (int i = 1; i < parts.length; i++) {
 			String part = parts[i];
 			if (part.endsWith("'")) part = part.substring(0, part.length() - 1);
-			if (!part.matches("[0-9]{1,10}")) throw new IllegalArgumentException(INVALID_PATH);
+			if (!part.matches("[0-9]{1,10}")) throw new InvalidInputException(INVALID_PATH);
 			try { indexes[i - 1] = Integer.parseInt(part); }
-			catch (NumberFormatException e) { throw new IllegalArgumentException(INVALID_PATH); }
+			catch (NumberFormatException e) { throw new InvalidInputException(INVALID_PATH); }
 		}
 		return indexes;
 	}
@@ -391,7 +394,7 @@ public class CryptoAdapter extends AAdapter {
 	private AString store(RequestContext ctx, ACell input, AString value) {
 		AString name = text(input, NAME, null);
 		ACell overwrite = RT.getIn(input, OVERWRITE);
-		if (overwrite != null && !(overwrite instanceof CVMBool)) throw new IllegalArgumentException(INVALID_OVERWRITE);
+		if (overwrite != null && !(overwrite instanceof CVMBool)) throw new InvalidInputException(INVALID_OVERWRITE);
 		SecretAdapter.storeSecret(engine, ctx, name, value, CVMBool.TRUE.equals(overwrite));
 		return SECRET_PREFIX.append(name);
 	}
@@ -399,10 +402,10 @@ public class CryptoAdapter extends AAdapter {
 	private AString secret(RequestContext ctx, ACell input, AString field) {
 		AString ref = text(input, field, null);
 		// The existing Engine secret-resolution boundary is String-based.
-		if (!Engine.isSecretRef(ref.toString())) throw new IllegalArgumentException(SECRET_REF_REQUIRED);
+		if (!Engine.isSecretRef(ref.toString())) throw new InvalidInputException(SECRET_REF_REQUIRED);
 		String value = engine.resolveSecret(ref.toString(), ctx);
-		if (value == null) throw new IllegalArgumentException(SECRET_MISSING);
-		if (value.length() > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+		if (value == null) throw new NotFoundException(SECRET_MISSING, ref.toString());
+		if (value.length() > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 		return Strings.create(value);
 	}
 
@@ -416,37 +419,37 @@ public class CryptoAdapter extends AAdapter {
 
 	private AKeyPair keyPair(RequestContext ctx, ACell input) {
 		Blob seed = blob(secret(ctx, input, SEED), MAX_BYTES);
-		if (seed.count() != AKeyPair.SEED_LENGTH) throw new IllegalArgumentException(INVALID_KEY);
+		if (seed.count() != AKeyPair.SEED_LENGTH) throw new InvalidInputException(INVALID_KEY);
 		return AKeyPair.create(seed);
 	}
 
 	private static AccountKey accountKey(ACell input) {
 		Blob key = blob(RT.getIn(input, ACCOUNT_KEY), MAX_BYTES);
-		if (key.count() != 32) throw new IllegalArgumentException(INVALID_KEY);
+		if (key.count() != 32) throw new InvalidInputException(INVALID_KEY);
 		return AccountKey.wrap(key.getBytes());
 	}
 
 	private static Blob data(ACell input) {
 		AString encoding = text(input, ENCODING, HEX);
-		if (!isTextEncoding(encoding)) throw new IllegalArgumentException(INVALID_ENCODING);
+		if (!isTextEncoding(encoding)) throw new InvalidInputException(INVALID_ENCODING);
 		ACell supplied = RT.getIn(input, DATA);
 		// Encoding describes string input only; native blobs already ARE bytes.
 		if (supplied instanceof ABlob || HEX.equals(encoding)) return blob(supplied, MAX_BYTES);
 		AString value = text(input, DATA, null);
-		if (value.count() > MAX_BYTES * 2L) throw new IllegalArgumentException(TOO_LARGE);
+		if (value.count() > MAX_BYTES * 2L) throw new InvalidInputException(TOO_LARGE);
 		byte[] bytes;
 		try { bytes = UTF8.equals(encoding) ? value.toBlob().getBytes() : Base64.getDecoder().decode(value.toString()); }
-		catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_BYTES); }
-		if (bytes.length > MAX_BYTES) throw new IllegalArgumentException(TOO_LARGE);
+		catch (IllegalArgumentException e) { throw new InvalidInputException(INVALID_BYTES); }
+		if (bytes.length > MAX_BYTES) throw new InvalidInputException(TOO_LARGE);
 		return Blob.wrap(bytes);
 	}
 
 	private static Blob blob(ACell value, int maxBytes) {
-		if (value instanceof AString s && s.count() > maxBytes * 2L + 2) throw new IllegalArgumentException(TOO_LARGE);
+		if (value instanceof AString s && s.count() > maxBytes * 2L + 2) throw new InvalidInputException(TOO_LARGE);
 		ABlob parsed = Blobs.parse(value);
-		if (parsed == null) throw new IllegalArgumentException(INVALID_BYTES);
+		if (parsed == null) throw new InvalidInputException(INVALID_BYTES);
 		// Check before flattening a BlobTree or allocating a copy.
-		if (parsed.count() > maxBytes) throw new IllegalArgumentException(TOO_LARGE);
+		if (parsed.count() > maxBytes) throw new InvalidInputException(TOO_LARGE);
 		return parsed.toFlatBlob();
 	}
 
@@ -457,7 +460,7 @@ public class CryptoAdapter extends AAdapter {
 			// Validate strictly before constructing a UTF-8 string from the blob.
 			StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes.getBytes()));
 			return Strings.create(bytes);
-		} catch (CharacterCodingException e) { throw new IllegalArgumentException(INVALID_UTF8); }
+		} catch (CharacterCodingException e) { throw new InvalidInputException(INVALID_UTF8); }
 	}
 
 	private static boolean isTextEncoding(AString encoding) {
@@ -467,7 +470,7 @@ public class CryptoAdapter extends AAdapter {
 	private static AString text(ACell input, AString field, AString fallback) {
 		ACell value = RT.getIn(input, field);
 		if (value == null && fallback != null) return fallback;
-		if (!(value instanceof AString s)) throw new IllegalArgumentException(field + REQUIRED_STRING);
+		if (!(value instanceof AString s)) throw new InvalidInputException(field + REQUIRED_STRING);
 		return s;
 	}
 }

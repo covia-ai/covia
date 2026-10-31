@@ -359,7 +359,7 @@ class ConversationRouterTest {
 				(draft, sid, jid) -> true);
 			assertEquals(Strings.create("owner only"), RT.getIn(fromStranger.awaitResult(5000), Fields.RESPONSE, "completed"),
 				"the agent serves the stranger as itself");
-			var anonymous = engine.publicContext();
+			var anonymous = engine.context(engine.publicPrincipal());
 			assertEquals(anonymous.getCallerDID(),
 				engine.jobs().getJobData(fromStranger.getID(), anonymous).get(Fields.CALLER),
 				"the stranger's turn is the anonymous principal's, not the owner's");
@@ -459,7 +459,8 @@ class ConversationRouterTest {
 			engine.getVenueState().users().ensure(owner);
 			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "agent", null, null, true),
 				new ConversationSessions(engine.adapterState("messaging-test"), "closed/sessions"));
-			assertNull(engine.publicContext());
+			assertEquals(Engine.PUBLIC_ACCESS_OFF, assertThrows(covia.exception.AuthException.class,
+				() -> engine.context(engine.publicPrincipal())).getMessage());
 			assertEquals(Engine.PUBLIC_ACCESS_OFF, router.deliveryRefusal(STRANGER));
 		} finally { engine.close(); }
 	}
