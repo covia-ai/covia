@@ -1390,6 +1390,29 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testReadOnlyDLFSRootCreatesNoDrive() {
+		// A refused write creates nothing, the root's own drive included.
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"shared", Maps.of("dlfs", "ro-drive", "subpath", "docs", "readOnly", true)
+			))
+		));
+		Engine.addDemoAssets(eng);
+		try {
+			RequestContext alice = RequestContext.of(Strings.create("did:key:z6Mk-test-FileAdapterTest-ro"));
+			Job write = eng.jobs().invokeOperation("v/ops/file/write",
+				Maps.of("root", "shared", "path", "note.txt", "content", "x"), alice);
+			assertThrows(Exception.class, () -> write.awaitResult(2000));
+			AVector<?> drives = RT.ensureVector(RT.getIn(eng.jobs().invokeOperation(
+				"v/ops/dlfs/list-drives", Maps.empty(), alice).awaitResult(2000), "drives"));
+			assertEquals(0, drives.count(), "a refused write must not create the drive: " + drives);
+		} finally {
+			eng.close();
+		}
+	}
+
+	@Test
 	public void testDefaultEngineHasTempRoot() {
 		// With no file.roots configured, the adapter defaults to creating an
 		// ephemeral 'tmp' root. Agents get a usable scratch space immediately.

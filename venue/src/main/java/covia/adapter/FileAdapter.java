@@ -394,8 +394,10 @@ public class FileAdapter extends AAdapter implements covia.venue.storage.Content
 			String relative = joinDLFSPath(dr.subpath, userPath);
 			String ref = "dlfs/" + dr.driveName + (relative.isEmpty() ? "" : "/" + relative);
 			// The root names its drive and subpath, which count as present: a
-			// write under them creates them as their owner
-			String rootRef = "dlfs/" + dr.driveName + (dr.subpath == null ? "" : "/" + dr.subpath);
+			// write under them creates them as their owner. A read-only root is
+			// never written, so it creates nothing.
+			String rootRef = dr.readOnly ? null
+				: "dlfs/" + dr.driveName + (dr.subpath == null ? "" : "/" + dr.subpath);
 			DLFSAdapter.AuthorisedPath target = requireDLFSAdapter()
 				.resolveAuthorisedPath(ctx, ref, ability, rootRef);
 			Path logicalBase = FileOperations.resolve(target.root(), dr.subpath,
