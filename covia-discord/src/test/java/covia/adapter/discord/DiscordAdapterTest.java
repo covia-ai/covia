@@ -58,6 +58,16 @@ class DiscordAdapterTest {
 	@AfterAll static void close(){if(engine!=null)engine.close();if(api!=null)api.close();}
 	@BeforeEach void clearRequests(){api.requests.clear();}
 
+	@Test void aBotThatIsNotRunningSaysWhetherItIsStillStarting(){
+		// A runner not yet started is STARTING; once stopped it is unavailable and stays so.
+		BotRunner idle=new BotRunner(adapter,BotSpec.parse("idle",Maps.of("token","idle-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice")),false),
+			api.url(),covia.adapter.messaging.MessagingBot.Managed.CONFIG);
+		assertThrows(covia.exception.StillStartingException.class,()->idle.call("GET","/users/@me",null));
+		idle.stop();
+		var stopped=assertThrows(covia.exception.UnavailableException.class,()->idle.call("GET","/users/@me",null));
+		assertFalse(stopped instanceof covia.exception.StillStartingException,stopped.getMessage());
+	}
+
 	@Test void preparedEngineDefersGatewayUntilActivation() throws Exception {
 		var key=convex.core.crypto.AKeyPair.generate();
 		AMap<AString,ACell> settings=Maps.of("apiUrl",api.url(),"bots",Maps.of("startup",

@@ -265,6 +265,7 @@ public class Engine {
 		this.lastFlushMillis = System.currentTimeMillis();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
+		this.venueProofs = new covia.venue.auth.VenueProofs(this);
 	}
 
 	/** Accepts the external JSON configuration form. */
@@ -481,6 +482,7 @@ public class Engine {
 			}
 			checkLaunchCancellation();
 			new covia.venue.auth.AuthMethods(this).validate();
+			venueProofs.validate();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
 			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
@@ -1425,6 +1427,7 @@ public class Engine {
 		java.util.List<String> previousOrder = java.util.List.copyOf(adapterRegistrationOrder);
 		if (adapter.engine == null) adapter.install(this);
 		new covia.venue.auth.AuthMethods(this).validateAdapter(adapter);
+		covia.venue.auth.VenueProofs.validateAdapter(adapter);
 		if (catalogPublished) {
 			if (previous == null) {
 				VenueBootstrapMaterializer.materialiseAdapter(this, adapter);
@@ -4315,6 +4318,38 @@ public class Engine {
 		}
 		requireSafeUrl(http.getBaseURI().toString());
 		return venue;
+	}
+
+	private final covia.venue.auth.VenueProofs venueProofs;
+
+	/**
+	 * Why a credential audienced to {@code did} may not be sent to the venue
+	 * reached at {@code target}, or null when it may: the venue there is
+	 * proven to hold {@code did} by one of the operator's proof mechanisms,
+	 * tried in order ({@code auth.venueProof}). A mechanism dials the target
+	 * only through {@link #connectVenue}, so the outbound guard applies unless
+	 * the caller may have the venue dial anywhere. With
+	 * {@code auth.requireVenueProof} off, every target may.
+	 *
+	 * @param ctx The caller that chose the target
+	 * @param target Venue URL or DID
+	 * @param did The DID the credential is audienced to
+	 * @return null, or every mechanism's reason for not proving {@code did}
+	 */
+	public String venueProof(RequestContext ctx, String target, String did) {
+		return venueProof(target, did, outboundUnrestricted(ctx));
+	}
+
+	/**
+	 * {@link #venueProof(RequestContext, String, String)} for a caller whose
+	 * standing was decided when the connection was first authorised, such as
+	 * a recovered job's.
+	 *
+	 * @param unrestricted Whether that caller could have the venue dial anywhere
+	 */
+	public String venueProof(String target, String did, boolean unrestricted) {
+		if (!config().isRequireVenueProof()) return null;
+		return venueProofs.prove(target, did, () -> connectVenue(target, null, VenueAuth.none(), unrestricted));
 	}
 
 	private HTTPAdapter ssrfGuard() {

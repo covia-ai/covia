@@ -45,6 +45,7 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
+import covia.grid.auth.VenueChallenge;
 import covia.grid.auth.VenueDID;
 import covia.grid.impl.StreamContent;
 
@@ -469,6 +470,30 @@ public class VenueHTTP extends Venue {
 				throw new ResponseException("getStatus returned code: "+code,response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
+		});
+	}
+
+	/**
+	 * Asks the connected venue to prove its DID for a nonce
+	 * ({@link VenueChallenge}). The request carries no credential and no
+	 * grants, whatever this connection authenticates as, since the venue's
+	 * identity is not yet proven.
+	 *
+	 * @param nonce A fresh nonce ({@link VenueChallenge#nonce})
+	 * @return Future for the proof the venue answers with, or null if its answer has none
+	 */
+	public CompletableFuture<String> challenge(String nonce) {
+		String body = JSON.print(Maps.of(VenueChallenge.NONCE, Strings.create(nonce))).toString();
+		HttpRequest request = HttpRequest.newBuilder(getBaseURI().resolve(VenueChallenge.PATH))
+			.timeout(Duration.ofMillis(Math.max(timeout, 120_000L)))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(body))
+			.build();
+		return dispatch(request, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code = response.statusCode();
+			if (code != 200) throw new ResponseException("challenge returned HTTP " + code, response);
+			AString proof = RT.ensureString(RT.getIn(JSON.parse(response.body()), VenueChallenge.PROOF));
+			return proof == null ? null : proof.toString();
 		});
 	}
 

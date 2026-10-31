@@ -42,6 +42,7 @@ import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.ShuttingDownException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -907,7 +908,8 @@ public class CoviaAPI extends ACoviaAPI {
 				@OpenApiResponse(status = "200", description = "Operation output",
 					content = @OpenApiContent(type = "application/json", from = Object.class)),
 				@OpenApiResponse(status = "400", description = "Malformed request or operation"),
-				@OpenApiResponse(status = "403", description = "Operation not authorised")
+				@OpenApiResponse(status = "403", description = "Operation not authorised"),
+				@OpenApiResponse(status = "503", description = "Venue shutting down; retry once it is back")
 			})
 	protected void runOperation(Context ctx) {
 		// Direct operation results may contain owner-requested plaintext secrets.
@@ -943,6 +945,8 @@ public class CoviaAPI extends ACoviaAPI {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 			if (cause instanceof AuthException) {
 				buildError(ctx, 403, cause.getMessage());
+			} else if (cause instanceof ShuttingDownException) {
+				buildError(ctx, 503, cause.getMessage());
 			} else if (cause instanceof covia.exception.RemoteFetchException) {
 				buildError(ctx, 502, cause.getMessage());
 			} else if (cause instanceof covia.exception.RateLimitException rate) {
@@ -1061,6 +1065,8 @@ public class CoviaAPI extends ACoviaAPI {
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
+		} catch (ShuttingDownException e) {
+			this.buildError(ctx, 503, e.getMessage());
 		} catch (covia.exception.RemoteFetchException e) {
 			// Resolving the operation required fetching a definition from another
 			// venue, and that upstream fetch failed — a gateway error, not "the
@@ -2124,6 +2130,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (RuntimeException e) {
 			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
 			buildError(ctx, cause instanceof AuthException ? 403
+				: cause instanceof ShuttingDownException ? 503
 				: (cause instanceof IllegalArgumentException || cause instanceof InvalidInputException
 					|| cause instanceof NotFoundException) ? 400 : 500, cause.getMessage());
 		}

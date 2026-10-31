@@ -45,6 +45,9 @@ public final class VenueDID {
 	 */
 	public static final String UNPROVEN = "The venue's DID is not proven at the address it was reached by; connect by its DID, or name it: ";
 
+	/** Why an address does not prove a DID ({@link #provenAt}). */
+	public static final String NOT_ITS_ADDRESS = "the address is not the DID's own; only a did:web DID is proven by its address";
+
 	private static final ConcurrentHashMap<String, String> CACHE = new ConcurrentHashMap<>();
 
 	/** One client for every discovery: each client holds a selector thread for its lifetime. */

@@ -752,9 +752,10 @@ public class Config {
 		if (auth == null) return;
 		validateUnknownFields(auth,
 			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth",
-				"requireAud", "requireExp", "requireVenueProof", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
+				"requireAud", "requireExp", "requireVenueProof", "venueProof", "maxTokenLifetime", "loginRedirectOrigins", "loginRedirectUris", "methods"),
 			"auth", strict);
 		covia.venue.auth.AuthMethods.validateConfig(auth);
+		covia.venue.auth.VenueProofs.validateConfig(auth);
 		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
 		optionalBoolean(auth, REQUIRE_AUD, "auth.requireAud", true);
 		optionalBoolean(auth, REQUIRE_EXP, "auth.requireExp", true);
@@ -1845,8 +1846,9 @@ public class Config {
 	/**
 	 * Whether an authenticated connection to another venue must prove the
 	 * venue's DID before sending it a credential ({@code auth.requireVenueProof},
-	 * default {@code true}). Off, the venue takes the DID a target claims at its
-	 * address, for test venues whose DID is served where it cannot be proven.
+	 * default {@code true}), by the mechanisms {@code auth.venueProof} lists.
+	 * Off, the venue takes the DID a target claims at its address, for test
+	 * venues whose DID cannot be proven where they are served.
 	 */
 	public boolean isRequireVenueProof() {
 		AMap<AString, ACell> authConfig = getAuthConfig();

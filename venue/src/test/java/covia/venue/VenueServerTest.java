@@ -150,6 +150,26 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void aVenueShuttingDownAnswers503() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
+			Config.BIND_ADDRESS, "127.0.0.1"));
+		try {
+			// Admission closes first in a shutdown, while the listener may still answer.
+			server.getEngine().jobs().beginShutdown();
+			for (String route : new String[] { "invoke", "run" }) {
+				HttpRequest request = HttpRequest.newBuilder()
+					.uri(new URI("http://127.0.0.1:" + server.port() + "/api/v1/" + route))
+					.header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(
+						"{\"operation\":\"v/ops/covia/read\",\"input\":{\"path\":\"w/x\"}}"))
+					.timeout(Duration.ofSeconds(5)).build();
+				HttpResponse<String> resp = TestHTTP.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+				assertEquals(503, resp.statusCode(), route + ": " + resp.body());
+			}
+		} finally { server.close(); }
+	}
+
+	@Test
 	public void closingAVenueClosesTheHostItOpened() throws Exception {
 		VenueServer server = VenueServer.launch(Maps.of(Config.PORT, 0, Config.STORE, "memory",
 			Config.BIND_ADDRESS, "127.0.0.1",
