@@ -36,7 +36,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.RateLimitException;
-import covia.exception.UnavailableException;
+import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
@@ -1569,7 +1569,7 @@ public class JobManager {
 		}
 		closeAdmission();
 		for (Job job : activeJobs.values()) {
-			if (!job.isFinished()) job.pollingFailed(new UnavailableException(AAdapter.VENUE_SHUT_DOWN));
+			if (!job.isFinished()) job.pollingFailed(new ShuttingDownException(AAdapter.VENUE_SHUT_DOWN));
 		}
 	}
 
@@ -1607,6 +1607,6 @@ public class JobManager {
 
 	private void requireAccepting(boolean topLevel) {
 		AtomicBoolean gate = topLevel ? acceptingTopLevel : acceptingInternal;
-		if (!gate.get()) throw new UnavailableException(SHUTTING_DOWN);
+		if (!gate.get()) throw new ShuttingDownException(SHUTTING_DOWN);
 	}
 }

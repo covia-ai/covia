@@ -30,7 +30,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `Grid.webDIDAddress`: the address a `did:web` venue is reached at.
 - Expected-failure exceptions: `InvalidInputException`, `NotFoundException`,
   `ConflictException`, `NotSupportedException`, `UnavailableException`,
-  `ConfigurationException` (#644).
+  `ConfigurationException`, `ShuttingDownException` (#644).
 - `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
 - `auth.venueProof`: the mechanisms, in order, that may prove a venue's DID, by default
   `address` then `challenge`; adapters add more through `VenueProofMethods`.
@@ -40,6 +40,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 
 - `RemoteFetchException` is an `UnavailableException`.
+- `JobManager` throws Covia exception types for refused invocations and job
+  messages (#644).
+- A venue shutting down answers 503 on `/invoke`, `/run` and `DELETE /users/{did}`.
 - A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
   it stands for by position in the frame's history. A legacy frame renders as it will
   once migrated, so migration still leaves the model's input unchanged.
@@ -319,6 +322,8 @@ These changes require Convex 0.8.18.
   and runs nothing (#643).
 - Tool failures no longer show Java class names for expected errors; unexpected
   ones are logged and reported as venue errors.
+- `/run` answers 400 for an operation that fails with its own reason, not 500.
+- `GET /jobs/{id}` no longer reports a venue error as 404.
 - Secret operations expose distinct refusal constants for an existing name,
   a missing secret and a decryption failure, including unreadable key versions
   and malformed records (#586).
