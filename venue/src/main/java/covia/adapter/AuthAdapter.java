@@ -16,6 +16,8 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueChallenge;
@@ -79,7 +81,8 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 				Venue venue;
 				try {
 					venue = connection.get();
-				} catch (IllegalArgumentException | IllegalStateException e) {
+				} catch (InvalidInputException | ConfigurationException
+						| IllegalArgumentException | IllegalStateException e) {
 					// Refused by the outbound guard, or no address to dial
 					return VenueChallenge.Reason.UNREACHABLE + e.getMessage();
 				}

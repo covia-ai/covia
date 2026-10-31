@@ -23,6 +23,7 @@ import convex.core.data.Maps;
 import convex.etch.EtchStore;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
+import covia.exception.ConfigurationException;
 import covia.venue.server.VenueServer;
 
 /**
@@ -98,7 +99,7 @@ public class VenueIdentityGuardTest {
 			activeNode = ns;
 			ns.launch();
 			try {
-				IllegalStateException e = assertThrows(IllegalStateException.class,
+				ConfigurationException e = assertThrows(ConfigurationException.class,
 					() -> new Engine(configFor(kpB), CoviaApplication.connect(ns.getHost()), kpB).start());
 				assertTrue(e.getMessage().contains(didFor(kpA)),
 					"error names the owning identity: " + e.getMessage());

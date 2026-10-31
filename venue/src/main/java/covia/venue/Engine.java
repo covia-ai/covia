@@ -657,21 +657,21 @@ public class Engine {
 			AMap<AString, ACell> existingUser = auth.getUser(id);
 			if (existingUser != null
 					&& !did.equals(RT.ensureString(existingUser.get(Fields.DID)))) {
-				throw new IllegalStateException("Named user " + id
+				throw new ConfigurationException("Named user " + id
 					+ " is already bound to a different DID");
 			}
 			AMap<AString, ACell> spec = RT.ensureMap(entry.getValue());
 			AVector<ACell> keys = (spec != null)
 				? RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS)) : null;
 			if (keys == null || keys.isEmpty()) {
-				throw new IllegalArgumentException("users.bootstrap." + id
+				throw new ConfigurationException("users.bootstrap." + id
 					+ " requires a non-empty authenticationKeys array");
 			}
 			for (long i = 0; i < keys.count(); i++) {
 				AString key = RT.ensureString(keys.get(i));
 				AuthState.requireValidAuthenticationKey(key);
 				if (!declaredKeys.add(key)) {
-					throw new IllegalArgumentException(
+					throw new ConfigurationException(
 						"One authentication key cannot bootstrap two named users");
 				}
 				AMap<AString, AMap<AString, ACell>> known = auth.getUsers();
@@ -681,7 +681,7 @@ public class Engine {
 						AMap<AString, ACell> otherKeys = RT.ensureMap(
 							other.getValue().get(Fields.AUTHENTICATION_KEYS));
 						if (otherKeys != null && otherKeys.containsKey(key)) {
-							throw new IllegalArgumentException(
+							throw new ConfigurationException(
 								Auth.KEY_ALREADY_BOUND
 								+ other.getKey());
 						}
@@ -743,14 +743,14 @@ public class Engine {
 			return new MemoryStorage();
 		} else if (Config.STORAGE_TYPE_FILE.equals(storageType)) {
 			if (storagePath == null || storagePath.isEmpty()) {
-				throw new IllegalArgumentException("File storage requires 'path' configuration");
+				throw new ConfigurationException("File storage requires 'path' configuration");
 			}
 			Path path = Paths.get(storagePath);
 			if (!Files.exists(path)) {
 				try {
 					Files.createDirectories(path);
 				} catch (IOException e) {
-					throw new IllegalArgumentException("Failed to create storage directory: " + storagePath, e);
+					throw new ConfigurationException("Failed to create storage directory: " + storagePath, e);
 				}
 			}
 			log.info("Using file storage at: {}", storagePath);
@@ -838,7 +838,7 @@ public class Engine {
 			ACell did = RT.getIn(e.getValue(), Keywords.VALUE, Covia.DID);
 			sb.append(did != null ? did : "key " + e.getKey());
 		}
-		throw new IllegalStateException(
+		throw new ConfigurationException(
 			"Venue key mismatch: this store already holds venue state for [" + sb
 			+ "] but the configured key gives " + getDIDString()
 			+ ". Starting anyway would create a fresh empty venue and orphan the existing"
@@ -2433,7 +2433,8 @@ public class Engine {
 	private Venue publisherVenue(RequestContext ctx, String venueConn) {
 		try {
 			return connectVenue(ctx, venueConn, VenueAuth.none());
-		} catch (IllegalArgumentException | IllegalStateException e) {
+		} catch (InvalidInputException | ConfigurationException
+				| IllegalArgumentException | IllegalStateException e) {
 			throw RemoteFetchException.invalidVenue(venueConn, e);
 		}
 	}
@@ -3174,14 +3175,14 @@ public class Engine {
 			AString derived = Strings.create("did:key:"
 				+ Multikey.encodePublicKey(keyPair.getAccountKey()));
 			if (!derived.equals(declared)) {
-				throw new IllegalStateException("Declared venue identity " + declared
+				throw new ConfigurationException("Declared venue identity " + declared
 					+ " does not match the venue key pair (" + derived
 					+ ") — wrong seed or keystore?");
 			}
 		} else if (d.startsWith("did:web:")) {
 			AString web = config.getWebDID();
 			if (!declared.equals(web)) {
-				throw new IllegalStateException("Declared venue identity " + declared
+				throw new ConfigurationException("Declared venue identity " + declared
 					+ " does not match the venue's did:web form ("
 					+ (web == null ? "no public hostname" : web) + ")");
 			}
@@ -4248,7 +4249,7 @@ public class Engine {
 	 *
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(String url) {
 		ssrfGuard().requireSafeUrl(url);
@@ -4263,7 +4264,7 @@ public class Engine {
 	 * @param ctx The caller that chose the target
 	 * @param url URL string to validate
 	 * @throws IllegalArgumentException naming the rule when the URL is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeUrl(RequestContext ctx, String url) {
 		if (!outboundUnrestricted(ctx)) requireSafeUrl(url);
@@ -4277,7 +4278,7 @@ public class Engine {
 	 * @param ctx The caller that chose the target
 	 * @param host Host name or address literal
 	 * @throws IllegalArgumentException naming the rule when the host is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public void requireSafeHost(RequestContext ctx, String host) {
 		if (!outboundUnrestricted(ctx)) ssrfGuard().requireSafeHost(host);
@@ -4313,7 +4314,8 @@ public class Engine {
 	 * @param auth Authentication the connection presents
 	 * @return The connected venue, not yet contacted
 	 * @throws IllegalArgumentException when the spec is malformed or its address is refused
-	 * @throws IllegalStateException when the guard cannot be enforced
+	 * @throws InvalidInputException when its transport cannot be checked
+	 * @throws ConfigurationException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
 		return connectVenue(spec, null, auth, outboundUnrestricted(ctx));
@@ -4332,7 +4334,7 @@ public class Engine {
 		Venue venue = Grid.connect(spec, venueDID, auth);
 		if (unrestricted) return venue;
 		if (!(venue instanceof VenueHTTP http)) {
-			throw new IllegalArgumentException(UNGUARDED_VENUE_TRANSPORT + spec);
+			throw new InvalidInputException(UNGUARDED_VENUE_TRANSPORT + spec);
 		}
 		requireSafeUrl(http.getBaseURI().toString());
 		return venue;
@@ -4372,7 +4374,7 @@ public class Engine {
 
 	private HTTPAdapter ssrfGuard() {
 		if (!(getAdapter("http") instanceof HTTPAdapter http)) {
-			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
+			throw new ConfigurationException("SSRF validation unavailable: http adapter not registered");
 		}
 		return http;
 	}
