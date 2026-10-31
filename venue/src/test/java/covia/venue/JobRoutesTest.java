@@ -386,12 +386,6 @@ public class JobRoutesTest {
 	}
 
 	@Test
-	public void malformedDefinitionIsTheRequestsProblemNotTheVenues() {
-		assertEquals(400, covia.venue.api.ApiErrors.status(
-			new covia.exception.InvalidDefinitionException("Orchestration step 0 requires string field 'op'")));
-	}
-
-	@Test
 	public void nonArrayUcansIs400() throws Exception {
 		for (String route : new String[] {"invoke", "run"}) {
 			HttpResponse<String> r = send(HttpRequest.newBuilder()
@@ -414,6 +408,12 @@ public class JobRoutesTest {
 			.PUT(HttpRequest.BodyPublishers.noBody()));
 		assertEquals(200, cancel.statusCode(), cancel.body());
 		assertEquals("COMPLETE", RT.ensureString(RT.getIn(JSON.parse(cancel.body()), "status")).toString());
+
+		HttpResponse<String> pause = send(HttpRequest.newBuilder()
+			.uri(new URI(base + "/api/v1/jobs/" + id + "/pause"))
+			.PUT(HttpRequest.BodyPublishers.noBody()));
+		assertEquals(409, pause.statusCode(), pause.body());
+		assertTrue(errorOf(pause).startsWith(JobManager.JOB_TERMINAL), pause.body());
 	}
 
 	/** An unparseable job id is a plain 400, before any stream is committed. */

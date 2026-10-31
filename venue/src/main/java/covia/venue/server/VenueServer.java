@@ -1117,21 +1117,19 @@ public class VenueServer {
 		routes.before(requestLog::begin);
 
 		routes.exception(HttpResponseException.class, (e, ctx) -> {
-			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) ApiErrors.respond(ctx, e);
+			// A status a route raised itself, such as BadRequestResponse
+			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) ApiErrors.write(ctx, e.getStatus(), e.getMessage());
 			else renderHttpError(e, ctx);
 		});
 
 		routes.exception(Exception.class, (e, ctx) -> {
+			// A route answers the outcomes it defines; anything else that escapes
+			// it is a venue error, whatever its type (COG-21)
+			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) {
-				// A Covia type is a refusal the route left unanswered; anything
-				// else is a venue error, logged with its stack.
-				if (ApiErrors.status(e) == 500) {
-					log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
-				}
-				ApiErrors.respond(ctx, e);
+				ApiErrors.write(ctx, 500, ApiErrors.INTERNAL_ERROR + covia.adapter.AAdapter.describeFailure(e));
 				return;
 			}
-			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			// A generic title with the exception under details: the class and
 			// message stay visible by design, because operators debug from the
 			// response as much as from the log (#540).
