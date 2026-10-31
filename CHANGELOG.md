@@ -10,340 +10,139 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
-- `agent:sessionRead` with `current: true` reads back the caller's own session, but
-  only what is outside its context: the turns behind its compaction summaries (#597).
-  `from`/`to` read exactly the turns a summary names; `skip` and `older` page back.
-- `GoalTreeContext.turnText`: the words of a turn, from a string, a structured
-  message's `text` or an agent request's `task`.
-- `AStorage.storeVerified`: stores content only if its SHA-256 is the given hash (#629).
-- `StreamContent`: one-shot content over a stream, such as an HTTP response body.
-- `ai.covia:venue` publishes a test jar (`tests` classifier) with its shared test support.
+- `agent:sessionRead` reads the turns behind the caller's own compaction summaries (#597).
 - Agent `accepts: "anyone"` admits every caller, anonymous ones included.
-- An LLM agent's context shows who a turn comes from as a `[From: …]` element, once
-  per change of sender (COG-20 §4).
-- `AAdapter.stateSteps()`: an adapter's state migration as an ordered list of
-  `MigrationStep`s; its state version is their number.
-- `ucan:issue` takes `prf`: the venue passes on part of a grant made to it (#636).
-- `Engine.connectVenue`: connects to another venue through the outbound guard.
-- `outbound/any` on `<venueDID>/outbound`: the venue's own standing to dial any HTTP,
-  MCP, A2A, model, Convex peer or venue target unchecked, delegable by a venue-issued grant.
-- `Grid.webDIDAddress`: the address a `did:web` venue is reached at.
-- Expected-failure exceptions: `InvalidInputException`, `NotFoundException`,
-  `ConflictException`, `NotSupportedException`, `UnavailableException`,
-  `ConfigurationException`, `ShuttingDownException`, `StillStartingException` (#644).
-- `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
-- `auth.venueProof`: the mechanisms, in order, that may prove a venue's DID, by default
-  `address` then `challenge`; adapters add more through `VenueProofMethods`.
-- `VenueChallenge` verifies a venue's challenge proof of its DID, and
-  `VenueHTTP.challenge` asks for one.
+- An LLM agent's context names who each turn comes from (COG-20 §4).
+- `ucan:issue` takes `prf` to pass on part of a grant made to the venue (#636).
+- `outbound/any`: the venue's standing to dial any outbound target, delegable by grant.
+- Venues prove their DID by address or challenge (`auth.venueProof`, `auth.requireVenueProof`).
 
 ### Changed
 
-- `RemoteFetchException` is an `UnavailableException`.
-- `JobManager` throws Covia exception types for refused invocations and job
-  messages (#644).
-- A venue shutting down answers 503 on `/invoke`, `/run` and `DELETE /users/{did}`.
-- A Telegram or Discord bot that is not running says whether it is still starting,
-  retrying a failed start, or stopped.
-- A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
-  it stands for by position in the frame's history. A legacy frame renders as it will
-  once migrated, so migration still leaves the model's input unchanged.
-- Retrospective projections mark a summary `compacted`, with the turns it stands for.
-- Session titles are the words of the first message rather than its JSON.
-- Content uploads to file storage stream to disk, checked against their hash as they
-  arrive; a failed or mismatched upload leaves nothing under the hash (#629).
-- `VenueHTTP` streams content uploads and downloads instead of buffering them (#629).
-  Downloaded content can be read once, as a stream or a blob; its size is unknown until
-  read unless the venue sends a length.
-- A `claudecode:session` opened without a prompt takes no pool slot until its first turn.
-- Connected accounts no longer appear in `secret:list` or a user export.
-- A connected account is stored by `oauth:complete` from the account that started the
-  connect, with the one-time code the callback hands the browser. `returnTo` names an
-  app under an `adapters.oauth.returnTo` prefix, never a venue path.
-  `OAuthAdapter.complete` is now `callback`, and stores nothing.
+- A venue shutting down answers 503.
+- A chat bot that is not running says whether it is starting, retrying or stopped.
+- Compaction summaries name the turns they stand for.
+- Session titles are the first message's words, not its JSON.
+- Content uploads and downloads stream, checked against their hash (#629).
+- A `claudecode:session` takes no pool slot until its first turn.
+- Connected accounts complete from the account that started the connect.
 - Every user turn in an agent's history keeps its caller; `config.recordCaller` is gone.
-- Each venue migration step is a class, listed in order in `VenueMigrations.STEPS`.
-- `RemoteFetchException.malformedVenue` is `invalidVenue`, which also reports a
-  target the outbound guard refuses.
-- `VenueAuth` key-pair strategies hold no audience: the connection names its venue as
-  each token's `aud`. `keyPair(kp, did)` and `identityKeyPair` are gone, `mintToken`
-  takes the venue's DID, and `apply` takes the connection's venue DID.
-- `Engine.requireSafeUrl` and `requireSafeHost` take the `RequestContext` of the
-  caller that chose the target, and `Engine.fetchRemoteAsset`, `fetchRemoteNamedAsset`
-  and `fetchRemoteContent` the caller whose reference names the publisher.
-
-### Deprecated
-
-- `AAdapter.migrateState`, with an overridden `stateVersion`: give `stateSteps()`.
 
 ### Removed
 
-- The `venue/relay` ability and `UcanTokens.relayDelegation`: users hop with
-  `authenticateAs: "caller"` and grants.
-- `auth.audience`: `auth.requireAud` replaces it.
-- `ConversionException`: a malformed venue response is a `ResponseException`.
+- The `venue/relay` ability: users hop with `authenticateAs: "caller"` and grants.
+- `auth.audience`: replaced by `auth.requireAud`.
 
 ### Fixed
 
-- Cancel, pause, resume and messages by id reach a job listed moments after it was
-  submitted, instead of missing it (404).
+- Cancel, pause, resume and messages by id reach a just-submitted job.
 
 ### Security
 
-- `authenticateAs: "venue"` is only for the venue itself. A user could have the venue
-  act as itself, at another venue or at itself as the operator.
-- `crypto:derive-key` reads only the caller's own secrets, and `crypto:jwt-decode`
-  never returns a stored token's signature, so `secret/use` never yields possession.
-- Venue-local SQL databases are named `<userDID>/sql/<db>`: users whose DIDs differ
-  only in punctuation no longer share databases. The public principal has none.
-- A Claude Code session resumes only in its own project: naming another project no
-  longer stops it, and a resume that never runs claims nothing.
-- Convex calls go to the operator's peer (`adapters.convex.peer`). Relaying to a peer
-  a call names is off by default (`adapters.convex.anyPeer`) and, when on, passes the
-  outbound guard.
-- Deleting an account revokes its connected accounts at their providers.
-- The `sql` skill says a registered database name always means the shared connection.
-- A `did:web` document is fetched only from a host the outbound guard allows.
-- Grid and remote-agent targets, orchestration steps' venues and `did:web` asset
-  publishers pass the outbound guard; a loopback or private venue needs its host in
-  `adapters.http.allowedHosts` unless the venue itself, or an `outbound/any` holder,
-  makes the call.
-- An authenticated grid or remote-agent hop sends its credential only to a venue
-  proven to hold the DID it is audienced to, by its address or by a challenge. A
-  recovered job proves its target again before re-sending a saved credential.
-- The outbound guard's address rule applies to every later lookup of a host it passes,
-  and also refuses IPv6 unique local and IPv4-carrying forms, `100.64.0.0/10` and `0.0.0.0/8`.
-- `http.allowedHosts` and `http.blockedHosts` match a host name with or without its trailing dot.
-- A bearer credential must name the venue in `aud` unless `auth.requireAud` is off.
-- A client connection signs credentials only for the DID it was opened with, or one the
-  venue proves at its address, and sends none to a venue presenting another DID.
-- OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
-  secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
-  `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.
-- A token refresh never brings back a disconnected account, and a callback for a
-  deleted account stores nothing.
-- A per-agent A2A request is the asker's own, admitted by `accepts` or a UCAN. Its
-  `GetTask`, `CancelTask`, `SubscribeToTask` and `taskId` continuation reach only the
-  asker's tasks for that agent, refused alike otherwise (#619).
-- A capability scope bounds job and scheduled-event access for every context.
-- A chat binding authenticates each sender (AUTH.md §5.3); an agent records the
-  authentication beside the turn, never in the message.
-- A chat bot's message comes from the bot's principal for an allow-listed sender, and
-  is anonymous otherwise. A bot an agent creates is that agent, never its owner.
-- A `user: "public"` chat bot is bound by the public scope.
-- `GET /api/v1/secrets` needs the read `secret:list` needs: a public scope without
-  `crud/read` on `s/` no longer lists the public store's secret names.
-- `GET /api/v1/operations/{name}` resolves the name as the caller, not as an
-  anonymous, unscoped context.
-- A job stream reads each frame as its subscriber and ends once `GET /jobs/{id}`
-  would refuse it, such as after the job's deletion or its proof's expiry.
-- `GET /api/v1/agents/{id}` answers a refused or malformed id with 403 or 400, not 500.
-- `auth:identity-token` refuses a principal acting as itself under a restricted scope,
-  and no credential authenticates as the venue's public principal.
+- `authenticateAs: "venue"` is only for the venue itself.
+- `secret/use` never yields possession through `crypto:derive-key` or `crypto:jwt-decode`.
+- Venue-local SQL databases are per user; the public principal has none.
+- A Claude Code session resumes only in its own project.
+- Convex calls go to the operator's peer unless `adapters.convex.anyPeer` is set.
+- Every outbound venue target passes the outbound guard, with a stricter address rule.
+- Credentials go only to a venue proven to hold the DID they name.
+- Bearer credentials must name the venue in `aud` by default.
+- OAuth connections are sealed `oauth` adapter state, gated by `oauth/*` abilities and
+  revoked when their account is deleted.
+- Per-agent A2A requests and tasks belong to the asker (#619).
+- Capability scopes bound job and scheduled-event access in every context.
+- Chat bindings authenticate each sender; unlisted senders are anonymous.
+- REST secret listing, operation lookup, job streams and agent lookup check the caller.
+- `auth:identity-token` refuses restricted self-tokens and the public principal.
 
 ### Migration
 
 - Venue-local SQL databases from earlier versions are not carried over.
-- A call naming a Convex peer other than the venue's is refused unless
-  `adapters.convex.anyPeer` is set.
-- A `did:web` identity on a private network needs its host in `adapters.http.allowedHosts`.
-- Connected accounts move out of the secret store on first access. A `secret/use`
-  grant on `s/oauth/<provider>` no longer covers one: grant `oauth/use` on
-  `oauth/<provider>`.
-- The test adapter's state is at version 3, with two synthetic steps for migration tests.
-- A public agent's `a2a.caps` reads as `accepts: "anyone"`; beside a different
-  `accepts` it is refused.
-- Anonymous askers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
-  and `v/ops/agent/message`.
-- An explicit `auth.public.caps` needs `crud/read` on `j` for anonymous callers to
-  follow their jobs.
-- An open chat bot's strangers are anonymous: its agent needs `accepts: "anyone"`, and
-  `auth.public.caps` must grant `invoke` on `v/ops/agent/chat` or the bot's operation.
+- A call naming a Convex peer other than the venue's needs `adapters.convex.anyPeer`.
+- A private-network `did:web` identity needs its host in `adapters.http.allowedHosts`.
+- Grant `oauth/use` on `oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
+- A public agent's `a2a.caps` becomes `accepts: "anyone"`; beside another `accepts` it is refused.
+- Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
+  and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
+- An open chat bot's agent needs `accepts: "anyone"`, and the public scope `invoke` on
+  `v/ops/agent/chat` or the bot's operation.
 - A capped agent behind a chat bot needs write on the media drive to receive media.
-- A bot an agent created earlier still comes from its owner; create it again.
-- Agents no longer receive `via`: a chat turn is the sender's text, or
-  `{text, attachments, content?}`.
-- `mediaOperation` and `replyOperation` receive `authentication` instead of `via`.
+- Recreate bots that agents created earlier, so they come from the agent.
+- Agents no longer receive `via`; `mediaOperation` and `replyOperation` receive `authentication`.
 - A webhook message accepted before the upgrade and not yet handled fails once.
 
 ## [0.10.0] - 2026-10-26
 
 ### Convex 0.8.18 lattice applications
 
-These changes require Convex 0.8.18.
-
-- Messaging local-agent intake commits session input, receipt, conversation mapping
-  and Job admission state in one venue transaction, retaining user-deletion fencing
-  (#616). Delivery makes one attempt; failures remain visible without automatic
-  replay. Telegram reports admission failure once. HITL commits its inbox response,
-  final Job result and session notification together, with one winner under contention.
-- Venue components share atomic updates and transactions; whole-venue LWW is
-  for backup, replication and fenced failover, not arbitrary fork merging.
-- The signed venue value records `:version`. Ordered startup migrations run
-  atomically; legacy adapter storage moves on first access without a bulk scan.
-  Older binaries must not reopen upgraded stores.
-- Typed refusal of a newer venue version; read stored versions before a start (#621).
-- Adapters version and migrate their own state: `AAdapter.stateVersion`, `migrateState` (#621).
-- Start-up migration is one venue transaction, built-in and module adapters included (#621).
-- Migration is a call: `VenueState.migrate` on a store before launch, `Engine.migrate` on a running venue (#621).
-- `AdapterState` replaces `AdapterWorkspace` for private `:adapters/<name>`
-  storage. Embedders must replace removed `engine.adapterWorkspace(...)` calls;
-  user cleanup belongs in adapter deletion hooks, with external cleanup after commit.
-- Opt-in `x/<adapter>/...` views reuse standard accessors and CRUD authority.
-  `x/test` exposes read-only context and sample values plus persistent per-user
-  scratch. No private state is automatically exposed and venue identity does
-  not bypass cross-user authority. User exports do not include private adapter state.
-
-- Execution context IDs are grouped with their owning user. Namespace delegation
-  preserves that owner; local scope accessors never reinterpret another user's
-  agent/session/job/task IDs. Output handoff snapshots explicitly bind their
-  namespace, while old snapshots remain readable without a startup rewrite.
-- Adapter lattice write policy uses `latticeWriteDenial`: null allows, a refusal
-  reason is returned unchanged. Views last one operation/transaction; adapters
-  retain ownership of policy and value validation.
+- Requires Convex 0.8.18.
+- Messaging intake and HITL responses commit in one venue transaction (#616).
+- Venue components share atomic updates and transactions.
+- Venue state is versioned, with ordered start-up migrations in one transaction (#621).
+- Adapters version and migrate their own state (#621).
+- Opt-in `x/<adapter>/...` views of adapter state.
 
 ### Migration
 
-- Embedders upgrading from 0.9.x: see `venue/docs/EMBEDDING.md`.
-- No rollback below 0.10.0: 0.9.x cannot read upgraded values (DLFS modification
-  times, versioned secrets, agent history) and has no version check. Keep the
-  state from before the upgrade.
-- External login (#298): replace `auth.loginRedirectOrigins` with exact
-  `auth.loginRedirectUris`; configure Microsoft `tenantId`; use HTTPS except on
-  loopback. Frontend redirects now carry a single-use code exchanged with PKCE,
-  not a bearer. Legacy email-based accounts require explicit identity-link
-  confirmation; provider bearer lookup now requires an issuer/subject binding.
-
-- `SecretStore.deriveKey` is deprecated and reads only secrets written before
-  key versions; pass `SecretStore.keys(keyPair)` to `store`, `storeIfAbsent` and
-  `decrypt`. The `byte[]` `store` and `storeIfAbsent` overloads are removed.
-- A venue rolled back below 0.10.0 cannot read secrets written since the
-  upgrade; configured secrets recover, as startup rewrites them.
-- An agent or delegate creating an agent must name `config.caps` it holds;
-  leaving them out (unrestricted) needs an unrestricted caller.
+- No rollback below 0.10.0: keep the state from before the upgrade.
+- External login: `auth.loginRedirectUris` replaces `auth.loginRedirectOrigins`, Microsoft
+  needs `tenantId`, and legacy email accounts confirm identity links (#298).
+- Creating an agent names `config.caps` the creator holds; leaving them out needs an
+  unrestricted caller.
 
 ### Security
 
-- External login uses browser-bound single-use state, S256 PKCE and verified
-  OIDC nonce; Nimbus validates provider tokens and manages JWKS. Invalid ID
-  tokens never fall back to user-info. New accounts retain a stable DID across
-  email changes, and matching emails never auto-link providers (#298).
-
-- Key and venue JWT verification rejects malformed supplied `exp`/`nbf` claims
-  even when expiry is optional, and avoids clock-skew overflow on extreme
-  timestamps. Existing missing-expiry policy and 60-second leeway are preserved.
-- Secret store key derived with HKDF under a domain label; each secret records
-  its key version and migrates on its next write (#535).
-- `sql:query` no longer applies data-changing statements.
-- Registered SQL databases take an operator `readOnly` flag that refuses
-  `sql:execute` for every caller.
-- MCP venue-side targets (`v/ops/...`, `scope: "venue"`) require venue
-  authority; any signed-in user could rewrite the venue catalog.
-- User-created messaging bots no longer resolve credentials from the venue's
-  store or environment; only operator-declared bots do.
-- Agent `caps`, `accepts` and public `a2a.caps` confer only what their author
-  holds, so sub-agents and delegated creates cannot escalate.
-- MCP `tools-call` and `tools-list` apply the SSRF policy to the server URL.
-- `bearerSecret: "oauth/<provider>"` needs `secret/use` and honours `nb.url`,
-  like any other secret reference.
-- A capability-scoped agent or delegate reaches only jobs it launched or its
-  caps cover; a live job is never returned by id without read access.
-- A capability-scoped agent or delegate lists, cancels and triggers only the
-  scheduled events it created.
-- Naming another user's path (config layer, agent definition, operation, A2A
-  binding, `did:…/a/<hash>`) needs read access to it; `Engine.resolvePath`
-  checks, `resolvePathUnchecked` is engine-internal.
-- A bare `nb.gate` binds to the grant's issuer, so a presenter cannot plant
-  its own gate; a grantor's private gate runs without the presenter reading it.
+- External login uses single-use state, PKCE and OIDC nonce; matching emails never
+  auto-link providers (#298).
+- JWT verification rejects malformed `exp`/`nbf` claims.
+- Secret store keys derived with HKDF and versioned per secret (#535).
+- `sql:query` no longer applies data-changing statements; registered databases take `readOnly`.
+- MCP venue-side targets require venue authority.
+- User-created messaging bots no longer use the venue's credentials.
+- Agent `caps`, `accepts` and `a2a.caps` confer only what their author holds.
+- MCP `tools-call` and `tools-list` apply the SSRF policy.
+- `bearerSecret: "oauth/<provider>"` needs `secret/use`.
+- Capability-scoped agents reach only their own jobs and scheduled events, or those
+  their caps cover.
+- Naming another user's path needs read access to it.
+- A bare `nb.gate` binds to the grant's issuer.
 
 ### Added
 
-- `venue/docs/EMBEDDING.md`: the supported embedder surface, checked by `EmbedderContractTest`.
-- `VenueServer.getHost()`: the host a standalone venue opened.
-- MCP `tools/list` includes `_meta["ai.covia/operation"]`, the actual dispatch
-  reference, so clients can join MCP exposure to the venue catalog (#558).
-- Method-independent `EvidencePolicy` checks trusted authentication results against
-  originating methods, separate event/proof properties and freshness limits,
-  returning a refusal reason or `null`. Requirements project to immutable Convex
-  data. Sensitive-action enforcement and policy configuration remain pending (#297).
-- Adapter-backed authentication bindings (`auth.methods`) select trusted
-  implementations through `AuthenticationMethods`, with direct Convex input,
-  startup validation and rejection of stale in-flight verification after
-  lifecycle/configuration changes (#297). Omitted selection preserves current
-  credentials; explicit selection rejects legacy venue JWTs of unknown origin.
-- Common `AuthResult` from `VenueAuthenticator.verify`, with method-owned credential
-  provenance and conservative authentication evidence (#297 Phase 1). Existing
-  authentication APIs and acceptance rules remain unchanged; trusted embedders
-  can bind results, while identity-only rebinding clears earlier evidence.
-  Core records project directly to immutable Convex lattice data; method details
-  use maps and evidence properties use sets, without protocol-specific types
-  or a method-specific codec in the core.
-- `agent:suspend` records the actual caller, optional reason and time separately
-  from faults. Info/list expose the record; resume clears it. Suspended request/chat
-  refusals carry `agent:suspended` (#590).
-- `p2p` adapter: an opt-in Convex P2P node in the venue, `p2p:peers`, `p2p:connect` and peer events (#587).
-- Tool guards (`engine.toolGuards()`): an embedding host sees each operation
-  call an agent is about to make and passes or refuses it, holding it if need
-  be within the call's own timeout; a guard that times out or throws refuses.
-- Slack Socket Mode (`appToken`), one connection per app token routed by workspace;
-  messaging bindings may hold shared provider connections.
-- Slack agent template, `slack-bot-management` skill and `/slack` operator skill.
-- Slack thread replies continue an agent's conversation without a mention.
-- `scheduler:list` describes each event: `by`, `input`, `description`, `created` (#583).
-- `relay` handler for WhatsApp and Slack bindings: one number or app, many principals (#584).
-- `telegram:format`: an agent's Markdown to Telegram HTML, read-only. Set it as
-  an agent bot's `replyOperation`, or call it from an application's own reply
-  hook. A `parse_mode` returned by a reply hook now wins over the bot's
-  `parseMode`.
-- Venue `"tray": false` keeps the tray icon and AWT out of the process.
-- WhatsApp voice notes, photos and files: attachments and `mediaOperation` for agent
-  bindings, `media` on relay polls and a relay `media` action; Telegram's attachment
-  handling is now shared messaging code.
-- `whatsapp:download` (ability `whatsapp/download`); WhatsApp operation bindings now receive media messages.
-- `covia-speech` module: `speech:transcribe`, `speech:speak` and `speech:engines` over an
-  OpenAI-compatible audio API, cloud or local.
-- `speech` local engine: in-process transcription with sherpa-onnx (Parakeet, Moonshine),
-  operator-installed or pinned native libraries, Ogg/Opus voice notes.
-- `speech:transcribe` takes audio the caller holds as inline base64 `bytes`, stored nowhere;
-  `speech:prepare` fetches the local engine's model and libraries before any audio is in hand.
-- `speech:listen` and `speech:hear`: live dictation on the local engine, settling words at each
-  pause and returning those still being spoken.
-- Every jar names its Java module (`Automatic-Module-Name`: `covia.venue`, `covia.core`,
-  `covia.<module>`).
-- `user:export`, `user:import` and `user:clone`: a user's whole stored state as one value,
-  secrets sealed to the caller's key; import runs Covia's migrations (#615).
+- MCP `tools/list` names each tool's operation in `_meta` (#558).
+- Authentication method bindings, `auth.methods` (#297).
+- `agent:suspend` records who suspended and why (#590).
+- `p2p` adapter: an opt-in Convex P2P node (#587).
+- Slack Socket Mode, agent template, skills and thread replies.
+- `scheduler:list` describes each event (#583).
+- `relay` handler for WhatsApp and Slack bindings (#584).
+- `telegram:format`: Markdown to Telegram HTML.
+- Venue `"tray": false`.
+- WhatsApp voice notes, photos and files; `whatsapp:download`.
+- `covia-speech` module: transcription and speech, local or over an OpenAI-compatible
+  API, with live dictation.
+- `user:export`, `user:import` and `user:clone` (#615).
 
 ### Changed
 
-- Discord, Telegram and SQL module jars use the venue's Kotlin, Jackson, Gson and Protobuf
-  instead of bundling their own copies.
-- The build and the venue warn on JDK 25 before 25.0.3 (JDK-8370887, late
-  timeouts); CI and release require a fixed JDK.
-- Javalin 7.2.4, MCP Java SDK 2.1.0 and Logback 1.6.6, matching Convex 0.8.18.
-- A standalone venue closes its lattice host after its node, saving the root
-  once more before the store closes.
+- Module jars use the venue's Kotlin, Jackson, Gson and Protobuf.
+- The build and venue warn on JDK 25 before 25.0.3; CI requires a fixed JDK.
+- Javalin 7.2.4, MCP Java SDK 2.1.0 and Logback 1.6.6.
+- A standalone venue saves its root once more on shutdown.
 
 ### Fixed
 
-- A tool called before its skill is loaded names the skills that provide it,
-  and runs nothing (#643).
-- Tool failures no longer show Java class names for expected errors; unexpected
-  ones are logged and reported as venue errors.
-- `/run` answers 400 for an operation that fails with its own reason, not 500.
+- A tool called before its skill is loaded names the skills that provide it (#643).
+- Expected tool failures no longer show Java class names.
+- `/run` answers 400, not 500, for an operation's own failure.
 - `GET /jobs/{id}` no longer reports a venue error as 404.
-- Secret operations expose distinct refusal constants for an existing name,
-  a missing secret and a decryption failure, including unreadable key versions
-  and malformed records (#586).
-- DLFS drive creation, deletion and listing use Convex's existing tombstone-aware
-  registry. Deleted drives survive a root save in flight and disappear from
-  listings, while file-level merge semantics remain intact (#589).
-- A deliberate agent stop survives late failures; cancelled cycles record its
-  cause and settle queued callers without recording a fault (#590).
+- Distinct secret refusals for existing, missing and undecryptable secrets (#586).
+- Deleted DLFS drives stay deleted (#589).
+- A deliberate agent stop survives late failures (#590).
 - Discord splits long messages without breaking surrogate pairs.
 - Messaging sends honour url-bound `secret/use` grants.
-- Adapters share one HTTP client per class, not one per venue or call; on JDK 27
-  each client holds a virtual-thread carrier, and the suite hung on Windows.
-- Oversized messaging downloads are refused as too large on JDK 27.
+- Adapters share one HTTP client per class.
+- Oversized messaging downloads are refused on JDK 27.
 
 ## [0.9.11] - 2026-10-15
 
