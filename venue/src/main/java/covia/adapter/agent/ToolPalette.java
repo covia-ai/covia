@@ -340,12 +340,7 @@ public final class ToolPalette {
 				continue;
 			}
 
-			// toolName lives inside the operation block. If absent, sanitise the
-			// dispatch string (e.g. "agent:create") rather than the catalog path.
-			AString assetToolName = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.TOOL_NAME));
-			AString dispatchAdapter = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
-			String toolName = deriveToolName(parsed[1], assetToolName,
-				(dispatchAdapter != null) ? dispatchAdapter : operation);
+			String toolName = boundName(parsed, asset);
 			// Manifest order owns name precedence. Do not let a later operation
 			// replace the route behind an earlier definition with the same name.
 			AString name = Strings.create(toolName);
@@ -358,6 +353,29 @@ public final class ToolPalette {
 				activityLabel(asset.meta(), toolName), name, source, ref));
 		}
 		return new Palette(tools, index, null);
+	}
+
+	/** The tool name a parsed entry binds to its operation's metadata. */
+	private static String boundName(AString[] parsed, Asset asset) {
+		// toolName lives inside the operation block. If absent, sanitise the
+		// dispatch string (e.g. "agent:create") rather than the catalog path.
+		AString assetToolName = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.TOOL_NAME));
+		AString dispatchAdapter = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
+		return deriveToolName(parsed[1], assetToolName,
+			(dispatchAdapter != null) ? dispatchAdapter : parsed[0]);
+	}
+
+	/**
+	 * The tool name a tool entry would bind, from definitions this venue holds
+	 * — never fetched from another — or null when none is held here. Read
+	 * authority is checked as when the entry is bound.
+	 */
+	static String localToolName(Engine engine, RequestContext ctx, ACell entry) {
+		AString[] parsed = parseConfigToolEntry(entry);
+		if (parsed == null) return null;
+		requireToolMetadataRead(engine, ctx, parsed[0]);
+		Asset asset = engine.resolveLocalAsset(parsed[0], ctx);
+		return (asset != null) ? boundName(parsed, asset) : null;
 	}
 
 	/** UI-only activity text, deliberately kept outside provider tool definitions. */
@@ -384,6 +402,18 @@ public final class ToolPalette {
 	}
 
 	/** Direct fixed-route lookup. */
+	/** The tool names that {@link #operation} routes in this index. */
+	static Set<String> names(AMap<AString, ACell> toolIndex) {
+		Set<String> names = new HashSet<>();
+		if (toolIndex == null) return names;
+		for (var entry : toolIndex.entrySet()) {
+			if (RT.ensureString(RT.getIn(entry.getValue(), Fields.OPERATION)) != null) {
+				names.add(entry.getKey().toString());
+			}
+		}
+		return names;
+	}
+
 	static AString operation(AMap<AString, ACell> toolIndex, String name) {
 		return (toolIndex == null || name == null) ? null
 			: RT.ensureString(RT.getIn(toolIndex.get(Strings.create(name)), Fields.OPERATION));

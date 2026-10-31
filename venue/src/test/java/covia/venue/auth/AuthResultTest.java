@@ -132,8 +132,8 @@ class AuthResultTest {
 		for (String name : new String[] {"alice", "Bob_2.test-3", ".", ".."}) {
 			// Deliberately the existing username grammar, including dot-only names.
 			AString user = Strings.create(did + ":u:" + name);
-			AString token = Strings.create(VenueAuth.namedKeyPair(key, user.toString(),
-				engine.getDIDString().toString(), 300).mintToken());
+			AString token = Strings.create(VenueAuth.namedKeyPair(key, user.toString(), 300)
+				.mintToken(engine.getDIDString().toString()));
 			assertNull(engine.getVenueState().users().get(user));
 			AuthResult result = auth.verify(token);
 			assertEquals(user, result.userDID());
@@ -176,8 +176,8 @@ class AuthResultTest {
 			":u:alice:g:worker", ":org:acme:service:build:job:42", ":g:parent:g:child",
 			":segment".repeat(2000)}) {
 			AString subject = Strings.create(did + suffix);
-			AString token = Strings.create(VenueAuth.namedKeyPair(key, subject.toString(),
-				engine.getDIDString().toString(), 300).mintToken());
+			AString token = Strings.create(VenueAuth.namedKeyPair(key, subject.toString(), 300)
+				.mintToken(engine.getDIDString().toString()));
 			Context ctx = context();
 			assertEquals(subject, auth.authenticate(ctx, token));
 			assertEquals(subject, auth.authenticatedUser(ctx));
@@ -271,8 +271,8 @@ class AuthResultTest {
 		// could issue a session for it; neither credential may authenticate.
 		AString publicDID = Strings.create(engine.getDIDString() + ":public");
 		assertTrue(engine.isPublicPrincipal(publicDID));
-		AString selfIssued = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(), publicDID.toString(),
-			engine.getDIDString().toString(), 300).mintToken());
+		AString selfIssued = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(), publicDID.toString(), 300)
+			.mintToken(engine.getDIDString().toString()));
 		assertKeyRejected(selfIssued, VenueAuthenticator.Reason.PUBLIC_SUBJECT);
 		AString venueSigned = JWT.signPublic(Maps.of(JWT.ISS, engine.getDIDString(), JWT.SUB, publicDID,
 			JWT.AUD, engine.getDIDString(), JWT.IAT, now, JWT.EXP, expiry), engine.getKeyPair());
@@ -282,7 +282,7 @@ class AuthResultTest {
 		// Any other venue-key-signed nested subject still authenticates.
 		AString user = Strings.create(UCAN.toDIDKey(engine.getKeyPair().getAccountKey()) + ":u:alice");
 		assertEquals(user, auth.authenticate(Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(),
-			user.toString(), engine.getDIDString().toString(), 300).mintToken())));
+			user.toString(), 300).mintToken(engine.getDIDString().toString()))));
 	}
 
 	private static void assertKeyRejected(AString token, String reason) {

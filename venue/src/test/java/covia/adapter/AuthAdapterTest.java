@@ -253,7 +253,7 @@ class AuthAdapterTest {
 		outerUser.secrets().store("MY_JWT", jwt.toString(), encKey);
 
 		// Authed client so the outer invocation runs as outerDid (the secret owner).
-		VenueHTTP authed = VenueHTTP.create(URI.create(TestServer.BASE_URL), VenueAuth.keyPair(outerKp, TestServer.ENGINE.getDIDString().toString()));
+		VenueHTTP authed = VenueHTTP.create(URI.create(TestServer.BASE_URL), VenueAuth.keyPair(outerKp));
 
 		// Body for the inner /api/v1/invoke call: ?wait=true so the response
 		// includes the completed job's output.

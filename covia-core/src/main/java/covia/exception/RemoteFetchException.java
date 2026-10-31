@@ -20,7 +20,7 @@ package covia.exception;
  * degrade visibly rather than fail wholesale.</p>
  */
 @SuppressWarnings("serial")
-public class RemoteFetchException extends CoviaException {
+public class RemoteFetchException extends UnavailableException {
 
 	/** The remote venue reference (DID / connection string), for callers that
 	 *  want to build a status without re-parsing the message. May be null. */

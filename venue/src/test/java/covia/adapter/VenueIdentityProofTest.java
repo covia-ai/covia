@@ -22,6 +22,7 @@ import convex.core.data.Maps;
 import convex.core.data.prim.CVMBool;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.auth.VenueDID;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
@@ -75,8 +76,27 @@ public class VenueIdentityProofTest {
 	@Test
 	void venueNamedByItsDidWebIsProven() throws IOException {
 		try (Peer peer = new Peer()) {
+			peer.claims = peer.did();
 			assertAuthenticated(ENGINE, peer, peer.did());
-			assertEquals(0, peer.discoveries.get(), "a did:web target needs no discovery");
+			assertEquals(1, peer.discoveries.get(),
+				"the connection checks once that the venue presents the DID it was opened for");
+		}
+	}
+
+	@Test
+	void venueNamedByItsDidWebPresentingAnotherGetsNoCredential() throws IOException {
+		try (Peer peer = new Peer()) {
+			peer.claims = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+			String refusal;
+			try {
+				Job job = ENGINE.jobs().invokeOperation(GRID_RUN, venueInput(peer.did()), ENGINE.venueContext());
+				assertThrows(Exception.class, () -> job.awaitResult(5000));
+				refusal = job.getErrorMessage();
+			} catch (RuntimeException e) {
+				refusal = e.getMessage();
+			}
+			assertTrue(refusal != null && refusal.contains(VenueDID.PRESENTS_OTHER), refusal);
+			assertEquals(0, peer.calls.get(), "a venue presenting another DID receives no call");
 		}
 	}
 
@@ -90,14 +110,14 @@ public class VenueIdentityProofTest {
 
 	@Test
 	void proofMatchesSchemeHostAndPort() {
-		assertTrue(VenueConnection.proven("https://venue.example.com", "did:web:venue.example.com"));
-		assertTrue(VenueConnection.proven("https://Venue.Example.com:443/", "did:web:venue.example.com"));
-		assertTrue(VenueConnection.proven("https://venue.example.com:8443", "did:web:venue.example.com%3A8443"));
-		assertTrue(VenueConnection.proven("http://localhost:8080", "did:web:localhost%3A8080"));
-		assertFalse(VenueConnection.proven("http://venue.example.com", "did:web:venue.example.com"));
-		assertFalse(VenueConnection.proven("https://venue.example.com:8443", "did:web:venue.example.com"));
-		assertFalse(VenueConnection.proven("https://evil.example", "did:web:venue.example.com"));
-		assertFalse(VenueConnection.proven("https://venue.example.com", "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"));
+		assertTrue(VenueDID.provenAt("https://venue.example.com", "did:web:venue.example.com"));
+		assertTrue(VenueDID.provenAt("https://Venue.Example.com:443/", "did:web:venue.example.com"));
+		assertTrue(VenueDID.provenAt("https://venue.example.com:8443", "did:web:venue.example.com%3A8443"));
+		assertTrue(VenueDID.provenAt("http://localhost:8080", "did:web:localhost%3A8080"));
+		assertFalse(VenueDID.provenAt("http://venue.example.com", "did:web:venue.example.com"));
+		assertFalse(VenueDID.provenAt("https://venue.example.com:8443", "did:web:venue.example.com"));
+		assertFalse(VenueDID.provenAt("https://evil.example", "did:web:venue.example.com"));
+		assertFalse(VenueDID.provenAt("https://venue.example.com", "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"));
 	}
 
 	private static AMap<AString, ACell> venueInput(String venue) {
@@ -124,7 +144,7 @@ public class VenueIdentityProofTest {
 		Job job = engine.jobs().invokeOperation(GRID_RUN, venueInput(venue), engine.venueContext());
 		// The peer is no venue, so the call itself fails once it has arrived
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(peer.authenticated.get() > 0, "the credential reaches the venue");
+		assertTrue(peer.authenticated.get() > 0, "the credential reaches the venue: " + job.getErrorMessage());
 	}
 
 	private static Engine unprovenEngine() {

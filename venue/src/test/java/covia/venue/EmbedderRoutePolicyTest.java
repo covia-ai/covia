@@ -117,9 +117,8 @@ class EmbedderRoutePolicyTest {
 		assertEquals(401,
 			get(strictServer, IDENTITY, "not-a-jwt").statusCode());
 		assertEquals(401, get(strictServer, IDENTITY,
-			VenueAuth.keyPair(key,
-				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString(),
-				300).mintToken()).statusCode());
+			VenueAuth.keyPair(key, 300).mintToken(
+				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString())).statusCode());
 
 		assertResponse(200, did.toString(), get(strictServer, IDENTITY, token));
 		assertNull(strictServer.getEngine().getVenueState().users().get(did),
@@ -135,11 +134,8 @@ class EmbedderRoutePolicyTest {
 	@Test
 	void namedCredentialExposesAuthenticatorAndMappedVenueUser()
 			throws Exception {
-		String token = VenueAuth.namedKeyPair(
-			operatorKey,
-			operatorDID.toString(),
-			strictServer.getEngine().getDIDString().toString(),
-			300).mintToken();
+		String token = VenueAuth.namedKeyPair(operatorKey, operatorDID.toString(), 300)
+			.mintToken(strictServer.getEngine().getDIDString().toString());
 
 		assertNotEquals(operatorKeyDID, operatorDID);
 		assertResponse(200, operatorKeyDID + "|" + operatorDID,
@@ -151,8 +147,8 @@ class EmbedderRoutePolicyTest {
 		AKeyPair key = AKeyPair.generate();
 		AString root = UCAN.toDIDKey(key.getAccountKey());
 		AString subject = Strings.create(root + ":u:alice:g:worker");
-		String token = VenueAuth.namedKeyPair(key, subject.toString(),
-			strictServer.getEngine().getDIDString().toString(), 300).mintToken();
+		String token = VenueAuth.namedKeyPair(key, subject.toString(), 300)
+			.mintToken(strictServer.getEngine().getDIDString().toString());
 		assertResponse(200, root + "|" + subject, get(strictServer, IDENTITIES, token));
 		assertNull(strictServer.getEngine().getVenueState().users().get(subject));
 		// Neither a known installation nor a known owner grants native user admission.
@@ -182,11 +178,8 @@ class EmbedderRoutePolicyTest {
 
 	@Test
 	void extenderCanAuthenticateAlternateCredentialCarrier() throws Exception {
-		String token = VenueAuth.namedKeyPair(
-			operatorKey,
-			operatorDID.toString(),
-			"did:web:embedder.example",
-			300).mintToken();
+		String token = VenueAuth.namedKeyPair(operatorKey, operatorDID.toString(), 300)
+			.mintToken("did:web:embedder.example");
 
 		assertResponse(200, operatorKeyDID + "|" + operatorDID,
 			getWithApiKey(strictServer, API_KEY_AUTH, token));
@@ -422,8 +415,7 @@ class EmbedderRoutePolicyTest {
 	}
 
 	private static String tokenFor(AKeyPair key, VenueServer server) {
-		return VenueAuth.keyPair(key,
-			server.getEngine().getDIDString().toString(), 300).mintToken();
+		return VenueAuth.keyPair(key, 300).mintToken(server.getEngine().getDIDString().toString());
 	}
 
 	private static String base(VenueServer server) {

@@ -35,7 +35,6 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
-import covia.exception.ConversionException;
 import covia.exception.RateLimitException;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
@@ -44,6 +43,7 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
+import covia.grid.auth.VenueDID;
 import covia.grid.impl.StreamContent;
 
 public class VenueHTTP extends Venue {
@@ -86,6 +86,10 @@ public class VenueHTTP extends Venue {
 	private final HttpClient httpClient;
 	private final URI baseURI;
 	private final VenueAuth auth;
+	/** The DID this connection was opened for, or null when opened by URL alone. */
+	private final String expectedDID;
+	/** The venue DID credentials are audienced to, once established ({@link VenueDID#establish}). */
+	private volatile String venueDID;
 
 	// ---- 429 backpressure handling ----
 
@@ -156,9 +160,24 @@ public class VenueHTTP extends Venue {
 	}
 
 	public VenueHTTP(URI host, VenueAuth auth) {
+		this(host, null, auth);
+	}
+
+	/**
+	 * A connection to the venue at {@code host} opened for the DID
+	 * {@code venueDID}: credentials it signs are audienced to that DID, and
+	 * none is sent unless the venue there presents it.
+	 *
+	 * @param host Venue address
+	 * @param venueDID The venue's DID, or null to take the DID the venue
+	 *        proves at {@code host}
+	 * @param auth Authentication strategy
+	 */
+	public VenueHTTP(URI host, String venueDID, VenueAuth auth) {
 		this.baseURI = host.resolve("/api/v1/");
 		this.httpClient = HTTP_CLIENT;
 		this.auth = auth;
+		this.expectedDID = venueDID;
 
 		// Auto-set user identity from auth if available
 		String did = auth.getDID();
@@ -166,7 +185,24 @@ public class VenueHTTP extends Venue {
 			setUser(did);
 		}
 	}
-	
+
+	/**
+	 * The DID of the venue this connection reaches, as credentials name it:
+	 * established on first use and kept for the connection's life.
+	 *
+	 * @return The venue's DID
+	 * @throws covia.exception.AuthException if the venue presents another DID
+	 *         than the connection was opened for, or one its address does not prove
+	 */
+	public String venueDID() {
+		String did = venueDID;
+		if (did == null) {
+			did = VenueDID.establish(baseURI, expectedDID);
+			venueDID = did;
+		}
+		return did;
+	}
+
 	/**
 	 * Gets the base URI for API requests. Every request this client makes
 	 * resolves against it, so its host is the only one the client dials.
@@ -198,7 +234,7 @@ public class VenueHTTP extends Venue {
 		// floor so large content transfers and slow LLM-backed invokes still
 		// complete; grows with the caller's configured job-wait timeout.
 		builder.timeout(Duration.ofMillis(Math.max(timeout, 120_000L)));
-		auth.apply(builder);
+		auth.apply(builder, this::venueDID);
 		// Proofs also ride a header so body-less requests (GET /jobs/{id} and
 		// friends) carry the caller's authority — without this, a federated
 		// hop can invoke a remote job but never observe it. Authentication is
@@ -365,7 +401,7 @@ public class VenueHTTP extends Venue {
 			ACell body=JSON.parseJSON5(response.body());
 			Hash v=Hash.parse(body);
 			if (v!=null) return v;
-			throw new ConversionException("Result did not contain a valid Hash: got "+body); 
+			throw new ResponseException("Result did not contain a valid Hash: got "+body, response);
 		});
 	} 
 
@@ -386,6 +422,17 @@ public class VenueHTTP extends Venue {
 	 */
 	public static VenueHTTP create(URI host, VenueAuth auth) {
 		return new VenueHTTP(host, auth);
+	}
+
+	/**
+	 * Create a Covia grid client for the venue with a known DID
+	 * @param host Host Venue
+	 * @param venueDID The venue's DID, or null to take the DID it proves at {@code host}
+	 * @param auth Authentication provider
+	 * @return Covia client instance
+	 */
+	public static VenueHTTP create(URI host, String venueDID, VenueAuth auth) {
+		return new VenueHTTP(host, venueDID, auth);
 	}
 
 	/**
@@ -727,7 +774,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
-				throw new ConversionException("assets API returned status: "+code);
+				throw new ResponseException("assets API returned status: "+code, response);
 			}
 			ACell body=JSON.parseJSON5(response.body());
 			AVector<?> items=null;
@@ -739,14 +786,14 @@ public class VenueHTTP extends Venue {
 			} 
 			
 			if (items==null) {
-				throw new ConversionException("assets API did not return a list of assets");
+				throw new ResponseException("assets API did not return a list of assets", response);
 			}
 			
 			ArrayList<String> al=new ArrayList<>();
 			long n=items.count();
 			for (int i=0; i<n; i++) {
 				AString ref=RT.ensureString(items.get(i));
-				if (ref==null) throw new ConversionException("assets API returned a non-string reference");
+				if (ref==null) throw new ResponseException("assets API returned a non-string reference", response);
 				al.add(ref.toString());
 			}
 			return al;
@@ -892,7 +939,7 @@ public class VenueHTTP extends Venue {
 						return hash;
 					}
 				}
-				throw new ConversionException("Failed to parse content hash from response: " + response.body());
+				throw new ResponseException("Failed to parse content hash from response: " + response.body(), response);
 			} else {
 				throw new ResponseException("Failed to add content: " + response.statusCode() + " - " + response.body(), response);
 			}

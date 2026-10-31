@@ -127,7 +127,7 @@ public class HitlFederationTest {
 		// Bob calls VENUE A; his ucans carry the delegation plus his identity
 		// token for venue B. The grid op input carries data only (COG-15).
 		VenueHTTP bobOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_A));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP));
 		bobOnA.setUcans(java.util.List.of(
 			hitlGrant, identityToken(bobKP, TwoVenueTestServer.DID_B)));
 
@@ -206,7 +206,7 @@ public class HitlFederationTest {
 
 		// Bob presents ONLY his identity token — no delegation from Alice.
 		VenueHTTP bobOnA = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP, TwoVenueTestServer.DID_A));
+			URI.create(TwoVenueTestServer.BASE_URL_A), VenueAuth.keyPair(bobKP));
 		bobOnA.setUcans(java.util.List.of(
 			identityToken(bobKP, TwoVenueTestServer.DID_B)));
 

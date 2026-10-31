@@ -28,10 +28,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `outbound/any` on `<venueDID>/outbound`: the venue's own standing to dial any HTTP,
   MCP, A2A, model, Convex peer or venue target unchecked, delegable by a venue-issued grant.
 - `Grid.webDIDAddress`: the address a `did:web` venue is reached at.
+- Expected-failure exceptions: `InvalidInputException`, `NotFoundException`,
+  `ConflictException`, `NotSupportedException`, `UnavailableException`,
+  `ConfigurationException` (#644).
 - `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
 
 ### Changed
 
+- `RemoteFetchException` is an `UnavailableException`.
 - A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
   it stands for by position in the frame's history. A legacy frame renders as it will
   once migrated, so migration still leaves the model's input unchanged.
@@ -52,6 +56,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Each venue migration step is a class, listed in order in `VenueMigrations.STEPS`.
 - `RemoteFetchException.malformedVenue` is `invalidVenue`, which also reports a
   target the outbound guard refuses.
+- `VenueAuth` key-pair strategies hold no audience: the connection names its venue as
+  each token's `aud`. `keyPair(kp, did)` and `identityKeyPair` are gone, `mintToken`
+  takes the venue's DID, and `apply` takes the connection's venue DID.
 - `Engine.requireSafeUrl` and `requireSafeHost` take the `RequestContext` of the
   caller that chose the target, and `Engine.fetchRemoteAsset`, `fetchRemoteNamedAsset`
   and `fetchRemoteContent` the caller whose reference names the publisher.
@@ -65,6 +72,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The `venue/relay` ability and `UcanTokens.relayDelegation`: users hop with
   `authenticateAs: "caller"` and grants.
 - `auth.audience`: `auth.requireAud` replaces it.
+- `ConversionException`: a malformed venue response is a `ResponseException`.
 
 ### Security
 
@@ -93,6 +101,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   and also refuses IPv6 unique local and IPv4-carrying forms, `100.64.0.0/10` and `0.0.0.0/8`.
 - `http.allowedHosts` and `http.blockedHosts` match a host name with or without its trailing dot.
 - A bearer credential must name the venue in `aud` unless `auth.requireAud` is off.
+- A client connection signs credentials only for the DID it was opened with, or one the
+  venue proves at its address, and sends none to a venue presenting another DID.
 - OAuth connections are the `oauth` adapter's own state, tokens sealed, out of every
   secret operation's reach. `oauth/use`, `oauth/connect`, `oauth/disconnect` and
   `crud/read` on `<did>/oauth/<provider>` gate them; the public principal has none.
@@ -301,6 +311,10 @@ These changes require Convex 0.8.18.
 
 ### Fixed
 
+- A tool called before its skill is loaded names the skills that provide it,
+  and runs nothing (#643).
+- Tool failures no longer show Java class names for expected errors; unexpected
+  ones are logged and reported as venue errors.
 - Secret operations expose distinct refusal constants for an existing name,
   a missing secret and a decryption failure, including unreadable key versions
   and malformed records (#586).

@@ -2148,14 +2148,27 @@ public class Engine {
 		return resolveAsset(ref, ctx, false);
 	}
 
+	/**
+	 * {@link #resolveAsset} from what this venue holds, never fetching from
+	 * another venue: a remote DID URL resolves only to a definition held here,
+	 * and is otherwise null. For lookups that must stay cheap, such as hints.
+	 */
+	public Asset resolveLocalAsset(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, true, false);
+	}
+
 	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked) {
+		return resolveAsset(ref, ctx, checked, true);
+	}
+
+	private Asset resolveAsset(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
 		if (ref == null) return null;
 
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no
 		// venue — execution, if any, is local. See resolveDIDURL.
 		if (ref.startsWith(NS_DID)) {
-			Asset asset = resolveDIDURL(ref, ctx, checked);
+			Asset asset = resolveDIDURL(ref, ctx, checked, fetch);
 			if (asset != null) return asset;
 			// Fall through — DID URL might be unresolvable but other forms
 			// could match (rare; defensive).
@@ -2328,16 +2341,18 @@ public class Engine {
 	 * other resolution forms or surface a clean error.</p>
 	 */
 	private Asset resolveDIDURL(AString ref, RequestContext ctx) {
-		return resolveDIDURL(ref, ctx, true);
+		return resolveDIDURL(ref, ctx, true, true);
 	}
 
-	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked) {
+	/** {@code fetch} false resolves only a definition held here. */
+	private Asset resolveDIDURL(AString ref, RequestContext ctx, boolean checked, boolean fetch) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null) return null;
 		if (r.name() != null) {
 			// Named refs are publisher-scoped bindings — OUR v/ops/x is not
 			// THEIR v/ops/x, so there is no local-copy shortcut.
-			return "web".equals(r.method()) ? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
+			return (fetch && "web".equals(r.method()))
+				? fetchRemoteNamedAsset(ctx, r.didString(), r.name()) : null;
 		}
 		Asset local = lookupLocalAsset(r);
 		if (local != null) {
@@ -2347,7 +2362,7 @@ public class Engine {
 			if (checked) requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
 			return local;
 		}
-		return "web".equals(r.method()) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
+		return (fetch && "web".equals(r.method())) ? fetchRemoteAsset(ctx, r.didString(), r.hash()) : null;
 	}
 
 	/**
@@ -4280,18 +4295,20 @@ public class Engine {
 	 * @throws IllegalStateException when the guard cannot be enforced
 	 */
 	public Venue connectVenue(RequestContext ctx, String spec, VenueAuth auth) {
-		return connectVenue(spec, auth, outboundUnrestricted(ctx));
+		return connectVenue(spec, null, auth, outboundUnrestricted(ctx));
 	}
 
 	/**
 	 * {@link #connectVenue(RequestContext, String, VenueAuth)} for a caller whose
 	 * standing was decided when the connection was first authorised, such as a
-	 * recovered job's.
+	 * recovered job's, to a venue whose DID may already be known.
 	 *
+	 * @param venueDID The target's DID, as the hop proved it; credentials the
+	 *        connection signs are audienced to it. Null when none is signed.
 	 * @param unrestricted Whether that caller could have the venue dial anywhere
 	 */
-	public Venue connectVenue(String spec, VenueAuth auth, boolean unrestricted) {
-		Venue venue = Grid.connect(spec, auth);
+	public Venue connectVenue(String spec, String venueDID, VenueAuth auth, boolean unrestricted) {
+		Venue venue = Grid.connect(spec, venueDID, auth);
 		if (unrestricted) return venue;
 		if (!(venue instanceof VenueHTTP http)) {
 			throw new IllegalArgumentException(UNGUARDED_VENUE_TRANSPORT + spec);

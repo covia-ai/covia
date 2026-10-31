@@ -246,7 +246,7 @@ public class AgentApiTest {
 			Vectors.empty()).toJWT(ownerKey);
 
 		VenueHTTP delegated = VenueHTTP.create(
-			URI.create(TestServer.BASE_URL), VenueAuth.keyPair(delegateKey, TestServer.ENGINE.getDIDString().toString()));
+			URI.create(TestServer.BASE_URL), VenueAuth.keyPair(delegateKey));
 		delegated.setTimeout(5000);
 		delegated.setUcans(java.util.List.of(createGrant.toString()));
 

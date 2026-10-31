@@ -61,7 +61,7 @@ public final class VenueStoreFixture {
 
 	public static VenueHTTP client(VenueServer server, String keyByte) {
 		VenueHTTP client = VenueHTTP.create(URI.create("http://127.0.0.1:" + server.port()),
-			VenueAuth.keyPair(key(keyByte), server.getEngine().getDIDString().toString()));
+			VenueAuth.keyPair(key(keyByte)));
 		client.setTimeout(20_000);
 		return client;
 	}

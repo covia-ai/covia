@@ -2933,23 +2933,21 @@ public class LLMAgentAdapterTest {
 		assertTrue(msg.contains("goaltree harness tool"), msg);
 		assertTrue(msg.contains("llmagent"), msg);
 
-		// The reverse direction: llmagent's harness names under goaltree.
+		// A runtime's own harness tool reaches dispatch only through
+		// invoke_tool, and is told to call it directly. Every llmagent harness
+		// name is also goaltree's: the shared tools and the task tools.
+		ACell own = adapter.dispatchTool("context_load", Maps.empty(), null, ctx, 1000);
+		assertEquals("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, "context_load"),
+			RT.ensureString(own).toString());
 		GoalTreeAdapter goaltree = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell reverse = goaltree.dispatchTool("complete_task", Maps.empty(), null, ctx, 1000);
-		String reverseMsg = RT.ensureString(reverse).toString();
-		assertTrue(reverseMsg.contains("llmagent harness tool"), reverseMsg);
-		assertTrue(reverseMsg.contains("goaltree"), reverseMsg);
+		ACell task = goaltree.dispatchTool(TaskTools.COMPLETE, Maps.empty(), null, ctx, 1000);
+		assertEquals("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, TaskTools.COMPLETE),
+			RT.ensureString(task).toString());
 
-		// A name shared by both runtimes reports both providers.
-		ACell shared = adapter.dispatchTool("context_load", Maps.empty(), null, ctx, 1000);
-		String sharedMsg = RT.ensureString(shared).toString();
-		assertTrue(sharedMsg.contains("goaltree, llmagent"), sharedMsg);
-
-		// A genuinely unknown name keeps the ordinary resolution failure.
+		// A genuinely unknown name is neither a tool nor an operation reference.
 		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), null, ctx, 1000);
-		String unknownMsg = RT.ensureString(unknown).toString();
-		assertTrue(unknownMsg.startsWith("Error:"), unknownMsg);
-		assertFalse(unknownMsg.contains("harness tool"), unknownMsg);
+		assertEquals("Error: " + HarnessTools.noSuchTool("no_such_tool_xyz", null),
+			RT.ensureString(unknown).toString());
 	}
 
 	// ========== agent:context includes loads-derived exchanges (#418) ==========

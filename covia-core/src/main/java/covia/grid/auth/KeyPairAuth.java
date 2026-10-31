@@ -1,6 +1,7 @@
 package covia.grid.auth;
 
 import java.net.http.HttpRequest;
+import java.util.function.Supplier;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.util.Multikey;
@@ -17,19 +18,18 @@ import convex.auth.jwt.JWT;
  * <p>Generates a fresh, short-lived JWT for each request. The JWT is signed
  * with the provided key pair and contains:
  * <ul>
- *   <li>{@code sub} — normally the key's {@code did:key}, or a stable named
-	 *       DID whose venue-owned authentication record admits this key, or
-	 *       an identity nested below the signing key's DID</li>
+ *   <li>{@code sub} — normally the key's {@code did:key}, or a named DID
+ *       the key is authorised for</li>
  *   <li>{@code iss} — same as {@code sub} (self-issued)</li>
- *   <li>{@code aud} — the target venue's DID, when configured (RECOMMENDED:
- *       binds the token to one venue, so a captured JWT cannot be replayed at
- *       any other venue that accepts self-issued tokens)</li>
+ *   <li>{@code aud} — the DID of the venue the request goes to, as the
+ *       connection established it, so a captured JWT cannot be replayed at
+ *       any other venue</li>
  *   <li>{@code iat} — current time</li>
  *   <li>{@code exp} — current time + token lifetime</li>
  * </ul>
  *
  * <p>For a key-derived identity the JWT's {@code kid} header is the bare
- * Multikey. For a stable named identity it is the verification-method DID URL
+ * Multikey. For a named identity it is the verification-method DID URL
  * {@code <subject>#<multikey>} published by that identity's DID document.
  */
 class KeyPairAuth extends VenueAuth {
@@ -44,28 +44,16 @@ class KeyPairAuth extends VenueAuth {
 	private final String subject;
 	/** JOSE key identifier: bare Multikey, or the named subject's DID URL. */
 	private final AString keyID;
-	/** Target venue DID for the {@code aud} claim; null = no audience binding. */
-	private final String audience;
-
-	KeyPairAuth(AKeyPair keyPair) {
-		this(keyPair, DEFAULT_TOKEN_LIFETIME, null);
-	}
-
-	KeyPairAuth(AKeyPair keyPair, long tokenLifetime) {
-		this(keyPair, tokenLifetime, null);
-	}
-
-	KeyPairAuth(AKeyPair keyPair, long tokenLifetime, String audience) {
-		this(keyPair, null, tokenLifetime, audience);
-	}
 
 	/**
-	 * Creates a key-pair authenticator whose stable subject may differ from the
+	 * Creates a key-pair authenticator whose subject may differ from the
 	 * signing key's {@code did:key}. A local named user requires a registered
 	 * authentication key; an identity nested below the signing key's DID does not.
 	 * Authentication alone grants neither user admission nor parent authority.
+	 *
+	 * @param subject named identity, or null for the key's own {@code did:key}
 	 */
-	KeyPairAuth(AKeyPair keyPair, String subject, long tokenLifetime, String audience) {
+	KeyPairAuth(AKeyPair keyPair, String subject, long tokenLifetime) {
 		if (keyPair == null) {
 			throw new IllegalArgumentException("Key pair must not be null");
 		}
@@ -74,7 +62,6 @@ class KeyPairAuth extends VenueAuth {
 		}
 		this.keyPair = keyPair;
 		this.tokenLifetime = tokenLifetime;
-		this.audience = audience;
 		// Pre-compute the did:key from the public key
 		AString multikey = Multikey.encodePublicKey(keyPair.getAccountKey());
 		this.didKey = "did:key:" + multikey;
@@ -85,31 +72,32 @@ class KeyPairAuth extends VenueAuth {
 	}
 
 	@Override
-	public void apply(HttpRequest.Builder builder) {
-		builder.header("Authorization", "Bearer " + buildToken());
+	public void apply(HttpRequest.Builder builder, Supplier<String> venueDID) {
+		builder.header("Authorization", "Bearer " + buildToken(venueDID.get()));
 	}
 
 	@Override
-	public String mintToken() {
-		return buildToken().toString();
+	public String mintToken(String venueDID) {
+		requireDID(venueDID, "venueDID");
+		return buildToken(venueDID).toString();
 	}
 
 	/**
 	 * The ONE place the claim set exists — {@code sub}/{@code iss} = the
-	 * configured subject, {@code aud} when configured, {@code iat} now,
+	 * configured subject, {@code aud} = the venue, {@code iat} now,
 	 * {@code exp} now + lifetime — signed with {@link JWT#signPublic}.
 	 * Shared by {@link #apply} and {@link #mintToken} so a minted token is
 	 * exactly what a request would carry, by construction.
 	 */
-	private AString buildToken() {
+	private AString buildToken(String venueDID) {
 		long nowSecs = System.currentTimeMillis() / 1000;
 		AMap<AString, ACell> claims = Maps.of(
 			JWT.SUB, Strings.create(subject),
 			JWT.ISS, Strings.create(subject),
+			JWT.AUD, Strings.create(venueDID),
 			JWT.IAT, nowSecs,
 			JWT.EXP, nowSecs + tokenLifetime
 		);
-		if (audience != null) claims = claims.assoc(JWT.AUD, Strings.create(audience));
 		return JWT.signPublic(claims, keyPair, keyID);
 	}
 

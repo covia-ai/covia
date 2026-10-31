@@ -215,8 +215,11 @@ public class VenueIdentityTest {
 	@Test
 	void clientsMayAudienceBindToEitherPublishedForm() throws Exception {
 		String keyForm = "did:key:" + Multikey.encodePublicKey(venueKey.getAccountKey());
-		assertEchoWorks(VenueAuth.keyPair(AKeyPair.generate(), WEB_DID.toString()));
-		assertEchoWorks(VenueAuth.keyPair(AKeyPair.generate(), keyForm));
+		// A connection takes the form the venue presents; a token minted for
+		// the other form is accepted too.
+		assertEchoWorks(VenueAuth.keyPair(AKeyPair.generate()));
+		assertEchoWorks(VenueAuth.bearer(VenueAuth.keyPair(AKeyPair.generate()).mintToken(WEB_DID.toString())));
+		assertEchoWorks(VenueAuth.bearer(VenueAuth.keyPair(AKeyPair.generate()).mintToken(keyForm)));
 	}
 
 	private void assertEchoWorks(VenueAuth auth) throws Exception {
