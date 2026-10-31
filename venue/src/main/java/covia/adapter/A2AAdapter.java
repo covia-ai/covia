@@ -36,6 +36,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -412,18 +413,18 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (metadata.containsKey(K_AGENT)) {
 			a2a = RT.ensureMap(metadata.get(K_AGENT));
 			if (a2a == null || !Strings.create("a2a").equals(a2a.get(Fields.ADAPTER)))
-				throw new InvalidInputException(INVALID_AGENT_DEFINITION + "expected a2a adapter");
+				throw new InvalidDefinitionException(INVALID_AGENT_DEFINITION + "expected a2a adapter");
 		} else {
 			if (!TYPE_A2A_AGENT.equals(RT.ensureString(metadata.get(Fields.TYPE)))) {
 				throw new InvalidInputException("Asset is not type 'a2a-agent': " + ref);
 			}
 			a2a = RT.ensureMap(metadata.get(Fields.A2A));
 		}
-		if (a2a == null) throw new InvalidInputException("A2A agent asset has no 'a2a' profile");
+		if (a2a == null) throw new InvalidDefinitionException("A2A agent asset has no 'a2a' profile");
 		AString endpoint = RT.ensureString(a2a.get(K_ENDPOINT));
 		AMap<AString, ACell> card = RT.ensureMap(a2a.get(K_CARD));
 		if (endpoint == null || card == null) {
-			throw new InvalidInputException("A2A agent asset requires a card and endpoint");
+			throw new InvalidDefinitionException("A2A agent asset requires a card and endpoint");
 		}
 		engine.requireSafeUrl(ctx, endpoint.toString());
 		AMap<AString, ACell> authBinding = RT.ensureMap(a2a.get(K_AUTH));

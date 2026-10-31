@@ -40,6 +40,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.CoviaException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.ShuttingDownException;
@@ -1266,7 +1267,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
-		} catch (UnavailableException e) {
+		} catch (UnavailableException | InvalidDefinitionException e) {
 			buildError(ctx, 503, e.getMessage());
 		}
 	}

@@ -8,6 +8,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.api.Fields;
 import covia.exception.ConflictException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -55,7 +56,7 @@ public final class ExternalAgents {
 		try {
 			return validate(agent.getRecord().get(AgentState.KEY_AGENT));
 		} catch (InvalidInputException e) {
-			throw new UnavailableException(MISCONFIGURED + e.getMessage(), e);
+			throw new InvalidDefinitionException(MISCONFIGURED + e.getMessage(), e);
 		}
 	}
 

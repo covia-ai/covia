@@ -127,7 +127,7 @@ class AgentFacetTest {
         assertEquals(Status.INPUT_REQUIRED, first.getStatus(), first.getErrorMessage());
         AgentState agent = agent("external");
         agent.putRecord(agent.getRecord().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "")));
-        covia.exception.UnavailableException e = assertThrows(covia.exception.UnavailableException.class,
+        covia.exception.InvalidDefinitionException e = assertThrows(covia.exception.InvalidDefinitionException.class,
             () -> engine.jobs().deliverMessage(first.getID(), Maps.of(Fields.MESSAGE, Strings.create("continue")), ctx));
         assertEquals(ExternalAgents.MISCONFIGURED + ExternalAgents.INVALID, e.getMessage());
     }
