@@ -37,6 +37,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.RateLimitException;
 import covia.exception.ShuttingDownException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
@@ -1497,15 +1498,23 @@ public class JobManager {
 	}
 
 	/**
-	 * Resolves the adapter responsible for a job.
+	 * Resolves the adapter responsible for a job: the one its record says it
+	 * was dispatched to, else the one its operation names, else null.
+	 * @throws UnavailableException if that adapter is not enabled here now
 	 */
 	private AAdapter resolveJobAdapter(Job job) {
-		AMap<AString, ACell> meta = resolveJobMeta(job);
-		if (meta != null) {
-			String adapterName = AAdapter.getAdapterName(meta);
-			if (adapterName != null) return engine.getAdapter(adapterName);
+		AString recorded = RT.ensureString(job.getData().get(Fields.ADAPTER));
+		String adapterName;
+		if (recorded != null) {
+			adapterName = recorded.toString();
+		} else {
+			AMap<AString, ACell> meta = resolveJobMeta(job);
+			adapterName = (meta != null) ? AAdapter.getAdapterName(meta) : null;
 		}
-		return null;
+		if (adapterName == null) return null;
+		AAdapter adapter = engine.getAdapter(adapterName);
+		if (adapter == null) throw new UnavailableException(ADAPTER_NOT_AVAILABLE + adapterName);
+		return adapter;
 	}
 
 	// ========== Job ID Generation ==========

@@ -33,6 +33,7 @@ import covia.exception.ConflictException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -1047,6 +1048,32 @@ public class JobManagerTest {
 					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
 				"a message the job's operation cannot take is refused, not dropped");
 			assertTrue(ex.getMessage().startsWith(JobManager.JOB_NO_MESSAGES), ex.getMessage());
+		} finally {
+			job.cancel();
+		}
+	}
+
+	@Test
+	public void testDeliverMessageWithDisabledAdapterIsUnavailable() {
+		engine.registerAdapter(new AAdapter() {
+			@Override public String getName() { return "disabled-multiturn-test"; }
+			@Override public String getDescription() { return "test"; }
+			@Override public boolean supportsMultiTurn() { return true; }
+			@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+					AMap<AString, ACell> m, ACell in) {
+				return new CompletableFuture<>();
+			}
+		});
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("disabled-multiturn-test:run")));
+		Job job = engine.jobs().invokeOperation(meta, null, ctx);
+		engine.disableAdapter("disabled-multiturn-test");
+		try {
+			UnavailableException ex = assertThrows(UnavailableException.class, () ->
+				engine.jobs().deliverMessage(job.getID(),
+					Maps.of(Strings.create("content"), Strings.create("more")), ctx),
+				"the job takes messages, but its backend is not enabled now");
+			assertTrue(ex.getMessage().startsWith(JobManager.ADAPTER_NOT_AVAILABLE), ex.getMessage());
 		} finally {
 			job.cancel();
 		}

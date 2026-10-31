@@ -674,6 +674,9 @@ public class A2A extends ACoviaAPI {
 		}
 		try {
 			engine().jobs().cancelJob(task.id(), rctx);
+		} catch (ConflictException e) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE, e.getMessage());
+			return;
 		} catch (Exception e) {
 			writeError(ctx, id, A2AErrorCodes.INTERNAL, "Cancel failed: " + e.getMessage());
 			return;
