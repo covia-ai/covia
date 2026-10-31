@@ -961,6 +961,7 @@ public class JobManager {
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(callerDID);
 			// Create before publishing the runtime handle; updates only edit existing rows.
+			// Readers can see the row first, so by-id lookups go through liveJob.
 			if (!memoryOnly && !job.account().createJob(jobID, status)) {
 				throw new IllegalStateException(JOB_ID_EXISTS + jobID);
 			}
@@ -1061,10 +1062,24 @@ public class JobManager {
 	}
 
 	/**
+	 * The live handle for a job a caller names by id. Acceptance writes a recorded
+	 * job's row before it registers the handle, both under the account monitor, so
+	 * a caller who has just read the row can arrive in between. A miss re-checks
+	 * under that monitor, after any acceptance in progress.
+	 */
+	private Job liveJob(Blob jobID) {
+		Job job = activeJobs.get(jobID);
+		if (job != null) return job;
+		synchronized (engine.getAuth()) {
+			return activeJobs.get(jobID);
+		}
+	}
+
+	/**
 	 * Gets the live Job object with lattice fallback using request context.
 	 */
 	public Job getJob(Blob jobID, RequestContext ctx) {
-		Job job = activeJobs.get(jobID);
+		Job job = liveJob(jobID);
 		if (job != null) {
 			requireReadable(ctx, jobID, job.getData());
 			return job;
@@ -1127,8 +1142,7 @@ public class JobManager {
 	}
 
 	public AMap<AString, ACell> cancelJob(Blob id, String reason) {
-		Job job;
-		job = activeJobs.get(id);
+		Job job = liveJob(id);
 		if (job == null) return null;
 		job.cancel(reason);
 		return job.getData();
@@ -1142,7 +1156,7 @@ public class JobManager {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
-		Job job = activeJobs.get(id);
+		Job job = liveJob(id);
 		if (job == null) return null;
 		job.pause();
 		return job.getData();
@@ -1156,7 +1170,7 @@ public class JobManager {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
-		Job job = activeJobs.get(id);
+		Job job = liveJob(id);
 		if (job == null) return null;
 		job.resume();
 		return job.getData();
@@ -1195,7 +1209,7 @@ public class JobManager {
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public void deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
-		Job job = activeJobs.get(jobID);
+		Job job = liveJob(jobID);
 		if (job == null) {
 			// Not active: consult the caller's lattice so a job that has completed
 			// and been evicted reports its terminal state rather than "not found"
