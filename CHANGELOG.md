@@ -30,7 +30,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `Grid.webDIDAddress`: the address a `did:web` venue is reached at.
 - Expected-failure exceptions: `InvalidInputException`, `NotFoundException`,
   `ConflictException`, `NotSupportedException`, `UnavailableException`,
-  `ConfigurationException`, `ShuttingDownException` (#644).
+  `ConfigurationException`, `ShuttingDownException`, `StillStartingException` (#644).
 - `auth.requireVenueProof` (default on) turns off venue identity proof for test venues.
 - `auth.venueProof`: the mechanisms, in order, that may prove a venue's DID, by default
   `address` then `challenge`; adapters add more through `VenueProofMethods`.
@@ -43,6 +43,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `JobManager` throws Covia exception types for refused invocations and job
   messages (#644).
 - A venue shutting down answers 503 on `/invoke`, `/run` and `DELETE /users/{did}`.
+- A Telegram or Discord bot that is not running says whether it is still starting,
+  retrying a failed start, or stopped.
 - A compaction summary renders as `[Compacted: turns <from>–<to>]`, naming the turns
   it stands for by position in the frame's history. A legacy frame renders as it will
   once migrated, so migration still leaves the model's input unchanged.
