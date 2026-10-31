@@ -35,6 +35,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -72,21 +73,23 @@ final class FileOperations {
 	private FileOperations() {}
 
 	/**
-	 * An IO failure as the Covia type for what it says about the target. A
-	 * missing file is not found; an existing file where none may be, a
-	 * non-empty directory, a file where a directory is needed, a file the
-	 * system will not open and a file that is not a readable archive refuse
-	 * the request as they stand. Anything else is a venue fault.
+	 * An IO failure as the Covia type for what it says about the request. A
+	 * missing file is not found, and an existing file where a new one would go
+	 * conflicts with it. Deleting a non-empty directory without
+	 * {@code recursive}, a path through a file and a file that is not a
+	 * readable archive are bad input. A file the system will not open is the
+	 * operator's setup. Anything else is a venue fault.
 	 */
 	static RuntimeException failure(IOException e) {
 		if (e instanceof NoSuchFileException missing) {
 			return new NotFoundException(e.getMessage(), missing.getFile());
 		}
-		if (e instanceof FileAlreadyExistsException || e instanceof DirectoryNotEmptyException
-				|| e instanceof NotDirectoryException || e instanceof AccessDeniedException
+		if (e instanceof FileAlreadyExistsException) return new ConflictException(e.getMessage());
+		if (e instanceof DirectoryNotEmptyException || e instanceof NotDirectoryException
 				|| e instanceof ZipException) {
-			return new ConflictException(e.getMessage());
+			return new InvalidInputException(e.getMessage(), e);
 		}
+		if (e instanceof AccessDeniedException) return new ConfigurationException(e.getMessage(), e);
 		return new UncheckedIOException(e.getMessage(), e);
 	}
 

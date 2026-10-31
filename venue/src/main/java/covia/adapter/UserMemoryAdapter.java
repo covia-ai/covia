@@ -20,7 +20,6 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.AuthException;
-import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.venue.RequestContext;
@@ -284,7 +283,7 @@ public class UserMemoryAdapter extends AAdapter {
 		ACell value = readValue(ctx, path);
 		if (value == null) return Vectors.empty();
 		if (value instanceof AVector) return (AVector<ACell>) value;
-		throw new ConflictException("memory at " + path + " is not a flat list — remember/update/forget "
+		throw new InvalidInputException("memory at " + path + " is not a flat list — remember/update/forget "
 			+ "operate on flat lists; edit a structured store with the covia tools");
 	}
 

@@ -20,7 +20,6 @@ import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
-import covia.exception.ConflictException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -259,7 +258,7 @@ public class ContextLoader {
 			if (jobData == null) throw new NotFoundException("job not found: " + jobId, jobId.toString());
 			ACell status = jobData.get(Fields.STATUS);
 			if (!Strings.create("COMPLETE").equals(status)) {
-				throw new ConflictException("job " + jobId + " is not complete (" + status + ")");
+				throw new UnavailableException("job " + jobId + " is not complete (" + status + ")");
 			}
 			ACell output = jobData.get(Fields.OUTPUT);
 			AString path = RT.ensureString(entry.get(K_PATH));
@@ -522,7 +521,7 @@ public class ContextLoader {
 
 			ACell status = jobData.get(Fields.STATUS);
 			if (!Strings.create("COMPLETE").equals(status)) {
-				if (required) throw new ConflictException("Required context job not complete: " + jobId + " status=" + status);
+				if (required) throw new UnavailableException("Required context job not complete: " + jobId + " status=" + status);
 				return null;
 			}
 

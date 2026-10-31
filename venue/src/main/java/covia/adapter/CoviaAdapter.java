@@ -37,7 +37,6 @@ import static covia.lattice.WorkspaceRoot.parseStringPath;
 
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -530,7 +529,7 @@ public class CoviaAdapter extends AAdapter {
 			return slicePage(typeName, total, page, offset, input);
 
 		} else {
-			throw new ConflictException(
+			throw new InvalidInputException(
 				"covia:slice requires a collection (vector, map, or set), got: " + typeName);
 		}
 	}
