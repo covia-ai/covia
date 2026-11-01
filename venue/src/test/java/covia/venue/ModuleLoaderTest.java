@@ -28,6 +28,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -152,7 +154,7 @@ public class ModuleLoaderTest {
 			Strings.create("sha256"), Strings.create("00".repeat(32)))));
 		Engine bad = Engine.createTemp(badConfig);
 		try {
-			IllegalStateException e = assertThrows(IllegalStateException.class,
+			ConfigurationException e = assertThrows(ConfigurationException.class,
 				() -> Engine.addDemoAssets(bad));
 			assertTrue(e.getMessage().contains("integrity check FAILED"), e.getMessage());
 		} finally {
@@ -166,7 +168,7 @@ public class ModuleLoaderTest {
 			Vectors.of(Strings.create(dir.resolve("no-such-module.jar").toString())));
 		Engine engine = Engine.createTemp(config);
 		try {
-			IllegalStateException e = assertThrows(IllegalStateException.class,
+			ConfigurationException e = assertThrows(ConfigurationException.class,
 				() -> Engine.addDemoAssets(engine));
 			assertTrue(e.getMessage().contains("Module jar not found"), e.getMessage());
 		} finally {
@@ -392,7 +394,7 @@ public class ModuleLoaderTest {
 				ExecutionException e = assertThrows(ExecutionException.class,
 					() -> asVenue(strict, "v/ops/venue/module/load",
 						Maps.of(Strings.create("module"), Strings.create(bad))), bad);
-				assertInstanceOf(IllegalArgumentException.class, rootCause(e), bad + ": " + rootCause(e));
+				assertInstanceOf(InvalidInputException.class, rootCause(e), bad + ": " + rootCause(e));
 				assertNull(strict.getAdapter("modtest"), bad);
 			}
 			// A relative sub-path inside the staging dir is fine

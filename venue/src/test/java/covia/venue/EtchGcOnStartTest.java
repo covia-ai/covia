@@ -18,6 +18,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.venue.server.VenueServer;
 
 /**
@@ -182,11 +183,11 @@ public class EtchGcOnStartTest {
 		assertTrue(new Config(Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, true)))).isEtchGcOnStart());
 		assertFalse(new Config(Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, false)))).isEtchGcOnStart());
 		assertFalse(new Config(Maps.empty()).isEtchGcOnStart());
-		assertThrows(IllegalArgumentException.class, () -> new Config(
+		assertThrows(ConfigurationException.class, () -> new Config(
 			Maps.of(Config.ETCH, Maps.of(GC, Maps.of(ON_START, Strings.create("yes"))))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(
+		assertThrows(ConfigurationException.class, () -> new Config(
 			Maps.of(Config.ETCH, Maps.of(GC, Maps.of(Strings.intern("onstart"), true)))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(
+		assertThrows(ConfigurationException.class, () -> new Config(
 			Maps.of(Config.ETCH, Maps.of(GC, true))));
 	}
 

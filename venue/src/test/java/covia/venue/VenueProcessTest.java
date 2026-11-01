@@ -23,6 +23,8 @@ import org.junit.jupiter.api.io.TempDir;
 import convex.core.crypto.Hashing;
 import convex.core.data.Maps;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -183,10 +185,10 @@ class VenueProcessTest {
 		process.arm();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.PENDING));
 
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> process.requestRestart(tempDir.resolve("missing.jar").toString(), null,
 				10_000, job));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> process.requestRestart(successor.toString(), "00", 10_000, job));
 
 		String sha = Hashing.sha256(Files.readAllBytes(successor)).toHexString();
@@ -205,7 +207,7 @@ class VenueProcessTest {
 
 		process.requestRestart(null, null, 10_000,
 			new Job(Maps.of(Fields.STATUS, Status.PENDING)));
-		assertThrows(IllegalStateException.class, () -> process.requestRestart(
+		assertThrows(NotSupportedException.class, () -> process.requestRestart(
 			null, null, 10_000, new Job(Maps.of(Fields.STATUS, Status.PENDING))));
 	}
 

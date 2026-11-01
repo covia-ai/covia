@@ -16,6 +16,8 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ResponseException;
+import covia.exception.ShuttingDownException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -86,7 +88,7 @@ public final class RemoteJobs implements AutoCloseable {
 
 	/** Observation of an existing job does not confer cancellation ownership. */
 	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials, boolean ownsRemote) {
-		if (closed) throw new IllegalStateException("Remote observation is closed");
+		if (closed) throw new ShuttingDownException("Remote observation is closed");
 		AMap<AString, ACell> record = Maps.of(PROTOCOL, Strings.create(protocol),
 			TARGET, Strings.create(target), OBSERVATION, SUBMITTING,
 			OWNS_REMOTE, convex.core.data.prim.CVMBool.create(ownsRemote));
@@ -156,12 +158,12 @@ public final class RemoteJobs implements AutoCloseable {
 
 	/** Bind a known ID before observing. Never call this by resubmitting on timeout. */
 	public void accepted(Job job, String id) {
-		if (id == null || id.isBlank()) throw new IllegalArgumentException("Remote response has no job ID");
+		if (id == null || id.isBlank()) throw new ResponseException("Remote response has no job ID");
 		job.update(data -> {
 			AMap<AString, ACell> record = RT.ensureMap(data.get(DELEGATION));
 			ACell old = record.get(REMOTE_ID);
 			if (old != null && !old.equals(Strings.create(id))) {
-				throw new IllegalStateException("Remote job identity changed");
+				throw new ResponseException("Remote job identity changed");
 			}
 			return data.assoc(DELEGATION, record.assoc(REMOTE_ID, Strings.create(id))
 				.assoc(OBSERVATION, HEALTHY).dissoc(ERROR_TYPE));
@@ -209,7 +211,7 @@ public final class RemoteJobs implements AutoCloseable {
 			|| Status.FAILED.equals(status) || Status.REJECTED.equals(status)
 			|| Status.PENDING.equals(status) || Status.STARTED.equals(status)
 			|| Status.PAUSED.equals(status) || Status.INPUT_REQUIRED.equals(status) || Status.AUTH_REQUIRED.equals(status))) {
-			throw new IllegalArgumentException(INVALID_CANCELLATION_STATUS);
+			throw new ResponseException(INVALID_CANCELLATION_STATUS);
 		}
 		AString outcome = Status.CANCELLED.equals(status) ? OUTCOME_ACKNOWLEDGED
 			: Job.isFinished(Maps.of(Fields.STATUS, status)) ? OUTCOME_FINISHED : OUTCOME_UNKNOWN;
@@ -219,7 +221,7 @@ public final class RemoteJobs implements AutoCloseable {
 	/** Validated response from a Covia job cancellation endpoint. */
 	public static AMap<AString, ACell> cancellationResult(convex.core.data.Blob id, AMap<AString, ACell> snapshot) {
 		if (snapshot == null || !id.equals(Job.parseID(snapshot.get(Fields.ID)))) {
-			throw new IllegalArgumentException(CANCELLATION_ID_MISMATCH);
+			throw new ResponseException(CANCELLATION_ID_MISMATCH);
 		}
 		return cancellationResult(RT.ensureString(snapshot.get(Fields.STATUS)));
 	}

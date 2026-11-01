@@ -13,6 +13,7 @@ import convex.lattice.cursor.Cursors;
 import covia.adapter.AAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.venue.RequestContext;
 
 /** Routes x/adapterName through the active adapter's explicit, user-scoped view. */
@@ -39,7 +40,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 			if (!(key instanceof AString s) || s.isEmpty() || s.toString().contains("/")
 					|| s.toString().contains("\\") || s.toString().equals(".") || s.toString().equals("..")
 					|| s.toString().chars().anyMatch(Character::isISOControl)) {
-				throw new IllegalArgumentException(INVALID_PATH);
+				throw new InvalidInputException(INVALID_PATH);
 			}
 		}
 		AString resource = Strings.create(owner + WorkspaceRoot.buildSubPath(keys));

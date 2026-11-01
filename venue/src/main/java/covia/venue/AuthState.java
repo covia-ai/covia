@@ -20,6 +20,10 @@ import convex.lattice.LatticeContext;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 
 /** Stored authentication directory and key lifecycle rules. No providers or runtime services. */
 public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
@@ -116,7 +120,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 				created.set(false);
 				AString stored = RT.ensureString(existing.get(Fields.DID));
 				if (!did.equals(stored)) {
-					throw new IllegalStateException("Named user " + id
+					throw new ConflictException("Named user " + id
 						+ " is already bound to a different DID: " + stored);
 				}
 				return users;
@@ -177,24 +181,28 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	private long installKeys(AString id,
 			AVector<ACell> keyDIDs, AString actorDID, AString label) {
 		if (keyDIDs == null || keyDIDs.isEmpty()) {
-			throw new IllegalArgumentException("At least one authentication key is required");
+			throw new InvalidInputException("At least one authentication key is required");
 		}
 		requireActorDID(actorDID);
 		AMap<AString, ACell> user = getUser(id);
-		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
+		if (user == null) throw new NotFoundException("Unknown named user: " + id, id.toString());
 
 		AMap<AString, ACell> keys = getAuthenticationKeys(id);
 		java.util.HashSet<AString> requested = new java.util.HashSet<>();
 		for (long i = 0; i < keyDIDs.count(); i++) {
 			AString keyDID = RT.ensureString(keyDIDs.get(i));
-			requireValidAuthenticationKey(keyDID);
+			try {
+				requireValidAuthenticationKey(keyDID);
+			} catch (IllegalArgumentException e) {
+				throw new InvalidInputException(e.getMessage(), e);
+			}
 			if (!requested.add(keyDID)) {
-				throw new IllegalArgumentException("Duplicate authentication key");
+				throw new InvalidInputException("Duplicate authentication key");
 			}
 			requireKeyNotBoundElsewhere(id, keyDID);
 			AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
 			if (existing != null && !ACTIVE.equals(existing.get(Fields.STATUS))) {
-				throw new IllegalArgumentException(
+				throw new NotSupportedException(
 					"Revoked authentication keys cannot be reactivated");
 			}
 		}
@@ -226,7 +234,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 			AString actorDID, boolean allowLast) {
 		requireActorDID(actorDID);
 		AMap<AString, ACell> user = getUser(id);
-		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
+		if (user == null) throw new NotFoundException("Unknown named user: " + id, id.toString());
 		AMap<AString, ACell> keys = getAuthenticationKeys(id);
 		AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
 		if (existing == null || REVOKED.equals(existing.get(Fields.STATUS))) return false;
@@ -234,7 +242,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 			throw new IllegalStateException("Malformed authentication key status");
 		}
 		if (!allowLast && getActiveAuthenticationKeys(id).count() <= 1) {
-			throw new IllegalArgumentException(
+			throw new NotSupportedException(
 				CANNOT_REVOKE_FINAL_KEY);
 		}
 		AMap<AString, ACell> revoked = existing
@@ -254,7 +262,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 			AMap<AString, ACell> otherKeys =
 				RT.ensureMap(other.getValue().get(Fields.AUTHENTICATION_KEYS));
 			if (otherKeys != null && otherKeys.containsKey(keyDID)) {
-				throw new IllegalArgumentException(
+				throw new ConflictException(
 					KEY_ALREADY_BOUND + other.getKey());
 			}
 		}

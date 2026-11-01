@@ -30,6 +30,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 import covia.venue.api.ACoviaAPI;
 import covia.venue.server.AuthMiddleware;
@@ -135,7 +136,7 @@ public class OAuthProvider {
 		CVMLong ttlCell = RT.ensureLong(cfg.get(K_ACCESS_TTL));
 		if (ttlCell != null) {
 			if (ttlCell.longValue() < 60 || ttlCell.longValue() > 86_400) {
-				throw new IllegalArgumentException("auth.oauth.provider.accessTokenTtlSecs must be from 60 to 86400");
+				throw new ConfigurationException("auth.oauth.provider.accessTokenTtlSecs must be from 60 to 86400");
 			}
 			ttl = ttlCell.longValue();
 		}
@@ -154,43 +155,43 @@ public class OAuthProvider {
 			for (var entry : clientMap.entrySet()) {
 				String id = (RT.ensureString(entry.getKey()) != null) ? entry.getKey().toString() : null;
 				if (id == null || !CLIENT_ID.matcher(id).matches()) {
-					throw new IllegalArgumentException("auth.oauth.provider.clients: a client id is invalid: " + entry.getKey());
+					throw new ConfigurationException("auth.oauth.provider.clients: a client id is invalid: " + entry.getKey());
 				}
 				clients.put(id, client(id, RT.ensureMap(entry.getValue())));
 			}
 		}
 		if (clients.isEmpty()) {
-			throw new IllegalArgumentException("auth.oauth.provider is enabled but registers no clients");
+			throw new ConfigurationException("auth.oauth.provider is enabled but registers no clients");
 		}
 		log.info("OAuth authorization server enabled: issuer {}, {} client(s)", issuer, clients.size());
 		return new OAuthProvider(engine, Map.copyOf(clients), ttl, issuer);
 	}
 
 	private static Client client(String id, AMap<AString, ACell> settings) {
-		if (settings == null) throw new IllegalArgumentException("auth.oauth.provider.clients." + id + " must be a settings object");
+		if (settings == null) throw new ConfigurationException("auth.oauth.provider.clients." + id + " must be a settings object");
 		AVector<ACell> uris = RT.ensureVector(settings.get(K_REDIRECT_URIS));
 		if (uris == null || uris.isEmpty()) {
-			throw new IllegalArgumentException("auth.oauth.provider.clients." + id + ".redirectUris must list at least one URI");
+			throw new ConfigurationException("auth.oauth.provider.clients." + id + ".redirectUris must list at least one URI");
 		}
 		List<String> redirects = new ArrayList<>();
 		for (long i = 0; i < uris.count(); i++) {
 			AString u = RT.ensureString(uris.get(i));
-			if (u == null || u.toString().isBlank()) throw new IllegalArgumentException("auth.oauth.provider.clients." + id + ".redirectUris entries must be URIs");
+			if (u == null || u.toString().isBlank()) throw new ConfigurationException("auth.oauth.provider.clients." + id + ".redirectUris entries must be URIs");
 			String uri = u.toString().trim();
 			URI parsed;
 			try {
 				parsed = URI.create(uri);
 			} catch (IllegalArgumentException e) {
-				throw new IllegalArgumentException("auth.oauth.provider.clients." + id + ".redirectUris: not a URI: " + uri);
+				throw new ConfigurationException("auth.oauth.provider.clients." + id + ".redirectUris: not a URI: " + uri, e);
 			}
 			if (parsed.getScheme() == null || parsed.getFragment() != null) {
-				throw new IllegalArgumentException("auth.oauth.provider.clients." + id
+				throw new ConfigurationException("auth.oauth.provider.clients." + id
 					+ ".redirectUris must be absolute URIs without a fragment: " + uri);
 			}
 			// https everywhere; plain http only for a loopback native redirect; any
 			// other scheme (a native app's custom scheme) is taken as registered.
 			if ("http".equalsIgnoreCase(parsed.getScheme()) && !isLoopback(parsed)) {
-				throw new IllegalArgumentException("auth.oauth.provider.clients." + id
+				throw new ConfigurationException("auth.oauth.provider.clients." + id
 					+ ".redirectUris: plain http is allowed only for loopback: " + uri);
 			}
 			redirects.add(uri);
@@ -198,10 +199,10 @@ public class OAuthProvider {
 		String secretRef = str(settings.get(K_SECRET));
 		boolean isPublic = Boolean.TRUE.equals(bool(settings.get(K_PUBLIC)));
 		if (secretRef != null && !Engine.isSecretRef(secretRef)) {
-			throw new IllegalArgumentException("auth.oauth.provider.clients." + id + ".secret must be an s/NAME reference");
+			throw new ConfigurationException("auth.oauth.provider.clients." + id + ".secret must be an s/NAME reference");
 		}
 		if (secretRef == null && !isPublic) {
-			throw new IllegalArgumentException("auth.oauth.provider.clients." + id
+			throw new ConfigurationException("auth.oauth.provider.clients." + id
 				+ " needs either secret (an s/NAME reference) or public:true (a PKCE-only public client)");
 		}
 		List<String> scopes = new ArrayList<>();
@@ -209,7 +210,7 @@ public class OAuthProvider {
 		if (sc != null) {
 			for (long i = 0; i < sc.count(); i++) {
 				AString s = RT.ensureString(sc.get(i));
-				if (s == null || s.toString().isBlank()) throw new IllegalArgumentException("auth.oauth.provider.clients." + id + ".scopes entries must be strings");
+				if (s == null || s.toString().isBlank()) throw new ConfigurationException("auth.oauth.provider.clients." + id + ".scopes entries must be strings");
 				scopes.add(s.toString().trim());
 			}
 		}

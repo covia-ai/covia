@@ -842,7 +842,7 @@ public class EngineTest {
 			Hash mismatchAsset = dlfsVenue.storeAsset(JSON.printPretty(Maps.of(
 				Fields.NAME, "mismatched",
 				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256("declared".getBytes()).toHexString()))), null);
-			IllegalArgumentException mismatch = assertThrows(IllegalArgumentException.class, () ->
+			covia.exception.InvalidInputException mismatch = assertThrows(covia.exception.InvalidInputException.class, () ->
 				dlfsVenue.putContent(dlfsVenue.getMetaValue(mismatchAsset), new ByteArrayInputStream("sent".getBytes())));
 			assertTrue(mismatch.getMessage().startsWith(AStorage.HASH_MISMATCH), mismatch.getMessage());
 			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(mismatchAsset)));

@@ -36,6 +36,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -93,7 +94,7 @@ public class LoginProviders {
 		URI base = URI.create(engine.config().getBaseUrl());
 		secureCookie = "https".equals(base.getScheme());
 		if (!providers.isEmpty() && !secureCookie && !("http".equals(base.getScheme()) && isLoopback(base.getHost()))) {
-			throw new IllegalArgumentException(HTTPS_REQUIRED);
+			throw new ConfigurationException(HTTPS_REQUIRED);
 		}
 		cookieName = secureCookie ? "__Host-covia-login" : "covia-login";
 	}
@@ -121,7 +122,7 @@ public class LoginProviders {
 	String resolveClientSecret(OAuthConfig provider) {
 		if (!Engine.isSecretRef(provider.clientSecret)) return provider.clientSecret;
 		String secret = engine.resolveSecret(provider.clientSecret, engine.venueContext());
-		if (secret == null) throw new IllegalStateException("auth.oauth." + provider.name
+		if (secret == null) throw new ConfigurationException("auth.oauth." + provider.name
 				+ ".clientSecret references " + provider.clientSecret + ", which is not set in the venue's secret store");
 		return secret;
 	}
@@ -368,18 +369,18 @@ public class LoginProviders {
 
 	private static Set<String> redirectUris(AMap<AString, ACell> auth) {
 		if (auth == null) return Set.of();
-		if (auth.containsKey(Config.LOGIN_REDIRECT_ORIGINS)) throw new IllegalArgumentException(LEGACY_REDIRECT_CONFIG);
+		if (auth.containsKey(Config.LOGIN_REDIRECT_ORIGINS)) throw new ConfigurationException(LEGACY_REDIRECT_CONFIG);
 		AVector<ACell> configured = RT.ensureVector(auth.get(Config.LOGIN_REDIRECT_URIS));
 		Set<String> result = new HashSet<>();
 		if (configured != null) for (ACell cell : configured) {
-			if (!(cell instanceof AString value)) throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG);
+			if (!(cell instanceof AString value)) throw new ConfigurationException(INVALID_REDIRECT_CONFIG);
 			String text = value.toString();
 			URI uri;
-			try { uri = URI.create(text); } catch (IllegalArgumentException e) { throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG); }
+			try { uri = URI.create(text); } catch (IllegalArgumentException e) { throw new ConfigurationException(INVALID_REDIRECT_CONFIG, e); }
 			if (uri.getHost() == null || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
 					|| !("https".equals(uri.getScheme()) || ("http".equals(uri.getScheme())
 					&& isLoopback(uri.getHost())))) {
-				throw new IllegalArgumentException(INVALID_REDIRECT_CONFIG);
+				throw new ConfigurationException(INVALID_REDIRECT_CONFIG);
 			}
 			result.add(text);
 		}

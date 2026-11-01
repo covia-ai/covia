@@ -38,6 +38,7 @@ import covia.adapter.TestAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -405,12 +406,12 @@ public class SchedulerTest {
 		AString longest = s("d".repeat(Scheduler.MAX_DESCRIPTION_CHARS));
 		assertEquals(longest, Scheduler.validateDescription(longest));
 
-		IllegalArgumentException notString = assertThrows(IllegalArgumentException.class,
+		InvalidInputException notString = assertThrows(InvalidInputException.class,
 			() -> Scheduler.validateDescription(CVMLong.create(42)));
 		assertEquals(Scheduler.DESCRIPTION_NOT_STRING, notString.getMessage());
 
 		AString tooLong = s("d".repeat(Scheduler.MAX_DESCRIPTION_CHARS + 1));
-		IllegalArgumentException overLong = assertThrows(IllegalArgumentException.class,
+		InvalidInputException overLong = assertThrows(InvalidInputException.class,
 			() -> sched.schedule(s("v/test/ops/echo"), s("x"), ctx, future(), null, null, tooLong));
 		assertEquals(Scheduler.DESCRIPTION_TOO_LONG, overLong.getMessage());
 		assertTrue(sched.list(ctx).isEmpty(), "a refused event is not scheduled");
@@ -533,16 +534,16 @@ public class SchedulerTest {
 	@Test
 	public void testValidateRepeatAcceptsOnlyEvery() {
 		assertEquals(everyHour(), Scheduler.validateRepeat(everyHour()));
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(InvalidInputException.class, () ->
 			Scheduler.validateRepeat(Maps.of(s("cron"), s("0 9 * * 1-5"))),
 			"unknown recurrence forms are rejected, not guessed at");
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(InvalidInputException.class, () ->
 			Scheduler.validateRepeat(Maps.of(ScheduleState.K_EVERY, CVMLong.create(HOUR), s("cron"), s("x"))),
 			"extra keys are rejected");
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(InvalidInputException.class, () ->
 			Scheduler.validateRepeat(Maps.of(ScheduleState.K_EVERY, CVMLong.create(Scheduler.MIN_REPEAT_MS - 1))),
 			"below the floor");
-		assertThrows(IllegalArgumentException.class, () ->
+		assertThrows(InvalidInputException.class, () ->
 			Scheduler.validateRepeat(Maps.of(ScheduleState.K_EVERY, s("3600000"))),
 			"every must be an integer");
 	}

@@ -35,6 +35,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.grid.auth.VenueAuth;
 import covia.venue.server.VenueServer;
 
@@ -420,12 +421,12 @@ public class MCPAuthTest {
 
 	@Test
 	void invalidPolicyShapesFailClosed() {
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(Config.AUTH, CVMBool.TRUE))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(
 				Config.AUTH, Maps.of(Config.REQUIRED, Strings.create("yes"))))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(
 				Config.AUTH, Maps.of(
 					Config.ALLOWED_DIDS, Strings.create("did:key:z"))))));

@@ -16,6 +16,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.crypto.Hashing;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.StillStartingException;
 import covia.grid.Job;
 import covia.venue.server.VenueServer;
 
@@ -99,29 +102,36 @@ public final class VenueProcess {
 	 */
 	public RestartPlan requestRestart(String successor, String sha256,
 			long startupTimeoutMillis, Job job) {
-		if (!armed.get()) throw new IllegalStateException("Venue process startup is not complete");
+		if (!armed.get()) throw new StillStartingException("Venue process startup is not complete");
 		if (currentJar == null) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Process restart requires MainVenue to be running from an executable jar");
 		}
 		if (job == null) throw new IllegalStateException("Process restart requires a Job context");
 		if (startupTimeoutMillis < 1_000 || startupTimeoutMillis > 300_000) {
-			throw new IllegalArgumentException("startupTimeout must be between 1000 and 300000 ms");
+			throw new InvalidInputException("startupTimeout must be between 1000 and 300000 ms");
 		}
 
-		Path target = (successor == null || successor.isBlank())
-			? currentJar : Path.of(successor).toAbsolutePath().normalize();
 		validateVenueJar(currentJar);
-		validateVenueJar(target);
-		String targetDigest = sha256(target);
+		Path target;
+		String targetDigest;
+		try {
+			// The successor jar is the caller's
+			target = (successor == null || successor.isBlank())
+				? currentJar : Path.of(successor).toAbsolutePath().normalize();
+			validateVenueJar(target);
+			targetDigest = sha256(target);
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		if (sha256 != null && !sha256.isBlank()
 				&& !targetDigest.equalsIgnoreCase(sha256)) {
-			throw new IllegalArgumentException("Venue jar integrity check failed for " + target
+			throw new InvalidInputException("Venue jar integrity check failed for " + target
 				+ ": expected sha256 " + sha256 + ", got " + targetDigest);
 		}
 		String fallbackDigest = target.equals(currentJar) ? targetDigest : sha256(currentJar);
 		if (!restartRequested.compareAndSet(false, true)) {
-			throw new IllegalStateException("A venue process restart is already pending");
+			throw new NotSupportedException("A venue process restart is already pending");
 		}
 
 		RestartPlan plan = new RestartPlan(target, currentJar, startupTimeoutMillis,

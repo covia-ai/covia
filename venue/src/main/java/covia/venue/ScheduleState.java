@@ -24,6 +24,7 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.lattice.Covia;
 
 /** Stored schedule records and recurrence rules. No timers or job execution. */
@@ -252,11 +253,11 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 	 */
 	public static AMap<AString, ACell> validateRepeat(AMap<AString, ACell> repeat) {
 		if (repeat.count() != 1 || !repeat.containsKey(K_EVERY)) {
-			throw new IllegalArgumentException("repeat must be {every: <millis>}");
+			throw new InvalidInputException("repeat must be {every: <millis>}");
 		}
 		CVMLong every = RT.ensureLong(repeat.get(K_EVERY));
 		if (every == null || every.longValue() < MIN_REPEAT_MS) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"repeat.every must be an integer of at least " + MIN_REPEAT_MS + " millis");
 		}
 		return Maps.of(K_EVERY, every);
@@ -271,10 +272,10 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 	public static AString validateDescription(ACell description) {
 		if (description == null) return null;
 		if (!(description instanceof AString s)) {
-			throw new IllegalArgumentException(DESCRIPTION_NOT_STRING);
+			throw new InvalidInputException(DESCRIPTION_NOT_STRING);
 		}
 		if (s.toString().length() > MAX_DESCRIPTION_CHARS) {
-			throw new IllegalArgumentException(DESCRIPTION_TOO_LONG);
+			throw new InvalidInputException(DESCRIPTION_TOO_LONG);
 		}
 		return s;
 	}

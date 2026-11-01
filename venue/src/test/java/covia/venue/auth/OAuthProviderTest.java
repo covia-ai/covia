@@ -32,6 +32,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -344,7 +345,7 @@ public class OAuthProviderTest {
 		try {
 			r.run();
 			org.junit.jupiter.api.Assertions.fail("expected failure: " + because);
-		} catch (IllegalArgumentException expected) {
+		} catch (ConfigurationException expected) {
 			// good
 		}
 	}

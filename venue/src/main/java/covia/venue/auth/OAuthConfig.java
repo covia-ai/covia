@@ -21,6 +21,9 @@ import com.nimbusds.openid.connect.sdk.Nonce;
 import com.nimbusds.openid.connect.sdk.claims.IDTokenClaimsSet;
 import com.nimbusds.openid.connect.sdk.validators.IDTokenValidator;
 
+import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+
 /**
  * Configuration for a single OAuth provider, combining well-known endpoints
  * with venue-specific credentials loaded from config.
@@ -69,7 +72,7 @@ public class OAuthConfig {
 
 	public static OAuthConfig microsoft(String clientId, String clientSecret, String baseUrl, String tenantId) {
 		if (tenantId == null || !tenantId.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
-			throw new IllegalArgumentException(TENANT_REQUIRED);
+			throw new ConfigurationException(TENANT_REQUIRED);
 		}
 		String authority = "https://login.microsoftonline.com/" + tenantId.toLowerCase(java.util.Locale.ROOT);
 		return new OAuthConfig("microsoft", clientId, clientSecret,
@@ -111,7 +114,7 @@ public class OAuthConfig {
 
 	/** One strict validator shared by browser callbacks and direct provider-token authentication. */
 	public IDTokenClaimsSet validateIdToken(String token, Nonce nonce) throws Exception {
-		if (issuer == null || jwksUri == null) throw new IllegalArgumentException(INVALID_ID_TOKEN);
+		if (issuer == null || jwksUri == null) throw new AuthException(INVALID_ID_TOKEN);
 		SignedJWT jwt = SignedJWT.parse(token);
 		JWSVerificationKeySelector<SecurityContext> keys = keySelector;
 		if (keys == null) synchronized (this) {
@@ -138,7 +141,7 @@ public class OAuthConfig {
 		String azp = jwt.getJWTClaimsSet().getStringClaim("azp");
 		if ((azp != null && !clientId.equals(azp))
 				|| (jwt.getJWTClaimsSet().getAudience().size() > 1 && azp == null)
-				|| verified.getSubject().getValue().isBlank()) throw new IllegalArgumentException(INVALID_ID_TOKEN);
+				|| verified.getSubject().getValue().isBlank()) throw new AuthException(INVALID_ID_TOKEN);
 		return verified;
 	}
 }

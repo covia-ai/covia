@@ -242,8 +242,8 @@ public class Scheduler {
 			return CompletableFuture.failedFuture(ex);
 		}
 		if (c == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("No scheduled event for handle"));
+			return CompletableFuture.failedFuture(new NotFoundException("No scheduled event for handle",
+				(handle == null) ? null : handle.toHexString()));
 		}
 		return fire(c);
 	}

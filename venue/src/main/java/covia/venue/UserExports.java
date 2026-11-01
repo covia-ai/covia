@@ -18,6 +18,9 @@ import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.BadFormatException;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
@@ -99,7 +102,7 @@ public final class UserExports {
 		// One read: state and meta come from the same record.
 		ACell record = (user == null) ? null : user.get();
 		AMap<AString, ACell> state = Users.content(record);
-		if (state == null) throw new IllegalArgumentException(VenueState.UNKNOWN_USER);
+		if (state == null) throw new NotFoundException(VenueState.UNKNOWN_USER, did.toString());
 		String busy = unfinishedWork(state);
 		if (busy != null) throw new IllegalStateException(busy);
 
@@ -114,7 +117,7 @@ public final class UserExports {
 		ACell meta = RT.getIn(record, Covia.K_META);
 		if (meta != null) export = export.assoc(Covia.K_META, meta);
 		if (includeSecrets && secrets != null && !secrets.isEmpty()) {
-			if (recipient == null) throw new IllegalArgumentException(SECRETS_NEED_KEY);
+			if (recipient == null) throw new InvalidInputException(SECRETS_NEED_KEY);
 			AMap<AString, ACell> plain;
 			try {
 				plain = SecretStore.plaintexts(secrets, SecretStore.keys(engine.getKeyPair()));
@@ -148,17 +151,24 @@ public final class UserExports {
 
 		ACell sealed = value.get(K_SECRETS);
 		if (sealed != null) {
-			if (!(sealed instanceof ABlob envelope)) throw new IllegalArgumentException(NOT_AN_EXPORT);
-			if (key == null) throw new IllegalArgumentException(SEED_REQUIRED);
+			if (!(sealed instanceof ABlob envelope)) throw new InvalidInputException(NOT_AN_EXPORT);
+			if (key == null) throw new InvalidInputException(SEED_REQUIRED);
 			ACell opened;
 			try {
 				opened = CVMEncoder.INSTANCE.decodeMultiCell(ECIES.decrypt(key, envelope.toFlatBlob()));
 			} catch (BadFormatException | RuntimeException e) {
-				throw new IllegalArgumentException(SEED_REJECTED);
+				throw new InvalidInputException(SEED_REJECTED);
 			}
 			AMap<AString, ACell> plain = RT.ensureMap(opened);
-			if (plain == null) throw new IllegalArgumentException(NOT_AN_EXPORT);
-			state = state.assoc(Namespace.S, SecretStore.records(plain, SecretStore.keys(engine.getKeyPair())));
+			if (plain == null) throw new InvalidInputException(NOT_AN_EXPORT);
+			AMap<AString, ACell> records;
+			try {
+				records = SecretStore.records(plain, SecretStore.keys(engine.getKeyPair()));
+			} catch (IllegalArgumentException e) {
+				// The sealed secrets are the export's own content
+				throw new InvalidInputException(e.getMessage(), e);
+			}
+			state = state.assoc(Namespace.S, records);
 		}
 		return restore(did, state);
 	}
@@ -174,9 +184,9 @@ public final class UserExports {
 	public boolean cloneUser(AString from, AString to) {
 		requireOrdinary(from);
 		requireOrdinary(to);
-		if (from.equals(to)) throw new IllegalArgumentException(SAME_USER);
+		if (from.equals(to)) throw new InvalidInputException(SAME_USER);
 		AMap<AString, ACell> state = engine.getVenueState().users().content(from);
-		if (state == null) throw new IllegalArgumentException(VenueState.UNKNOWN_USER);
+		if (state == null) throw new NotFoundException(VenueState.UNKNOWN_USER, from.toString());
 		String busy = unfinishedWork(state);
 		if (busy != null) throw new IllegalStateException(busy);
 		return restore(to, state);
@@ -198,30 +208,30 @@ public final class UserExports {
 	}
 
 	private void requireOrdinary(AString did) {
-		if (did == null) throw new IllegalArgumentException(VenueState.UNKNOWN_USER);
+		if (did == null) throw new NotFoundException(VenueState.UNKNOWN_USER, null);
 		engine.requireNotSubPrincipal(did);
 		if (engine.isVenuePrincipal(did) || engine.isPublicPrincipal(did)) {
-			throw new IllegalArgumentException(PROTECTED);
+			throw new InvalidInputException(PROTECTED);
 		}
 	}
 
 	/** Decodes and checks an export, refusing a version this venue cannot read. */
 	static AMap<AString, ACell> decode(ABlob export) {
-		if (export == null) throw new IllegalArgumentException(NOT_AN_EXPORT);
+		if (export == null) throw new InvalidInputException(NOT_AN_EXPORT);
 		ACell decoded;
 		try {
 			// Storeless: everything the export refers to must be in it.
 			decoded = CVMEncoder.INSTANCE.decodeMultiCell(export.toFlatBlob());
 		} catch (BadFormatException | RuntimeException e) {
-			throw new IllegalArgumentException(NOT_AN_EXPORT);
+			throw new InvalidInputException(NOT_AN_EXPORT);
 		}
 		AMap<AString, ACell> value = RT.ensureMap(decoded);
 		if (value == null || !FORMAT.equals(value.get(K_FORMAT))
 				|| !(value.get(Fields.VERSION) instanceof CVMLong version) || version.longValue() < 1
 				|| !(value.get(K_USER) instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException(NOT_AN_EXPORT);
+			throw new InvalidInputException(NOT_AN_EXPORT);
 		}
-		if (version.longValue() > VERSION) throw new IllegalArgumentException(NEWER_VERSION);
+		if (version.longValue() > VERSION) throw new NotSupportedException(NEWER_VERSION);
 		return value;
 	}
 
@@ -230,7 +240,7 @@ public final class UserExports {
 	private static AMap<AString, ACell> migrate(AMap<AString, ACell> state) {
 		ACell jobs = state.get(Namespace.J);
 		if (jobs == null) return state;
-		if (!(jobs instanceof Index<?, ?> index)) throw new IllegalArgumentException(NOT_AN_EXPORT);
+		if (!(jobs instanceof Index<?, ?> index)) throw new InvalidInputException(NOT_AN_EXPORT);
 		return state.assoc(Namespace.J, Job.currentStates((Index<Blob, ACell>) index));
 	}
 

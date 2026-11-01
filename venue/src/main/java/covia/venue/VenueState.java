@@ -36,6 +36,7 @@ import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.NotFoundException;
 import covia.venue.migration.VenueMigrations;
 import covia.venue.storage.LatticeStorage;
 
@@ -307,7 +308,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			AMap<ACell, ACell> venue = (AMap<ACell, ACell>) value;
 			AMap<AString, ACell> users = RT.ensureMap(venue.get(Covia.USER_DATA));
 			ACell previous = users == null ? null : users.get(did);
-			if (previous == null) throw new IllegalArgumentException(UNKNOWN_USER);
+			if (previous == null) throw new NotFoundException(UNKNOWN_USER, did.toString());
 			if (RT.getIn(previous, Covia.K_DELETED) != null) {
 				AMap<AString, ACell> record = RT.ensureMap(previous);
 				return venue.assoc(Covia.USER_DATA, users.assoc(did,

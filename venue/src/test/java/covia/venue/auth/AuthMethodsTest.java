@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.AAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -170,14 +171,14 @@ class AuthMethodsTest {
 		try {
 			Fixture working = new Fixture(false);
 			engine.registerAdapter(working);
-			assertEquals(AuthMethods.AMBIGUOUS + "auth-fixture", assertThrows(IllegalArgumentException.class,
+			assertEquals(AuthMethods.AMBIGUOUS + "auth-fixture", assertThrows(ConfigurationException.class,
 				() -> engine.registerAdapter(new Fixture(true))).getMessage());
 			assertSame(working, engine.getAdapter("auth-fixture"));
 			assertEquals(ALICE, call(new VenueAuthenticator(engine), FIRST).userDID());
 		} finally { engine.close(); }
 		Engine missing = Engine.createTemp(config(Maps.of(FIRST, reference("auth-fixture", Strings.create("missing")))));
 		try {
-			assertEquals(AuthMethods.UNAVAILABLE + "auth-fixture/missing", assertThrows(IllegalArgumentException.class,
+			assertEquals(AuthMethods.UNAVAILABLE + "auth-fixture/missing", assertThrows(ConfigurationException.class,
 				() -> missing.registerAdapter(new Fixture(true))).getMessage());
 			assertNull(missing.getAdapter("auth-fixture"));
 		} finally { missing.close(); }
@@ -235,7 +236,7 @@ class AuthMethodsTest {
 		for (ACell methods : new ACell[] {null, Strings.create("wrong"), Maps.of("", Maps.empty()),
 			Maps.of(FIRST, Maps.of("adapter", "")), Maps.of(FIRST, Maps.of("adapter", "auth", "enabled", true)),
 			Maps.of(FIRST, Maps.of("adapter", "auth", "implementation", null))}) {
-			IllegalArgumentException failure = assertThrows(IllegalArgumentException.class, () -> new Config(config(methods)));
+			ConfigurationException failure = assertThrows(ConfigurationException.class, () -> new Config(config(methods)));
 			assertTrue(failure.getMessage().startsWith(AuthMethods.INVALID_CONFIG));
 		}
 	}
@@ -243,7 +244,7 @@ class AuthMethodsTest {
 	@Test void startupResolvesAfterHostHookAndBeforeServing() {
 		AMap<AString, ACell> cfg = config(fixtureBindings()).assoc(Config.STORE, Strings.create("memory"))
 			.assoc(Strings.intern("port"), convex.core.data.prim.CVMLong.ZERO);
-		assertThrows(IllegalArgumentException.class, () -> VenueServer.launch(cfg));
+		assertThrows(ConfigurationException.class, () -> VenueServer.launch(cfg));
 		VenueServer server = VenueServer.launch(cfg, List.of(), engine -> {
 			engine.registerAdapter(new Fixture(true));
 			return CompletableFuture.completedFuture(null);

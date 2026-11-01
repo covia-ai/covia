@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -21,7 +22,11 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 
 /**
  * Loading and unloading of venue modules — adapters packaged as external
@@ -117,7 +122,7 @@ public class Modules {
 		if (modulesCell == null) return List.of();
 		AVector<ACell> modules = RT.ensureVector(modulesCell);
 		if (modules == null) {
-			throw new IllegalStateException(
+			throw new ConfigurationException(
 				"Config 'modules' must be an array of module entries (path string or {path, sha256})");
 		}
 		List<Discovered> discovered = new ArrayList<>();
@@ -125,6 +130,10 @@ public class Modules {
 			for (long i = 0; i < modules.count(); i++) {
 				discovered.add(discover(venueConfig, modules.get(i)));
 			}
+		} catch (IllegalStateException e) {
+			// A module the config names cannot load: the operator's setup
+			close(discovered, e);
+			throw new ConfigurationException(e.getMessage(), e);
 		} catch (RuntimeException | Error e) {
 			close(discovered, e);
 			throw e;
@@ -167,7 +176,7 @@ public class Modules {
 			path = s.toString();
 		} else {
 			AString p = RT.ensureString(RT.getIn(entry, "path"));
-			if (p == null) throw new IllegalStateException(
+			if (p == null) throw new ConfigurationException(
 				"Module entry must be a path string or {path, sha256?}: " + entry);
 			path = p.toString();
 			AString h = RT.ensureString(RT.getIn(entry, "sha256"));
@@ -198,7 +207,8 @@ public class Modules {
 	 * @param sha256 Optional pinned digest (hex), or null
 	 * @param config Module-level settings for {@link AAdapter#configureModule}
 	 * @return The loaded module record
-	 * @throws IllegalStateException on any load failure (nothing is left registered)
+	 * @throws ConfigurationException if a module adapter refuses a setting
+	 * @throws IllegalStateException on any other load failure (nothing is left registered)
 	 */
 	public static LoadedModule load(Engine engine, Path jarPath, String sha256,
 			AMap<AString, ACell> config) {
@@ -210,7 +220,8 @@ public class Modules {
 	 * registering them: verifies the optional digest, creates the module
 	 * classloader and discovers its adapters.
 	 *
-	 * @throws IllegalStateException on any failure (the loader is closed)
+	 * @throws ConfigurationException if a module adapter refuses a setting
+	 * @throws IllegalStateException on any other failure (the loader is closed)
 	 */
 	static Discovered discover(Config venueConfig, Path jarPath, String sha256,
 			AMap<AString, ACell> config) {
@@ -234,7 +245,14 @@ public class Modules {
 			int discovered = 0;
 			for (AAdapter adapter : ServiceLoader.load(AAdapter.class, loader)) {
 				discovered++;
-				if (!adapter.configureModule(config, venueConfig.isStrictConfig())) {
+				boolean accepted;
+				try {
+					accepted = adapter.configureModule(config, venueConfig.isStrictConfig());
+				} catch (IllegalArgumentException e) {
+					// A malformed module setting (docs/ADAPTERS.md) is the operator's
+					throw new ConfigurationException(e.getMessage(), e);
+				}
+				if (!accepted) {
 					log.info("Adapter '{}' from module {} is inactive",
 						adapter.getName(), jar.getName());
 					continue;
@@ -338,11 +356,11 @@ public class Modules {
 	 * @param engine The engine
 	 * @param name Module name
 	 * @return The unloaded module record
-	 * @throws IllegalArgumentException if no such module is loaded
+	 * @throws NotFoundException if no such module is loaded
 	 */
 	public static LoadedModule unload(Engine engine, String name) {
 		LoadedModule module = engine.getModule(name);
-		if (module == null) throw new IllegalArgumentException("Module not loaded: " + name);
+		if (module == null) throw new NotFoundException("Module not loaded: " + name, name);
 		for (String adapterName : module.adapterNames()) {
 			if (engine.moduleOf(adapterName) == module) engine.removeAdapter(adapterName);
 		}
@@ -372,27 +390,32 @@ public class Modules {
 	 * @param config Venue config
 	 * @param ref Caller-supplied module reference (file name or path)
 	 * @return The resolved jar path
-	 * @throws IllegalStateException when dynamic loading is disabled
-	 * @throws IllegalArgumentException when the reference violates the policy
+	 * @throws NotSupportedException when dynamic loading is disabled
+	 * @throws InvalidInputException when the reference violates the policy
 	 */
 	public static Path resolveDynamicPath(Config config, String ref) {
 		if (!config.isDynamicModulesEnabled()) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Dynamic module loading is disabled on this venue (set dynamicModules.enabled)");
 		}
-		if (ref == null || ref.isBlank()) throw new IllegalArgumentException("module is required");
+		if (ref == null || ref.isBlank()) throw new InvalidInputException("module is required");
 		Path dir = Path.of(config.getDynamicModulesDir());
-		Path requested = Path.of(ref);
+		Path requested;
+		try {
+			requested = Path.of(ref);
+		} catch (InvalidPathException e) {
+			throw new InvalidInputException("module is not a valid path: " + ref, e);
+		}
 		if (config.isDynamicModulesAnyPath()) {
 			return requested.isAbsolute() ? requested.normalize() : dir.resolve(requested).normalize();
 		}
 		if (requested.isAbsolute()) {
-			throw new IllegalArgumentException("module must be a name inside the staging directory "
+			throw new InvalidInputException("module must be a name inside the staging directory "
 				+ dir + " (absolute paths need dynamicModules.anyPath)");
 		}
 		for (Path segment : requested) {
 			if ("..".equals(segment.toString())) {
-				throw new IllegalArgumentException("module must not contain '..' segments");
+				throw new InvalidInputException("module must not contain '..' segments");
 			}
 		}
 		Path resolved = dir.resolve(requested).normalize();
@@ -400,11 +423,11 @@ public class Modules {
 			Path realDir = dir.toRealPath();
 			Path realJar = resolved.toRealPath();
 			if (!realJar.startsWith(realDir)) {
-				throw new IllegalArgumentException("module resolves outside the staging directory " + dir);
+				throw new InvalidInputException("module resolves outside the staging directory " + dir);
 			}
 			return realJar;
 		} catch (IOException e) {
-			throw new IllegalArgumentException("Module jar not found in staging directory "
+			throw new InvalidInputException("Module jar not found in staging directory "
 				+ dir + ": " + ref);
 		}
 	}

@@ -48,6 +48,10 @@ import convex.lattice.LatticeHost;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.CoviaApplication;
@@ -259,7 +263,7 @@ public class VenueServer {
 			if (etchConfig != null) {
 				// An operator asking for encryption must never silently get an
 				// unencrypted (or non-Etch) store.
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"'etch' configuration requires an Etch store; 'store: memory' is not one");
 			}
 			log.info("Using in-memory store (no persistence)");
@@ -415,7 +419,7 @@ public class VenueServer {
 			// (#232). Silently minting a fresh DID would orphan every client's
 			// state: logins, agents and secrets all bind to the venue identity.
 			if (storePreexisted) {
-				throw new IllegalStateException(
+				throw new ConfigurationException(
 					"Venue store " + storePath + " exists but no venue identity is configured: "
 					+ "no 'seed', no 'keystore', and no venue.key beside the store. Restore "
 					+ keyFile + " or configure the original seed/keystore. To deliberately "
@@ -498,34 +502,34 @@ public class VenueServer {
 		String path = stringField(ks, "path");
 		if (path == null) path = envOr("CONVEX_KEYSTORE", DEFAULT_KEYSTORE_PATH);
 		String alias = stringField(ks, "alias");
-		if (alias == null) throw new IllegalStateException(
+		if (alias == null) throw new ConfigurationException(
 			"keystore config requires an 'alias' naming the venue key entry"
 			+ " (Convex convention: the hex public key — see 'convex key list')");
 		String storepass = stringField(ks, "storepass");
 		if (storepass == null) storepass = System.getenv("CONVEX_KEYSTORE_PASSWORD");
-		if (storepass == null) throw new IllegalStateException(
+		if (storepass == null) throw new ConfigurationException(
 			"keystore integrity password not found — set 'storepass' in the keystore"
 			+ " config block or the CONVEX_KEYSTORE_PASSWORD environment variable");
 		String keypass = stringField(ks, "keypass");
 		if (keypass == null) keypass = System.getenv("CONVEX_KEY_PASSWORD");
-		if (keypass == null) throw new IllegalStateException(
+		if (keypass == null) throw new ConfigurationException(
 			"key entry password not found — set 'keypass' in the keystore config"
 			+ " block or the CONVEX_KEY_PASSWORD environment variable");
 
 		File file = FileUtils.getFile(path);
-		if (!file.exists()) throw new IllegalStateException(
+		if (!file.exists()) throw new ConfigurationException(
 			"keystore file not found: " + file + " — create keys with 'convex key generate'"
 			+ " or point 'path' (or CONVEX_KEYSTORE) at an existing PKCS12 keystore");
 		try {
 			java.security.KeyStore store = PFXTools.loadStore(file, storepass.toCharArray());
 			AKeyPair kp = PFXTools.getKeyPair(store, alias, keypass.toCharArray());
-			if (kp == null) throw new IllegalStateException(
+			if (kp == null) throw new ConfigurationException(
 				"keystore " + file + " has no key entry for alias '" + alias + "'");
 			return kp;
-		} catch (IllegalStateException e) {
+		} catch (ConfigurationException e) {
 			throw e;
 		} catch (Exception e) {
-			throw new IllegalStateException(
+			throw new ConfigurationException(
 				"failed to load venue key '" + alias + "' from keystore " + file
 				+ ": " + e.getMessage(), e);
 		}
@@ -1497,7 +1501,7 @@ public class VenueServer {
 
 		private EtchStore etchStore() {
 			if (!(store instanceof EtchStore etch) || !config.isPersistentFileStore()) {
-				throw new IllegalStateException("Store garbage collection needs a persistent file store;"
+				throw new NotSupportedException("Store garbage collection needs a persistent file store;"
 					+ " this venue's store is '" + config.getStore() + "'");
 			}
 			return etch;
@@ -1529,7 +1533,7 @@ public class VenueServer {
 			File file = etch.getFile();
 			boolean retain = retainSuperseded == null ? config.isEtchGcRetainSuperseded() : retainSuperseded;
 			if (backupFile != null && Boolean.FALSE.equals(retainSuperseded)) {
-				throw new IllegalArgumentException(covia.adapter.VenueAdapter.BACKUP_RETENTION_DISABLED);
+				throw new InvalidInputException(covia.adapter.VenueAdapter.BACKUP_RETENTION_DISABLED);
 			}
 			// Reject occupied/reserved paths before starting a cycle. Convex
 			// validates again and creates the link without replacing anything.
@@ -1537,16 +1541,16 @@ public class VenueServer {
 			File backup = requested == null ? null : etch.validateGCBackup(requested);
 			synchronized (cycleLock) {
 				if (collectedStore != null) {
-					throw new IllegalStateException("The store was already collected in this process;"
+					throw new NotSupportedException("The store was already collected in this process;"
 						+ " restart the venue to collect again (the collected file is adopted on the next start)");
 				}
 				if (collecting || etch.isGCInProgress()) {
-					throw new IllegalStateException("A store collection is already in progress");
+					throw new UnavailableException("A store collection is already in progress");
 				}
 				long bytes = file.length();
 				long free = Files.getFileStore(file.getAbsoluteFile().toPath()).getUsableSpace();
 				if (free < bytes) {
-					throw new IllegalStateException("Not enough free disk to collect the store: the cycle needs about "
+					throw new UnavailableException("Not enough free disk to collect the store: the cycle needs about "
 						+ bytes + " bytes, " + free + " available");
 				}
 				collecting = true;

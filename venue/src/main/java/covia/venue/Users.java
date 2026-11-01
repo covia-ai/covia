@@ -10,6 +10,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
 import covia.lattice.Covia;
 import convex.core.lang.RT;
 
@@ -175,7 +176,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 		user.cursor().updateAndGet(current -> {
 			AMap<AString, ACell> record = RT.ensureMap(current);
 			if (record == null) record = Maps.empty();
-			if (!withoutSlots(record).isEmpty()) throw new IllegalStateException(NOT_EMPTY);
+			if (!withoutSlots(record).isEmpty()) throw new ConflictException(NOT_EMPTY);
 			for (var entry : incoming.entrySet()) record = record.assoc(entry.getKey(), entry.getValue());
 			return record;
 		});
