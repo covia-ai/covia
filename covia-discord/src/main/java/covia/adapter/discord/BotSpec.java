@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 import covia.adapter.messaging.ChannelAuthentication;
 import covia.adapter.messaging.MessagingBotSpec;
@@ -36,7 +37,7 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 	}
 	public AString userDID(Engine engine) {
 		if (!PUBLIC_USER.equals(userRef)) return Strings.create(userRef);
-		if (engine==null || !engine.config().isPublicAccess()) throw new IllegalStateException(
+		if (engine==null || !engine.config().isPublicAccess()) throw new ConfigurationException(
 			"bot '"+name+"' acts as public but public access is disabled");
 		return Strings.create(engine.getDIDString()+":public");
 	}

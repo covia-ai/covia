@@ -15,6 +15,9 @@ import convex.core.lang.RT;
 import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.adapter.messaging.ConversationRouter;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.RequestContext;
 
 /** Discord bots as a venue front door and as an outbound messaging adapter. */
@@ -68,13 +71,13 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	void rearmForTest(){rearmRuntimeBots();}
 
 	@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,AMap<AString,ACell> meta,ACell input){
-		requireInvoke(ctx);String op=getSubOperation(meta);if(op==null)throw new IllegalArgumentException("Insufficient specification for discord operation");
-		return CompletableFuture.supplyAsync(()->switch(op){case "send"->send(ctx,input);case "call"->call(ctx,input);case "create"->handleCreate(ctx,input);case "delete"->handleDelete(ctx,input);case "bots"->handleBots(ctx);default->throw new UnsupportedOperationException("Unsupported discord operation: "+op);},VIRTUAL_EXECUTOR);
+		requireInvoke(ctx);String op=getSubOperation(meta);if(op==null)throw new InvalidDefinitionException("Insufficient specification for discord operation");
+		return CompletableFuture.supplyAsync(()->switch(op){case "send"->send(ctx,input);case "call"->call(ctx,input);case "create"->handleCreate(ctx,input);case "delete"->handleDelete(ctx,input);case "bots"->handleBots(ctx);default->throw new NotSupportedException("Unsupported discord operation: "+op);},VIRTUAL_EXECUTOR);
 	}
 	private ACell send(RequestContext ctx,ACell input){
-		AMap<AString,ACell> in=RT.castMap(input);if(in==null)throw new IllegalArgumentException("send expects an object");BotRunner r=selectBot(ctx,RT.ensureString(in.get(K_BOT)));requireBotAccess(ctx,r,ABILITY_SEND);
+		AMap<AString,ACell> in=RT.castMap(input);if(in==null)throw new InvalidInputException("send expects an object");BotRunner r=selectBot(ctx,RT.ensureString(in.get(K_BOT)));requireBotAccess(ctx,r,ABILITY_SEND);
 		AString channel=RT.ensureString(in.get(K_CHANNEL_ID));AString content=RT.ensureString(in.get(K_CONTENT));
-		if(channel==null||channel.isEmpty())throw new IllegalArgumentException("channel_id is required");if(content==null||content.isEmpty())throw new IllegalArgumentException("content is required");
+		if(channel==null||channel.isEmpty())throw new InvalidInputException("channel_id is required");if(content==null||content.isEmpty())throw new InvalidInputException("content is required");
 		AMap<AString,ACell> body=Maps.of(K_CONTENT,content);AString reply=RT.ensureString(in.get(K_REPLY_TO));if(reply!=null)body=body.assoc(Strings.intern("message_reference"),Maps.of(Strings.intern("message_id"),reply,Strings.intern("fail_if_not_exists"),CVMBool.FALSE));
 		if(CVMBool.TRUE.equals(in.get(K_SUPPRESS_EMBEDS)))body=body.assoc(Strings.intern("flags"),convex.core.data.prim.CVMLong.create(4));
 		for(long i=0;i<in.count();i++){var e=in.entryAt(i);ACell k=e.getKey();if(!K_BOT.equals(k)&&!K_CHANNEL_ID.equals(k)&&!K_REPLY_TO.equals(k)&&!K_SUPPRESS_EMBEDS.equals(k))body=body.assoc((AString)k,e.getValue());}
@@ -82,9 +85,9 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	}
 	private ACell call(RequestContext ctx,ACell input){
 		BotRunner r=selectBot(ctx,RT.ensureString(RT.getIn(input,K_BOT)));requireBotAccess(ctx,r,ABILITY_CALL);
-		AString method=RT.ensureString(RT.getIn(input,K_METHOD)),route=RT.ensureString(RT.getIn(input,K_ROUTE));if(method==null||route==null)throw new IllegalArgumentException("method and route are required");
-		String m=method.toString().toUpperCase(),p=route.toString();if(!Set.of("GET","POST","PUT","PATCH","DELETE").contains(m))throw new IllegalArgumentException("method must be GET, POST, PUT, PATCH or DELETE");
-		if(!p.startsWith("/")||p.contains("://")||p.contains("..")||p.startsWith("/gateway")||p.startsWith("/oauth2"))throw new IllegalArgumentException("route must be a safe Discord API path; Gateway and OAuth routes are managed/refused");
+		AString method=RT.ensureString(RT.getIn(input,K_METHOD)),route=RT.ensureString(RT.getIn(input,K_ROUTE));if(method==null||route==null)throw new InvalidInputException("method and route are required");
+		String m=method.toString().toUpperCase(),p=route.toString();if(!Set.of("GET","POST","PUT","PATCH","DELETE").contains(m))throw new InvalidInputException("method must be GET, POST, PUT, PATCH or DELETE");
+		if(!p.startsWith("/")||p.contains("://")||p.contains("..")||p.startsWith("/gateway")||p.startsWith("/oauth2"))throw new InvalidInputException("route must be a safe Discord API path; Gateway and OAuth routes are managed/refused");
 		return r.call(m,p,RT.getIn(input,K_BODY));
 	}
 }

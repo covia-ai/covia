@@ -33,6 +33,7 @@ import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
@@ -139,7 +140,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private String sessionsRelativePath(){return managed==Managed.CONFIG
 		? "config/"+spec.name()+"/sessions"
 		: adapter.userStatePath(spec.userDID(adapter.engine),"sessions/"+spec.name());}
-	ACell sendMessage(String channelId,AMap<AString,ACell> body){AString content=RT.ensureString(body.get(Strings.intern("content")));if(content==null||content.isBlank())throw new IllegalArgumentException("content is required");ACell last=null;boolean first=true;for(String chunk:MessagingText.split(content.toString(),MAX_MESSAGE_LENGTH)){AMap<AString,ACell> part=body.assoc(Strings.intern("content"),Strings.create(chunk));if(!first)part=part.dissoc(Strings.intern("message_reference"));last=call("POST","/channels/"+channelId+"/messages",part);sent.incrementAndGet();first=false;}return last;}
+	ACell sendMessage(String channelId,AMap<AString,ACell> body){AString content=RT.ensureString(body.get(Strings.intern("content")));if(content==null||content.isBlank())throw new InvalidInputException("content is required");ACell last=null;boolean first=true;for(String chunk:MessagingText.split(content.toString(),MAX_MESSAGE_LENGTH)){AMap<AString,ACell> part=body.assoc(Strings.intern("content"),Strings.create(chunk));if(!first)part=part.dissoc(Strings.intern("message_reference"));last=call("POST","/channels/"+channelId+"/messages",part);sent.incrementAndGet();first=false;}return last;}
 	private ACell send(String channel,String text,String reply){AMap<AString,ACell> body=Maps.of(Strings.intern("content"),Strings.create(text));if(reply!=null)body=body.assoc(Strings.intern("message_reference"),Maps.of(Strings.intern("message_id"),Strings.create(reply),Strings.intern("fail_if_not_exists"),CVMBool.FALSE));return sendMessage(channel,body);}
 	private void sendQuietly(String channel,String text,String reply){try{send(channel,text,reply);}catch(RuntimeException e){log.debug("Discord bot '{}': notice failed: {}",spec.name(),concise(e));}}
 
