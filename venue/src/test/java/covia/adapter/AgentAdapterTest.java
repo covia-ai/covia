@@ -6110,7 +6110,7 @@ public class AgentAdapterTest {
 		engine.gridScheduler().cancel((Blob) wakeHandle, RequestContext.of(ALICE_DID));
 	}
 
-	// ========== Issue #88: fail-fast on transition error ==========
+	// ========== Issue #88: transition errors ==========
 
 	@Test
 	public void testLlmTimeoutFailsCycleWithoutSuspendingAgent() {

@@ -4112,7 +4112,7 @@ public class AgentAdapter extends AAdapter {
 
 				// A cancelled transition is an administrative stop (agent:suspend
 				// or agent:delete cancelled it), not an agent failure — it must
-				// NOT flow into the merge + fail-fast path, which would stamp
+				// NOT flow into the merge, which would take it for a fault and stamp
 				// SUSPENDED over a TERMINATED record or poison a freshly
 				// recreated agent under the same id (#202). Settle per initiator
 				// and exit; the finally-block re-check handles any new work.
@@ -4855,12 +4855,6 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Fails the caller Jobs for a set of queued tasks. Used by the fail-fast
-	 * path on transition errors, where the task queue is drained before
-	 * notification so callers see a settled (SUSPENDED) lattice state. Pass
-	 * the tasks snapshot captured before the drain.
-	 */
-	/**
 	 * Terminal settlement for a task that consumed an entire loop's iteration
 	 * budget without resolving (#215): fail the caller's job with a structured
 	 * error and remove the task, so the loop-cap sleep is an ending rather
@@ -4922,6 +4916,7 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
+	/** Fails the caller Jobs for a set of queued tasks. */
 	private void failQueuedTasks(Index<Blob, ACell> tasks, String error) {
 		if (tasks == null) return;
 		for (var entry : tasks.entrySet()) {
@@ -4934,8 +4929,9 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Fails all pending work for an agent that is being abandoned (e.g.
-	 * suspended on a run-loop exception). Sweeps three sources:
+	 * Fails all pending work for an agent that is being abandoned (deleted,
+	 * or its account removed); a suspended agent keeps its work instead
+	 * ({@link #holdForResume}). Sweeps three sources:
 	 * <ul>
 	 *   <li>Tasks still listed in {@code agent.getTasks()} — venue op was
 	 *       never called; the caller's Job is still waiting in PENDING/STARTED.</li>
