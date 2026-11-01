@@ -329,8 +329,9 @@ monitor (`JobManager.shutdown`):
    gets a `JobPollingFailedException` ("Venue shut down") with no change to
    the record, so no thread outlives the venue on a job's account.
 
-Then the persistence sweep stops and the final flush runs, carrying the
-suspended states.
+Then requests to remote venues still in flight finish
+([Remote delegation](#remote-delegation)), the persistence sweep stops and the
+final flush runs, carrying the suspended states.
 
 ## Admission
 
@@ -417,7 +418,11 @@ polling or automatic retry; a process crash can leave an attempt unresolved.
 Even an acknowledgement cannot undo effects already performed remotely.
 
 Shutdown suspends observation and fences late callbacks, without claiming
-remote cancellation. Transient/private jobs
+remote cancellation. `Engine.close()` then waits for any observation or
+cancellation request already in flight, so none is sent once it returns. Each
+is bounded by its transport's timeouts: 120 s per HTTP request to a Covia
+venue, 30 s for A2A. Once close has begun, no request starts: a cancellation then
+sends nothing and records `unknown` with the reason. Transient/private jobs
 retain their existing recording policy: they can observe remote work while
 the process lives, but have no restart recovery guarantee. Use `/invoke` when
 a durable local record is needed. Neither `/invoke` nor a saved remote handle

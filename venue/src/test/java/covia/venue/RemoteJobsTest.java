@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
@@ -80,6 +82,75 @@ class RemoteJobsTest {
 			observer.observe(job, () -> CompletableFuture.completedFuture(Maps.empty()), data -> job.completeWith(Strings.create("fresh")));
 			assertEquals(Strings.create("fresh"), job.future().get(5, TimeUnit.SECONDS));
 		} finally { engine.close(); }
+	}
+
+	@Test void closeWaitsForAPollInFlightAndSendsNothingAfter() throws Exception {
+		RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2);
+		Job job = job();
+		observer.prepare(job, "test", "test://peer", Maps.empty());
+		observer.accepted(job, "remote");
+		CountDownLatch polling = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		AtomicBoolean closeReturned = new AtomicBoolean();
+		AtomicBoolean sentAfterClose = new AtomicBoolean();
+		AtomicInteger sent = new AtomicInteger();
+		observer.observe(job, () -> {
+			polling.countDown();
+			// Blocked as discovery, a venue challenge or the transport can be
+			try { release.await(); } catch (InterruptedException e) { throw new IllegalStateException(e); }
+			sent.incrementAndGet();
+			sentAfterClose.set(closeReturned.get());
+			return CompletableFuture.completedFuture(Maps.empty());
+		}, data -> {});
+		assertTrue(polling.await(5, TimeUnit.SECONDS));
+		Thread closer = Thread.ofPlatform().start(() -> { observer.close(); closeReturned.set(true); });
+		awaitParked(closer);
+		assertTrue(closer.isAlive(), "close returned while a poll was in flight");
+		release.countDown();
+		closer.join();
+		assertFalse(sentAfterClose.get());
+		assertEquals(1, sent.get());
+	}
+
+	@Test void closeWaitsForACancellationInFlightAndSendsNoneAfter() throws Exception {
+		RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2);
+		Job job = job();
+		CountDownLatch sending = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		job.setCancelHook(() -> observer.attemptCancellation(job, "remote", () -> {
+			sending.countDown();
+			release.await();
+			return RemoteJobs.cancellationResult(Status.CANCELLED);
+		}));
+		job.cancel();
+		assertTrue(sending.await(5, TimeUnit.SECONDS));
+		Thread closer = Thread.ofPlatform().start(observer::close);
+		awaitParked(closer);
+		assertTrue(closer.isAlive(), "close returned while a cancellation was in flight");
+		release.countDown();
+		closer.join();
+		assertEquals(RemoteJobs.OUTCOME_ACKNOWLEDGED, RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
+		// Once closed, a cancellation sends nothing and records why
+		Job late = job();
+		AtomicInteger sent = new AtomicInteger();
+		late.setCancelHook(() -> observer.attemptCancellation(late, "remote", () -> {
+			sent.incrementAndGet();
+			return RemoteJobs.cancellationResult(Status.CANCELLED);
+		}));
+		late.cancel();
+		AMap<AString, ACell> cancellation = RT.ensureMap(late.getData().get(Fields.CANCELLATION));
+		assertEquals(RemoteJobs.OUTCOME_UNKNOWN, cancellation.get(RemoteJobs.OUTCOME));
+		assertEquals(Strings.create(RemoteJobs.CLOSED), cancellation.get(RemoteJobs.CANCELLATION_ERROR));
+		assertEquals(0, sent.get());
+	}
+
+	/** Returns once {@code thread} has parked, as close does to wait for a request, or ended. */
+	private static void awaitParked(Thread thread) {
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		while (thread.isAlive() && thread.getState() != Thread.State.WAITING) {
+			assertTrue(System.nanoTime() < deadline, "close neither parked nor returned");
+			Thread.onSpinWait();
+		}
 	}
 
 	@Test void credentialsAreEncryptedOutsideJobHistoryAndMissingCredentialsDoNotChangeOutcome() {

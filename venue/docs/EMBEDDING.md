@@ -15,7 +15,8 @@ the configuration. `VenueServer.launch(config, store)` adopts a store you have
 already opened: the venue closes it when it closes, or if launch fails.
 
 The venue opens a `LatticeHost` over the store, and closes in this order:
-1. the engine, which stops intake and makes its final flush;
+1. the engine, which stops intake, lets its requests to remote venues in
+   flight finish ([JOBS.md](JOBS.md#shutdown)) and makes its final flush;
 2. the node;
 3. the host, whose `close()` makes the final checkpoint;
 4. the store.

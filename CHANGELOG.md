@@ -69,6 +69,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Cancel, pause, resume and messages by id reach a just-submitted job.
 - REST errors share one body: RFC 9457 problem details (`application/problem+json`), with `error` repeating `detail` (COG-21).
 - Cancelling a finished job answers its record, even once it has left memory.
+- A closing venue waits for its remote job polls and cancellations in flight, and sends none after.
 - A message to a job that does not take messages answers 409 instead of being dropped.
 - A malformed job id or `ucans` field answers 400.
 

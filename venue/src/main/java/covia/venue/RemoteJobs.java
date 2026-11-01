@@ -1,12 +1,18 @@
 package covia.venue;
 
+import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -28,6 +34,9 @@ import covia.grid.Status;
  * adapters reconstruct them from the delegation record on recovery.
  */
 public final class RemoteJobs implements AutoCloseable {
+	private static final Logger log = LoggerFactory.getLogger(RemoteJobs.class);
+	/** Refusal of remote work once {@link #close} has begun. */
+	public static final String CLOSED = "Remote observation is closed";
 	public static final String INVALID_CANCELLATION_STATUS = "Invalid remote cancellation status";
 	public static final String CANCELLATION_ID_MISMATCH = "Remote cancellation job ID mismatch";
 	public static final AString DELEGATION = Strings.intern("delegation");
@@ -64,6 +73,8 @@ public final class RemoteJobs implements AutoCloseable {
 	private final ConcurrentHashMap<Job, Consumer<Job>> cleanups = new ConcurrentHashMap<>();
 	private final Semaphore permits = new Semaphore(32);
 	private final ConcurrentHashMap<ACell, Semaphore> peerPermits = new ConcurrentHashMap<>();
+	/** Requests started and not yet settled; {@link #close} waits for them. Its monitor guards {@link #closed}'s setting. */
+	private final Set<CompletableFuture<?>> requests = ConcurrentHashMap.newKeySet();
 	private final long intervalMs;
 	private final long maxDelayMs;
 	private volatile boolean closed;
@@ -93,7 +104,7 @@ public final class RemoteJobs implements AutoCloseable {
 
 	/** Observation of an existing job does not confer cancellation ownership. */
 	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials, boolean ownsRemote) {
-		if (closed) throw new ShuttingDownException("Remote observation is closed");
+		if (closed) throw new ShuttingDownException(CLOSED);
 		AMap<AString, ACell> record = Maps.of(PROTOCOL, Strings.create(protocol),
 			TARGET, Strings.create(target), OBSERVATION, SUBMITTING,
 			OWNS_REMOTE, convex.core.data.prim.CVMBool.create(ownsRemote));
@@ -183,25 +194,37 @@ public final class RemoteJobs implements AutoCloseable {
 	 * One asynchronous, transport-bounded cancellation attempt. The adapter owns
 	 * protocol interpretation; local cancellation never waits for the peer.
 	 * Captured transport authority remains usable after terminal secret cleanup.
+	 * Once closed, nothing is sent and the outcome is recorded as unknown.
 	 */
 	public void attemptCancellation(Job job, String remoteId,
 			java.util.concurrent.Callable<AMap<AString, ACell>> request) {
-		covia.adapter.AAdapter.VIRTUAL_EXECUTOR.execute(() -> {
-			try {
-				recordCancellation(job, remoteId, Maps.of(OUTCOME, OUTCOME_REQUESTED));
-			} finally {
-				AMap<AString, ACell> result;
-				try { result = request.call(); }
-				catch (Exception error) {
-					Throwable cause = unwrap(error);
-					result = cause instanceof covia.exception.ResponseException re
-						&& re.response instanceof java.net.http.HttpResponse<?> response
-						? cancellationHttpFailure(response.statusCode())
-						: unknownCancellation(cause);
-					if (cause instanceof InterruptedException) Thread.currentThread().interrupt();
+		CompletableFuture<Void> attempt;
+		try {
+			attempt = start(() -> {
+				try {
+					recordCancellation(job, remoteId, Maps.of(OUTCOME, OUTCOME_REQUESTED));
+				} finally {
+					AMap<AString, ACell> result;
+					try { result = request.call(); }
+					catch (Exception error) {
+						Throwable cause = unwrap(error);
+						result = cause instanceof covia.exception.ResponseException re
+							&& re.response instanceof java.net.http.HttpResponse<?> response
+							? cancellationHttpFailure(response.statusCode())
+							: unknownCancellation(cause);
+						if (cause instanceof InterruptedException) Thread.currentThread().interrupt();
+					}
+					recordCancellation(job, remoteId, result);
 				}
-				recordCancellation(job, remoteId, result);
-			}
+				return CompletableFuture.completedFuture(null);
+			});
+		} catch (ShuttingDownException refused) {
+			// No flush: the engine is closing, and its final flush, if still to come, carries this
+			job.recordCancellation(unknownCancellation(refused).assoc(REMOTE_ID, Strings.create(remoteId)));
+			return;
+		}
+		attempt.whenComplete((done, failure) -> {
+			if (failure != null) log.error("Recording remote cancellation of job {} failed", job.getID(), unwrap(failure));
 		});
 	}
 
@@ -303,6 +326,24 @@ public final class RemoteJobs implements AutoCloseable {
 		}
 	}
 
+	/**
+	 * Starts one request on a virtual thread, never the alarm thread: starting
+	 * it can block on discovery, a venue challenge or the transport.
+	 * {@link #close} waits for every request started here.
+	 *
+	 * @throws ShuttingDownException once close has begun, starting nothing
+	 */
+	private <T> CompletableFuture<T> start(Supplier<CompletableFuture<T>> request) {
+		CompletableFuture<T> started;
+		synchronized (requests) {
+			if (closed) throw new ShuttingDownException(CLOSED);
+			started = CompletableFuture.supplyAsync(request, covia.adapter.AAdapter.VIRTUAL_EXECUTOR).thenCompose(f -> f);
+			requests.add(started);
+		}
+		started.whenComplete((result, error) -> requests.remove(started));
+		return started;
+	}
+
 	private static Throwable unwrap(Throwable error) {
 		while ((error instanceof java.util.concurrent.CompletionException
 				|| error instanceof java.util.concurrent.ExecutionException) && error.getCause() != null) {
@@ -352,11 +393,9 @@ public final class RemoteJobs implements AutoCloseable {
 			Semaphore peer = peerPermits.computeIfAbsent(descriptor(job).get(TARGET), ignored -> new Semaphore(4));
 			if (!peer.tryAcquire()) { schedule(intervalMs); return; }
 			if (!permits.tryAcquire()) { peer.release(); schedule(intervalMs); return; }
-			// Starting a request can perform blocking discovery/auth. Never do it on the alarm thread.
 			CompletableFuture<AMap<AString, ACell>> request;
-			try {
-				request = CompletableFuture.supplyAsync(poll::get, covia.adapter.AAdapter.VIRTUAL_EXECUTOR).thenCompose(f -> f);
-			} catch (RuntimeException | Error error) { request = CompletableFuture.failedFuture(error); }
+			try { request = start(poll); }
+			catch (RuntimeException | Error error) { request = CompletableFuture.failedFuture(error); }
 			request.whenComplete((snapshot, error) -> {
 				synchronized (job) {
 					try {
@@ -384,12 +423,26 @@ public final class RemoteJobs implements AutoCloseable {
 		}
 	}
 
+	/**
+	 * Stops observation, then waits for every request already started, each
+	 * bounded by its transport's own timeout, so none outlives the engine. No
+	 * request starts once close has begun. A request may need engine services
+	 * that synchronise on the engine, so {@link Engine#close} calls this before
+	 * taking its monitor. Idempotent.
+	 */
 	@Override public void close() {
-		closed = true;
+		synchronized (requests) { closed = true; }
 		watches.forEach((job, watch) -> watch.stop());
 		watches.clear();
 		cleanups.forEach(Job::unsubscribe);
 		cleanups.clear();
 		timer.shutdownNow();
+		for (CompletableFuture<?> request : requests) {
+			try { request.get(); }
+			catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+			catch (ExecutionException | CancellationException e) {
+				// The request's own outcome, handled where it was started
+			}
+		}
 	}
 }
