@@ -16,11 +16,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextLoader;
@@ -138,6 +140,44 @@ public class UserMemoryAdapterTest {
 		List<String> texts = recalledTexts();
 		assertEquals(List.of("old 4", "old 5", "old 6", "old 7"), texts.subList(0, 4), "the first four forgotten, none twice");
 		assertEquals(8, texts.size(), "every forget and every remember took effect");
+	}
+
+	@Test
+	public void testUserAndAgentEditingSharedListAllSurvive() throws Exception {
+		User user = engine.getVenueState().users().ensure(ALICE.getUserDID());
+		user.ensureAgent("memory-sharer", Maps.empty(), null);
+		RequestContext agent = RequestContext.ofAgent(ALICE.getUserDID(), Strings.create("memory-sharer"));
+		int n = 16;
+		List<Callable<ACell>> tasks = new ArrayList<>();
+		for (int i = 0; i < n; i++) {
+			AMap<AString, ACell> remember = Maps.of(Strings.create("command"), Strings.create("remember"),
+				Strings.create("text"), Strings.create("fact " + i));
+			RequestContext caller = (i % 2 == 0) ? ALICE : agent;
+			tasks.add(() -> run(remember, caller));
+		}
+		together(tasks);
+		List<String> texts = recalledTexts();
+		assertEquals(n, texts.size(), "none lost between the user and their agent");
+		for (int i = 0; i < n; i++) assertTrue(texts.contains("fact " + i), "kept: fact " + i);
+	}
+
+	// ========== authority ==========
+
+	@Test
+	public void testEditNeedsWriteAuthorityOnThePath() {
+		remember("first");
+		AMap<AString, ACell> remember = Maps.of(Strings.create("command"), Strings.create("remember"),
+			Strings.create("text"), Strings.create("second"));
+		AMap<AString, ACell> invoke = Capability.create(Strings.create(OP), AAdapter.INVOKE);
+		AMap<AString, ACell> read = Capability.create(Strings.create("w/memory"), Capability.CRUD_READ);
+		AMap<AString, ACell> write = Capability.create(Strings.create("w/memory"), Capability.CRUD_WRITE);
+
+		assertThrows(JobFailedException.class, () -> run(remember, ALICE.withCaps(Vectors.of(invoke, read))),
+			"read alone must not allow an edit");
+		assertEquals("1. first", recall().toString(), "the refused edit changed nothing");
+
+		run(remember, ALICE.withCaps(Vectors.of(invoke, write)));
+		assertEquals("1. first\n2. second", recall().toString());
 	}
 
 	// ========== update / forget by number ==========

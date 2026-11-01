@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.UnaryOperator;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
@@ -711,6 +712,26 @@ public class CoviaAdapter extends AAdapter {
 		} catch (IllegalArgumentException e) {
 			throw new InvalidInputException(e.getMessage(), e);
 		}
+	}
+
+	/**
+	 * Replaces the value at a path with {@code change} applied to it, in one
+	 * atomic update authorised as {@code covia:write} is. {@code change}
+	 * receives the current value (null when absent) and may run again on a
+	 * retry, so it must be pure; an exception from it leaves the path unchanged.
+	 * For an adapter that edits part of a stored value, where a read followed by
+	 * a write would lose a concurrent edit.
+	 */
+	void updatePath(RequestContext ctx, AString path, UnaryOperator<ACell> change) {
+		ACell input = Maps.of(Fields.PATH, path);
+		requireCap(ctx, input, Capability.CRUD_WRITE);
+		var target = resolvePathTarget(ctx, path, Capability.CRUD_WRITE);
+		final ACell[] keys = target.remainingKeys();
+		updateTree(target.cursor(), keys, target.requireExistingRecord(),
+			(current, from) -> {
+			requireCreateAccess(ctx, input, keys, current, from);
+			return deepSet(current, keys, from, change.apply(deepGet(current, keys, from)));
+		});
 	}
 
 	/**

@@ -3,8 +3,8 @@ package covia.adapter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +22,7 @@ import convex.core.lang.RT;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
 
 /**
@@ -36,17 +37,17 @@ import covia.venue.RequestContext;
  *
  * <h3>Storage</h3>
  * <p>The list is a single {@code AVector} stored at a configurable workspace
- * path (default {@code w/memory}). Every mutation rewrites the <b>whole vector</b>
- * via {@code covia:write}, which is a whole-value LWW replace, so removals are
- * durable and never re-materialise (this also avoids the per-key delete concern
- * in GetMine-ai/demo#134). Per-user DID scoping comes from the {@code covia:*}
- * ops for free; this adapter holds no identity logic.</p>
+ * path (default {@code w/memory}). Every mutation replaces the <b>whole vector</b>,
+ * so removals are durable and never re-materialise (this also avoids the per-key
+ * delete concern in GetMine-ai/demo#134). Per-user DID scoping and authority come
+ * from the {@code covia} adapter, which reads the list and applies each mutation;
+ * this adapter holds no identity logic.</p>
  *
- * <p>Each mutation is a read, an edit and a whole-value write, so two at once
- * would compute from the same read and the second would silently drop the
- * first: an agent's parallel tool calls run concurrently. Mutations by one
- * caller are therefore serialised, which also makes the {@code n} each one
- * returns the position it actually took.</p>
+ * <p>Each mutation is one atomic update of the stored list
+ * ({@link CoviaAdapter#updatePath}), so concurrent mutations never drop each
+ * other — an agent's parallel tool calls, or a user and their agents sharing
+ * {@code w/memory} — and the {@code n} each one returns is the position it
+ * actually took.</p>
  *
  * <h3>Numbering</h3>
  * <p>Display numbers are 1-based positions in the vector. {@code update}/{@code forget}
@@ -70,7 +71,6 @@ public class UserMemoryAdapter extends AAdapter {
 
 	// Input / output keys
 	private static final AString K_PATH       = Strings.intern("path");
-	private static final AString K_VALUE      = Strings.intern("value");
 	private static final AString K_TEXT       = Strings.intern("text");
 	private static final AString K_TS         = Strings.intern("ts");
 	private static final AString K_UPDATED    = Strings.intern("updated");
@@ -79,9 +79,6 @@ public class UserMemoryAdapter extends AAdapter {
 	private static final AString K_REMEMBERED = Strings.intern("remembered");
 	private static final AString K_FORGOTTEN  = Strings.intern("forgotten");
 	private static final AString K_UPDATED_OK = Strings.intern("updated");
-
-	/** One lock per caller DID: its mutations read, edit and write back without interleaving. */
-	private final ConcurrentHashMap<AString, ReentrantLock> locks = new ConcurrentHashMap<>();
 
 	@Override
 	public String getName() {
@@ -121,9 +118,9 @@ public class UserMemoryAdapter extends AAdapter {
 		try {
 			return switch (command) {
 				case "recall"   -> CompletableFuture.completedFuture(handleRecall(ctx, input));
-				case "remember" -> CompletableFuture.completedFuture(mutate(ctx, () -> handleRemember(ctx, input)));
-				case "update"   -> CompletableFuture.completedFuture(mutate(ctx, () -> handleUpdate(ctx, input)));
-				case "forget"   -> CompletableFuture.completedFuture(mutate(ctx, () -> handleForget(ctx, input)));
+				case "remember" -> CompletableFuture.completedFuture(handleRemember(ctx, input));
+				case "update"   -> CompletableFuture.completedFuture(handleUpdate(ctx, input));
+				case "forget"   -> CompletableFuture.completedFuture(handleForget(ctx, input));
 				default -> CompletableFuture.failedFuture(new InvalidInputException(
 					"memory requires command: recall | remember | update | forget"));
 			};
@@ -183,10 +180,8 @@ public class UserMemoryAdapter extends AAdapter {
 		AString text = RT.ensureString(RT.getIn(input, "text"));
 		if (text == null) throw new InvalidInputException("memory:remember requires 'text'");
 
-		AVector<ACell> list = readList(ctx, path);
 		AMap<AString, ACell> entry = Maps.of(K_TEXT, text, K_TS, CVMLong.create(System.currentTimeMillis()));
-		list = list.conj(entry);
-		writeList(ctx, path, list);
+		AVector<ACell> list = editList(ctx, path, current -> current.conj(entry));
 
 		return Maps.of(K_REMEMBERED, CVMBool.TRUE, K_N, CVMLong.create(list.count()), K_COUNT, CVMLong.create(list.count()));
 	}
@@ -198,48 +193,56 @@ public class UserMemoryAdapter extends AAdapter {
 		AString text = RT.ensureString(RT.getIn(input, "text"));
 		if (text == null) throw new InvalidInputException("memory:update requires 'text'");
 
-		AVector<ACell> list = readList(ctx, path);
-		long idx = index(input, list.count());
+		long now = System.currentTimeMillis();
+		long[] idx = {0};
+		AVector<ACell> list = editList(ctx, path, current -> {
+			idx[0] = index(input, current.count());
+			ACell prev = current.get(idx[0]);
+			long ts = (RT.getIn(prev, "ts") instanceof CVMLong l) ? l.longValue() : now;
+			AMap<AString, ACell> entry = Maps.of(
+				K_TEXT, text,
+				K_TS, CVMLong.create(ts),
+				K_UPDATED, CVMLong.create(now));
+			return current.assoc(idx[0], entry);
+		});
 
-		ACell prev = list.get(idx);
-		long ts = (RT.getIn(prev, "ts") instanceof CVMLong l) ? l.longValue() : System.currentTimeMillis();
-		AMap<AString, ACell> entry = Maps.of(
-			K_TEXT, text,
-			K_TS, CVMLong.create(ts),
-			K_UPDATED, CVMLong.create(System.currentTimeMillis()));
-		list = list.assoc(idx, entry);
-		writeList(ctx, path, list);
-
-		return Maps.of(K_UPDATED_OK, CVMBool.TRUE, K_N, CVMLong.create(idx + 1), K_COUNT, CVMLong.create(list.count()));
+		return Maps.of(K_UPDATED_OK, CVMBool.TRUE, K_N, CVMLong.create(idx[0] + 1), K_COUNT, CVMLong.create(list.count()));
 	}
 
 	// ========== forget — remove item n ==========
 
 	private ACell handleForget(RequestContext ctx, ACell input) {
 		String path = path(input);
-		AVector<ACell> list = readList(ctx, path);
-		long idx = index(input, list.count());
+		long[] idx = {0};
+		AVector<ACell> list = editList(ctx, path, current -> {
+			idx[0] = index(input, current.count());
+			AVector<ACell> out = Vectors.empty();
+			for (long i = 0; i < current.count(); i++) {
+				if (i != idx[0]) out = out.conj(current.get(i));
+			}
+			return out;
+		});
 
-		AVector<ACell> out = Vectors.empty();
-		for (long i = 0; i < list.count(); i++) {
-			if (i != idx) out = out.conj(list.get(i));
-		}
-		writeList(ctx, path, out);
-
-		return Maps.of(K_FORGOTTEN, CVMBool.TRUE, K_N, CVMLong.create(idx + 1), K_COUNT, CVMLong.create(out.count()));
+		return Maps.of(K_FORGOTTEN, CVMBool.TRUE, K_N, CVMLong.create(idx[0] + 1), K_COUNT, CVMLong.create(list.count()));
 	}
 
 	// ========== helpers ==========
 
-	/** Runs a read-edit-write mutation holding the caller's lock (a lock, not a monitor: tools run on virtual threads). */
-	private ACell mutate(RequestContext ctx, java.util.function.Supplier<ACell> mutation) {
-		ReentrantLock lock = locks.computeIfAbsent(ctx.getCallerDID(), k -> new ReentrantLock());
-		lock.lock();
-		try {
-			return mutation.get();
-		} finally {
-			lock.unlock();
-		}
+	/**
+	 * Applies {@code edit} to the flat list at a path in one atomic update and
+	 * returns the list written. {@code edit} may run again on a retry, so it must
+	 * be pure; an exception from it leaves the list unchanged.
+	 */
+	private AVector<ACell> editList(RequestContext ctx, String path, UnaryOperator<AVector<ACell>> edit) {
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		if (covia == null) throw new UnavailableException("covia adapter is unavailable");
+		AtomicReference<AVector<ACell>> written = new AtomicReference<>();
+		covia.updatePath(ctx, Strings.create(path), current -> {
+			AVector<ACell> next = edit.apply(asList(current, path));
+			written.set(next);
+			return next;
+		});
+		return written.get();
 	}
 
 	private static String path(ACell input) {
@@ -276,11 +279,10 @@ public class UserMemoryAdapter extends AAdapter {
 		return RT.getIn(read, "value");
 	}
 
-	/** The mutable flat list at a path (for remember/update/forget). Refuses to
-	 *  operate on a non-list value so a stray write can't clobber a map store. */
+	/** The mutable flat list held at a path (for remember/update/forget). Refuses
+	 *  to operate on a non-list value so a stray edit can't clobber a map store. */
 	@SuppressWarnings("unchecked")
-	private AVector<ACell> readList(RequestContext ctx, String path) {
-		ACell value = readValue(ctx, path);
+	private static AVector<ACell> asList(ACell value, String path) {
 		if (value == null) return Vectors.empty();
 		if (value instanceof AVector) return (AVector<ACell>) value;
 		throw new InvalidInputException("memory at " + path + " is not a flat list — remember/update/forget "
@@ -324,10 +326,6 @@ public class UserMemoryAdapter extends AAdapter {
 	private static String strInput(ACell input, String key, String dflt) {
 		AString s = RT.ensureString(RT.getIn(input, key));
 		return (s != null) ? s.toString() : dflt;
-	}
-
-	private void writeList(RequestContext ctx, String path, AVector<ACell> list) {
-		invokeCovia("v/ops/covia/write", Maps.of(K_PATH, Strings.create(path), K_VALUE, list), ctx);
 	}
 
 	private ACell invokeCovia(String op, ACell input, RequestContext ctx) {
