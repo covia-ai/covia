@@ -16,8 +16,10 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueChallenge;
@@ -148,14 +150,14 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 			return CompletableFuture.completedFuture(out);
 		}
 		return CompletableFuture.failedFuture(
-			new IllegalArgumentException("Unknown auth operation: " + op));
+			new NotSupportedException("Unknown auth operation: " + op));
 	}
 
 	/** Issue identity evidence only; never accept caller-supplied claims or keys. */
 	private ACell identityToken(RequestContext ctx, ACell input) {
 		AString caller = ctx == null ? null : ctx.getCallerDID();
 		if (caller == null || engine.isPublicPrincipal(caller) || engine.isPublicPrincipal(ctx.getUserDID())) {
-			throw new IllegalArgumentException(IDENTITY_AUTH_REQUIRED);
+			throw new AuthException(IDENTITY_AUTH_REQUIRED);
 		}
 		// A restricted scope on a principal acting as itself (a scoped credential,
 		// say) bounds what this request may do; a bearer for that identity would
@@ -164,34 +166,34 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		// bounds again wherever it is used, and a principal with its own
 		// authority has no scope.
 		if (ctx.getCaps() != null && !ctx.isSubPrincipal()) {
-			throw new IllegalArgumentException(IDENTITY_DIRECT_ONLY);
+			throw new AuthException(IDENTITY_DIRECT_ONLY);
 		}
 		AString signer = UCAN.toDIDKey(engine.getKeyPair().getAccountKey());
 		if (!signer.equals(caller) && !VenueAuthenticator.isNestedIdentity(caller, signer)) {
-			throw new IllegalArgumentException(IDENTITY_NOT_OWNED);
+			throw new AuthException(IDENTITY_NOT_OWNED);
 		}
 		// Pin the signing action, so custom metadata/aliases cannot bypass its grant.
 		engine.requireAuthority(ctx, IDENTITY_OP, INVOKE);
-		if (!(input instanceof AMap<?, ?> params)) throw new IllegalArgumentException(IDENTITY_INPUT);
+		if (!(input instanceof AMap<?, ?> params)) throw new InvalidInputException(IDENTITY_INPUT);
 		for (long i = 0; i < params.count(); i++) {
 			if (!(params.entryAt(i).getKey() instanceof AString key) || !IDENTITY_FIELDS.contains(key)) {
-				throw new IllegalArgumentException(IDENTITY_INPUT);
+				throw new InvalidInputException(IDENTITY_INPUT);
 			}
 		}
 		ACell audienceValue = params.get(JWT.AUD);
 		if (!(audienceValue instanceof AString audience) || !DID.isCanonicalBase(audience)) {
-			throw new IllegalArgumentException(IDENTITY_AUDIENCE);
+			throw new InvalidInputException(IDENTITY_AUDIENCE);
 		}
 		long lifetime = DEFAULT_IDENTITY_LIFETIME;
 		if (params.containsKey(LIFETIME)) {
 			if (!(params.get(LIFETIME) instanceof CVMLong seconds)
 					|| seconds.longValue() < 1 || seconds.longValue() > MAX_IDENTITY_LIFETIME) {
-				throw new IllegalArgumentException(IDENTITY_LIFETIME);
+				throw new InvalidInputException(IDENTITY_LIFETIME);
 			}
 			lifetime = seconds.longValue();
 		}
 		if (params.containsKey(OVERWRITE) && !(params.get(OVERWRITE) instanceof CVMBool)) {
-			throw new IllegalArgumentException(IDENTITY_OVERWRITE);
+			throw new InvalidInputException(IDENTITY_OVERWRITE);
 		}
 		AString name = params.get(Fields.NAME) instanceof AString s ? s : null;
 		AString token = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(),

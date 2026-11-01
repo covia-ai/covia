@@ -10,6 +10,8 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -77,7 +79,7 @@ public class JSONAdapter extends AAdapter {
 				case "assoc"  -> CompletableFuture.completedFuture(handleAssoc(input));
 				case "select" -> CompletableFuture.completedFuture(handleSelect(input));
 				default -> CompletableFuture.failedFuture(
-					new IllegalArgumentException("Unknown json operation: " + op));
+					new NotSupportedException("Unknown json operation: " + op));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -92,7 +94,7 @@ public class JSONAdapter extends AAdapter {
 		ACell valuesCell = RT.getIn(input, K_VALUES);
 		AVector<?> values = RT.ensureVector(valuesCell);
 		if (values == null) {
-			throw new IllegalArgumentException("'values' must be a vector of maps");
+			throw new InvalidInputException("'values' must be a vector of maps");
 		}
 		ACell acc = null;
 		long n = values.count();
@@ -151,13 +153,13 @@ public class JSONAdapter extends AAdapter {
 		ACell casesCell = RT.getIn(input, K_CASES);
 		AVector<?> cases = RT.ensureVector(casesCell);
 		if (cases == null) {
-			throw new IllegalArgumentException("'cases' must be a vector of {when, then} maps");
+			throw new InvalidInputException("'cases' must be a vector of {when, then} maps");
 		}
 		long n = cases.count();
 		for (long i = 0; i < n; i++) {
 			ACell c = cases.get(i);
 			if (!(c instanceof AMap)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Each case must be a map with 'when' and 'then' keys, got: " + c);
 			}
 			@SuppressWarnings("unchecked")
@@ -196,7 +198,7 @@ public class JSONAdapter extends AAdapter {
 
 		ACell[] keys = pathToKeys(pathCell);
 		if (keys.length == 0) {
-			throw new IllegalArgumentException("'path' must be a non-empty string or vector of keys");
+			throw new InvalidInputException("'path' must be a non-empty string or vector of keys");
 		}
 
 		ACell result = RT.assocIn(target, value, keys);
@@ -222,7 +224,7 @@ public class JSONAdapter extends AAdapter {
 			}
 			return keys;
 		}
-		throw new IllegalArgumentException(
+		throw new InvalidInputException(
 			"'path' must be a string or vector of keys, got: " + pathCell);
 	}
 
@@ -234,7 +236,7 @@ public class JSONAdapter extends AAdapter {
 		ACell key = RT.getIn(input, K_KEY);
 		ACell casesCell = RT.getIn(input, K_CASES);
 		if (!(casesCell instanceof AMap)) {
-			throw new IllegalArgumentException("'cases' must be a map");
+			throw new InvalidInputException("'cases' must be a map");
 		}
 		@SuppressWarnings("unchecked")
 		AMap<ACell, ACell> cases = (AMap<ACell, ACell>) casesCell;
