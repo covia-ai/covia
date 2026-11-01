@@ -570,6 +570,16 @@ Job index and render resolved entries as `get_job_results`, but Covia does not
 currently expose a generic async-invoke harness tool.
 Ordinary operation tools remain synchronous and bounded by `toolCallTimeoutMs`.
 
+A sessioned agent's call still running at that limit is not cancelled. The
+model's tool result is an error saying the call did not complete within the
+limit and may still be running (`AbstractLLMAdapter.TOOL_STILL_RUNNING`), so
+it can carry on without calling it again. When the call ends, its outcome
+`{operation, status: COMPLETE | FAILED, result | error}` is appended to the
+asking session as a message from the venue, which wakes the agent. A task
+that yields meanwhile waits for that message (§4.6). The call is not recorded,
+so a restart loses its outcome. A call with no session to deliver to gets the
+plain timeout error.
+
 HITL is the deliberate long-lived exception (§6.3). A sessioned agent receives
 the durable request ID immediately and the job is tracked in its pending index;
 the HITL record remembers that session and
@@ -863,9 +873,10 @@ session: a supplied `sessionId` is resolved and echoed back, and without one
 the trigger runs unsessioned.
 
 `force` (default `true`) runs a cycle even when the agent has no work, so an
-agent may act proactively on a trigger. `force: false` runs one only when
-there is work, and an idle agent with none returns its status rather than
-failing; the scheduler's wake events pass `false` (§4.6).
+agent may act proactively on a trigger. The forced cycle takes a ready task if
+there is one, and never a parked one (§4.6). `force: false` runs a cycle only
+when there is work, and an idle agent with none returns its status rather than
+failing; the scheduler's wake events pass `false`.
 
 The `wait` parameter on trigger is a block on the loop's completion
 future, not a result-await. `true` or absent blocks until the loop drains
@@ -945,6 +956,9 @@ run's `finally` block.
 
 **Iteration budget.** A single loop runs at most `MAX_LOOP_ITERATIONS`
 (20) cycles before forcing sleep — a runaway backstop, not a normal exit.
+A task that yields with nothing outstanding fails at once (§4.6), so the cap
+is reached only by a task that is ready again every cycle, such as one whose
+wake time is always already past.
 A cap hit on genuinely varied work (a long task queue, chat traffic) is
 benign: remaining work re-wakes a fresh loop via the post-exit re-check.
 But if the **same task** was presented for the entire budget without
@@ -1035,7 +1049,7 @@ exit re-check. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
    - A stale persisted `RUNNING` is allowed through defensively; normal startup
      has already cleared it.
    - Unless `force`, if there is no work (no session with pending messages
-     and no tasks) → return null (leave slot empty).
+     and no ready task) → return null (leave slot empty).
    - Resolve `config.operation` → if null, return null.
    - Create a fresh `CompletableFuture<ACell>` and atomically put it in the slot.
    - Persist `RUNNING`, then launch `executeRunLoop` on a
@@ -1045,9 +1059,33 @@ exit re-check. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
 
 An agent is eligible to run when any of:
 
-- A new task has been added to `tasks` (via `agent:request`)
-- A new message has been delivered to a session's `pending` queue (via
-  `agent:message`, or a HITL answer re-entering the asking session)
+- A session has a message in its `pending` queue (via `agent:message` or
+  `agent:chat`, a HITL answer re-entering the asking session, or the outcome
+  of a tool call that passed its time limit)
+- A task is ready (below)
+
+**Task readiness and yields.** A task is ready unless it is parked. A parked
+task is ready again once something new is there for it: an input it has not
+been shown (a continuation through `agent:message` with its `taskId`), a
+message in its session, or its `wakeTime` having come. The work check and the
+choice of task both use this test (`AgentState.isTaskReady`), and the cycle
+takes the oldest ready task.
+
+A cycle that leaves its picked task queued, neither completed nor failed and
+without a transition error, has yielded it. The task is parked
+(`parked: true` on its row) when something will bring it back:
+
+- a HITL ask from its cycle that is still open (the ask's entry in the agent's
+  `pending` index names the task);
+- a tool call from its cycle still running past its time limit (§3.4.2),
+  tracked in memory;
+- a `wakeTime` on the task;
+- input or session messages that arrived during the cycle.
+
+A yield with none of these could never resume, so the task's Job fails at once
+with `AgentAdapter.TASK_YIELDED_IDLE`. Claiming a task for a cycle clears
+`parked`, so a task that is not parked but has been shown its input was
+interrupted mid-cycle, and runs again (§6.1).
 
 **No lost wakeups.** `addTask` / `appendSessionPending` write to the lattice
 atomically, then call `wakeAgent`. The loop's top-of-iteration `hasWork` check
@@ -1073,11 +1111,11 @@ through `hasWork`.
 
 The venue keeps one `agent:trigger {force: false}` event per agent in the grid
 scheduler, at the earliest `wakeTime` across its threads
-([GRID_SCHEDULER.md §8](./GRID_SCHEDULER.md)). The gate above never reads
-`wakeTime`: the fire is only a wake opportunity, and the loop runs if there is
-work, so a parked task runs and a session with nothing pending does not.
-There is no fixed periodic sleep interval. A `sleep` harness tool and idle
-backoff are future work (§8.3.4).
+([GRID_SCHEDULER.md §8](./GRID_SCHEDULER.md)). When it fires, a parked task
+whose `wakeTime` has come is ready and runs. Readiness applies to tasks only:
+a session's own `wakeTime` firing with nothing pending runs nothing. No
+production transition returns a `wakeTime` yet, and there is no fixed
+periodic sleep interval. A `sleep` harness tool is future work (§8.3.4).
 
 The scheduler is an internal venue concern — its implementation may change
 without affecting the agent contract or MCP interface.
@@ -1129,6 +1167,13 @@ request whose task is still in `tasks` and a chat whose envelope is
 still pending on its session, so the boot wake completes them. Venue shutdown
 likewise leaves them `STARTED` (`suspendJob`) and stops the run loop without
 relaunching it (see JOBS.md § Shutdown).
+
+A parked task (§4.6) keeps waiting across a restart only while what it waits
+on survives one. A wake time and an open HITL ask are durable. A tool call past
+its time limit ran only in memory, so a parked task left with nothing durable
+to wait on fails at boot (`AgentAdapter.TASK_WAIT_LOST`). A task that was not
+parked but had been shown its input was interrupted mid-cycle, and the boot
+wake runs it again.
 
 ### 6.2 Effects
 
@@ -1296,17 +1341,18 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
 - **`sleep` harness tool** — let an LLM defer its current thread by writing
   `wakeTime = now + ms`. A future `wakeTime` is set only by a transition
   result (§4.6).
-- **Backoff** — exponential backoff between cycles of a task that keeps
-  yielding without progress (a `yieldCount` on the thread). A yielded task is
-  presented again on the next cycle, up to the iteration budget (§4.4).
-- **Async-completion wake** — a general completion hook on an outbound Job
-  that appends its result to `session.pending` and wakes the agent. Only
-  sessioned HITL asks re-enter this way (§6.3).
+- **Async invoke** — a harness tool that starts an operation without waiting
+  and delivers its outcome to the session when it ends. Today only sessioned
+  HITL asks (§6.3) and tool calls past their time limit (§3.4.2) re-enter this
+  way. Retrying slow work belongs inside the operation's own Job, not in the
+  run loop or the scheduler.
+- **Session readiness** — a session's own `wakeTime` running a cycle with
+  nothing pending, as a task's does (§4.6).
 - **Task/session unification** — one `threads` shape with a single
   `pickReadyThread`, replacing separate tasks and sessions. A large refactor
   needing its own design.
-- **Observability** — each thread's `wakeTime`, and the agent's next wake, in
-  `agent:info`.
+- **Observability** — each thread's `wakeTime`, whether a task is parked and
+  on what, and the agent's next wake, in `agent:info`.
 
 ### 8.4 Target principles
 

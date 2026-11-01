@@ -198,7 +198,7 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 
 | Op | Queue | Caller waits? | Completion semantics |
 |----|-------|---------------|----------------------|
-| `agent_request` | `tasks` Index | yes (Job) | Agent must produce `response` (auto-completes task) or `error`, or yield (task stays pending until external wake) |
+| `agent_request` | `tasks` Index | yes (Job) | Agent completes or fails the task (`complete_task` / `fail_task`; a goaltree root reply completes it), or yields: the task waits while a HITL ask, a late tool call or a wake time will bring it back, and fails otherwise (§6.3) |
 | `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message it had already seen (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
@@ -586,27 +586,28 @@ The framework around the transition:
    - Append adapter-emitted non-terminal `turns`, if any, to `frames[0].conversation`
    - If return value non-null → append one terminal turn to `frames[0].conversation`
    - If chat picked: complete chat Job with return value (yield only if return is null — rare)
-   - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise yield, apply falloff (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
+   - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise it yields, and is parked or failed (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
    - If message picked: no completion concept (return value already emitted to history)
 7. On adapter throw → if task/chat picked, Job → FAILED with *technical* error (distinct from `fail_task` semantic failure)
 8. Returns the sessionId in the response envelope (always)
 
 Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete_task(result)` and return. Their session becomes a one-turn audit record.
 
-### 6.3 Yield, falloff, and timeouts
+### 6.3 Yield and timeouts
 
 For task work, the framework distinguishes **completed** from **yield** by observing whether `agent:complete_task` / `agent:fail_task` was invoked during the transition. Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, completion is determined by the return value (non-null = complete; null = yield, rare).
 
-**Yield semantics.** A task cycle that exits without invoking a completion op yields — the run loop exits the active wake, the agent returns to SLEEPING, and the task stays in the `tasks` Index for next time. Yield is the natural way to express:
+**Yield semantics.** A task cycle that exits without invoking a completion op yields. The task stays in the `tasks` Index, parked, only while something will bring it back, and runs again when that arrives ([AGENT_LOOP.md §4.6](./AGENT_LOOP.md)):
 
 - **Human input in progress** — a sessioned HITL request returned its durable
   handle; the answer will append to this session and wake the task again (§3.4.2)
-- **Multi-step planning** — agent did internal work (lattice writes to `n` / `c` / `t`) but isn't ready to complete
-- **Agent had nothing useful to say** — transient false wake; loop exits cleanly
+- **A slow call** — a tool call passed its time limit while still running; its
+  outcome will append to this session when it ends
+- **A wake time** — the transition returned a `wakeTime` for the task
 
-The picked task resumes on the next wake; the wake events are listed in [AGENT_LOOP.md §8.2](./AGENT_LOOP.md).
+A yield with none of these could never resume, so the task fails at once with a reason rather than being presented again with nothing new.
 
-**Iteration budget.** A task presented for a run's whole iteration budget without resolving is failed ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)). There is no backoff between its cycles ([AGENT_LOOP.md §8.3.4](./AGENT_LOOP.md)).
+**Iteration budget.** A task presented for a run's whole iteration budget without resolving is failed ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)).
 
 **Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
 

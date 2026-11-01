@@ -2051,8 +2051,11 @@ typically needs `http://host.docker.internal:11434`, with Ollama started as
 URL and this knob instead of a bare ConnectException.
 
 Agent-side bounds: each level-3 LLM call is bounded by the agent's
-`llmTimeoutMs` (default 120s) and each tool call by `toolCallTimeoutMs`
-(default 300s); cancellation interrupts the in-flight provider call.
+`llmTimeoutMs` (default 120s), and is cancelled at it, interrupting the
+in-flight provider call. Each tool call is bounded by `toolCallTimeoutMs`
+(default 300s, minimum 1s). A tool call still running at its limit is not
+cancelled: the model is told it may still be running, and in a session its
+outcome arrives as a message when it ends (`docs/AGENT_LOOP.md` §3.4.2).
 Provider responses also carry `finishReason` when reported. A `length` result
 is incomplete: both agent runtimes discard its partial content and tool calls,
 retry once with a concise-response diagnostic, and fail clearly if the retry

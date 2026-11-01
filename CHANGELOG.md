@@ -16,8 +16,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `ucan:issue` takes `prf` to pass on part of a grant made to the venue (#636).
 - `outbound/any`: the venue's standing to dial any outbound target, delegable by grant.
 - Venues prove their DID by address or challenge (`auth.venueProof`, `auth.requireVenueProof`).
+- An agent tool call past `toolCallTimeoutMs` delivers its outcome to the session when it ends (#607).
 
 ### Changed
+
+- A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
+- A forced `agent:trigger` no longer presents a parked task.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.

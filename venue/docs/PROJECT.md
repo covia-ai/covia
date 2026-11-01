@@ -795,9 +795,9 @@ answer with a location. Not in v1, but nothing in the record prevents it.
    to handle. This is the point of hiring a PM.
 5. **Session per assigned node, not per agent and not per task.**
    Commissioning with `agent:request` and letting the task Job stand for
-   the engagement was rejected: a standing task is perpetual `hasWork`, so
-   the loop would run continuously and trip the stuck-task guard, and
-   there is no `sleep` tool to park it (AGENT_LOOP.md §8.3.4). One session per
+   the engagement was rejected: a standing task that yields between
+   checkpoints with nothing outstanding fails at once (AGENT_LOOP.md §4.6),
+   and there is no `sleep` tool to park it (AGENT_LOOP.md §8.3.4). One session per
    assigned node gives each engagement its own context and its own
    checkpoint cadence, and lets one agent hold several nodes. When threads
    unification and `sleep` land, a task-backed commission becomes
