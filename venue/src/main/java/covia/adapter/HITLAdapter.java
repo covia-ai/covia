@@ -26,6 +26,11 @@ import covia.adapter.hitl.HitlValidation;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
@@ -129,11 +134,11 @@ public class HITLAdapter extends AAdapter {
 				case "list":
 					return CompletableFuture.completedFuture(handleList(ctx, input));
 				case "request":
-					return CompletableFuture.failedFuture(new IllegalStateException(
+					return CompletableFuture.failedFuture(new NotSupportedException(
 						"hitl:request is Job-carried — invoke it as an operation, not internally"));
 				default:
 					return CompletableFuture.failedFuture(
-						new IllegalArgumentException("Unknown hitl operation: " + subOp));
+						new NotSupportedException("Unknown hitl operation: " + subOp));
 			}
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
@@ -162,7 +167,7 @@ public class HITLAdapter extends AAdapter {
 		// to deliver into.
 		if (target == null) target = ctx.getUserDID();
 		AString title = RT.ensureString(RT.getIn(input, Hitl.TITLE));
-		if (title == null) throw new IllegalArgumentException("title is required");
+		if (title == null) throw new InvalidInputException("title is required");
 		AVector<ACell> asks = HitlValidation.validateAsks(RT.getIn(input, Hitl.ASKS));
 		validateOfferedGrantExpiries(asks, System.currentTimeMillis() / 1000);
 		Long timeoutSecs = parseTimeout(RT.getIn(input, Hitl.TIMEOUT));
@@ -180,8 +185,8 @@ public class HITLAdapter extends AAdapter {
 		final AString targetDID = target;
 		User targetUser = engine.getVenueState().users().get(targetDID);
 		if (targetUser == null) {
-			throw new IllegalArgumentException("HITL target user is not registered at this venue: "
-				+ targetDID);
+			throw new NotFoundException("HITL target user is not registered at this venue: "
+				+ targetDID, targetDID.toString());
 		}
 		targetUser.putHitlRequest(id, record);
 		Blob jobId = job.getID();
@@ -282,7 +287,7 @@ public class HITLAdapter extends AAdapter {
 		if (timeoutCell == null) return null;
 		CVMLong t = RT.ensureLong(timeoutCell);
 		if (t == null || t.longValue() <= 0) {
-			throw new IllegalArgumentException("timeout must be a positive number of seconds");
+			throw new InvalidInputException("timeout must be a positive number of seconds");
 		}
 		return t.longValue();
 	}
@@ -310,7 +315,7 @@ public class HITLAdapter extends AAdapter {
 		AString caller = ctx.getUserDID();
 		if (caller == null) throw new AuthException("Authentication required");
 		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
-		if (id == null) throw new IllegalArgumentException("id is required");
+		if (id == null) throw new InvalidInputException("id is required");
 		// Records key on bare hex, but REST renders job ids 0x-prefixed —
 		// accept both, so a pasted job id just works.
 		String idStr = id.toString();
@@ -323,10 +328,10 @@ public class HITLAdapter extends AAdapter {
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
 		AMap<AString, ACell> record = user.getHitlRequest(id);
 		if (record == null) {
-			throw new IllegalArgumentException("No HITL request " + id + " in your inbox");
+			throw new NotFoundException("No HITL request " + id + " in your inbox", id.toString());
 		}
 		if (!Hitl.OPEN.equals(record.get(Hitl.STATUS))) {
-			throw new IllegalStateException("HITL request " + id + " is not open (status: "
+			throw new NotSupportedException("HITL request " + id + " is not open (status: "
 				+ record.get(Hitl.STATUS) + ")");
 		}
 		// Lazy expiry: a due-but-untriggered timer (e.g. lost on restart before
@@ -334,7 +339,7 @@ public class HITLAdapter extends AAdapter {
 		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
 		if (expires != null && System.currentTimeMillis() > expires.longValue()) {
 			expireRequest(caller, id, Blob.parse(id.toString()));
-			throw new IllegalStateException("HITL request " + id + " has expired");
+			throw new NotSupportedException("HITL request " + id + " has expired");
 		}
 
 		AString outcome = RT.ensureString(RT.getIn(input, Hitl.OUTCOME));
@@ -346,14 +351,14 @@ public class HITLAdapter extends AAdapter {
 		if (Hitl.ANSWER.equals(outcome)) {
 			return resolveAnswer(user, id, record, input, comment, job);
 		}
-		throw new IllegalArgumentException("outcome must be 'answer' or 'reject'");
+		throw new InvalidInputException("outcome must be 'answer' or 'reject'");
 	}
 
 	private ACell resolveReject(User user, AString id, AString comment, Job job) {
 		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.REJECT);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
 		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(),
-				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), job)) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
+				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), job)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
 	}
 
@@ -410,7 +415,7 @@ public class HITLAdapter extends AAdapter {
 		// in its own durable session.
 		if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
 		AMap<AString, ACell> result = output;
-		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, job)) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
+		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, job)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
@@ -426,14 +431,14 @@ public class HITLAdapter extends AAdapter {
 	 * @param expectedAud the audience the request asked for (pinned, or the
 	 *                    requester by default) — must be the token's {@code aud}
 	 * @param now         current time, unix seconds
-	 * @throws AuthException / IllegalArgumentException on any failure
+	 * @throws AuthException / InvalidInputException on any failure
 	 */
 	private void verifyTransportedToken(AString jwt, AString responder, AString expectedAud, long now) {
 		UcanJwtValidator.Validation validation =
 			UcanJwtValidator.validate(jwt, now, engine.didVerifier());
 		UCAN token = validation.token();
 		if (token == null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"token answer is not a valid UCAN JWT: " + validation.reason());
 		}
 		// iss must be the answering human — not something an agent slipped in.
@@ -454,10 +459,10 @@ public class HITLAdapter extends AAdapter {
 		JWT parsed = JWT.parse(jwt);
 		AMap<AString, ACell> claims = (parsed != null) ? parsed.getClaims() : null;
 		if (claims == null || claims.get(UCAN.EXP) == null) {
-			throw new IllegalArgumentException("token must carry an exp (bounded lifetime)");
+			throw new InvalidInputException("token must carry an exp (bounded lifetime)");
 		}
 		if (!UCANValidator.checkTemporalBounds(token, now)) {
-			throw new IllegalArgumentException("token is expired or not yet valid");
+			throw new InvalidInputException("token is expired or not yet valid");
 		}
 		// Audience binding: the token is usable only by the principal it was
 		// requested for, so leakage from a persisted job record cannot be replayed.
@@ -489,10 +494,10 @@ public class HITLAdapter extends AAdapter {
 				} else if (g != null) {
 					grantExp = g.longValue();
 					if (grantExp <= now) {
-						throw new IllegalArgumentException("approved grant " + i + " has expired");
+						throw new InvalidInputException("approved grant " + i + " has expired");
 					}
 				} else {
-					throw new IllegalArgumentException("approved grant " + i
+					throw new InvalidInputException("approved grant " + i
 						+ " exp must be unix seconds or null");
 				}
 			} else {
@@ -504,21 +509,14 @@ public class HITLAdapter extends AAdapter {
 			validateExpiryAgainstMaximum(grantExp, maxLifetime, now, "approved grant " + i);
 			if (grantExp != null && (exp == null || grantExp < exp)) exp = grantExp;
 		}
-		try {
-			ACell result = engine.jobs().invokeInternal("v/ops/ucan/issue",
-				Maps.of(Strings.intern("aud"), requester,
-					Strings.intern("att"), approved,
-					Hitl.EXP, (exp == null) ? null : CVMLong.create(exp)),
-				engine.context(responder)).get(30, TimeUnit.SECONDS);
-			AString token = RT.ensureString(RT.getIn(result, Hitl.TOKEN));
-			if (token == null) throw new IllegalStateException("ucan:issue returned no token");
-			return token;
-		} catch (RuntimeException e) {
-			throw e;
-		} catch (Exception e) {
-			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			throw new IllegalStateException("Grant issuance failed: " + cause.getMessage(), cause);
-		}
+		ACell result = await(engine.jobs().invokeInternal("v/ops/ucan/issue",
+			Maps.of(Strings.intern("aud"), requester,
+				Strings.intern("att"), approved,
+				Hitl.EXP, (exp == null) ? null : CVMLong.create(exp)),
+			engine.context(responder)), 30_000, "ucan:issue");
+		AString token = RT.ensureString(RT.getIn(result, Hitl.TOKEN));
+		if (token == null) throw new IllegalStateException("ucan:issue returned no token");
+		return token;
 	}
 
 	/** Validate policy before delivery, so the human never approves an expiry
@@ -552,12 +550,12 @@ public class HITLAdapter extends AAdapter {
 			ACell value = grant.get(Hitl.EXP);
 			CVMLong exp = RT.ensureLong(value);
 			if (value != null && exp == null) {
-				throw new IllegalArgumentException(where + ".grants[" + i
+				throw new InvalidInputException(where + ".grants[" + i
 					+ "].exp must be unix seconds or null");
 			}
 			Long expiry = (exp == null) ? null : exp.longValue();
 			if (expiry != null && expiry <= now) {
-				throw new IllegalArgumentException(where + ".grants[" + i + "].exp is expired");
+				throw new InvalidInputException(where + ".grants[" + i + "].exp is expired");
 			}
 			validateExpiryAgainstMaximum(expiry, maxLifetime, now,
 				where + ".grants[" + i + "]");
@@ -568,11 +566,11 @@ public class HITLAdapter extends AAdapter {
 			long now, String where) {
 		if (maxLifetime == null) return;
 		if (expiry == null) {
-			throw new IllegalArgumentException(where + " requests no expiry, exceeding this venue's "
+			throw new InvalidInputException(where + " requests no expiry, exceeding this venue's "
 				+ maxLifetime + "-second HITL grant ceiling");
 		}
 		if (expiry - now > maxLifetime) {
-			throw new IllegalArgumentException(where + ".exp exceeds this venue's "
+			throw new InvalidInputException(where + ".exp exceeds this venue's "
 				+ maxLifetime + "-second HITL grant ceiling");
 		}
 	}
@@ -585,7 +583,7 @@ public class HITLAdapter extends AAdapter {
 		if (value == null) return null;
 		CVMLong seconds = RT.ensureLong(value);
 		if (seconds == null || seconds.longValue() <= 0) {
-			throw new IllegalStateException("adapters.hitl.maxGrantLifetimeSecs must be "
+			throw new ConfigurationException("adapters.hitl.maxGrantLifetimeSecs must be "
 				+ "a positive number of seconds or null");
 		}
 		return seconds.longValue();
@@ -671,7 +669,7 @@ public class HITLAdapter extends AAdapter {
 					String error = Hitl.REJECTED.equals(status) ? rejection(RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED;
 					return data.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(error)).dissoc(Fields.ERROR_CODE);
 				});
-				if (changed == null) throw new IllegalStateException(REQUEST_ALREADY_RESOLVED);
+				if (changed == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 				notification.set(changed);
 				// Terminal jobs are skipped at restart: no live cleanup listener will
 				// survive to remove this wait, so settle it with the result itself.

@@ -14,6 +14,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 import covia.grid.hitl.Hitl;
 
 /**
@@ -42,26 +43,26 @@ public class HitlValidationTest {
 	@Test
 	public void testAsksStructuralViolations() {
 		// Empty / non-vector
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.empty()));
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Strings.create("x")));
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.empty()));
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Strings.create("x")));
 		// Duplicate ask ids
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			Hitl.text("a", "p").build(), Hitl.text("a", "p2").build())));
 		// Unknown type
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			(ACell) Maps.of(Hitl.ID, Strings.create("a"), Hitl.TYPE, Strings.create("essay"),
 				Hitl.PROMPT, Strings.create("p")))));
 		// Missing prompt
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			(ACell) Maps.of(Hitl.ID, Strings.create("a"), Hitl.TYPE, Hitl.TEXT))));
 		// choice without options
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			Hitl.choice("a", "p").build())));
 		// Duplicate option ids
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			Hitl.choice("a", "p").option("x", "X").option("x", "X2").build())));
 		// Options on a non-option type
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			(ACell) Hitl.text("a", "p").build().assoc(Hitl.OPTIONS,
 				Vectors.of((ACell) Maps.of(Hitl.ID, Strings.create("x"), Hitl.LABEL, Strings.create("X")))))));
 	}
@@ -69,14 +70,14 @@ public class HitlValidationTest {
 	@Test
 	public void testGrantPlacementRules() {
 		// Grants ride explicit choices ONLY: approval asks and options.
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			(ACell) Hitl.text("a", "p").build().assoc(Hitl.GRANTS,
 				Vectors.of((ACell) Hitl.grant("w/x", "crud/read"))))));
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			(ACell) Hitl.choice("a", "p").option("x", "X").build().assoc(Hitl.GRANTS,
 				Vectors.of((ACell) Hitl.grant("w/x", "crud/read"))))));
 		// Malformed grant entries
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(Vectors.of(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(Vectors.of(
 			(ACell) Hitl.approval("a", "p").build().assoc(Hitl.GRANTS,
 				Vectors.of((ACell) Maps.of(Hitl.WITH, Strings.create("w/x"))))))); // no can
 		// Approval-ask and option grants are the permitted placements.
@@ -93,7 +94,7 @@ public class HitlValidationTest {
 				.grant(Hitl.grant("w/x", "crud/read", (Long) null)).build())).count(),
 			"explicit exp:null is a valid non-expiring grant offer");
 
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAsks(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAsks(
 			Vectors.of((ACell) Hitl.approval("a", "p")
 				.grant(Hitl.grant("w/x", "crud/read")
 					.assoc(Hitl.EXP, Strings.create("tomorrow"))).build())));
@@ -122,25 +123,25 @@ public class HitlValidationTest {
 	public void testAnswerShapes() {
 		AVector<ACell> asks = sampleAsks();
 		// Required unanswered
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAnswers(asks,
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAnswers(asks,
 			answers(Strings.create("tier"), Strings.create("fast"))));
 		// Approval must be boolean
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAnswers(asks,
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAnswers(asks,
 			answers(Strings.create("pay"), Strings.create("yes"))));
 		// Text must be a string
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAnswers(asks,
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAnswers(asks,
 			answers(Strings.create("pay"), CVMBool.TRUE, Strings.create("notes"), CVMLong.create(1))));
 		// Choice must name a known option
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAnswers(asks,
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAnswers(asks,
 			answers(Strings.create("pay"), CVMBool.TRUE, Strings.create("tier"), Strings.create("zzz"))));
 		// Checkboxes must be a vector of known, non-duplicate option ids
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAnswers(asks,
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAnswers(asks,
 			answers(Strings.create("pay"), CVMBool.TRUE, Strings.create("scopes"), Strings.create("r"))));
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAnswers(asks,
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAnswers(asks,
 			answers(Strings.create("pay"), CVMBool.TRUE,
 				Strings.create("scopes"), Vectors.of(Strings.create("r"), Strings.create("r")))));
 		// Unknown ask id
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.validateAnswers(asks,
+		assertThrows(InvalidInputException.class, () -> HitlValidation.validateAnswers(asks,
 			answers(Strings.create("pay"), CVMBool.TRUE, Strings.create("bogus"), Strings.create("x"))));
 	}
 
@@ -180,13 +181,13 @@ public class HitlValidationTest {
 			"the issued capability is the offer's own map, never the echo's");
 
 		// ADVERSARIAL: echo of a never-offered grant fails the response.
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.intersectEchoedGrants(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.intersectEchoedGrants(
 			Vectors.of((ACell) Hitl.grant("w/private/", "crud")), triggered));
 		// ADVERSARIAL: echo of an offered-but-untriggered grant fails too.
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.intersectEchoedGrants(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.intersectEchoedGrants(
 			Vectors.of((ACell) Hitl.grant("w/reports/", "crud/read")), Vectors.empty()));
 		// ADVERSARIAL: an echo widening the ability is not a match.
-		assertThrows(IllegalArgumentException.class, () -> HitlValidation.intersectEchoedGrants(
+		assertThrows(InvalidInputException.class, () -> HitlValidation.intersectEchoedGrants(
 			Vectors.of((ACell) Hitl.grant("w/reports/", "crud")), triggered));
 	}
 }
