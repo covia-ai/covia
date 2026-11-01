@@ -141,7 +141,7 @@ This is a critical design distinction. The three execution-related namespaces se
 
 **Operations are definitions.** They describe a transformation but don't execute. They're the "what."
 
-**Jobs are executions of operations.** Every `invoke()` creates a job. The job records exactly what ran (pinned op ref), what went in (pinned inputs), what came out (outputs), and who did it (executor). Jobs are the **economic and accountability unit** — billing, SLA tracking, and dispute resolution happen at the job level. Jobs answer the caller's question: "what happened with my request?"
+**Jobs are executions of operations.** Every `invoke()` creates a job. The job records what ran (`op`), what went in (`input`), what came out (`output` or `error`), and who asked (`caller`). Jobs are the **economic and accountability unit** — billing, SLA tracking, and dispute resolution happen at the job level. Jobs answer the caller's question: "what happened with my request?"
 
 **Agents are actors that create and execute jobs.** An agent's transition function may invoke operations (creating jobs), send messages to other agents (via session.pending), or spawn new agents. The agent's timeline records all of this from the agent's perspective — what it saw, what it decided, what it did. The timeline answers the agent's question: "what did I do and why?"
 
@@ -149,13 +149,13 @@ This is a critical design distinction. The three execution-related namespaces se
 
 ```
 /j/2456543/                          /g/my-assistant/timeline/
-  op_name: "/o/my-transform"           42: {
-  op_pinned: "/a/cafebabe..."              start: 1719500000,
-  caller: "/g/my-assistant"                end: 1719500005,
-  executor: "/g/helper"                     op: "test:echo",
-  inputs: { ... }                          state: { ... },
-  outputs: { ... }                         tasks: [resolved task data...],
-  cost: 450                                messages: [session pending...],
+  op: "/o/my-transform"                42: {
+  caller: "<owner>:g:my-assistant"         start: 1719500000,
+  status: "COMPLETE"                       end: 1719500005,
+  input: { ... }                           op: "test:echo",
+  output: { ... }                          state: { ... },
+                                           tasks: [resolved task data...],
+                                           messages: [session pending...],
                                            result: { ... },
                                            taskResults: { ... }
                                          }
@@ -384,8 +384,9 @@ request-aware step. It:
 4. walks the components from the venue root to the position;
 5. returns the component there, or throws if the principal may not act.
 
-Reads, writes, deletes, the job-free read API, context loading and operation
-references all use it.
+Reads, writes, deletes, the job-free read API, context loading and lattice
+paths in operation references all use it. Content hashes and other venues'
+paths stay with `Engine.resolvePath` and federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.
@@ -464,7 +465,7 @@ Capabilities inherit the namespace path hierarchy. The risk profile follows from
 
 ### 5.4 Namespace Security Symmetry
 
-The six namespaces form a natural grid. `/a/` is the universal immutable layer that all other namespaces pin to. The remaining namespaces are mutable with different constraints:
+Six of the namespaces form a natural grid. `/a/` is the universal immutable layer that all other namespaces pin to. The remaining namespaces are mutable with different constraints:
 
 | | Mutable Registry | Working State | Controlled |
 |---|-----------------|---------------|------------|
