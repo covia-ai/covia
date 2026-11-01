@@ -41,6 +41,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
 import covia.grid.Assets;
 import covia.grid.Job;
@@ -225,6 +226,9 @@ public class EngineTest {
 			"failed start must close storage after shutting down the scheduler");
 		assertThrows(IllegalStateException.class, engine.gridScheduler()::start,
 			"failed start must shut down the scheduler it started");
+		assertThrows(ShuttingDownException.class,
+			() -> engine.gridScheduler().cancel(Blob.fromHex("00"), RequestContext.of(Strings.create("did:test:late"))),
+			"a request reaching the shut-down scheduler is refused as shutting down");
 
 		// The caller retains the Engine reference and close remains safe after
 		// automatic rollback, including repeated cleanup by an outer owner.

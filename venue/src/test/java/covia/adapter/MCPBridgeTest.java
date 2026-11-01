@@ -304,6 +304,23 @@ public class MCPBridgeTest {
 	}
 
 	@Test
+	public void testCallerNamedMalformedServerIsTheCallersToFix() {
+		// A URL from the call's input that names no MCP endpoint fails the job
+		// with the session's own reason, not as an unexpected venue error.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		String url = "did:web:venue.example";
+		String reason = assertThrows(IllegalArgumentException.class,
+			() -> McpClientSession.endpointUrl(url)).getMessage();
+		Job add = addServer("didweb", url, null, ctx);
+		Job list = engine.jobs().invokeOperation("v/ops/mcp/tools-list", Maps.of(Fields.SERVER, url), ctx);
+		for (Job job : new Job[] {add, list}) {
+			assertThrows(Exception.class, () -> job.awaitResult(15000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(reason, job.getErrorMessage());
+		}
+	}
+
+	@Test
 	public void testRawAuthTokenWarns() {
 		// Pure check: secret references (bare or DID-qualified) are clean,
 		// literal credentials warn with the catalog-path remedy. (A live add

@@ -401,7 +401,7 @@ public class UserAdapter extends AAdapter {
 		} catch (RuntimeException ignored) {
 			// Converted below into a short, caller-recoverable validation error.
 		}
-		throw new IllegalArgumentException("Invalid user DID: " + value);
+		throw new InvalidInputException("Invalid user DID: " + value);
 	}
 
 	/**

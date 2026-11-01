@@ -49,6 +49,7 @@ import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
@@ -1538,6 +1539,9 @@ public class VenueServer {
 			// Reject occupied/reserved paths before starting a cycle. Convex
 			// validates again and creates the link without replacing anything.
 			File requested = backupFile == null ? (retain ? checkpointFile(file) : null) : new File(backupFile);
+			if (requested != null && Files.exists(requested.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				throw new ConflictException(StoreControl.BACKUP_EXISTS.formatted(requested));
+			}
 			File backup = requested == null ? null : etch.validateGCBackup(requested);
 			synchronized (cycleLock) {
 				if (collectedStore != null) {

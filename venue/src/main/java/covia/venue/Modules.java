@@ -130,8 +130,9 @@ public class Modules {
 			for (long i = 0; i < modules.count(); i++) {
 				discovered.add(discover(venueConfig, modules.get(i)));
 			}
-		} catch (IllegalStateException e) {
-			// A module the config names cannot load: the operator's setup
+		} catch (IllegalStateException | IllegalArgumentException e) {
+			// A module the config names cannot load, or refuses the settings the
+			// config gives it: the operator's setup
 			close(discovered, e);
 			throw new ConfigurationException(e.getMessage(), e);
 		} catch (RuntimeException | Error e) {
@@ -207,7 +208,7 @@ public class Modules {
 	 * @param sha256 Optional pinned digest (hex), or null
 	 * @param config Module-level settings for {@link AAdapter#configureModule}
 	 * @return The loaded module record
-	 * @throws ConfigurationException if a module adapter refuses a setting
+	 * @throws IllegalArgumentException if a module adapter refuses a setting
 	 * @throws IllegalStateException on any other load failure (nothing is left registered)
 	 */
 	public static LoadedModule load(Engine engine, Path jarPath, String sha256,
@@ -220,7 +221,7 @@ public class Modules {
 	 * registering them: verifies the optional digest, creates the module
 	 * classloader and discovers its adapters.
 	 *
-	 * @throws ConfigurationException if a module adapter refuses a setting
+	 * @throws IllegalArgumentException if a module adapter refuses a setting
 	 * @throws IllegalStateException on any other failure (the loader is closed)
 	 */
 	static Discovered discover(Config venueConfig, Path jarPath, String sha256,
@@ -245,13 +246,9 @@ public class Modules {
 			int discovered = 0;
 			for (AAdapter adapter : ServiceLoader.load(AAdapter.class, loader)) {
 				discovered++;
-				boolean accepted;
-				try {
-					accepted = adapter.configureModule(config, venueConfig.isStrictConfig());
-				} catch (IllegalArgumentException e) {
-					// A malformed module setting (docs/ADAPTERS.md) is the operator's
-					throw new ConfigurationException(e.getMessage(), e);
-				}
+				// A malformed module setting (docs/ADAPTERS.md) refuses with
+				// IllegalArgumentException; the caller knows whose setting it was
+				boolean accepted = adapter.configureModule(config, venueConfig.isStrictConfig());
 				if (!accepted) {
 					log.info("Adapter '{}' from module {} is inactive",
 						adapter.getName(), jar.getName());
@@ -264,7 +261,8 @@ public class Modules {
 			return new Discovered(name, jarPath, sha256, config, loader, List.copyOf(active));
 		} catch (RuntimeException | Error e) {
 			closeQuietly(loader, e);
-			if (e instanceof IllegalStateException || e instanceof CoviaException) throw (RuntimeException) e;
+			if (e instanceof IllegalStateException || e instanceof IllegalArgumentException
+					|| e instanceof CoviaException) throw (RuntimeException) e;
 			throw new IllegalStateException("Failed to load module: " + jarPath, e);
 		}
 	}

@@ -17,6 +17,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import covia.api.Fields;
+import covia.exception.CoviaException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
@@ -106,7 +107,8 @@ public class AAdapterInstallTest {
 		new ProbeAdapter().invoke(job, null, Maps.empty(), null);
 		assertEquals(covia.grid.Status.FAILED, job.getStatus());
 		assertTrue(job.future().isCompletedExceptionally());
-		assertTrue(job.getErrorMessage().contains("output/validator/Class"));
+		assertEquals(CoviaException.UNEXPECTED.formatted("NoClassDefFoundError"), job.getErrorMessage(),
+			"an unexpected failure reaches the caller by its type, never its text");
 	}
 
 	/** Minimal adapter exposing the protected installAsset for the test. */

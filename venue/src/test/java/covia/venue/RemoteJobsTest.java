@@ -16,6 +16,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -91,7 +92,7 @@ class RemoteJobsTest {
 			assertFalse(job.getData().toString().contains("private-token"));
 			AString ref = (AString) RemoteJobs.descriptor(job).get(RemoteJobs.AUTH_REF);
 			engine.getVenueState().users().ensure(engine.getDIDString()).secrets().delete(ref);
-			assertThrows(IllegalStateException.class, () -> observer.credentials(job));
+			assertThrows(UnavailableException.class, () -> observer.credentials(job));
 			observer.unavailable(job, new IllegalStateException("private-token"));
 			assertEquals(Status.STARTED, job.getStatus());
 			assertFalse(job.getData().toString().contains("private-token"));
@@ -106,7 +107,7 @@ class RemoteJobsTest {
 			observer.accepted(job, "remote");
 			CompletableFuture<Void> checked = job.future().thenAccept(result -> {
 				assertEquals(Status.COMPLETE, RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_STATUS));
-				assertThrows(IllegalStateException.class, () -> observer.credentials(job));
+				assertThrows(UnavailableException.class, () -> observer.credentials(job));
 			});
 			job.completeWith(Strings.create("done"), data -> RemoteJobs.observed(data, Status.COMPLETE));
 			checked.join();

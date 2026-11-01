@@ -231,18 +231,34 @@ public class MCPAdapter extends AAdapter {
 	private AString getServerUrl(AMap<AString, ACell> meta, ACell input) {
 		// First try to get from input parameters
 		AString url = RT.ensureString(RT.getIn(input, Fields.SERVER));
-		if (url != null) return url;
+		if (url != null) return checkedUrl(url, InvalidInputException::new);
 
 		// Then check metadata — the operation block (bridged ops, #80), then
 		// the legacy top-level position.
 		if (meta != null) {
 			url = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.SERVER));
-			if (url != null) return url;
+			if (url != null) return checkedUrl(url, InvalidDefinitionException::new);
 			url = RT.ensureString(meta.get(Fields.SERVER));
-			if (url != null) return url;
+			if (url != null) return checkedUrl(url, InvalidDefinitionException::new);
 		}
 
 		return null;
+	}
+
+	/**
+	 * A server URL that names an MCP endpoint. {@link McpClientSession} refuses
+	 * a malformed one without knowing where it came from; {@code refusal} says
+	 * whose it is to fix: the call's input, or a stored definition (a bridged
+	 * operation or a server registration).
+	 */
+	private static AString checkedUrl(AString url,
+			java.util.function.BiFunction<String, Throwable, ? extends CoviaException> refusal) {
+		try {
+			McpClientSession.endpointUrl(url.toString());
+			return url;
+		} catch (IllegalArgumentException e) {
+			throw refusal.apply(e.getMessage(), e);
+		}
 	}
 
 	/**
@@ -547,6 +563,7 @@ public class MCPAdapter extends AAdapter {
 		String name = requireServerName(input);
 		AString url = RT.ensureString(RT.getIn(input, K_URL));
 		if (url == null) throw new InvalidInputException("url is required");
+		checkedUrl(url, InvalidInputException::new);
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		boolean venueScope = isVenueScope(ctx, input);
 
@@ -613,6 +630,7 @@ public class MCPAdapter extends AAdapter {
 		AString url = RT.ensureString(RT.getIn(input, Fields.SERVER));
 		if (url == null) throw new InvalidInputException(
 			"server is required — the MCP server's base URL, e.g. https://host/mcp");
+		checkedUrl(url, InvalidInputException::new);
 		AString toolName = RT.ensureString(RT.getIn(input, Fields.TOOL));
 		if (toolName == null || !toolName.toString().matches("[A-Za-z0-9_-]{1,128}")) {
 			throw new InvalidInputException(
@@ -747,6 +765,7 @@ public class MCPAdapter extends AAdapter {
 		AString url = RT.ensureString(RT.getIn(reg, K_URL));
 		if (url == null) throw new JobFailedException("Unknown MCP server: " + name
 			+ " (no registry entry at " + registryPath(venueScope, name) + ")");
+		checkedUrl(url, InvalidDefinitionException::new);
 		AString auth = RT.ensureString(RT.getIn(reg, K_AUTH));
 
 		String token = resolveAuthRef(ctx, auth, url);

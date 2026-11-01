@@ -44,6 +44,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.ConflictException;
+import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import io.javalin.Javalin;
@@ -185,7 +187,8 @@ class LoginFlowTest {
 
 	@Test void exchangeRechecksTheIdentityBindingAndAccountAfterTheCallback() throws Exception {
 		try (Fixture f = new Fixture()) {
-			for (String change : new String[] {"unbound", "rebound", "deleted"}) {
+			AString conflict = Strings.create("conflict");
+			for (String change : new String[] {"conflicted", "unbound", "rebound", "deleted"}) {
 				CodeVerifier verifier = new CodeVerifier();
 				var start = f.start("?redirect_uri=" + enc(REDIRECT) + "&state=state&code_challenge_method=S256&code_challenge=" + challenge(verifier));
 				var callback = f.callback(start);
@@ -195,6 +198,10 @@ class LoginFlowTest {
 				AMap<AString, ACell> record = f.engine.getAuth().getUser(id);
 				if (change.equals("deleted")) {
 					f.engine.deleteUser(f.engine.venueContext(), RT.ensureString(record.get(Fields.DID)));
+				} else if (change.equals("conflicted")) {
+					// A second account claims the binding: the lookup refuses both.
+					f.engine.getAuth().putUser(conflict, Maps.of(Fields.DID, "did:web:other.example:u:other",
+						LoginProviders.EXTERNAL_IDENTITY, identity.binding()));
 				} else {
 					f.engine.getAuth().putUser(id, change.equals("unbound")
 							? record.dissoc(LoginProviders.EXTERNAL_IDENTITY)
@@ -204,6 +211,7 @@ class LoginFlowTest {
 				assertEquals(400, response.statusCode(), change);
 				assertEquals(LoginProviders.INVALID_EXCHANGE, response.body());
 				assertEquals(400, f.exchange(code, verifier.getValue(), REDIRECT).statusCode());
+				if (change.equals("conflicted")) f.engine.getAuth().putUser(conflict, Maps.of(Fields.DID, "did:web:other.example:u:other"));
 				if (!change.equals("deleted")) f.engine.getAuth().putUser(id, record);
 			}
 		}
@@ -335,7 +343,7 @@ class LoginFlowTest {
 					Fields.PROVIDER, "test", Fields.PROVIDER_SUB, "subject"));
 			assertNull(LoginProviders.findIdentity(f.engine.getAuth(), "https://issuer", "subject"));
 			var identity = new LoginProviders.UserIdentity("https://issuer", "subject", "alice@example", "Alice");
-			assertEquals(LoginProviders.LEGACY_IDENTITY, assertThrows(IllegalStateException.class,
+			assertEquals(LoginProviders.LEGACY_IDENTITY, assertThrows(NotSupportedException.class,
 					() -> f.login.provisionIdentity("test", identity)).getMessage());
 			assertNull(f.engine.getAuth().getUser(identity.toUserId()));
 		}
@@ -347,7 +355,7 @@ class LoginFlowTest {
 			f.login.provisionIdentity("test", identity);
 			f.engine.getAuth().putUser(Strings.create("conflict"), Maps.of(Fields.DID, "did:web:other.example:u:other",
 				LoginProviders.EXTERNAL_IDENTITY, identity.binding()));
-			assertEquals(LoginProviders.IDENTITY_CONFLICT, assertThrows(IllegalStateException.class,
+			assertEquals(LoginProviders.IDENTITY_CONFLICT, assertThrows(ConflictException.class,
 				() -> f.login.provisionIdentity("test", identity)).getMessage());
 		}
 	}

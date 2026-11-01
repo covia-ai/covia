@@ -18,6 +18,7 @@ import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.ResponseException;
 import covia.exception.ShuttingDownException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -125,7 +126,7 @@ public final class RemoteJobs implements AutoCloseable {
 	private AMap<AString, ACell> credentials(AMap<AString, ACell> record) {
 		AString ref = record == null ? null : RT.ensureString(record.get(AUTH_REF));
 		AString value = ref == null ? null : secrets().decrypt(ref, SecretStore.keys(engine.getKeyPair()));
-		if (value == null) throw new IllegalStateException("Remote observation credentials unavailable");
+		if (value == null) throw new UnavailableException("Remote observation credentials unavailable");
 		return RT.ensureMap(JSON.parse(value));
 	}
 

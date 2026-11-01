@@ -21,6 +21,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 
@@ -225,9 +226,9 @@ public class JobTest {
 	public void testLosingFailureCannotReplaceWinningCause() {
 		Job job = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
 		job.setPreserveFailureCause(true);
-		var winner = new IllegalArgumentException("winner");
+		var winner = new InvalidInputException("winner");
 		job.fail(winner);
-		job.fail(new IllegalStateException("loser"));
+		job.fail(new InvalidInputException("loser"));
 		assertEquals("winner", job.getErrorMessage());
 		var error = assertThrows(java.util.concurrent.CompletionException.class, () -> job.future().join());
 		org.junit.jupiter.api.Assertions.assertSame(winner, error.getCause());

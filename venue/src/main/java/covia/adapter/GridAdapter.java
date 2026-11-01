@@ -25,6 +25,7 @@ import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -269,8 +270,9 @@ public class GridAdapter extends AAdapter {
 				.orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
 				.exceptionallyCompose(ex -> {
 					if (ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException) {
+						// The caller's wait ran out; the job itself may still finish
 						return CompletableFuture.failedFuture(
-							new TimeoutException("grid:jobResult timed out after " + timeoutMs + "ms waiting for job " + jobId.toHexString()));
+							new UnavailableException("grid:jobResult timed out after " + timeoutMs + "ms waiting for job " + jobId.toHexString()));
 					}
 					return CompletableFuture.failedFuture(ex);
 				});

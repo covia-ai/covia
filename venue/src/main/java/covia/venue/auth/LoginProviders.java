@@ -37,6 +37,8 @@ import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.NotSupportedException;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -235,7 +237,7 @@ public class LoginProviders {
 				fail(ctx, INVALID_EXCHANGE); return;
 			}
 			issueCredential(ctx, exchange.userDID(), exchange.identity().email());
-		} catch (IllegalArgumentException | IllegalStateException | AuthException e) { fail(ctx, INVALID_EXCHANGE); }
+		} catch (IllegalArgumentException | IllegalStateException | AuthException | ConflictException e) { fail(ctx, INVALID_EXCHANGE); }
 	}
 
 	/** Current credential delivery seam. Managed-session issuance and assurance remain unimplemented. */
@@ -274,28 +276,28 @@ public class LoginProviders {
 				.header("Content-Type", "application/x-www-form-urlencoded").header("Accept", "application/json")
 				.POST(HttpRequest.BodyPublishers.ofString(body)).timeout(Duration.ofSeconds(30)).build();
 		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-		if (response.statusCode() != 200) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (response.statusCode() != 200) throw new AuthException(INVALID_LOGIN);
 		return (Map<String, Object>) JSON.jvm(response.body());
 	}
 
 	@SuppressWarnings("unchecked")
 	private UserIdentity fetchUserInfo(OAuthConfig provider, String token) throws Exception {
-		if (token == null) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (token == null) throw new AuthException(INVALID_LOGIN);
 		HttpRequest request = HttpRequest.newBuilder(URI.create(provider.userInfoUrl))
 				.header("Authorization", "Bearer " + token).header("Accept", "application/json")
 				.GET().timeout(Duration.ofSeconds(30)).build();
 		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-		if (response.statusCode() != 200) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (response.statusCode() != 200) throw new AuthException(INVALID_LOGIN);
 		Map<String, Object> data = (Map<String, Object>) JSON.jvm(response.body());
 		// GitHub's numeric id is stable. Its /user email has no verified flag, so do not trust it as verified metadata.
 		Object id = data.get("id");
-		if (!(id instanceof Number) || ((Number) id).longValue() <= 0) throw new IllegalArgumentException(INVALID_LOGIN);
+		if (!(id instanceof Number) || ((Number) id).longValue() <= 0) throw new AuthException(INVALID_LOGIN);
 		return new UserIdentity(provider.issuer, id.toString(), null, string(data.get("name")));
 	}
 
 	record UserIdentity(String issuer, String sub, String email, String name) {
 		UserIdentity {
-			if (issuer == null || issuer.isBlank() || sub == null || sub.isBlank()) throw new IllegalArgumentException(INVALID_LOGIN);
+			if (issuer == null || issuer.isBlank() || sub == null || sub.isBlank()) throw new AuthException(INVALID_LOGIN);
 		}
 		AMap<AString, ACell> binding() { return Maps.of(ISS, issuer, SUB, sub); }
 		AString toUserId() { return Strings.create("external-" + Vectors.of(issuer, sub).getHash().toHexString()); }
@@ -312,13 +314,13 @@ public class LoginProviders {
 					if (matches(entry.getValue(), identity.issuer(), identity.sub())) { id = entry.getKey(); break; }
 				}
 			} else {
-				if (auth.getUser(id) != null) throw new IllegalStateException(IDENTITY_CONFLICT);
+				if (auth.getUser(id) != null) throw new ConflictException(IDENTITY_CONFLICT);
 				for (var record : auth.getUsers().values()) {
 					if (record.get(EXTERNAL_IDENTITY) != null) continue;
 					if ((Strings.create(provider).equals(record.get(Fields.PROVIDER))
 							&& Strings.create(identity.sub()).equals(record.get(Fields.PROVIDER_SUB)))
 							|| (identity.email() != null && Strings.create(identity.email()).equals(record.get(Fields.EMAIL)))) {
-						throw new IllegalStateException(LEGACY_IDENTITY);
+						throw new NotSupportedException(LEGACY_IDENTITY);
 					}
 				}
 			}
@@ -336,7 +338,7 @@ public class LoginProviders {
 		for (var record : auth.getUsers().values()) {
 			if (!matches(record, issuer, subject)) continue;
 			AString did = RT.ensureString(record.get(Fields.DID));
-			if (did == null || (found != null && !found.equals(did))) throw new IllegalStateException(IDENTITY_CONFLICT);
+			if (did == null || (found != null && !found.equals(did))) throw new ConflictException(IDENTITY_CONFLICT);
 			found = did;
 		}
 		return found;

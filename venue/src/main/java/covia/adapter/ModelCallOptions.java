@@ -52,14 +52,14 @@ record ModelCallOptions(boolean nativeSystemMessages, boolean automaticCaching,
 	private static boolean flag(Map<String, Object> values, String key, boolean fallback) {
 		if (!values.containsKey(key)) return fallback;
 		Object v = values.get(key);
-		if (!(v instanceof Boolean b)) throw new IllegalArgumentException(INVALID + key + " must be boolean");
+		if (!(v instanceof Boolean b)) throw new InvalidInputException(INVALID + key + " must be boolean");
 		return b;
 	}
 
 	private static String choice(Map<String, Object> values, String key, String fallback, Set<String> choices) {
 		Object v = values.getOrDefault(key, fallback);
 		if (!(v instanceof String s) || !choices.contains(s)) {
-			throw new IllegalArgumentException(INVALID + key + " must be one of " + choices);
+			throw new InvalidInputException(INVALID + key + " must be one of " + choices);
 		}
 		return s;
 	}

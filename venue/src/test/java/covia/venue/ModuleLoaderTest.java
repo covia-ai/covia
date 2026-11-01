@@ -176,6 +176,21 @@ public class ModuleLoaderTest {
 		}
 	}
 
+	@Test
+	public void testRefusedModuleSettingFailsBoot(@TempDir Path dir) throws Exception {
+		AMap<AString, ACell> config = Maps.of(Config.MODULES, Vectors.of(Maps.of(
+			"path", buildModuleJar(dir).toString(), "config", Maps.of("label", 42))));
+		Engine engine = Engine.createTemp(config);
+		try {
+			ConfigurationException e = assertThrows(ConfigurationException.class,
+				() -> Engine.addDemoAssets(engine), "a setting in the venue config is the operator's");
+			assertInstanceOf(IllegalArgumentException.class, e.getCause(), "the module's own refusal is kept");
+			assertEquals(e.getCause().getMessage(), e.getMessage());
+		} finally {
+			engine.close();
+		}
+	}
+
 	/** A module jar holding only the test-classpath VersionedTestAdapter, named "test". */
 	private static Path buildVersionedTestModuleJar(Path dir) throws Exception {
 		Path jar = dir.resolve("versioned-test-module.jar");
@@ -428,9 +443,20 @@ public class ModuleLoaderTest {
 				() -> asVenue(engine, "v/ops/venue/module/load", Maps.of(
 					Strings.create("module"), Strings.create(jar.getFileName().toString()),
 					Strings.create("sha256"), Strings.create("00".repeat(32)))));
+			assertInstanceOf(InvalidInputException.class, rootCause(e), "the pin is the caller's");
 			assertTrue(rootCause(e).getMessage().contains("integrity check FAILED"), rootCause(e).getMessage());
 			assertNull(engine.getAdapter("modtest"));
 			assertNull(engine.getModule("modtest-module"));
+
+			// A setting the module refuses is the caller's too
+			e = assertThrows(ExecutionException.class,
+				() -> asVenue(engine, "v/ops/venue/module/load", Maps.of(
+					Strings.create("module"), Strings.create(jar.getFileName().toString()),
+					Strings.create("config"), Maps.of("label", 42))));
+			assertInstanceOf(InvalidInputException.class, rootCause(e), String.valueOf(rootCause(e)));
+			assertInstanceOf(IllegalArgumentException.class, rootCause(e).getCause(), "the module's own refusal is kept");
+			assertEquals(rootCause(e).getCause().getMessage(), rootCause(e).getMessage());
+			assertNull(engine.getAdapter("modtest"));
 
 			String goodHash = Blob.wrap(MessageDigest.getInstance("SHA-256")
 				.digest(Files.readAllBytes(jar))).toHexString();

@@ -49,7 +49,7 @@ class ModelCallOptionsTest {
 		}
 		for (String invalid : List.of("{\"cacheTtl\":\"2h\"}", "{\"automaticCaching\":\"true\"}",
 				"{\"thinkingPrefixMismatch\":\"ignore\"}")) {
-			assertThrows(IllegalArgumentException.class, () -> ModelCallOptions.resolve(
+			assertThrows(InvalidInputException.class, () -> ModelCallOptions.resolve(
 				Maps.empty(), Maps.of("modelOptions", JSON.parse(invalid))));
 		}
 		assertThrows(InvalidInputException.class, () -> ModelCallOptions.resolve(

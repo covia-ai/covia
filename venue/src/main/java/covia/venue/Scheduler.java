@@ -30,6 +30,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
+import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
 import covia.venue.ScheduleState.Entry;
 import static covia.venue.ScheduleState.*;
@@ -92,6 +93,8 @@ public class Scheduler {
 		"A capability-scoped agent manages only the scheduled events it created";
 	/** Why an event did not fire: the agent that scheduled it has been deleted, so it was dropped. */
 	public static final String AGENT_GONE = "%s no longer exists, so its scheduled event was dropped";
+	/** Refusal for work reaching a scheduler the venue has shut down. */
+	public static final String SHUT_DOWN = "Scheduler is shut down";
 
 	private final Engine engine;
 	private final LongSupplier clock;
@@ -301,6 +304,8 @@ public class Scheduler {
 
 	/** Arm the alarm from the (already-loaded) lattice index. Call once on boot. */
 	public void start() {
+		// Starting a scheduler the venue already shut down is a lifecycle bug.
+		if (shutdown) throw new IllegalStateException(SHUT_DOWN);
 		onTimer(() -> { started = true; armNext(); return null; });
 	}
 
@@ -530,7 +535,7 @@ public class Scheduler {
 
 	/** Run a body on the single timer thread and await it, unwrapping its exception. */
 	private <T> T onTimer(Callable<T> body) {
-		if (shutdown) throw new IllegalStateException("Scheduler is shut down");
+		if (shutdown) throw new ShuttingDownException(SHUT_DOWN);
 		try {
 			return timer.submit(body).get();
 		} catch (ExecutionException e) {

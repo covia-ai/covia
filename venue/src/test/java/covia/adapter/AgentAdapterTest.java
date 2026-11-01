@@ -4663,9 +4663,8 @@ public class AgentAdapterTest {
 			fail("grid:jobResult should error on timeout when caller wanted a result");
 		} catch (java.util.concurrent.ExecutionException e) {
 			Throwable cause = e.getCause();
-			assertTrue(cause instanceof java.util.concurrent.TimeoutException
-					|| (cause != null && cause.getMessage() != null && cause.getMessage().contains("timed out")),
-				"Expected TimeoutException, got: " + cause);
+			assertTrue(cause instanceof covia.exception.UnavailableException,
+				"a caller's wait that runs out is an expected failure, got: " + cause);
 		}
 	}
 

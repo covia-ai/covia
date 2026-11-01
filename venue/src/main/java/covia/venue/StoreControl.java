@@ -2,6 +2,7 @@ package covia.venue;
 
 import java.io.IOException;
 
+import covia.exception.ConflictException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 
@@ -25,6 +26,8 @@ import covia.exception.UnavailableException;
  */
 public interface StoreControl {
 	String BACKUP_UNSUPPORTED = "Store checkpoints are unavailable on this host";
+	/** Refusal of a backup path where a file already is: a checkpoint never replaces one. */
+	String BACKUP_EXISTS = "Backup file already exists: %s";
 
 	/** Where the store's collection stands. */
 	record Status(String file, long bytes, boolean inProgress, boolean sweepComplete,
@@ -59,7 +62,8 @@ public interface StoreControl {
 
 	/** Retains the pre-cycle store at a new path on the same filesystem.
 	 * The checkpoint is ready to open/copy only after the original store closes.
-	 * Existing embedded hosts must opt in explicitly. */
+	 * Existing embedded hosts must opt in explicitly. A host refuses a path
+	 * where a file already is with {@link ConflictException} ({@link #BACKUP_EXISTS}). */
 	default Result collect(String backupFile) throws IOException {
 		if (backupFile != null) throw new NotSupportedException(BACKUP_UNSUPPORTED);
 		return collect();

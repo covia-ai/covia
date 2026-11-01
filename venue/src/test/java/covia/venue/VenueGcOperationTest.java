@@ -305,6 +305,13 @@ public class VenueGcOperationTest {
 			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, operator, Maps.of("cancel", CVMBool.TRUE)), "inProgress"));
 			String noRestart = gcFails(engine, operator, Maps.of("restart", CVMBool.TRUE));
 			assertTrue(noRestart.contains("restart"), noRestart);
+			// A backup path already taken is refused before any cycle, and never replaced.
+			File taken = new File(file.getParentFile(), "taken-checkpoint.etch");
+			Files.writeString(taken.toPath(), "taken");
+			assertEquals(StoreControl.BACKUP_EXISTS.formatted(new File(taken.getAbsolutePath())),
+				gcFails(engine, operator, Maps.of("backupFile", taken.getAbsolutePath())));
+			assertEquals("taken", Files.readString(taken.toPath()));
+			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, operator, STATUS), "inProgress"));
 			assertEquals(CVMBool.FALSE, RT.getIn(gc(engine, operator, STATUS), "completed"));
 
 			// The collection itself. Persist the live root first: the venue writes

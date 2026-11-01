@@ -150,7 +150,7 @@ class UserAdapterTest {
 	void rejectsMalformedDIDAndAmbiguousIdentityInput() {
 		ExecutionException badDID = assertThrows(ExecutionException.class,
 			() -> create(Maps.of(Fields.DID, "alice")));
-		assertInstanceOf(IllegalArgumentException.class, badDID.getCause());
+		assertInstanceOf(InvalidInputException.class, badDID.getCause());
 
 		ExecutionException both = assertThrows(ExecutionException.class,
 			() -> create(Maps.of(Fields.DID, "did:example:alice", "username", "alice")));

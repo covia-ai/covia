@@ -371,8 +371,14 @@ public class VenueAdapter extends AAdapter {
 		AString sha = RT.ensureString(RT.getIn(input, K_SHA256));
 		ACell cfgCell = RT.getIn(input, K_CONFIG);
 		AMap<AString, ACell> cfg = (cfgCell instanceof AMap) ? (AMap<AString, ACell>) cfgCell : Maps.empty();
-		Modules.LoadedModule module = Modules.load(engine, jar,
-			(sha != null) ? sha.toString() : null, cfg);
+		Modules.LoadedModule module;
+		try {
+			module = Modules.load(engine, jar, (sha != null) ? sha.toString() : null, cfg);
+		} catch (IllegalStateException | IllegalArgumentException e) {
+			// The jar, its digest and its settings are the caller's: a jar that is
+			// missing, unverified or holds no adapters, or a setting it refuses
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		return moduleEntry(module);
 	}
 

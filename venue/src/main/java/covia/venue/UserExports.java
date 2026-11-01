@@ -21,6 +21,7 @@ import covia.api.Fields;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
@@ -104,7 +105,7 @@ public final class UserExports {
 		AMap<AString, ACell> state = Users.content(record);
 		if (state == null) throw new NotFoundException(VenueState.UNKNOWN_USER, did.toString());
 		String busy = unfinishedWork(state);
-		if (busy != null) throw new IllegalStateException(busy);
+		if (busy != null) throw new UnavailableException(busy);
 
 		AMap<AString, ACell> secrets = RT.ensureMap(state.get(Namespace.S));
 		AMap<AString, ACell> export = Maps.of(
@@ -147,7 +148,7 @@ public final class UserExports {
 		AMap<AString, ACell> state = RT.ensureMap(value.get(K_USER));
 		state = migrate(state.dissoc(Namespace.S));
 		String busy = unfinishedWork(state);
-		if (busy != null) throw new IllegalStateException(busy);
+		if (busy != null) throw new NotSupportedException(busy);
 
 		ACell sealed = value.get(K_SECRETS);
 		if (sealed != null) {
@@ -188,7 +189,7 @@ public final class UserExports {
 		AMap<AString, ACell> state = engine.getVenueState().users().content(from);
 		if (state == null) throw new NotFoundException(VenueState.UNKNOWN_USER, from.toString());
 		String busy = unfinishedWork(state);
-		if (busy != null) throw new IllegalStateException(busy);
+		if (busy != null) throw new UnavailableException(busy);
 		return restore(to, state);
 	}
 
