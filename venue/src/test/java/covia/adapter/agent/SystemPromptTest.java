@@ -28,7 +28,8 @@ import covia.venue.TestEngine;
  * {@code config.systemPrompt} as a context entry (AGENT_CONTEXT.md §5.1): a
  * workspace path, a DLFS file, an operation or a job resolve to the identity
  * once per cycle through the same loader as loads; a prompt that does not
- * resolve fails the cycle and warns at create.
+ * resolve warns at create and fails an inspection with the reason, and a cycle
+ * it fails suspends the agent ({@code AgentCycleTest}).
  */
 public class SystemPromptTest {
 
@@ -120,14 +121,15 @@ public class SystemPromptTest {
 	// ========== failure and validation ==========
 
 	@Test
-	public void testUnresolvablePromptWarnsAtCreateAndFailsTheCycle() {
-		ACell created = create("missing-prompt-agent", Maps.of("ref", "w/prompts/absent"), "v/ops/llmagent/chat");
+	public void testUnresolvablePromptWarnsAtCreateAndFailsInspection() {
+		AMap<AString, ACell> prompt = Maps.of("ref", "w/prompts/absent");
+		ACell created = create("missing-prompt-agent", prompt, "v/ops/llmagent/chat");
 		AVector<ACell> warnings = RT.ensureVector(RT.getIn(created, Fields.WARNINGS));
 		assertNotNull(warnings, created.toString());
 		assertTrue(warnings.toString().contains("systemPrompt does not resolve"), warnings.toString());
 		RuntimeException e = assertThrows(RuntimeException.class, () -> head("missing-prompt-agent"));
-		assertTrue(e.getMessage().contains("config.systemPrompt did not resolve"), e.getMessage());
-		assertTrue(e.getMessage().contains("w/prompts/absent"), e.getMessage());
+		assertTrue(e.getMessage().contains(AbstractLLMAdapter.SYSTEM_PROMPT_UNRESOLVED.formatted(prompt, "")),
+			e.getMessage());
 	}
 
 	@Test

@@ -1076,7 +1076,7 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * A {@code systemPrompt} entry that does not resolve for the creator now
-	 * will fail the agent's every cycle: say so at create time. Resolution
+	 * will suspend the agent at its first cycle: say so at create time. Resolution
 	 * uses the creator's own access, as the skill-source advisories do.
 	 */
 	private AString systemPromptWarning(AMap<AString, ACell> config, RequestContext ctx) {

@@ -72,6 +72,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final String LLM_TIMEOUT_PREFIX = "LLM call timed out after ";
 	/** A failed LLM call: the operation, then why. */
 	public static final String LLM_CALL_FAILED = "LLM call failed (%s): %s";
+	/** A {@code config.systemPrompt} entry that did not resolve: the entry, then why. */
+	public static final String SYSTEM_PROMPT_UNRESOLVED = "config.systemPrompt did not resolve — %s: %s";
 	/**
 	 * How a level-3 operation's reason begins when the provider refused the
 	 * context as larger than the model accepts. The reason survives a job
@@ -324,9 +326,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@code op} + {@code input}, {@code job}) resolved through the same
 	 * loader as pinned context and loads, once per cycle, under the cycle's
 	 * identity: a prompt kept at a workspace path or in a DLFS file, or built
-	 * by a read-only operation. A prompt that does not resolve fails the
-	 * cycle — a missing identity is a configuration error, not something to
-	 * render around.
+	 * by a read-only operation. A prompt that does not resolve means the agent
+	 * cannot continue: a missing identity is a configuration error, not
+	 * something to render around, and every cycle reads it again, so every
+	 * cycle would fail the same way until it is fixed.
 	 */
 	protected AMap<AString, ACell> resolveSystemPrompt(AMap<AString, ACell> config, RequestContext ctx) {
 		ACell prompt = config.get(K_SYSTEM_PROMPT);
@@ -338,8 +341,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			return config.assoc(K_SYSTEM_PROMPT, Strings.create(text));
 		} catch (RuntimeException e) {
 			if (!isExpectedFailure(e)) throw e;
-			throw new InvalidInputException("config.systemPrompt did not resolve — " + entry
-				+ ": " + ContextLoader.rootMessage(e), e);
+			throw new CannotContinueException(SYSTEM_PROMPT_UNRESOLVED.formatted(entry,
+				ContextLoader.rootMessage(e)), e);
 		}
 	}
 

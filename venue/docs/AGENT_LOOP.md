@@ -551,8 +551,10 @@ What happens next depends on what failed:
   missing model, an invalid setting) or `UnavailableException` (the provider
   cannot be reached, or keeps failing after the provider library's own retries),
   or returns a failure value, which a level-3 operation returns only for a
-  setup problem. An unexpected failure, a venue fault logged at ERROR where it
-  happened, counts the same. The agent is suspended with the reason as its
+  setup problem. Both LLM runtimes raise it when the agent's `systemPrompt`
+  entry does not resolve, since every cycle reads it again
+  ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §5.1). An unexpected failure, a venue
+  fault logged at ERROR where it happened, counts the same. The agent is suspended with the reason as its
   `error` (#88: an agent whose key is missing stops after one cycle).
 
 A suspended agent keeps its queue, whether a fault or a deliberate

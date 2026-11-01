@@ -18,6 +18,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -241,32 +242,43 @@ public class AgentCycleTest {
 	// ========== A failed cycle settles exactly what it took ==========
 
 	/**
-	 * Goaltree resolves its system prompt before it touches the session. A
-	 * prompt that does not resolve fails the cycle there, and the message the
-	 * cycle was for is still taken: it is a turn in the conversation, its chat
-	 * fails with the reason, and the agent rests rather than running the same
-	 * cycle again.
+	 * Both LLM runtimes read their system prompt at the start of every cycle,
+	 * goaltree before it touches the session. A prompt that does not resolve
+	 * would stop every cycle the same way, so the agent cannot continue. The
+	 * message the cycle was for is still taken: it is a turn in the
+	 * conversation and its chat fails with the reason. The agent is suspended
+	 * after that one cycle, and runs again once the prompt resolves and it is
+	 * resumed.
 	 */
 	@Test
-	public void aCycleThatFailsBeforeItsRuntimeStartsStillTakesItsMessage(TestInfo info) throws Exception {
-		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "early-failure", Maps.of(
-			Fields.OPERATION, "v/ops/goaltree/chat",
-			"llmOperation", "v/test/ops/llm",
-			"systemPrompt", Maps.of("ref", "w/prompts/absent")));
-		Job chat = chat(owner, "early-failure", null, "hello");
-		try {
-			assertThrows(JobFailedException.class, () -> chat.awaitResult(5000),
-				() -> "the chat is settled, after " + timelineCount(agent) + " cycles");
-			assertTrue(chat.getErrorMessage().contains("config.systemPrompt did not resolve"),
-				chat.getErrorMessage());
-			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
-			assertEquals(1, timelineCount(agent), "one cycle, not the same cycle again");
+	public void anUnresolvableSystemPromptSuspendsTheAgent(TestInfo info) throws Exception {
+		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+			RequestContext owner = RequestContext.of(Strings.create(TestEngine.uniqueDID(info) + "-" + runtime));
+			AMap<AString, ACell> prompt = Maps.of("ref", "w/prompts/absent");
+			AgentState agent = create(owner, "no-prompt", Maps.of(
+				Fields.OPERATION, "v/ops/" + runtime + "/chat",
+				"llmOperation", "v/test/ops/failllm",
+				"systemPrompt", prompt));
+			Job chat = chat(owner, "no-prompt", null, "hello");
+			assertThrows(JobFailedException.class, () -> chat.awaitResult(10_000), runtime);
+			String reason = AbstractLLMAdapter.SYSTEM_PROMPT_UNRESOLVED.formatted(prompt, "");
+			assertTrue(chat.getErrorMessage().contains(reason), runtime + ": " + chat.getErrorMessage());
+			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner), runtime);
+			assertTrue(agent.getError().toString().contains(reason), runtime + ": " + agent.getError());
+			assertEquals(1, timelineCount(agent), runtime + ": one cycle, not one per piece of work");
 			Blob sid = sessionOf(chat);
-			assertEquals(0, pendingCount(agent, sid), "the cycle took the message");
-			assertEquals(1, userTurns(agent, sid, "hello").count(), "the message is in the conversation");
-		} finally {
-			op(owner, "delete", "early-failure", Maps.empty());
+			assertEquals(0, pendingCount(agent, sid), runtime + ": the cycle took the message");
+			assertEquals(1, userTurns(agent, sid, "hello").count(), runtime + ": the message is in the conversation");
+			assertNull(agent.getSessionCycleEpoch(sid), runtime + ": the claim ends with the cycle");
+
+			// The prompt is read again at the next cycle, so writing it is the fix.
+			engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, Strings.create("w/prompts/absent"),
+				Fields.VALUE, Strings.create("You are back.")), owner).awaitResult(5000);
+			op(owner, "resume", "no-prompt", Maps.empty());
+			Job next = chat(owner, "no-prompt", sid, "again");
+			assertEquals(Vectors.of(hex(next)), answered(next), runtime);
+			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner), runtime);
+			assertNull(agent.getError(), runtime);
 		}
 	}
 
