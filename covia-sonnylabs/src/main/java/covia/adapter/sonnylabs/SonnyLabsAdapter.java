@@ -21,7 +21,10 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -91,7 +94,7 @@ public class SonnyLabsAdapter extends AAdapter {
 			for (long i = 0; i < config.count(); i++) {
 				ACell key = config.entryAt(i).getKey();
 				if (!(key instanceof AString text) || !CONFIG_KEYS.contains(text)) {
-					throw new IllegalArgumentException("adapters.sonnylabs: unknown setting " + key
+					throw new ConfigurationException("adapters.sonnylabs: unknown setting " + key
 						+ " (known: baseUrl, apiKey, apiVersion, timeoutMillis, enabled)");
 				}
 			}
@@ -103,13 +106,14 @@ public class SonnyLabsAdapter extends AAdapter {
 		long nextTimeout = longSetting(config, K_TIMEOUT_MILLIS, DEFAULT_TIMEOUT_MILLIS);
 
 		validateBaseUrl(nextBaseUrl);
-		validateSecretRef(nextApiKeyRef, "adapters.sonnylabs.apiKey");
+		String badKeyRef = secretRefProblem(nextApiKeyRef, "adapters.sonnylabs.apiKey");
+		if (badKeyRef != null) throw new ConfigurationException(badKeyRef);
 		if (nextApiVersion != null && !nextApiVersion.matches("\\d{4}-\\d{2}-\\d{2}")) {
-			throw new IllegalArgumentException(
+			throw new ConfigurationException(
 				"adapters.sonnylabs.apiVersion must be a date in YYYY-MM-DD form");
 		}
 		if (nextTimeout < 1 || nextTimeout > MAX_TIMEOUT_MILLIS) {
-			throw new IllegalArgumentException("adapters.sonnylabs.timeoutMillis must be between 1 and "
+			throw new ConfigurationException("adapters.sonnylabs.timeoutMillis must be between 1 and "
 				+ MAX_TIMEOUT_MILLIS);
 		}
 
@@ -126,7 +130,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (!"scan".equals(subOp)) {
-			throw new UnsupportedOperationException("Unsupported SonnyLabs operation: " + subOp);
+			throw new NotSupportedException("Unsupported SonnyLabs operation: " + subOp);
 		}
 		return CompletableFuture.supplyAsync(() -> scan(ctx, input), VIRTUAL_EXECUTOR);
 	}
@@ -134,21 +138,21 @@ public class SonnyLabsAdapter extends AAdapter {
 	ACell scan(RequestContext ctx, ACell input) {
 		AString textCell = RT.ensureString(RT.getIn(input, K_TEXT));
 		if (textCell == null || textCell.isEmpty()) {
-			throw new IllegalArgumentException("text must be a non-empty string");
+			throw new InvalidInputException("text must be a non-empty string");
 		}
 
 		String surface = optionalInputString(input, K_SURFACE, "user_message");
 		if (!SURFACES.contains(surface)) {
-			throw new IllegalArgumentException("surface must be one of " + SURFACES);
+			throw new InvalidInputException("surface must be one of " + SURFACES);
 		}
 		String tier = optionalInputString(input, K_TIER, null);
 		if (tier != null && !TIERS.contains(tier)) {
-			throw new IllegalArgumentException("tier must be fast, accurate, or auto");
+			throw new InvalidInputException("tier must be fast, accurate, or auto");
 		}
 
 		ACell captureCell = RT.getIn(input, K_CAPTURE);
 		if (captureCell != null && !(captureCell instanceof CVMBool)) {
-			throw new IllegalArgumentException("capture must be a boolean");
+			throw new InvalidInputException("capture must be a boolean");
 		}
 		boolean capture = captureCell != null && RT.bool(captureCell);
 		AString policyId = optionalInputAString(input, K_POLICY_ID);
@@ -168,7 +172,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		String idempotencyKey = optionalInputString(input, K_IDEMPOTENCY_KEY, null);
 		if (idempotencyKey == null) idempotencyKey = UUID.randomUUID().toString();
 		if (idempotencyKey.isEmpty() || idempotencyKey.length() > 255) {
-			throw new IllegalArgumentException("idempotencyKey must contain 1 to 255 characters");
+			throw new InvalidInputException("idempotencyKey must contain 1 to 255 characters");
 		}
 
 		HttpRequest.Builder builder = HttpRequest.newBuilder()
@@ -213,8 +217,11 @@ public class SonnyLabsAdapter extends AAdapter {
 	private String resolveApiKey(RequestContext ctx, ACell input) {
 		AString callerRef = optionalInputAString(input, K_API_KEY);
 		String ref = callerRef == null ? apiKeyRef : callerRef.toString();
-		validateSecretRef(ref, callerRef == null
+		String badRef = secretRefProblem(ref, callerRef == null
 			? "adapters.sonnylabs.apiKey" : "apiKey");
+		if (badRef != null) {
+			throw callerRef == null ? new ConfigurationException(badRef) : new InvalidInputException(badRef);
+		}
 		RequestContext secretOwner = callerRef == null ? engine.venueContext() : ctx;
 		String value = engine.resolveSecret(ref, secretOwner, baseUrl + "/v1/scans");
 		if (value == null || value.isBlank()) {
@@ -260,7 +267,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		ACell value = RT.getIn(input, key);
 		if (value == null) return null;
 		AString text = RT.ensureString(value);
-		if (text == null) throw new IllegalArgumentException(key + " must be a string");
+		if (text == null) throw new InvalidInputException(key + " must be a string");
 		return text;
 	}
 
@@ -269,7 +276,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		ACell value = RT.getIn(input, key);
 		if (value == null) return null;
 		if (!(value instanceof AMap<?, ?> map)) {
-			throw new IllegalArgumentException(key + " must be an object");
+			throw new InvalidInputException(key + " must be an object");
 		}
 		return (AMap<AString, ACell>) map;
 	}
@@ -285,7 +292,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		if (value == null) return null;
 		AString text = RT.ensureString(value);
 		if (text == null || text.isEmpty()) {
-			throw new IllegalArgumentException("adapters.sonnylabs." + key
+			throw new ConfigurationException("adapters.sonnylabs." + key
 				+ " must be a non-empty string");
 		}
 		return text.toString();
@@ -297,16 +304,17 @@ public class SonnyLabsAdapter extends AAdapter {
 		if (value == null) return fallback;
 		CVMLong number = RT.ensureLong(value);
 		if (number == null) {
-			throw new IllegalArgumentException("adapters.sonnylabs." + key + " must be an integer");
+			throw new ConfigurationException("adapters.sonnylabs." + key + " must be an integer");
 		}
 		return number.longValue();
 	}
 
-	private static void validateSecretRef(String ref, String field) {
+	/** Why {@code ref} cannot name the API key's secret, or null when it can. */
+	private static String secretRefProblem(String ref, String field) {
 		if (!Engine.isSecretRef(ref) || ref.endsWith("/")) {
-			throw new IllegalArgumentException(field
-				+ " must be an s/NAME secret reference, never a raw API key");
+			return field + " must be an s/NAME secret reference, never a raw API key";
 		}
+		return null;
 	}
 
 	private static void validateBaseUrl(String value) {
@@ -316,11 +324,11 @@ public class SonnyLabsAdapter extends AAdapter {
 					|| !("http".equalsIgnoreCase(uri.getScheme())
 						|| "https".equalsIgnoreCase(uri.getScheme()))
 					|| uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-				throw new IllegalArgumentException("adapters.sonnylabs.baseUrl must be an absolute "
+				throw new ConfigurationException("adapters.sonnylabs.baseUrl must be an absolute "
 					+ "HTTP(S) URL without credentials, query, or fragment");
 			}
 		} catch (URISyntaxException e) {
-			throw new IllegalArgumentException("adapters.sonnylabs.baseUrl must be a valid HTTP(S) URL", e);
+			throw new ConfigurationException("adapters.sonnylabs.baseUrl must be a valid HTTP(S) URL", e);
 		}
 	}
 

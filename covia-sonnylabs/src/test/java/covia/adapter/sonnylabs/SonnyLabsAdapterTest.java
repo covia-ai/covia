@@ -27,6 +27,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.adapter.agent.Skills;
+import covia.exception.ConfigurationException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -48,15 +49,15 @@ class SonnyLabsAdapterTest {
 			"apiVersion", "2026-06-01",
 			"timeoutMillis", 15_000L), true));
 
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("apiKey", "sk_live_raw"), true));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("baseUrl", "file:///tmp/sonny"), true));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("apiVersion", "latest"), true));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("timeoutMillis", 0L), true));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("typo", true), true));
 		assertTrue(adapter.configure(Maps.of("typo", true), false),
 			"lenient mode ignores unknown adapter settings");
