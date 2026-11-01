@@ -13,6 +13,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Cells;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -22,6 +23,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.AAdapter;
+import covia.adapter.AgentAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
@@ -1019,6 +1021,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
 		// surfaces from the op's own validation (#89).
 		ToolCycleEngine.ProgressRelay relay = ToolCycleEngine.relayForRunningCall();
+		CompletableFuture<ACell> call = null;
 		try {
 			// HITL is naturally longer-lived than a model turn. Its operation
 			// already owns a durable Job, so a sessioned agent receives that handle
@@ -1037,13 +1040,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				return receipt;
 			}
 			java.util.function.Consumer<Job> watch = (relay != null) ? relay::watch : null;
-			ACell result = ((resolved != null)
-					? engine.jobs().invokeInternal(operation, resolved, input, ctx, watch)
-					: engine.jobs().invokeInternal(operation, input, ctx, watch))
-				.get(timeoutMs, TimeUnit.MILLISECONDS);
+			call = (resolved != null)
+				? engine.jobs().invokeInternal(operation, resolved, input, ctx, watch)
+				: engine.jobs().invokeInternal(operation, input, ctx, watch);
+			ACell result = call.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
-			return toolTimeout(timeoutMs);
+			return stillRunning(operation, call, ctx, timeoutMs);
 		} catch (InterruptedException e) {
 			return toolInterrupted();
 		} catch (Exception e) {
@@ -1118,6 +1121,39 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** The result of a tool call whose operation outran its budget. */
 	static AString toolTimeout(long timeoutMs) {
 		return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
+	}
+
+	/** The result of a sessioned tool call still running at its time limit (#607):
+	 *  the operation, then the limit in milliseconds. */
+	public static final String TOOL_STILL_RUNNING = "Error: %s did not complete within %dms and may still be running. "
+		+ "If it finishes, its result will arrive in this session as a message. "
+		+ "Do not call it again unless repeating it is safe.";
+
+	/**
+	 * Answers a tool call still running at its time limit (#607). The call is
+	 * not cancelled: a sessioned agent is told it may still be running, and
+	 * when it ends its outcome reaches the asking session as a message from
+	 * the venue, which wakes the agent. Nothing is recorded, so a restart
+	 * loses the outcome. Without a session there is nowhere to deliver it,
+	 * and the plain timeout stands.
+	 */
+	private AString stillRunning(AString operation, CompletableFuture<ACell> call,
+			RequestContext ctx, long timeoutMs) {
+		AString agentId = ctx.getAgentId();
+		Blob sessionId = ctx.getSessionId();
+		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
+		if (agentId == null || sessionId == null || agents == null) return toolTimeout(timeoutMs);
+		AString owner = ctx.getUserDID();
+		call.whenComplete((result, failure) -> {
+			// Shutdown cancels running calls; that is not their outcome.
+			if (engine.isClosing()) return;
+			AMap<AString, ACell> outcome = (failure == null)
+				? Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.COMPLETE, Fields.RESULT, result)
+				: Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.FAILED,
+					Fields.ERROR, Strings.create(toolFailure(failure, operation.toString())));
+			agents.deliverSessionMessage(owner, agentId, sessionId, engine.getDIDString(), null, outcome);
+		});
+		return Strings.create(String.format(TOOL_STILL_RUNNING, operation, timeoutMs));
 	}
 
 	/** The result of a tool call abandoned because its cycle was interrupted;

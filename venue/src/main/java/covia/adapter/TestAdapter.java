@@ -287,6 +287,8 @@ public class TestAdapter extends AAdapter {
                     return handleAmountGate(input);
                 case "never":
                     return new CompletableFuture<>();
+                case "hold":
+                    return CompletableFuture.supplyAsync(() -> handleHold(input), VIRTUAL_EXECUTOR);
                 case "delay":
                     // Handled via invoke() override for caller DID propagation
                     return CompletableFuture.failedFuture(
@@ -339,6 +341,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("denygate",     BASE+"testdenygate.json");
 			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
+			installTestAsset("hold",         BASE+"holdop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
 			installTestAsset("progress",     BASE+"progressop.json");
 			installTestAsset("error",        BASE+"failop.json");
@@ -780,9 +783,18 @@ public class TestAdapter extends AAdapter {
             // through the agent tool loop while keeping the L3 provider fully
             // deterministic. LangChain's provider boundary has separate tests
             // for its provider-only JSON rendering.
+            int hold = lastUserMsg.indexOf("hold:");
             if (lastUserMsg.contains("progress-relay")) {
                 toolName = "v/test/ops/progress";
                 arguments = "{}";
+            } else if (hold >= 0) {
+                // A call the test finishes by releasing the named gate.
+                String gate = lastUserMsg.substring(hold + 5).split("\\s", 2)[0];
+                toolName = "v/test/ops/hold";
+                arguments = "{\"gate\":\"" + gate + "\",\"result\":\"late\"}";
+            } else if (lastUserMsg.contains("ask-human")) {
+                toolName = "v/ops/hitl/request";
+                arguments = "{\"title\":\"Need a decision\",\"asks\":[{\"id\":\"next\",\"type\":\"text\",\"prompt\":\"What next?\"}]}";
             } else if (lastUserMsg.contains("issue-334-read")) {
                 toolName = "covia_read";
                 arguments = "{\"path\":\"w/issue-334/signals\"}";
@@ -1672,6 +1684,22 @@ public class TestAdapter extends AAdapter {
         return Maps.of(
             "role", Strings.create("assistant"),
             "content", Strings.create("kicked self-message"));
+    }
+
+    /**
+     * Holds until the test releases the named {@link TestGate}, then returns
+     * {@code result}, or fails with {@code error} when one is given. The test
+     * decides exactly when the call finishes, so nothing waits on a clock.
+     */
+    private ACell handleHold(ACell input) {
+        AString gateName = RT.ensureString(RT.getIn(input, "gate"));
+        if (gateName == null) throw new InvalidInputException("hold requires a 'gate' name");
+        TestGate gate = TEST_GATES.get(gateName.toString());
+        if (gate == null) throw new IllegalStateException("Unknown test gate: " + gateName);
+        gate.pass();
+        AString error = RT.ensureString(RT.getIn(input, Fields.ERROR));
+        if (error != null) throw new JobFailedException(error.toString());
+        return RT.getIn(input, Fields.RESULT);
     }
 
     private JobFailedException handleError(ACell input) {
