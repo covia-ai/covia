@@ -23,6 +23,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
 - A forced `agent:trigger` no longer presents a parked task.
+- An agent is suspended only when it cannot continue: its model setup is wrong, its provider cannot be reached, or the venue fails. Other failures, `fail_task` among them, fail only the work (#652).
+- A suspended agent keeps its queued work; waiting jobs say it is suspended, and the work runs after `agent:resume`.
+- Cancelling an `agent:request` job takes its task out of the agent's queue.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.

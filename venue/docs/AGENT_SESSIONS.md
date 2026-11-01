@@ -588,7 +588,7 @@ The framework around the transition:
    - If chat picked: complete chat Job with return value (yield only if return is null — rare)
    - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise it yields, and is parked or failed (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
    - If message picked: no completion concept (return value already emitted to history)
-7. On adapter throw → if task/chat picked, Job → FAILED with *technical* error (distinct from `fail_task` semantic failure)
+7. On adapter throw → if task/chat picked, Job → FAILED with *technical* error (distinct from `fail_task` semantic failure), unless the agent cannot continue (§6.3)
 8. Returns the sessionId in the response envelope (always)
 
 Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete_task(result)` and return. Their session becomes a one-turn audit record.
@@ -611,7 +611,7 @@ A yield with none of these could never resume, so the task fails at once with a 
 
 **Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
 
-**Technical errors.** If the transition adapter throws (e.g., LLM API failure, lattice error), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail_task`'s semantic failure). The task entry is removed / chat slot cleared in both cases; the difference is recorded in the Job's failure reason.
+**Technical errors.** If the transition adapter throws or returns an `error` (e.g., a request the provider refused, an LLM call past `llmTimeoutMs`), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail_task`'s semantic failure), and the agent carries on with its other work. The difference is recorded in the Job's failure reason. When the agent cannot continue (its model setup is wrong, its provider cannot be reached, or the venue fails), the agent is suspended instead and the picked task stays queued for after resume ([AGENT_LOOP.md §3.4](./AGENT_LOOP.md)).
 
 **Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete_task`, `agent:fail_task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside an LLM adapter, the tool loop wraps these as named tools the LLM can call:
 

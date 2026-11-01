@@ -2060,7 +2060,11 @@ URL and this knob instead of a bare ConnectException.
 
 Agent-side bounds: each level-3 LLM call is bounded by the agent's
 `llmTimeoutMs` (default 120s), and is cancelled at it, interrupting the
-in-flight provider call. Each tool call is bounded by `toolCallTimeoutMs`
+in-flight provider call; that fails the work the agent was doing, and the
+agent carries on with the rest. A provider that keeps failing after the
+provider library's own retries, or a refused key or missing model, suspends
+the agent with its queued work kept (`docs/AGENT_LOOP.md` §3.4). Each tool
+call is bounded by `toolCallTimeoutMs`
 (default 300s, minimum 1s). A tool call still running at its limit is not
 cancelled: the model is told it may still be running, and in a session its
 outcome arrives as a message when it ends (`docs/AGENT_LOOP.md` §3.4.2).

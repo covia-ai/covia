@@ -35,10 +35,10 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    stateless invocation. Each level is a grid operation, pluggable independently.
    The framework never inspects user state; lower levels never manage framework fields.
 
-5. **Transition function must succeed.** A failing transition function is a severe
-   bug — it suspends the entire agent. The agent update restores the queues and
-   records the error. The transition function is responsible for its own error
-   handling; if it wants the agent to continue running, it must return successfully.
+5. **A failure lands on what failed.** A failed transition fails the work it took
+   — the picked task, the chats it was answering — and the agent carries on with
+   the rest. Only an agent that cannot continue is suspended, and it keeps its
+   queue (§3.4).
 
 ### 1.1 Agent references
 
@@ -525,9 +525,35 @@ Pending outbound jobs are not declared in transition output. The field is a
 reserved framework surface; the built-in harnesses currently have no generic
 writer for it (§3.4.2).
 
-The transition function must handle its own errors internally. If it throws, the
-agent update treats this as a severe failure: the agent is suspended, all queues
-are preserved, and the error is recorded. No timeline entry is written.
+**Transition failures.** A transition fails by throwing, or by returning an
+`error` in its output. The cycle's timeline entry records the error either way.
+What happens next depends on what failed:
+
+- **The work.** An expected failure ([ERRORS.md](ERRORS.md)) belongs to the work
+  the cycle took. The model gave up on the task (`fail_task`), reached the
+  tool-call iteration limit, sent a conversation too big for the model or a
+  request the provider refused, or an LLM call outlasted `llmTimeoutMs`. The
+  cycle's picked task fails, and so do the chats it was answering. Work it never
+  took stays queued, and the agent carries on with it. A task the agent already
+  resolved keeps its own outcome.
+- **The agent cannot continue.** A transition raises `CannotContinueException`
+  when the next unit of work would fail the same way. The LLM harness raises it
+  when a model call fails with `ConfigurationException` (a refused key, a
+  missing model, an invalid setting) or `UnavailableException` (the provider
+  cannot be reached, or keeps failing after the provider library's own retries),
+  or returns a failure value, which a level-3 operation returns only for a
+  setup problem. An unexpected failure, a venue fault logged at ERROR where it
+  happened, counts the same. The agent is suspended with the reason as its
+  `error` (#88: an agent whose key is missing stops after one cycle).
+
+A suspended agent keeps its queue, whether a fault or a deliberate
+`agent:suspend` stopped it. The task the stopped cycle took stays queued and
+runs again after resume. A chat whose message that cycle had already taken into
+its conversation fails with the reason, since it would never be presented again.
+Every Job still waiting on the agent, a queued task or a chat caller, carries a
+progress note (`AgentAdapter.SUSPENDED_WAITING`) saying the agent is suspended
+and why, until `agent:resume` clears it. New requests and chats are refused
+while the agent is suspended (§4.5).
 
 #### 3.4.1 Task Completion — Two Mechanisms
 
@@ -944,13 +970,14 @@ run's `finally` block.
    timeline and state writes first.
 7. Loop back to step 1. The top-of-loop check at step 2 is the sole
    exit gate.
-8. On exception:
+8. On failure, thrown or returned as the output's `error` (§3.4):
    - Append the cycle record with the error and the inferences that ran
      before it (§2.4).
-   - Leave `tasks`, `pending`, and `sessions` unchanged.
-   - Set status → `"SUSPENDED"`, set `error`.
-   - Fail all pending task Jobs and clear parked completions for this
-     agent.
+   - If the agent can continue, fail the picked task's Job and the chats
+     the cycle took, then loop back to step 1 for the remaining work.
+   - If it cannot (a `CannotContinueException` or an unexpected failure),
+     set status → `"SUSPENDED"` and `error`, leave `tasks`, `pending` and
+     `sessions` unchanged, and give every waiting Job the suspension note.
    - Note: task completions made via tool calls during execution are
      **not** rolled back (§3.4.1).
 
@@ -986,11 +1013,11 @@ the response visible to callers without querying agent state separately.
 
 | Operation | Trigger | Effect | Allowed status | New status |
 |-----------|---------|--------|----------------|------------|
-| **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged. | RUNNING (internal) | SUSPENDED |
-| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error` and `suspension`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
-| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`; latest stop replaces previous actor/reason. Cancel an active transition, recording the stop on its timeline and notifying waiting callers. | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
+| **Suspend** | the agent cannot continue, or the run loop fails unexpectedly (§3.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged; waiting Jobs carry the suspension note. | RUNNING (internal) | SUSPENDED |
+| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error` and `suspension`, clear waiting Jobs' suspension notes. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
+| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`; latest stop replaces previous actor/reason. Cancel an active transition, recording the stop on its timeline. The queue is kept as for any suspension (§3.4). | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
 | **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
-| **Cancel task** | `agent:cancelTask` | Remove a pending task from the agent's `tasks` index. Does not affect the run loop directly. | any except TERMINATED | unchanged |
+| **Cancel task** | `agent:cancelTask`, or cancelling the request Job | Remove a pending task from the agent's `tasks` index, so the agent never runs it. Does not affect the run loop directly. | any except TERMINATED | unchanged |
 | **Delete** | `agent:delete` | Accepts exactly one `agentId` or an exact `agentIds` list (maximum 100; no prefixes/wildcards). One Job halts each named agent. Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove each lattice slot, making unreachable storage eligible for Etch GC. The full list is validated before deletion starts. | any | TERMINATED (or absent) |
 | **Fork** | `agent:fork` | Create a NEW agent at a different `agentId` from this one's config + optional state + optional timeline. The source is untouched and the target slot must be empty. | source must not be TERMINATED | new agent SLEEPING |
 
@@ -1363,7 +1390,7 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
 3. **Single venue writes.** Unchanged.
 4. **Two layers, not three.** L1 (run loop) drives cycles and persists results. L2 (step adapter) does one cycle's worth of reasoning. L3 is outside the harness — a step adapter may invoke an L3 provider, but that's the adapter's business, not a layer of the contract. The framework never inspects the step adapter's reasoning; the step adapter never manages framework fields.
 5. **Lattice is the state.** No FSM accumulator threaded through the step. Persistent agent state (config, sessions, tasks, pending, timeline) lives on the lattice. The step adapter reads what it needs via context and writes via venue ops.
-6. **Step must succeed.** A failing step suspends the agent (#88). Same fail-fast semantics; the step adapter can return `error` to fail explicitly.
+6. **A failure lands on what failed.** Unchanged (§3.4): a failing step fails the work it took, and suspends the agent only when the agent cannot continue. The step adapter can return `error` to fail explicitly.
 
 ### 8.5 Target step contract
 
@@ -1403,7 +1430,7 @@ No `state`, no `tasks`, no `pending`, no `messages`, no `session`, no `config`. 
 ```
 {
   response?: ACell,          // recorded as the cycle's timeline result
-  error?:    ACell,          // fail-fast — suspend, drain queue, fail callers (#88)
+  error?:    ACell,          // fails the work this step took (§3.4)
   frames?:   AVector<ACell>, // optional session-frames replacement (goal-tree pattern)
   done?:     boolean         // explicit "no more work to do this run" signal
 }
@@ -1435,7 +1462,7 @@ Per cycle:
    4. Invoke the step: `engine.jobs().invokeInternal(stepOp, {cause}, ctx)`.
    5. On success: write timeline entry from `response` / `error`; replace `frames` if emitted.
    6. On `done: true` or after `MAX_LOOP_ITERATIONS`: exit.
-   7. On `error`: fail-fast (existing #88 path — suspend, drain, fail callers).
+   7. On `error`: fail the work the step took; on `CannotContinueException` or an unexpected failure, suspend the agent with its queue kept (§3.4).
 3. After loop exits, mark SLEEPING (or honour SUSPENDED/TERMINATED), release `runningLoops` slot, re-check for wakes.
 
 The framework no longer:

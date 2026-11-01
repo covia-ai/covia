@@ -64,7 +64,7 @@ the rules above.
 | `ResponseException` | A remote service answered with an error or a malformed response |
 | `AuthException` | The caller is not authenticated or not authorised |
 | `WrongScopeException` | A scope-bound namespace (`n/`, `c/`, `t/`) is used outside the scope it needs |
-| `ConfigurationException` | The operator's setup is wrong or incomplete for what was asked |
+| `ConfigurationException` | The setup a request runs under is wrong or incomplete: the operator's configuration, or the settings and credentials the caller supplied for a dependency (a refused key, a missing model). Every request made the same way fails until it is fixed |
 | `RateLimitException` | An admission or rate control refused the request; carries a retry hint |
 | `JobFailedException` | A job the caller awaited failed; carries the job |
 
