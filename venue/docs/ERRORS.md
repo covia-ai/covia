@@ -33,7 +33,9 @@ a remote's response body or free-text error detail, and never carries a
 credential, a secret value, another principal's data, a URL that may carry a
 credential, or a stack trace. A failure from a remote service or provider says what
 failed and its status; the response stays on the exception
-(`ResponseException.response`) for code that needs it. A provider's error code
+(`ResponseException.response`) for code that needs it. A remote is named by its
+URL's origin (`AAdapter.origin`), since a path or query may carry a credential.
+A provider's error code
 or request id is quoted only when it is an identifier (`AAdapter.identifier`). A model reads these
 messages, so a remote's text quoted in one would reach it as the venue's own
 statement.
