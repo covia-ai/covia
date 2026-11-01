@@ -7,8 +7,7 @@ model: it is simply a scheduled invocation of the agent's wake operation
 (`agent:trigger`, §8).
 
 Agent wake is a consumer of this service — see §8 and
-[SCHEDULER.md](./SCHEDULER.md) for the agent-side mapping. The bespoke
-per-thread `AgentScheduler` that predated this service has been retired.
+[SCHEDULER.md](./SCHEDULER.md) for the agent-side mapping.
 
 ---
 
@@ -348,9 +347,8 @@ coordinates the venue transaction and timer (agent-side details are in
   `wakeTime`s (healing any stale handle).
 
 So per-thread independence lives in the agent's own lattice state, while the
-scheduler holds a single, operation-agnostic entry per agent. The retired
-`AgentScheduler`/`ThreadRef` and per-thread due-ness leave the scheduler entirely.
-Redundant wakes collapse safely because waking is idempotent — one run loop per
+scheduler holds a single, operation-agnostic entry per agent and knows nothing of
+per-thread due-ness. Redundant wakes collapse safely because waking is idempotent — one run loop per
 agent via the `runningLoops` CAS (**at most one active computation per agent**).
 A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transient Job,
 §7).

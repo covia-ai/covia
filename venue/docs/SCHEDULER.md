@@ -3,12 +3,10 @@
 How an agent cycle is initiated, and how scheduling is granular at the session
 and task level while execution stays serial per agent.
 
-**Status:** current. Agent wake is now a **consumer of the per-venue grid
-scheduler** ([GRID_SCHEDULER.md](./GRID_SCHEDULER.md)) — a scheduled future wake
-is just a `agent:trigger` event in the venue `:schedule`. The bespoke per-thread
-`AgentScheduler` (STPE + `ThreadRef`) that an earlier design used has been
-**retired**; this doc covers the agent-side mapping, the grid doc covers the
-engine.
+Agent wake is a **consumer of the per-venue grid scheduler**
+([GRID_SCHEDULER.md](./GRID_SCHEDULER.md)): a scheduled future wake is an
+`agent:trigger` event in the venue `:schedule`. This doc covers the agent-side
+mapping; the grid doc covers the engine.
 
 See also:
 - [AGENT_LOOP.md](./AGENT_LOOP.md) — run loop, status model, virtual-thread launcher
@@ -63,8 +61,7 @@ All three funnel into one method: `wakeAgent(agentId, ctx, force)`.
 `wakeTime` is **not** consulted by the gate. A scheduled wake works by *firing*
 `agent:trigger` at the due time (creating a wake opportunity); the loop then runs
 iff `hasWork` — i.e. a parked task is "work" and runs, a session with no pending
-is a no-op. There is no `hasDueScheduledWake` arm and no agent-level wake flag —
-both were removed when the per-thread model landed.
+is a no-op.
 
 ---
 
@@ -128,12 +125,9 @@ and guarantees only that the loop gets a cycle. Callers who want output submit w
 via `agent:request` (task Job) or `agent:chat` (chat Job) and await that Job.
 
 - **Creates no session.** A supplied `sessionId` is resolved and echoed back; if
-  none is supplied the trigger runs unsessioned. (It used to mint an empty session
-  — removed.)
-- **`force` (default `true`)** — `true` runs a cycle even if the agent is idle
-  (the historical kick); `false` runs only if there is work. The flag is additive,
-  so existing callers are unchanged; the scheduler is the caller that passes
-  `false`.
+  none is supplied the trigger runs unsessioned.
+- **`force` (default `true`)** — `true` runs a cycle even if the agent is idle;
+  `false` runs only if there is work. The scheduler passes `false`.
 - **`wait` (default block)** — `true`/absent blocks until the loop drains to
   `SLEEPING`; `false` returns immediately with `{status: RUNNING}`; `<ms>` is a
   bounded block. This is a wait on the run loop's completion future, **not** a
@@ -159,18 +153,15 @@ transient-Job fire goes through `invokeFuture` → `doKick`. Both share `wakeAge
 
 ---
 
-## 7. Deferred / not yet built
+## 7. Future work
 
-These were part of an earlier per-thread design and are **not** implemented; they
-remain candidate future work and are recorded here so the doc isn't read as
-describing them as current:
+None of these is built:
 
 - **`sleep` harness tool** — let an LLM defer its current thread by writing
-  `wakeTime = now + ms`. Today a future `wakeTime` is set only by a transition
+  `wakeTime = now + ms`. A future `wakeTime` is set only by a transition
   result (`mergeAndPostProcess`), not by a dedicated tool.
 - **Backoff / `yieldCount`** — exponential backoff on repeated no-progress yields.
-  No `yieldCount` field or backoff policy exists yet.
-- **Async-completion wake (Path 4)** — a completion hook on an outbound Job that
+- **Async-completion wake** — a completion hook on an outbound Job that
   appends to `session.pending` and wakes the agent. The agent-level `pending`
   Index exists; the hook wiring is not part of the wake scheduler.
 - **Task/session unification ("threads")** — collapsing tasks and sessions into a
