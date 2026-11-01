@@ -21,6 +21,10 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -77,14 +81,14 @@ public class GridAdapter extends AAdapter {
 			return engine.jobs().invokeInternal(meta, input, ctx);
 		}
 		if (gridOp == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid grid operation: no sub-operation in metadata"));
+			return CompletableFuture.failedFuture(new InvalidDefinitionException("Invalid grid operation: no sub-operation in metadata"));
 		}
 		return switch (gridOp) {
 			case "run"       -> invokeRun(ctx, meta, input);
 			case "invoke"    -> invokeAsync(ctx, meta, input);
 			case "jobStatus" -> invokeJobStatus(ctx, meta, input);
 			case "jobResult" -> invokeJobResult(ctx, meta, input);
-			default          -> CompletableFuture.failedFuture(new IllegalArgumentException("Unrecognised grid operation: " + gridOp));
+			default          -> CompletableFuture.failedFuture(new NotSupportedException("Unrecognised grid operation: " + gridOp));
 		};
 	}
 
@@ -104,8 +108,8 @@ public class GridAdapter extends AAdapter {
 		AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		boolean existing = "jobResult".equals(getSubOperation(RT.ensureMap(meta)));
 		Blob existingID = existing ? parseJobId(RT.getIn(input, Fields.ID)) : null;
-		if (existing && existingID == null) throw new IllegalArgumentException("'id' is required");
-		if (!existing && operation == null) throw new IllegalArgumentException("'operation' is required");
+		if (existing && existingID == null) throw new InvalidInputException("'id' is required");
+		if (!existing && operation == null) throw new InvalidInputException("'operation' is required");
 		AString target = resolveVenue(meta, input);
 		VenueConnection remote = remoteConnection(ctx, target, input);
 		RemoteJobs observer = engine.remoteJobs();
@@ -150,10 +154,10 @@ public class GridAdapter extends AAdapter {
 
 	private void applyRemote(Job job, AMap<AString, ACell> snapshot) {
 		AString status = RT.ensureString(snapshot.get(Fields.STATUS));
-		if (status == null) throw new IllegalArgumentException("Remote Job has no status");
+		if (status == null) throw new ResponseException("Remote Job has no status");
 		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
 		Blob expected = Job.parseID(record.get(RemoteJobs.REMOTE_ID));
-		if (!expected.equals(Job.parseID(snapshot.get(Fields.ID)))) throw new IllegalArgumentException("Remote Job ID mismatch");
+		if (!expected.equals(Job.parseID(snapshot.get(Fields.ID)))) throw new ResponseException("Remote Job ID mismatch");
 		if (Status.COMPLETE.equals(status)) {
 			job.completeWith(snapshot.get(Fields.OUTPUT), data -> RemoteJobs.observed(data, status));
 			return;
@@ -162,7 +166,7 @@ public class GridAdapter extends AAdapter {
 			|| Status.PAUSED.equals(status) || Status.INPUT_REQUIRED.equals(status)
 			|| Status.AUTH_REQUIRED.equals(status) || Status.FAILED.equals(status)
 			|| Status.CANCELLED.equals(status) || Status.REJECTED.equals(status))) {
-			throw new IllegalArgumentException("Invalid remote Job status");
+			throw new ResponseException("Invalid remote Job status");
 		}
 		// Local processing is STARTED even while the remote worker is queued.
 		AString localStatus = Status.PENDING.equals(status) ? Status.STARTED : status;
@@ -198,7 +202,7 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeRun(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'operation' is required; pass an operation path or asset hash"));
 		}
 
@@ -216,7 +220,7 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeAsync(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'operation' is required; pass an operation path or asset hash"));
 		}
 
@@ -237,7 +241,7 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeJobStatus(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
@@ -248,7 +252,7 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeJobResult(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(
+			return CompletableFuture.failedFuture(new InvalidInputException(
 				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
@@ -382,7 +386,7 @@ public class GridAdapter extends AAdapter {
 			AVector<ACell> capabilities = token.getCapabilities();
 			if (capabilities == null || !capabilities.isEmpty()) continue;
 			if (found != null && !found.equals(jwt.toString())) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"Multiple caller identity credentials were supplied for " + targetVenueDID);
 			}
 			found = jwt.toString();
@@ -419,11 +423,11 @@ public class GridAdapter extends AAdapter {
         try {
             Blob id = Job.parseID(jobIdCell);
             if (id == null) {
-                throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell);
+                throw new InvalidInputException("Invalid job ID format: " + jobIdCell);
             }
             return id;
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell, e);
+            throw new InvalidInputException("Invalid job ID format: " + jobIdCell, e);
         }
     }
 

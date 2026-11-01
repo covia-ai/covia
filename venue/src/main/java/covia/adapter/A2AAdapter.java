@@ -40,6 +40,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -732,7 +733,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private void handleSendResponse(Job job, String rpcUrl, RequestAuth auth, HttpResponse<String> resp) {
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
 			if (resp.statusCode() >= 500 || resp.statusCode() == 408) {
-				engine.remoteJobs().submissionUnknown(job, new IllegalStateException("Remote send unavailable"));
+				engine.remoteJobs().submissionUnknown(job, new UnavailableException("Remote send unavailable"));
 				return;
 			}
 			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode() + ": "
@@ -753,7 +754,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		}
 		Object result = envReply.get("result");
 		if (result == null) {
-			engine.remoteJobs().submissionUnknown(job, new IllegalArgumentException("Missing remote result"));
+			engine.remoteJobs().submissionUnknown(job, new ResponseException("Missing remote result"));
 			return;
 		}
 
@@ -803,7 +804,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			catch (Exception e) { return CompletableFuture.failedFuture(e); }
 		}, snapshot -> {
 			Task task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(snapshot).toString(), Task.class);
-			if (!remoteTaskId.equals(task.id())) throw new IllegalArgumentException("Remote task ID mismatch");
+			if (!remoteTaskId.equals(task.id())) throw new ResponseException("Remote task ID mismatch");
 			if (task.status().state().isFinal()) finishJobWithRemoteTask(job, task, snapshot);
 			else applyInterruptedState(job, task, snapshot);
 		});
@@ -1031,15 +1032,15 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (error != null) {
 			// Error text/data may contain secrets; retain only the protocol code.
 			ACell code = error.get(K_RPC_CODE);
-			if (!(code instanceof convex.core.data.prim.CVMLong)) throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
+			if (!(code instanceof convex.core.data.prim.CVMLong)) throw new ResponseException(INVALID_CANCELLATION_RESPONSE);
 			return Maps.of(RemoteJobs.OUTCOME, RemoteJobs.OUTCOME_REJECTED, Fields.ERROR_CODE, code);
 		}
 		ACell raw = unwrapKind(reply.get(Fields.RESULT), "task");
 		Task task = JsonUtil.OBJECT_MAPPER.fromJson(JSON.print(raw).toString(), Task.class);
-		if (!remoteTaskId.equals(task.id())) throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
+		if (!remoteTaskId.equals(task.id())) throw new ResponseException(INVALID_CANCELLATION_RESPONSE);
 		if (task.status() == null || task.status().state() == null
 				|| task.status().state() == org.a2aproject.sdk.spec.TaskState.TASK_STATE_UNSPECIFIED) {
-			throw new IllegalArgumentException(INVALID_CANCELLATION_RESPONSE);
+			throw new ResponseException(INVALID_CANCELLATION_RESPONSE);
 		}
 		return RemoteJobs.cancellationResult(A2ACodec.fromTaskState(task.status().state()));
 	}

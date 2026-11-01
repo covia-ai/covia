@@ -3,6 +3,7 @@ package covia.adapter.remote;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import covia.exception.NotSupportedException;
 
 /**
  * A live binding to externally controlled agent work. Construction is passive;
@@ -18,7 +19,7 @@ public interface RemoteInteraction {
 	 * must be reported, never silently converted to success or blindly retried.
 	 */
 	default void deliver(AMap<AString, ACell> messageRecord) {
-		throw new UnsupportedOperationException(MESSAGE_UNSUPPORTED);
+		throw new NotSupportedException(MESSAGE_UNSUPPORTED);
 	}
 
 	/**
