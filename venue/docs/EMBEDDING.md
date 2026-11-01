@@ -4,7 +4,9 @@ For applications that run a Covia venue inside their own process, as GetMine
 and Brightside do. This is the supported embedder surface;
 `EmbedderContractTest` exercises it, so a change that breaks it fails Covia's
 own build. Raw lattice paths and other internals can change between minor
-versions; use these entry points instead.
+versions; use these entry points instead. An embedder calls these venue
+objects directly; the venue's operations are another route, suited to
+out-of-process clients and agents, and never required of an embedder.
 
 ## Starting and stopping
 

@@ -32,6 +32,7 @@ The on-chain CVM layer handles identity anchoring, economic settlement, and trus
 - **The lattice is permissive, the ecosystem rewards convention.** All namespaces store arbitrary CAD3 values, but tooling, interop, and chaining work best with JSON-like (hashmap-based) structures.
 - **Freedom in workspace, discipline everywhere else.** System-managed namespaces enforce typed integrity; user workspaces allow arbitrary structure.
 - **Operations receive values, not paths.** Security is enforced by resolving references at invocation time and explicitly granting capabilities.
+- **One kind per level.** A level holds records or sub-namespaces, never both: `v/skills` holds skillsets and `v/skills/root` holds skills. A reference's kind is declared by the field it appears under (`skills` versus `skillsets`), never inferred from what it resolves to, so a reference of the wrong kind is reported rather than silently mis-resolved.
 
 ---
 
