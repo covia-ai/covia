@@ -31,6 +31,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.storage.ContentProvider;
@@ -500,8 +501,11 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		AMap<AString, ACell> stored;
 		try {
 			stored = MessagingMedia.store(engine, said.speech().bytes(), said.mediaType(), directory, name, ctx);
+		} catch (IllegalArgumentException e) {
+			// The destination is the caller's
+			throw new InvalidInputException(e.getMessage(), e);
 		} catch (IOException e) {
-			throw new JobFailedException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+			throw new UnavailableException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory, e);
 		}
 		return said.describe(stored);
 	}

@@ -1539,9 +1539,7 @@ public class VenueServer {
 			// Reject occupied/reserved paths before starting a cycle. Convex
 			// validates again and creates the link without replacing anything.
 			File requested = backupFile == null ? (retain ? checkpointFile(file) : null) : new File(backupFile);
-			if (requested != null && Files.exists(requested.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-				throw new ConflictException(StoreControl.BACKUP_EXISTS.formatted(requested));
-			}
+			requireNoBackup(requested);
 			File backup = requested == null ? null : etch.validateGCBackup(requested);
 			synchronized (cycleLock) {
 				if (collectedStore != null) {
@@ -1574,6 +1572,9 @@ public class VenueServer {
 					throw new IOException(missing.size()
 						+ " value(s) reachable from the root are missing from the collected file");
 				}
+				// A file created at the backup path since preflight is refused
+				// here too, before the cutover checks again
+				requireNoBackup(backup);
 				EtchStore successor = etch.completeGC(backup);
 				collectedStore = successor; // closed after the old handle in close()
 				long after = successor.getEtch().getDataLength();
@@ -1583,9 +1584,12 @@ public class VenueServer {
 				return new Result(before, after, elapsed, file.getPath(), successor.getFile().getPath(),
 					backup == null ? null : backup.getPath());
 			} catch (IOException | RuntimeException e) {
-				// The original file is untouched: roll the cycle back (unless a
-				// cancel already is) so the store is exactly as before
-				if (!cancelRequested && etch.isGCInProgress()) {
+				// A cancel rolled the cycle back under this collection, which
+				// therefore ends cancelled, not failed
+				if (cancelRequested) throw (CancellationException) new CancellationException().initCause(e);
+				// The original file is untouched: roll the cycle back so the
+				// store is exactly as before
+				if (etch.isGCInProgress()) {
 					try {
 						etch.cancelGC();
 					} catch (IOException | RuntimeException cancelFailure) {
@@ -1606,6 +1610,13 @@ public class VenueServer {
 			EtchStore etch = etchStore();
 			cancelRequested = true;
 			if (etch.isGCInProgress()) etch.cancelGC();
+		}
+
+		/** Refuses a backup path where a file already is: a checkpoint never replaces one. */
+		private static void requireNoBackup(File backup) {
+			if (backup != null && Files.exists(backup.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				throw new ConflictException(StoreControl.BACKUP_EXISTS.formatted(backup));
+			}
 		}
 	}
 

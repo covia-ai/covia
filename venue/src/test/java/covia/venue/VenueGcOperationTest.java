@@ -24,6 +24,7 @@ import covia.adapter.VenueAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.server.VenueServer;
 
 /**
@@ -185,6 +186,9 @@ public class VenueGcOperationTest {
 			else Files.writeString(backup.toPath(), "do not replace");
 			store.resume.countDown();
 			assertThrows(JobFailedException.class, () -> cycle.awaitResult(60_000));
+			assertEquals(cancel ? Status.CANCELLED : Status.FAILED, cycle.getStatus());
+			if (!cancel) assertTrue(RT.getIn(cycle.getData(), Fields.ERROR).toString()
+				.startsWith(StoreControl.BACKUP_EXISTS.formatted("")), "the competing file is a conflict");
 			if (cancel) assertFalse(backup.exists(), "an aborted cycle must not publish a checkpoint");
 			else assertEquals("do not replace", Files.readString(backup.toPath()));
 			assertFalse(store.isGCInProgress());
