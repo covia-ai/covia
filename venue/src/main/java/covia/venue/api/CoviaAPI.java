@@ -291,7 +291,7 @@ public class CoviaAPI extends ACoviaAPI {
 		                description = "Bad request due to invalid offset, negative limit, or too many assets requested (exceeding 1000).",
 		                content = {
 		                    @OpenApiContent(
-		                        type = "application/json",
+		                        type = ApiErrors.PROBLEM_JSON,
 		                        from = ErrorResponse.class
 		                    )
 		                }

@@ -24,12 +24,15 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.auth.VenueAuth;
+import covia.venue.api.ApiErrors;
 import covia.venue.server.SseServer;
+import io.javalin.http.HttpStatus;
 
 /**
  * #200 — the job SSE route must be reachable.
@@ -200,7 +203,8 @@ public class JobRoutesTest {
 				CompletableFuture<java.util.List<String>> after = readUntil(in, SseServer.JOB_NOT_FOUND);
 				job.cancel(); // the detached handle still publishes this update
 				java.util.List<String> frames = after.get(10, TimeUnit.SECONDS);
-				assertTrue(frames.stream().anyMatch(l -> l.contains(SseServer.JOB_NOT_FOUND)),
+				assertTrue(frames.stream().anyMatch(l -> l.contains(SseServer.JOB_NOT_FOUND)
+						&& l.contains("\"status\": 404")),
 					"the stream must end as GET would answer: " + frames);
 				assertTrue(frames.stream().noneMatch(l -> l.contains("CANCELLED")),
 					"a deleted job's update must not reach the stream: " + frames);
@@ -349,13 +353,17 @@ public class JobRoutesTest {
 		assertEquals(legacy, storage.get(), "REST and SSE reads must not rewrite an old record");
 	}
 
-	/** The REST error body (COG-21): every refusal is {@code {"error": reason}}. */
+	/** The REST error body (COG-21): RFC 9457 problem details whose {@code detail} is the reason. */
 	private static String errorOf(HttpResponse<String> r) {
-		assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith("application/json"),
-			"error bodies are JSON: " + r.body());
-		AString error = RT.ensureString(RT.getIn(JSON.parse(r.body()), "error"));
-		assertNotNull(error, "error body carries its reason: " + r.body());
-		return error.toString();
+		assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith(ApiErrors.PROBLEM_JSON),
+			"error bodies are problem details: " + r.body());
+		ACell body = JSON.parse(r.body());
+		assertEquals(CVMLong.create(r.statusCode()), RT.getIn(body, "status"), r.body());
+		assertEquals(HttpStatus.forStatus(r.statusCode()).getMessage(), RT.getIn(body, "title").toString());
+		AString detail = RT.ensureString(RT.getIn(body, "detail"));
+		assertNotNull(detail, "error body carries its reason: " + r.body());
+		assertEquals(detail, RT.getIn(body, "error"), "error repeats detail");
+		return detail.toString();
 	}
 
 	private HttpResponse<String> send(HttpRequest.Builder request) throws Exception {

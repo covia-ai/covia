@@ -25,6 +25,7 @@ import covia.venue.AgentEvents;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.api.ApiErrors;
 import io.javalin.http.sse.SseClient;
 
 public class SseServer {
@@ -33,6 +34,7 @@ public class SseServer {
 
 	/** Opening of the error frame that ends a job stream the caller can no longer read. */
 	public static final String JOB_NOT_FOUND = "Job not found: ";
+	public static final String AGENT_NOT_FOUND = "Agent not found: ";
 
 	/** One job-stream client and the context its reads are made under. */
 	private record JobClient(SseClient client, RequestContext rctx) {}
@@ -168,8 +170,7 @@ public class SseServer {
 
 	/** Ends a stream whose job the caller cannot read, saying no more than a 404 would. */
 	private static void sendNotFound(SseClient client, String jobId) {
-		client.sendEvent("error", JSON.toString(Maps.of(Fields.ERROR,
-			Strings.create(JOB_NOT_FOUND + jobId))));
+		client.sendEvent("error", ApiErrors.body(404, JOB_NOT_FOUND + jobId));
 		client.close();
 	}
 
@@ -208,7 +209,7 @@ public class SseServer {
 		AgentAdapter agents = (AgentAdapter) engine.getAdapter("agent");
 		AMap<AString, ACell> info = (agents != null) ? agents.agentInfo(rctx, Strings.create(ref)) : null;
 		if (info == null) {
-			client.sendEvent("error", "{\"error\":\"Agent not found: " + ref + "\"}");
+			client.sendEvent("error", ApiErrors.body(404, AGENT_NOT_FOUND + ref));
 			client.close();
 			return;
 		}

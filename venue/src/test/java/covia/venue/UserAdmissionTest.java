@@ -30,6 +30,7 @@ import covia.exception.ResponseException;
 import covia.grid.Principals;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.venue.api.ApiErrors;
 import covia.venue.server.VenueServer;
 
 class UserAdmissionTest {
@@ -82,9 +83,9 @@ class UserAdmissionTest {
 
 				assertEquals(403, response.statusCode(), path + ": " + response.body());
 				assertTrue(response.headers().firstValue("Content-Type")
-					.orElse("").startsWith("application/json"),
+					.orElse("").startsWith(ApiErrors.PROBLEM_JSON),
 					path + ": " + response.headers());
-				assertTrue(response.body().contains("\"error\""), response.body());
+				assertTrue(response.body().contains("\"detail\""), response.body());
 				assertTrue(response.body().contains("User is not registered"),
 					response.body());
 				assertTrue(response.body().contains("user:create"), response.body());
