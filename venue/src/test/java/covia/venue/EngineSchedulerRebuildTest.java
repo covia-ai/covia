@@ -15,7 +15,7 @@ import covia.venue.AgentState.ThreadKind;
 
 /**
  * Validates {@link Engine#rebuildSchedulerFromLattice} — on boot, each agent's
- * single {@code agent:wake} event is re-derived from the authoritative
+ * single {@code agent:trigger} wake event is re-derived from the authoritative
  * per-thread {@code wakeTime} fields in the lattice, healing any drift from a
  * prior run. The lattice is the source of truth; a stale stored handle never
  * loses or duplicates a scheduled wake. See GRID_SCHEDULER.md §8.

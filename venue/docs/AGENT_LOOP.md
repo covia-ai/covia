@@ -858,18 +858,24 @@ Trigger nudges the run loop so a cycle executes; it carries no payload and
 makes no guarantees about agent output. Callers who want results should
 submit work via `agent:request` (task Job) or `agent:chat` (chat Job) and
 await that Job. Use trigger only when the normal intake path isn't enough
-(manual state edit, diagnostics, resuming a stuck agent).
+(manual state edit, diagnostics, resuming a stuck agent). Trigger creates no
+session: a supplied `sessionId` is resolved and echoed back, and without one
+the trigger runs unsessioned.
+
+`force` (default `true`) runs a cycle even when the agent has no work, so an
+agent may act proactively on a trigger. `force: false` runs one only when
+there is work, and an idle agent with none returns its status rather than
+failing; the scheduler's wake events pass `false` (§4.6).
 
 The `wait` parameter on trigger is a block on the loop's completion
-future, not a result-await: it returns when the loop drains all
-outstanding work and exits to SLEEPING. A transition that awaits an ordinary
+future, not a result-await. `true` or absent blocks until the loop drains
+all outstanding work and exits to SLEEPING, `false` returns at once, and a
+number of milliseconds is a bounded block. A transition that awaits an ordinary
 async op (LLM or HTTP) simply keeps its virtual thread blocked on `.join()` —
 there is no yield/resume handoff. Sessioned HITL requests return their durable
 handle immediately and re-enter through the asking session (§6.3). A `SLEEPING` return means
 the loop fully drained; a `RUNNING` snapshot from a bounded `wait` means
-the loop is still processing. The transition always runs once per
-trigger, even with no pending work, so an agent may act proactively on
-a trigger.
+the loop is still processing.
 
 Cancelling the trigger Job ends its `wait` immediately: `job.cancel()`
 completes a per-caller signal raced against the loop's completion future,
@@ -1014,9 +1020,11 @@ Scheduling combines durable work (`sessions`/`tasks`) with one process-local
 launcher slot. Stable lattice status gates suspended/terminated agents; the
 launcher slot provides exclusion and observable liveness.
 
-**`wakeAgent(agentId, ctx)`** is the single entry point for all agent wakes.
-It is called by `agent:request`, `agent:message`, and async job completion
-callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
+**`wakeAgent(ownerDID, agentId, force)`** is the single entry point for all
+agent wakes. It is called by the intake operations (`agent:request`,
+`agent:message`, `agent:chat`), HITL answers, `agent:resume`, `agent:trigger`
+(including the scheduler's wake events), boot recovery and the run loop's own
+exit re-check. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
 `compute()`):
 
 1. Inside `runningLoops.compute(agentId, ...)`:
@@ -1026,8 +1034,8 @@ callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
    - Otherwise → read the stable agent status from the lattice.
    - A stale persisted `RUNNING` is allowed through defensively; normal startup
      has already cleared it.
-   - If no work (no session with pending messages and no tasks) → return null
-     (leave slot empty).
+   - Unless `force`, if there is no work (no session with pending messages
+     and no tasks) → return null (leave slot empty).
    - Resolve `config.operation` → if null, return null.
    - Create a fresh `CompletableFuture<ACell>` and atomically put it in the slot.
    - Persist `RUNNING`, then launch `executeRunLoop` on a
@@ -1038,8 +1046,8 @@ callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
 An agent is eligible to run when any of:
 
 - A new task has been added to `tasks` (via `agent:request`)
-- A pending outbound job has completed or failed
-- A new message has been delivered to a session's `pending` queue (via `agent:message`)
+- A new message has been delivered to a session's `pending` queue (via
+  `agent:message`, or a HITL answer re-entering the asking session)
 
 **No lost wakeups.** `addTask` / `appendSessionPending` write to the lattice
 atomically, then call `wakeAgent`. The loop's top-of-iteration `hasWork` check
@@ -1052,11 +1060,24 @@ the next `wakeAgent` from the writer finds the slot empty and launches.
 empty-slot → launch transition. Only one thread can populate the slot; all
 others observe it populated and return the existing completion.
 
-**Scheduled wakes:** a transition may return a `wakeTime` on its session/task; the
-framework arms one `agent:trigger` event for the agent in the per-venue grid
-scheduler at the earliest such time (see [SCHEDULER.md](./SCHEDULER.md) and
-[GRID_SCHEDULER.md](./GRID_SCHEDULER.md)). There is no fixed periodic sleep
-interval. A `sleep` harness tool and idle backoff are deferred (SCHEDULER.md §7).
+**Scheduled wakes.** Wake times are kept per session and per task, not per
+agent, so a sleep on one session never delays another. A session or task
+record may carry `wakeTime` (absolute millis): "this thread wants to wake at
+T". Only the framework writes it, never the `n/`, `c/` or `t/` scratch
+namespaces. On merge, `mergeAndPostProcess` installs the `wakeTime` a
+transition returns on the thread it picked, or clears the one that thread
+carried when the transition returns none. The last writer wins, with no
+min-merge, so a short retry cannot clobber an explicit long sleep. Intake
+operations write `pending` or `tasks`, never `wakeTime`: new work runs at once
+through `hasWork`.
+
+The venue keeps one `agent:trigger {force: false}` event per agent in the grid
+scheduler, at the earliest `wakeTime` across its threads
+([GRID_SCHEDULER.md §8](./GRID_SCHEDULER.md)). The gate above never reads
+`wakeTime`: the fire is only a wake opportunity, and the loop runs if there is
+work, so a parked task runs and a session with nothing pending does not.
+There is no fixed periodic sleep interval. A `sleep` harness tool and idle
+backoff are future work (§8.3.4).
 
 The scheduler is an internal venue concern — its implementation may change
 without affecting the agent contract or MCP interface.
@@ -1240,7 +1261,7 @@ L3: LLM call (provider) — single model invocation, no agent semantics
 | Message arrival | `agent:message` appends to `session.pending` | yes | no |
 | Chat arrival | `agent:chat` reserves a chat slot | yes | yes (the chat Job) |
 | Pending completion | An outbound Job in `pending` finishes; completion callback wakes the agent | result of the outbound Job | no |
-| Scheduled fire | Grid scheduler fires the agent's `agent:trigger` event at the earliest thread `wakeTime` (SCHEDULER.md §4) | no | no |
+| Scheduled fire | Grid scheduler fires the agent's `agent:trigger` event at the earliest thread `wakeTime` (§4.6) | no | no |
 | **Trigger** | `agent:trigger` MCP op | no | optional loop-drain `wait`, not a result-await |
 | Self-wake | A previous step wrote new work to the agent's own queues | (whatever the previous step wrote) | n/a |
 
@@ -1269,6 +1290,23 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
 #### 8.3.3 Wire shapes leak framework concerns into adapters
 
 `formattedTasks`, `resolvedPending`, `effectiveMessages`, `presentedSessionPendingCount` are framework-internal scheduling artefacts. Step adapters depend on them. Changing the framework's wire format changes every step adapter. The right boundary is: framework gives the adapter a context, adapter reads typed lattice data via accessors.
+
+#### 8.3.4 Wake features not built
+
+- **`sleep` harness tool** — let an LLM defer its current thread by writing
+  `wakeTime = now + ms`. A future `wakeTime` is set only by a transition
+  result (§4.6).
+- **Backoff** — exponential backoff between cycles of a task that keeps
+  yielding without progress (a `yieldCount` on the thread). A yielded task
+  waits for the agent's next wake.
+- **Async-completion wake** — a general completion hook on an outbound Job
+  that appends its result to `session.pending` and wakes the agent. Only
+  sessioned HITL asks re-enter this way (§6.3).
+- **Task/session unification** — one `threads` shape with a single
+  `pickReadyThread`, replacing separate tasks and sessions. A large refactor
+  needing its own design.
+- **Observability** — each thread's `wakeTime`, and the agent's next wake, in
+  `agent:info`.
 
 ### 8.4 Target principles
 
