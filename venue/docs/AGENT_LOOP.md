@@ -1297,8 +1297,8 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
   `wakeTime = now + ms`. A future `wakeTime` is set only by a transition
   result (§4.6).
 - **Backoff** — exponential backoff between cycles of a task that keeps
-  yielding without progress (a `yieldCount` on the thread). A yielded task
-  waits for the agent's next wake.
+  yielding without progress (a `yieldCount` on the thread). A yielded task is
+  presented again on the next cycle, up to the iteration budget (§4.4).
 - **Async-completion wake** — a general completion hook on an outbound Job
   that appends its result to `session.pending` and wakes the agent. Only
   sessioned HITL asks re-enter this way (§6.3).

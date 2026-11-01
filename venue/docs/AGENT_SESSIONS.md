@@ -606,7 +606,7 @@ For task work, the framework distinguishes **completed** from **yield** by obser
 
 The picked task resumes on the next wake; the wake events are listed in [AGENT_LOOP.md §8.2](./AGENT_LOOP.md).
 
-**No yield cap.** A task that yields without progress is not capped or auto-failed: it stays dormant in `tasks`, burning nothing, until the agent's next wake. There is no backoff between such cycles ([AGENT_LOOP.md §8.3.4](./AGENT_LOOP.md)).
+**Iteration budget.** A task presented for a run's whole iteration budget without resolving is failed ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)). There is no backoff between its cycles ([AGENT_LOOP.md §8.3.4](./AGENT_LOOP.md)).
 
 **Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
 
