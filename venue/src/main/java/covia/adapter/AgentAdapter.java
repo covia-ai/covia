@@ -4005,6 +4005,11 @@ public class AgentAdapter extends AAdapter {
 						cycleClaim = epoch;
 					} else if (pickedTask == null) {
 						continue; // the session went before the cycle could claim it
+					} else {
+						// The task's session went before the cycle could claim it:
+						// the task runs without one, and took none of its messages.
+						pickedSessionRecord = null;
+						filteredInbox = Vectors.empty();
 					}
 				}
 
