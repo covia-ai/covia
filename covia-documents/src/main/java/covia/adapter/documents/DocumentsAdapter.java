@@ -48,7 +48,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TextExtractor;
-import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
@@ -149,7 +148,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 		if (config != null && config.get(K_MAX_CHARS_CONFIG) != null) {
 			CVMLong n = RT.ensureLong(config.get(K_MAX_CHARS_CONFIG));
 			if (n == null || n.longValue() < 1 || n.longValue() > MAX_CHARS_CEILING) {
-				throw new ConfigurationException("adapters.documents.maxChars must be an integer from 1 to "
+				throw new IllegalArgumentException("adapters.documents.maxChars must be an integer from 1 to "
 					+ MAX_CHARS_CEILING + ", got: " + config.get(K_MAX_CHARS_CONFIG));
 			}
 			cap = (int) n.longValue();

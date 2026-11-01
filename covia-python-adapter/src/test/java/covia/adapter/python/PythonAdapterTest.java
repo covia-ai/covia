@@ -28,7 +28,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
-import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Asset;
@@ -49,20 +48,20 @@ class PythonAdapterTest {
 	@Test
 	void malformedKnownConfigFailsEvenWithoutPython() {
 		PythonAdapter adapter = new PythonAdapter();
-		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
 			() -> adapter.configureModule(Maps.of("enabled", "yes"), false));
-		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
 			() -> adapter.configureModule(Maps.of("operations", Maps.of(
 				"bad_name", Maps.of("script", "x.py"))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
 			() -> adapter.configureModule(Maps.of("operations", Maps.of(
 				"valid", Maps.of("function", "main"))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
 			() -> adapter.configureModule(Maps.of("typo", true), true));
-		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
 			() -> adapter.configureModule(Maps.of("instances", Maps.of(
 				"templates", Maps.of("worker", Maps.of("script", "worker.py")))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
 			() -> adapter.configureModule(Maps.of("instances", Maps.of(
 				"maxPerUser", 4L,
 				"maxTotal", 2L,

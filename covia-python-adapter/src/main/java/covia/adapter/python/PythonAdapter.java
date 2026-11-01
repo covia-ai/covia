@@ -298,7 +298,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		for (AString key : map.keySet()) {
 			if (known.contains(key.toString())) continue;
 			String message = "Unknown configuration field " + path + "." + key;
-			if (strict) throw new ConfigurationException(message);
+			if (strict) throw new IllegalArgumentException(message);
 			log.warn(message);
 		}
 	}
@@ -339,8 +339,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		return nested;
 	}
 
-	private static ConfigurationException malformed(String path, String detail) {
-		return new ConfigurationException("Malformed configuration at " + path + ": " + detail);
+	private static IllegalArgumentException malformed(String path, String detail) {
+		return new IllegalArgumentException("Malformed configuration at " + path + ": " + detail);
 	}
 
 	@Override

@@ -94,7 +94,7 @@ public class SonnyLabsAdapter extends AAdapter {
 			for (long i = 0; i < config.count(); i++) {
 				ACell key = config.entryAt(i).getKey();
 				if (!(key instanceof AString text) || !CONFIG_KEYS.contains(text)) {
-					throw new ConfigurationException("adapters.sonnylabs: unknown setting " + key
+					throw new IllegalArgumentException("adapters.sonnylabs: unknown setting " + key
 						+ " (known: baseUrl, apiKey, apiVersion, timeoutMillis, enabled)");
 				}
 			}
@@ -107,13 +107,13 @@ public class SonnyLabsAdapter extends AAdapter {
 
 		validateBaseUrl(nextBaseUrl);
 		String badKeyRef = secretRefProblem(nextApiKeyRef, "adapters.sonnylabs.apiKey");
-		if (badKeyRef != null) throw new ConfigurationException(badKeyRef);
+		if (badKeyRef != null) throw new IllegalArgumentException(badKeyRef);
 		if (nextApiVersion != null && !nextApiVersion.matches("\\d{4}-\\d{2}-\\d{2}")) {
-			throw new ConfigurationException(
+			throw new IllegalArgumentException(
 				"adapters.sonnylabs.apiVersion must be a date in YYYY-MM-DD form");
 		}
 		if (nextTimeout < 1 || nextTimeout > MAX_TIMEOUT_MILLIS) {
-			throw new ConfigurationException("adapters.sonnylabs.timeoutMillis must be between 1 and "
+			throw new IllegalArgumentException("adapters.sonnylabs.timeoutMillis must be between 1 and "
 				+ MAX_TIMEOUT_MILLIS);
 		}
 
@@ -292,7 +292,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		if (value == null) return null;
 		AString text = RT.ensureString(value);
 		if (text == null || text.isEmpty()) {
-			throw new ConfigurationException("adapters.sonnylabs." + key
+			throw new IllegalArgumentException("adapters.sonnylabs." + key
 				+ " must be a non-empty string");
 		}
 		return text.toString();
@@ -304,7 +304,7 @@ public class SonnyLabsAdapter extends AAdapter {
 		if (value == null) return fallback;
 		CVMLong number = RT.ensureLong(value);
 		if (number == null) {
-			throw new ConfigurationException("adapters.sonnylabs." + key + " must be an integer");
+			throw new IllegalArgumentException("adapters.sonnylabs." + key + " must be an integer");
 		}
 		return number.longValue();
 	}
@@ -324,11 +324,11 @@ public class SonnyLabsAdapter extends AAdapter {
 					|| !("http".equalsIgnoreCase(uri.getScheme())
 						|| "https".equalsIgnoreCase(uri.getScheme()))
 					|| uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-				throw new ConfigurationException("adapters.sonnylabs.baseUrl must be an absolute "
+				throw new IllegalArgumentException("adapters.sonnylabs.baseUrl must be an absolute "
 					+ "HTTP(S) URL without credentials, query, or fragment");
 			}
 		} catch (URISyntaxException e) {
-			throw new ConfigurationException("adapters.sonnylabs.baseUrl must be a valid HTTP(S) URL", e);
+			throw new IllegalArgumentException("adapters.sonnylabs.baseUrl must be a valid HTTP(S) URL", e);
 		}
 	}
 

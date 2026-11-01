@@ -25,7 +25,6 @@ import convex.core.lang.RT;
 import covia.adapter.TextExtractor;
 import covia.adapter.TextExtractor.Extraction;
 import covia.adapter.TextExtractor.Request;
-import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.grid.Job;
@@ -152,8 +151,8 @@ public class DocumentsAdapterTest {
 		assertEquals(DocumentsAdapter.DEFAULT_MAX_CHARS, adapter.getMaxChars());
 		assertTrue(adapter.configure(Maps.of("maxChars", 500), false));
 		assertEquals(500, adapter.getMaxChars());
-		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxChars", 0), false));
-		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxChars", "lots"), false));
+		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxChars", 0), false));
+		assertThrows(IllegalArgumentException.class, () -> adapter.configure(Maps.of("maxChars", "lots"), false));
 		assertTrue(adapter.configure(Maps.empty(), false));
 		assertEquals(DocumentsAdapter.DEFAULT_MAX_CHARS, adapter.getMaxChars());
 		assertNotNull(RT.getIn(adapter.info(), "supported"));
