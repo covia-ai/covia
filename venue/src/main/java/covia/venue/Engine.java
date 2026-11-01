@@ -970,6 +970,7 @@ public class Engine {
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.closeAdmission();
+		// Already closed outside the monitor by close(); this covers a failed start
 		remoteJobs.close();
 
 		// Release adapter-owned native/session resources before module classloaders.

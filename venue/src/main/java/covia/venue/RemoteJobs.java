@@ -425,7 +425,8 @@ public final class RemoteJobs implements AutoCloseable {
 
 	/**
 	 * Stops observation, then waits for every request already started, each
-	 * bounded by its transport's own timeout, so none outlives the engine. No
+	 * bounded by its transport's own timeout, so none outlives the engine; an
+	 * interrupt ends the wait and is kept on the thread. No
 	 * request starts once close has begun. A request may need engine services
 	 * that synchronise on the engine, so {@link Engine#close} calls this before
 	 * taking its monitor. Idempotent.
