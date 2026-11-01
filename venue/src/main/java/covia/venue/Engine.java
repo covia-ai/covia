@@ -151,7 +151,7 @@ public class Engine {
 	/**
 	 * Per-venue grid scheduler. Fires any deferred grid operation at a future
 	 * wall-clock time; an agent wake is one consumer (a scheduled
-	 * {@code agent:wake}). See {@code venue/docs/GRID_SCHEDULER.md}.
+	 * {@code agent:trigger}). See {@code venue/docs/GRID_SCHEDULER.md}.
 	 */
 	private final Scheduler gridScheduler;
 	/** The live agent tap (#394): run-loop, cycle, inference, tool and status
@@ -3719,7 +3719,7 @@ public class Engine {
 	}
 
 	/**
-	 * Re-derives every agent's single {@code agent:wake} event from the
+	 * Re-derives every agent's single {@code agent:trigger} wake event from the
 	 * authoritative per-thread {@code wakeTime} fields in the lattice. Called
 	 * once during {@link #start()}: the {@code :schedule} index already
 	 * persists across restarts, but a crash could leave a stored handle stale,

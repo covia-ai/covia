@@ -6046,7 +6046,7 @@ public class AgentAdapterTest {
 	 * When a transition returns a {@code wakeTime} in its result, the
 	 * framework installs it on the picked thread via {@code setThreadWakeTime}:
 	 * the lattice session record carries {@code wakeTime}, and the venue grid
-	 * scheduler holds a single {@code agent:wake} event armed at that time.
+	 * scheduler holds a single {@code agent:trigger} wake event armed at that time.
 	 */
 	@Test
 	public void testTransitionWakeTimeSchedulesSessionWake() {
@@ -6085,7 +6085,7 @@ public class AgentAdapterTest {
 			"session record should carry wakeTime after transition");
 		assertEquals(farFuture, ((CVMLong) lattWake).longValue());
 
-		// Scheduler: a single agent:wake event armed at the transition's wakeTime.
+		// Scheduler: a single agent:trigger wake event armed at the transition's wakeTime.
 		convex.core.data.AVector<ACell> events =
 			engine.gridScheduler().list(RequestContext.of(ALICE_DID));
 		ACell wakeHandle = null;
@@ -6099,7 +6099,7 @@ public class AgentAdapterTest {
 			}
 		}
 		assertNotNull(wakeHandle,
-			"scheduler should hold an agent:wake event at the transition's wakeTime");
+			"scheduler should hold an agent:trigger wake event at the transition's wakeTime");
 
 		// Cleanup — cancel so we don't leak a pending fire into later tests.
 		engine.gridScheduler().cancel((Blob) wakeHandle, RequestContext.of(ALICE_DID));

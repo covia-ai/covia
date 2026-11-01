@@ -451,7 +451,7 @@ groups accordingly.
 | `project:plan` | Effective assignee | `{node, plan?, registers?}` | Replaces `plan` and/or `registers`. No deep merge: the assignee owns these documents whole and re-writes them from its own context. |
 | `project:report` | Effective assignee | `{node, kind, summary, detail?, spend?, forecast?}` | Appends a `log` entry. `kind` is `checkpoint` (routine), `highlight` (periodic summary upward), or `exception`. Reported `spend.cost` and `spend.jobs` overwrite the framework's figures for the node's own spend (the assignee is the only source of cost); `spend.tokens` is framework-owned and ignored. An `exception` raises to the principal (§6.4) and moves the node to `EXCEPTION`. |
 | `project:deliver` | Effective assignee | `{node, product, location?, note?}` | Marks a product `DELIVERED` at `location` (default: its declared one), runs every `op`/`test` criterion and records the results on the log entry, then applies the product's `acceptance` rule (§6.5). Fails if an `op` criterion fails; the product stays `IN_PROGRESS` with the failures logged so the assignee can fix and retry. |
-| `project:wake` | Assignee | `{node, after}` | Asks to be woken sooner than the next checkpoint (one-shot scheduler event, replaces any earlier ask). The project-scoped stand-in for the deferred `sleep` harness tool (SCHEDULER.md §7). |
+| `project:wake` | Assignee | `{node, after}` | Asks to be woken sooner than the next checkpoint (one-shot scheduler event, replaces any earlier ask). The project-scoped stand-in for the unbuilt `sleep` harness tool (AGENT_LOOP.md §8.3.4). |
 
 ### 5.3 Governance — acting as a node's principal
 
@@ -797,7 +797,7 @@ answer with a location. Not in v1, but nothing in the record prevents it.
    Commissioning with `agent:request` and letting the task Job stand for
    the engagement was rejected: a standing task is perpetual `hasWork`, so
    the loop would run continuously and trip the stuck-task guard, and
-   there is no `sleep` tool to park it (SCHEDULER.md §7). One session per
+   there is no `sleep` tool to park it (AGENT_LOOP.md §8.3.4). One session per
    assigned node gives each engagement its own context and its own
    checkpoint cadence, and lets one agent hold several nodes. When threads
    unification and `sleep` land, a task-backed commission becomes
@@ -874,7 +874,7 @@ answer with a location. Not in v1, but nothing in the record prevents it.
 
 - [AGENT_SESSIONS.md](./AGENT_SESSIONS.md) — sessions, `pending`, session metadata
 - [AGENT_LOOP.md](./AGENT_LOOP.md) — run loop, wake, timeline
-- [SCHEDULER.md](./SCHEDULER.md), [GRID_SCHEDULER.md](./GRID_SCHEDULER.md) — wakes and scheduled events
+- [GRID_SCHEDULER.md](./GRID_SCHEDULER.md) — scheduled events, including agent wakes (§8)
 - [AGENT_TEMPLATES.md](./AGENT_TEMPLATES.md) — templates, delegation, `outputPath` handoff
 - [UCAN.md](./UCAN.md) — capabilities, issuing, agent identity models
 - [ADAPTERS.md](./ADAPTERS.md) — adapter contract, catalog, private state

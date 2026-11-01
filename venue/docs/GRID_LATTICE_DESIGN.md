@@ -236,7 +236,7 @@ Each agent is a single atomic record — local mutations replace the record thro
 Internal framework fields (sessions, tasks, pending, timeline, caps, scheduling state) are managed by the runtime and are not a stable user-writable surface. Their structure is documented where it's authoritative:
 
 - **Sessions and tasks:** [AGENT_SESSIONS.md](./AGENT_SESSIONS.md)
-- **Scheduling (wake times):** [SCHEDULER.md](./SCHEDULER.md); the grid scheduler engine: [GRID_SCHEDULER.md](./GRID_SCHEDULER.md)
+- **Scheduling (wake times):** [AGENT_LOOP.md §4.6](./AGENT_LOOP.md); the grid scheduler engine: [GRID_SCHEDULER.md](./GRID_SCHEDULER.md)
 - **Transition function contract and timeline:** [AGENT_LOOP.md](./AGENT_LOOP.md)
 
 **Execution architecture, transition function contract, operations, scheduling, and timeline entry structure** are defined in AGENT_LOOP.md. In summary: the venue runtime manages agent lifecycle through a three-level architecture (agent update → transition function → LLM call), where only the transition function is pluggable. See AGENT_LOOP.md §2–§4 for full details.

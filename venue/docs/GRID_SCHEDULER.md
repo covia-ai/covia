@@ -6,8 +6,8 @@ as `owner` at time `T`". Waking an agent is one consumer of this, not the
 model: it is simply a scheduled invocation of the agent's wake operation
 (`agent:trigger`, §8).
 
-Agent wake is a consumer of this service — see §8 and
-[SCHEDULER.md](./SCHEDULER.md) for the agent-side mapping.
+Agent wake is a consumer of this service — see §8, and
+[AGENT_LOOP.md §4.6](./AGENT_LOOP.md) for the agent side.
 
 ---
 
@@ -322,14 +322,17 @@ Job, but `track:true` does the same with one Job per fire instead of two.
 ## 8. Agent wake as a consumer
 
 The agent wake path uses ordinary scheduled operations; its runtime entry point
-coordinates the venue transaction and timer (agent-side details are in
-[SCHEDULER.md](./SCHEDULER.md)):
+coordinates the venue transaction and timer (where `wakeTime` is set, and how
+the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md)):
 
 - A session or task carries its own `wakeTime` on the agent record — the
   authoritative per-thread "this thread wants to wake at T" marker.
 - `Scheduler.setThreadWakeTime` commits the intent, event and handle in one
   `VenueState` transaction, then arms the timer from committed state.
-  `AgentState.setThreadWakeTime` itself is a data-only mutation, safe on drafts.
+  `AgentState.setThreadWakeTime` itself is a data-only mutation, safe on drafts,
+  and `VenueState.setAgentThreadWakeTime` writes the intent and the event
+  together without touching the timer, so it composes into a larger venue
+  transaction. Drafts never call a live scheduler.
   The venue re-derives the agent's **single** scheduled event at the *earliest* unfired
   `wakeTime` across all its threads. The event fires `agent:trigger {agentId,
   force:false, wait:false}` with `track:false` stated explicitly — a wake is
@@ -337,6 +340,9 @@ coordinates the venue transaction and timer (agent-side details are in
   it into a durable Job (only `forceTrackJobs` does, §7). Its handle is stored
   on the agent record (`wakeHandle`) so the next change can cancel-and-replace
   it — exactly one event per agent.
+- The event records the agent's owner as both `owner` and `by`, with no
+  `actor` and no `proofs`, so it fires with the owner's own authority, exactly
+  as the owner calling `agent:trigger` would (§5).
 - When it fires, `agent:trigger` (via the transient-Job `invokeFuture` path, so no
   session is minted and no durable Job is recorded) calls `wakeAgent(force:false)`. The run
   loop runs iff there is work (`hasWork` = session pending or tasks); it processes

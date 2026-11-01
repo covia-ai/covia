@@ -65,7 +65,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
-	/** Handle of this agent's single pending {@code agent:wake} event in the
+	/** Handle of this agent's single pending {@code agent:trigger} wake event in the
 	 *  venue grid scheduler, or absent when no wake is armed. */
 	private static final AString K_WAKE_HANDLE = Strings.intern("wakeHandle");
 	/** Monotonic task-row revision. A continuation increments it so a transition

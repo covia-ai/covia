@@ -3628,9 +3628,9 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * @param ownerDID the DID whose namespace the agent lives in — the identity
 	 *              the run loop executes as
-	 * @param force if true, skips the {@code hasWork} gate — used by
-	 *              explicit triggers and scheduler fires that always want
-	 *              to try running
+	 * @param force if true, skips the {@code hasWork} gate — used where work
+	 *              has just been written, and by {@code agent:trigger} unless
+	 *              it passes {@code force: false}, as scheduler wake fires do
 	 */
 	public CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId, boolean force) {
 		AgentState agent = getAgent(ownerDID, agentId);

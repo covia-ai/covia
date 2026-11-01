@@ -24,8 +24,8 @@ import covia.venue.AgentState.ThreadKind;
 /**
  * Unit test for {@link Scheduler#setThreadWakeTime} and the per-agent-earliest
  * model it drives (GRID_SCHEDULER.md §8). Per-thread {@code wakeTime} stays
- * authoritative on the lattice; the agent holds at most one {@code agent:wake}
- * event in the venue grid scheduler, armed at the earliest of them. Assertions
+ * authoritative on the lattice; the agent holds at most one {@code agent:trigger}
+ * wake event in the venue grid scheduler, armed at the earliest of them. Assertions
  * read the owner-scoped {@code Scheduler.list} output rather than any in-memory
  * structure — the actual fire path is covered behaviourally elsewhere. Wake
  * times are far-future so nothing fires mid-test.
@@ -87,7 +87,7 @@ public class AgentStateThreadWakeTest {
 		assertTrue(wt instanceof CVMLong, "wakeTime should be CVMLong");
 		assertEquals(target, ((CVMLong) wt).longValue());
 
-		// Scheduler: exactly one agent:wake event, at the requested time.
+		// Scheduler: exactly one agent:trigger wake event, at the requested time.
 		AVector<ACell> events = wakeEvents();
 		assertEquals(1, events.count(), "one wake event should be armed");
 		assertEquals(AgentState.TRIGGER_OP, opOf(events.get(0)));

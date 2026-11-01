@@ -145,7 +145,7 @@ The exact context-bearing cells under `frames` and the session/frame load tiers
 are defined only by [AGENT_CONTEXT.md §1.1](./AGENT_CONTEXT.md#11-durable-context-state-contract);
 this document does not repeat them.
 
-Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, [SCHEDULER.md](./SCHEDULER.md) for wake state, and [AGENT_LOOP.md](./AGENT_LOOP.md) for timeline entry structure.
+Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, and [AGENT_LOOP.md](./AGENT_LOOP.md) for wake state (§4.6) and timeline entry structure.
 
 **User scratch space** for the agent, session, and task lives in the virtual namespaces `n/`, `c/`, and `t/` respectively — see [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md). Task scratch is stored once on the task Job at `j/<taskId>/temp/`; it is not duplicated on the transient `g/<agent>/tasks` queue row. These are for arbitrary user data; framework-managed state (status, `wakeTime`, task input/result, etc.) is accessed through dedicated APIs, not via these shortcuts.
 
@@ -604,9 +604,9 @@ For task work, the framework distinguishes **completed** from **yield** by obser
 - **Multi-step planning** — agent did internal work (lattice writes to `n` / `c` / `t`) but isn't ready to complete
 - **Agent had nothing useful to say** — transient false wake; loop exits cleanly
 
-The picked task resumes on the next wake. The four wake paths (explicit trigger, work arrival, scheduled, async completion) are defined in [SCHEDULER.md §4](./SCHEDULER.md).
+The picked task resumes on the next wake; the wake events are listed in [AGENT_LOOP.md §8.2](./AGENT_LOOP.md).
 
-**Per-task exponential backoff.** A task that yields without progress is not capped or auto-failed — it is rescheduled by the framework with growing delay between cycles. Any progress (completion, fail, message arrival, delegated op callback, explicit trigger) resets the backoff. Yielded tasks are dormant, not burning resources. See [SCHEDULER.md](./SCHEDULER.md) for wake semantics, field names, and backoff policy.
+**Iteration budget.** A task presented for a run's whole iteration budget without resolving is failed ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)). There is no backoff between its cycles ([AGENT_LOOP.md §8.3.4](./AGENT_LOOP.md)).
 
 **Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
 
@@ -749,7 +749,6 @@ A single session with multiple counterparties (e.g. a group chat). If supported,
 5. **Storage limits** — per-session size cap? Per-agent total cap? Auto-archive on overflow?
 6. **Session merge/fork** — should sessions support merge (combine two contexts) or fork (branch from a point)?
 7. **Visibility** — can other users/agents read sessions (with caps)? Default: only the agent and its owner.
-8. **Scheduling** — can a session declare "wake me at time T" without an external request? See [SCHEDULER.md](./SCHEDULER.md).
 
 ---
 
@@ -759,4 +758,4 @@ A single session with multiple counterparties (e.g. a group chat). If supported,
 - [GOAL_TREE.md](./GOAL_TREE.md) — frame stack abstraction; session-scoped when `persistent: true`
 - [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md) — context loading
 - [PROJECT.md](./PROJECT.md) — long-lived work state that sessions reference but don't own
-- [SCHEDULER.md](./SCHEDULER.md) — wake semantics and backoff policy
+- [GRID_SCHEDULER.md](./GRID_SCHEDULER.md) — scheduled events, including a session's or task's `wakeTime` (§8)
