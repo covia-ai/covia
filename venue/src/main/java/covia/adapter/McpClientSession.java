@@ -76,6 +76,12 @@ public class McpClientSession implements AutoCloseable {
 		this.accessToken = accessToken;
 	}
 
+	static final String URL_REQUIRED = "MCP server URL is required";
+	static final String URL_MALFORMED = "MCP server URL is not a valid URL";
+	static final String URL_NOT_HTTP = "MCP server must be an HTTP(S) URL. "
+		+ "Resolve a venue DID to its HTTP URL before calling this tool";
+	static final String URL_FRAGMENT = "MCP server URL must not contain a fragment";
+
 	/**
 	 * Normalises a configured MCP server URL to its streamable-HTTP endpoint.
 	 * A URL with no path implies {@code /mcp}; any explicit path is retained.
@@ -84,26 +90,25 @@ public class McpClientSession implements AutoCloseable {
 	 * preserved.
 	 */
 	static String endpointUrl(String serverUrl) {
+		// Refusals never repeat the URL: its path or query may carry a credential
 		if (serverUrl == null || serverUrl.isBlank()) {
-			throw new IllegalArgumentException("MCP server URL is required");
+			throw new IllegalArgumentException(URL_REQUIRED);
 		}
 
 		final URI uri;
 		try {
 			uri = new URI(serverUrl.trim());
 		} catch (URISyntaxException e) {
-			throw new IllegalArgumentException("Invalid MCP server URL '" + serverUrl + "': "
-				+ e.getMessage(), e);
+			throw new IllegalArgumentException(URL_MALFORMED, e);
 		}
 
 		String scheme = uri.getScheme();
 		if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
 				|| uri.getHost() == null) {
-			throw new IllegalArgumentException("MCP server must be an HTTP(S) URL, not '"
-				+ serverUrl + "'. Resolve a venue DID to its HTTP URL before calling this tool");
+			throw new IllegalArgumentException(URL_NOT_HTTP);
 		}
 		if (uri.getFragment() != null) {
-			throw new IllegalArgumentException("MCP server URL must not contain a fragment: " + serverUrl);
+			throw new IllegalArgumentException(URL_FRAGMENT);
 		}
 
 		String path = uri.getPath();

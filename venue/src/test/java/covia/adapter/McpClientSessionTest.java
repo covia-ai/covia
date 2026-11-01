@@ -69,8 +69,10 @@ public class McpClientSessionTest {
 	public void testRejectsNonHttpServerWithActionableError() {
 		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
 			() -> McpClientSession.endpointUrl("did:web:venue.example"));
-		assertTrue(error.getMessage().contains("HTTP(S) URL"), error.getMessage());
-		assertTrue(error.getMessage().contains("Resolve a venue DID"), error.getMessage());
+		assertEquals(McpClientSession.URL_NOT_HTTP, error.getMessage());
+		String secret = "https://user:pw@mcp.example.com/s/tok3n#frag";
+		assertFalse(assertThrows(IllegalArgumentException.class,
+			() -> McpClientSession.endpointUrl(secret)).getMessage().contains("tok3n"), "a refusal never repeats the URL");
 	}
 
 	@Test

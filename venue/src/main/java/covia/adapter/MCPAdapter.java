@@ -24,7 +24,9 @@ import covia.exception.CoviaException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.api.Abilities;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -102,13 +104,13 @@ public class MCPAdapter extends AAdapter {
 					}
 
 					if (remoteToolName==null) {
-						throw new JobFailedException("No remote tool name provided (either in input or operation metadata)");
+						throw new InvalidInputException("No remote tool name provided (either in input or operation metadata)");
 					}
 
 					// Get MCP server URL from metadata or input
 					AString serverUrl =getServerUrl(meta, input);
 					if (serverUrl == null) {
-						throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
+						throw new InvalidInputException("No server URL provided in input (or asset metadata fallback)");
 					}
 					// The caller may name the server: the same outbound policy as http.
 					engine.requireSafeUrl(ctx, serverUrl.toString());
@@ -126,7 +128,7 @@ public class MCPAdapter extends AAdapter {
 							? (AMap<AString,ACell>) input : Maps.empty();
 					}
 					if (toolArguments == null) {
-						throw new JobFailedException("Tool call requires arguments as a JSON object");
+						throw new InvalidInputException("Tool call requires arguments as a JSON object");
 					}
 
 					// Access token: explicit input wins; else the operation
@@ -148,7 +150,7 @@ public class MCPAdapter extends AAdapter {
 					// Get MCP server URL from metadata or input
 					AString serverUrl = getServerUrl(meta, input);
 					if (serverUrl == null) {
-						throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
+						throw new InvalidInputException("No server URL provided in input (or asset metadata fallback)");
 					}
 					engine.requireSafeUrl(ctx, serverUrl.toString());
 
@@ -250,7 +252,7 @@ public class MCPAdapter extends AAdapter {
 		String ref = auth.toString();
 		if (!Engine.isSecretRef(ref)) return ref; // literal token
 		String value = engine.resolveSecret(ref, ctx, serverUrl != null ? serverUrl.toString() : null);
-		if (value == null) throw new JobFailedException("MCP server auth secret not found: " + ref);
+		if (value == null) throw new NotFoundException("MCP server auth secret not found: " + ref, ref);
 		return value;
 	}
 	
@@ -571,8 +573,8 @@ public class MCPAdapter extends AAdapter {
 			if (toolName.toString().equals(t.name())) { tool = t; break; }
 		}
 		if (tool == null) {
-			throw new JobFailedException("Tool '" + toolName + "' not found on MCP server at "
-				+ url + ". Available tools: " + availableNames(tools));
+			throw new NotFoundException("Tool '" + toolName + "' not found on MCP server at "
+				+ origin(url.toString()) + ". Available tools: " + availableNames(tools), toolName.toString());
 		}
 
 		AString storedAuth = qualifyAuthRef(auth, ctx);
@@ -682,8 +684,8 @@ public class MCPAdapter extends AAdapter {
 
 		ACell reg = readLattice(writeCtx, registryPath(venueScope, name));
 		AString url = RT.ensureString(RT.getIn(reg, K_URL));
-		if (url == null) throw new JobFailedException("Unknown MCP server: " + name
-			+ " (no registry entry at " + registryPath(venueScope, name) + ")");
+		if (url == null) throw new NotFoundException("Unknown MCP server: " + name
+			+ " (no registry entry at " + registryPath(venueScope, name) + ")", name);
 		checkedUrl(url, InvalidDefinitionException::new);
 		AString auth = RT.ensureString(RT.getIn(reg, K_AUTH));
 
@@ -726,10 +728,10 @@ public class MCPAdapter extends AAdapter {
 		ACell root = readLattice(writeCtx, path);
 		java.util.LinkedHashMap<String, AMap<AString, ACell>> ops = new java.util.LinkedHashMap<>();
 		collectBridgedOps(root, path, ops, 0);
-		if (ops.isEmpty()) throw new JobFailedException(
+		if (ops.isEmpty()) throw new NotFoundException(
 			"No bridged MCP tools found at path: " + path
 			+ " — bridged ops carry operation.adapter = mcp:tools:call;"
-			+ " curate one with v/ops/mcp/add-tool");
+			+ " curate one with v/ops/mcp/add-tool", path);
 
 		// Group by server + auth so each server is listed once
 		java.util.LinkedHashMap<String, java.util.List<String>> groups = new java.util.LinkedHashMap<>();
@@ -799,7 +801,7 @@ public class MCPAdapter extends AAdapter {
 		}
 
 		if (updated == 0 && unchanged == 0 && missing.count() == 0) {
-			throw new JobFailedException("Could not refresh any bridged tools at " + path
+			throw new UnavailableException("Could not refresh any bridged tools at " + path
 				+ ": " + JSON.print(errors));
 		}
 		AMap<AString, ACell> result = Maps.of(

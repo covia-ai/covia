@@ -52,12 +52,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Expected failures are Covia exception types; a JDK exception reaching a caller is a venue error, logged and shown only by its type (#644).
 - A REST refusal a route does not list answers 400; a venue error answers 500.
 - A store collection cancelled by `venue:gc` ends CANCELLED.
+- Model provider, MCP server and A2A failures are typed; a refused operator key is a configuration error, a caller's an input error.
+- A2A params that do not fit their method answer invalid params; a venue error on an A2A stream arrives as one error event.
 
 ### Removed
 
 - The `venue/relay` ability: users hop with `authenticateAs: "caller"` and grants.
 - `auth.audience`: replaced by `auth.requireAud`.
 - `FileAdapter.resolve`, which resolved a root path without authorising it.
+- `JobFailedException(Exception)`: pass a reason.
 
 ### Fixed
 
@@ -84,7 +87,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Chat bindings authenticate each sender; unlisted senders are anonymous.
 - REST secret listing, operation lookup, job streams and agent lookup check the caller.
 - `auth:identity-token` refuses restricted self-tokens and the public principal.
-- Errors never quote a remote service's response body or an unexpected failure's message.
+- Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 
 ### Migration
 
