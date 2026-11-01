@@ -38,7 +38,7 @@ Everything goes here — nothing lives alongside. Live turns from chat/message i
 |-------|--------|
 | Session created | Root frame created, description = session origin (first message, task request, operation invocation) |
 | Chat / message intake | Envelope appended to `sessions/<sid>/pending` |
-| Transition picked | Cycle claims the session (`inCycle` epoch) and, in the same CAS, drains the presented envelopes and appends them to the root conversation as `user` turns — an envelope leaves pending only in the write that lands its turn |
+| Cycle starts | The run loop claims the session (`inCycle` epoch) and, in the same CAS, closes tool calls left without a result and moves the pending envelopes and the task's input into the root conversation as `user` turns (AGENT_LOOP.md §4.4) — an envelope leaves pending only in the write that lands its turn |
 | Transition runs | Assistant turns persist before their tools execute; tool results, loads changes and compactions persist per iteration — all epoch-fenced writes to the live stack |
 | Agent calls `compact` | Run of live turns collapses into a segment with the agent's summary |
 | Agent calls `subgoal` | Child frame pushed live onto `sessions/<sid>/frames`, stamped with the spawning toolCall id; its conversation builds up on the lattice; pop (parent tool result + child truncation) is one atomic CAS |
@@ -48,11 +48,11 @@ Chat sessions typically never `complete` the root frame — they run indefinitel
 
 ### Persistence and interruption
 
-**Write model.** A sessioned execution attempt claims the session by writing an `inCycle` epoch; every frame write is fenced on that epoch, so a superseded attempt (cancelled by suspend/delete, session removed, or replaced by a later attempt) cannot corrupt the stack — its writes bounce. The merge at attempt end clears the claim. Terminal frames carry an explicit `status` (`complete` | `failed`), written in the same CAS as their terminal turn. Unsessioned and direct-invoke runs keep a local stack and return it in the transition output; sessioned runs emit no copy — the session record is authoritative.
+**Write model.** The run loop claims the session for each cycle by writing an `inCycle` epoch, and hands the transition that claim in `session.inCycle`; every frame write is fenced on that epoch, so a superseded attempt (cancelled by suspend/delete, session removed, or replaced by a later attempt) cannot corrupt the stack — its writes bounce. The merge at attempt end clears the claim. Terminal frames carry an explicit `status` (`complete` | `failed`), written in the same CAS as their terminal turn. Unsessioned and direct-invoke runs keep a local stack and return it in the transition output; sessioned runs emit no copy — the session record is authoritative.
 
 **Durability bound.** Lattice writes reach the store's mmap via the ~100ms sweep and are fsynced every `FLUSH_INTERVAL_MS` (10s default). External interactions already written to the conversation therefore remain available for audit. The local execution attempt itself is not a checkpoint and is never resumed.
 
-**Venue restart.** Startup clears persisted `RUNNING` and stale `inCycle` markers after generic Job recovery. PENDING/STARTED request Jobs fail honestly; the agent adapter removes their task/chat intake before considering remaining queued work. A stale epoch alone never wakes an agent. If a later external input starts a fresh attempt on the same session, dangling tool calls are converted to explicit unknown-outcome failures and unfinished child frames are popped un-run; their internal loops are not continued.
+**Venue restart.** Startup clears persisted `RUNNING` and stale `inCycle` markers after generic Job recovery. Request and chat Jobs whose work is still queued are kept for the boot wake (AGENT_LOOP.md §6.1); intake whose Job recovery settled is removed before remaining queued work is considered. A stale epoch alone never wakes an agent. If a later external input starts a fresh cycle on the same session, dangling tool calls are converted to explicit unknown-outcome failures as the cycle starts and unfinished child frames are popped un-run; their internal loops are not continued.
 
 **Operator suspend follows the same attempt boundary.** Suspend settles the claim. Leftover child frames are popped un-run ("interrupted — re-issue if needed") only if a later external input starts a fresh attempt.
 
@@ -362,7 +362,7 @@ The root frame is session-scoped, not transition-scoped. It is created when the 
 
 1. First chat/message arrives → session created, root frame created with origin as description
 2. Envelope appended to `sessions/<sid>/pending`; run loop wakes
-3. Transition drains pending into the root frame's live turns as `user` entries
+3. The cycle starts: the run loop moves pending into the root frame's conversation as `user` turns
 4. LLM produces assistant turns, optionally with tool calls; tools execute, results appended as `tool` turns
 5. Agent may call `subgoal` (pushes child frame) or `compact` (segments a run of live turns)
 6. Transition ends; frame persists. Session is now ready for the next message.
@@ -433,24 +433,11 @@ The draft step sees gather + analyse results in its ancestor context.
 
 ## Concurrent Intake During Subgoals
 
-A session may be working inside a child frame (subgoal in progress) when a new chat or message arrives. The rule:
+A session may be working inside a child frame (subgoal in progress) when a new chat or message arrives.
 
-**Intake is uniform — envelopes always land in `sessions/<sid>/pending` regardless of frame depth.** The subgoal-aware logic is at drain time.
+**Intake is uniform — envelopes always land in `sessions/<sid>/pending` regardless of frame depth,** and a cycle takes only what was queued when it started. A message that arrives while the agent works, in a subgoal or not, waits for the next cycle.
 
-**Draining targets the root frame, not the active child.** User turns from drained envelopes are always appended to `frames[0].conversation`. Subgoals are the agent's internal decomposition; the user is in dialogue with the session, not with a subgoal.
-
-**The active child sees the new user turn via ancestor context.** `renderAncestors` renders the root frame at decreasing budget; a newly-appended user turn at the tail of root's conversation shows up on the child's next inference. No extra plumbing.
-
-**The agent has three choices once it notices:**
-1. **Keep working** — appropriate when the new message is unrelated or lower priority (e.g. "actually make it concise too" during a long research task).
-2. **`complete(partial_result)`** — wrap up the subgoal with what's done so far, return to root, then respond.
-3. **`fail({reason: "superseded"})`** — abandon the subgoal and return to root.
-
-The harness does not pre-empt. The agent decides.
-
-### Soft nudge
-
-When `pending` drains while a child frame is active, the harness injects a short `system` turn into the active frame's conversation: *"New user message at session root — see ancestor context."* This makes the event salient without changing the ancestor-rendering contract. Agents deep in tool loops don't have to audit ancestors every turn.
+**The next cycle takes it into the root frame, not a child.** User turns are always appended to `frames[0].conversation`. Subgoals are the agent's internal decomposition; the user is in dialogue with the session, not with a subgoal. The harness does not pre-empt the running cycle.
 
 ### Parallel tool calls including subgoal
 
@@ -469,7 +456,7 @@ subgoal("Analyse Delta Corp")
 
 Parent decides: retry, skip, escalate, or fail itself. The child frame is popped from the stack either way; the parent sees its outcome as the subgoal call's tool result, and the child's own exchange — context, inferences, tool calls and results — is kept under that call in the cycle's timeline entry ([AGENT_LOOP.md §2.4](./AGENT_LOOP.md)). A subgoal pops out of the parent's current context; its history stays available for audit and introspection.
 
-**Transition atomicity.** Each frame-stack mutation (push, pop, append, compaction, pending drain) lands atomically on the session record. A process failure can leave a valid intermediate frame stack, but never a torn lattice write. That state is retained for audit and may be settled by a later fresh attempt; the failed executor itself is not resumed.
+**Transition atomicity.** Each frame-stack mutation (push, pop, append, compaction, taking the cycle's input) lands atomically on the session record. A process failure can leave a valid intermediate frame stack, but never a torn lattice write. That state is retained for audit and may be settled by a later fresh attempt; the failed executor itself is not resumed.
 
 ## Zooming Into History
 
@@ -740,7 +727,7 @@ As goals get more complex, the agent can opt into more tools:
 19. **Context layout is the canonical one.** Reference at top (primacy), conversation in middle, current turn at bottom (recency) — the sequence is AGENT_CONTEXT.md §3, and the goal tree only fills its slots.
 20. **Frame stack is lattice data on the session record.** Stored in `sessions/<sid>/frames`. Explorable and mergeable. It survives transitions and venue restarts as durable conversation state, not as an executor checkpoint.
 21. **Compacted segments nest.** Each `compact` replaces the visible prefix with one new segment containing the exact prior vector. Future activity only appends.
-22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes are drained into the root frame as `user` turns atomically with the transition's other writes. Keeps concurrent intake separate from the append path.
+22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes move into the root frame as `user` turns in the write that starts the cycle and claims the session. Keeps concurrent intake separate from the append path.
 
 ## Related Design
 

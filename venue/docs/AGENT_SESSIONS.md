@@ -199,7 +199,7 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 | Op | Queue | Caller waits? | Completion semantics |
 |----|-------|---------------|----------------------|
 | `agent_request` | `tasks` Index | yes (Job) | Agent completes or fails the task (`complete_task` / `fail_task`; a goaltree root reply completes it), or yields: the task waits while a HITL ask, a late tool call or a wake time will bring it back, and fails otherwise (§6.3) |
-| `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message it had already seen (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
+| `agent_chat` | session `pending` (as an awaiting waiter) | yes (Job) | Agent's next `response` on this session completes every chat whose message a cycle has taken (§5.5.2). Not serialised — several may await one session. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
 
@@ -481,7 +481,7 @@ client → agent_message {agentId, sessionId: "s-01HX...",
 
 #### 5.5.1 Where messages live
 
-All conversational traffic is session-scoped. Messages land in `sessions/<sid>/pending` and are drained into `sessions/<sid>/frames/0/conversation` by the run loop on the next transition cycle for that session. There is no agent-level inbox — conversation lives with the conversation.
+All conversational traffic is session-scoped. Messages land in `sessions/<sid>/pending`, and the next cycle on that session takes them into `sessions/<sid>/frames/0/conversation` as it starts. There is no agent-level inbox — conversation lives with the conversation.
 
 #### 5.5.2 Multiple messages before the agent transitions
 
@@ -490,12 +490,12 @@ If a caller sends several messages on the same session while the agent is still 
 ```
 g/<agent>/sessions/<sid>/
   frames/0/conversation — appended turns (processed)
-  pending    — messages received but not yet presented to a transition
+  pending    — messages received but not yet taken by a cycle
 ```
 
-When the agent next transitions, claimed items in `pending` are appended to the root-frame conversation atomically as they are presented to the transition. This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
+When the next cycle on the session starts, the run loop moves everything in `pending` to the root-frame conversation in one transaction, before the transition runs ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)). This preserves ordering per-session and prevents interleaving across sessions — conversation A can't disrupt conversation B's turn assembly.
 
-**Chats are not serialised.** A session may hold several `agent_chat` calls awaiting at once — a caller sending three messages before a reply arrives is never rejected. Each is a waiter (an envelope in `pending` carrying its chat Job id, plus a STARTED Job). A cycle drains every presented envelope into one prompt and produces one response, so completion resolves **every waiter the agent had already seen** — each whose envelope was drained (presented this cycle or an earlier one that yielded) completes with that same response; a waiter whose envelope is still `pending` arrived after the cycle's snapshot and awaits the next response. So N quick messages get the one reply the agent formed after reading all N — which is honest, not a dropped message. Each result names every chat it answered in `answered` (their Job ids, in presentation order), so a client can tell one reply to several messages from several replies and collapse the duplicates. Cancelling a chat Job stops that caller awaiting; the message was still delivered. A technical error or `deleteSession` fails every waiter on the session with the reason. The in-memory waiter set is a convenience: the durable record is the envelope plus the STARTED Job, recovered on restart by the stale-STARTED gate.
+**Chats are not serialised.** A session may hold several `agent_chat` calls awaiting at once — a caller sending three messages before a reply arrives is never rejected. Each is a waiter: an envelope in `pending` carrying its chat Job id, and the Job, PENDING while the envelope is queued. A cycle takes every queued envelope into one prompt and produces one response, and taking a chat's message makes its Job STARTED. A response completes **every waiter that is STARTED** — taken this cycle or by an earlier one that yielded — with that same response; a waiter still PENDING awaits the next response, even one that registered before an earlier cycle replied. So N quick messages get the one reply the agent formed after reading all N — which is honest, not a dropped message. Each result names every chat it answered in `answered` (their Job ids, this cycle's first), so a client can tell one reply to several messages from several replies and collapse the duplicates. Cancelling a chat Job stops that caller awaiting; the message was still delivered. A failed cycle fails the waiters a cycle took, with the reason, and `deleteSession` fails every waiter on the session. The in-memory waiter set is a convenience: the durable record is the envelope and the chat Job, and a chat whose envelope is still queued is registered again at boot ([AGENT_LOOP.md §6.1](./AGENT_LOOP.md)).
 
 #### 5.5.3 Agent-to-agent messages (pipelines)
 
@@ -525,7 +525,8 @@ input: {
     sessionId, parties, meta,
     c,                 — session state snapshot (from sessions/<sid>/c/). Common updates.
     frames,            — root conversation plus any goal-tree child frames
-    pending            — messages queued since last transition (§5.5.2)
+    pending,           — the messages this cycle took, already user turns in frames (§5.5.2)
+    inCycle            — this cycle's claim on the session
   },
   task?: {             — present only when this transition is servicing a task
     taskId,
@@ -534,7 +535,7 @@ input: {
                          at g/<agent>/tasks/<taskId>)
     input              — the task's input payload
   },
-  newInput             — the new request/message that triggered this transition
+  newInput             — the task's input this cycle shows, already a user turn in frames
 }
 
 output: ACell           — the response value (or null), appended to frames[0].conversation
@@ -567,9 +568,9 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 
 | Field | Writer | When |
 |-------|--------|------|
-| `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for both built-in LLM runtimes |
-| `frames` | the owning cycle | live epoch-fenced writes for both built-in LLM runtimes; the framework merge never rewrites their frames. Context-bearing frame fields are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 |
-| `inCycle` | the owning attempt sets it at claim; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
+| `pending` | intake (`appendSessionPending`) appends; the run loop takes | at cycle start, in the same CAS that lands the taken envelopes' user turns, for every runtime |
+| `frames` | the run loop and the owning cycle | the run loop writes the cycle's input at its start and, for a runtime that does not write frames itself, its turns at the merge; both built-in LLM runtimes write live, fenced by the claim. Nothing replaces the frames wholesale. Context-bearing frame fields are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 |
+| `inCycle` | the run loop sets it as the cycle starts; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
 | `meta.turns` | the common frame store / framework append | bumped in the same CAS as a root-conversation append |
 | `meta.updated` | the common frame store / framework append | ratcheted to the newest persisted root-turn timestamp in the same CAS |
 
@@ -579,17 +580,18 @@ The framework around the transition:
 
 1. Resolves or mints the session before invoking (§5.4)
 2. Reads `n/`, `c/`, `frames`, `pending` (and `t` if a task is focused) from the lattice
-3. Scopes the request context to `(agent, session, task?)` so writes and completion ops route correctly
-4. Provides the snapshots as transition input under their shorthand names
-5. Invokes the transition adapter
-6. On adapter return:
+3. Takes the cycle's input in one transaction: claims the session, and moves `pending` and the task's next input into `frames[0].conversation` as user turns ([AGENT_LOOP.md §4.4](./AGENT_LOOP.md)). Each chat it took becomes STARTED
+4. Scopes the request context to `(agent, session, task?)` so writes and completion ops route correctly
+5. Provides the snapshots as transition input under their shorthand names
+6. Invokes the transition adapter
+7. On adapter return:
    - Append adapter-emitted non-terminal `turns`, if any, to `frames[0].conversation`
    - If return value non-null → append one terminal turn to `frames[0].conversation`
-   - If chat picked: complete chat Job with return value (yield only if return is null — rare)
+   - Complete every chat on the session that is STARTED with the return value (yield only if return is null — rare)
    - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise it yields, and is parked or failed (§6.3). (goaltree additionally completes a still-open task when its root frame completes — there, a reply is the answer; llmagent yields.)
    - If message picked: no completion concept (return value already emitted to history)
-7. On adapter throw → if task/chat picked, Job → FAILED with *technical* error (distinct from `fail_task` semantic failure), unless the agent cannot continue (§6.3)
-8. Returns the sessionId in the response envelope (always)
+8. On adapter throw → the picked task's Job and the session's STARTED chats → FAILED with *technical* error (distinct from `fail_task` semantic failure), unless the agent cannot continue (§6.3)
+9. Returns the sessionId in the response envelope (always)
 
 Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete_task(result)` and return. Their session becomes a one-turn audit record.
 

@@ -81,6 +81,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A message to a job that does not take messages answers 409 instead of being dropped.
 - A malformed job id or `ucans` field answers 400.
 - Memory edits made at once by a user and their agents all take effect.
+- A chat is no longer answered with the reply to an earlier message (#654).
 
 ### Security
 

@@ -1,17 +1,15 @@
 package covia.adapter.agent;
 
 /**
- * Marker for LLM transition adapters that own the session's frame stack and
- * pending drain. Both built-in runtimes claim the session through the shared
- * {@link FrameStore} and write every conversation mutation live.
+ * Marker for transition adapters that write their turns into the session's
+ * frame stack live, through the shared {@link FrameStore}, under the claim the
+ * run loop made when the cycle took its input. For these adapters the run-loop
+ * merge appends none of the transition's turns; everything else (the cycle's
+ * input, timeline, task removal, status, the end of the claim) is the same.
  *
  * <p>The framework consults this on the <em>adapter</em>, not the transition
  * output: an errored or cancelled transition produces no output, so gating on
- * output shape would double-drain pending and re-append turns the adapter
- * already wrote. When the transition op's adapter carries this marker, the
- * run-loop merge skips its own frames write, turn append, and pending drain
- * for the picked session; everything else (timeline, task removal, status,
- * {@code inCycle} clear) is unchanged.</p>
+ * output shape would re-append turns the adapter already wrote.</p>
  */
 public interface FramesOwning {
 }

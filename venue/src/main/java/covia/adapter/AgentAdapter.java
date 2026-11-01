@@ -290,16 +290,15 @@ public class AgentAdapter extends AAdapter {
 	 * Per-agent in-flight chat Jobs keyed by session ID. An entry reserves
 	 * a chat awaiting a reply on a session, keyed by the chat's own Job id, so a
 	 * session may hold several at once — chats are not serialised. A response on
-	 * the session completes every waiter whose message it had already seen (its
-	 * envelope drained from {@code session.pending}); one that arrived after the
-	 * cycle's snapshot stays until the next response (§5.5). The map is released
-	 * per waiter when the run loop completes or fails its Job, when the caller
-	 * cancels it (a cancel hook in {@link #handleChat}), on {@code deleteSession},
-	 * or when {@link #failAllPendingForAgent} sweeps a deleted agent. Keeping it in
-	 * memory (not on the lattice) lets {@code Job.isFinished()} be the truth —
-	 * the durable record of an awaiting chat is its envelope in
-	 * {@code session.pending} plus the STARTED Job, recovered on restart by the
-	 * stale-STARTED gate, not this map.
+	 * the session completes every waiter whose message a cycle has taken (its Job
+	 * STARTED); one still queued stays PENDING until a later response (§5.5). The
+	 * map is released per waiter when the run loop completes or fails its Job,
+	 * when the caller cancels it (a cancel hook in {@link #handleChat}), on
+	 * {@code deleteSession}, or when {@link #failAllPendingForAgent} sweeps a
+	 * deleted agent. Keeping it in memory (not on the lattice) lets
+	 * {@code Job.isFinished()} be the truth — the durable record of an awaiting
+	 * chat is its envelope in {@code session.pending} and its Job, registered
+	 * again on restart by {@link #recoverJob}, not this map.
 	 */
 	private final ConcurrentHashMap<AgentKey, ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>>> activeChats = new ConcurrentHashMap<>();
 
@@ -5040,8 +5039,8 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Whether the transition op's adapter owns the session's frames and
-	 * pending drain itself ({@link covia.adapter.agent.FramesOwning} —
+	 * Whether the transition op's adapter writes its turns into the session's
+	 * frames itself ({@link covia.adapter.agent.FramesOwning} —
 	 * lattice-resident frames). Resolved from the adapter, per cycle, so the
 	 * answer survives error/cancel paths where the transition emits no output.
 	 */
