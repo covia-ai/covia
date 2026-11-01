@@ -171,6 +171,28 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testContextTooLargeTellsTheAgentWhatToDo() {
+		// A level-3 operation's context-size refusal is recognised by its
+		// reason, and the agent is told how to shrink its context.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "context-too-large-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"model", "context-too-large-test"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "too much")));
+
+		covia.exception.JobFailedException failure = assertThrows(
+			covia.exception.JobFailedException.class,
+			() -> step(adapter, RequestContext.of(ALICE_DID), input));
+		String advice = AbstractLLMAdapter.CONTEXT_TOO_LARGE_ADVICE;
+		String expected = java.util.regex.Pattern.quote(advice)
+			.replace("%s", "\\E.+\\Q").replace("%d", "\\E\\d+\\Q");
+		assertTrue(failure.getMessage().matches(expected), failure.getMessage());
+		assertTrue(failure.getMessage().contains("v/test/ops/llm"), failure.getMessage());
+	}
+
+	@Test
 	public void testLevel3FailureFailsTransition() {
 		// Regression: a level-3 op that completes with a failure VALUE
 		// ({status: FAILED} from Status.failure — here an unresolvable API

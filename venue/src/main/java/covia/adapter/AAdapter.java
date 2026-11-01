@@ -1118,6 +1118,23 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * A URL as a message may name it: its scheme, host and port, never the
+	 * userinfo, path or query, any of which may carry a credential
+	 * (ERRORS.md). Null when {@code url} names no host.
+	 */
+	public static String origin(String url) {
+		if (url == null) return null;
+		try {
+			java.net.URI uri = new java.net.URI(url.trim());
+			if (uri.getScheme() == null || uri.getHost() == null) return null;
+			String origin = uri.getScheme().toLowerCase(java.util.Locale.ROOT) + "://" + uri.getHost();
+			return (uri.getPort() >= 0) ? origin + ":" + uri.getPort() : origin;
+		} catch (java.net.URISyntaxException e) {
+			return null;
+		}
+	}
+
+	/**
 	 * Whether a failure was expected: a CoviaException carrying its reason
 	 * (#644), looking through async wrappers. Anything else reaching a caller —
 	 * including a CoviaException thrown without a reason — is a runtime or

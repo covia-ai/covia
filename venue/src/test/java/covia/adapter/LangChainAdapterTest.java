@@ -64,9 +64,12 @@ import com.sun.net.httpserver.HttpServer;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ConversationRenderer;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -1742,18 +1745,178 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
-	public void testOllamaConnectHint() {
+	public void testOllamaConnectFailureNamesTheVenueKnob() {
 		RuntimeException connect = new RuntimeException("request failed",
 			new java.net.ConnectException("Connection refused"));
-		String hint = LangChainAdapter.ollamaConnectHint("http://localhost:11434", connect);
-		assertNotNull(hint);
-		assertTrue(hint.contains("http://localhost:11434"), hint);
-		assertTrue(hint.contains("adapters.langchain.ollamaUrl"), hint);
-		assertTrue(hint.contains("host.docker.internal"), hint);
+		RuntimeException failure = LangChainAdapter.providerFailure("ollama", "qwen", false,
+			"http://user:pw@localhost:11434/", connect);
+		assertInstanceOf(UnavailableException.class, failure);
+		assertEquals(LangChainAdapter.OLLAMA_UNREACHABLE.formatted("http://localhost:11434"), failure.getMessage());
+		assertSame(connect, failure.getCause());
 
-		// Non-connectivity failures pass through untouched
-		assertNull(LangChainAdapter.ollamaConnectHint("http://localhost:11434",
-			new RuntimeException("model not found: qwen")));
+		// A hosted provider's connect failure says it could not be reached
+		failure = LangChainAdapter.providerFailure("openai", "gpt", false, null, connect);
+		assertInstanceOf(UnavailableException.class, failure);
+		assertEquals(LangChainAdapter.PROVIDER_UNREACHABLE.formatted("openai", "gpt"), failure.getMessage());
+
+		// Anything not recognised passes through untouched, as the venue bug it is
+		RuntimeException other = new RuntimeException("model not found: qwen");
+		assertSame(other, LangChainAdapter.providerFailure("ollama", "qwen", false,
+			"http://localhost:11434", other));
+	}
+
+	// ========== Provider failures are typed, never in the provider's words ==========
+
+	/** Provider text a refusal carries, which no message may quote. */
+	private static final String PROVIDER_TEXT = "PROVIDER-SAYS-sk-leak-123";
+
+	private static dev.langchain4j.exception.HttpException http(int status, String body) {
+		return new dev.langchain4j.exception.HttpException(status, body + " " + PROVIDER_TEXT);
+	}
+
+	private static <T extends Throwable> T assertMapped(Class<T> type, String message,
+			RuntimeException providerFailure, boolean operatorKey) {
+		RuntimeException failure = LangChainAdapter.providerFailure("anthropic", "claude-x", operatorKey,
+			null, providerFailure);
+		T typed = assertInstanceOf(type, failure, "mapped type for " + providerFailure);
+		assertEquals(message, failure.getMessage());
+		assertFalse(failure.getMessage().contains(PROVIDER_TEXT), "never the provider's text: " + failure);
+		assertSame(providerFailure, failure.getCause(), "the provider's failure stays as the cause");
+		return typed;
+	}
+
+	@Test
+	public void testProviderFailuresAreTypedWithoutProviderText() {
+		var auth = new dev.langchain4j.exception.AuthenticationException(http(401, "invalid x-api-key"));
+		assertMapped(ConfigurationException.class,
+			LangChainAdapter.OPERATOR_KEY_REFUSED.formatted("anthropic", "claude-x"), auth, true);
+		assertMapped(InvalidInputException.class,
+			LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x"), auth, false);
+
+		assertMapped(UnavailableException.class,
+			LangChainAdapter.PROVIDER_RATE_LIMITED.formatted("anthropic", "claude-x"),
+			new dev.langchain4j.exception.RateLimitException(http(429, "slow down")), false);
+		assertMapped(UnavailableException.class,
+			LangChainAdapter.PROVIDER_TIMED_OUT.formatted("anthropic", "claude-x"),
+			new dev.langchain4j.exception.TimeoutException(new java.net.http.HttpTimeoutException(PROVIDER_TEXT)), false);
+		assertMapped(UnavailableException.class,
+			LangChainAdapter.PROVIDER_FAILED.formatted("anthropic", "claude-x", LangChainAdapter.httpNote(529)),
+			new dev.langchain4j.exception.InternalServerException(http(529, "overloaded")), false);
+		assertMapped(UnavailableException.class,
+			LangChainAdapter.PROVIDER_FAILED.formatted("anthropic", "claude-x", ""),
+			new dev.langchain4j.exception.InternalServerException("no choices " + PROVIDER_TEXT), false);
+		assertMapped(UnavailableException.class,
+			LangChainAdapter.PROVIDER_UNREACHABLE.formatted("anthropic", "claude-x"),
+			new dev.langchain4j.exception.UnresolvedModelServerException(
+				new java.nio.channels.UnresolvedAddressException()), false);
+
+		NotFoundException missing = assertMapped(NotFoundException.class,
+			LangChainAdapter.MODEL_NOT_FOUND.formatted("anthropic", "claude-x"),
+			new dev.langchain4j.exception.ModelNotFoundException(http(404, "no such model")), false);
+		assertEquals("claude-x", missing.getRef());
+		assertMapped(NotSupportedException.class,
+			LangChainAdapter.FEATURE_NOT_SUPPORTED.formatted("anthropic", "claude-x"),
+			new dev.langchain4j.exception.UnsupportedFeatureException("topK " + PROVIDER_TEXT), false);
+
+		assertMapped(ResponseException.class,
+			LangChainAdapter.CONTENT_FILTERED.formatted("anthropic", "claude-x"),
+			new dev.langchain4j.exception.ContentFilteredException("I cannot " + PROVIDER_TEXT), false);
+		assertMapped(ResponseException.class,
+			LangChainAdapter.REQUEST_REFUSED.formatted("anthropic", "claude-x", LangChainAdapter.httpNote(400)),
+			new dev.langchain4j.exception.InvalidRequestException(http(400, "bad tool schema")), false);
+		assertMapped(ResponseException.class,
+			LangChainAdapter.REQUEST_REFUSED.formatted("anthropic", "claude-x", LangChainAdapter.httpNote(302)),
+			new RuntimeException(http(302, "moved")), false);
+		assertMapped(ResponseException.class,
+			LangChainAdapter.MALFORMED_RESPONSE.formatted("anthropic", "claude-x"),
+			new dev.langchain4j.exception.JsonReadException(new java.io.IOException(PROVIDER_TEXT)), false);
+	}
+
+	@Test
+	public void testContextSizeRefusalIsRecognisedByItsReason() {
+		for (String body : new String[] {
+				"{\"error\":{\"code\":\"context_length_exceeded\"}}",
+				"{\"error\":{\"message\":\"prompt is too long: 250000 tokens > 200000 maximum\"}}",
+				"This model's maximum context length is 128000 tokens"}) {
+			var refusal = new dev.langchain4j.exception.InvalidRequestException(http(400, body));
+			InvalidInputException failure = assertMapped(InvalidInputException.class,
+				LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("anthropic", "claude-x"), refusal, false);
+			assertTrue(failure.getMessage().startsWith(AbstractLLMAdapter.CONTEXT_TOO_LARGE));
+		}
+	}
+
+	@Test
+	public void testExpectedFailuresAndCancellationsPassThrough() {
+		InvalidInputException ours = new InvalidInputException("messages[0] has no role");
+		assertSame(ours, LangChainAdapter.providerFailure("openai", "gpt", false, null, ours));
+		RuntimeException cancelled = new RuntimeException(new InterruptedException());
+		assertSame(cancelled, LangChainAdapter.providerFailure("openai", "gpt", false, null, cancelled));
+	}
+
+	/**
+	 * End to end through the operation: a key the provider refuses is the
+	 * operator's to fix when it came from the venue's own store, the caller's
+	 * when the caller supplied it; a context-size refusal keeps its reason.
+	 */
+	@Test
+	public void testProviderRefusalsReachTheCallerTyped() throws Exception {
+		HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		provider.createContext("/v1/messages", exchange -> {
+			String request = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+			boolean context = request.contains("context-test-model");
+			byte[] body = (context
+				? "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long " + PROVIDER_TEXT + "\"}}"
+				: "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"" + PROVIDER_TEXT + "\"}}")
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(context ? 400 : 401, body.length);
+			try (var out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		provider.start();
+		Engine engine = covia.venue.TestEngine.ENGINE;
+		try {
+			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+			String secretName = "LIBWRAP_REFUSED_KEY_" + System.nanoTime();
+			engine.getVenueState().users().ensure(engine.getDIDString()).secrets()
+				.store(secretName, "venue-key", covia.venue.SecretStore.keys(engine.getKeyPair()));
+			AMap<AString, ACell> meta = Maps.of(Strings.create("operation"), Maps.of(
+				Strings.create("adapter"), Strings.create("langchain:anthropic"),
+				Strings.create("secretKey"), Strings.create(secretName)));
+			AMap<AString, ACell> input = Maps.of(
+				Strings.create("prompt"), Strings.create("hi"),
+				Strings.create("model"), Strings.create("claude-x"),
+				Strings.create("maxTokens"), CVMLong.create(64),
+				Strings.create("url"), Strings.create("http://127.0.0.1:" + provider.getAddress().getPort() + "/v1/"));
+			// The venue dials any url, so its own context reaches the local fake.
+			RequestContext venue = engine.venueContext();
+
+			Throwable operators = failureOf(adapter.invokeFuture(venue, meta, input));
+			assertInstanceOf(ConfigurationException.class, operators);
+			assertEquals(LangChainAdapter.OPERATOR_KEY_REFUSED.formatted("anthropic", "claude-x"), operators.getMessage());
+
+			Throwable callers = failureOf(adapter.invokeFuture(venue, meta,
+				input.assoc(Strings.create("apiKey"), Strings.create("sk-caller"))));
+			assertInstanceOf(InvalidInputException.class, callers);
+			assertEquals(LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x"), callers.getMessage());
+
+			Throwable context = failureOf(adapter.invokeFuture(venue, meta,
+				input.assoc(Strings.create("model"), Strings.create("context-test-model"))));
+			assertInstanceOf(InvalidInputException.class, context);
+			assertEquals(LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("anthropic", "context-test-model"),
+				context.getMessage());
+			for (Throwable t : new Throwable[] {operators, callers, context}) {
+				assertFalse(t.getMessage().contains(PROVIDER_TEXT), t.getMessage());
+			}
+		} finally {
+			provider.stop(0);
+		}
+	}
+
+	private static Throwable failureOf(java.util.concurrent.CompletableFuture<ACell> future) {
+		var e = assertThrows(java.util.concurrent.ExecutionException.class, () -> future.get(10, TimeUnit.SECONDS));
+		return e.getCause();
 	}
 
 	// ========== langchain:models discovery ==========
@@ -2391,8 +2554,15 @@ public class LangChainAdapterTest {
 			// With no url and the caller's own ANTHROPIC_API_KEY stored, the
 			// operation's default names that key, bound for the provider's own endpoint.
 			engine.getVenueState().users().ensure(callerDID).secrets().store("ANTHROPIC_API_KEY", "caller-key", encKey);
-			assertEquals("caller-key", adapter.resolveApiKey(meta, Maps.empty(), caller,
-				LangChainAdapter.defaultBaseUrl("anthropic")));
+			LangChainAdapter.ApiKey own = adapter.resolveApiKey(meta, Maps.empty(), caller,
+				LangChainAdapter.defaultBaseUrl("anthropic"));
+			assertEquals("caller-key", own.value());
+			assertFalse(own.operators(), "the caller's own key is the caller's");
+			// The venue's key, used under a grant, is still the operator's.
+			LangChainAdapter.ApiKey venues = adapter.resolveApiKey(meta, Maps.of(apiKey, venueKey), granted, proxyUrl);
+			assertEquals("venue-key", venues.value());
+			assertTrue(venues.operators(), "the venue's key is the operator's");
+			assertFalse(venues.toString().contains("venue-key"), "never the value");
 		} finally {
 			engine.close();
 			proxy.stop(0);

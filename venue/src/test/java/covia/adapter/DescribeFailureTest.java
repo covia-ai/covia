@@ -39,4 +39,14 @@ public class DescribeFailureTest {
 			AAdapter.describeFailure(new InvalidInputException((String) null)), "a reason is what makes it expected");
 		assertEquals("Operation failed without an error detail", AAdapter.describeFailure(null));
 	}
+
+	@Test
+	public void testOriginNamesAUrlWithoutWhatMayCarryACredential() {
+		assertEquals("https://mcp.example.com",
+			AAdapter.origin("https://user:secret@mcp.example.com/api/mcp/s/tok3n/mcp?api_key=k"));
+		assertEquals("http://localhost:11434", AAdapter.origin("HTTP://localhost:11434/"));
+		assertEquals(null, AAdapter.origin("did:web:venue.example"));
+		assertEquals(null, AAdapter.origin("not a url"));
+		assertEquals(null, AAdapter.origin(null));
+	}
 }

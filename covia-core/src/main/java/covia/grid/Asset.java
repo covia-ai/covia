@@ -1,7 +1,9 @@
 package covia.grid;
 
 import java.io.IOException;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 
 import convex.auth.did.DID;
@@ -207,22 +209,33 @@ public class Asset {
 		return v.invoke(getID(), input);
 	}
 	
+	/** Why {@link #run} stopped waiting when its thread was interrupted: the operation's ID. */
+	public static final String RUN_INTERRUPTED = "Interrupted while awaiting operation %s";
+
 	/**
 	 * Runs this asset as an operation. Typically this will trigger an execution on the underlying venue.
+	 * A failure passes on as the type the venue reported it with, such as
+	 * {@link JobFailedException} for a failed job; a checked one stays wrapped,
+	 * as the fault it is.
 	 * @param <T> Return type of operation, typically a Map of outputs
 	 * @param input Input to the operation, typically a Map of parameters
 	 * @return Output of the execution
-	 * @throws JobFailedException if unable to execute job successfully
+	 * @throws CancellationException if the thread is interrupted while waiting
 	 */
 	@SuppressWarnings("unchecked")
 	public <T extends ACell> T run(ACell input) {
+		Venue v = getVenue();
+		if (v == null) throw new IllegalStateException("Cannot run asset with no attached Venue");
 		try {
-			Venue v = getVenue();
-			if (v == null) throw new IllegalStateException("Cannot run asset with no attached Venue");
 			return (T) v.run(getID(), input).get();
-		} catch (InterruptedException | ExecutionException e) {
-			if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-			throw new JobFailedException(e);
+		} catch (ExecutionException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof RuntimeException failure) throw failure;
+			if (cause instanceof Error error) throw error;
+			throw new CompletionException(cause);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new CancellationException(RUN_INTERRUPTED.formatted(getID()));
 		}
 	}
  }

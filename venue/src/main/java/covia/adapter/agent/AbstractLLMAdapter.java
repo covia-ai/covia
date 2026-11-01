@@ -25,6 +25,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
+import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
@@ -65,7 +66,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_SYSTEM_PROMPT   = Strings.intern("systemPrompt");
 	/** Prefix of the timeout failure a run loop treats as recoverable (AgentAdapter). */
 	public static final String LLM_TIMEOUT_PREFIX = "LLM call timed out after ";
-	public static final AString K_URL             = Strings.intern("url");
+	/**
+	 * How a level-3 operation's reason begins when the provider refused the
+	 * context as larger than the model accepts. The reason survives a job
+	 * boundary where the exception type does not, so the run loop recognises
+	 * the refusal by it.
+	 */
+	public static final String CONTEXT_TOO_LARGE = "The context is larger than the model accepts";
+	/** What the agent is told when its context was refused as too large: operation, then encoded bytes. */
+	public static final String CONTEXT_TOO_LARGE_ADVICE = "LLM provider rejected the context as too large"
+		+ " (%s, approximately %d encoded bytes). Loaded references are not truncated automatically because"
+		+ " provider tokenisation varies; inspect agent:context and context_unload unused paths, then retry.";
+	public static final AString K_URL           = Strings.intern("url");
 	public static final AString K_API_KEY         = Strings.intern("apiKey");
 	public static final AString K_CACHE           = Strings.intern("cache");
 	public static final AString K_PROVIDER_OPTIONS = Strings.intern("providerOptions");
@@ -541,16 +553,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			invocation.cancel(true);
 			throw new JobFailedException("Interrupted while waiting for LLM call (" + llmOperation + ")");
 		} catch (ExecutionException e) {
-			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			if (isContextSizeFailure(cause)) {
-				throw new JobFailedException("LLM provider rejected the context as too large ("
-					+ llmOperation + ", approximately " + Cells.storageSize(messages)
-					+ " encoded bytes). Loaded references are not truncated automatically because "
-					+ "provider tokenisation varies; inspect agent:context and context_unload unused "
-					+ "paths, then retry. Provider detail: " + describeFailure(cause));
+			Throwable cause = unwrap((e.getCause() != null) ? e.getCause() : e);
+			String reason = CoviaException.reasonOf(cause);
+			if (reason != null && reason.startsWith(CONTEXT_TOO_LARGE)) {
+				JobFailedException failure = new JobFailedException(CONTEXT_TOO_LARGE_ADVICE.formatted(
+					llmOperation, Cells.storageSize(messages)));
+				failure.initCause(cause);
+				throw failure;
 			}
 			if (cause instanceof RuntimeException re) throw re;
-			throw new JobFailedException("LLM call failed (" + llmOperation + "): " + cause.getMessage());
+			throw new JobFailedException("LLM call failed (" + llmOperation + "): " + describeFailure(cause));
 		}
 
 		// A level-3 op that completes with a failure VALUE — {status: FAILED,
@@ -558,18 +570,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// provider) — is not an assistant message. Without this guard the tool
 		// loop sees no toolCalls and no content and silently emits an empty
 		// response, hiding the real failure. Surface it as a transition failure
-		// so the framework fails the caller's Job with the provider's message.
-		// (An op that throws already propagates exceptionally via join().)
+		// so the framework fails the caller's Job with the operation's message,
+		// which is the venue's own: a provider's refusal arrives as a typed
+		// failure above, never as a value. (An op that throws already
+		// propagates exceptionally via join().)
 		if (result instanceof AMap && Status.FAILED.equals(RT.getIn(result, Fields.STATUS))) {
 			AString message = RT.ensureString(RT.getIn(result, Fields.MESSAGE));
-			if (message != null && isContextSizeFailure(
-					new IllegalArgumentException(message.toString()))) {
-				throw new JobFailedException("LLM provider rejected the context as too large ("
-					+ llmOperation + ", approximately " + Cells.storageSize(messages)
-					+ " encoded bytes). Loaded references are not truncated automatically because "
-					+ "provider tokenisation varies; inspect agent:context and context_unload unused "
-					+ "paths, then retry. Provider detail: " + message);
-			}
 			throw new JobFailedException("LLM call failed (" + llmOperation + "): "
 				+ (message != null ? message.toString() : "no message"));
 		}
@@ -577,23 +583,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// Level 3 operation returns OpenAI-style JSON text. Malformed text remains
 		// intact so executeToolCall can produce a visible, correctable error.
 		return ToolCallArguments.canonicaliseAssistantMessage(result);
-	}
-
-	/** Recognises common provider context-window failures without guessing tokens. */
-	private static boolean isContextSizeFailure(Throwable failure) {
-		for (Throwable t = failure; t != null; t = t.getCause()) {
-			String message = t.getMessage();
-			if (message == null) continue;
-			String m = message.toLowerCase(java.util.Locale.ROOT);
-			if (m.contains("context_length_exceeded")
-					|| m.contains("maximum context length")
-					|| m.contains("prompt is too long")
-					|| m.contains("input is too long")
-					|| m.contains("too many input tokens")
-					|| m.contains("request too large")
-					|| m.contains("context window")) return true;
-		}
-		return false;
 	}
 
 	// ========== The `model` facet: rendering hints and context budget ==========
