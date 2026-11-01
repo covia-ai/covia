@@ -1191,10 +1191,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *
 	 * @param rawArguments the {@code arguments} cell from an LLM tool call
 	 * @return the parsed arguments value
-	 * @throws IllegalArgumentException if the arguments are not valid JSON
+	 * @throws InvalidInputException if the arguments are not valid JSON
 	 */
 	public static ACell parseToolArguments(ACell rawArguments) {
-		return ToolCallArguments.parse(rawArguments);
+		try {
+			return ToolCallArguments.parse(rawArguments);
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 	}
 
 	// ========== Config helpers ==========

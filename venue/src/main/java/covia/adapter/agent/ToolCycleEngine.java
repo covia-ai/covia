@@ -18,6 +18,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 import covia.venue.AgentEvents;
 
 /**
@@ -340,7 +341,7 @@ final class ToolCycleEngine {
 		try {
 			toolInput = AbstractLLMAdapter.parseToolArguments(
 				RT.getIn(rawCall, AbstractLLMAdapter.K_ARGUMENTS));
-		} catch (IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			String detail = AbstractLLMAdapter.toolFailure(e, name);
 			early = ToolOutcome.result(Strings.create("Error: " + detail));
 			log.warn("Tool call {} has malformed arguments: {}", name, detail);

@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 
 /**
  * Tests for AbstractLLMAdapter — the shared base for LLM-backed agent adapters.
@@ -143,9 +144,9 @@ public class AbstractLLMAdapterTest {
 	public void testParseToolArgumentsGarbageThrows() {
 		// Outright garbage is a visible error the LLM can correct — never a
 		// silent Maps.empty() substitution or a pass-through.
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> AbstractLLMAdapter.parseToolArguments(Strings.create("not json")));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> AbstractLLMAdapter.parseToolArguments(Strings.create("{broken")));
 	}
 

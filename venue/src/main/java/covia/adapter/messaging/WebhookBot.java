@@ -22,6 +22,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
+import covia.exception.NotSupportedException;
 import covia.venue.RequestContext;
 
 /**
@@ -239,7 +240,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			if (!claim(id)) return;
 			if (localSession) {
 				String refusal = router.deliveryRefusal(channel);
-				if (refusal != null) throw new IllegalStateException(refusal);
+				if (refusal != null) throw new NotSupportedException(refusal);
 				deliverSession(id, event, channel, conversation);
 				return;
 			}

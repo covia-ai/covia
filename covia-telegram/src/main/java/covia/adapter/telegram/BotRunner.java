@@ -61,6 +61,7 @@ import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
@@ -532,7 +533,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		Message m = update.message();
 		try {
 			String refusal = admitted(update) ? conversations.deliveryRefusal(channel(update.message())) : NOT_ADMITTED;
-			if (refusal != null) throw new IllegalStateException(refusal);
+			if (refusal != null) throw new NotSupportedException(refusal);
 			respondAgent(id, m, messageText(m), true);
 		} catch (RuntimeException failure) {
 			String detail = concise(failure);

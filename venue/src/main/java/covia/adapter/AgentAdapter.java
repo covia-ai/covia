@@ -345,8 +345,7 @@ public class AgentAdapter extends AAdapter {
 		AgentTarget target;
 		try {
 			target = resolveAgentTarget(ctx, ref, Abilities.AGENT_MESSAGE, false);
-		} catch (covia.exception.AuthException | covia.exception.InvalidInputException
-				| IllegalArgumentException refused) {
+		} catch (covia.exception.AuthException | covia.exception.InvalidInputException refused) {
 			return describeFailure(refused);
 		}
 		AgentState agent = getAgent(target.ownerDID(), target.agentId());
