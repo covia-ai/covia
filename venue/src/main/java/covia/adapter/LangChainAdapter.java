@@ -567,7 +567,8 @@ public class LangChainAdapter extends AAdapter {
 	/** Reads maxTokens/temperature/topP from the op input. Numeric fields
 	 *  accept integers and doubles alike — {@code temperature: 0} arrives as
 	 *  a long from JSON and must not be dropped (it's the deterministic-
-	 *  extraction case that motivated #218). */
+	 *  extraction case that motivated #218). A bad setting is the setup the
+	 *  call runs under, so it is a {@code ConfigurationException}. */
 	static ModelTuning extractTuning(ACell input) {
 		return extractTuning(input, Maps.empty());
 	}
@@ -578,7 +579,7 @@ public class LangChainAdapter extends AAdapter {
 		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
 		ACell optionsCell = RT.getIn(input, AbstractLLMAdapter.K_PROVIDER_OPTIONS);
 		if (optionsCell != null && !(optionsCell instanceof AMap<?, ?>)) {
-			throw new InvalidInputException("providerOptions must be a map");
+			throw new ConfigurationException("providerOptions must be a map");
 		}
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
@@ -589,11 +590,11 @@ public class LangChainAdapter extends AAdapter {
 	private static Integer asPositiveInt(ACell value, String field) {
 		if (value == null) return null;
 		if (!(value instanceof CVMLong number)) {
-			throw new InvalidInputException(field + " must be a positive integer, got: " + value);
+			throw new ConfigurationException(field + " must be a positive integer, got: " + value);
 		}
 		long n = number.longValue();
 		if (n <= 0 || n > Integer.MAX_VALUE) {
-			throw new InvalidInputException(field + " must be between 1 and "
+			throw new ConfigurationException(field + " must be between 1 and "
 				+ Integer.MAX_VALUE + ", got: " + n);
 		}
 		return (int) n;
@@ -625,7 +626,7 @@ public class LangChainAdapter extends AAdapter {
 	private static Double asDouble(ACell v, String field) {
 		if (v == null) return null;
 		convex.core.data.prim.CVMDouble d = RT.castDouble(v);
-		if (d == null) throw new InvalidInputException(field + " must be a number, got: " + v);
+		if (d == null) throw new ConfigurationException(field + " must be a number, got: " + v);
 		return d.doubleValue();
 	}
 
@@ -652,6 +653,14 @@ public class LangChainAdapter extends AAdapter {
 	 * provider's text is read only to recognise a context-size refusal.
 	 * Anything else, a cancellation included, passes on unchanged.
 	 *
+	 * <p>The type says what failed. A refused key or a missing model is the
+	 * setup the call runs under, so {@code ConfigurationException}; a provider
+	 * that cannot be reached or keeps failing after langchain4j's retries is
+	 * {@code UnavailableException}; anything about this request's content is
+	 * {@code InvalidInputException}, {@code ResponseException} or
+	 * {@code NotSupportedException}. The agent harness relies on this split
+	 * (AGENT_LOOP.md §3.4).</p>
+	 *
 	 * @param operatorKey whether the API key sent was the operator's rather than the caller's
 	 * @param ollamaUrl the Ollama base URL called, or null for a hosted provider
 	 */
@@ -665,9 +674,8 @@ public class LangChainAdapter extends AAdapter {
 			String at = origin(ollamaUrl);
 			failure = new UnavailableException(OLLAMA_UNREACHABLE.formatted(at != null ? at : "its configured url"));
 		} else if (e instanceof dev.langchain4j.exception.AuthenticationException) {
-			failure = operatorKey
-				? new ConfigurationException(OPERATOR_KEY_REFUSED.formatted(provider, model))
-				: new InvalidInputException(CALLER_KEY_REFUSED.formatted(provider, model));
+			failure = new ConfigurationException((operatorKey ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED)
+				.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
 			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
@@ -675,7 +683,7 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
 			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, httpNote(status)));
 		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
-			failure = new NotFoundException(MODEL_NOT_FOUND.formatted(provider, model), model);
+			failure = new ConfigurationException(MODEL_NOT_FOUND.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
 			failure = new NotSupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
@@ -929,7 +937,7 @@ public class LangChainAdapter extends AAdapter {
 		// effective value here also keeps authored operations from silently falling
 		// through to langchain4j's hidden 1024-token default (#391).
 		if (tuning.maxTokens() == null) {
-			throw new InvalidInputException("Anthropic requires an effective maxTokens; "
+			throw new ConfigurationException("Anthropic requires an effective maxTokens; "
 				+ "declare operation.default.maxTokens or supply maxTokens in the call");
 		}
 		builder = builder.maxTokens(tuning.maxTokens());
@@ -1723,48 +1731,51 @@ public class LangChainAdapter extends AAdapter {
 		return out;
 	}
 
+	/** An image in the request that cannot be read: the ref and why. */
+	public static final String IMAGE_UNREADABLE = "image ref '%s' could not be read: %s";
+
 	/** Resolves one referenced-image block to an inline base64 block. Fail-loud: an
-	 *  unresolvable image is a wrong answer, not a degraded one. */
+	 *  unresolvable image is a wrong answer, not a degraded one. An image that
+	 *  cannot be read is this request's failure, never the provider's, so it is
+	 *  {@code InvalidInputException} even when its store is unavailable. */
 	private ACell resolveImageAsset(ACell block, RequestContext ctx) {
 		AString ref = RT.ensureString(RT.getIn(block, "source", "ref"));
 		if (ref == null) throw new InvalidInputException(
 			"image asset source requires a content 'ref' (asset, workspace, file, DLFS, or DID URL)");
+		covia.venue.storage.ContentProvider.Resolved resolved;
+		byte[] bytes;
 		try {
 			// Unified reference-addressed content resolution (Engine.resolveContent):
 			// CAS assets, lattice values, and DLFS drive paths — every storage
 			// mechanism, under the caller's authority.
-			covia.venue.storage.ContentProvider.Resolved resolved =
-				engine.resolveContent(ref, ctx);
-			byte[] bytes = (resolved != null) ? resolved.content().getBlob().getBytes() : null;
-			String mime = (resolved != null) ? resolved.contentType() : null;
-			if (bytes == null || bytes.length == 0) {
-				throw new NotFoundException(
-					"image ref '" + ref + "' did not resolve to content", ref.toString());
-			}
-
-			// Explicit mediaType on the block wins; else asset contentType; else sniff.
-			AString mtOverride = RT.ensureString(RT.getIn(block, "source", "mediaType"));
-			if (mtOverride != null) mime = mtOverride.toString();
-			if (mime == null) mime = covia.utils.MimeUtils.guess(ref.toString(), bytes);
-			if (mime == null || !mime.startsWith("image/")) {
-				throw new InvalidInputException(
-					"image ref '" + ref + "' has no image media type (got " + mime
-					+ ") — set source.mediaType explicitly");
-			}
-
-			String b64 = java.util.Base64.getEncoder().encodeToString(bytes);
-			return Maps.of(
-				K_TYPE, V_IMAGE,
-				K_SOURCE, Maps.of(
-					K_TYPE, V_BASE64,
-					K_MEDIA_TYPE, Strings.create(mime),
-					K_DATA, Strings.create(b64)));
-		} catch (RuntimeException e) {
-			throw e;
-		} catch (Exception e) {
-			throw new UnavailableException(
-				"failed to read image ref '" + ref + "': " + e.getMessage(), e);
+			resolved = engine.resolveContent(ref, ctx);
+			bytes = (resolved != null) ? resolved.content().getBlob().getBytes() : null;
+		} catch (UnavailableException | java.io.IOException e) {
+			throw new InvalidInputException(IMAGE_UNREADABLE.formatted(ref, CoviaException.describe(e)), e);
 		}
+		String mime = (resolved != null) ? resolved.contentType() : null;
+		if (bytes == null || bytes.length == 0) {
+			throw new NotFoundException(
+				"image ref '" + ref + "' did not resolve to content", ref.toString());
+		}
+
+		// Explicit mediaType on the block wins; else asset contentType; else sniff.
+		AString mtOverride = RT.ensureString(RT.getIn(block, "source", "mediaType"));
+		if (mtOverride != null) mime = mtOverride.toString();
+		if (mime == null) mime = covia.utils.MimeUtils.guess(ref.toString(), bytes);
+		if (mime == null || !mime.startsWith("image/")) {
+			throw new InvalidInputException(
+				"image ref '" + ref + "' has no image media type (got " + mime
+				+ ") — set source.mediaType explicitly");
+		}
+
+		String b64 = java.util.Base64.getEncoder().encodeToString(bytes);
+		return Maps.of(
+			K_TYPE, V_IMAGE,
+			K_SOURCE, Maps.of(
+				K_TYPE, V_BASE64,
+				K_MEDIA_TYPE, Strings.create(mime),
+				K_DATA, Strings.create(b64)));
 	}
 
 

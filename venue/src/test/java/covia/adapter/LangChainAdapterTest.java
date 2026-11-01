@@ -773,6 +773,44 @@ public class LangChainAdapterTest {
 		assertTrue(e.getMessage().contains("w/nothing/here"), e.getMessage());
 	}
 
+	/** A content store that is always down, for {@link #testUnreadableImageIsTheRequestsFailure}. */
+	private static final class DownStore extends AAdapter implements covia.venue.storage.ContentProvider {
+		static final String STORE_DOWN = "test store is down";
+		@Override public String getName() { return "downstore"; }
+		@Override public String getDescription() { return "Content store that cannot be read, for tests"; }
+		@Override public java.util.concurrent.CompletableFuture<ACell> invokeFuture(RequestContext ctx,
+				AMap<AString, ACell> meta, ACell input) {
+			return java.util.concurrent.CompletableFuture.completedFuture(input);
+		}
+		@Override public Resolved getContent(AString ref, RequestContext ctx) {
+			if (!ref.toString().startsWith("down/")) return null;
+			throw new UnavailableException(STORE_DOWN);
+		}
+	}
+
+	@Test
+	public void testUnreadableImageIsTheRequestsFailure() {
+		// An image in the messages whose store is unavailable fails this request,
+		// never the provider: UnavailableException from a model call means only
+		// that the provider cannot be reached (AGENT_LOOP.md §3.4).
+		Engine engine = Engine.createTemp(null);
+		try {
+			Engine.addDemoAssets(engine);
+			engine.registerAdapter(new DownStore());
+			var adapter = (LangChainAdapter) engine.getAdapter("langchain");
+			var messages = Vectors.of(
+				Maps.of("role", "user", "content", Vectors.of(
+					Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", "down/photo.png")))));
+			InvalidInputException e = assertThrows(InvalidInputException.class,
+				() -> adapter.resolveImageRefs(messages, RequestContext.of(Strings.create("did:key:zImgDown"))));
+			assertEquals(LangChainAdapter.IMAGE_UNREADABLE.formatted("down/photo.png", DownStore.STORE_DOWN),
+				e.getMessage());
+			assertInstanceOf(UnavailableException.class, e.getCause());
+		} finally {
+			engine.close();
+		}
+	}
+
 	@Test
 	public void testUserContentBlocksVision() {
 		// covia#198: a user message's content may be an array of blocks —
@@ -1572,7 +1610,7 @@ public class LangChainAdapterTest {
 		assertEquals(0.9, anthropic.defaultRequestParameters().topP());
 		assertEquals(2048, anthropic.defaultRequestParameters().maxOutputTokens());
 
-		InvalidInputException missing = assertThrows(InvalidInputException.class,
+		ConfigurationException missing = assertThrows(ConfigurationException.class,
 			() -> LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
 				"claude-sonnet-5", java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE));
 		assertTrue(missing.getMessage().contains("effective maxTokens"));
@@ -1653,15 +1691,16 @@ public class LangChainAdapterTest {
 		assertNull(none.topP());
 		assertNull(none.maxTokens());
 
-		assertThrows(InvalidInputException.class,
+		// A bad setting is the setup the call runs under, not its content.
+		assertThrows(ConfigurationException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"temperature\": \"hot\"}")));
-		assertThrows(InvalidInputException.class,
+		assertThrows(ConfigurationException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 0}")));
-		assertThrows(InvalidInputException.class,
+		assertThrows(ConfigurationException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 2147483648}")));
-		assertThrows(InvalidInputException.class,
+		assertThrows(ConfigurationException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": \"1024\"}")));
-		assertThrows(InvalidInputException.class,
+		assertThrows(ConfigurationException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"providerOptions\": true}")));
 	}
 
@@ -1790,7 +1829,7 @@ public class LangChainAdapterTest {
 		var auth = new dev.langchain4j.exception.AuthenticationException(http(401, "invalid x-api-key"));
 		assertMapped(ConfigurationException.class,
 			LangChainAdapter.OPERATOR_KEY_REFUSED.formatted("anthropic", "claude-x"), auth, true);
-		assertMapped(InvalidInputException.class,
+		assertMapped(ConfigurationException.class,
 			LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x"), auth, false);
 
 		assertMapped(UnavailableException.class,
@@ -1810,10 +1849,9 @@ public class LangChainAdapterTest {
 			new dev.langchain4j.exception.UnresolvedModelServerException(
 				new java.nio.channels.UnresolvedAddressException()), false);
 
-		NotFoundException missing = assertMapped(NotFoundException.class,
+		assertMapped(ConfigurationException.class,
 			LangChainAdapter.MODEL_NOT_FOUND.formatted("anthropic", "claude-x"),
 			new dev.langchain4j.exception.ModelNotFoundException(http(404, "no such model")), false);
-		assertEquals("claude-x", missing.getRef());
 		assertMapped(NotSupportedException.class,
 			LangChainAdapter.FEATURE_NOT_SUPPORTED.formatted("anthropic", "claude-x"),
 			new dev.langchain4j.exception.UnsupportedFeatureException("topK " + PROVIDER_TEXT), false);
@@ -1898,7 +1936,7 @@ public class LangChainAdapterTest {
 
 			Throwable callers = failureOf(adapter.invokeFuture(venue, meta,
 				input.assoc(Strings.create("apiKey"), Strings.create("sk-caller"))));
-			assertInstanceOf(InvalidInputException.class, callers);
+			assertInstanceOf(ConfigurationException.class, callers);
 			assertEquals(LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x"), callers.getMessage());
 
 			Throwable context = failureOf(adapter.invokeFuture(venue, meta,

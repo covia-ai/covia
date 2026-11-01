@@ -1,9 +1,11 @@
 package covia.exception;
 
 /**
- * The operator's setup is wrong or incomplete for what was asked. The message
- * says what is not configured, so the caller can report it and the operator
- * can fix it.
+ * The setup a request runs under is wrong or incomplete: the operator's
+ * configuration, or the settings and credentials the caller supplied for a
+ * dependency, such as a model's key or name. The message says what is not
+ * configured and whose it is to fix. Every request made the same way fails
+ * until it is fixed.
  */
 @SuppressWarnings("serial")
 public class ConfigurationException extends CoviaException {
