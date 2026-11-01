@@ -331,6 +331,9 @@ public class JobManager {
 			} catch (covia.exception.AuthException e) {
 				job.fail(e);
 			} catch (RuntimeException | Error e) {
+				if (CoviaException.reasonOf(e) == null) {
+					log.error("Unexpected failure starting job {}", job.getID(), e);
+				}
 				try { job.fail(e); }
 				catch (RuntimeException | Error reporting) {
 					if (reporting != e) e.addSuppressed(reporting);

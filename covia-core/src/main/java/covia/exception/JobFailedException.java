@@ -12,8 +12,9 @@ public class JobFailedException extends CoviaException {
 		this.job=job;
 	}
 
+	/** A job failed by {@code e}: its reason if expected, else its type, never its text. */
 	public JobFailedException(Exception e) {
-		this(Job.failure(e.toString()));
+		this(Job.failure(CoviaException.describe(e)));
 	}
 	
 	public JobFailedException(String message) {

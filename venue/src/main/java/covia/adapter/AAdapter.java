@@ -1049,7 +1049,11 @@ public abstract class AAdapter {
 		} else if (unwrap(error) instanceof CancellationException) {
 			job.cancel();
 		} else {
-			job.fail(unwrap(error));
+			Throwable cause = unwrap(error);
+			if (covia.exception.CoviaException.reasonOf(cause) == null) {
+				log.error("Unexpected failure in job {}", job.getID(), cause);
+			}
+			job.fail(cause);
 		}
 	}
 

@@ -20,6 +20,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.CoviaException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 
@@ -846,15 +847,15 @@ public class Job {
 	}
 
 	/** Fail this Job while retaining a non-persisted typed cause for
-	 * result-oriented in-process callers. */
+	 * result-oriented in-process callers. The recorded error is an expected
+	 * failure's reason, or the type of anything else, never its text. */
 	public void fail(Throwable cause) {
 		fail(cause, UnaryOperator.identity());
 	}
 
 	/** Fail with supporting state in the same transition; the decorator must be pure. */
 	protected void fail(Throwable cause, UnaryOperator<AMap<AString, ACell>> decorate) {
-		String message = cause == null ? "Operation failed" : cause.getMessage();
-		String detail = (message != null && !message.isBlank()) ? message : cause.toString();
+		String detail = cause == null ? "Operation failed" : CoviaException.describe(cause);
 		commitUpdate(job -> decorate.apply(job).assoc(Fields.STATUS, Status.FAILED)
 			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), cause, null);
 	}
