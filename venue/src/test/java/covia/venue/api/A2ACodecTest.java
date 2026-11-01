@@ -288,30 +288,6 @@ public class A2ACodecTest {
 		assertNotNull(m.messageId()); // auto-generated UUID
 	}
 
-	// ======== extractTaskId ========
-
-	@Test
-	public void extractTaskId_absentReturnsNull() {
-		Map<String, Object> params = Map.of("message", Map.of("role", "user"));
-		assertNull(A2ACodec.extractTaskId(params));
-	}
-
-	@Test
-	public void extractTaskId_presentReturnsBlob() {
-		Map<String, Object> params = Map.of("message",
-				Map.of("role", "user", "taskId", "000000000000000000000000deadbeef"));
-		Blob id = A2ACodec.extractTaskId(params);
-		assertNotNull(id);
-		assertEquals("000000000000000000000000deadbeef", id.toHexString());
-	}
-
-	@Test
-	public void extractTaskId_notHexIsRefused() {
-		Map<String, Object> params = Map.of("message",
-				Map.of("role", "user", "taskId", "not-a-task"));
-		assertThrows(IllegalArgumentException.class, () -> A2ACodec.extractTaskId(params));
-	}
-
 	// ======== History ========
 
 	@Test

@@ -424,8 +424,10 @@ public class A2A extends ACoviaAPI {
 		}
 		// The endpoint records the ask it admitted; recording it is not the
 		// asker's own write to the task.
-		engine().jobs().appendToHistory(job.getID(), rctx.getUserDID(), record);
-		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(job.getID(), rctx)));
+		Blob taskId = job.getID();
+		AString asker = rctx.getUserDID();
+		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, asker, record));
+		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(taskId, rctx)));
 	}
 
 	/** Continue one exact non-terminal {@code agent:request} Job of this agent. */
@@ -622,8 +624,22 @@ public class A2A extends ACoviaAPI {
 		}
 		// The operation took the message as its input; recording it gives the
 		// Task its history without delivering it a second time.
-		engine().jobs().appendToHistory(job.getID(), record, rctx);
-		return job.getID();
+		Blob taskId = job.getID();
+		recordFirstMessage(taskId, () -> engine().jobs().appendToHistory(taskId, record, rctx));
+		return taskId;
+	}
+
+	/**
+	 * Records a fresh task's first message in its history. The task exists and
+	 * is running by now, so a failure is logged, not answered: an asker told
+	 * the send failed would send again and start a second task.
+	 */
+	private static void recordFirstMessage(Blob taskId, Runnable append) {
+		try {
+			append.run();
+		} catch (RuntimeException e) {
+			log.error("Failed to record the first message of task {}", taskId, e);
+		}
 	}
 
 	/**
