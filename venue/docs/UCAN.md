@@ -18,6 +18,8 @@ Design for User Controlled Authorisation Networks (UCAN) in Covia, using lattice
 
 5. **DID-native.** Resource URIs are DID URLs. The DID identifies the authority (user), the path scopes into their lattice namespace. This aligns naturally with Covia's per-user namespace model.
 
+6. **Policy is Covia's, decided at one seam.** convex-core validates token structure, signatures and chains and treats resources as opaque; Covia gives resources their meaning and enforces granting where tokens are produced (§4.1). Each policy decision is one Engine method (`Engine.crossUserAllows`, `Engine.requireAuthority`) that composes venue configuration and delegates to the static, configuration-free matching in `CapabilityChecker`, so call sites stay a single line.
+
 ---
 
 ## 2. UCAN Structure

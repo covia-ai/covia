@@ -60,7 +60,6 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The `venue/relay` ability: users hop with `authenticateAs: "caller"` and grants.
 - `auth.audience`: replaced by `auth.requireAud`.
 - `FileAdapter.resolve`, which resolved a root path without authorising it.
-- `JobFailedException(Exception)`: pass a reason.
 
 ### Fixed
 

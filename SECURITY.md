@@ -54,10 +54,10 @@ If you run Covia in production, track the latest release and the [DX_PLAN.md](DX
 - vulnerabilities in third-party LLM providers, MCP servers, or remote venues you choose to call;
 - issues caused by operator misconfiguration (e.g. running with `NoAuth` on a public network, disabling SSRF protection, exposing a venue without TLS) — though if our defaults make this *easy to get wrong*, we want to hear about it;
 - vulnerabilities in dependencies that already have a public advisory and a fix available (open a normal issue or PR to bump them);
-- denial of service from unbounded but documented behaviour (e.g. long-running jobs have no framework timeout by design) — see the rate-limiting work tracked in `AGENTS.md`.
+- denial of service from unbounded but documented behaviour (e.g. long-running jobs have no framework timeout by design) — see the rate-limiting item in [`DX_PLAN.md`](DX_PLAN.md).
 
 Vulnerabilities in the upstream [Convex](https://github.com/Convex-Dev/convex) lattice platform should be reported to that project; if you're unsure where a problem lives, report it to us and we'll route it.
 
 ## A note on the trust model
 
-A venue trusts the operators it federates with. Covia provides UCAN-based capabilities, per-user secret isolation, job-ownership enforcement, and SSRF protection as building blocks, but **the security of a federation depends on the policies its operators configure**. Capability enforcement is still being hardened (see `AGENTS.md`); treat the current cross-venue trust surface as evolving, and review the [operator guide](https://docs.covia.ai/docs/operator-guide/) before exposing a venue.
+A venue trusts the operators it federates with. Covia provides UCAN-based capabilities, per-user secret isolation, job-ownership enforcement, and SSRF protection as building blocks, but **the security of a federation depends on the policies its operators configure**. Capability enforcement is still being hardened (see [`venue/docs/UCAN.md`](venue/docs/UCAN.md)); treat the current cross-venue trust surface as evolving, and review the [operator guide](https://docs.covia.ai/docs/operator-guide/) before exposing a venue.

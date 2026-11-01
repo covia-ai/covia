@@ -248,6 +248,14 @@ Adapter-owned state uses `AdapterState`; see
   — never a fresh Engine per test unless persistence/restart is under test
 - Cross-venue tests use the shared `TwoVenueTestServer` (static venues,
   per-test identities) — never spin venues per test
+- Launching a venue is the expensive part: tell a feature's story as one
+  scenario on one store (a relaunch only when persistence is under test), and
+  run authority matrices and edge cases on `TestEngine.ENGINE` or a store from
+  `TestTemp.etch`. A test class in the default suite takes a second or two at
+  most. `TestEngine.ENGINE` is Etch-backed so store machinery such as online
+  GC runs on it under the suite's own load (`SharedEngineOnlineGcTest`)
+- Size and durability assertions call `engine.flush()` first: the venue
+  persists on a 100 ms sweep
 - A test that needs an Etch store of its own (restart, recovery, GC, the root,
   identity) gets it from `TestTemp.etch` or `TestTemp.etchFile`, never
   `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server

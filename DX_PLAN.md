@@ -81,12 +81,10 @@ _Goal: every clone builds reproducibly, every PR is validated automatically, and
 
 _Goal: an operator can run a venue in production, and the surrounding ecosystem (examples, templates) helps developers go further._
 
-> The operability items below are surfaced here for the public roadmap, but `AGENTS.md` (P1/P2) is their engineering source of truth — track status there to avoid two checklists drifting.
-
 - [ ] **Health & readiness endpoints** (`/health`, `/ready`) so orchestrators and load balancers can probe a venue meaningfully.
 - [x] **Structured (JSON) logging and request-ID propagation.** `operations.log-format: "json"`, `X-Request-Id` on every response, and operator-controlled audit and access logs (#538, #547).
-- [ ] **Per-operation rate limiting.** Per-caller HTTP request and concurrent-job caps are shipped; operation-specific limits remain. (Tracked in `AGENTS.md` P1.)
-- [ ] **Metrics export** — Prometheus-compatible counters for operations, jobs, adapters, and storage. (Tracked in `AGENTS.md` P2.)
+- [ ] **Per-operation rate limiting.** Per-caller HTTP request and concurrent-job caps are shipped; operation-specific limits remain.
+- [ ] **Metrics export** — Prometheus-compatible counters for operations, jobs, adapters, and storage.
 - [ ] 🌱 **A runnable `examples/` collection.** Hello-world per SDK, plus the AP-invoice demo as real, clonable code rather than only a tooling skill. Working examples are some of the best documentation we can offer — and because they directly serve Milestone 1's "first success", consider pulling a single hello-world example forward rather than waiting for the full collection. The `ap-demo` skill already contains content to lift from.
 - [ ] **A hardening checklist for operators** — UCAN capabilities, secret management, SSRF protection, CORS — consolidated into one practical page.
 

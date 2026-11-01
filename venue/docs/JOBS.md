@@ -41,6 +41,11 @@ is always reachable by cancel, pause, resume and message delivery.
 constant for protocol interop but is emitted by no code path — there is no
 timeout status, by design (see Waiting below).
 
+`INPUT_REQUIRED` and `AUTH_REQUIRED` mean the caller owes the job more input;
+`STARTED` means the caller is waiting on the job. So when the far end of a
+mirrored interaction asks a question, the job moves to `INPUT_REQUIRED` and
+the caller's reply is delivered to it; the question is never the job's result.
+
 What each terminal status means, as the venue actually emits them:
 
 | Status | Meaning |
