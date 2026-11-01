@@ -83,6 +83,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			venue = local;
 			credentials = Maps.empty();
 		} else {
+			engine.remoteJobs().requireNotClosing();
 			VenueConnection connection = VenueConnection.connect(engine, ctx, target, input);
 			venue = connection.venue();
 			credentials = connection.credentials();
@@ -118,6 +119,9 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private void bind(Job job, VenueRemoteAgent proxy, Blob id) {
 		bindInteraction(job, new RemoteInteraction() {
 			@Override public void deliver(AMap<AString, ACell> record) {
+				if (!LOCAL_PROTOCOL.equals(RemoteJobs.descriptor(job).get(RemoteJobs.PROTOCOL))) {
+					engine.remoteJobs().requireNotClosing();
+				}
 				AMap<AString, ACell> message = RT.ensureMap(record.get(Fields.MESSAGE));
 				if (message == null) message = Maps.of(Fields.CONTENT, record.get(Fields.MESSAGE));
 				proxy.deliver(id, message);

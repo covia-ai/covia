@@ -24,6 +24,7 @@ import convex.core.data.Vectors;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
 import covia.api.Fields;
+import covia.exception.ShuttingDownException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -35,8 +36,10 @@ class RemoteDelegationTest {
 	/** Gates prove local cancellation completes while remote IO remains blocked. */
 	private static final class CancellationPeer implements AutoCloseable {
 		final HttpServer server;
-		final Engine engine = Engine.createTemp(null);
+		final Engine engine;
 		final String protocol;
+		/** Requests that hand the peer work or a message: never a status read or a cancel. */
+		final AtomicInteger sends = new AtomicInteger();
 		final CountDownLatch submitted = new CountDownLatch(1);
 		final CountDownLatch cancelReceived = new CountDownLatch(1);
 		final CountDownLatch cancelResponse = new CountDownLatch(1);
@@ -48,8 +51,10 @@ class RemoteDelegationTest {
 		volatile boolean malformed;
 		volatile boolean wrongId;
 		volatile String a2aCancelState;
-		CancellationPeer(String protocol) throws Exception {
+		CancellationPeer(String protocol) throws Exception { this(protocol, null); }
+		CancellationPeer(String protocol, AMap<AString, ACell> config) throws Exception {
 			this.protocol = protocol;
+			engine = Engine.createTemp(config);
 			server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 			server.setExecutor(AAdapter.VIRTUAL_EXECUTOR);
 			server.createContext("/", exchange -> {
@@ -59,6 +64,7 @@ class RemoteDelegationTest {
 				String method = a2a ? convex.core.lang.RT.getIn(convex.core.util.JSON.parse(request), "method").toString() : "";
 				boolean submit = a2a ? org.a2aproject.sdk.spec.A2AMethods.SEND_MESSAGE_METHOD.equals(method) : path.endsWith("/invoke");
 				boolean cancel = a2a ? org.a2aproject.sdk.spec.A2AMethods.CANCEL_TASK_METHOD.equals(method) : path.endsWith("/cancel");
+				if (a2a ? submit : "POST".equals(exchange.getRequestMethod())) sends.incrementAndGet();
 				try {
 					if (submit) { submitted.countDown(); acceptance.await(); }
 					if (cancel) { cancels.incrementAndGet(); cancelReceived.countDown(); cancelResponse.await(); }
@@ -87,12 +93,15 @@ class RemoteDelegationTest {
 			http.addAllowedHost("127.0.0.1");
 		}
 		String url() { return "http://127.0.0.1:" + server.getAddress().getPort(); }
-		Job submit() {
+		Job submit() { return engine.jobs().invokeOperation(operation(), input(), engine.venueContext()); }
+		AMap<AString, ACell> operation() {
 			String op = protocol.equals("a2a") ? "a2a:rawSend" : protocol.equals("grid") ? "grid:run" : "remoteagent:request";
+			return Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, op));
+		}
+		AMap<AString, ACell> input() {
 			ACell message = Maps.of("role", "user", "parts", convex.core.data.Vectors.of(Maps.of("type", "text", "text", "hello")));
-			return engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, op)),
-				Maps.of(Fields.VENUE, url(), Fields.URL, url(), Fields.OPERATION, "v/ops/work",
-					Fields.AGENT_ID, "g/worker", Fields.INPUT, Maps.of("task", "work"), Fields.MESSAGE, message), engine.venueContext());
+			return Maps.of(Fields.VENUE, url(), Fields.URL, url(), Fields.OPERATION, "v/ops/work",
+				Fields.AGENT_ID, "g/worker", Fields.INPUT, Maps.of("task", "work"), Fields.MESSAGE, message);
 		}
 		@Override public void close() {
 			acceptance.countDown(); cancelResponse.countDown(); engine.close(); server.stop(0);
@@ -123,6 +132,44 @@ class RemoteDelegationTest {
 			child.cancel();
 			assertEquals(Status.CANCELLED, child.getStatus());
 			assertEquals(1, peer.cancels.get());
+		}
+	}
+
+	@Test void gridShutdownSendsNothingNewButCancels() throws Exception { shutdownSendsNothingNewButCancels("grid"); }
+	@Test void a2aShutdownSendsNothingNewButCancels() throws Exception { shutdownSendsNothingNewButCancels("a2a"); }
+	@Test void remoteagentShutdownSendsNothingNewButCancels() throws Exception { shutdownSendsNothingNewButCancels("remoteagent"); }
+
+	private void shutdownSendsNothingNewButCancels(String protocol) throws Exception {
+		// A grace window no test outlasts, held open by the remote job still running
+		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, TimeUnit.DAYS.toMillis(1)));
+		try (CancellationPeer peer = new CancellationPeer(protocol, config)) {
+			Job running = peer.submit();
+			await(() -> RemoteJobs.descriptor(running) != null && RemoteJobs.descriptor(running).get(RemoteJobs.REMOTE_ID) != null);
+			int sends = peer.sends.get();
+			Thread closer = Thread.ofVirtual().start(peer.engine::close);
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+			while (!peer.engine.isClosing()) {
+				assertTrue(System.nanoTime() < deadline, "close never began");
+				Thread.onSpinWait();
+			}
+			// Work still running inside the window may not hand the peer anything new
+			java.util.concurrent.ExecutionException refused = assertThrows(java.util.concurrent.ExecutionException.class,
+				() -> peer.engine.jobs().invokeInternal(peer.operation(), peer.input(), peer.engine.venueContext())
+					.get(5, TimeUnit.SECONDS));
+			assertInstanceOf(ShuttingDownException.class, refused.getCause());
+			assertEquals(RemoteJobs.SENDS_CLOSED, refused.getCause().getMessage());
+			if (!protocol.equals("grid")) {
+				ShuttingDownException message = assertThrows(ShuttingDownException.class, () -> peer.engine.jobs()
+					.deliverMessage(running.getID(), Maps.of(Fields.CONTENT, "more"), peer.engine.venueContext()));
+				assertEquals(RemoteJobs.SENDS_CLOSED, message.getMessage());
+			}
+			assertEquals(sends, peer.sends.get());
+			// A cancel still goes out, and its answer is recorded within the window
+			running.cancel();
+			assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
+			peer.cancelResponse.countDown();
+			closer.join();
+			assertEquals(RemoteJobs.OUTCOME_ACKNOWLEDGED, convex.core.lang.RT.getIn(running.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
 		}
 	}
 

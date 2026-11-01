@@ -111,6 +111,8 @@ public class GridAdapter extends AAdapter {
 		Blob existingID = existing ? parseJobId(RT.getIn(input, Fields.ID)) : null;
 		if (existing && existingID == null) throw new InvalidInputException("'id' is required");
 		if (!existing && operation == null) throw new InvalidInputException("'operation' is required");
+		// Observing an existing job only reads; submitting one sends
+		if (!existing) engine.remoteJobs().requireNotClosing();
 		AString target = resolveVenue(meta, input);
 		VenueConnection remote = remoteConnection(ctx, target, input);
 		RemoteJobs observer = engine.remoteJobs();
@@ -232,6 +234,7 @@ public class GridAdapter extends AAdapter {
         // (tool-call arguments at the MCP and provider boundaries, #508).
         ACell operationInput = RT.getIn(input, Fields.INPUT);
         AString venueSpec = resolveVenue(meta, input);
+        if (venueSpec != null) engine.remoteJobs().requireNotClosing();
 
         Venue venue = selectVenue(ctx, venueSpec, input);
 
@@ -338,6 +341,7 @@ public class GridAdapter extends AAdapter {
 		// A foreign output path is itself an explicit request to write remotely as
 		// the current caller. The identity credential authenticates that caller;
 		// its mere presence still cannot select this behaviour.
+		engine.remoteJobs().requireNotClosing();
 		Venue venue = connectRemote(ctx, venueSpec,
 			Maps.of(AUTHENTICATE_AS, Strings.create("caller")));
 		return venue.invoke("v/ops/covia/write",

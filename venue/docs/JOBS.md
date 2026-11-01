@@ -310,7 +310,8 @@ monitor (`JobManager.shutdown`):
 
 1. **Top-level admission closes** (`beginShutdown()`): `invokeOperation`
    throws. Internal composition — the sub-operations in-flight work runs to
-   finish — is still admitted.
+   finish — is still admitted, but sends nothing new to a remote venue
+   ([Remote delegation](#remote-delegation)).
 2. **Grace**: in-flight work (`PENDING`/`STARTED`) gets up to
    `shutdown.graceMs` (default 2000) to finish on its own. An upper bound:
    shutdown proceeds the moment nothing is in flight.
@@ -418,13 +419,16 @@ polling or automatic retry; a process crash can leave an attempt unresolved.
 Even an acknowledgement cannot undo effects already performed remotely.
 
 Shutdown suspends observation and fences late callbacks, without claiming
-remote cancellation. A status or cancellation request already sent to a
-remote venue may run until the shutdown grace window ends: the jobs' window,
-counted from the start of `Engine.close()`. A cancellation answered within it
-records its outcome; one still unanswered when it ends keeps `requested`, and
-its answer is ignored. Close does not recall a request already sent. Once close
-has begun, no request starts: a cancellation then sends nothing and records
-`unknown` with the reason. Transient/private jobs
+remote cancellation. Once `Engine.close()` begins, the venue sends nothing new
+to another venue or remote agent: a new remote job (a Grid run or invoke, an
+A2A send, a remote agent request), a message to one, or a write there fails
+with `ShuttingDownException` before any contact. Status checks and
+cancellations still go out during the shutdown grace window, the jobs' window
+counted from the start of close, so a remote job that finishes in it completes
+here. A request still running when the window ends is given up on: its answer
+is ignored, and a cancellation keeps `requested`. Close does not recall a
+request already sent. After the window no request starts: a cancellation then
+sends nothing and records `unknown` with the reason. Transient/private jobs
 retain their existing recording policy: they can observe remote work while
 the process lives, but have no restart recovery guarantee. Use `/invoke` when
 a durable local record is needed. Neither `/invoke` nor a saved remote handle

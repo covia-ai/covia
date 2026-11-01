@@ -38,6 +38,8 @@ public final class RemoteJobs implements AutoCloseable {
 	private static final Logger log = LoggerFactory.getLogger(RemoteJobs.class);
 	/** Refusal of remote work once {@link #close} has begun. */
 	public static final String CLOSED = "Remote observation is closed";
+	/** Refusal of a new send to a remote venue once this venue has begun shutting down. */
+	public static final String SENDS_CLOSED = "Venue is shutting down; nothing new is sent to remote venues";
 	public static final String INVALID_CANCELLATION_STATUS = "Invalid remote cancellation status";
 	public static final String CANCELLATION_ID_MISMATCH = "Remote cancellation job ID mismatch";
 	public static final AString DELEGATION = Strings.intern("delegation");
@@ -105,6 +107,19 @@ public final class RemoteJobs implements AutoCloseable {
 	/** Checkpoint intent and protected transport credentials before submitting once. */
 	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials) {
 		prepare(job, protocol, target, credentials, true);
+	}
+
+	/**
+	 * Refuses a new send to another venue or remote agent once this venue has
+	 * begun shutting down: a new remote job, a message to one, or a write
+	 * there. Call it before any contact, discovery and venue proof included.
+	 * Status reads and cancellations are not sends; requests already under way
+	 * get the shutdown grace window ({@link #close(long)}).
+	 *
+	 * @throws ShuttingDownException once shutdown has begun
+	 */
+	public void requireNotClosing() {
+		if (engine.isClosing()) throw new ShuttingDownException(SENDS_CLOSED);
 	}
 
 	/** Observation of an existing job does not confer cancellation ownership. */

@@ -663,6 +663,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	@SuppressWarnings("unchecked")
 	private void doSendMirrored(Job job, RequestContext ctx, ACell input, boolean allowRaw) {
+		engine.remoteJobs().requireNotClosing();
 		AgentTarget target;
 		try {
 			target = resolveAgentTarget(input, ctx, allowRaw);
@@ -828,6 +829,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	 * deliverer, so a reply is never silently dropped.</p>
 	 */
 	private void deliver(Job job, RemoteLink link, AMap<AString, ACell> messageRecord) {
+		engine.remoteJobs().requireNotClosing();
 		MessageSendParams params = new MessageSendParams(
 			continuation(job, link, messageRecord.get(Fields.MESSAGE)),
 			new org.a2aproject.sdk.spec.MessageSendConfiguration(null, null, null, true), null);

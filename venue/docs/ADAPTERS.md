@@ -39,7 +39,10 @@ adapter cannot hold the job-handle response until execution completes.
 
 Remote Grid runs and A2A sends use the engine's `RemoteJobs` observer. An
 accepted remote handle survives individual request failures; a lost submission
-acknowledgement records uncertainty and is never blindly replayed. See
+acknowledgement records uncertainty and is never blindly replayed. Before it
+contacts another venue to hand it new work, a message or a write, an adapter
+calls `RemoteJobs.requireNotClosing()`, which refuses once the venue has begun
+shutting down. See
 [JOBS.md](JOBS.md#remote-delegation) for the implemented lifecycle and
 [REMOTE_JOBS_DESIGN.md](REMOTE_JOBS_DESIGN.md) for the further protocol design.
 
