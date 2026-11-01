@@ -26,6 +26,7 @@ import convex.core.data.prim.CVMLong;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.Cursors;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
 import covia.api.Fields;
 import covia.lattice.Covia;
 import covia.lattice.WorkspaceRoot;
@@ -252,7 +253,7 @@ class DomainTransactionTest {
 			} finally { resume.countDown(); }
 			var failure = assertThrows(java.util.concurrent.ExecutionException.class,
 				() -> pending.get(10, TimeUnit.SECONDS));
-			assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+			assertInstanceOf(ConflictException.class, failure.getCause());
 			assertEquals(AuthState.KEY_ALREADY_BOUND + bob, failure.getCause().getMessage());
 		}
 		assertFalse(auth.isAuthenticationKeyActive(alice, key));

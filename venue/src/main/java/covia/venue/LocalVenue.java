@@ -16,6 +16,7 @@ import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Strings;
+import covia.exception.NotFoundException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -138,7 +139,7 @@ public class LocalVenue extends Venue {
 	public CompletableFuture<Job> getJob(Blob jobId) {
 		Job job = engine.jobs().getJob(jobId, context());
 		if (job == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
+			return CompletableFuture.failedFuture(new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(job);
 	}
@@ -147,7 +148,7 @@ public class LocalVenue extends Venue {
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		AMap<AString, ACell> status = engine.jobs().getJobData(jobId, context());
 		if (status == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
+			return CompletableFuture.failedFuture(new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(status);
 	}
@@ -156,7 +157,7 @@ public class LocalVenue extends Venue {
 	public CompletableFuture<ACell> awaitJobResult(Blob jobId) {
 		Job job = engine.jobs().getJob(jobId, context());
 		if (job == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
+			return CompletableFuture.failedFuture(new NotFoundException("Job not found: " + jobId.toHexString(), jobId.toHexString()));
 		}
 		return job.future();
 	}

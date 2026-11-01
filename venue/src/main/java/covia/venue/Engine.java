@@ -668,7 +668,11 @@ public class Engine {
 			}
 			for (long i = 0; i < keys.count(); i++) {
 				AString key = RT.ensureString(keys.get(i));
-				AuthState.requireValidAuthenticationKey(key);
+				try {
+					AuthState.requireValidAuthenticationKey(key);
+				} catch (IllegalArgumentException e) {
+					throw new ConfigurationException(e.getMessage(), e);
+				}
 				if (!declaredKeys.add(key)) {
 					throw new ConfigurationException(
 						"One authentication key cannot bootstrap two named users");
