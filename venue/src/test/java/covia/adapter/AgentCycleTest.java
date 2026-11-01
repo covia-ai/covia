@@ -26,6 +26,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
@@ -241,6 +242,41 @@ public class AgentCycleTest {
 
 	// ========== A failed cycle settles exactly what it took ==========
 
+	/** The two LLM runtimes, by the name of their adapter. */
+	private static final String[] LLM_RUNTIMES = {"llmagent", "goaltree"};
+
+	/**
+	 * Says "hello" to an agent whose setup is wrong and checks what its one
+	 * cycle did: it took the message, which is a turn in the conversation,
+	 * failed the chat with {@code reason} and suspended the agent with it.
+	 * Returns the chat's session.
+	 */
+	private Blob assertSuspendedByItsSetup(RequestContext owner, AgentState agent, String reason,
+			String runtime) throws Exception {
+		Job chat = chat(owner, agent.getAgentId().toString(), null, "hello");
+		assertThrows(JobFailedException.class, () -> chat.awaitResult(10_000), runtime);
+		assertTrue(chat.getErrorMessage().contains(reason), runtime + ": " + chat.getErrorMessage());
+		assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner), runtime);
+		assertTrue(agent.getError().toString().contains(reason), runtime + ": " + agent.getError());
+		assertEquals(1, timelineCount(agent), runtime + ": one cycle, not one per piece of work");
+		Blob sid = sessionOf(chat);
+		assertEquals(0, pendingCount(agent, sid), runtime + ": the cycle took the message");
+		assertEquals(1, userTurns(agent, sid, "hello").count(), runtime + ": the message is in the conversation");
+		assertNull(agent.getSessionCycleEpoch(sid), runtime + ": the claim ends with the cycle");
+		return sid;
+	}
+
+	/** Resumes an agent whose setup has been fixed and checks it answers in {@code sid} again. */
+	private void assertRunsAgainOnResume(RequestContext owner, AgentState agent, Blob sid,
+			String runtime) throws Exception {
+		String agentId = agent.getAgentId().toString();
+		op(owner, "resume", agentId, Maps.empty());
+		Job next = chat(owner, agentId, sid, "again");
+		assertEquals(Vectors.of(hex(next)), answered(next), runtime);
+		assertEquals(AgentState.SLEEPING, awaitRest(agent, owner), runtime);
+		assertNull(agent.getError(), runtime);
+	}
+
 	/**
 	 * Both LLM runtimes read their system prompt at the start of every cycle,
 	 * goaltree before it touches the session. A prompt that does not resolve
@@ -252,33 +288,42 @@ public class AgentCycleTest {
 	 */
 	@Test
 	public void anUnresolvableSystemPromptSuspendsTheAgent(TestInfo info) throws Exception {
-		for (String runtime : new String[] {"llmagent", "goaltree"}) {
+		for (String runtime : LLM_RUNTIMES) {
 			RequestContext owner = RequestContext.of(Strings.create(TestEngine.uniqueDID(info) + "-" + runtime));
 			AMap<AString, ACell> prompt = Maps.of("ref", "w/prompts/absent");
 			AgentState agent = create(owner, "no-prompt", Maps.of(
 				Fields.OPERATION, "v/ops/" + runtime + "/chat",
 				"llmOperation", "v/test/ops/failllm",
 				"systemPrompt", prompt));
-			Job chat = chat(owner, "no-prompt", null, "hello");
-			assertThrows(JobFailedException.class, () -> chat.awaitResult(10_000), runtime);
-			String reason = AbstractLLMAdapter.SYSTEM_PROMPT_UNRESOLVED.formatted(prompt, "");
-			assertTrue(chat.getErrorMessage().contains(reason), runtime + ": " + chat.getErrorMessage());
-			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner), runtime);
-			assertTrue(agent.getError().toString().contains(reason), runtime + ": " + agent.getError());
-			assertEquals(1, timelineCount(agent), runtime + ": one cycle, not one per piece of work");
-			Blob sid = sessionOf(chat);
-			assertEquals(0, pendingCount(agent, sid), runtime + ": the cycle took the message");
-			assertEquals(1, userTurns(agent, sid, "hello").count(), runtime + ": the message is in the conversation");
-			assertNull(agent.getSessionCycleEpoch(sid), runtime + ": the claim ends with the cycle");
+			Blob sid = assertSuspendedByItsSetup(owner, agent,
+				AbstractLLMAdapter.SYSTEM_PROMPT_UNRESOLVED.formatted(prompt, ""), runtime);
 
 			// The prompt is read again at the next cycle, so writing it is the fix.
 			engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, Strings.create("w/prompts/absent"),
 				Fields.VALUE, Strings.create("You are back.")), owner).awaitResult(5000);
-			op(owner, "resume", "no-prompt", Maps.empty());
-			Job next = chat(owner, "no-prompt", sid, "again");
-			assertEquals(Vectors.of(hex(next)), answered(next), runtime);
-			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner), runtime);
-			assertNull(agent.getError(), runtime);
+			assertRunsAgainOnResume(owner, agent, sid, runtime);
+		}
+	}
+
+	/**
+	 * An LLM operation that does not resolve would fail every model call the
+	 * same way, so the agent cannot continue, as when its provider refuses
+	 * the setup. The cycle takes its message and suspends the agent; once
+	 * the agent names an operation that resolves and is resumed, it answers.
+	 */
+	@Test
+	public void anUnresolvableLlmOperationSuspendsTheAgent(TestInfo info) throws Exception {
+		for (String runtime : LLM_RUNTIMES) {
+			RequestContext owner = RequestContext.of(Strings.create(TestEngine.uniqueDID(info) + "-" + runtime));
+			String absent = "v/test/ops/absent";
+			AgentState agent = create(owner, "no-model", Maps.of(
+				Fields.OPERATION, "v/ops/" + runtime + "/chat",
+				"llmOperation", absent));
+			Blob sid = assertSuspendedByItsSetup(owner, agent, AbstractLLMAdapter.LLM_CALL_FAILED.formatted(
+				absent, JobManager.CANNOT_RESOLVE_OPERATION + absent), runtime);
+
+			op(owner, "update", "no-model", Maps.of(Fields.CONFIG, Maps.of("llmOperation", "v/test/ops/failllm")));
+			assertRunsAgainOnResume(owner, agent, sid, runtime);
 		}
 	}
 

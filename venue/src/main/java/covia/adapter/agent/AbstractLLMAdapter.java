@@ -547,7 +547,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// invocation is cancelled — LangChainAdapter bridges cancellation to a
 		// worker-thread interrupt, closing the in-flight HTTP call.
 		long llmTimeoutMs = resolveLlmTimeoutMs(config);
-		CompletableFuture<ACell> invocation = engine.jobs().invokeInternal(llmOperation, l3Input, ctx);
+		// The operation is resolved apart from the call, so that one which does
+		// not resolve is known for the agent's setup: every call would fail the
+		// same way, so the agent cannot continue. A failure the operation raises
+		// itself is classified below.
+		Operation operation;
+		try {
+			operation = engine.jobs().resolveOperation(llmOperation, ctx);
+		} catch (RuntimeException e) {
+			if (!isExpectedFailure(e)) throw e;
+			throw new CannotContinueException(LLM_CALL_FAILED.formatted(llmOperation, CoviaException.reasonOf(e)), e);
+		}
+		CompletableFuture<ACell> invocation = engine.jobs().invokeInternal(llmOperation, operation, l3Input, ctx, null);
 		ACell result;
 		try {
 			result = invocation.get(llmTimeoutMs, TimeUnit.MILLISECONDS);

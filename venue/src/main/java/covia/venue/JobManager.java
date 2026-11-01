@@ -344,8 +344,13 @@ public class JobManager {
 		}
 	}
 
-	/** Resolve a reference to an operation definition, failing fast otherwise. */
-	private Operation resolveOperation(AString ref, RequestContext ctx) {
+	/**
+	 * Resolve a reference to an operation definition, failing fast otherwise:
+	 * {@link NotFoundException} when it does not resolve,
+	 * {@link InvalidInputException} when it is missing or names an asset that
+	 * is not an operation, and whatever resolving it raised.
+	 */
+	public Operation resolveOperation(AString ref, RequestContext ctx) {
 		if (ref == null) throw operationRequired();
 
 		Asset asset = engine.resolveAsset(ref, ctx);

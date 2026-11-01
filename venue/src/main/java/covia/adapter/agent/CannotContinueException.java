@@ -4,8 +4,8 @@ import covia.exception.CoviaException;
 
 /**
  * The agent cannot continue: the setup its model call runs under is wrong (a
- * key, model or setting, or an identity prompt that does not resolve), or its
- * provider cannot be reached. Every unit of work
+ * key, model or setting, or an LLM operation or identity prompt that does not
+ * resolve), or its provider cannot be reached. Every unit of work
  * the agent took next would fail the same way, so a transition raises this
  * instead of failing the work, and the run loop suspends the agent and keeps
  * its queue until the cause is fixed and the agent resumed (AGENT_LOOP.md
