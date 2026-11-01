@@ -14,6 +14,9 @@ import org.junit.jupiter.api.Test;
 import io.github.jaredmdobson.concentus.OpusApplication;
 import io.github.jaredmdobson.concentus.OpusEncoder;
 
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+
 /**
  * Audio reaches the local engine as 16 kHz mono: WAV at other rates and channel counts
  * is mixed down and resampled; an Ogg/Opus voice note (encoded here with Concentus's own
@@ -66,15 +69,15 @@ class AudioDecoderTest {
 	}
 
 	@Test void otherFormatsTooLongAndDamagedAudioAreRefused() throws Exception {
-		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(IllegalArgumentException.class,
+		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(NotSupportedException.class,
 			() -> AudioDecoder.decode("ID3\u0003mp3-ish".getBytes(StandardCharsets.ISO_8859_1))).getMessage());
-		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(IllegalArgumentException.class,
+		assertEquals(AudioDecoder.UNSUPPORTED, assertThrows(NotSupportedException.class,
 			() -> AudioDecoder.decode(header(new byte[1600], 8_000, 1, 1, 8))).getMessage(), "8-bit WAV is not read");
 		byte[] long8k = new byte[(AudioDecoder.MAX_SECONDS + 1) * 8_000 * 2];
-		assertEquals(AudioDecoder.TOO_LONG, assertThrows(IllegalArgumentException.class,
+		assertEquals(AudioDecoder.TOO_LONG, assertThrows(InvalidInputException.class,
 			() -> AudioDecoder.decode(header(long8k, 8_000, 1, 1, 16))).getMessage());
 		byte[] ogg = oggOpus(tone(16_000, 0.5), 16_000);
-		assertEquals(AudioDecoder.MALFORMED, assertThrows(IllegalArgumentException.class,
+		assertEquals(AudioDecoder.MALFORMED, assertThrows(InvalidInputException.class,
 			() -> AudioDecoder.decode(java.util.Arrays.copyOf(ogg, ogg.length - 10))).getMessage());
 	}
 
