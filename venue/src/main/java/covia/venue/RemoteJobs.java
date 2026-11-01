@@ -36,11 +36,15 @@ public final class RemoteJobs implements AutoCloseable {
 	public static final AString OBSERVATION = Strings.intern("observation");
 	public static final AString AUTH_REF = Strings.intern("authRef");
 	public static final AString ERROR_TYPE = Strings.intern("observationErrorType");
+	/** An expected observation failure's reason; absent for anything else. */
+	public static final AString ERROR = Strings.intern("observationError");
 	public static final AString REMOTE_STATUS = Strings.intern("remoteStatus");
 	public static final AString OWNS_REMOTE = Strings.intern("ownsRemote");
 	public static final AString OUTCOME = Strings.intern("outcome");
 	public static final AString HTTP_STATUS = Strings.intern("httpStatus");
 	public static final AString CANCELLATION_ERROR_TYPE = Strings.intern("errorType");
+	/** An expected cancellation failure's reason; absent for anything else. */
+	public static final AString CANCELLATION_ERROR = Strings.intern("error");
 	/** Cancellation outcomes recorded under {@link #OUTCOME}. */
 	public static final AString OUTCOME_REQUESTED = Strings.intern("requested");
 	public static final AString OUTCOME_ACKNOWLEDGED = Strings.intern("acknowledged");
@@ -153,7 +157,7 @@ public final class RemoteJobs implements AutoCloseable {
 	public static AMap<AString, ACell> observed(AMap<AString, ACell> data, AString status) {
 		AMap<AString, ACell> record = RT.ensureMap(data.get(DELEGATION));
 		return data.assoc(DELEGATION, record.assoc(REMOTE_STATUS, status)
-			.assoc(OBSERVATION, HEALTHY).dissoc(ERROR_TYPE));
+			.assoc(OBSERVATION, HEALTHY).dissoc(ERROR_TYPE).dissoc(ERROR));
 	}
 
 	/** Bind a known ID before observing. Never call this by resubmitting on timeout. */
@@ -166,7 +170,7 @@ public final class RemoteJobs implements AutoCloseable {
 				throw new ResponseException("Remote job identity changed");
 			}
 			return data.assoc(DELEGATION, record.assoc(REMOTE_ID, Strings.create(id))
-				.assoc(OBSERVATION, HEALTHY).dissoc(ERROR_TYPE));
+				.assoc(OBSERVATION, HEALTHY).dissoc(ERROR_TYPE).dissoc(ERROR));
 		});
 		if (job.isRecorded()) engine.flush();
 	}
@@ -192,7 +196,7 @@ public final class RemoteJobs implements AutoCloseable {
 					result = cause instanceof covia.exception.ResponseException re
 						&& re.response instanceof java.net.http.HttpResponse<?> response
 						? cancellationHttpFailure(response.statusCode())
-						: Maps.of(OUTCOME, OUTCOME_UNKNOWN, CANCELLATION_ERROR_TYPE, cause.getClass().getSimpleName());
+						: unknownCancellation(cause);
 					if (cause instanceof InterruptedException) Thread.currentThread().interrupt();
 				}
 				recordCancellation(job, remoteId, result);
@@ -226,6 +230,23 @@ public final class RemoteJobs implements AutoCloseable {
 		return cancellationResult(RT.ensureString(snapshot.get(Fields.STATUS)));
 	}
 
+	private static AMap<AString, ACell> unknownCancellation(Throwable cause) {
+		AMap<AString, ACell> result = Maps.of(OUTCOME, OUTCOME_UNKNOWN,
+			CANCELLATION_ERROR_TYPE, cause.getClass().getSimpleName());
+		AString reason = reason(cause);
+		return reason == null ? result : result.assoc(CANCELLATION_ERROR, reason);
+	}
+
+	/**
+	 * An expected failure's reason, which is the venue's own words. Null for
+	 * anything else, whose text may carry a credential-bearing URL or a
+	 * remote's body; its type is recorded instead.
+	 */
+	private static AString reason(Throwable error) {
+		if (covia.exception.CoviaException.reasonOf(error) == null) return null;
+		return Strings.create(covia.adapter.AAdapter.describeFailure(error));
+	}
+
 	public static AMap<AString, ACell> cancellationHttpFailure(int code) {
 		return Maps.of(OUTCOME, code >= 400 && code < 500 && code != 408 ? OUTCOME_REJECTED : OUTCOME_UNKNOWN,
 			HTTP_STATUS, code);
@@ -254,13 +275,14 @@ public final class RemoteJobs implements AutoCloseable {
 		AMap<AString, ACell> current = descriptor(job);
 		AString ref = current == null ? null : RT.ensureString(current.get(AUTH_REF));
 		if (ref != null && !closed) cleanUpOnFinish(job, ref);
-		// Exception text may contain a credential-bearing URL or response body.
 		AString type = error == null ? null : Strings.create(unwrap(error).getClass().getSimpleName());
+		AString reason = reason(error);
 		job.update(data -> {
 			AMap<AString, ACell> record = RT.ensureMap(data.get(DELEGATION));
 			if (record == null) return null;
 			AMap<AString, ACell> next = record.assoc(OBSERVATION, value);
 			next = type == null ? next.dissoc(ERROR_TYPE) : next.assoc(ERROR_TYPE, type);
+			next = reason == null ? next.dissoc(ERROR) : next.assoc(ERROR, reason);
 			return next.equals(record) ? null : data.assoc(DELEGATION, next);
 		});
 	}

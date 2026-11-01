@@ -35,6 +35,7 @@ import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.ResponseException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
 import covia.venue.Engine;
@@ -148,11 +149,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	private ACell execute(HttpClient client,String tok,String method,String route,ACell body,boolean retry429){
 		try{HttpRequest.Builder b=HttpRequest.newBuilder(URI.create(apiUrl+route)).timeout(Duration.ofSeconds(45)).header("Authorization","Bot "+tok).header("User-Agent","DiscordBot (https://covia.ai, "+Engine.jarVersion()+")");String json=body==null?"":JSON.print(body).toString();if(body!=null)b.header("Content-Type","application/json");b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(json));HttpResponse<String> r=client.send(b.build(),HttpResponse.BodyHandlers.ofString());
 			if(r.statusCode()==429&&retry429){long wait=1000;try{ACell parsed=JSON.parse(r.body());Object ra=JSON.json(RT.getIn(parsed,Strings.intern("retry_after")));if(ra instanceof Number n)wait=Math.min(30_000,Math.max(100,Math.round(n.doubleValue()*1000)));}catch(RuntimeException ignored){}Thread.sleep(wait);return execute(client,tok,method,route,body,false);}
-			if(r.statusCode()<200||r.statusCode()>=300){failed.incrementAndGet();throw new JobFailedException("Discord "+method+" "+route+" failed: HTTP "+r.statusCode()+" "+trim(r.body()));}
+			if(r.statusCode()<200||r.statusCode()>=300){failed.incrementAndGet();throw new ResponseException("Discord "+method+" "+route+" failed: HTTP "+r.statusCode(),r);}
 			if(r.body()==null||r.body().isBlank())return CVMBool.TRUE;return JSON.parse(r.body());
 		}catch(InterruptedException e){Thread.currentThread().interrupt();throw new JobFailedException("Discord call interrupted");}catch(java.io.IOException|IllegalArgumentException e){throw new JobFailedException("Discord "+method+" "+route+" failed: "+concise(e));}
 	}
-	static String concise(Throwable t){Throwable c=t;while((c instanceof CompletionException||c instanceof ExecutionException)&&c.getCause()!=null)c=c.getCause();String msg=AAdapter.describeFailure(c);return msg.length()>400?msg.substring(0,400)+"…":msg;}
-	private static String trim(String s){if(s==null)return "";return s.length()>600?s.substring(0,600)+"…":s;}
-	private void logFailure(String what,InboundMessage m,Throwable t){log.warn("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t));}
+	static String concise(Throwable t){Throwable c=t;while((c instanceof CompletionException||c instanceof ExecutionException)&&c.getCause()!=null)c=c.getCause();String msg=AAdapter.describeFailure(c);return msg.length()>400?msg.substring(0,400)+"…":msg;}	private void logFailure(String what,InboundMessage m,Throwable t){log.warn("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t));}
 }

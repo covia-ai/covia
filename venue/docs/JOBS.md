@@ -345,7 +345,9 @@ remote status are committed atomically before result continuations run.
 
 Transport timeouts, malformed observations, missing remote records, and 5xx
 responses do not prove execution failed. They set observation health to
-`retrying`; 401/403 observations set `auth-required`. Requests are bounded and
+`retrying`; 401/403 observations set `auth-required`. The failure's type is
+recorded as `observationErrorType` and, for an expected failure, its reason as
+`observationError`; both clear when observation is healthy again. Requests are bounded and
 back off with jitter (including HTTP Retry-After), with at most 32 requests
 globally and four per target. There is no job lifetime deadline. Interrupted
 A2A tasks remain observed, including when resumed directly at the remote peer.
@@ -396,12 +398,14 @@ The optional `cancellation` record contains `remoteId`, `outcome`, and available
   won the race).
 - `rejected`: the peer refused the cancellation request.
 - `unknown`: a transport failure, unreadable response or nonterminal response
-  did not establish cancellation.
+  did not establish cancellation. A failure records its type as `errorType`
+  and, for an expected failure, its reason as `error`.
 
 This evidence can be persisted after local termination through the narrow
 `Job.recordCancellation` method. It never changes the terminal status, result
-or error, and never repeats terminal cleanup or cancellation hooks. Raw error
-text, response bodies and credentials are not recorded. A missing cancellation
+or error, and never repeats terminal cleanup or cancellation hooks. Only an
+expected failure's reason is recorded, in the venue's own words; other error
+text, response bodies and credentials are not. A missing cancellation
 record is not confirmation that remote work stopped. If acceptance is lost and
 no remote ID arrives, no cancellation can be addressed. There is no confirmation
 polling or automatic retry; a process crash can leave an attempt unresolved.

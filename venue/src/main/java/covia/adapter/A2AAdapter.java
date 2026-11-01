@@ -545,8 +545,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				.thenApply(resp -> {
 					int sc = resp.statusCode();
 					if (sc < 200 || sc >= 300) {
-						throw new ResponseException("Agent card fetch failed: HTTP " + sc + ": "
-							+ conciseDetail(resp.body(), 512), resp);
+						throw new ResponseException("Agent card fetch failed: HTTP " + sc, resp);
 					}
 					// Round-trip through the SDK mapper so the response is parsed
 					// (and any drift in upstream card format is flagged loudly).
@@ -620,8 +619,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 					// Per spec §9, JSON-RPC errors still arrive with HTTP 200;
 					// we only reject on non-2xx transport-level failures.
 					if (sc < 200 || sc >= 300) {
-						throw new ResponseException("A2A RPC failed: HTTP " + sc + ": "
-							+ conciseDetail(resp.body(), 512), resp);
+						throw new ResponseException("A2A RPC failed: HTTP " + sc, resp);
 					}
 					ACell parsed = JSON.parse(resp.body());
 					if (!(parsed instanceof AMap)) {
@@ -736,8 +734,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				engine.remoteJobs().submissionUnknown(job, new UnavailableException("Remote send unavailable"));
 				return;
 			}
-			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode() + ": "
-				+ conciseDetail(resp.body(), 512));
+			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode());
 			return;
 		}
 		Map<?, ?> envReply;
@@ -898,8 +895,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		int code = resp.statusCode();
 		if (code >= 500 || code == 408) throw unacknowledged(null);
 		if (code < 200 || code >= 300) {
-			throw new NotSupportedException("Remote agent rejected the message: HTTP " + code
-				+ ": " + conciseDetail(resp.body(), 512));
+			throw new NotSupportedException("Remote agent rejected the message: HTTP " + code);
 		}
 		AMap<AString, ACell> reply;
 		try {

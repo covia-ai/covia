@@ -234,16 +234,21 @@ public class SonnyLabsAdapter extends AAdapter {
 		return value;
 	}
 
+	/** A provider code or request id fit to quote: an identifier, never free text. */
+	private static final java.util.regex.Pattern IDENTIFIER = java.util.regex.Pattern.compile("[A-Za-z0-9._:-]{1,80}");
+
+	/**
+	 * The provider's refusal, by status, code and request id. Its free-text
+	 * detail is the provider's words, which may echo scanned text, so it is
+	 * never quoted.
+	 */
 	private static JobFailedException apiFailure(HttpResponse<String> response) {
 		String code = null;
-		String detail = null;
 		try {
 			AMap<AString, ACell> problem = RT.ensureMap(JSON.parse(response.body()));
 			if (problem != null) {
 				AString codeCell = RT.ensureString(problem.get(Strings.intern("code")));
-				AString detailCell = RT.ensureString(problem.get(Strings.intern("detail")));
-				if (codeCell != null) code = codeCell.toString();
-				if (detailCell != null) detail = detailCell.toString();
+				if (codeCell != null && IDENTIFIER.matcher(codeCell.toString()).matches()) code = codeCell.toString();
 			}
 		} catch (RuntimeException ignored) {
 			// A non-problem response still reports its HTTP status and request id.
@@ -252,8 +257,8 @@ public class SonnyLabsAdapter extends AAdapter {
 			.append(response.statusCode());
 		if (code != null) message.append(", ").append(code);
 		message.append(')');
-		if (detail != null && !detail.isBlank()) message.append(": ").append(detail);
 		response.headers().firstValue("X-Request-Id")
+			.filter(id -> IDENTIFIER.matcher(id).matches())
 			.ifPresent(id -> message.append(" [requestId=").append(id).append(']'));
 		return new JobFailedException(message.toString());
 	}

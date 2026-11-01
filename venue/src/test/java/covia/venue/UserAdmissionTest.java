@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -45,9 +46,12 @@ class UserAdmissionTest {
 
 			CompletionException failure = assertThrows(CompletionException.class,
 				() -> client.startJobAsync(Strings.create("v/test/ops/echo"), Maps.empty()).join());
-			assertInstanceOf(ResponseException.class, failure.getCause());
-			assertTrue(failure.getCause().getMessage().contains("403"));
-			assertTrue(failure.getCause().getMessage().contains("user:create"));
+			ResponseException refused = assertInstanceOf(ResponseException.class, failure.getCause());
+			assertTrue(refused.getMessage().contains("403"));
+			// The venue's reason stays in the response, never in the client's message
+			HttpResponse<?> response = assertInstanceOf(HttpResponse.class, refused.response);
+			assertTrue(String.valueOf(response.body()).contains("user:create"));
+			assertFalse(refused.getMessage().contains("user:create"));
 			assertNull(server.getEngine().getVenueState().users().get(did));
 		} finally {
 			server.close();

@@ -399,12 +399,12 @@ public class VenueHTTP extends Venue {
 		
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
 			if (response.statusCode() != 201) {
-				throw new ResponseException("Failed to add asset: " + response.statusCode() + " - " + response.body(), response);
+				throw new ResponseException("Failed to add asset: HTTP " + response.statusCode(), response);
 			}
 			ACell body=JSON.parseJSON5(response.body());
 			Hash v=Hash.parse(body);
 			if (v!=null) return v;
-			throw new ResponseException("Result did not contain a valid Hash: got "+body, response);
+			throw new ResponseException("Result did not contain a valid Hash", response);
 		});
 	} 
 
@@ -577,7 +577,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
 				throw new ResponseException(
-					"Failed to run operation: " + response + " = " + response.body(), response);
+					"Failed to run operation: HTTP " + response.statusCode(), response);
 			}
 			return JSON.parseJSON5(response.body());
 		});
@@ -727,7 +727,7 @@ public class VenueHTTP extends Venue {
 			int code = response.statusCode();
 			// 201 = job submitted; 200 = wait window closed with the finished record
 			if (code != 201 && code != 200) {
-				throw new ResponseException("Failed to start operation: " + response+" = "+response.body(),response);
+				throw new ResponseException("Failed to start operation: HTTP " + response.statusCode(), response);
 			}
 			AMap<AString,ACell> body=RT.ensureMap(JSON.parseJSON5(response.body()));
 			if (body==null) {
@@ -966,9 +966,9 @@ public class VenueHTTP extends Venue {
 						return hash;
 					}
 				}
-				throw new ResponseException("Failed to parse content hash from response: " + response.body(), response);
+				throw new ResponseException("Failed to parse content hash from response", response);
 			} else {
-				throw new ResponseException("Failed to add content: " + response.statusCode() + " - " + response.body(), response);
+				throw new ResponseException("Failed to add content: HTTP " + response.statusCode(), response);
 			}
 		});
 
@@ -996,19 +996,16 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
-	 * Reads the start of a failed response's body for its message, then closes
-	 * it so the connection is released.
+	 * Closes a failed response's body so the connection is released. The body
+	 * is never read into a message: it is the remote's text, not ours.
 	 */
-	private static String errorBody(HttpResponse<InputStream> response) {
-		try (InputStream body = response.body()) {
-			return new String(body.readNBytes(ERROR_BODY_LIMIT), java.nio.charset.StandardCharsets.UTF_8);
+	private static void release(HttpResponse<InputStream> response) {
+		try {
+			response.body().close();
 		} catch (IOException e) {
-			return "";
+			// the connection is released either way
 		}
 	}
-
-	/** How much of a failed content response's body is read for its message. */
-	private static final int ERROR_BODY_LIMIT = 4096;
 
 	/**
 	 * Gets content for an asset using the GET API endpoint. The content is
@@ -1025,7 +1022,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
-				errorBody(response);
+				release(response);
 				throw new ResponseException("Content get failed with status: " + code
 					+ " -- asset reference: " + assetID);
 			}
@@ -1049,7 +1046,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
-				errorBody(response);
+				release(response);
 				throw new ResponseException("Content get failed with status: " +code+" -- asset ID: "+assetID);
 			}
 			return streamedContent(response);
@@ -1067,8 +1064,9 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofInputStream()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
+				release(response);
 				throw new ResponseException("Venue content get failed with status: " +code
-					+" -- asset ID: "+assetID+" -- "+errorBody(response));
+					+" -- asset ID: "+assetID);
 			}
 			return streamedContent(response);
 		});
@@ -1115,7 +1113,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to cancel job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to cancel job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1137,7 +1135,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to pause job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to pause job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1159,7 +1157,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to resume job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to resume job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1181,7 +1179,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new ResponseException("Failed to delete job: " + code + " - " + response.body(), response);
+				throw new ResponseException("Failed to delete job: HTTP " + code, response);
 			}
 		});
 	}
@@ -1202,7 +1200,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				return null;
 			} else {
-				throw new ResponseException("Failed to get job status: " + response.statusCode() + " - " + response.body(), response);
+				throw new ResponseException("Failed to get job status: HTTP " + response.statusCode(), response);
 			}
 		});
 	}
@@ -1451,7 +1449,7 @@ public class VenueHTTP extends Venue {
 			.build();
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
-				throw new ResponseException("Value read failed: " + response + " = " + response.body(), response);
+				throw new ResponseException("Value read failed: HTTP " + response.statusCode(), response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
 		});
@@ -1468,7 +1466,7 @@ public class VenueHTTP extends Venue {
 		HttpRequest req = requestBuilder("agents").GET().build();
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
-				throw new ResponseException("Agent list failed: " + response + " = " + response.body(), response);
+				throw new ResponseException("Agent list failed: HTTP " + response.statusCode(), response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
 		});
@@ -1486,7 +1484,7 @@ public class VenueHTTP extends Venue {
 		HttpRequest req = requestBuilder("agents/" + agentId).GET().build();
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 200) {
-				throw new ResponseException("Agent info failed: " + response + " = " + response.body(), response);
+				throw new ResponseException("Agent info failed: HTTP " + response.statusCode(), response);
 			}
 			return RT.castMap(JSON.parse(response.body()));
 		});
