@@ -76,6 +76,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A shutting-down venue sends nothing new to remote venues; status checks, cancels and requests already sent get the shutdown grace window.
 - A message to a job that does not take messages answers 409 instead of being dropped.
 - A malformed job id or `ucans` field answers 400.
+- Memory edits made at once by a user and their agents all take effect.
 
 ### Security
 
