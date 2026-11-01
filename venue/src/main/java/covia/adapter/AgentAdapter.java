@@ -431,42 +431,54 @@ public class AgentAdapter extends AAdapter {
 
 	/** True only while this venue process owns a live run-loop attempt. */
 
-	/** The set of chat-job ids still queued in a session's pending envelopes —
-	 *  a waiter whose id is here has not yet been presented to the agent. */
-	private static java.util.Set<Blob> pendingChatJobIds(AVector<ACell> pending) {
-		java.util.Set<Blob> ids = new java.util.HashSet<>();
-		if (pending == null) return ids;
-		for (long i = 0; i < pending.count(); i++) {
-			AString jobHex = RT.ensureString(RT.getIn(pending.get(i), Fields.JOB_ID));
-			if (jobHex != null) {
-				try { ids.add(Blob.fromHex(jobHex.toString())); } catch (Exception ignored) {}
-			}
-		}
-		return ids;
-	}
-
 	/** The in-memory waiter map for one session, or null when none is held. */
 	private ConcurrentHashMap<Blob, Job> sessionChats(AgentKey key, Blob sid) {
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
 		return (agentChats != null) ? agentChats.get(sid) : null;
 	}
 
-	/** Fail only chat callers whose envelopes were consumed by this cycle. */
-	private void failPresentedChats(AgentKey key, Blob sid, AgentState agent,
-			String error, AMap<AString, ACell> cycleTokens) {
+	/**
+	 * Marks the chats whose messages a cycle took as STARTED. A chat's Job
+	 * status is the one record of whether the agent has taken it: a reply, a
+	 * failed cycle and a suspension settle exactly the chats that are STARTED,
+	 * and a chat whose message is still queued stays PENDING.
+	 */
+	private void startTakenChats(AgentKey key, Blob sid, AVector<ACell> taken) {
+		ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, sid);
+		if (waiters == null) return;
+		for (long i = 0; i < taken.count(); i++) {
+			AString jobHex = RT.ensureString(RT.getIn(taken.get(i), Fields.JOB_ID));
+			Blob jobId = (jobHex != null) ? Blob.parse(jobHex.toString()) : null;
+			Job chat = (jobId != null) ? waiters.get(jobId) : null;
+			if (chat != null && Status.PENDING.equals(chat.getStatus())) chat.setStatus(Status.STARTED);
+		}
+	}
+
+	/**
+	 * Removes and returns a session's waiting chats that the agent has taken
+	 * (STARTED), and drops finished ones. A chat still PENDING stays: its
+	 * message has not been taken yet.
+	 */
+	private static java.util.Map<Blob, Job> removeTakenChats(ConcurrentHashMap<Blob, Job> waiters) {
+		java.util.LinkedHashMap<Blob, Job> taken = new java.util.LinkedHashMap<>();
+		for (Job chat : new java.util.ArrayList<>(waiters.values())) {
+			if (chat.isFinished()) {
+				waiters.remove(chat.getID(), chat);
+			} else if (Status.STARTED.equals(chat.getStatus()) && waiters.remove(chat.getID(), chat)) {
+				taken.put(chat.getID(), chat);
+			}
+		}
+		return taken;
+	}
+
+	/** Fails the session's chats the agent has taken; chats still queued keep waiting. */
+	private void failTakenChats(AgentKey key, Blob sid, String error, AMap<AString, ACell> cycleTokens) {
 		if (sid == null) return;
 		ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, sid);
 		if (waiters == null) return;
-		java.util.Set<Blob> stillQueued = pendingChatJobIds(agent.getSessionPending(sid));
-		for (Job chatJob : new java.util.ArrayList<>(waiters.values())) {
-			if (chatJob == null || chatJob.isFinished()) {
-				waiters.remove(chatJob != null ? chatJob.getID() : null);
-				continue;
-			}
-			if (stillQueued.contains(chatJob.getID())) continue;
-			waiters.remove(chatJob.getID(), chatJob);
-			if (cycleTokens != null) attachTokens(chatJob, cycleTokens);
-			chatJob.fail(error);
+		for (Job chat : removeTakenChats(waiters).values()) {
+			if (cycleTokens != null) attachTokens(chat, cycleTokens);
+			chat.fail(error);
 		}
 	}
 
@@ -1697,9 +1709,9 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * agent:chat — synchronous request for the agent's next response on a
 	 * session. Registers a response waiter, appends the message to the
-	 * session's pending vector, wakes the agent, and leaves the Job in
-	 * STARTED state. The framework's run loop completes the Job from the
-	 * transition's {@code response} value once the agent runs (see
+	 * session's pending vector and wakes the agent. The Job stays PENDING
+	 * until a cycle takes the message, and is STARTED from then until the run
+	 * loop completes it from a transition's {@code response} (see
 	 * {@link #executeRunLoop}).
 	 *
 	 * <p>A2A {@code message/send} analogue. Unlike {@code agent:request},
@@ -1714,8 +1726,8 @@ public class AgentAdapter extends AAdapter {
 	 *   <li>{@code sessionId} present + unknown → fail</li>
 	 * </ul>
 	 *
-	 * <p>Several chats may await the same session. Each cycle completes the
-	 * waiters whose input it consumed. A trusted SessionDelivery participant
+	 * <p>Several chats may await the same session. A response completes the
+	 * waiters whose messages a cycle has taken. A trusted SessionDelivery participant
 	 * can commit delivery bookkeeping with intake, before the agent wakes.</p>
 	 */
 	private void handleChat(Job job, ACell input, RequestContext ctx) {
@@ -1742,10 +1754,11 @@ public class AgentAdapter extends AAdapter {
 
 		// Chats are not serialised: register this one as a waiter on the session
 		// keyed by its own Job id, alongside any already awaiting. Its message
-		// queues below like any other; the cycle that next runs on this session
-		// answers the conversation so far, and completion (in the run loop)
-		// resolves every waiter the agent had already seen. A cancel hook drops
-		// the waiter so a caller cancelling their own Job stops awaiting at once.
+		// queues below like any other; the cycle that takes it marks the Job
+		// STARTED, and a response (in the run loop) resolves every waiter that
+		// is STARTED, so registering before queuing never lets an earlier reply
+		// answer this chat. A cancel hook drops the waiter so a caller
+		// cancelling their own Job stops awaiting at once.
 		AgentKey chatKey = target.key();
 		ConcurrentHashMap<Blob, Job> agentChats = activeChats
 			.computeIfAbsent(chatKey, k -> new ConcurrentHashMap<>())
@@ -4007,22 +4020,16 @@ public class AgentAdapter extends AAdapter {
 				}
 				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
 
-				// PENDING means accepted and queued. STARTED begins only when this
-				// live executor attempt actually picks the external request/chat.
+				// PENDING means accepted and queued. STARTED begins when a cycle
+				// takes the work: a request when its task is picked, a chat when
+				// its message enters the conversation.
 				if (pickedTask != null) {
 					Job taskJob = engine.jobs().getJob(pickedTask.getKey());
 					if (taskJob != null && Status.PENDING.equals(taskJob.getStatus())) {
 						taskJob.setStatus(Status.STARTED);
 					}
 				}
-				if (pickedSessionBlob != null) {
-					ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
-					if (waiters != null) {
-						for (Job w : waiters.values()) {
-							if (w != null && Status.PENDING.equals(w.getStatus())) w.setStatus(Status.STARTED);
-						}
-					}
-				}
+				if (cycleClaim != null) startTakenChats(key, pickedSessionBlob, filteredInbox);
 
 				AMap<AString, ACell> transitionInput = Maps.of(
 					Fields.AGENT_ID, agentId,
@@ -4443,24 +4450,16 @@ public class AgentAdapter extends AAdapter {
 		// awaitResult caller sees the completed cycle's writes.
 		completeDeferredJobs(deferredCompletions.remove(key));
 
-		// Complete every chat the agent has already seen. A response on the
-		// session answers the whole conversation queued before this cycle, so
-		// each waiter whose envelope has been drained from pending (presented
-		// this cycle or an earlier yielded one) resolves with the same reply;
-		// a waiter whose envelope is still pending arrived after the snapshot
-		// and keeps awaiting. Same post-merge ordering as task completion. A
-		// failed cycle fails those waiters instead, below.
+		// Complete every chat the agent has taken. A response on the session
+		// answers the whole conversation so far, so each waiting chat whose
+		// message a cycle took (this one, or an earlier one that yielded)
+		// resolves with the same reply; a chat still queued keeps waiting.
+		// Same post-merge ordering as task completion. A failed cycle fails
+		// those chats instead, below.
 		if (leanResponse != null && pickedSessionBlob != null) {
 			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
 			if (waiters != null) {
-				java.util.Set<Blob> stillQueued = pendingChatJobIds(agent.getSessionPending(pickedSessionBlob));
-				java.util.LinkedHashMap<Blob, Job> answered = new java.util.LinkedHashMap<>();
-				for (Job chatJob : new java.util.ArrayList<>(waiters.values())) {
-					if (chatJob == null || chatJob.isFinished()) { waiters.remove(chatJob != null ? chatJob.getID() : null); continue; }
-					if (stillQueued.contains(chatJob.getID())) continue;   // not yet presented
-					waiters.remove(chatJob.getID(), chatJob);
-					answered.put(chatJob.getID(), chatJob);
-				}
+				java.util.Map<Blob, Job> answered = removeTakenChats(waiters);
 				// Every result names the chats this response answered, in
 				// presentation order — this cycle's inbox first, then any
 				// waiter presented by an earlier cycle that yielded — so a
@@ -4491,8 +4490,7 @@ public class AgentAdapter extends AAdapter {
 		// task above, and here the chats it was answering. Work it never took
 		// stays queued, and the agent carries on with it.
 		if (leanError != null && !cannotContinue) {
-			failPresentedChats(key, pickedSessionBlob, agent,
-				leanError.toString(), cycleTokens);
+			failTakenChats(key, pickedSessionBlob, leanError.toString(), cycleTokens);
 		}
 
 		// An agent that cannot continue — its model setup is wrong, its
@@ -4552,7 +4550,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
 		if (agentChats != null) {
-			for (Blob sid : agentChats.keySet()) failPresentedChats(key, sid, agent, error, null);
+			for (Blob sid : agentChats.keySet()) failTakenChats(key, sid, error, null);
 		}
 		noteSuspended(key, agent);
 	}

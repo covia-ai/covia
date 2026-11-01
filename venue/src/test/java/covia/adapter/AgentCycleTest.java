@@ -2,6 +2,8 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -223,6 +225,8 @@ public class AgentCycleTest {
 				Blob sid = sessionOf(first);
 				Job second = chat(owner, "mid-cycle", sid, "second");
 				assertEquals(1, pendingCount(agent, sid), runtime + ": the second message waits in the queue");
+				assertEquals(Status.STARTED, first.getStatus(), runtime + ": a chat the cycle took is started");
+				assertEquals(Status.PENDING, second.getStatus(), runtime + ": a queued chat is not");
 
 				gate.release();
 				assertEquals(Vectors.of(hex(first)), answered(first), runtime + ": a reply answers only what its cycle took");
@@ -432,5 +436,49 @@ public class AgentCycleTest {
 		assertEquals(both, answered(second), "this cycle's message first, then the one taken earlier");
 		assertEquals(both, answered(first));
 		assertEquals(RT.getIn(second.getOutput(), Fields.RESPONSE), RT.getIn(first.getOutput(), Fields.RESPONSE));
+	}
+
+	/**
+	 * A chat waits for a reply before its message is queued. A reply landing
+	 * in between answers only the chats a cycle took, so this chat waits for
+	 * the reply to its own message. Session delivery accepts a message inside
+	 * the intake transaction, which holds the chat in that gap.
+	 */
+	@Test
+	public void aReplyBeforeAChatIsQueuedDoesNotAnswerIt(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("gap");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			AgentState agent = stepAgent(owner, "chat-gap");
+			Job first = chat(owner, "chat-gap", null, "hold:" + gateName + " reply");
+			awaitGate(gate);
+			Blob sid = sessionOf(first);
+
+			CountDownLatch waiting = new CountDownLatch(1);
+			CountDownLatch queue = new CountDownLatch(1);
+			RequestContext delivering = owner.withSessionDelivery((draft, session, job) -> {
+				waiting.countDown();
+				try {
+					queue.await();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				return true;
+			});
+			CompletableFuture<Job> delivered = CompletableFuture.supplyAsync(() -> agents().deliverSession(
+				Maps.of(Fields.AGENT_ID, "chat-gap", Fields.SESSION_ID, Strings.create(sid.toHexString()),
+					Fields.MESSAGE, "reply"), delivering));
+			try {
+				assertTrue(waiting.await(10, TimeUnit.SECONDS), "the second chat waits, its message not yet queued");
+				gate.release();
+				assertEquals(Vectors.of(hex(first)), answered(first), "the reply answers the chat its cycle took");
+				assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			} finally {
+				queue.countDown();
+			}
+			Job second = delivered.get(10, TimeUnit.SECONDS);
+			assertEquals(Vectors.of(hex(second)), answered(second), "it is answered by the reply to its own message");
+			assertEquals(Vectors.of(Strings.create("reply")), RT.getIn(second.getOutput(), Fields.RESPONSE, "saw"));
+		}
 	}
 }
