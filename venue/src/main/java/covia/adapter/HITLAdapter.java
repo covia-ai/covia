@@ -190,22 +190,31 @@ public class HITLAdapter extends AAdapter {
 		}
 		targetUser.putHitlRequest(id, record);
 		Blob jobId = job.getID();
-		trackPending(job);
+		trackPending(job, ctx.getTaskId());
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
 		job.setStatus(Status.INPUT_REQUIRED);
 		if (timeoutSecs != null) scheduleExpiry(targetDID, id, jobId, timeoutSecs * 1000);
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
 
-	/** HITL's result is delivered through the session inbox; pending holds only its handle. */
-	private void trackPending(Job job) {
+	/**
+	 * HITL's result is delivered through the session inbox; pending holds only
+	 * its handle, and the task whose cycle asked when there is one, so that
+	 * task waits for the answer rather than failing as idle. Recovery passes
+	 * no task and keeps the entry already recorded.
+	 */
+	private void trackPending(Job job, Blob taskId) {
 		AMap<AString, ACell> data = job.getData();
 		AString agentId = Principals.agentIdOf(RT.ensureString(data.get(Fields.ACTOR)));
 		if (agentId == null) return;
 		User owner = engine.getVenueState().users().get(RT.ensureString(data.get(Fields.CALLER)));
 		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return;
-		agent.addPending(job.getID(), Maps.empty());
+		if (taskId != null) {
+			agent.addPending(job.getID(), Maps.of(Fields.TASK_ID, Strings.create(taskId.toHexString())));
+		} else if (!agent.getPending().containsKey(job.getID())) {
+			agent.addPending(job.getID(), Maps.empty());
+		}
 		var cleanup = new java.util.function.Consumer<Job>() {
 			@Override public void accept(Job updated) {
 				if (!updated.isFinished()) return;
@@ -219,7 +228,7 @@ public class HITLAdapter extends AAdapter {
 
 	@Override
 	public void recoverJob(Job job) {
-		trackPending(job); // restores legacy waits and arms cleanup if recovery fails
+		trackPending(job, null); // restores legacy waits and arms cleanup if recovery fails
 		super.recoverJob(job);
 		if (job.isFinished()) return;
 		AMap<AString, ACell> data = job.getData();

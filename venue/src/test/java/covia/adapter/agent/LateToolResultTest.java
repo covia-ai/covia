@@ -15,8 +15,10 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.AgentAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -97,5 +99,46 @@ public class LateToolResultTest {
 		assertTrue(c.contains("COMPLETE") && c.contains("FAILED"),
 			"each outcome carries its status: " + c);
 		assertTrue(c.contains(HOLD), "each outcome names its operation: " + c);
+	}
+
+	@Test
+	public void aTaskWaitsForItsLateCallAndRunsAgainOnItsOutcome(TestInfo info) throws Exception {
+		AString did = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(did);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, "late-task",
+			Fields.CONFIG, Maps.of(
+				Fields.OPERATION, "v/ops/llmagent/chat",
+				"llmOperation", "v/test/ops/toolllm",
+				AbstractLLMAdapter.K_TOOL_CALL_TIMEOUT_MS, LIMIT_MS)),
+			owner).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(did).agent("late-task");
+
+		String gateName = "late-task-" + did;
+		Job job;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			// toolllm calls hold, which outlives the limit; the model then
+			// replies with text, a yield backed by the call still running.
+			job = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(
+				Fields.AGENT_ID, "late-task",
+				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
+			TestEngine.awaitTimelineCount(agent, 1, 10_000);
+			TestEngine.awaitAgentStatus(agent, AgentState.SLEEPING, 10_000);
+			assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
+				"a task waiting on a late call is parked, not failed");
+			assertFalse(job.isFinished());
+			gate.release();
+		}
+
+		// The outcome arrives in the task's session and runs it again. toolllm
+		// replies with text once more, leaving nothing outstanding this time.
+		Job asked = job;
+		assertThrows(Exception.class, () -> asked.awaitResult(10_000));
+		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
+		assertEquals(2, agent.getTimeline().count());
+		ACell shown = RT.getIn(agent.getTimeline().get(1), Fields.MESSAGES);
+		assertNotNull(shown, "the second cycle was shown the late outcome");
+		assertTrue(shown.toString().contains("late") && shown.toString().contains("COMPLETE"),
+			"the late outcome reached the task's session: " + shown);
 	}
 }

@@ -1,0 +1,198 @@
+package covia.adapter;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
+
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Blob;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.Status;
+import covia.grid.hitl.Hitl;
+import covia.venue.AgentState;
+import covia.venue.Engine;
+import covia.venue.RequestContext;
+import covia.venue.TestEngine;
+import covia.venue.User;
+
+/**
+ * A task that yields runs again only when something it waits on brings it
+ * back: a person's answer, a call past its time limit, or a wake time. One
+ * that yields with none of these fails at once (AGENT_LOOP.md §4.6). Every
+ * case is driven by test transitions and lattice state, with no clock waits.
+ */
+public class TaskYieldTest {
+
+	private static final long HOUR_MS = 3_600_000;
+
+	private final Engine engine = TestEngine.ENGINE;
+
+	private AgentAdapter agents() {
+		return (AgentAdapter) engine.getAdapter("agent");
+	}
+
+	private AgentState create(RequestContext owner, String agentId, AMap<AString, ACell> config,
+			AMap<AString, ACell> state) {
+		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config);
+		if (state != null) input = input.assoc(AgentState.KEY_STATE, state);
+		engine.jobs().invokeOperation("v/ops/agent/create", input, owner).awaitResult(5000);
+		return engine.getVenueState().users().get(owner.getUserDID()).agent(agentId);
+	}
+
+	private Job request(RequestContext owner, String agentId, String ask) {
+		return engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.INPUT, Maps.of("ask", ask)), owner);
+	}
+
+	/** Waits for the agent's run to reach a rest state (its loop's own completion). */
+	private void awaitRest(AgentState agent, RequestContext owner) throws Exception {
+		agents().awaitRunFinished(agent.getAgentId(), owner, 10_000);
+	}
+
+	private static long timelineCount(AgentState agent) {
+		AVector<ACell> timeline = agent.getTimeline();
+		return (timeline == null) ? 0 : timeline.count();
+	}
+
+	@Test
+	public void aYieldWithNothingOutstandingFailsTheTaskAtOnce(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		AgentState agent = create(owner, "idle-yield", Maps.of(Fields.OPERATION, "v/test/ops/echo"), null);
+
+		Job job = request(owner, "idle-yield", "do something");
+		assertThrows(Exception.class, () -> job.awaitResult(10_000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
+		awaitRest(agent, owner);
+		assertEquals(1, timelineCount(agent), "the task ran once, not until the loop cap");
+		assertEquals(0, agent.getTasks().count());
+	}
+
+	@Test
+	public void aWakeTimeParksTheTaskUntilItComes(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		long later = System.currentTimeMillis() + HOUR_MS;
+		AgentState agent = create(owner, "wake-yield",
+			Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
+			Maps.of(Fields.WAKE_TIME, CVMLong.create(later)));
+
+		Job job = request(owner, "wake-yield", "come back later");
+		TestEngine.awaitTimelineCount(agent, 1, 10_000);
+		awaitRest(agent, owner);
+		Blob taskId = job.getID();
+		ACell row = agent.getTasks().get(taskId);
+		assertTrue(AgentState.isParked(row), "a yield with a wake time parks the task");
+		assertEquals(CVMLong.create(later), RT.getIn(row, Fields.WAKE_TIME));
+		assertFalse(job.isFinished(), "the caller's job waits with its task");
+
+		// Before its wake time a parked task is not work, so a plain kick runs nothing.
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "wake-yield", Fields.FORCE, false), owner).awaitResult(5000);
+		assertEquals(1, timelineCount(agent));
+
+		// A forced kick runs a cycle, but not on the parked task.
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "wake-yield"), owner).awaitResult(10_000);
+		assertEquals(2, timelineCount(agent));
+		assertNull(RT.getIn(agent.getTimeline().get(1), Fields.TASKS),
+			"a forced kick does not present a parked task");
+		assertTrue(AgentState.isParked(agent.getTasks().get(taskId)));
+
+		// Time passes: the wake time is now behind us, the scheduler fires, and the task runs.
+		engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
+			AgentState.ThreadKind.TASK, taskId, System.currentTimeMillis() - 1);
+		TestEngine.awaitTimelineCount(agent, 3, 10_000);
+		awaitRest(agent, owner);
+		assertNotNull(RT.getIn(agent.getTimeline().get(2), Fields.TASKS),
+			"the task's own wake presents it again");
+		assertTrue(AgentState.isParked(agent.getTasks().get(taskId)),
+			"it asked for a later wake again, so it is parked again");
+		assertFalse(job.isFinished());
+
+		// Leave nothing armed in the shared engine.
+		engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
+			AgentState.ThreadKind.TASK, taskId, 0);
+	}
+
+	@Test
+	public void aTaskThatAsksAPersonWaitsForTheAnswer(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		AgentState agent = create(owner, "ask-yield", Maps.of(Fields.OPERATION, "v/test/ops/askhuman"), null);
+
+		Job job = request(owner, "ask-yield", "decide for me");
+		TestEngine.awaitTimelineCount(agent, 1, 10_000);
+		awaitRest(agent, owner);
+		assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
+			"an open ask from the task's cycle parks the task");
+		assertTrue(agent.hasPendingFor(job.getID()));
+		assertFalse(job.isFinished());
+
+		respond(owner, agent, "carry on");
+		ACell result = job.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertTrue(result.toString().contains("carry on"), "the answer completes the task: " + result);
+		assertEquals(2, timelineCount(agent), "the task ran once to ask and once on the answer");
+	}
+
+	@Test
+	public void aTaskThatAsksThroughTheLlmHarnessWaitsForTheAnswer(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		AgentState agent = create(owner, "harness-ask", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/toolllm",
+			Fields.TOOLS, Vectors.of(Strings.create("v/ops/hitl/request"))), null);
+
+		// toolllm asks through hitl_request, then replies with text: a yield
+		// backed by the ask, which the task id carried through the harness
+		// ties to this task.
+		Job job = request(owner, "harness-ask", "ask-human");
+		TestEngine.awaitTimelineCount(agent, 1, 10_000);
+		awaitRest(agent, owner);
+		assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
+			"an ask made through the LLM harness parks its task");
+		assertFalse(job.isFinished());
+
+		// The answer runs the task again. toolllm replies with text once more,
+		// which leaves nothing outstanding, so this time the task fails as idle.
+		respond(owner, agent, "carry on");
+		assertThrows(Exception.class, () -> job.awaitResult(10_000));
+		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
+		assertEquals(2, timelineCount(agent));
+	}
+
+	@Test
+	public void aTaskWokenEveryCycleStillStopsAtTheLoopCap(TestInfo info) throws Exception {
+		// A wake time already passed is honoured every cycle, so this task is
+		// always ready; the iteration cap remains the backstop (#215).
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		AgentState agent = create(owner, "past-wake",
+			Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
+			Maps.of(Fields.WAKE_TIME, CVMLong.create(1)));
+
+		Job job = request(owner, "past-wake", "spin");
+		assertThrows(Exception.class, () -> job.awaitResult(10_000));
+		assertTrue(job.getErrorMessage().contains("loop iterations"),
+			"the cap fails the task: " + job.getErrorMessage());
+		awaitRest(agent, owner);
+		assertEquals(0, agent.getTasks().count());
+	}
+
+	/** Answers the agent's one open ask, as its owner. */
+	private void respond(RequestContext owner, AgentState agent, String answer) {
+		AString askId = null;
+		for (var entry : agent.getPending().entrySet()) askId = Strings.create(entry.getKey().toHexString());
+		assertNotNull(askId, "the agent should have an open ask");
+		engine.jobs().invokeOperation("v/ops/hitl/respond",
+			Hitl.answer(askId.toString()).answer("next", answer).build(), owner).awaitResult(5000);
+	}
+}

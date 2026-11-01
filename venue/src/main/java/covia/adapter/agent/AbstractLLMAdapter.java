@@ -1144,14 +1144,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
 		if (agentId == null || sessionId == null || agents == null) return toolTimeout(timeoutMs);
 		AString owner = ctx.getUserDID();
+		// A task that yields while this runs waits for it rather than failing as idle.
+		Runnable release = agents.trackLateCall(owner, agentId, ctx.getTaskId());
 		call.whenComplete((result, failure) -> {
-			// Shutdown cancels running calls; that is not their outcome.
-			if (engine.isClosing()) return;
-			AMap<AString, ACell> outcome = (failure == null)
-				? Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.COMPLETE, Fields.RESULT, result)
-				: Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.FAILED,
-					Fields.ERROR, Strings.create(toolFailure(failure, operation.toString())));
-			agents.deliverSessionMessage(owner, agentId, sessionId, engine.getDIDString(), null, outcome);
+			try {
+				// Shutdown cancels running calls; that is not their outcome.
+				if (engine.isClosing()) return;
+				AMap<AString, ACell> outcome = (failure == null)
+					? Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.COMPLETE, Fields.RESULT, result)
+					: Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.FAILED,
+						Fields.ERROR, Strings.create(toolFailure(failure, operation.toString())));
+				agents.deliverSessionMessage(owner, agentId, sessionId, engine.getDIDString(), null, outcome);
+			} finally {
+				// Only after delivery: the message, not the count, now brings the task back.
+				release.run();
+			}
 		});
 		return Strings.create(String.format(TOOL_STILL_RUNNING, operation, timeoutMs));
 	}

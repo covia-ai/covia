@@ -1963,12 +1963,12 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
-	public void testStuckTaskFailsTerminallyAtLoopCap() throws Exception {
-		// test:stubbornllm never resolves the task: every cycle is a plain-text
-		// reply, so the run loop burns its whole iteration budget on one task.
-		// The cap must be terminal — the caller's job FAILED with a structured
-		// error and the task removed — not a sleep the wake re-check turns into
-		// another full-budget burn while the job pins STARTED (#215).
+	public void testTaskThatYieldsWithNothingOutstandingFailsAtOnce() throws Exception {
+		// test:stubbornllm never resolves the task: its one cycle is a
+		// plain-text reply that leaves nothing to resume the task (no ask, no
+		// running call, no wake time). The caller's job fails after that one
+		// cycle with a reason, rather than the task being picked straight back
+		// up with nothing new until the loop cap (#215).
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
@@ -1988,18 +1988,17 @@ public class LLMAgentAdapterTest {
 				Fields.AGENT_ID, "stubborn-agent",
 				Fields.INPUT, Maps.of("task", "impossible request")),
 			RequestContext.of(ALICE_DID));
-		Exception ex = assertThrows(Exception.class, () -> reqJob.awaitResult(30000),
+		assertThrows(Exception.class, () -> reqJob.awaitResult(30000),
 			"the caller's await must terminate in failure, not hang");
-		assertTrue(ex.getMessage().contains("loop iterations"),
-			"error must say what happened, got: " + ex.getMessage());
-		assertTrue(reqJob.isFinished(), "job must not stay STARTED forever");
 		assertEquals(Status.FAILED, reqJob.getStatus());
+		assertEquals(covia.adapter.AgentAdapter.TASK_YIELDED_IDLE, reqJob.getErrorMessage());
 
-		// The stuck task is gone; the agent is not poisoned
+		// One cycle ran; the task is gone; the agent is not poisoned
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("stubborn-agent");
-		assertEquals(0, agent.getTasks().count(), "stuck task must be removed");
+		assertEquals(0, agent.getTasks().count(), "the yielded task must be removed");
 		TestEngine.awaitAgentIdle(agent, 10000);
+		assertEquals(1, agent.getTimeline().count(), "the task ran exactly once");
 	}
 
 	@Test

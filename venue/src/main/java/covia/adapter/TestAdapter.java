@@ -234,6 +234,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
                 case "wakeresponse":
                     return CompletableFuture.completedFuture(handleWakeResponse(input));
+                case "askhuman":
+                    return CompletableFuture.completedFuture(handleAskHuman(ctx, input));
                 case "llm":
 					if (ctx.getAgentId() != null) CAPTURED_LLM_INPUT.put(ctx.getAgentId(), input);
                     return CompletableFuture.completedFuture(withMockTokens(handleLlm(input), input));
@@ -349,6 +351,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("pause",        BASE+"pauseop.json");
 			installTestAsset("taskcomplete", BASE+"taskcomplete.json");
 			installTestAsset("wakeresponse", BASE+"wakeresponse.json");
+			installTestAsset("askhuman",     BASE+"askhuman.json");
 
 			// Demos and content fixtures — stored in CAS only, not in any catalog.
 			installExampleAsset(BASE+"empty.json");
@@ -560,6 +563,28 @@ public class TestAdapter extends AAdapter {
             out = out.assoc(Fields.WAKE_TIME, wt);
         }
         return out;
+    }
+
+    /**
+     * Test task transition that asks its owner a question and yields. With no
+     * message in its session it calls {@code hitl:request} under the cycle's
+     * context and leaves the task queued; once the answer arrives in the
+     * session, it completes the task with that answer.
+     */
+    private ACell handleAskHuman(RequestContext ctx, ACell input) {
+        AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, AgentState.KEY_PENDING));
+        if (inbox != null && inbox.count() > 0) {
+            ACell answer = RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE);
+            if (ctx.getTaskId() != null) {
+                engine.jobs().invokeInternal("v/ops/agent/complete-task",
+                    Maps.of(Fields.RESULT, answer), ctx).join();
+            }
+            return Maps.of(Fields.RESPONSE, Strings.create("answered"));
+        }
+        engine.jobs().invokeOperation("v/ops/hitl/request", Maps.of(
+            "title", "Need a decision",
+            "asks", Vectors.of(Maps.of("id", "next", "type", "text", "prompt", "What next?"))), ctx);
+        return Maps.of(Fields.RESPONSE, Strings.create("asked"));
     }
 
     /**
@@ -789,7 +814,7 @@ public class TestAdapter extends AAdapter {
                 arguments = "{}";
             } else if (hold >= 0) {
                 // A call the test finishes by releasing the named gate.
-                String gate = lastUserMsg.substring(hold + 5).split("\\s", 2)[0];
+                String gate = lastUserMsg.substring(hold + 5).split("[\\s\"]", 2)[0];
                 toolName = "v/test/ops/hold";
                 arguments = "{\"gate\":\"" + gate + "\",\"result\":\"late\"}";
             } else if (lastUserMsg.contains("ask-human")) {

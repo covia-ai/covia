@@ -122,6 +122,13 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPEND_REASON_INVALID = "Suspension reason must be a string";
 	public static final String SUSPEND_AGENT_GONE = "Agent was removed or terminated before suspension";
 	public static final String TRANSITION_CANCELLED = "Transition cancelled";
+	/** Why a task failed after a cycle that neither resolved it nor left anything to resume it. */
+	public static final String TASK_YIELDED_IDLE = "The agent ended its turn without completing or failing the task, "
+		+ "and nothing it waits on (a person's answer, a running call or a wake time) would resume it; "
+		+ "inspect the agent timeline for what it did, and re-submit if appropriate";
+	/** Why a parked task failed at startup: what it waited on ran only in memory. */
+	public static final String TASK_WAIT_LOST = "The venue restarted while the task waited on a call that "
+		+ "had passed its time limit, so its result was lost; re-submit if appropriate";
 	public static final String SUSPENDED_REFUSAL = "Agent '%s' is suspended%s; %s";
 	public static final String SUSPENDED_RESUME_ADVICE = "fix the cause, then use agent:resume";
 	public static final String SUSPENDED_ASK_ADVICE = "ask whoever stopped the agent before using agent:resume";
@@ -211,6 +218,15 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private final ConcurrentHashMap<AgentKey, CompletableFuture<ACell>> runningLoops
 		= new ConcurrentHashMap<>();
+
+	/**
+	 * Tool calls still running past their time limit, counted by the task
+	 * whose cycle made them (#607). A task that yields while one runs is
+	 * parked, and the call's outcome wakes it. Held in memory only, because
+	 * the calls are: startup fails the tasks that waited on them.
+	 */
+	private final ConcurrentHashMap<LateCallKey, Integer> lateCalls = new ConcurrentHashMap<>();
+	private record LateCallKey(AgentKey agent, Blob taskId) {}
 
 	/** Active transition job per agent — allows suspend to cancel running transitions */
 	private final ConcurrentHashMap<AgentKey, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
@@ -3732,15 +3748,36 @@ public class AgentAdapter extends AAdapter {
 		return intake == AgentState.SessionIntake.APPLIED;
 	}
 
+	/**
+	 * Records a tool call from a task's cycle that is still running past its
+	 * time limit. Returns the release to run once its outcome has been
+	 * delivered; releasing more than once has no further effect.
+	 */
+	public Runnable trackLateCall(AString ownerDID, AString agentId, Blob taskId) {
+		if (taskId == null) return () -> {};
+		LateCallKey key = new LateCallKey(new AgentKey(ownerDID, agentId), taskId);
+		lateCalls.merge(key, 1, Integer::sum);
+		java.util.concurrent.atomic.AtomicBoolean released = new java.util.concurrent.atomic.AtomicBoolean();
+		return () -> {
+			if (released.compareAndSet(false, true)) {
+				lateCalls.computeIfPresent(key, (k, n) -> (n > 1) ? n - 1 : null);
+			}
+		};
+	}
+
+	private boolean hasLateCalls(AString ownerDID, AString agentId, Blob taskId) {
+		return lateCalls.containsKey(new LateCallKey(new AgentKey(ownerDID, agentId), taskId));
+	}
+
 	/** Overload: non-forced wake (used by message delivery / resume auto-wake). */
 	CompletableFuture<ACell> wakeAgent(AString ownerDID, AString agentId) {
 		return wakeAgent(ownerDID, agentId, false);
 	}
 
+	/** Work is a session message waiting, or a task with something to run on
+	 *  ({@link AgentState#isTaskReady}); a parked task is not work. */
 	private static boolean hasWork(AgentState agent) {
-		if (agent.hasSessionPending()) return true;
-		Index<Blob, ACell> tasks = agent.getTasks();
-		return tasks != null && tasks.count() > 0;
+		return agent.hasSessionPending() || agent.hasReadyTask(System.currentTimeMillis());
 	}
 
 	// ========== Run loop ==========
@@ -3843,7 +3880,7 @@ public class AgentAdapter extends AAdapter {
 				// On subsequent iterations, exit cleanly if no work remains.
 				// The finally block performs a post-exit re-check that closes
 				// the exit/wake race without a lock.
-				if (!firstIteration && !agent.hasSessionPending() && tasks.count() == 0) {
+				if (!firstIteration && !hasWork(agent)) {
 					break;
 				}
 				firstIteration = false;
@@ -3858,9 +3895,10 @@ public class AgentAdapter extends AAdapter {
 
 				long startTs = Utils.getCurrentTimestamp();
 
-				// Pick at most one task per cycle (oldest by created timestamp).
-				// Multi-task agents fan out across cycles.
-				Map.Entry<Blob, ACell> pickedTask = pickOldestTask(tasks);
+				// Pick at most one task per cycle: the oldest by created timestamp
+				// that has something to run on. Multi-task agents fan out across
+				// cycles; parked tasks wait for what they are waiting on.
+				Map.Entry<Blob, ACell> pickedTask = pickOldestReadyTask(agent, tasks);
 				if (pickedTask != null) {
 					if (stuckTaskId != null && stuckTaskId.equals(pickedTask.getKey())) {
 						stuckCount++;
@@ -4373,6 +4411,25 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
+		// A cycle that leaves its task queued has yielded it. The task waits
+		// only on something that will bring it back: a person's answer, a call
+		// still running past its time limit, or a wake time. A yield with none
+		// of these could never resume, so the task fails now rather than being
+		// picked straight back up with nothing new (AGENT_LOOP.md §4.6).
+		if (pickedTask != null && leanError == null) {
+			Blob taskId = pickedTask.getKey();
+			ACell row = agent.getTasks().get(taskId);
+			if (row != null) {
+				if (yieldIsBacked(agent, callerDID, agentId, taskId, row)) {
+					agent.parkTask(taskId, AgentState.taskRevision(pickedTask.getValue()));
+				} else {
+					log.info("Agent {} yielded task {} with nothing to resume it — failing the task job",
+						agentId, taskId);
+					failTask(callerDID, agentId, taskId, TASK_YIELDED_IDLE);
+				}
+			}
+		}
+
 		// Cost attribution (#217): stamp the cycle's token usage onto the
 		// caller-facing job records BEFORE completing them, so the tokens
 		// field rides the same write-through persist as the completion.
@@ -4626,17 +4683,19 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Picks the oldest task from the Index by {@code created} timestamp.
-	 * Index iteration order is hash-based, so we must scan to find FIFO.
-	 * Returns null if the Index is empty.
+	 * Picks the oldest ready task ({@link AgentState#isTaskReady}) by
+	 * {@code created} timestamp. Index iteration order is hash-based, so we
+	 * must scan to find FIFO. Returns null if no task is ready.
 	 */
 	@SuppressWarnings("unchecked")
-	private static Map.Entry<Blob, ACell> pickOldestTask(Index<Blob, ACell> tasks) {
+	private static Map.Entry<Blob, ACell> pickOldestReadyTask(AgentState agent, Index<Blob, ACell> tasks) {
 		if (tasks == null || tasks.count() == 0) return null;
+		long now = System.currentTimeMillis();
 		Map.Entry<Blob, ACell> oldest = null;
 		long oldestTs = Long.MAX_VALUE;
 		for (var entry : tasks.entrySet()) {
 			ACell value = entry.getValue();
+			if (!agent.isTaskReady(value, now)) continue;
 			long ts = Long.MAX_VALUE;
 			if (value instanceof AMap) {
 				ACell created = ((AMap<AString, ACell>) value).get(Fields.CREATED);
@@ -4749,15 +4808,32 @@ public class AgentAdapter extends AAdapter {
 			+ " re-submit if appropriate";
 		log.warn("Agent {} stuck on task {} for the whole iteration budget — failing the task job",
 			agentId, taskId);
+		failTask(ownerDID, agentId, taskId, err);
+	}
+
+	/**
+	 * Whether a task that yielded has something that will bring it back:
+	 * a wake time, an open HITL ask from its cycle, a call still running past
+	 * its time limit, or input or messages that arrived during the cycle.
+	 */
+	private boolean yieldIsBacked(AgentState agent, AString ownerDID, AString agentId,
+			Blob taskId, ACell row) {
+		if (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong) return true;
+		if (agent.hasPendingFor(taskId) || hasLateCalls(ownerDID, agentId, taskId)) return true;
+		return agent.hasNewWorkFor(row, System.currentTimeMillis());
+	}
+
+	/** Removes a queued task and fails its caller's Job with {@code reason}. */
+	private void failTask(AString ownerDID, AString agentId, Blob taskId, String reason) {
 		// Drain before notification (the settled-state rule, S2.7c-2): the
 		// task leaves the agent's Index BEFORE the caller's job fails, so an
-		// awaitResult caller never observes the stuck task still queued.
+		// awaitResult caller never observes the task still queued.
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent != null) agent.removeTask(taskId);
 		outputContexts.remove(taskId);
 		Job pending = engine.jobs().getJob(taskId);
 		if (pending != null && !pending.isFinished()) {
-			pending.fail(err);
+			pending.fail(reason);
 		}
 	}
 
@@ -4947,7 +5023,7 @@ public class AgentAdapter extends AAdapter {
 					agent.sleep();
 					staleRuns++;
 				}
-				reconcileAgentAfterRestart(user, agent);
+				reconcileAgentAfterRestart(did, user, agent);
 				if (hasWork(agent)) {
 					log.info("Waking agent {} — durable work found on boot", agentId);
 					wakeAgent(did, agentId, true);
@@ -4964,18 +5040,26 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Removes agent-owned intake whose external Job was made terminal by the
 	 * generic Job recovery pass. Stable waiting Jobs and jobless lattice tasks
-	 * remain queued. Session epochs are executor fences, so none survives
-	 * process startup.
+	 * remain queued. A parked task survives only while what it waits on does:
+	 * a wake time or an open HITL ask is durable, but a call past its time
+	 * limit ran only in memory, so a task left waiting on one alone fails.
+	 * Session epochs are executor fences, so none survives process startup.
 	 */
 	@SuppressWarnings("unchecked")
-	private void reconcileAgentAfterRestart(User user, AgentState agent) {
+	private void reconcileAgentAfterRestart(AString ownerDID, User user, AgentState agent) {
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if (tasks != null) {
 			for (var entry : tasks.entrySet()) {
-				ACell rawJob = user.getJob(entry.getKey());
+				Blob taskId = entry.getKey();
+				ACell rawJob = user.getJob(taskId);
 				if (rawJob instanceof AMap<?, ?> map
 						&& Job.isFinished((AMap<AString, ACell>) map)) {
-					agent.removeTask(entry.getKey());
+					agent.removeTask(taskId);
+				} else if (AgentState.isParked(entry.getValue())
+						&& !(RT.getIn(entry.getValue(), Fields.WAKE_TIME) instanceof CVMLong)
+						&& !agent.hasPendingFor(taskId)
+						&& !agent.hasNewWorkFor(entry.getValue(), System.currentTimeMillis())) {
+					failTask(ownerDID, agent.getAgentId(), taskId, TASK_WAIT_LOST);
 				}
 			}
 		}

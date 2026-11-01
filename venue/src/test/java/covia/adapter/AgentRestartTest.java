@@ -122,4 +122,71 @@ public class AgentRestartTest {
 			}
 		}
 	}
+
+	/**
+	 * A parked task survives a restart only while what it waits on does. A
+	 * wake time is durable, so that task stays parked. A call past its time
+	 * limit ran only in memory, so a task left with nothing durable to wait
+	 * on fails at boot rather than waiting forever.
+	 */
+	@Test
+	public void parkedTaskSurvivesRestartOnlyWithSomethingDurableToWaitOn() throws Exception {
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		AKeyPair keyPair = AKeyPair.generate();
+		RequestContext alice = RequestContext.of(ALICE);
+		AMap<AString, ACell> later = Maps.of(Fields.WAKE_TIME,
+			convex.core.data.prim.CVMLong.create(System.currentTimeMillis() + 3_600_000));
+		Job waking;
+		Job orphaned;
+
+		// Phase 1: both tasks yield with a wake time and park. One then loses
+		// its wake time, standing in for a task whose only wait was in memory.
+		Engine first = new Engine(config(), covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
+		try {
+			Engine.addDemoAssets(first);
+			for (String agentId : new String[] {"parked-waking", "parked-orphan"}) {
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
+					AgentState.KEY_STATE, later), alice).awaitResult(5000);
+			}
+			waking = first.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "parked-waking", Fields.INPUT, Maps.of("ask", "wait")), alice);
+			orphaned = first.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "parked-orphan", Fields.INPUT, Maps.of("ask", "wait")), alice);
+			AgentAdapter agents = (AgentAdapter) first.getAdapter("agent");
+			for (String agentId : new String[] {"parked-waking", "parked-orphan"}) {
+				AgentState agent = first.getVenueState().users().get(ALICE).agent(agentId);
+				covia.venue.TestEngine.awaitTimelineCount(agent, 1, 10_000);
+				agents.awaitRunFinished(Strings.create(agentId), alice, 10_000);
+			}
+			AgentState orphan = first.getVenueState().users().get(ALICE).agent("parked-orphan");
+			assertTrue(AgentState.isParked(orphan.getTasks().get(orphaned.getID())));
+			orphan.setThreadWakeTime(AgentState.ThreadKind.TASK, orphaned.getID(), 0);
+			first.syncState();
+		} finally {
+			first.close();
+		}
+
+		// Phase 2: boot on the same lattice and run the boot reconciliation.
+		Engine second = new Engine(config(), covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
+		try {
+			Engine.addDemoAssets(second);
+			second.jobs().recoverJobs();
+			((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
+
+			Job lost = second.jobs().getJob(orphaned.getID(), alice);
+			assertNotNull(lost);
+			assertEquals(Status.FAILED, lost.getStatus(), "a task with nothing durable to wait on fails at boot");
+			assertEquals(AgentAdapter.TASK_WAIT_LOST, lost.getErrorMessage());
+
+			Job kept = second.jobs().getJob(waking.getID(), alice);
+			assertNotNull(kept);
+			assertFalse(kept.isFinished(), "a task waiting on its wake time stays queued");
+			assertTrue(AgentState.isParked(second.getVenueState().users().get(ALICE)
+				.agent("parked-waking").getTasks().get(waking.getID())));
+		} finally {
+			second.close();
+		}
+	}
 }

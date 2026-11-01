@@ -78,6 +78,9 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	private static final AString K_CONTINUATIONS = Strings.intern("continuations");
 	/** Number of original/continuation inputs already claimed by run cycles. */
 	private static final AString K_PRESENTED_INPUTS = Strings.intern("presentedInputs");
+	/** Set on a task row that yielded while something it waits on is outstanding:
+	 *  it runs again only when something new arrives for it ({@link #isTaskReady}). */
+	private static final AString K_PARKED = Strings.intern("parked");
 
 	/** Operation the scheduler fires to wake this agent — a non-forcing,
 	 *  non-blocking {@code agent:trigger}. Package-visible so scheduler tests
@@ -615,6 +618,8 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * Claims the next input for a task revision exactly once. Input zero is the
 	 * original {@code input}; later inputs are continuation envelopes' messages.
 	 * Returns null when all inputs were already presented or the revision raced.
+	 * A claim also unparks the task: it is in a cycle now, so a restart before
+	 * that cycle ends finds it interrupted rather than waiting.
 	 */
 	@SuppressWarnings("unchecked")
 	public ACell claimTaskInput(Blob taskId, long expectedRevision) {
@@ -625,7 +630,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 			Index<Blob, ACell> tasks = extractTasks(r);
 			ACell rawTask = tasks.get(taskId);
 			if (!(rawTask instanceof AMap<?, ?>) || taskRevision(rawTask) != expectedRevision) return r;
-			AMap<AString, ACell> task = (AMap<AString, ACell>) rawTask;
+			AMap<AString, ACell> task = ((AMap<AString, ACell>) rawTask).dissoc(K_PARKED);
 			long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count)
 				? count.longValue() : 0L;
 			ACell input;
@@ -636,7 +641,9 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 					(task.get(K_CONTINUATIONS) instanceof AVector<?> v)
 						? (AVector<ACell>) v : Vectors.empty();
 				long index = presented - 1;
-				if (index >= continuations.count()) return r;
+				if (index >= continuations.count()) {
+					return isParked(rawTask) ? r.assoc(K_TASKS, tasks.assoc(taskId, task)) : r;
+				}
 				ACell envelope = continuations.get(index);
 				input = RT.getIn(envelope, Fields.MESSAGE);
 			}
@@ -680,6 +687,73 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		ACell task = extractTasks(before).get(taskId);
 		return (task != null && taskRevision(task) == expectedRevision
 			&& !hasUnpresentedTaskInputs(task)) ? task : null;
+	}
+
+	/**
+	 * Parks a task that yielded while something it waits on is outstanding, so
+	 * the run loop passes it over until something new arrives for it. Does
+	 * nothing if the revision moved: a continuation arrived, and the task is
+	 * ready anyway.
+	 */
+	@SuppressWarnings("unchecked")
+	public void parkTask(Blob taskId, long expectedRevision) {
+		update(r -> {
+			Index<Blob, ACell> tasks = extractTasks(r);
+			ACell task = tasks.get(taskId);
+			if (!(task instanceof AMap<?, ?>) || taskRevision(task) != expectedRevision) return r;
+			return r.assoc(K_TASKS, tasks.assoc(taskId,
+				((AMap<AString, ACell>) task).assoc(K_PARKED, CVMBool.TRUE)));
+		});
+	}
+
+	/** Whether a task row has been parked by a yield. */
+	public static boolean isParked(ACell taskData) {
+		return taskData instanceof AMap<?, ?> map && CVMBool.TRUE.equals(map.get(K_PARKED));
+	}
+
+	/**
+	 * Whether a task has something to run on: it has not been parked, or it
+	 * has an input it has not been shown, or its wake time has come, or its
+	 * session has messages waiting (a human's answer arrives this way). A task
+	 * that is not parked but has been shown its input was interrupted
+	 * mid-cycle, and runs again.
+	 */
+	public boolean isTaskReady(ACell taskData, long now) {
+		return !isParked(taskData) || hasNewWorkFor(taskData, now);
+	}
+
+	/**
+	 * Whether something new is there for a task, parked or not: an input it
+	 * has not been shown, a wake time that has come, or messages waiting in
+	 * its session.
+	 */
+	@SuppressWarnings("unchecked")
+	public boolean hasNewWorkFor(ACell taskData, long now) {
+		if (!(taskData instanceof AMap<?, ?>)) return false;
+		AMap<AString, ACell> task = (AMap<AString, ACell>) taskData;
+		if (hasUnpresentedTaskInputs(task)) return true;
+		if (task.get(Fields.WAKE_TIME) instanceof CVMLong wake && wake.longValue() <= now) return true;
+		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
+		Blob sessionId = (sid == null) ? null : Blob.parse(sid.toString());
+		AMap<AString, ACell> session = (sessionId == null) ? null : getSession(sessionId);
+		return session != null && SessionState.sessionHasWork(session);
+	}
+
+	/** Whether any queued task is ready to run ({@link #isTaskReady}). */
+	public boolean hasReadyTask(long now) {
+		for (var entry : getTasks().entrySet()) {
+			if (isTaskReady(entry.getValue(), now)) return true;
+		}
+		return false;
+	}
+
+	/** Whether an outbound wait recorded for this task, such as an unanswered HITL ask, is open. */
+	public boolean hasPendingFor(Blob taskId) {
+		AString hex = Strings.create(taskId.toHexString());
+		for (var entry : getPending().entrySet()) {
+			if (hex.equals(RT.getIn(entry.getValue(), Fields.TASK_ID))) return true;
+		}
+		return false;
 	}
 
 	public void addPending(Blob jobId, ACell snapshot) {
