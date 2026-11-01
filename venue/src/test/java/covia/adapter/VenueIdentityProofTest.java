@@ -14,6 +14,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -264,6 +265,9 @@ public class VenueIdentityProofTest {
 	void aRecoveredJobWhoseVenueIsNoLongerProvenAwaitsAuthorityWithoutResendingItsCredential() throws Exception {
 		try (Peer peer = Peer.withKey()) {
 			peer.acceptsJobs = true;
+			// The first venue's status request goes unanswered until it has closed, with no
+			// grace window, so it has nothing left to send when the credentials are counted
+			peer.holdStatus = new CountDownLatch(1);
 			Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
@@ -272,12 +276,13 @@ public class VenueIdentityProofTest {
 			Job job;
 			try {
 				job = first.jobs().invokeOperation(GRID_RUN, input(peer.url(), "venue"), first.venueContext());
-				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+				assertTrue(peer.statusAsked.await(5, TimeUnit.SECONDS), "the venue observes the job it handed over");
 			} finally { first.close(); }
 			assertTrue(peer.credentialed.get() > 0, "the proven venue received the job with a credential");
+			int credentialed = peer.credentialed.get();
+			peer.holdStatus.countDown();
 			// The address no longer answers challenges
 			peer.key = null;
-			int credentialed = peer.credentialed.get();
 			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 			try {
 				Engine.addDemoAssets(second);
@@ -360,18 +365,13 @@ public class VenueIdentityProofTest {
 		return engine;
 	}
 
-	private static void await(java.util.function.BooleanSupplier condition) throws Exception {
-		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-		while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
-		assertTrue(condition.getAsBoolean());
-	}
-
 	/**
 	 * A loopback listener that answers discovery with the DID it is told to
 	 * claim and, holding a key, challenges with proofs signed by it. It counts
 	 * discoveries, challenges, the calls that follow, and every request
 	 * carrying a credential or grants. Told to, it answers each challenge with
-	 * one fixed proof, accepts jobs, or forwards every request to another peer.
+	 * one fixed proof, accepts jobs and holds their status requests unanswered,
+	 * or forwards every request to another peer.
 	 */
 	private static final class Peer implements AutoCloseable {
 		private static final HttpClient CLIENT = HttpClient.newHttpClient();
@@ -382,6 +382,9 @@ public class VenueIdentityProofTest {
 		final AtomicInteger calls = new AtomicInteger();
 		final AtomicInteger authenticated = new AtomicInteger();
 		final AtomicInteger credentialed = new AtomicInteger();
+		final CountDownLatch statusAsked = new CountDownLatch(1);
+		/** While set, each job status request waits for it before its answer. */
+		volatile CountDownLatch holdStatus;
 		volatile String claims;
 		volatile AKeyPair key;
 		volatile String replay;
@@ -419,12 +422,26 @@ public class VenueIdentityProofTest {
 				else if (discovery) respond(exchange, 200, "{\"id\":\"" + claims + "\"}");
 				else if (challenge) answerChallenge(exchange, body);
 				else if (acceptsJobs && (path.endsWith("/invoke") || path.endsWith("/jobs/" + REMOTE_ID))) {
+					if (!path.endsWith("/invoke")) awaitStatusRelease();
 					respond(exchange, path.endsWith("/invoke") ? 201 : 200,
 						"{\"id\":\"" + REMOTE_ID + "\",\"status\":\"STARTED\"}");
 				}
 				else respond(exchange, 404, "");
 			});
 			server.start();
+		}
+
+		/** Counts a job status request, then holds it while {@link #holdStatus} is set. */
+		private void awaitStatusRelease() throws IOException {
+			statusAsked.countDown();
+			CountDownLatch hold = holdStatus;
+			if (hold == null) return;
+			try {
+				hold.await();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IOException(e);
+			}
 		}
 
 		private void answerChallenge(HttpExchange exchange, byte[] body) throws IOException {
@@ -470,6 +487,10 @@ public class VenueIdentityProofTest {
 		/** The did:web this listener can prove by its address: its own loopback address. */
 		String webDID() { return "did:web:127.0.0.1%3A" + server.getAddress().getPort(); }
 
-		@Override public void close() { server.stop(0); }
+		@Override public void close() {
+			CountDownLatch hold = holdStatus;
+			if (hold != null) hold.countDown();
+			server.stop(0);
+		}
 	}
 }

@@ -8,6 +8,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -75,9 +76,13 @@ public final class RemoteJobs implements AutoCloseable {
 	private final ConcurrentHashMap<ACell, Semaphore> peerPermits = new ConcurrentHashMap<>();
 	/** Requests started and not yet settled; {@link #close} waits for them. Its monitor guards {@link #closed}'s setting. */
 	private final Set<CompletableFuture<?>> requests = ConcurrentHashMap.newKeySet();
+	/** Guards {@link #abandoned}'s setting against a cancellation outcome being recorded. */
+	private final Object settling = new Object();
 	private final long intervalMs;
 	private final long maxDelayMs;
 	private volatile boolean closed;
+	/** Set once close stops waiting: later answers are ignored, and a request not yet begun sends nothing. */
+	private volatile boolean abandoned;
 
 	RemoteJobs(Engine engine) { this(engine, 500, 30_000); }
 
@@ -194,9 +199,13 @@ public final class RemoteJobs implements AutoCloseable {
 	 * One asynchronous, transport-bounded cancellation attempt. The adapter owns
 	 * protocol interpretation; local cancellation never waits for the peer.
 	 * Captured transport authority remains usable after terminal secret cleanup.
-	 * Once closed, nothing is sent and the outcome is recorded as unknown.
+	 * Once closed, nothing is sent and the outcome is recorded as unknown. An
+	 * attempt close gives up on keeps its {@code requested} outcome, and its
+	 * answer is ignored.
+	 *
+	 * @return The attempt, complete once it has ended
 	 */
-	public void attemptCancellation(Job job, String remoteId,
+	public CompletableFuture<Void> attemptCancellation(Job job, String remoteId,
 			java.util.concurrent.Callable<AMap<AString, ACell>> request) {
 		CompletableFuture<Void> attempt;
 		try {
@@ -221,16 +230,24 @@ public final class RemoteJobs implements AutoCloseable {
 		} catch (ShuttingDownException refused) {
 			// No flush: the engine is closing, and its final flush, if still to come, carries this
 			job.recordCancellation(unknownCancellation(refused).assoc(REMOTE_ID, Strings.create(remoteId)));
-			return;
+			return CompletableFuture.completedFuture(null);
 		}
 		attempt.whenComplete((done, failure) -> {
-			if (failure != null) log.error("Recording remote cancellation of job {} failed", job.getID(), unwrap(failure));
+			// A shutdown refusal means close gave up on it before it began
+			if (failure != null && !(unwrap(failure) instanceof ShuttingDownException)) {
+				log.error("Recording remote cancellation of job {} failed", job.getID(), unwrap(failure));
+			}
 		});
+		return attempt;
 	}
 
+	/** Records an outcome, unless close has given up on requests: nothing is written after that. */
 	private void recordCancellation(Job job, String remoteId, AMap<AString, ACell> result) {
-		job.recordCancellation(result.assoc(REMOTE_ID, Strings.create(remoteId)));
-		if (job.isRecorded()) engine.flush();
+		synchronized (settling) {
+			if (abandoned) return;
+			job.recordCancellation(result.assoc(REMOTE_ID, Strings.create(remoteId)));
+			if (job.isRecorded()) engine.flush();
+		}
 	}
 
 	/** A terminal response is evidence, never a change to the cancelled local result. */
@@ -337,7 +354,11 @@ public final class RemoteJobs implements AutoCloseable {
 		CompletableFuture<T> started;
 		synchronized (requests) {
 			if (closed) throw new ShuttingDownException(CLOSED);
-			started = CompletableFuture.supplyAsync(request, covia.adapter.AAdapter.VIRTUAL_EXECUTOR).thenCompose(f -> f);
+			started = CompletableFuture.supplyAsync(() -> {
+				// Begun only after close gave up on requests: send nothing
+				if (abandoned) throw new ShuttingDownException(CLOSED);
+				return request.get();
+			}, covia.adapter.AAdapter.VIRTUAL_EXECUTOR).thenCompose(f -> f);
 			requests.add(started);
 		}
 		started.whenComplete((result, error) -> requests.remove(started));
@@ -424,26 +445,39 @@ public final class RemoteJobs implements AutoCloseable {
 	}
 
 	/**
-	 * Stops observation, then waits for every request already started, each
-	 * bounded by its transport's own timeout, so none outlives the engine; an
-	 * interrupt ends the wait and is kept on the thread. No
-	 * request starts once close has begun. A request may need engine services
-	 * that synchronise on the engine, so {@link Engine#close} calls this before
-	 * taking its monitor. Idempotent.
+	 * Stops observation and lets requests already started run until
+	 * {@code graceEnds} ({@link System#nanoTime}), the end of the venue's
+	 * shutdown grace window, then gives up on the rest: a later answer is
+	 * ignored, and a request not yet begun sends nothing. No request starts
+	 * once close has begun. An interrupt ends the wait and is kept on the
+	 * thread. A request may need engine services that synchronise on the
+	 * engine, so {@link Engine#close} calls this before taking its monitor.
+	 * Idempotent.
 	 */
-	@Override public void close() {
+	void close(long graceEnds) {
 		synchronized (requests) { closed = true; }
 		watches.forEach((job, watch) -> watch.stop());
 		watches.clear();
 		cleanups.forEach(Job::unsubscribe);
 		cleanups.clear();
 		timer.shutdownNow();
-		for (CompletableFuture<?> request : requests) {
-			try { request.get(); }
-			catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
-			catch (ExecutionException | CancellationException e) {
-				// The request's own outcome, handled where it was started
+		try {
+			for (CompletableFuture<?> request : requests) {
+				long remaining = graceEnds - System.nanoTime();
+				if (remaining <= 0) break;
+				try { request.get(remaining, TimeUnit.NANOSECONDS); }
+				catch (ExecutionException | CancellationException e) {
+					// The request's own outcome, handled where it was started
+				}
 			}
+		} catch (TimeoutException e) {
+			// The grace window has ended
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 		}
+		synchronized (settling) { abandoned = true; }
 	}
+
+	/** Closes at once, giving up on any request still running. */
+	@Override public void close() { close(System.nanoTime()); }
 }

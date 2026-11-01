@@ -943,8 +943,8 @@ public class Engine {
 	 *
 	 * <p>In-flight jobs first get {@code shutdown.graceMs} to finish, then
 	 * their adapters suspend them ({@link covia.adapter.AAdapter#suspendJob});
-	 * see {@link JobManager#shutdown}. Requests to remote venues already in
-	 * flight then finish ({@link RemoteJobs#close}).</p>
+	 * see {@link JobManager#shutdown}. Requests already sent to remote venues
+	 * may run until the same window ends ({@link RemoteJobs#close(long)}).</p>
 	 *
 	 * <p>Idempotent — calling close more than once is safe.</p>
 	 */
@@ -958,9 +958,11 @@ public class Engine {
 		}
 		// Jobs first, outside the engine monitor: work finishing inside the
 		// grace window may need engine services that synchronise on it. So may
-		// a remote request in flight, which closing remote observation awaits.
+		// a request already sent to a remote venue, which may run until the
+		// same window ends.
+		long graceEnds = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.getShutdownGraceMs());
 		if (flush) jobManager.shutdown(config.getShutdownGraceMs());
-		remoteJobs.close();
+		remoteJobs.close(graceEnds);
 		synchronized (this) {
 			closeStartedResources(flush, null);
 			lifecycle = Lifecycle.CLOSED;

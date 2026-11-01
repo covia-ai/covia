@@ -7,6 +7,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
@@ -84,7 +85,7 @@ class RemoteJobsTest {
 		} finally { engine.close(); }
 	}
 
-	@Test void closeWaitsForAPollInFlightAndSendsNothingAfter() throws Exception {
+	@Test void closeLetsAPollInFlightRunWithinTheGraceWindow() throws Exception {
 		RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2);
 		Job job = job();
 		observer.prepare(job, "test", "test://peer", Maps.empty());
@@ -103,7 +104,7 @@ class RemoteJobsTest {
 			return CompletableFuture.completedFuture(Maps.empty());
 		}, data -> {});
 		assertTrue(polling.await(5, TimeUnit.SECONDS));
-		Thread closer = Thread.ofPlatform().start(() -> { observer.close(); closeReturned.set(true); });
+		Thread closer = Thread.ofPlatform().start(() -> { observer.close(WINDOW_OPEN); closeReturned.set(true); });
 		awaitParked(closer);
 		assertTrue(closer.isAlive(), "close returned while a poll was in flight");
 		release.countDown();
@@ -112,7 +113,7 @@ class RemoteJobsTest {
 		assertEquals(1, sent.get());
 	}
 
-	@Test void closeWaitsForACancellationInFlightAndSendsNoneAfter() throws Exception {
+	@Test void closeLetsACancellationInFlightRecordItsOutcomeWithinTheGraceWindow() throws Exception {
 		RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2);
 		Job job = job();
 		CountDownLatch sending = new CountDownLatch(1);
@@ -124,12 +125,33 @@ class RemoteJobsTest {
 		}));
 		job.cancel();
 		assertTrue(sending.await(5, TimeUnit.SECONDS));
-		Thread closer = Thread.ofPlatform().start(observer::close);
+		Thread closer = Thread.ofPlatform().start(() -> observer.close(WINDOW_OPEN));
 		awaitParked(closer);
 		assertTrue(closer.isAlive(), "close returned while a cancellation was in flight");
 		release.countDown();
 		closer.join();
 		assertEquals(RemoteJobs.OUTCOME_ACKNOWLEDGED, RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
+	}
+
+	@Test void closeGivesUpOnARequestWhenTheGraceWindowEnds() throws Exception {
+		RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2);
+		Job job = job();
+		CountDownLatch sending = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		AtomicReference<CompletableFuture<Void>> attempt = new AtomicReference<>();
+		job.setCancelHook(() -> attempt.set(observer.attemptCancellation(job, "remote", () -> {
+			sending.countDown();
+			release.await();
+			return RemoteJobs.cancellationResult(Status.CANCELLED);
+		})));
+		job.cancel();
+		assertTrue(sending.await(5, TimeUnit.SECONDS));
+		// The window has already ended, so close returns with the request still running
+		observer.close(System.nanoTime());
+		release.countDown();
+		attempt.get().get(5, TimeUnit.SECONDS);
+		// Its answer is ignored: the attempt began and nothing established its outcome
+		assertEquals(RemoteJobs.OUTCOME_REQUESTED, RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
 		// Once closed, a cancellation sends nothing and records why
 		Job late = job();
 		AtomicInteger sent = new AtomicInteger();
@@ -144,10 +166,14 @@ class RemoteJobsTest {
 		assertEquals(0, sent.get());
 	}
 
+	/** A grace window that outlasts any test. */
+	private static final long WINDOW_OPEN = System.nanoTime() + TimeUnit.DAYS.toNanos(1);
+
 	/** Returns once {@code thread} has parked, as close does to wait for a request, or ended. */
 	private static void awaitParked(Thread thread) {
 		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-		while (thread.isAlive() && thread.getState() != Thread.State.WAITING) {
+		while (thread.isAlive() && thread.getState() != Thread.State.WAITING
+				&& thread.getState() != Thread.State.TIMED_WAITING) {
 			assertTrue(System.nanoTime() < deadline, "close neither parked nor returned");
 			Thread.onSpinWait();
 		}
