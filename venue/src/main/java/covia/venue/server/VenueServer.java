@@ -74,6 +74,7 @@ import covia.venue.auth.VenueAuthenticator;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
 import io.javalin.config.RoutesConfig;
+import io.javalin.http.BadRequestResponse;
 import io.javalin.http.Context;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.InternalServerErrorResponse;
@@ -1132,21 +1133,24 @@ public class VenueServer {
 			// A route answers the outcomes it defines. An expected failure that
 			// escapes it is a refusal in a situation it does not list, a 400 with
 			// its reason; anything else is a venue error, a 500 naming only its
-			// type (COG-21)
+			// type, whose message stays in the log line the request's id finds
+			// (COG-21, ERRORS.md). The same holds on every route.
 			String reason = CoviaException.reasonOf(e);
-			if (reason == null) log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
+			String requestId = RequestLog.id(ctx);
+			if (reason == null) log.error("Unhandled exception in {} {} (request {})", ctx.method(), ctx.path(), requestId, e);
 			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) {
 				if (reason != null) ApiErrors.write(ctx, 400, reason);
 				else ApiErrors.write(ctx, 500, covia.adapter.AAdapter.describeFailure(e));
 				return;
 			}
-			// A generic title with the exception under details: the class and
-			// message stay visible by design, because operators debug from the
-			// response as much as from the log (#540).
-			String exception = e.getClass().getSimpleName();
-			if (e.getMessage() != null && !e.getMessage().isBlank()) exception += ": " + e.getMessage();
-			renderHttpError(new InternalServerErrorResponse("Internal server error",
-				Map.of("exception", exception)), ctx);
+			if (reason != null) {
+				renderHttpError(new BadRequestResponse(reason), ctx);
+				return;
+			}
+			Map<String, String> details = new java.util.LinkedHashMap<>();
+			details.put("error", covia.adapter.AAdapter.describeFailure(e));
+			if (requestId != null) details.put("requestId", requestId);
+			renderHttpError(new InternalServerErrorResponse("Internal server error", details), ctx);
 		});
 
 		// One owner for CORS admission and response headers. The old combination

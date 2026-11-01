@@ -317,7 +317,7 @@ Per venue (`logging`, both default `false`):
 Each line is tagged with the venue's hostname, so a process hosting several
 venues can be attributed. Every request gets an id either way: it is
 returned in `X-Request-Id` and carried by the audit and access lines of that
-request. An inbound `X-Request-Id` is kept only from a trusted proxy
+request, and by the ERROR line for a failure the venue did not expect. An inbound `X-Request-Id` is kept only from a trusted proxy
 (*Trusted proxies*) and only if it is a short plain token.
 
 Per process, in the server document's `operations` block — logging is one

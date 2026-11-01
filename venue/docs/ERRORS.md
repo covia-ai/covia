@@ -133,3 +133,4 @@ unchanged. A timeout becomes `UnavailableException`, and an interrupt a
 | Agent tool loop | An `Error:` result carrying the reason | [AGENT_LOOP.md](AGENT_LOOP.md) |
 | MCP | A tool result marked `isError` carrying the reason | [OPERATIONS.md](OPERATIONS.md#mcp-exposure) |
 | A2A | The JSON-RPC error the situation maps to | [A2A_AGENTS.md](A2A_AGENTS.md#errors) |
+| Other HTTP routes (sign-in, OAuth, WebDAV, embedder routes) | The route's own answer; a refusal it does not answer itself is a 400 with the reason, and an unexpected failure a 500 naming its type and the request id (`X-Request-Id`), which the ERROR log line also carries. HTML for a browser, Javalin's JSON otherwise | [CONFIG.md](CONFIG.md) for request ids |

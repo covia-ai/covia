@@ -32,8 +32,10 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.NotSupportedException;
 import covia.grid.auth.VenueAuth;
 import covia.venue.server.AuthMiddleware;
+import covia.venue.server.RequestLog;
 import covia.venue.server.VenueServer;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.BadRequestResponse;
@@ -60,6 +62,7 @@ class EmbedderRoutePolicyTest {
 	private static final String LIMITED = "/api/getmine/limited";
 	private static final String FAILURE = "/api/getmine/failure";
 	private static final String BAD_REQUEST = "/api/getmine/bad-request";
+	private static final String REFUSAL = "/api/getmine/refusal";
 	private static final String METHOD_REJECTED = "/api/getmine/method-rejected";
 	private static final String CUSTOM_FAILURE = "/api/getmine/custom-failure";
 	private static final String CUSTOM_AUTH = "/api/getmine/custom-auth";
@@ -211,8 +214,12 @@ class EmbedderRoutePolicyTest {
 			denied.headers().firstValue("Retry-After").orElse(null));
 	}
 
+	/**
+	 * An unexpected failure names only its type and the request, whose log line
+	 * holds the message: a message may carry a remote's text or a credential.
+	 */
 	@Test
-	void unexpectedErrorsUseJavalinRepresentationsWithDiagnostics()
+	void unexpectedErrorsNameTheirTypeAndRequestOnly()
 			throws Exception {
 		// The venue logs the unhandled exception at ERROR with its stack —
 		// correct in production; here it is provoked on purpose.
@@ -223,15 +230,36 @@ class EmbedderRoutePolicyTest {
 			assertContentType("application/json", json);
 			assertTrue(json.body().contains("\"status\": 500"), json.body());
 			assertTrue(json.body().contains("IllegalStateException"), json.body());
+			assertTrue(json.body().contains(requestId(json)), json.body());
+			assertFalse(json.body().contains("diagnostic"), json.body());
 
 			HttpResponse<String> html = getAccept(
 				strictServer, FAILURE, "text/html");
 			assertEquals(500, html.statusCode(), html.body());
 			assertContentType("text/html", html);
-			assertTrue(html.body().contains(
-				"extension &lt;failed&gt; &amp; diagnostic"), html.body());
-			assertFalse(html.body().contains("extension <failed>"), html.body());
+			assertTrue(html.body().contains("IllegalStateException"), html.body());
+			assertTrue(html.body().contains(requestId(html)), html.body());
+			assertFalse(html.body().contains("diagnostic"), html.body());
 		});
+	}
+
+	/** A refusal the route does not answer itself is a 400 with its reason, escaped in HTML. */
+	@Test
+	void typedRefusalsAnswerBadRequestWithTheirReason() throws Exception {
+		HttpResponse<String> json = getAccept(strictServer, REFUSAL, "application/json");
+		assertEquals(400, json.statusCode(), json.body());
+		assertContentType("application/json", json);
+		assertTrue(json.body().contains("refused"), json.body());
+
+		HttpResponse<String> html = getAccept(strictServer, REFUSAL, "text/html");
+		assertEquals(400, html.statusCode(), html.body());
+		assertContentType("text/html", html);
+		assertTrue(html.body().contains("&lt;refused&gt;"), html.body());
+		assertFalse(html.body().contains("<refused>"), html.body());
+	}
+
+	private static String requestId(HttpResponse<String> response) {
+		return response.headers().firstValue(RequestLog.HEADER).orElseThrow();
 	}
 
 	@Test
@@ -309,6 +337,9 @@ class EmbedderRoutePolicyTest {
 		routes.get(LIMITED, ctx -> ctx.result("ok"), RATE_LIMITED);
 		routes.get(FAILURE, ctx -> {
 			throw new IllegalStateException("extension <failed> & diagnostic");
+		});
+		routes.get(REFUSAL, ctx -> {
+			throw new NotSupportedException("<refused> by the extension");
 		});
 		routes.get(BAD_REQUEST, ctx -> {
 			throw new BadRequestResponse("bad extension <input>",
