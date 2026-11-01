@@ -28,6 +28,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Asset;
 import covia.python.PythonRuntime;
 import covia.venue.Engine;
@@ -46,20 +49,20 @@ class PythonAdapterTest {
 	@Test
 	void malformedKnownConfigFailsEvenWithoutPython() {
 		PythonAdapter adapter = new PythonAdapter();
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
 			() -> adapter.configureModule(Maps.of("enabled", "yes"), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
 			() -> adapter.configureModule(Maps.of("operations", Maps.of(
 				"bad_name", Maps.of("script", "x.py"))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
 			() -> adapter.configureModule(Maps.of("operations", Maps.of(
 				"valid", Maps.of("function", "main"))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
 			() -> adapter.configureModule(Maps.of("typo", true), true));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
 			() -> adapter.configureModule(Maps.of("instances", Maps.of(
 				"templates", Maps.of("worker", Maps.of("script", "worker.py")))), false));
-		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+		org.junit.jupiter.api.Assertions.assertThrows(ConfigurationException.class,
 			() -> adapter.configureModule(Maps.of("instances", Maps.of(
 				"maxPerUser", 4L,
 				"maxTotal", 2L,
@@ -119,10 +122,10 @@ class PythonAdapterTest {
 			assertEquals(CVMLong.create(12), result.get(Strings.create("sum")));
 			assertEquals(CVMLong.create(1), result.get(Strings.create("calls")));
 
-			assertFutureCause(IllegalArgumentException.class, () -> invoke(adapter, call,
+			assertFutureCause(NotFoundException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.bob), Maps.of(
 					"id", id, "function", "add", "args", Vectors.empty())));
-			assertFutureCause(IllegalArgumentException.class, () -> invoke(adapter, call,
+			assertFutureCause(InvalidInputException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.alice), Maps.of(
 					"id", id, "function", "hidden", "args", Vectors.empty())));
 			assertFutureCause(IllegalStateException.class, () -> invoke(adapter, create,
@@ -136,7 +139,7 @@ class PythonAdapterTest {
 				RequestContext.ofAgent(identities.alice, Strings.create("closer")),
 				Maps.of("id", id));
 			assertEquals(CVMBool.TRUE, closed.get(Strings.create("closed")));
-			assertFutureCause(IllegalArgumentException.class, () -> invoke(adapter, call,
+			assertFutureCause(NotFoundException.class, () -> invoke(adapter, call,
 				RequestContext.of(identities.alice), Maps.of(
 					"id", id, "function", "add", "args", Vectors.empty())));
 		} finally {
