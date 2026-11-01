@@ -1331,6 +1331,8 @@ public class Engine {
 	 * @param adapter The adapter instance to register
 	 * @throws UnsupportedVersionException if the adapter's state is recorded at
 	 *         a newer version than it supports; nothing is registered or written
+	 * @throws ConfigurationException if the adapter refuses a setting in its
+	 *         venue configuration
 	 */
 	public synchronized void registerAdapter(AAdapter adapter) {
 		if (venueState == null) throw new IllegalStateException(ADAPTER_BEFORE_PREPARE);
@@ -1341,7 +1343,7 @@ public class Engine {
 		if (previous == null) previous = disabledAdapters.get(name);
 		AMap<AString, ACell> cfg = adapterConfig(name);
 		boolean disabled = CVMBool.FALSE.equals(cfg.get(Config.ENABLED));
-		if (disabled || !adapter.configure(cfg, config.isStrictConfig())) {
+		if (disabled || !configureStatic(adapter, cfg)) {
 			retractAdapter(name);
 			disabledAdapters.put(name, adapter);
 			if (previous != null) adapterRegistryVersion.incrementAndGet();
@@ -1353,6 +1355,19 @@ public class Engine {
 	}
 
 	public static final String ADAPTER_BEFORE_PREPARE = "Adapters are registered once the engine is prepared";
+
+	/**
+	 * Offers an adapter its effective configuration from the venue config. An
+	 * adapter refuses a malformed setting with {@link IllegalArgumentException}
+	 * (docs/ADAPTERS.md); in static configuration that is the operator's setup.
+	 */
+	private boolean configureStatic(AAdapter adapter, AMap<AString, ACell> cfg) {
+		try {
+			return adapter.configure(cfg, config.isStrictConfig());
+		} catch (IllegalArgumentException e) {
+			throw new ConfigurationException(e.getMessage(), e);
+		}
+	}
 
 	/** Start-up adapters whose state the venue's start-up transaction migrated, until they register. */
 	private final java.util.Set<AAdapter> migratedAtStart =
@@ -1545,7 +1560,8 @@ public class Engine {
 	 * @return true if the adapter was disabled and is now active; false if it
 	 *         was already active
 	 * @throws NotFoundException if the adapter is unknown
-	 * @throws ConfigurationException if the adapter declines the venue's configuration for it
+	 * @throws ConfigurationException if the adapter declines the venue's configuration
+	 *         for it or refuses a setting in it
 	 */
 	public synchronized boolean enableAdapter(String name) {
 		AAdapter adapter = disabledAdapters.get(name);
@@ -1553,7 +1569,7 @@ public class Engine {
 			if (adapters.containsKey(name)) return false;
 			throw unknownAdapter(name);
 		}
-		if (adapter.engine == null && !adapter.configure(adapterConfig(name), config.isStrictConfig())) {
+		if (adapter.engine == null && !configureStatic(adapter, adapterConfig(name))) {
 			throw new ConfigurationException(String.format(ADAPTER_DECLINED_CONFIG, name));
 		}
 		activate(adapter, null);
@@ -1569,14 +1585,22 @@ public class Engine {
 	 * @param name Adapter name
 	 * @param cfg The complete new effective configuration
 	 * @throws NotFoundException if the adapter is unknown
-	 * @throws InvalidInputException if the adapter rejects the configuration
+	 * @throws InvalidInputException if the adapter rejects the configuration or
+	 *         a setting in it
 	 */
 	public synchronized void configureAdapter(String name, AMap<AString, ACell> cfg) {
 		AAdapter adapter = adapters.get(name);
 		if (adapter == null) adapter = disabledAdapters.get(name);
 		if (adapter == null) throw unknownAdapter(name);
 		if (cfg == null) cfg = Maps.empty();
-		if (!adapter.configure(cfg, config.isStrictConfig())) {
+		boolean accepted;
+		try {
+			accepted = adapter.configure(cfg, config.isStrictConfig());
+		} catch (IllegalArgumentException e) {
+			// A malformed setting in the operator's request (docs/ADAPTERS.md)
+			throw new InvalidInputException(e.getMessage(), e);
+		}
+		if (!accepted) {
 			throw new InvalidInputException(String.format(ADAPTER_REJECTED_CONFIG, name));
 		}
 		runtimeAdapterConfig.put(name, cfg);

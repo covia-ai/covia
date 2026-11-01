@@ -39,6 +39,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -298,11 +299,11 @@ public class AuditLogTest {
 
 	@Test
 	public void loggingConfigIsValidated() {
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.STRICT_CONFIG, true, Config.LOGGING, Maps.of(Strings.create("everything"), true))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.LOGGING, Maps.of(Config.AUDIT, Strings.create("yes")))));
-		assertThrows(IllegalArgumentException.class, () -> Config.validateServerConfig(Maps.of(
+		assertThrows(ConfigurationException.class, () -> Config.validateServerConfig(Maps.of(
 			Config.OPERATIONS, Maps.of(Config.LOG_FORMAT, Strings.create("xml")),
 			Config.VENUES, Vectors.of(Maps.empty()))));
 		assertFalse(new Config(Maps.empty()).isAuditLogging());

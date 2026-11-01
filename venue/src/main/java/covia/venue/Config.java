@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.exception.ConfigurationException;
 
 /**
  * Venue configuration instance wrapping an immutable config map.
@@ -673,7 +674,7 @@ public class Config {
 		ACell raw = config.get(TRUSTED_PROXIES);
 		if (raw == null) return;
 		if (!(raw instanceof AVector<?>)) {
-			throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+			throw new ConfigurationException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
 		}
 		getTrustedProxies();   // parses every entry; a bad one fails startup with its name
 	}
@@ -923,7 +924,7 @@ public class Config {
 		if (unknown.isEmpty()) return;
 		String message = "Unknown configuration field" + (unknown.size() == 1 ? "" : "s")
 			+ ": " + String.join(", ", unknown);
-		if (strict) throw new IllegalArgumentException(message);
+		if (strict) throw new ConfigurationException(message);
 		log.warn("{} (ignored; set strictConfig=true to reject)", message);
 	}
 
@@ -977,8 +978,8 @@ public class Config {
 		return vector;
 	}
 
-	private static IllegalArgumentException malformed(String path, String requirement) {
-		return new IllegalArgumentException("Invalid configuration field '" + path + "': "
+	private static ConfigurationException malformed(String path, String requirement) {
+		return new ConfigurationException("Invalid configuration field '" + path + "': "
 			+ requirement);
 	}
 
@@ -1291,13 +1292,17 @@ public class Config {
 			if (raw instanceof AVector<?> v) {
 				for (long i = 0; i < v.count(); i++) {
 					AString s = RT.ensureString(v.get(i));
-					if (s == null) throw new IllegalArgumentException("trustedProxies entries must be strings");
+					if (s == null) throw new ConfigurationException("trustedProxies entries must be strings");
 					entries.add(s.toString());
 				}
 			} else if (raw != null) {
-				throw new IllegalArgumentException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
+				throw new ConfigurationException("trustedProxies must be an array of IP literals, CIDR ranges or \"loopback\"");
 			}
-			t = TrustedProxies.parse(entries);
+			try {
+				t = TrustedProxies.parse(entries);
+			} catch (IllegalArgumentException e) {
+				throw new ConfigurationException(e.getMessage(), e);
+			}
 			trustedProxies = t;
 		}
 		return t;
@@ -1497,7 +1502,7 @@ public class Config {
 			}
 			keyFn = hint -> {
 				if (hint != null && !hint.equals(expectedHint)) {
-					throw new IllegalStateException("Etch store is encrypted under key "
+					throw new ConfigurationException("Etch store is encrypted under key "
 						+ hint + " but the configured etch key has identity " + expectedHint
 						+ " — wrong key material for this store");
 				}
@@ -1950,7 +1955,7 @@ public class Config {
 		if (raw == null) return null;
 		AMap<AString, ACell> auth = RT.ensureMap(raw);
 		if (auth == null) {
-			throw new IllegalArgumentException("mcp.auth must be an object");
+			throw new ConfigurationException("mcp.auth must be an object");
 		}
 		return auth;
 	}
@@ -1969,7 +1974,7 @@ public class Config {
 		AMap<AString, ACell> auth = getMCPAuthConfig();
 		ACell raw = (auth == null) ? null : auth.get(REQUIRED);
 		if (raw != null && !(raw instanceof CVMBool)) {
-			throw new IllegalArgumentException("mcp.auth.required must be a boolean");
+			throw new ConfigurationException("mcp.auth.required must be a boolean");
 		}
 		boolean configuredRequired = (raw == null) ? !isPublicAccess() : CVMBool.TRUE.equals(raw);
 		return configuredRequired || !isPublicAccess() || !getMCPAllowedDids().isEmpty();
@@ -1986,23 +1991,23 @@ public class Config {
 		ACell raw = (auth == null) ? null : auth.get(ALLOWED_DIDS);
 		if (raw == null) return Set.of();
 		if (!(raw instanceof AVector<?> vector)) {
-			throw new IllegalArgumentException("mcp.auth.allowedDids must be an array of DID strings");
+			throw new ConfigurationException("mcp.auth.allowedDids must be an array of DID strings");
 		}
 		LinkedHashSet<String> result = new LinkedHashSet<>();
 		for (long i = 0; i < vector.count(); i++) {
 			AString entry = RT.ensureString(vector.get(i));
 			String did = (entry == null) ? null : entry.toString().trim();
 			if (did == null || !did.startsWith("did:") || did.length() <= 4) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"mcp.auth.allowedDids entries must be non-empty DID strings");
 			}
 			try {
 				if (convex.auth.did.DID.fromString(did) == null) {
-					throw new IllegalArgumentException(
+					throw new ConfigurationException(
 						"mcp.auth.allowedDids entry is not a valid DID: " + did);
 				}
 			} catch (RuntimeException e) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"mcp.auth.allowedDids entry is not a valid DID: " + did, e);
 			}
 			result.add(did);
@@ -2114,7 +2119,11 @@ public class Config {
 		/** Javalin's legacy allowHost accepted a bare host and supplied HTTPS. */
 		static ParsedOrigin parseConfigured(String raw, String label) {
 			String value = (raw != null && !raw.contains("://")) ? "https://" + raw : raw;
-			return parse(value, label);
+			try {
+				return parse(value, label);
+			} catch (IllegalArgumentException e) {
+				throw new ConfigurationException(e.getMessage(), e);
+			}
 		}
 
 		static ParsedOrigin parse(String raw, String label) {
@@ -2179,12 +2188,12 @@ public class Config {
 			for (long i = 0; i < vector.count(); i++) {
 				AString value = RT.ensureString(vector.get(i));
 				if (value == null) {
-					throw new IllegalArgumentException("corsOrigins array entries must be strings");
+					throw new ConfigurationException("corsOrigins array entries must be strings");
 				}
 				values.add(value.toString());
 			}
 		} else {
-			throw new IllegalArgumentException(
+			throw new ConfigurationException(
 				"corsOrigins must be a string, an array of strings, or false");
 		}
 
@@ -2207,7 +2216,7 @@ public class Config {
 		}
 		if (none) {
 			if (values.size() != 1) {
-				throw new IllegalArgumentException(
+				throw new ConfigurationException(
 					"corsOrigins 'none' cannot be combined with allowed origins");
 			}
 			return new CorsPolicy(false, false, false, List.of());

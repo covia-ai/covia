@@ -317,14 +317,19 @@ public class AdapterLifecycleTest {
 		}
 	}
 
-	/** Records every configure() call and declines configs with {@code reject: true}. */
+	/**
+	 * Records every configure() call, declines configs with {@code reject: true}
+	 * and refuses any {@code malformed} setting as malformed.
+	 */
 	private static final class ConfigurableAdapter extends AAdapter {
+		static final String MALFORMED = "malformed is not a valid setting";
 		AMap<AString, ACell> seen;
 		int calls;
 		@Override public String getName() { return "configurable"; }
 		@Override public String getDescription() { return "test"; }
 		@Override public boolean configure(AMap<AString, ACell> config, boolean strict) {
 			calls++;
+			if (config.containsKey(Strings.create("malformed"))) throw new IllegalArgumentException(MALFORMED);
 			if (RT.bool(config.get(Strings.create("reject")))) return false;
 			seen = config;
 			return true;
@@ -391,6 +396,36 @@ public class AdapterLifecycleTest {
 			assertNotNull(engine.getAdapter("configurable"));
 		} finally {
 			engine.close();
+		}
+	}
+
+	@Test
+	public void testMalformedSettingIsTypedByItsSource() {
+		// In the venue config a malformed setting is the operator's setup; in a
+		// runtime reconfiguration it is the caller's input.
+		AMap<AString, ACell> malformed = Maps.of(Strings.create("malformed"), CVMBool.TRUE);
+		Engine engine = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"), malformed)));
+		try {
+			covia.exception.ConfigurationException refused = assertThrows(
+				covia.exception.ConfigurationException.class,
+				() -> engine.registerAdapter(new ConfigurableAdapter()));
+			assertEquals(ConfigurableAdapter.MALFORMED, refused.getMessage());
+			assertNull(engine.getAdapter("configurable"));
+		} finally {
+			engine.close();
+		}
+		Engine parked = boot(Maps.of(Config.ADAPTERS, Maps.of(Strings.create("configurable"),
+			malformed.assoc(Config.ENABLED, CVMBool.FALSE))));
+		try {
+			parked.registerAdapter(new ConfigurableAdapter());
+			assertThrows(covia.exception.ConfigurationException.class, () -> parked.enableAdapter("configurable"));
+			covia.exception.InvalidInputException rejected = assertThrows(
+				covia.exception.InvalidInputException.class,
+				() -> parked.configureAdapter("configurable", malformed));
+			assertEquals(ConfigurableAdapter.MALFORMED, rejected.getMessage());
+			assertNull(parked.getAdapter("configurable"));
+		} finally {
+			parked.close();
 		}
 	}
 

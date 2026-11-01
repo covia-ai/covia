@@ -12,6 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import covia.exception.ConfigurationException;
 
 /**
  * Tests for venue {@link Config} default-resolution getters — in particular the
@@ -26,7 +27,7 @@ public class ConfigTest {
 		assertTrue(new Config(Maps.of(
 			Config.RECORD_READ_ONLY_OPERATIONS, CVMBool.TRUE))
 			.isRecordReadOnlyOperations());
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.RECORD_READ_ONLY_OPERATIONS, Strings.create("yes"))));
 	}
 
@@ -66,7 +67,7 @@ public class ConfigTest {
 		assertEquals(100, new Config(Maps.of(
 			Config.MAX_TOOL_ITERATIONS, convex.core.data.prim.CVMLong.create(100)))
 			.getMaxToolIterations());
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.MAX_TOOL_ITERATIONS, convex.core.data.prim.CVMLong.create(0))));
 	}
 
@@ -87,13 +88,13 @@ public class ConfigTest {
 		assertTrue(on.isDynamicModulesAnyPath());
 
 		// Malformed known fields always fail; unknown fields fail under strictConfig.
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.DYNAMIC_MODULES, Maps.of(Config.ENABLED, Strings.create("yes")))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.DYNAMIC_MODULES, Maps.of(Strings.create("dir"), Strings.create("")))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.DYNAMIC_MODULES, Strings.create("true"))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.STRICT_CONFIG, CVMBool.TRUE,
 			Config.DYNAMIC_MODULES, Maps.of(Strings.create("anypath"), CVMBool.TRUE))));
 	}
@@ -106,13 +107,13 @@ public class ConfigTest {
 		assertEquals("value",
 			compatible.getMap().get(Strings.create("futureFeature")).toString());
 
-		IllegalArgumentException strict = assertThrows(IllegalArgumentException.class,
+		ConfigurationException strict = assertThrows(ConfigurationException.class,
 			() -> new Config(Maps.of(
 				Config.STRICT_CONFIG, CVMBool.TRUE,
 				Strings.create("futureFeature"), Strings.create("value"))));
 		assertTrue(strict.getMessage().contains("venue.futureFeature"));
 
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.STRICT_CONFIG, CVMBool.TRUE,
 			Config.RATE_LIMIT, Maps.of(Strings.create("rsp"), 10L))));
 	}
@@ -129,26 +130,26 @@ public class ConfigTest {
 		assertTrue(set.isForceTrackScheduledJobs());
 
 		// Malformed values always fail; unknown keys only under strictConfig.
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.SCHEDULER, Strings.create("always"))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.SCHEDULER, Maps.of(Config.TRACK_JOBS, Strings.create("true")))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.STRICT_CONFIG, CVMBool.TRUE,
 			Config.SCHEDULER, Maps.of(Strings.create("trackJob"), CVMBool.TRUE))));
 	}
 
 	@Test
 	public void testKnownMalformedFieldsAlwaysFail() {
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.PORT, Strings.create("8080"))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.AUTH, Strings.create("public"))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.AUTH, Maps.of(Config.REQUIRE_AUD, Strings.create("no")))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.RATE_LIMIT, Maps.of(Strings.create("rps"), 0L))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.MCP, Maps.of(
 				Config.AUTH, Maps.of(
 					Config.ALLOWED_DIDS, Vectors.of("did:not valid"))))));
@@ -161,7 +162,7 @@ public class ConfigTest {
 			Config.AUTH, Maps.of(Config.REQUIRE_AUD, CVMBool.FALSE))).isRequireAud());
 		// The replaced audience policy is refused with its migration, whatever its value.
 		for (String policy : new String[] {"verify", "require"}) {
-			IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			ConfigurationException e = assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 				Config.AUTH, Maps.of(Config.AUDIENCE, Strings.create(policy)))));
 			assertTrue(e.getMessage().contains(Config.AUDIENCE_REPLACED));
 		}
@@ -205,7 +206,7 @@ public class ConfigTest {
 				"config", Maps.of("vendorOption", "ok")))));
 		assertTrue(config.isStrictConfig());
 
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.MODULES, Vectors.of(Maps.of(
 				"path", "modules/example.jar", "config", "bad")))));
 	}
@@ -218,12 +219,12 @@ public class ConfigTest {
 		assertEquals("/operator", redirect.getRootPage().redirect());
 		assertTrue(redirect.getRootPage().isRedirect());
 
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.ROOT_PAGE, Maps.empty())));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.ROOT_PAGE, Maps.of(
 				Config.REDIRECT, Strings.create("//evil.example")))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.ROOT_PAGE, Maps.of(
 				Config.FILE, Strings.create("definitely-not-a-real-file.html")))));
 	}
@@ -237,14 +238,14 @@ public class ConfigTest {
 		assertEquals(1, venues.size());
 		assertEquals(CVMBool.TRUE, venues.get(0).get(Config.STRICT_CONFIG));
 
-		assertThrows(IllegalArgumentException.class, () -> {
+		assertThrows(ConfigurationException.class, () -> {
 			var inherited = Config.validateServerConfig(Maps.of(
 				Config.STRICT_CONFIG, CVMBool.TRUE,
 				Config.VENUES, Vectors.of(Maps.of(
 					Strings.create("typoField"), Strings.create("value")))));
 			new Config(inherited.get(0));
 		});
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(ConfigurationException.class,
 			() -> Config.validateServerConfig(Maps.of(
 				Config.VENUES, Strings.create("not-an-array"))));
 	}
@@ -367,12 +368,12 @@ public class ConfigTest {
 
 	@Test
 	public void testCorsPolicyRejectsAmbiguousOrMalformedConfig() {
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.CORS_ORIGINS, Vectors.of(Strings.create("none"),
 				Strings.create("https://app.example")))).getCorsPolicy());
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.CORS_ORIGINS, Strings.create("https://app.example/path"))).getCorsPolicy());
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
 			Config.CORS_ORIGINS, CVMBool.TRUE)).getCorsPolicy());
 	}
 }

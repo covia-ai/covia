@@ -10,6 +10,7 @@ import convex.core.data.Strings;
 import covia.adapter.AAdapter;
 import covia.adapter.AuthAdapter;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 
 /** Resolves configured bindings against the live adapter set; owns no lifecycle. */
@@ -65,8 +66,8 @@ public final class AuthMethods {
 		return Map.copyOf(bindings);
 	}
 
-	private static IllegalArgumentException invalid(Object field) {
-		return new IllegalArgumentException(INVALID_CONFIG + field);
+	private static ConfigurationException invalid(Object field) {
+		return new ConfigurationException(INVALID_CONFIG + field);
 	}
 
 	/** Validate all explicit references after assembly and before serving requests. */
@@ -88,27 +89,27 @@ public final class AuthMethods {
 
 	private static Map<AString, AuthenticationMethods.Verifier> declarations(AAdapter adapter) {
 		if (!(adapter instanceof AuthenticationMethods provider)) {
-			throw new IllegalArgumentException(UNAVAILABLE + (adapter == null ? "adapter" : adapter.getName()));
+			throw new ConfigurationException(UNAVAILABLE + (adapter == null ? "adapter" : adapter.getName()));
 		}
 		Map<AString, AuthenticationMethods.Verifier> methods = provider.authenticationMethods();
-		if (methods == null) throw new IllegalArgumentException(INVALID_DECLARATION + adapter.getName());
+		if (methods == null) throw new ConfigurationException(INVALID_DECLARATION + adapter.getName());
 		for (var entry : methods.entrySet()) {
 			if (entry.getKey() == null || entry.getKey().toString().isBlank() || entry.getValue() == null) {
-				throw new IllegalArgumentException(INVALID_DECLARATION + adapter.getName());
+				throw new ConfigurationException(INVALID_DECLARATION + adapter.getName());
 			}
 		}
 		return methods;
 	}
 
 	private static AuthenticationMethods.Verifier resolve(Binding binding, AAdapter adapter) {
-		if (adapter == null) throw new IllegalArgumentException(UNAVAILABLE + binding.adapter);
+		if (adapter == null) throw new ConfigurationException(UNAVAILABLE + binding.adapter);
 		var methods = declarations(adapter);
 		if (binding.implementation == null) {
-			if (methods.size() != 1) throw new IllegalArgumentException(AMBIGUOUS + binding.adapter);
+			if (methods.size() != 1) throw new ConfigurationException(AMBIGUOUS + binding.adapter);
 			return methods.values().iterator().next();
 		}
 		var verifier = methods.get(binding.implementation);
-		if (verifier == null) throw new IllegalArgumentException(UNAVAILABLE + binding.adapter + "/" + binding.implementation);
+		if (verifier == null) throw new ConfigurationException(UNAVAILABLE + binding.adapter + "/" + binding.implementation);
 		return verifier;
 	}
 
@@ -121,7 +122,7 @@ public final class AuthMethods {
 			Binding binding = bindings.get(method);
 			if (binding == null) throw new AuthException(NOT_SELECTED + method);
 			try { verifier = resolve(binding, engine.getAdapter(binding.adapter)); }
-			catch (IllegalArgumentException e) { throw new AuthException(e.getMessage()); }
+			catch (ConfigurationException e) { throw new AuthException(e.getMessage()); }
 			revision = engine.adapterRegistryVersion();
 		}
 		return finish(method, input, verifier, revision);
