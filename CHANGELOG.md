@@ -49,7 +49,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `VenueServer.launch` throws a startup failure as its own type.
 - `ConflictException` means two values that cannot both stand; a job, session or interaction that does not take the request is `NotSupportedException`, still 409.
 - A remote agent that answers for a different task answers 502.
-- Expected failures are Covia exception types; a JDK exception reaching a caller is a venue error, logged and shown only by its type (#644).
+- A failure the venue did not expect is logged and shown to callers only by its type (#644).
 - A REST refusal a route does not list answers 400; a venue error answers 500.
 - A store collection cancelled by `venue:gc` ends CANCELLED.
 - Model provider, MCP server and A2A failures are typed; a refused operator key is a configuration error, a caller's an input error.
