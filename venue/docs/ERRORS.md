@@ -40,6 +40,17 @@ or request id is quoted only when it is an identifier (`AAdapter.identifier`). A
 messages, so a remote's text quoted in one would reach it as the venue's own
 statement.
 
+A database's error text may quote stored values, so the `sql` adapter never
+passes it on. The caller gets what failed, the SQLState and vendor code, and,
+from convex-db's Calcite parser and validator, the message for a statement it
+cannot parse or validate: that is checked before any row is read and quotes
+only the caller's own statement. The venue logs the database's full text.
+
+A remote MCP tool that reports an error has answered the call, and its error
+text is the tool's output. The `mcp` adapter fails the call with that text,
+attributed to the tool by name; a failure to reach or call the server follows
+the rules above.
+
 ## Types
 
 | Type | Meaning |

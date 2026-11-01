@@ -26,6 +26,8 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.db.ConvexDB;
 import convex.db.jdbc.ConvexDriver;
+import covia.exception.InvalidInputException;
+import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
@@ -45,6 +47,7 @@ public class SQLAdapterTest {
 	private static final String QUERY = "v/ops/sql/query";
 
 	private static Engine engine;
+	private static SQLAdapter adapter;
 	private static Path sqliteFile;
 	private static Path storeDir;
 	private AString did;
@@ -78,7 +81,8 @@ public class SQLAdapterTest {
 						Strings.create("sqlitedb"), Maps.of(
 							Strings.create("url"), Strings.create("jdbc:sqlite:" + sqliteFile))))));
 		engine = Engine.createTemp(config);
-		engine.registerAdapter(new SQLAdapter());
+		adapter = new SQLAdapter();
+		engine.registerAdapter(adapter);
 		Engine.addDemoAssets(engine);
 	}
 
@@ -497,18 +501,45 @@ public class SQLAdapterTest {
 				Strings.create("statement"), Strings.create("SELECT 1")),
 			ctx);
 		assertThrows(Exception.class, () -> bad.awaitResult(15000));
-		assertTrue(bad.getErrorMessage().contains("db is required"), bad.getErrorMessage());
+		assertEquals(SQLAdapter.DB_REQUIRED, bad.getErrorMessage());
 	}
 
+	/** Calcite's validation message quotes only the caller's statement, so the caller gets it. */
 	@Test
 	public void testSqlErrorNamesDatabase() {
-		Job bad = engine.jobs().invokeOperation("v/ops/sql/query",
-			Maps.of(Strings.create("db"), Strings.create("db5"),
-				Strings.create("statement"), Strings.create("SELECT * FROM no_such_table")),
-			ctx);
-		assertThrows(Exception.class, () -> bad.awaitResult(15000));
+		Job bad = attempt(engine, QUERY, ctx, "db5", "SELECT * FROM no_such_table");
 		assertEquals(Status.FAILED, bad.getStatus());
-		assertTrue(bad.getErrorMessage().contains("db5"), bad.getErrorMessage());
+		String message = bad.getErrorMessage();
+		assertTrue(message.startsWith("SQL database 'db5' " + SQLAdapter.STATEMENT_INVALID + ": "), message);
+		assertTrue(message.contains("NO_SUCH_TABLE"), message);
+	}
+
+	/**
+	 * A statement convex-db fails while reading rows is the caller's failure,
+	 * told without the database's text, which may quote stored values. That
+	 * includes an error thrown from Calcite's generated code.
+	 */
+	@Test
+	public void testEvaluationFailureQuotesNoStoredValue() {
+		exec(ctx, "db7", "CREATE TABLE t (id INTEGER, name VARCHAR)");
+		exec(ctx, "db7", "INSERT INTO t VALUES (1, 'stored-value')");
+		for (String statement : new String[] { "SELECT CAST(name AS INTEGER) FROM t", "SELECT 1/0" }) {
+			InvalidInputException failed = assertThrows(InvalidInputException.class,
+				() -> adapter.handleQuery(ctx, input("db7", statement)), statement);
+			assertEquals("SQL database 'db7' " + SQLAdapter.STATEMENT_FAILED, failed.getMessage(), statement);
+		}
+	}
+
+	/** Another driver's text may quote stored values: the caller gets only its codes. */
+	@Test
+	public void testRegisteredDatabaseTextIsNotQuoted() {
+		ResponseException refused = assertThrows(ResponseException.class,
+			() -> adapter.handleQuery(ctx, input("sqlitedb", "SELECT * FROM no_such_table")));
+		assertEquals("SQL database 'sqlitedb' " + SQLAdapter.STATEMENT_REFUSED + " (error code 1)", refused.getMessage());
+	}
+
+	private static AMap<AString, ACell> input(String db, String statement) {
+		return Maps.of(Strings.create("db"), Strings.create(db), Strings.create("statement"), Strings.create(statement));
 	}
 
 	// ========== Module-shipped skill ==========

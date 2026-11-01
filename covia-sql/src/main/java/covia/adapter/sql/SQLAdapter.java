@@ -10,10 +10,12 @@ import java.sql.Statement;
 import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 
+import org.apache.calcite.runtime.CalciteContextException;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.parser.SqlParseException;
 import org.apache.calcite.sql.parser.SqlParser;
+import org.apache.calcite.sql.validate.SqlValidatorException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,10 +34,13 @@ import convex.core.util.JSON;
 import convex.db.calcite.ConvexDdlExecutor;
 import convex.db.jdbc.ConvexDriver;
 import covia.adapter.AAdapter;
+import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
-import covia.exception.JobFailedException;
 import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
+import covia.exception.UnavailableException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -103,6 +108,36 @@ public class SQLAdapter extends AAdapter {
 
 	/** Refusal of sql:execute on a database registered with {@code readOnly: true}, after its name. */
 	static final String READ_ONLY_DATABASE = "is read-only; use sql:query to read it";
+
+	/** Refusal of a db that is missing or not a database name. */
+	static final String DB_REQUIRED = "db is required — a database name matching [a-zA-Z0-9_]{1,64}:"
+		+ " one of your venue-local databases (created on first use) or a connection registered in venue config";
+
+	// Failures of a database, after its name; ERRORS.md says what each may quote.
+
+	/** A statement Calcite cannot parse or validate, before its message. */
+	static final String STATEMENT_INVALID = "cannot run the statement";
+
+	/** A statement convex-db could not evaluate; its message may quote stored values. */
+	static final String STATEMENT_FAILED = "could not evaluate the statement";
+
+	/** A statement the database refused, before its SQLState and vendor code. */
+	static final String STATEMENT_REFUSED = "refused the statement";
+
+	/** A statement the database does not support. */
+	static final String STATEMENT_NOT_SUPPORTED = "does not support the statement";
+
+	/** A statement the database could not complete for now: a deadlock, lack of resources or a shutdown. */
+	static final String BUSY = "could not complete the statement now; retrying later may succeed";
+
+	/** A database the venue could not connect to, or lost its connection to. */
+	static final String UNREACHABLE = "cannot be reached";
+
+	/** A database that refused the credentials the venue config gives for it. */
+	static final String CREDENTIALS_REFUSED = "refused the venue's credentials for it";
+
+	/** A registered url no JDBC driver on the venue accepts. */
+	static final String NO_DRIVER = "has no JDBC driver on this venue for its url";
 
 	/** Refusal of a venue-local database to the public principal, which every
 	 *  anonymous caller shares and so can own nothing. */
@@ -172,24 +207,12 @@ public class SQLAdapter extends AAdapter {
 		AVector<ACell> params = RT.ensureVector(RT.getIn(input, K_PARAMS));
 		long maxRows = maxRows(input);
 
-		try {
-			Database target = resolveDatabase(ctx, db);
-			if (target.isConvexDb()) {
-				requireQuery(statement);
-				try (Connection conn = target.connect()) {
-					return runQuery(conn, statement, params, maxRows);
-				}
-			}
-			try (Connection conn = target.connect()) {
-				return runRolledBack(conn, statement, params, maxRows);
-			}
-		} catch (InvalidInputException e) {
-			throw e;
-		} catch (JobFailedException e) {
-			throw e;
-		} catch (Exception e) {
-			throw new JobFailedException("SQL query failed on database '" + db + "': " + rootMessage(e));
+		Database target = resolveDatabase(ctx, db);
+		if (target.isConvexDb()) {
+			requireQuery(statement);
+			return onConnection(db, target, conn -> runQuery(conn, statement, params, maxRows));
 		}
+		return onConnection(db, target, conn -> runRolledBack(conn, statement, params, maxRows));
 	}
 
 	ACell handleExecute(RequestContext ctx, ACell input) {
@@ -199,7 +222,7 @@ public class SQLAdapter extends AAdapter {
 		AVector<ACell> params = RT.ensureVector(RT.getIn(input, K_PARAMS));
 		requireWritable(db);
 
-		try (Connection conn = resolveDatabase(ctx, db).connect()) {
+		return onConnection(db, resolveDatabase(ctx, db), conn -> {
 			long updateCount;
 			if (params == null || params.count() == 0) {
 				try (Statement st = conn.createStatement()) {
@@ -212,11 +235,76 @@ public class SQLAdapter extends AAdapter {
 				}
 			}
 			return Maps.of(K_UPDATE_COUNT, CVMLong.create(updateCount));
-		} catch (JobFailedException e) {
-			throw e;
-		} catch (Exception e) {
-			throw new JobFailedException("SQL statement failed on database '" + db + "': " + rootMessage(e));
+		});
+	}
+
+	/** Work on an open connection; its {@code SQLException} is the database's answer. */
+	private interface Work {
+		ACell run(Connection conn) throws SQLException;
+	}
+
+	/**
+	 * Runs work on a new connection to a database, closing it after, with every
+	 * failure of the work or the close reported by {@link #statementFailure}.
+	 */
+	private static ACell onConnection(String db, Database target, Work work) {
+		Connection conn = target.connect(db);
+		try (conn) {
+			return work.run(conn);
+		} catch (SQLException | RuntimeException | ExceptionInInitializerError e) {
+			// convex-db can fail a statement with a bare runtime exception, or an
+			// error from Calcite's generated code, rather than an SQLException
+			throw statementFailure(db, target, e);
 		}
+	}
+
+	/**
+	 * What a caller is told of a failed statement. Calcite's parse and
+	 * validation messages come before any row is read and quote only the
+	 * caller's statement, so they are passed on. A database's own text may
+	 * quote stored values, so it is never passed on: the caller gets the
+	 * SQLState and vendor code, and the venue log gets the text.
+	 */
+	private static RuntimeException statementFailure(String db, Database target, Throwable e) {
+		SQLException sql = (e instanceof SQLException s) ? s : null;
+		String state = (sql == null) ? null : sql.getSQLState();
+		int code = (sql == null) ? 0 : sql.getErrorCode();
+		log.debug("SQL database '{}' failed a statement (SQLState {}, error code {}): {}", db, state, code, databaseMessage(e));
+		String prefix = "SQL database '" + db + "' ";
+		String statementError = statementError(e);
+		if (statementError != null) return new InvalidInputException(prefix + STATEMENT_INVALID + ": " + statementError, e);
+		String codes = codes(state, code);
+		String stateClass = (state != null && state.length() >= 2) ? state.substring(0, 2) : "";
+		return switch (stateClass) {
+			case "08" -> new UnavailableException(prefix + UNREACHABLE + codes, e);
+			case "28" -> new ConfigurationException(prefix + CREDENTIALS_REFUSED + codes, e);
+			case "40", "53", "57", "58" -> new UnavailableException(prefix + BUSY + codes, e);
+			case "0A" -> new NotSupportedException(prefix + STATEMENT_NOT_SUPPORTED + codes);
+			// convex-db sets no SQLState: what it cannot run is the statement's failure
+			case "" -> target.isConvexDb() ? new InvalidInputException(prefix + STATEMENT_FAILED, e)
+				: new ResponseException(prefix + STATEMENT_REFUSED + codes, e);
+			default -> new InvalidInputException(prefix + STATEMENT_REFUSED + codes, e);
+		};
+	}
+
+	/** Calcite's message for a statement it cannot parse or validate, else null. */
+	private static String statementError(Throwable e) {
+		for (Throwable t = e; t != null; t = t.getCause()) {
+			if (t instanceof CalciteContextException || t instanceof SqlParseException || t instanceof SqlValidatorException) {
+				// The first line locates the problem; a parse failure's rest lists every token Calcite expected
+				return String.valueOf(t.getMessage()).lines().findFirst().orElse("");
+			}
+			if (t.getCause() == t) break;
+		}
+		return null;
+	}
+
+	/** The SQLState and vendor code a message may quote, as {@code " (SQLState x, error code n)"}. */
+	private static String codes(String state, int code) {
+		String quoted = identifier(state);
+		if (quoted == null && code == 0) return "";
+		if (quoted == null) return " (error code " + code + ")";
+		return (code == 0) ? " (SQLState " + quoted + ")" : " (SQLState " + quoted + ", error code " + code + ")";
 	}
 
 	/**
@@ -255,21 +343,30 @@ public class SQLAdapter extends AAdapter {
 	 * MySQL refuse writes under it, and where a driver ignores it the rollback
 	 * still undoes whatever the database can undo.
 	 */
-	private static ACell runRolledBack(Connection conn, String statement, AVector<ACell> params, long maxRows) throws Exception {
+	private static ACell runRolledBack(Connection conn, String statement, AVector<ACell> params, long maxRows) throws SQLException {
 		try {
 			conn.setReadOnly(true);
 		} catch (SQLException e) {
 			// a hint only: SQLite, for one, refuses it once the connection is open
 		}
 		conn.setAutoCommit(false);
+		ACell result;
 		try {
-			return runQuery(conn, statement, params, maxRows);
-		} finally {
-			conn.rollback();
+			result = runQuery(conn, statement, params, maxRows);
+		} catch (SQLException | RuntimeException e) {
+			// The query's own failure is the one to report
+			try {
+				conn.rollback();
+			} catch (SQLException rollback) {
+				e.addSuppressed(rollback);
+			}
+			throw e;
 		}
+		conn.rollback();
+		return result;
 	}
 
-	private static ACell runQuery(Connection conn, String statement, AVector<ACell> params, long maxRows) throws Exception {
+	private static ACell runQuery(Connection conn, String statement, AVector<ACell> params, long maxRows) throws SQLException {
 		if (params == null || params.count() == 0) {
 			try (Statement st = conn.createStatement()) {
 				setMaxRowsHint(st, maxRows);
@@ -298,8 +395,27 @@ public class SQLAdapter extends AAdapter {
 			return url.startsWith(ConvexDriver.PREFIX);
 		}
 
-		Connection connect() throws SQLException {
-			return DriverManager.getConnection(url, props);
+		/** A new connection to database {@code db}; a failure is the operator's or the database's, never the caller's. */
+		Connection connect(String db) {
+			String prefix = "SQL database '" + db + "' ";
+			try {
+				DriverManager.getDriver(url);
+			} catch (SQLException e) {
+				log.warn("SQL database '{}': no JDBC driver accepts its url", db);
+				throw new ConfigurationException(prefix + NO_DRIVER);
+			}
+			try {
+				return DriverManager.getConnection(url, props);
+			} catch (SQLException e) {
+				String state = e.getSQLState();
+				log.warn("SQL database '{}' refused a connection (SQLState {}, error code {}): {}",
+					db, state, e.getErrorCode(), databaseMessage(e));
+				String codes = codes(state, e.getErrorCode());
+				if (state != null && state.startsWith("28")) {
+					throw new ConfigurationException(prefix + CREDENTIALS_REFUSED + codes, e);
+				}
+				throw new UnavailableException(prefix + UNREACHABLE + codes, e);
+			}
 		}
 	}
 
@@ -314,7 +430,7 @@ public class SQLAdapter extends AAdapter {
 		Properties props = new Properties();
 		if (external != null) {
 			AString url = RT.ensureString(RT.getIn(external, "url"));
-			if (url == null) throw new JobFailedException(
+			if (url == null) throw new ConfigurationException(
 				"Configured SQL database '" + db + "' has no url in venue config");
 			AString user = RT.ensureString(RT.getIn(external, "user"));
 			if (user != null) props.setProperty("user", user.toString());
@@ -326,12 +442,12 @@ public class SQLAdapter extends AAdapter {
 		// Scoped to the USER: an agent shares its owner's venue-local database
 		// rather than getting a private one the owner cannot see.
 		AString user = ctx.getUserDID();
-		if (user == null) throw new JobFailedException(
+		if (user == null) throw new AuthException(
 			"Venue-local SQL databases require an authenticated caller"
 			+ " — or register '" + db + "' under adapters.sql.databases in venue config");
-		if (engine.isPublicPrincipal(user)) throw new JobFailedException(PUBLIC_HAS_NO_DATABASES);
+		if (engine.isPublicPrincipal(user)) throw new AuthException(PUBLIC_HAS_NO_DATABASES);
 		String name = localName(user, db);
-		if (name == null) throw new JobFailedException(user + " " + UNNAMEABLE_OWNER);
+		if (name == null) throw new NotSupportedException(user + " " + UNNAMEABLE_OWNER);
 		// ONE convex-db instance for all venue-local databases, with per-user
 		// isolation by database name inside it: one instance = one store, so a
 		// venue's local SQL state lives in a single Etch file. The name goes as
@@ -363,7 +479,7 @@ public class SQLAdapter extends AAdapter {
 		String ref = password.toString();
 		if (ref.startsWith("s/") || ref.startsWith("/s/")) {
 			String value = engine.resolveSecret(ref, engine.venueContext());
-			if (value == null) throw new JobFailedException(
+			if (value == null) throw new ConfigurationException(
 				"SQL database '" + db + "' password secret not found in the venue store: " + ref
 				+ " — store it with the v/ops/secret/set operation");
 			return value;
@@ -376,10 +492,7 @@ public class SQLAdapter extends AAdapter {
 	private static String requireDb(ACell input) {
 		AString db = RT.ensureString(RT.getIn(input, K_DB));
 		if (db == null || !db.toString().matches("[a-zA-Z0-9_]{1,64}")) {
-			throw new InvalidInputException(
-				"db is required — a database name matching [a-zA-Z0-9_]{1,64}:"
-				+ " one of your venue-local databases (created on first use)"
-				+ " or a connection registered in venue config");
+			throw new InvalidInputException(DB_REQUIRED);
 		}
 		return db.toString();
 	}
@@ -404,7 +517,7 @@ public class SQLAdapter extends AAdapter {
 
 	/** Binds params with TYPED setters, matching JDBC driver conventions
 	 *  (convex-db's own tests bind typed; setObject is less travelled). */
-	private static void bindParams(PreparedStatement ps, AVector<ACell> params) throws Exception {
+	private static void bindParams(PreparedStatement ps, AVector<ACell> params) throws SQLException {
 		for (long i = 0; i < params.count(); i++) {
 			int idx = (int) i + 1;
 			Object o = JSON.json(params.get(i));
@@ -430,7 +543,7 @@ public class SQLAdapter extends AAdapter {
 		}
 	}
 
-	private static ACell readResults(ResultSet rs, long maxRows) throws Exception {
+	private static ACell readResults(ResultSet rs, long maxRows) throws SQLException {
 		ResultSetMetaData md = rs.getMetaData();
 		int n = md.getColumnCount();
 		AVector<ACell> columns = Vectors.empty();
@@ -475,13 +588,16 @@ public class SQLAdapter extends AAdapter {
 		return Strings.create(String.valueOf(o));
 	}
 
-	/** The most diagnosable message in a cause chain — Calcite wraps deeply. */
-	private static String rootMessage(Throwable e) {
-		Throwable best = null;
+	/** Everything a cause chain says, for the venue log only: Calcite wraps deeply. */
+	private static String databaseMessage(Throwable e) {
+		StringBuilder sb = new StringBuilder();
+		String last = null;
 		for (Throwable t = e; t != null; t = t.getCause()) {
-			if (t.getMessage() != null) best = t;
+			String message = t.getClass().getSimpleName() + ": " + t.getMessage();
+			if (!message.equals(last)) sb.append(sb.isEmpty() ? "" : " <- ").append(message);
+			last = message;
 			if (t.getCause() == t) break;
 		}
-		return (best != null) ? best.getMessage() : e.getClass().getSimpleName();
+		return sb.toString();
 	}
 }
