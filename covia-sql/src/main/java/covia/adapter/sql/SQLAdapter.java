@@ -32,7 +32,10 @@ import convex.core.util.JSON;
 import convex.db.calcite.ConvexDdlExecutor;
 import convex.db.jdbc.ConvexDriver;
 import covia.adapter.AAdapter;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -151,12 +154,12 @@ public class SQLAdapter extends AAdapter {
 		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
-			throw new IllegalArgumentException("Insufficient specification for SQL operation");
+			throw new InvalidDefinitionException("Insufficient specification for SQL operation");
 		}
 		return switch (subOp) {
 			case "query" -> CompletableFuture.supplyAsync(() -> handleQuery(ctx, input), VIRTUAL_EXECUTOR);
 			case "execute" -> CompletableFuture.supplyAsync(() -> handleExecute(ctx, input), VIRTUAL_EXECUTOR);
-			default -> throw new UnsupportedOperationException("Unsupported SQL operation: " + subOp);
+			default -> throw new NotSupportedException("Unsupported SQL operation: " + subOp);
 		};
 	}
 
@@ -180,6 +183,8 @@ public class SQLAdapter extends AAdapter {
 			try (Connection conn = target.connect()) {
 				return runRolledBack(conn, statement, params, maxRows);
 			}
+		} catch (InvalidInputException e) {
+			throw e;
 		} catch (JobFailedException e) {
 			throw e;
 		} catch (Exception e) {
@@ -222,7 +227,7 @@ public class SQLAdapter extends AAdapter {
 	private void requireWritable(String db) {
 		ACell registered = RT.getIn(engine.adapterConfig("sql"), "databases", db);
 		if (registered != null && RT.bool(RT.getIn(registered, Config.READ_ONLY))) {
-			throw new IllegalArgumentException("SQL database '" + db + "' " + READ_ONLY_DATABASE);
+			throw new NotSupportedException("SQL database '" + db + "' " + READ_ONLY_DATABASE);
 		}
 	}
 
@@ -237,10 +242,10 @@ public class SQLAdapter extends AAdapter {
 		} catch (SqlParseException e) {
 			// The first line locates the problem; the rest lists every token Calcite expected
 			String where = String.valueOf(e.getMessage()).lines().findFirst().orElse("");
-			throw new IllegalArgumentException(NOT_ONE_QUERY + ": " + where);
+			throw new InvalidInputException(NOT_ONE_QUERY + ": " + where);
 		}
 		if (!node.getKind().belongsTo(SqlKind.QUERY)) {
-			throw new IllegalArgumentException(NOT_A_QUERY + " (statement kind: " + node.getKind() + ")");
+			throw new InvalidInputException(NOT_A_QUERY + " (statement kind: " + node.getKind() + ")");
 		}
 	}
 
@@ -371,7 +376,7 @@ public class SQLAdapter extends AAdapter {
 	private static String requireDb(ACell input) {
 		AString db = RT.ensureString(RT.getIn(input, K_DB));
 		if (db == null || !db.toString().matches("[a-zA-Z0-9_]{1,64}")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"db is required — a database name matching [a-zA-Z0-9_]{1,64}:"
 				+ " one of your venue-local databases (created on first use)"
 				+ " or a connection registered in venue config");
@@ -382,7 +387,7 @@ public class SQLAdapter extends AAdapter {
 	private static String requireStatement(ACell input) {
 		AString s = RT.ensureString(RT.getIn(input, K_STATEMENT));
 		if (s == null || s.isEmpty()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"statement is required — a SQL statement, optionally with ? placeholders bound from params");
 		}
 		return s.toString();
@@ -392,7 +397,7 @@ public class SQLAdapter extends AAdapter {
 		ACell v = RT.getIn(input, K_MAX_ROWS);
 		if (v == null) return DEFAULT_MAX_ROWS;
 		Long n = RT.ensureLong(v) != null ? RT.ensureLong(v).longValue() : null;
-		if (n == null || n < 1) throw new IllegalArgumentException(
+		if (n == null || n < 1) throw new InvalidInputException(
 			"maxRows must be a positive integer (default " + DEFAULT_MAX_ROWS + ", max " + HARD_MAX_ROWS + ")");
 		return Math.min(n, HARD_MAX_ROWS);
 	}
