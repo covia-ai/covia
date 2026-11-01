@@ -1239,8 +1239,6 @@ fallback — credentials must be in the secret store for production use.
 
 ## 7. Phasing
 
-See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
-
 | Phase | Focus | Status |
 |-------|-------|--------|
 | **C2** | Delegation chains — proof chain walking, attenuation validation, agent sub-delegation, revocation | Planned |

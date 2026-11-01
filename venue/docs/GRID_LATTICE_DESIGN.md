@@ -1,19 +1,8 @@
 # Covia Grid Lattice Structure
 
-**Convex 0.8.18** separates storage cursors from component policy.
-`CoviaApplication` uses the upstream `LatticeApplication` adapter for
-`Covia.ROOT`, sharing its host's live cursor. `VenueState` binds a signed
-storage view and holds the venue value as a Convex `Timestamped` record: local
-edits stamp it, and incoming merges keep the newest without re-stamping. `Users` supplies lifecycle-guarded, stamped user views, and
-`User.recordCursor` supplies job/agent stamps. `WorkspaceRoot` exposes the existing
-`{updated, data}` envelopes. Use these accessors for writes: raw paths do not
-apply record policy or create missing containers. Bootstrap uses upstream
-`TransactionalComponent`; DLFS uses upstream `DLFSRegion`/`DLFSDrives`.
-
-
-Design document for the Covia venue-backed grid. Phases 0–2 are implemented (Phase 2 partially — per-user cursors done, capability enforcement pending); later phases are target state.
-
-## Design Document — February 2026 (living document)
+How Covia lays out its state in the Convex lattice: addressing, namespaces, how
+a caller's path reaches stored data, and how venue state is merged, signed and
+persisted. `covia.lattice.Covia` defines the lattice in code.
 
 ---
 
@@ -73,19 +62,22 @@ The lattice resolves implicit context based on the active session identity.
 
 ## 4. Namespaces
 
-Platform prefixes define mutation rules, integrity constraints, access control, and execution semantics. Some address stored records; others are virtual cursor views. The `x/` prefix lets adapters define their own user-visible shape without extending the core user record.
+Each user record holds the stored namespaces below. Request-relative
+shortcuts (`n/`, `c/`, `t/`, `v/`, `x/`, §4.5) name places inside them or
+elsewhere in the venue.
 
 ### 4.1 Namespace Summary
 
-| Namespace | Prefix | Mutability | Storage Type | Managed By |
-|-----------|--------|------------|--------------|------------|
-| Assets | `/a/` | Immutable, content-addressed | Index | System |
-| Operations | `/o/` | Mutable, schema-enforced (pin to `/a/` on invoke) | Hashmap | System |
-| Jobs | `/j/` | Lifecycle state machine (freeze to `/a/` on complete) | Index | System |
-| Agents | `/g/` | Identity-bound mutations | Index | System |
-| Workspace | `/w/` | Freely mutable | Hashmap | User/Agent |
-| Secrets | `/s/` | Encrypted, capability-gated | Index | System |
-| Extensions | `/x/<adapter>/` | Adapter-defined; read-only by default | Virtual cursor view | Adapter |
+| Namespace | Prefix | Holds | Changed through `covia:write` / `covia:delete` |
+|-----------|--------|-------|-------------------------------------------------|
+| Assets | `/a/` | Content-addressed asset references | No |
+| Operations | `/o/` | The user's named operation definitions | Yes |
+| Jobs | `/j/` | Job records by ID | No; `t/` scratch within a job |
+| Agents | `/g/` | Agent records by ID | No; `n/` and `c/` scratch within an agent run |
+| Workspace | `/w/` | User and agent data | Yes |
+| Secrets | `/s/` | Encrypted secrets | Delete of a whole secret only; set through `secret:set` |
+| HITL inbox | `/h/` | Human-in-the-loop requests | No; the `hitl` operations |
+| Extensions | `/x/<adapter>/` | An adapter's view for the addressed user | As the adapter allows; read-only by default |
 
 An extension route selects the active adapter's view for the addressed user.
 It is independent of private `:adapters/<name>` storage and exposes nothing
@@ -93,59 +85,36 @@ unless the adapter opts in. Standard accessors and CRUD capabilities apply;
 writable views use the authoritative venue's atomic updates. See
 [ADAPTERS.md](ADAPTERS.md#user-visible-extension-routes) for the hook contract.
 
-### 4.2 Storage Type Rationale
+### 4.2 Storage Types
 
-**Index** — used for system-managed namespaces. Provides ordered keys, range scans (critical for performance monitoring, garbage collection, auditing), and enforced structure. Keys are typically hashes, internal IDs, or timestamps (short blob-like values).
-
-**Hashmap** — used for user/agent-managed data. Flexible arbitrary keys, JSON-like navigation, no ordering guarantees. Suitable for workspace and metadata within records.
-
-**Mixed** — within any entry, the internal structure may use hashmaps for metadata regardless of the namespace root type. For example, `/j/` root is an index (ordered job listing), but `/j/2456543/` is a hashmap (job record), and `/j/2456543/logs/` may be an index (ordered log entries).
+`j/` is an Index keyed by job ID, so jobs list in ID order and support range
+scans. The other namespaces are hashmaps with JSON-like navigation. Inside an
+entry any structure may appear: a job record is a hashmap, and a list inside it
+may be a vector.
 
 ### 4.3 Namespace Details
 
 #### `/a/` — Assets
 
-Immutable, content-addressed data. Write-once, reference by CAD3 hash. The universal immutable layer — both data assets and operation snapshots pin here.
+Immutable, content-addressed data, referenced by CAD3 hash.
 
 - Keys are content hashes
-- Append-only — no mutation, no deletion (unless purging old records)
+- No mutation; an asset stays resolvable until it is garbage-collected
 - Self-verifying — any peer can validate data against its hash
-- Operations pin to `/a/` on invoke; jobs freeze to `/a/` on completion
 
 #### `/o/` — Operations
 
-Mutable, schema-enforced registry of operation definitions. Each entry must conform to operation schema (input spec, output spec, executor binding). Unlike `/w/`, values in `/o/` are typed and validated by the system.
+The user's own operation definitions under names they choose, such as
+`/o/my-transform`. A definition is operation metadata with an `operation` field
+naming the adapter operation that runs it, so a stable name can move to a
+different implementation without breaking its callers. Values are written with
+`covia:write` like `/w/`; the definition is read and checked when it is invoked.
 
-```json
-{
-  "name": "My Transform",
-  "input": { "schema": "..." },
-  "output": { "schema": "..." },
-  "executor": "langchain:openai",
-  "cost": 450,
-  "permissions": ["..."]
-}
-```
-
-`/o/` is a **user-controlled naming layer** that decouples stable operation names from underlying adapter implementations. Currently, operations are named by adapter prefix (e.g. `"langchain:openai"`, `"test:echo"`) — these are implementation-dependent. If an adapter is replaced, all operation references break. `/o/` solves this by letting users define stable names that map to changeable executor bindings. The `executor` field inside the definition specifies which adapter handles execution; the name is the user's choice. If the user switches from `langchain:openai` to `langchain:gemini`, only the executor binding changes — callers still reference `/o/my-transform`.
-
-Operations are authored and iterated in `/o/` under stable mutable names (e.g. `/o/my-transform`). When `invoke()` is called, the system **pins the current value to `/a/`** as an immutable content-addressed snapshot. The job record captures both the mutable name and the pinned ref:
-
-```json
-{
-  "op_name": "/o/my-transform",
-  "op_pinned": "/a/cafebabe...",
-  ...
-}
-```
-
-This gives human-readable provenance ("which op") and exact reproducibility ("which version") in the same record. The mutable name can be updated without breaking references — callers always get the latest, while past job records are pinned to the exact version that ran.
-
-`invoke()` also accepts operations from other sources — `/w/my-draft-op` (workspace draft, validated and pinned at invoke time), `/a/cafebabe...` (already pinned), or `did:key:zBob.../o/transform` (federated). In all cases the job record contains a pinned `/a/` reference.
-
-**Separation from `/w/`:** Both `/o/` and `/w/` are mutable, but `/o/` is a typed registry with schema enforcement, open-read defaults (code is inspectable), and operation-specific indexing (schema matching, dependency graphs, cost/performance tracking). `/w/` is untyped user data space with private-read defaults.
-
-**Separation from `/a/`:** Operations are kept in a distinct mutable namespace from immutable data assets because code and data have different security profiles. `read(/o/)` is low-risk (open-source mindset), while `read(/a/)` exposes potentially sensitive user data. `/a/` serves as the universal immutable layer that both data and operations pin to.
+`invoke()` accepts an operation from any of these places: `/o/my-transform`,
+`/w/my-draft-op`, a venue operation such as `v/ops/json/merge`, a content hash,
+or another venue's path such as `did:key:zBob.../o/transform`. The job's `op`
+records the reference that was invoked; an inline definition is recorded by its
+hash. See [OPERATIONS.md](OPERATIONS.md).
 
 #### `/j/` — Jobs
 
@@ -153,21 +122,7 @@ Lifecycle-managed execution records. Created by `invoke()`, transition through a
 
 **Lifecycle:** `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (terminal, sticky), plus the paused family `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED` (resume to `STARTED`).
 
-A job is stored as a single current-state record at `/j/<id>` — `{status, op, input, output?, error?, caller, created, updated, ...}`. Updates replace the state without retaining earlier versions. Legacy top-level `prev` links are ignored on reads and removed on the next write, without a startup scan. Terminal states are **sticky**: the CAS update path refuses transitions out of a terminal state, so the terminal record's `output`/`error` never change (the record entry itself remains deletable and secret-redacted on every durable write).
-
-```json
-{
-  "op_name": "/o/my-transform",
-  "op_pinned": "/a/cafebabe...",
-  "caller": "did:key:zAlice.../g/my-assistant",
-  "inputs": { "arg1": "<resolved value>", "arg2": "constant" },
-  "caps": ["<ucan token>"],
-  "executor": "did:key:zBob.../g/helper",
-  "status": "complete",
-  "outputs": { "result": "<computed value>" },
-  "cost": 450
-}
-```
+A job is stored as a single current-state record at `/j/<id>` — `{status, op, input, output?, error?, caller, created, updated, ...}`. Updates replace the state without retaining earlier versions. Legacy top-level `prev` links are ignored on reads and removed on the next write, without a startup scan. Terminal states are **sticky**: the CAS update path refuses transitions out of a terminal state, so the terminal record's `output`/`error` never change (the record entry itself remains deletable and secret-redacted on every durable write). [JOBS.md](JOBS.md) defines the record and its lifecycle.
 
 ### 4.4 Relationship Between `/g/` (Agents), `/j/` (Jobs), and `/o/` (Operations)
 
@@ -231,7 +186,7 @@ Each agent is a single atomic record — local mutations replace the record thro
 
 - **`config`** — the agent's declared behaviour: transition operation, name, description, tags, A2A skills, tool palette, protocol settings. This is what an author writes when creating an agent.
 - **`status`** — lifecycle plus persisted execution marker (`SLEEPING` / `RUNNING` / `SUSPENDED` / `TERMINATED`). The hosting venue validates RUNNING against its live launcher and clears stale markers at startup.
-- **Virtual namespaces `n/`, `c/`, `t/`** — user-writable scratch scoped to agent, session, and job. See §4.5.
+- **`n/`** — the agent's own workspace, and **`c/`** in each session — scratch the agent writes through the shortcuts in §4.5.
 
 Internal framework fields (sessions, tasks, pending, timeline, caps, scheduling state) are managed by the runtime and are not a stable user-writable surface. Their structure is documented where it's authoritative:
 
@@ -249,20 +204,9 @@ Internal framework fields (sessions, tasks, pending, timeline, caps, scheduling 
 | **Adapter** | Trusted handler of plaintext. Requests decryption from runtime, injects into external calls. |
 | **Transition fn** | Untrusted. References secrets by path only, never sees plaintext. |
 
-**Lattice operations on agents:** The following operations are available at the lattice/runtime level to any code running on the venue (adapters, orchestrators, API handlers). These are infrastructure capabilities — not specific to the LLM tool loop. For the subset exposed as LLM tools during agent execution, see AGENT_LOOP.md §3.5.
-
-| Operation | Description | Caps required |
-|-----------|-------------|---------------|
-| Read agent record | Read any field of an agent's state | `{ with: "did:.../g/<id>", can: "crud/read" }` |
-| Write agent workspace | Write to an agent's or user's workspace | `{ with: "did:.../w/path", can: "crud/write" }` |
-| List agents | Enumerate agents for a user | `{ with: "did:.../g/", can: "crud/read" }` |
-| Complete/fail task | Complete or fail a Job assigned to an agent | Job must be assigned to the agent |
-| Message agent | Append to an agent session's pending queue | `{ with: "did:.../g/<id>", can: "agent/message" }` |
-| Invoke operation | Invoke any grid operation (creates a Job) | `{ with: "did:.../o/op-name", can: "invoke" }` |
-| Extract secret | Reveal an owned secret through a direct owner call (see UCAN.md) | `{ with: "did:.../s/key", can: "secret/extract" }` |
-| Spawn agent | Create a new agent | `{ with: "did:.../g/", can: "crud/write" }` |
-| Fork agent | Fork an existing agent | `{ with: "did:.../g/<id>", can: "agent/fork" }` |
-| Delegate caps | Sub-delegate UCAN capabilities | `{ with: "did:...", can: "ucan/delegate" }` |
+**Authority over agents:** the capability each agent operation needs is listed
+in [UCAN.md §5.3](UCAN.md#53-enforcement-points); the subset exposed as LLM
+tools is in AGENT_LOOP.md §3.6.
 
 **Timeline efficiency:** Each timeline entry is a raw lattice value, not a pinned `/a/` ref. CAD3 structural sharing means unchanged subtrees between transitions share storage automatically. The timeline can grow indefinitely without proportional storage cost.
 
@@ -348,51 +292,49 @@ Mutable data space for agents and users. Persistent storage for user and agent d
 - Any CAD3 type is valid, but JSON-like structures get the best tooling support
 - Non-JSON structures will store and hash correctly but won't render nicely in UIs or chain through operations cleanly
 
-User-managed data may live at any writable path the user chooses, with
-operation-specific defaults such as `w/memory`. Adapter-owned state instead lives directly under the venue's
-`:adapters/<name>` region. Each adapter defines its own value and domain
-components; these share the running venue's atomic transaction boundary.
-Messaging uses `users/<did>` and `config/<name>` within its own state, but there
-is no universal adapter schema. Credentials remain in `/s/`. Public adapter
-declarations remain under `v/adapters/<name>/`. See [ADAPTERS.md](ADAPTERS.md)
-for owner-bound worker views, deletion hooks and lazy migration from the older
-venue-principal workspace layout.
+Operations may default to a workspace path, such as `w/memory`. Adapter-owned
+state lives in the venue's `:adapters/<name>` region, not in user workspaces;
+see [ADAPTERS.md](ADAPTERS.md#private-state-and-user-managed-storage).
 
 #### `/s/` — Secrets
 
-Encrypted, capability-gated data. Different encryption and access semantics from all other namespaces.
+Encrypted at rest: reading `/s/` returns ciphertext only. A secret is set only
+through `secret:set`, which encrypts it, and `covia:delete` removes a whole
+secret (`s/<name>`), never part of one. An operation uses a secret's value
+without revealing it under `secret/use`; revealing it needs `secret/extract`
+(UCAN.md, *Secret extraction*).
 
-- Encrypted at rest — `read(/s/)` returns ciphertext only
-- Decryption requires explicit `decrypt` capability via UCAN with key delegation
-- Convergent encryption ties back to CAD3
-- Reading the namespace is low-risk; the real security boundary is the decrypt capability
+### 4.5 Request-relative Shortcuts
 
-### 4.5 Virtual Namespaces
+Some path prefixes name no stored namespace. They are shortcuts whose meaning
+depends on the request, and each stands for a real path:
 
-Some path prefixes are not backed by a dedicated lattice namespace. Instead they are **virtual** — resolved at runtime by a `NamespaceResolver` that maps the prefix to the correct lattice location based on the `RequestContext`. The resolver returns a cursor at the containing record plus the remaining physical path, keeping scoping explicit while reusing normal cursor navigation.
+| Prefix | Stands for | Needs on the request |
+|--------|------------|----------------------|
+| `n/x` | `g/<agent>/n/x` — the running agent's workspace | the agent |
+| `c/x` | `g/<agent>/sessions/<session>/c/x` — the session's scratch | the agent and session |
+| `t/x` | `j/<job>/temp/x` — the job's scratch | the job |
+| `v/x` | `<venue>/w/global/x` — the venue's shared definitions | nothing |
+| `x/<adapter>/…` | that adapter's view for the addressed user | the user |
 
-**Virtual namespaces are user-level scratch space.** They expose a location for operation code and agent tool calls to read and write arbitrary data. They do **not** expose framework-managed system fields (status, `wakeTime`, task input/result, timeline). Those fields are accessed through dedicated APIs — `RequestContext`, engine accessors, venue ops — never by writing under a virtual namespace prefix. This split keeps the user-writable surface clean of state the framework owns and keeps the framework free to restructure its own storage without breaking user code.
+**The scratch shortcuts are user-level space.** `n/`, `c/` and `t/` give
+operation code and agent tool calls somewhere to keep arbitrary data. They never
+expose fields the framework manages (status, `wakeTime`, task input and result,
+timeline), which are reached through their own operations, so the framework can
+restructure its records without breaking user code. A shortcut writes inside an
+existing agent, session or job record and never creates that record.
 
-| Prefix | Resolves to | Scope | Resolver needs |
-|--------|-------------|-------|----------------|
-| `n/` | Agent-scoped scratch (persistent across sessions) | Agent | `RequestContext.agentId` |
-| `c/` | Session-scoped scratch (per-conversation) | Session | `RequestContext.sessionId` |
-| `t/` | Job-scoped scratch (per-invocation) | Job | `RequestContext.jobId` |
+**`n/` — agent workspace.** Persists across sessions and tasks: long-term
+memory, learned patterns, persona.
 
-**`n/` — Agent Workspace.** The running agent's persistent private workspace. Carries across sessions and tasks. Long-term memory, learned patterns, persona. Written rarely, read often. Agent-scoped via `RequestContext.agentId`.
+**`c/` — session scratch.** Working memory for one conversation, meaningful only
+while the session is active. See AGENT_SESSIONS.md for session lifecycle.
 
-**`c/` — Session Scratch.** Per-conversation working memory for a session. Dialogue context, topic notes, scratch that is only meaningful while the session is active. Session-scoped via `RequestContext.sessionId`. See AGENT_SESSIONS.md for session lifecycle.
-
-**`t/` — Job-Scoped Temp.** Temporary scratch for a single job execution. Job-scoped via `RequestContext.jobId`. Not agent-specific — any operation running under a job can use `t/` for intermediate results. Agent tasks use `t/` too, because a task IS a job (Task ID == Job ID).
-
-Properties:
-- **Naturally scoped** — the job is the execution unit; no separate lifecycle to manage.
-- **Concurrent-safe** — different jobs get different scratch, even for the same agent or user.
-- **Persisted** — part of the job record on the lattice; survives restarts.
-- **Auditable** — visible alongside job input/output, giving full provenance.
-- **Inheritable** — sub-operations within a job share its `t/` (see scoping rules below).
-
-Sub-operations within a job inherit the parent job's `jobId` on the `RequestContext`, so they share the parent's `t/`. This is the intended behaviour: orchestration steps, goal-tree subgoals, and tool calls can exchange data through `t/` without writing to permanent workspace.
+**`t/` — job scratch.** Intermediate results for one job. Any operation running
+under a job can use it, not only agents; an agent task is a job, so tasks use
+it too. It is persisted on the job record, so it survives restarts and sits
+alongside the job's input and output. Different jobs get different scratch,
+even for the same agent or user.
 
 #### Scoping Rules
 
@@ -417,37 +359,63 @@ Sub-operations within a job inherit the parent job's `jobId` on the `RequestCont
 | `n/` | Agent persona, learned patterns, long-term memory | Agent lifetime |
 | `w/` | Final outputs, documents, anything other agents or users should see | Permanent (user workspace) |
 
-#### Resolver Interface
+Each shortcut is currently a `NamespaceResolver` registered on `CoviaAdapter`
+by prefix; §4.6 replaces them.
 
-```java
-/**
- * Resolves a virtual namespace prefix to a lattice cursor and remaining path keys.
- * Called by CoviaAdapter when the first path segment matches a registered prefix.
- */
-public interface NamespaceResolver {
-    /**
-     * @param ctx     the request context (provides agentId, jobId, callerDID)
-     * @param adapter the CoviaAdapter (provides access to lattice cursors)
-     * @param keys    the full parsed path keys (first element is the prefix)
-     * @return resolved target, or null if unresolvable
-     */
-    ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
+### 4.6 Path Resolution (design, covia#617)
 
-    /** Whether this namespace accepts writes. */
-    boolean isWritable();
-}
-```
+A caller's path does not match the stored keys one for one. `w/foo` crosses the
+`{updated, data}` wrapper, `j/<hex>` is a Blob key read as the job's current
+state, `g/<id>` enters an agent record with its own `ts` stamp, `w/list/0` is a
+vector index, and `n/x` depends on who is asking. Path resolution maps one onto
+the other. Today it is done in several places, each with its own list of
+namespaces, and write policy is an allowlist in `CoviaAdapter`. This section is
+the design that replaces them.
 
-Resolvers are registered on CoviaAdapter at startup. Path resolution checks virtual resolvers first (O(1) lookup by prefix), then falls through to the standard user lattice cursor for physical namespaces. The resolver returns the cursor positioned at the right location and a short array of remaining keys.
+**One entry point.** `engine.paths().resolve(ctx, path, ability)` is the only
+request-aware step. It:
 
-A resolved target has the **same shape as a physical path**: a cursor at the
-record that holds the namespace, plus keys whose first element names the
-container within it (`t/x` → the Job record + `["temp", "x"]`, `c/x` → the
-session record + `["c", "x"]`, `n/x` → the agent record + `["n", "x"]`).
-Reads and writes therefore run one navigation rule for every namespace,
-virtual or physical. Scoped resolvers mark their target
-`requireExistingRecord`: `n/`, `c/`, and `t/` may update an existing agent,
-session, or Job record, but can never mint that owning record as a side effect.
+1. parses the path; a leading DID names the owner, otherwise the request's user
+   does;
+2. expands the shortcuts of §4.5 to their real paths, from the request. A
+   shortcut is accepted bare or with the caller's own DID, never another's;
+3. checks authority on the real path (`engine.requireLocalAccess`), so one piece
+   of data has one address and a grant covers every route to it;
+4. walks the components from the venue root to the position;
+5. returns the component there, or throws if the principal may not act.
+
+Reads, writes, deletes, the job-free read API, context loading and operation
+references all use it.
+
+**Components define their namespaces.** `ACoviaComponent extends
+ALatticeComponent` is the base of every component a caller can address.
+`resolve(keys, from)` returns the component at that position. It sees no
+request, takes as many keys per step as the component's rules cover (as cursor
+paths do), and builds each child only from its own cursor, so a walk from a
+draft root stays in the draft.
+
+| Component | Routes |
+|-----------|--------|
+| `VenueState` | a user's DID to their `User`; `x/<adapter>` to the adapter component |
+| `User` | `g/<id>` to `AgentState`, `j/<id>` to `JobState`, `s` to `SecretStore`, `a`, and `w`, `o`, `h` to a `WorkspaceRegion` |
+| `AgentState` | `sessions/<id>` to `SessionState` |
+
+`DataComponent` is the fallback for a position no other component claims,
+reading keys by value type: a map key, a vector index, an Index key.
+
+**Operations define writability.** `read()`, `update(ctx, change)` and
+`delete(ctx)` on the component at the position are the only ways to use it.
+Each makes its own checks and then changes its cursor in one atomic update;
+cursors carry no write policy. A `DataComponent` refuses changes unless the
+component above it opts its data in: `WorkspaceRegion` for `w` and `o`,
+`AgentState` for `n`, `SessionState` for `c`, `JobState` for `temp`.
+`SecretStore` accepts only removal of a whole secret. Refusals are typed and
+carry a reason from a constant on the refusing component. Checks that depend on
+the stored value run inside the update: the owning record must exist, and
+creating missing levels needs write authority at the nearest level that exists.
+
+`ACoviaComponent` is shaped so that it could move onto the Convex component
+hierarchy.
 
 ---
 
@@ -479,7 +447,7 @@ Operations never have implicit lattice access. The invocation boundary is the se
 
 ### 5.3 Capability Scoping via Paths
 
-Capabilities inherit the namespace path hierarchy. The risk profile follows from namespace semantics — code is inspectable, data is sensitive, secrets are encrypted. Each capability is a `with` (resource URI) + `can` (command) pair per the UCAN spec (see §6.2 for full details).
+Capabilities inherit the namespace path hierarchy. The risk profile follows from namespace semantics — code is inspectable, data is sensitive, secrets are encrypted. Each capability is a `with` (resource URI) + `can` (command) pair per the UCAN spec (see [UCAN.md](UCAN.md)).
 
 | Capability | Risk Level |
 |-----------|------------|
@@ -818,150 +786,6 @@ The Covia Grid lattice structure provides a unified data and execution model whe
 
 ---
 
-## 12. Implementation Phases
-
-The target state described above will be achieved incrementally. Each phase builds on the previous, ordered by prerequisite depth and value delivered.
-
-### Phase 0: Lattice Application Wrappers (DONE)
-
-Foundation for all lattice-backed state management.
-
-- `VenueState`, `AssetStore`, `User` wrappers over lattice cursors
-- Connected Engine state plus narrow component forks for bounded transactions
-- `Covia.ROOT` lattice definition with KeyedLattice composition
-- Per-venue OwnerLattice (one signing slot per venue)
-- Job write-through to lattice on every status update
-- Job recovery on restart (stabilise, never re-execute: fail interrupted jobs honestly, restore PAUSED/INPUT_REQUIRED and task-backed request jobs)
-- Etch store persistence via `store.setRootData()` / `store.getRootData()`
-
-### Phase 1: CAD3 Value IDs (DONE)
-
-Switch asset IDs from SHA256-of-JSON-string to CAD3 value hash (SHA3-256 of canonical encoding).
-
-Why early: foundational change affecting every asset reference. CAD3 value IDs are canonical — same semantic content produces the same hash regardless of JSON formatting (whitespace, key order). Aligns asset identity with the lattice's native content-addressing.
-
-Changes:
-- `Assets.calcID()` — parses JSON to map, returns `metaMap.getHash()`
-- `Asset.getID()` — uses `meta().getHash()` instead of `Hashing.sha256(getMetadata())`
-- `AssetStore.store()` — computes ID from parsed metaMap
-- Content SHA256 verification (`putContent`) is unchanged — that's payload integrity, not identity
-
-### Phase 2: Per-User Cursors + Capability Enforcement (PARTIALLY DONE)
-
-Separate venue state into per-user cursors and enforce access control using lattice-native UCAN `with`/`can` pairs. These go together — user segregation without enforcement is pointless, and enforcement without user scoping has nothing to protect.
-
-**Per-user cursors (DONE):** Partition venue state by caller DID so each user's data is isolated. The venue manages user state on users' behalf (users authenticate via OAuth or self-issued JWTs, not necessarily key pairs). Per-user state lives inside the venue's signed boundary — it's a MapLattice from user DID to per-user lattice, NOT a per-user OwnerLattice (the venue can't sign as the user). See `Users.java`, `User.java`, `JobManager.java`.
-
-**Capability enforcement (TODO):** Use UCAN-style `with`/`can` pairs as the representation model from the start. Capabilities are lattice-native maps (not JWT/base64) stored directly in venue state. Start with single-venue enforcement — no delegation chains or cross-venue proof walking yet.
-
-Lattice structure change:
-
-```
-:venues → OwnerLattice (per-venue)
-  <venue-AccountKey> → SignedLattice
-    :value → KeyedLattice
-      :assets    → CASLattice (venue-owned assets — adapters, shared)
-      :jobs      → IndexLattice (venue-managed jobs)
-      :ops       → MapLattice (venue operation registry)
-      :users     → MapLattice (DID → user record/profile)
-      :caps      → MapLattice (DID → capability set)              ← NEW
-      :user-data → MapLattice (DID → per-user KeyedLattice)       ← NEW
-        <user-DID-string> → KeyedLattice
-          :workspace → MapLattice (user data space)
-          :assets    → CASLattice (user-created assets)
-          :jobs      → MapLattice (user's job history)
-          :ops       → MapLattice (user's named operations)
-```
-
-> **Note — settled structure.** The sketch above is the Phase 2 planning shape. The
-> venue `:value` ultimately landed as a **single whole-value-LWW node** (not
-> per-region/per-entry LWW), and the dead `:jobs`/`:auth`/`:caps` regions were
-> dropped. Per-user state lives under `:user-data → <DID> → {j, g, s, w, o, h, a}`.
-> See **Appendix A.2** and **Appendix B** for the authoritative current structure.
-
-**Capability representation (lattice-native):**
-
-```
-:caps → MapLattice (DID → capability set)
-  "did:key:zAlice..." → [
-    { "with": "<venue-did>/o/", "can": "/invoke" },
-    { "with": "<venue-did>/a/", "can": "/crud/read" },
-    { "with": "<venue-did>/w/", "can": "/crud/write" }
-  ]
-  "did:key:zBob..." → [
-    { "with": "<venue-did>/", "can": "/" }           # full access
-  ]
-  :defaults → [                                       # anonymous/public DID
-    { "with": "<venue-did>/o/", "can": "/invoke" },
-    { "with": "<venue-did>/a/", "can": "/crud/read" }
-  ]
-```
-
-Each capability is a `with` (resource URI) + `can` (command) pair — the same UCAN `att` structure from §6. Resources use the DID path scheme. Commands use the slash-delimited hierarchy from §6.2. This representation is forward-compatible with full UCAN tokens (delegation chains, signatures, expiry) without any data model change — a UCAN token wraps the same `att` pairs with additional fields.
-
-**Enforcement (minimal, venue-level):**
-
-- Engine checks caller's capabilities before executing any action
-- Resource matching: path prefix — `<did>/o/` grants access to all operations under that venue
-- Command matching: prefix — `/crud` grants `/crud/read`, `/crud/write`, `/crud/delete`
-- Venue operator configures capabilities per DID via `:caps` in venue state
-- `:defaults` entry applies to unauthenticated/public DID
-- No delegation chains yet — capabilities are granted directly by the venue operator
-
-Venue-level `:assets` and `:jobs` remain for venue-owned state (adapter registrations, system jobs). User-level state holds user-created content and user-initiated jobs.
-
-Key design decisions:
-- Users identified by DID string (from OAuth-assigned `did:web:` or self-certifying `did:key:`)
-- No per-user signing — venue signs all state within its OwnerLattice boundary
-- `VenueState` gains `userData(AString did)` accessor returning a per-user cursor
-- API routes scope reads/writes to the caller's user data by default
-- Capabilities are lattice-native maps (AVector of AMaps), not JWT strings
-- Same `with`/`can` representation as full UCAN — forward-compatible
-
-### Phase 3: Operations Registry (`/o/`)
-
-User-controlled mutable operation naming, decoupled from adapter implementation.
-
-Operations are registered under user-chosen names in `/o/`. Each definition includes executor binding (adapter:op), input/output schema, and metadata. Names persist across adapter changes — if the underlying adapter is replaced, only the executor binding updates, not the operation name.
-
-```json
-{
-  "name": "Code Review",
-  "input": { "type": "object", "properties": {...} },
-  "output": { "type": "object", "properties": {...} },
-  "executor": "langchain:openai"
-}
-```
-
-On invoke, the current definition is pinned to `/a/` (immutable snapshot). Job record captures both the mutable name and the pinned ref.
-
-Lattice: add `:ops` to the venue KeyedLattice (MapLattice with LWW merge). Per-user ops under user cursor.
-
-### Phase 4: UCAN Delegation Chains
-
-Extend the capability model from Phase 2 with full UCAN features: signed tokens, delegation chains, expiry, revocation. The `with`/`can` representation is already in place — this phase adds the cryptographic wrapper.
-
-- UCAN tokens stored as content-addressable lattice values in `/a/`
-- Delegation: issuer signs UCAN granting subset of own capabilities to audience
-- Proof chains: each UCAN references parent UCANs via `/a/` hashes
-- Verification: walk chain, verify signatures, check attenuation at each step
-- Revocation: signed revocation records referencing UCAN `/a/` hash
-- Cross-venue: UCAN travels with job submissions, any venue verifies locally
-
-### Phase 5: Agent Model (`/g/`)
-
-Stateful actors with lifecycle, tasks, pending, sessions, timeline, and pluggable transition functions. The three-level architecture (agent update → transition fn → LLM call). Agent data structure and transitions are defined in AGENT_LOOP.md.
-
-Builds on: per-user cursors (agents are owned by users), operations registry (agents invoke ops), UCAN (agents have capability boundaries).
-
-### Phase 6: Workspace (`/w/`) and Secrets (`/s/`)
-
-Workspace: freely mutable data space per user/agent. Already partially enabled by per-user cursors.
-
-Secrets: encrypted at rest, capability-gated decryption. Convergent encryption. Required for secure API key management.
-
----
-
 ## Appendix A: Lattice Mechanics
 
 This appendix describes the operational mechanics of venue lattice state management — how cursors work, how merges happen, how state is signed and persisted, and how venues share state.
@@ -979,6 +803,10 @@ Each venue engine holds a **lattice cursor** pointing to its own venue root with
 Sub-cursors navigate to specific fields (e.g. `venueCursor.path(Covia.ASSETS)`). Sub-cursors write through to the venue root atomically — updating a job via the jobs sub-cursor updates the venue root in a single operation.
 
 For day-to-day operations, the venue works directly with its cursor. It does not interact with the global lattice structure unless syncing with other venues.
+
+Writes go through the component accessors — `VenueState`, `Users`, `User`, the
+agent and job records — because each applies its record's stamp and creates
+missing containers. A raw cursor path does neither.
 
 ### A.2 Merge Semantics
 
@@ -1059,24 +887,10 @@ collectable). Note the signal is *write*-activity: job-free reads do not bump
 it, which is the intended semantics — identities stay alive by doing things.
 
 `meta` is **framework-owned**: it is not a writable namespace (`covia:write`
-addresses `w`/`o`/`h` only), so users cannot forge their own activity. It is
+addresses `w` and `o` only), so users cannot forge their own activity. It is
 readable through the ordinary read path (`covia:read <did>/meta`, values API).
-
-The slot is deliberately open for future per-identity fields as venue identity
-management grows. Reserved (not yet implemented) candidates include:
-
-- `class` / `expiresAt` — identity lifecycle class (e.g. ephemeral demo
-  sessions) and explicit expiry, written at mint time by the flow that creates
-  scoped identities;
-- authentication material and policy (e.g. registered credentials, allowed
-  auth methods);
-- `credits` / quota state — per-identity resource budgets (LLM spend, storage),
-  pending the platform metering design;
-- verified links to real-world identity (organisational accounts, KYC-style
-  attestations, cross-venue identity anchors).
-
-New fields belong in `meta` rather than as further top-level record keys, so
-identity metadata stays in one documented place with one ownership rule.
+New per-identity fields belong in `meta` rather than as further top-level record
+keys, so identity metadata stays in one place with one ownership rule.
 
 | Region | Merge | Rationale |
 |--------|-------|-----------|
