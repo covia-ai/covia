@@ -684,7 +684,7 @@ public class CoviaAdapter extends AAdapter {
 		// pathCreated is read from the pre-state and means "a missing parent
 		// container had to be built" — not whether the leaf already had a value
 		// (that is `existed`).
-		baseCursor.update(keys, target.requireExistingRecord(),
+		updateTree(baseCursor, keys, target.requireExistingRecord(),
 			(current, from) -> {
 			requireCreateAccess(ctx, input, keys, current, from);
 			existed[0] = leafExisted(current, keys, from);
@@ -696,6 +696,21 @@ public class CoviaAdapter extends AAdapter {
 			return next;
 		});
 		return writeResult(existed[0], built[0]);
+	}
+
+	/**
+	 * Changes the caller's tree at a path. The tree refuses a path that does
+	 * not fit it (a key on a scalar or a list, an index out of range, a scoped
+	 * path with no parent record) with an IllegalArgumentException, which here
+	 * is the caller's input.
+	 */
+	private static void updateTree(WorkspaceRoot cursor, ACell[] keys, boolean requireExistingRecord,
+			WorkspaceRoot.PathUpdate update) {
+		try {
+			cursor.update(keys, requireExistingRecord, update);
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 	}
 
 	/**
@@ -789,7 +804,7 @@ public class CoviaAdapter extends AAdapter {
 			return Maps.of(K_DELETED, CVMBool.FALSE);
 		}
 		final boolean[] deleted = {false};
-		cursor.update(keys, requireExistingRecord,
+		updateTree(cursor, keys, requireExistingRecord,
 			(current, from) -> {
 			deleted[0] = leafExisted(current, keys, from);
 			return deepDelete(current, keys, from);
@@ -824,7 +839,7 @@ public class CoviaAdapter extends AAdapter {
 		final boolean[] built = {false};
 		final boolean[] existed = {false};
 		final long[] newSize = {0};
-		baseCursor.update(keys, target.requireExistingRecord(),
+		updateTree(baseCursor, keys, target.requireExistingRecord(),
 			(current, from) -> {
 			requireCreateAccess(ctx, input, keys, current, from);
 			existed[0] = leafExisted(current, keys, from);
