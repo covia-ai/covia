@@ -3070,6 +3070,9 @@ public class Engine {
 			contentStorage.storeVerified(expectedHash, new SizeLimitedStream(is, maxSize));
 		} catch (ContentTooLarge e) {
 			throw new InvalidInputException(CONTENT_TOO_LARGE + maxSize + " bytes");
+		} catch (IllegalArgumentException e) {
+			// The storage refuses content that does not match its hash (AStorage.HASH_MISMATCH)
+			throw new InvalidInputException(e.getMessage(), e);
 		}
 		log.debug("Stored content with SHA256: "+expectedHash);
 		return expectedHash;
