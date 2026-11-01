@@ -25,7 +25,9 @@ import org.junit.jupiter.api.io.TempDir;
 import com.sun.net.httpserver.HttpServer;
 
 import convex.core.lang.RT;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 
 /**
  * The local engine without sherpa-onnx's natives: a long note is split on its pauses
@@ -218,7 +220,7 @@ class LocalSpeechEngineTest {
 			assertEquals(List.of("API"), speech.spelled(), "and what was spelled is said to have been");
 			assertEquals(Lexicon.UNSAYABLE.formatted("東京"), assertThrows(JobFailedException.class,
 				() -> engine.speak(wavOf("The meeting is at 東京", null, null, null), null)).getMessage(), "fails loudly");
-			assertEquals(LocalSpeechEngine.ENGLISH_ONLY.formatted("test-lexicon"), assertThrows(IllegalArgumentException.class,
+			assertEquals(LocalSpeechEngine.ENGLISH_ONLY.formatted("test-lexicon"), assertThrows(NotSupportedException.class,
 				() -> engine.speak(wavOf("the", null, null, "fr"), null)).getMessage());
 			assertEquals(1, speaker.asked.size(), "nothing it could not say reached the voice");
 		} finally {
@@ -230,14 +232,14 @@ class LocalSpeechEngineTest {
 		Saying speaker = new Saying();
 		LocalSpeechEngine engine = speaking(voice("v".getBytes(StandardCharsets.UTF_8)), speaker);
 		try {
-			assertEquals(LocalSpeechEngine.WAV_ONLY, assertThrows(IllegalArgumentException.class,
+			assertEquals(LocalSpeechEngine.WAV_ONLY, assertThrows(NotSupportedException.class,
 				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", null, null, "opus", null, null, null), null)).getMessage());
-			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-voice"), assertThrows(IllegalArgumentException.class,
+			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-voice"), assertThrows(NotSupportedException.class,
 				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", "supertonic-3", null, "wav", null, null, null), null)).getMessage(),
 				"a caller cannot make the venue fetch another voice");
-			assertEquals(LocalSpeechEngine.VOICE_NUMBER, assertThrows(IllegalArgumentException.class,
+			assertEquals(LocalSpeechEngine.VOICE_NUMBER, assertThrows(InvalidInputException.class,
 				() -> engine.speak(wavOf("hi", "alloy", null, null), null)).getMessage());
-			assertEquals(LocalSpeechEngine.NO_SUCH_VOICE.formatted("test-voice", 2), assertThrows(IllegalArgumentException.class,
+			assertEquals(LocalSpeechEngine.NO_SUCH_VOICE.formatted("test-voice", 2), assertThrows(InvalidInputException.class,
 				() -> engine.speak(wavOf("hi", "3", null, null), null)).getMessage());
 			assertEquals(LocalSpeechEngine.NOTHING_SAID, assertThrows(JobFailedException.class,
 				() -> engine.speak(wavOf("", null, null, null), null)).getMessage(), "no audio is not speech");
@@ -309,7 +311,8 @@ class LocalSpeechEngineTest {
 			assertEquals(new LocalSpeechEngine.Heard("heard2 heard0", "", 0), ended, "at the end the rest settles");
 			assertEquals(1, backend.decoded.size(), "the stretch under way is decoded once more, and nothing else");
 			assertTrue(backend.pausesReleased, "and the pause finder is let go");
-			assertThrows(IllegalStateException.class, () -> dictation.hear(seconds(1), false), "an ended dictation hears no more");
+			assertEquals(LocalSpeechEngine.DICTATION_CLOSED, assertThrows(NotSupportedException.class,
+				() -> dictation.hear(seconds(1), false), "an ended dictation hears no more").getMessage());
 		} finally {
 			engine.close();
 		}
@@ -419,7 +422,7 @@ class LocalSpeechEngineTest {
 			JobFailedException missing = assertThrows(JobFailedException.class, () -> engine.transcribe(wav(1), "test-model", null, null, null));
 			assertEquals(LocalSpeechEngine.NOT_READY.formatted(NativeLibraries.NOT_INSTALLED), missing.getMessage());
 			assertEquals(NativeLibraries.NOT_INSTALLED, RT.getIn(engine.status(), "reason").toString());
-			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-model"), assertThrows(IllegalArgumentException.class,
+			assertEquals(LocalSpeechEngine.OTHER_MODEL.formatted("test-model"), assertThrows(NotSupportedException.class,
 				() -> engine.transcribe(wav(1), "parakeet-tdt-v3", null, null, null)).getMessage());
 			assertEquals(LocalSpeechEngine.SPEAK_UNAVAILABLE, assertThrows(JobFailedException.class,
 				() -> engine.speak(new SpeechEngine.SpeakRequest("hi", null, null, "wav", null, null, null), null)).getMessage(),

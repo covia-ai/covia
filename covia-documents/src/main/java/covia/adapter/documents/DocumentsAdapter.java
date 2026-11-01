@@ -48,6 +48,9 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.TextExtractor;
+import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.utils.MimeUtils;
 import covia.venue.RequestContext;
 
@@ -213,7 +216,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 	public Extraction extract(Request request) throws IOException {
 		Kind kind = kindOf(request.mime(), request.filename());
 		if (kind == null) {
-			throw new IllegalArgumentException("No text extractor for " + request.filename()
+			throw new NotSupportedException("No text extractor for " + request.filename()
 				+ " (" + request.mime() + "); supported: " + supported());
 		}
 		int cap = (request.maxChars() > 0) ? Math.min(request.maxChars(), MAX_CHARS_CEILING) : maxChars;
@@ -229,13 +232,13 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 				case TEXT -> text(request.bytes(), cap);
 			};
 		} catch (InvalidPasswordException e) {
-			throw new IllegalArgumentException(request.filename() + " is password-protected; it cannot be read");
+			throw new NotSupportedException(request.filename() + " is password-protected; it cannot be read");
 		} catch (IOException | RuntimeException e) {
-			if (e instanceof IllegalArgumentException iae) throw iae;
+			if (e instanceof CoviaException refusal) throw refusal;
 			String detail = (e.getMessage() != null && !e.getMessage().isBlank())
 				? e.getMessage() : e.getClass().getSimpleName();
-			throw new IllegalArgumentException("Cannot read " + request.filename()
-				+ " as " + kind.name().toLowerCase(Locale.ROOT) + ": " + detail);
+			throw new InvalidInputException("Cannot read " + request.filename()
+				+ " as " + kind.name().toLowerCase(Locale.ROOT) + ": " + detail, e);
 		}
 	}
 
@@ -368,7 +371,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 				.onUnmappableCharacter(CodingErrorAction.REPORT)
 				.decode(ByteBuffer.wrap(bytes)).toString();
 		} catch (CharacterCodingException e) {
-			throw new IllegalArgumentException("File is not valid UTF-8 text");
+			throw new InvalidInputException("File is not valid UTF-8 text");
 		}
 		return flat(text, cap, Maps.empty());
 	}
@@ -440,7 +443,7 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 		String subOp = getSubOperation(meta);
 		if (!"extract".equals(subOp)) {
 			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Unknown documents operation: " + subOp));
+				new NotSupportedException("Unknown documents operation: " + subOp));
 		}
 		try {
 			return CompletableFuture.completedFuture(handleExtract(input));
@@ -458,20 +461,20 @@ public class DocumentsAdapter extends AAdapter implements TextExtractor {
 	private ACell handleExtract(ACell input) throws IOException {
 		AString encoded = RT.ensureString(RT.getIn(input, K_BYTES));
 		if (encoded == null || encoded.isEmpty()) {
-			throw new IllegalArgumentException("bytes (base64) is required");
+			throw new InvalidInputException("bytes (base64) is required");
 		}
 		byte[] bytes;
 		try {
 			bytes = Base64.getDecoder().decode(encoded.toString().trim());
 		} catch (IllegalArgumentException e) {
-			throw new IllegalArgumentException("bytes must be base64: " + e.getMessage());
+			throw new InvalidInputException("bytes must be base64: " + e.getMessage(), e);
 		}
 		AString filenameCell = RT.ensureString(RT.getIn(input, K_FILENAME));
 		String filename = (filenameCell != null) ? filenameCell.toString() : "document";
 		AString mimeCell = RT.ensureString(RT.getIn(input, K_MIME));
 		String mime = (mimeCell != null) ? mimeCell.toString() : MimeUtils.guess(filename, bytes);
 		if (!supports(mime, filename)) {
-			throw new IllegalArgumentException("No text extractor for " + filename
+			throw new NotSupportedException("No text extractor for " + filename
 				+ " (" + mime + "); supported: " + supported());
 		}
 		CVMLong max = RT.ensureLong(RT.getIn(input, K_MAX_CHARS));

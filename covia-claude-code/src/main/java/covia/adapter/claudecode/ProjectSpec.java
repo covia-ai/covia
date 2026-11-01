@@ -12,6 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 
 /**
@@ -62,14 +63,14 @@ public record ProjectSpec(
 	 * The DID that owns the project. {@code "public"} and {@code "venue"}
 	 * resolve against the engine at call time.
 	 *
-	 * @throws IllegalStateException when the spec names the public principal
+	 * @throws ConfigurationException when the spec names the public principal
 	 *         but the venue has public access disabled
 	 */
 	public AString userDID(Engine engine) {
 		if (VENUE_USER.equals(userRef)) return engine.getDIDString();
 		if (!PUBLIC_USER.equals(userRef)) return Strings.create(userRef);
 		if (!engine.config().isPublicAccess()) {
-			throw new IllegalStateException("project '" + name + "' is owned by \"public\" but public access "
+			throw new ConfigurationException("project '" + name + "' is owned by \"public\" but public access "
 				+ "is disabled on this venue (auth.public.enabled) — name an explicit DID");
 		}
 		return Strings.create(engine.getDIDString() + ":public");

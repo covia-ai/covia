@@ -26,6 +26,7 @@ import covia.adapter.TextExtractor;
 import covia.adapter.TextExtractor.Extraction;
 import covia.adapter.TextExtractor.Request;
 import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -135,12 +136,12 @@ public class DocumentsAdapterTest {
 
 		assertFalse(adapter.supports("application/zip", "archive.zip"));
 		assertFalse(adapter.supports("image/heic", "photo.heic"));
-		IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+		NotSupportedException refused = assertThrows(NotSupportedException.class,
 			() -> adapter.extract(request(new byte[] {0x50, 0x4b}, "archive.zip", 0, null, null)));
 		assertTrue(refused.getMessage().contains("supported: pdf, docx"), refused.getMessage());
 
 		// A file that claims to be a PDF but is not fails with the reason, not a stack trace.
-		IllegalArgumentException broken = assertThrows(IllegalArgumentException.class,
+		InvalidInputException broken = assertThrows(InvalidInputException.class,
 			() -> adapter.extract(request("not a pdf".getBytes(StandardCharsets.UTF_8), "x.pdf", 0, null, null)));
 		assertTrue(broken.getMessage().startsWith("Cannot read x.pdf as pdf:"), broken.getMessage());
 	}
