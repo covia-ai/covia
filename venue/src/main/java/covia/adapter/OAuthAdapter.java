@@ -934,7 +934,14 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			AdapterState mine = state.inVenue(draft);
 			AMap<AString, ACell> secrets = RT.ensureMap(owner.secrets().cursor().get());
 			AMap<AString, ACell> connections = RT.ensureMap(mine.read(path));
-			LegacyMove move = moveLegacyGrants(secrets, connections, keys);
+			LegacyMove move;
+			try {
+				move = moveLegacyGrants(secrets, connections, keys);
+			} catch (NotSupportedException e) {
+				// Only the operator can fix it, so the operator is told as well as the caller
+				log.warn("Connected accounts of {} cannot be used: {}", userDID, e.getMessage());
+				throw e;
+			}
 			if (move.secrets() == secrets) return;
 			owner.secrets().cursor().set(move.secrets());
 			mine.write(path, move.connections());
@@ -944,9 +951,10 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	/** A user's secret records and connections after {@link #moveLegacyGrants(AMap, AMap, SecretStore.Keys)}. */
 	record LegacyMove(AMap<AString, ACell> secrets, AMap<AString, ACell> connections) {}
 
-	/** Refusal for a grant an earlier venue kept that cannot be read as one. */
+	/** Refusal for a grant an earlier venue kept that cannot be read as one; only the operator can reach it. */
 	public static final String UNREADABLE_LEGACY_GRANT =
-		"A connected account kept by an earlier venue is not a readable grant: ";
+		"A connected account kept by an earlier venue cannot be read: it is damaged or was sealed under a key "
+		+ "this venue no longer holds. The venue operator can restore that key or remove the record: ";
 
 	/**
 	 * Moves the grants an earlier venue kept among a user's secret records, as
@@ -954,7 +962,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	 * is kept over the older grant. Pure: the venue's keys are passed in, and
 	 * with no such grant both maps come back as the same cells.
 	 *
-	 * @throws IllegalStateException with {@link #UNREADABLE_LEGACY_GRANT} for a
+	 * @throws NotSupportedException with {@link #UNREADABLE_LEGACY_GRANT} for a
 	 * record that is not a readable grant, leaving every record as it was
 	 */
 	static LegacyMove moveLegacyGrants(AMap<AString, ACell> secrets, AMap<AString, ACell> connections,
@@ -968,7 +976,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			String provider = name.substring(LEGACY_GRANT_PREFIX.length());
 			AMap<AString, ACell> grant = legacyGrant(entry.getValue(), keys);
 			if (grant == null || !PROVIDER_NAME.matcher(provider).matches()) {
-				throw new IllegalStateException(UNREADABLE_LEGACY_GRANT + name);
+				throw new NotSupportedException(UNREADABLE_LEGACY_GRANT + name);
 			}
 			AString key = Strings.create(provider);
 			if (moved.get(key) == null) moved = moved.assoc(key, connection(grant, keys));

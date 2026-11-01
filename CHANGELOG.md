@@ -54,6 +54,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A store collection cancelled by `venue:gc` ends CANCELLED.
 - Model provider, MCP server and A2A failures are typed; a refused operator key is a configuration error, a caller's an input error.
 - A2A params that do not fit their method answer invalid params; a venue error on an A2A stream arrives as one error event.
+- A secret or connected account the venue cannot decrypt is refused with how to fix it; a use of one is logged for the operator.
 
 ### Removed
 

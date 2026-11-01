@@ -81,7 +81,6 @@ import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
-import covia.exception.CoviaException;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
@@ -4616,6 +4615,10 @@ public class Engine {
 		return owner.equals(ctx.getUserDID()) && !isPublicPrincipal(owner);
 	}
 
+	/** Refusal for a stored secret the venue cannot decrypt; the secret's name follows. */
+	public static final String SECRET_UNREADABLE = "Secret cannot be decrypted: it is damaged or was sealed under a key "
+		+ "this venue no longer holds. Its owner can set it again with secret:set: ";
+
 	/** One user's secret of one name, decrypted; null when the user or the secret
 	 *  is absent. The venue's own secrets also come from its process environment. */
 	private String decryptSecret(AString userDID, String name) {
@@ -4624,12 +4627,13 @@ public class Engine {
 		AString value;
 		try {
 			value = user.secrets().decrypt(Strings.create(name), SecretStore.keys(keyPair));
-		} catch (Exception e) {
+		} catch (RuntimeException e) {
 			// A decrypt/key failure is NOT the same as "secret not set". Collapsing
 			// both to null masked #91-class identity/key misconfigurations as
-			// absence. Surface it loudly instead. Values are never logged.
-			log.warn("Secret '{}' resolution errored for {}: {}", name, userDID, e.toString());
-			throw new CoviaException("Secret resolution failed for '" + name + "'", e);
+			// absence. The operator is told too, as a lost venue key is theirs to
+			// restore. Values are never logged.
+			log.warn("Secret '{}' of {} cannot be decrypted: {}", name, userDID, e.toString());
+			throw new NotSupportedException(SECRET_UNREADABLE + name);
 		}
 		if (value != null) return value.toString();
 		return isVenuePrincipal(userDID) ? environmentSecret(name) : null;   // null == genuinely absent

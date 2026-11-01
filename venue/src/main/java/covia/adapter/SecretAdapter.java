@@ -53,7 +53,8 @@ public class SecretAdapter extends AAdapter {
 	public static final String EXTRACT_NOT_PUBLIC = "The public principal's secrets are provisioned by the operator: they can be used under a grant, never extracted";
 	public static final String SECRET_EXISTS = "Secret already exists; pass overwrite:true to replace it";
 	public static final String SECRET_UNAVAILABLE = "Secret does not exist";
-	public static final String SECRET_DECRYPT_FAILED = "Secret cannot be decrypted";
+	public static final String SECRET_DECRYPT_FAILED = "Secret cannot be decrypted: it is damaged or was sealed "
+		+ "under a key this venue no longer holds. Set it again with secret:set";
 
 	@Override
 	public String getName() {
@@ -187,7 +188,7 @@ public class SecretAdapter extends AAdapter {
 			AString value;
 			try {
 				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));
-			} catch (RuntimeException e) { throw new IllegalStateException(SECRET_DECRYPT_FAILED); }
+			} catch (RuntimeException e) { throw new NotSupportedException(SECRET_DECRYPT_FAILED); }
 			if (value == null) throw new NotFoundException(SECRET_UNAVAILABLE, name.toString());
 			engine.audit().event(Audit.SECRET_EXTRACT, Audit.K_DID, ctx.getCallerDID(), Audit.K_NAME, name, Audit.K_OUTCOME, Audit.OK);
 			return Maps.of(Fields.NAME, name, Fields.VALUE, value);

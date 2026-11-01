@@ -69,7 +69,8 @@ public final class UserExports {
 	public static final String PROTECTED = "The venue and public principals cannot be exported, imported or cloned";
 	public static final String BUSY = "The user has unfinished work: a job not yet finished or an agent task outstanding. Retry once it has finished";
 	public static final String SECRETS_NEED_KEY = "The user has secrets: supply accountKey to seal them, or secrets: false to leave them out";
-	public static final String SECRET_UNREADABLE = "A secret could not be decrypted, so the export would be incomplete";
+	public static final String SECRET_UNREADABLE = "A secret could not be decrypted, so the export would be incomplete: "
+		+ "set it again with secret:set or delete it, or export with secrets: false";
 	public static final String NOT_AN_EXPORT = "Not a Covia user export";
 	public static final String NEWER_VERSION = "The export was written by a newer Covia than this venue reads";
 	public static final String SEED_REQUIRED = "The export holds sealed secrets: supply the seed they were sealed to";
@@ -124,7 +125,7 @@ public final class UserExports {
 				plain = SecretStore.plaintexts(secrets, SecretStore.keys(engine.getKeyPair()));
 			} catch (RuntimeException e) {
 				// Neither the provider's exception nor any decrypted material is reported.
-				throw new IllegalStateException(SECRET_UNREADABLE);
+				throw new NotSupportedException(SECRET_UNREADABLE);
 			}
 			export = export.assoc(K_SECRETS, ECIES.encrypt(recipient, Format.encodeMultiCell(plain, true)));
 		}

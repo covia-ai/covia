@@ -88,6 +88,15 @@ from a user's create operation works the same way.
 IO and HTTP client failures are caught by the caller and rethrown as the type
 for what was being attempted, with the cause chained.
 
+**Stored data the venue cannot read is an expected failure.** A record that is
+damaged or was sealed under a key the venue no longer holds, such as a secret
+or a connected account, is refused with `NotSupportedException`. The message
+names the record, never its content, and says who can fix it and how: the
+owner by setting it again, or the operator by restoring the key or removing the
+record. When such a record is used, rather than read out by its owner, the
+venue also logs a warning naming the user and the record, so the operator learns
+of a lost key.
+
 **Internal invariants stay JDK exceptions.** "Called before prepare", "already
 started" or an impossible state are venue bugs, and `IllegalStateException`
 reports them as such.

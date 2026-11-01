@@ -50,6 +50,7 @@ import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -621,7 +622,7 @@ public class OAuthAdapterTest {
 		assertSame(moved.connections(), again.connections());
 
 		// A shape it does not recognise is refused.
-		IllegalStateException refused = assertThrows(IllegalStateException.class, () -> OAuthAdapter.moveLegacyGrants(
+		NotSupportedException refused = assertThrows(NotSupportedException.class, () -> OAuthAdapter.moveLegacyGrants(
 			other.assoc(fake, SecretStore.seal(Strings.create("not a grant"), keys)), none, keys));
 		assertTrue(refused.getMessage().startsWith(OAuthAdapter.UNREADABLE_LEGACY_GRANT), refused.getMessage());
 	}

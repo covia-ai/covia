@@ -40,7 +40,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
-import covia.exception.CoviaException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
@@ -283,7 +283,8 @@ public class AuditLogTest {
 		assertEquals(v2Value, engine.resolveSecret("MIGRATING", ctx));
 
 		user.secrets().store("FOREIGN", v2Value, SecretStore.keys(AKeyPair.generate()));
-		assertThrows(CoviaException.class, () -> engine.resolveSecret("FOREIGN", ctx));
+		NotSupportedException unreadable = assertThrows(NotSupportedException.class, () -> engine.resolveSecret("FOREIGN", ctx));
+		assertEquals(Engine.SECRET_UNREADABLE + "FOREIGN", unreadable.getMessage());
 		assertTrue(List.copyOf(captured.list).stream().anyMatch(e -> e.getLevel() == Level.WARN
 			&& Engine.class.getName().equals(e.getLoggerName())), "the failed resolution is logged");
 
