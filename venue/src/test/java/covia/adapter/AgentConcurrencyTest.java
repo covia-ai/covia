@@ -211,7 +211,6 @@ public class AgentConcurrencyTest {
 		agent.suspend(ALICE_DID, Strings.create("review"));
 		ACell stop = agent.getRecord().get(AgentState.KEY_SUSPENSION);
 		agent.suspend(Strings.create("late failure"));
-		agent.suspendAndDrain(Strings.create("late failed cycle"));
 		assertEquals(stop, agent.getRecord().get(AgentState.KEY_SUSPENSION));
 		assertNull(agent.getError());
 		assertTrue(agent.tryResume());

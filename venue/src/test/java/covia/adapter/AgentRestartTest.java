@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
@@ -185,6 +186,11 @@ public class AgentRestartTest {
 			assertFalse(kept.isFinished(), "a task waiting on its wake time stays queued");
 			assertTrue(AgentState.isParked(second.getVenueState().users().get(ALICE)
 				.agent("parked-waking").getTasks().get(waking.getID())));
+
+			// A recovered request still leaves the queue when its caller cancels it.
+			kept.cancel();
+			assertNull(second.getVenueState().users().get(ALICE).agent("parked-waking")
+				.getTasks().get(waking.getID()), "a cancelled request is not left for the agent to run");
 		} finally {
 			second.close();
 		}

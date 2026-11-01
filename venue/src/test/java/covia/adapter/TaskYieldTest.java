@@ -187,6 +187,35 @@ public class TaskYieldTest {
 		assertEquals(0, agent.getTasks().count());
 	}
 
+	@Test
+	public void failTaskFailsOnlyItsTaskAndLeavesTheAgentRunning(TestInfo info) throws Exception {
+		// fail_task is the agent deciding a task cannot be done: a semantic
+		// failure of that task (AGENT_SESSIONS.md §6.3), not a technical error
+		// in the agent, which is what suspends it (#88). Through the real run
+		// loop, the task's Job fails with the agent's reason and the agent
+		// stays up for the next task.
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		AgentState agent = create(owner, "fails-a-task", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/taskllm",
+			"model", "parallel-task-fail-test"), null);
+
+		Job first = request(owner, "fails-a-task", "cannot be done");
+		assertThrows(Exception.class, () -> first.awaitResult(10_000));
+		assertEquals("failed deliberately", first.getErrorMessage());
+		awaitRest(agent, owner);
+		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+			"failing a task is not a fault in the agent: " + agent.getError());
+
+		Job second = request(owner, "fails-a-task", "nor can this");
+		assertThrows(Exception.class, () -> second.awaitResult(10_000));
+		assertEquals("failed deliberately", second.getErrorMessage(),
+			"the next task gets its own cycle and its own outcome");
+		awaitRest(agent, owner);
+		assertEquals(2, timelineCount(agent));
+		assertEquals(AgentState.SLEEPING, agent.getStatus());
+	}
+
 	/** Answers the agent's one open ask, as its owner. */
 	private void respond(RequestContext owner, AgentState agent, String answer) {
 		AString askId = null;

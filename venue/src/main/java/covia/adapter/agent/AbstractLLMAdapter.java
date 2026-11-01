@@ -27,10 +27,12 @@ import covia.adapter.AgentAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
@@ -66,8 +68,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_LLM_OPERATION   = Strings.intern("llmOperation");
 	public static final AString K_MODEL           = Strings.intern("model");
 	public static final AString K_SYSTEM_PROMPT   = Strings.intern("systemPrompt");
-	/** Prefix of the timeout failure a run loop treats as recoverable (AgentAdapter). */
+	/** How the failure begins when an LLM call outlasts the agent's {@code llmTimeoutMs}. */
 	public static final String LLM_TIMEOUT_PREFIX = "LLM call timed out after ";
+	/** A failed LLM call: the operation, then why. */
+	public static final String LLM_CALL_FAILED = "LLM call failed (%s): %s";
 	/**
 	 * How a level-3 operation's reason begins when the provider refused the
 	 * context as larger than the model accepts. The reason survives a job
@@ -563,23 +567,28 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				failure.initCause(cause);
 				throw failure;
 			}
+			// The setup the call runs under is wrong, or the provider cannot be
+			// reached after its own retries: the agent's next call would fail the
+			// same way, so the agent cannot continue. Anything else is about this
+			// request and fails only the work (AGENT_LOOP.md §3.4).
+			if (cause instanceof ConfigurationException || cause instanceof UnavailableException) {
+				throw new CannotContinueException(LLM_CALL_FAILED.formatted(llmOperation, reason), cause);
+			}
 			if (cause instanceof RuntimeException re) throw re;
-			throw new JobFailedException("LLM call failed (" + llmOperation + "): " + describeFailure(cause));
+			throw new JobFailedException(LLM_CALL_FAILED.formatted(llmOperation, describeFailure(cause)));
 		}
 
 		// A level-3 op that completes with a failure VALUE — {status: FAILED,
-		// message: ...} from Status.failure (missing/invalid API key, unknown
-		// provider) — is not an assistant message. Without this guard the tool
-		// loop sees no toolCalls and no content and silently emits an empty
-		// response, hiding the real failure. Surface it as a transition failure
-		// so the framework fails the caller's Job with the operation's message,
-		// which is the venue's own: a provider's refusal arrives as a typed
-		// failure above, never as a value. (An op that throws already
-		// propagates exceptionally via join().)
+		// message: ...} from Status.failure (missing or refused API key, unknown
+		// provider, unresolved model) — is not an assistant message. Without this
+		// guard the tool loop sees no toolCalls and no content and silently emits
+		// an empty response, hiding the real failure. A failure value is only
+		// ever a setup problem — a provider's refusal arrives as a typed failure
+		// above — so the agent cannot continue. Its message is the venue's own.
 		if (result instanceof AMap && Status.FAILED.equals(RT.getIn(result, Fields.STATUS))) {
 			AString message = RT.ensureString(RT.getIn(result, Fields.MESSAGE));
-			throw new JobFailedException("LLM call failed (" + llmOperation + "): "
-				+ (message != null ? message.toString() : "no message"));
+			throw new CannotContinueException(LLM_CALL_FAILED.formatted(llmOperation,
+				(message != null) ? message.toString() : "no message"), null);
 		}
 		// Keep the persisted agent protocol provider-neutral even when a custom
 		// Level 3 operation returns OpenAI-style JSON text. Malformed text remains

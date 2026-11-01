@@ -2132,14 +2132,14 @@ public class LLMAgentAdapterTest {
 		assertEquals(Status.FAILED, taskJob.getStatus(),
 			"task Job must transition to FAILED on agent give-up");
 
-		// The give-up is a transition failure, so the agent suspends with the
-		// error recorded (resumable via agent:resume) — its thread is freed and
-		// the task resolved, which is the point. An agent that loops to its
-		// tool-call safety limit is misbehaving, so parking it is appropriate.
+		// The limit bounds this task's cost and fails this task: the agent can
+		// still take its next one, so it is not suspended (AGENT_LOOP.md §3.4).
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("loop-agent");
-		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
-			"agent suspends (error recorded, resumable, thread freed) after giving up");
+		TestEngine.awaitAgentIdle(agent, 5000);
+		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+			"giving up on a task leaves the agent running");
+		assertNull(agent.getError());
 	}
 
 	@Test

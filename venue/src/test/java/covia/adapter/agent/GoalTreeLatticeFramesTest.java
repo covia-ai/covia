@@ -362,13 +362,15 @@ public class GoalTreeLatticeFramesTest {
 
 		// The chat caller is failed by deleteSession; the blocked transition
 		// aborts at its next write (session gone) instead of grinding on —
-		// surfacing as a transition failure, not a hang.
+		// surfacing as a failed cycle, not a hang. The work it lost was the
+		// deleted session's, so the agent carries on (AGENT_LOOP.md §3.4).
 		assertThrows(Exception.class, () -> chatJob.awaitResult(15000));
 		assertNull(agent("delsess-agent").getSession(sid), "session stays deleted");
-		await(() -> AgentState.SUSPENDED.equals(ag.getStatus()), 10000,
-			"aborted cycle surfaces as a transition failure (agent suspended, diagnosable)");
-		assertTrue(String.valueOf(ag.getError()).contains("superseded")
-				|| String.valueOf(ag.getError()).contains("vanished"),
-			"suspension error must be the abort diagnostic: " + ag.getError());
+		await(() -> AgentState.SLEEPING.equals(ag.getStatus()) && ag.getTimeline().count() > 0, 10000,
+			"aborted cycle surfaces as a failed cycle in the timeline");
+		assertNull(ag.getError(), "losing a deleted session's cycle is not a fault in the agent");
+		String result = String.valueOf(RT.getIn(ag.getTimeline().get(ag.getTimeline().count() - 1), Fields.RESULT));
+		assertTrue(result.contains("superseded") || result.contains("vanished"),
+			"the cycle's result must be the abort diagnostic: " + result);
 	}
 }

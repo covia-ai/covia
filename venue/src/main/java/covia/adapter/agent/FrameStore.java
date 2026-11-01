@@ -75,7 +75,9 @@ interface FrameStore {
 					}
 					check = store.frames();
 					if (GoalTreeContext.repairDanglingToolCalls(check, repair) != check) {
-						return failed("Interruption cleanup could not repair dangling tool calls "
+						// An invariant, not this cycle's work: every cycle on this
+						// session would fail here, so the agent cannot continue.
+						throw new IllegalStateException("Interruption cleanup could not repair dangling tool calls "
 							+ "for session " + sid);
 					}
 				}

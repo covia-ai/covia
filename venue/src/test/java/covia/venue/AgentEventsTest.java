@@ -351,13 +351,15 @@ public class AgentEventsTest {
 	}
 
 	@Test
-	public void testTransitionFailureSuspendsWithTheError() {
+	public void testCannotContinueSuspendsWithTheError() {
+		// A broken model setup means the agent cannot continue (AGENT_LOOP.md §3.4).
 		String id = "failing";
-		createAgent(id, Maps.of(Fields.OPERATION, "v/test/ops/error"));
+		createAgent(id, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
+			"llmOperation", "v/test/ops/failllm", "model", "setup"));
 		Capture c = new Capture();
 		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(did, Strings.create(id), c)) {
-			engine.jobs().invokeOperation("v/ops/agent/trigger",
-				Maps.of(Fields.AGENT_ID, id, Fields.WAIT, true), ctx).awaitResult(10_000);
+			engine.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, id, Fields.INPUT, Maps.of("q", "go")), ctx);
 			c.await(AgentEvents.RUN_END, null, 5_000);
 		}
 		Event cycleEnd = c.first(AgentEvents.CYCLE_END);

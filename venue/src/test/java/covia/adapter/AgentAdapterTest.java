@@ -3649,7 +3649,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testDeliberateStopSettlesActiveChatAndQueuedTask() throws Exception {
+	public void testDeliberateStopKeepsTheQueue() throws Exception {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 		AString id = Strings.create("stop-active-chat");
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
@@ -3670,12 +3670,18 @@ public class AgentAdapterTest {
 				Maps.of(Fields.AGENT_ID, id, Fields.REASON, "Owner is reviewing this agent"), ctx).awaitResult(5000);
 			assertEquals(AgentState.SUSPENDED, awaitFinished(agent));
 			AString detail = AgentState.suspensionDetail(agent.getRecord());
-			for (Job caller : new Job[] {chat, queued}) {
-				assertThrows(covia.exception.JobFailedException.class, () -> caller.awaitResult(5000));
-				assertEquals(detail.toString(), caller.getErrorMessage());
+			// The stopped cycle never merged, so this transition (which does not
+			// own its frames) gave the chat back: both the chat and the queued
+			// task wait for resume, and say why. A frames-owning runtime's chat
+			// is already in its conversation and fails instead (AgentSuspensionTest).
+			for (Job waiting : new Job[] {chat, queued}) {
+				assertFalse(waiting.isFinished(), "a suspended agent keeps its queue");
+				assertEquals(AgentAdapter.SUSPENDED_WAITING.formatted(id, ": " + detail),
+					Job.progressMessage(waiting.getData().get(Fields.PROGRESS)));
 			}
+			assertTrue(agent.hasSessionPending(), "the chat is queued again");
 			assertNull(agent.getError(), "a deliberate cancellation is not a fault");
-			assertEquals(0, agent.getTasks().count());
+			assertEquals(1, agent.getTasks().count());
 			assertEquals(1, agent.getTimeline().count());
 			ACell entry = agent.getTimeline().get(0);
 			assertEquals(CVMBool.TRUE, RT.getIn(entry, Fields.CANCELLED));
@@ -3688,6 +3694,8 @@ public class AgentAdapterTest {
 				&& detail.equals(e.data().get(Fields.ERROR))));
 			assertTrue(events.stream().anyMatch(e -> covia.venue.AgentEvents.CYCLE_END.equals(e.type())
 				&& detail.equals(e.data().get(Fields.ERROR))));
+			chat.cancel();
+			queued.cancel();
 		}
 	}
 
@@ -5355,38 +5363,35 @@ public class AgentAdapterTest {
 
 	@Test
 	public void testRemoveSuspendedThenRecreateWithNewConfig() {
-		// Reproduce #237: the old transition fails and suspends the agent.
+		// Reproduce #237: the old provider setup is broken, so the agent cannot
+		// continue and is suspended, its request still waiting.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/error")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/failllm", "model", "setup")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		Job failedRequest = engine.jobs().invokeOperation(
+		Job waitingRequest = engine.jobs().invokeOperation(
 			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
-				Fields.INPUT, Maps.of("q", "fail on old provider"),
-				Fields.WAIT, CVMLong.create(5000)),
+				Fields.INPUT, Maps.of("q", "fail on old provider")),
 			RequestContext.of(ALICE_DID));
-		try {
-			failedRequest.awaitResult(5000);
-			fail("old transition must fail");
-		} catch (covia.exception.JobFailedException expected) {
-			// expected
-		}
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState suspended = user.agent("susp-ow");
-		awaitFinished(suspended);
-		assertEquals(AgentState.SUSPENDED, suspended.getStatus());
+		TestEngine.awaitTimelineCount(suspended, 1, 5000);
+		assertEquals(AgentState.SUSPENDED, awaitFinished(suspended));
 		assertNotNull(suspended.getError());
-		long timelineBefore = suspended.getTimeline().count();
-		assertEquals(1, timelineBefore, "failed transition should remain in history");
+		assertFalse(waitingRequest.isFinished(), "a suspended agent keeps its queue");
+		assertEquals(1, suspended.getTimeline().count(), "failed transition should remain in history");
 
-		// Remove the failed record, then create a clean replacement.
+		// Remove the failed record, which fails the work it held, then create a
+		// clean replacement.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "susp-ow", Fields.REMOVE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertThrows(covia.exception.JobFailedException.class, () -> waitingRequest.awaitResult(5000));
 
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
@@ -6179,15 +6184,16 @@ public class AgentAdapterTest {
 	}
 
 	/**
-	 * Transition that always fails must surface as a FAILED request Job, suspend
-	 * the agent, drain its task queue, and not retry. Regression for the tight
-	 * retry loop reported in issue #88 (e.g. missing OPENAI_API_KEY → ~280
-	 * timeline entries in seconds).
+	 * A transition that fails for its work surfaces as a FAILED request Job,
+	 * once, and the agent carries on: a failure lands on what failed
+	 * (AGENT_LOOP.md §3.4). Regression for the tight retry loop reported in
+	 * issue #88 (~280 timeline entries in seconds): the failed task is not
+	 * retried. An agent that cannot continue is AgentSuspensionTest's.
 	 */
 	@Test
-	public void testTransitionErrorSuspendsAgentAndFailsCaller() {
+	public void testTransitionFailureFailsItsTaskOnceAndTheAgentSleeps() {
 		// v/test/ops/error reads input.message; the framework's transition input
-		// has no message field, so every invoke throws IllegalArgumentException.
+		// has no message field, so every invoke fails with InvalidInputException.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
@@ -6219,56 +6225,17 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("fail-fast-agent");
 
-		awaitFinished(agent);
-
-		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
-			"agent must be SUSPENDED after a transition error");
-		assertNotNull(agent.getError(), "SUSPENDED agent must record the error");
-		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION), "a fault has no deliberate-stop provenance");
-		assertEquals(0, agent.getTasks().count(),
-			"task queue must be drained on fail-fast (no retry on resume)");
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent),
+			"a failure of the work does not suspend the agent");
+		assertNull(agent.getError());
+		assertEquals(0, agent.getTasks().count(), "the failed task leaves the queue");
 
 		// Tight-loop guard: a single failed cycle must produce a single timeline
 		// entry, not the ~20 that the pre-fix code emitted per run.
 		AVector<ACell> timeline = (AVector<ACell>) agent.getRecord()
 			.get(AgentState.KEY_TIMELINE);
 		assertEquals(1, timeline.count(),
-			"fail-fast must record exactly one error cycle in the timeline");
-	}
-
-	/**
-	 * Resume after a fail-fast suspend must restore SLEEPING with the error
-	 * cleared. Subsequent requests should proceed against the (now clean)
-	 * agent — the framework does not retain stale state from the failed run.
-	 */
-	@Test
-	public void testResumeAfterFailFast() {
-		engine.jobs().invokeOperation(
-			"v/ops/agent/create",
-			Maps.of(
-				Fields.AGENT_ID, "resume-after-fail",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/error")),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-
-		Job firstReq = engine.jobs().invokeOperation(
-			"v/ops/agent/request",
-			Maps.of(
-				Fields.AGENT_ID, "resume-after-fail",
-				Fields.INPUT,    Maps.of("q", "first"),
-				Fields.WAIT,     CVMLong.create(5000)),
-			RequestContext.of(ALICE_DID));
-		try { firstReq.awaitResult(5000); } catch (Exception ignored) {}
-
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("resume-after-fail");
-		assertEquals(AgentState.SUSPENDED, agent.getStatus());
-
-		// Resume — operator action after fixing the underlying issue.
-		assertTrue(agent.tryResume(), "resume must flip SUSPENDED → SLEEPING");
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertNull(agent.getError(), "resume must clear the error");
-		assertEquals(0, agent.getTasks().count(),
-			"resumed agent must have a clean task queue");
+			"the failed task must run exactly one cycle");
 	}
 
 	// ========== agent:deleteSession ==========

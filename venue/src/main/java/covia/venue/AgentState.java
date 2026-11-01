@@ -878,21 +878,11 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * Suspends the agent with an error and drops the task queue, in one CAS.
-	 * Used when a transition fails: callers of the queued tasks have already
-	 * been notified via {@code failAllPendingForAgent}, so leaving stale tasks
-	 * around would only cause the same failure to replay on the next resume.
-	 * Operator can fix the underlying issue and {@code agent_resume} to a
-	 * clean state; callers re-submit if they want to retry.
-	 */
-	public void suspendAndDrain(AString error) {
-		update(r -> faultSuspension(r, error).assoc(K_TASKS, Index.none()));
-	}
-
-	/**
-	 * Records an administratively cancelled cycle, drains its queued tasks and
-	 * releases the session claim in one write. Never re-suspends a resumed agent.
-	 * Returns the previous record for notifying exactly the callers we drained.
+	 * Records an administratively cancelled cycle and releases the session claim
+	 * in one write. The queued tasks stay, the cancelled one among them, and run
+	 * after resume (AGENT_LOOP.md §3.4). Never re-suspends a resumed agent.
+	 * Returns the record before the write, or null when the agent is no longer
+	 * suspended.
 	 */
 	public AMap<AString, ACell> finishSuspendedCycle(AMap<AString, ACell> entry, Blob sid) {
 		var before = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
@@ -907,8 +897,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 				.assoc(Fields.RESULT, suspensionDetail(r));
 			AMap<AString, ACell> recorded = stopped;
 			draft.clearSessionCycle(sid);
-			draft.update(current -> current.assoc(K_TASKS, Index.none())
-				.assoc(K_TIMELINE, extractTimeline(current).conj(recorded)));
+			draft.update(current -> current.assoc(K_TIMELINE, extractTimeline(current).conj(recorded)));
 		});
 		return before.get();
 	}

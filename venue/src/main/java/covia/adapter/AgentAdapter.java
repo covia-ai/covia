@@ -34,6 +34,7 @@ import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
 import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.CannotContinueException;
 import covia.adapter.agent.ContextAssembler;
 import covia.adapter.agent.ConversationRenderer;
 import covia.adapter.agent.GoalTreeContext;
@@ -132,6 +133,8 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPENDED_REFUSAL = "Agent '%s' is suspended%s; %s";
 	public static final String SUSPENDED_RESUME_ADVICE = "fix the cause, then use agent:resume";
 	public static final String SUSPENDED_ASK_ADVICE = "ask whoever stopped the agent before using agent:resume";
+	/** The progress of a Job waiting on a suspended agent: its id, then {@code ": <cause>"} or nothing. */
+	public static final String SUSPENDED_WAITING = "Agent '%s' is suspended%s; this waits until the agent is resumed";
 	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
 	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
@@ -290,9 +293,9 @@ public class AgentAdapter extends AAdapter {
 	 * the session completes every waiter whose message it had already seen (its
 	 * envelope drained from {@code session.pending}); one that arrived after the
 	 * cycle's snapshot stays until the next response (§5.5). The map is released
-	 * per waiter when the run loop completes its Job, when the caller cancels it
-	 * (a cancel hook in {@link #handleChat}), on {@code deleteSession}, or when
-	 * {@link #failAllPendingForAgent} sweeps on technical failure. Keeping it in
+	 * per waiter when the run loop completes or fails its Job, when the caller
+	 * cancels it (a cancel hook in {@link #handleChat}), on {@code deleteSession},
+	 * or when {@link #failAllPendingForAgent} sweeps a deleted agent. Keeping it in
 	 * memory (not on the lattice) lets {@code Job.isFinished()} be the truth —
 	 * the durable record of an awaiting chat is its envelope in
 	 * {@code session.pending} plus the STARTED Job, recovered on restart by the
@@ -1571,6 +1574,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 		if (outputPath != null) outputContexts.put(taskId, ctx);
+		leaveQueueOnCancel(job, target.ownerDID(), agentId);
 
 		// Record the session on the task Job so consumers can recover it for the
 		// task's whole lifecycle (the A2A layer maps A2A contextId = session).
@@ -1583,6 +1587,21 @@ public class AgentAdapter extends AAdapter {
 		// Each accepted request guarantees a processing attempt, so bypass the
 		// optional-work launch gate.
 		wakeAgent(target.ownerDID(), agentId, true);
+	}
+
+	/**
+	 * Takes a request's task out of the queue when its caller cancels the Job,
+	 * so the agent never runs work nobody is waiting for. A request Job that
+	 * finishes any other way does so through the run loop, which removes the
+	 * task itself; {@code agent:cancelTask} takes the task first, so this
+	 * finds nothing.
+	 */
+	private void leaveQueueOnCancel(Job job, AString ownerDID, AString agentId) {
+		Blob taskId = job.getID();
+		job.setCancelHook(() -> {
+			AgentState agent = getAgent(ownerDID, agentId);
+			if (agent != null && agent.takeTask(taskId) != null) outputContexts.remove(taskId);
+		});
 	}
 
 	private void handleMessage(Job job, ACell input, RequestContext ctx) {
@@ -2733,6 +2752,7 @@ public class AgentAdapter extends AAdapter {
 		cancelActiveTransition(target.key());
 		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED,
 			AgentState.suspensionDetail(stopped));
+		noteSuspended(target.key(), agent);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(Fields.STATUS, AgentState.SUSPENDED,
@@ -2759,6 +2779,9 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SLEEPING, null);
+		// The waiting Jobs' suspension notes no longer hold. The run loop writes
+		// no other progress on its queued tasks and chats, so each is cleared.
+		for (Job waiting : waitingJobs(target.key(), agent)) waiting.progress(null, null);
 		if (autoWake) wakeAgent(target.ownerDID(), agentId, false);
 
 		job.setStatus(Status.STARTED);
@@ -3496,7 +3519,10 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return false;
 		Blob jobId = job.getID();
 		Index<Blob, ACell> tasks = agent.getTasks();
-		if (tasks != null && tasks.containsKey(jobId)) return true;
+		if (tasks != null && tasks.containsKey(jobId)) {
+			if (reattach) leaveQueueOnCancel(job, ownerDID, agentId);
+			return true;
+		}
 		Blob sid = parseSessionId(RT.ensureString(data.get(Fields.SESSION_ID)));
 		if (sid == null) return false;
 		AVector<ACell> pending = agent.getSessionPending(sid);
@@ -4049,7 +4075,7 @@ public class AgentAdapter extends AAdapter {
 
 				ACell transitionResult;
 				boolean transitionCancelled = false;
-				boolean llmTimedOut = false;
+				boolean cannotContinue = false;
 				try {
 					transitionResult = transitionFuture.join();
 				} catch (java.util.concurrent.CancellationException ce) {
@@ -4061,7 +4087,7 @@ public class AgentAdapter extends AAdapter {
 					// writes the entry, with the inferences that ran before it.
 					CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
 					Throwable reason = (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
-					llmTimedOut = isLlmTimeout(reason);
+					cannotContinue = agentCannotContinue(reason);
 					AMap<AString, ACell> failed = Maps.of(Fields.ERROR,
 						Strings.create("Transition failed: " + describeFailure(reason)));
 					if (carried != null) {
@@ -4101,10 +4127,7 @@ public class AgentAdapter extends AAdapter {
 					if (stopped != null) {
 						AString cause = AgentState.suspensionDetail(stopped);
 						if (cause != null) detail = cause;
-						@SuppressWarnings("unchecked")
-						Index<Blob, ACell> tasksAtCancel = (Index<Blob, ACell>) stopped.get(AgentState.KEY_TASKS);
-						failQueuedTasks(tasksAtCancel, detail.toString());
-						failAllPendingForAgent(ownerDID, agentId, detail.toString());
+						holdForResume(ownerDID, agentId, detail.toString());
 					}
 					cycle.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
 					// TERMINATED / removed / replaced: agent:delete has already
@@ -4116,7 +4139,7 @@ public class AgentAdapter extends AAdapter {
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, currentState, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, filteredInbox, resolvedPending,
-					presentedSessionPendingCount, startTs, allTaskResults, llmTimedOut, cycle);
+					presentedSessionPendingCount, startTs, allTaskResults, cannotContinue, cycle);
 				lastResult = merged.lastResult();
 				allTaskResults = merged.allTaskResults();
 			}
@@ -4155,7 +4178,7 @@ public class AgentAdapter extends AAdapter {
 				return;
 			}
 			suspendOnError(ownerDID, agentId, e);
-			failAllPendingForAgent(ownerDID, agentId, failure);
+			holdForResume(ownerDID, agentId, failure);
 			run.end(AgentState.SUSPENDED);
 			completion.completeExceptionally(e);
 		} finally {
@@ -4196,7 +4219,7 @@ public class AgentAdapter extends AAdapter {
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob,
 			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
-			long startTs, AMap<AString, ACell> allTaskResults, boolean llmTimedOut,
+			long startTs, AMap<AString, ACell> allTaskResults, boolean cannotContinue,
 			AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
 		long endTs = Utils.getCurrentTimestamp();
@@ -4215,14 +4238,16 @@ public class AgentAdapter extends AAdapter {
 
 		// Peek the parked envelopes (don't remove yet) so an exception
 		// before completeDeferredJobs leaves them visible to the outer
-		// catch sweeper — the slot is only cleared after merge succeeds.
+		// catch (holdForResume) — the slot is only cleared after merge succeeds.
 		ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
 			deferredCompletions.get(key);
-		// A timeout consumes the picked task once, but does not abandon any
-		// later queued tasks. Use the ordinary deferred-completion path so task
-		// removal is atomic with the timeline write and its caller is released
-		// only after that state is visible.
-		if (llmTimedOut && leanError != null && pickedTask != null) {
+		// A failed cycle fails the task it was working on, and nothing else: a
+		// failure lands on what failed (AGENT_LOOP.md §3.4). Use the ordinary
+		// deferred-completion path so task removal is atomic with the timeline
+		// write and its caller is released only after that state is visible. A
+		// task the agent already resolved (fail_task) keeps its own outcome. An
+		// agent that cannot continue leaves the task queued for after resume.
+		if (leanError != null && !cannotContinue && pickedTask != null) {
 			deferred = deferredCompletions.computeIfAbsent(key,
 				k -> new ConcurrentHashMap<>());
 			deferred.putIfAbsent(pickedTask.getKey(), Maps.of(
@@ -4453,8 +4478,7 @@ public class AgentAdapter extends AAdapter {
 		// this cycle or an earlier yielded one) resolves with the same reply;
 		// a waiter whose envelope is still pending arrived after the snapshot
 		// and keeps awaiting. Same post-merge ordering as task completion. A
-		// technical error suspends the agent and fails every waiter via
-		// failAllPendingForAgent below, so only the response path is here.
+		// failed cycle fails those waiters instead, below.
 		if (leanResponse != null && pickedSessionBlob != null) {
 			ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, pickedSessionBlob);
 			if (waiters != null) {
@@ -4492,37 +4516,32 @@ public class AgentAdapter extends AAdapter {
 		}
 		// else: yield — every waiter stays for the next response
 
-		// A provider timeout fails only work already presented to this cycle.
-		// Unpresented tasks and chat envelopes remain queued, and the ordinary
-		// clean-exit path returns the agent to SLEEPING. Every other transition
-		// error retains the fail-fast suspension introduced for #88.
-		if (leanError != null && llmTimedOut) {
+		// A failed cycle fails only the work it took (AGENT_LOOP.md §3.4): its
+		// task above, and here the chats it was answering. Work it never took
+		// stays queued, and the agent carries on with it.
+		if (leanError != null && !cannotContinue) {
 			failPresentedChats(key, pickedSessionBlob, agent,
 				leanError.toString(), cycleTokens);
 		}
 
-		// Fail-fast on deterministic transition error. Framework does not retry —
-		// the caller (operator, or whichever submitter is awaiting a queued
-		// task) decides how to respond to a failure. Suspend the agent and
-		// drop the task queue first so the lattice state is settled before
-		// any caller's awaitResult unblocks; then fail every queued task's
-		// caller Job. The run loop exits at the top of the next iteration
-		// via the SUSPENDED check; the finally re-wake only fires on
-		// SLEEPING, so the agent stays down until an operator resumes it.
-		// See issue #88.
-		if (leanError != null && !llmTimedOut) {
+		// An agent that cannot continue — its model setup is wrong, its
+		// provider unreachable, or the venue failed unexpectedly — would fail
+		// every unit of work the same way, so it is suspended rather than left
+		// to fail them one by one (#88). It keeps its queue: the lattice is
+		// suspended first, so a caller released below sees it, and the work
+		// waits for the cause to be fixed and the agent resumed. The run loop
+		// exits at the top of the next iteration via the SUSPENDED check.
+		if (cannotContinue) {
 			AString errStr = Strings.create(leanError.toString());
-			Index<Blob, ACell> tasksAtError = agent.getTasks();
-			agent.suspendAndDrain(errStr);
+			agent.suspend(errStr);
 			engine.agentEvents().status(callerDID, agentId, AgentState.SUSPENDED, errStr);
-			failQueuedTasks(tasksAtError, errStr.toString());
-			failAllPendingForAgent(callerDID, agentId, errStr.toString());
+			holdForResume(callerDID, agentId, errStr.toString());
 		}
 
 		ACell lastResult = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, Strings.create(callerDID + "/g/" + agentId),
-			Fields.STATUS, (leanError != null && !llmTimedOut) ? AgentState.SUSPENDED
+			Fields.STATUS, cannotContinue ? AgentState.SUSPENDED
 				: merged.get(AgentState.KEY_STATUS),
 			Fields.RESULT, result,
 			Fields.TASK_RESULTS, allTaskResults);
@@ -4530,18 +4549,65 @@ public class AgentAdapter extends AAdapter {
 		return new IterResult(lastResult, allTaskResults);
 	}
 
-	/** The narrow recoverable case: an LLM wait that retained its TimeoutException cause. */
-	private static boolean isLlmTimeout(Throwable failure) {
-		boolean llmFailure = false;
-		boolean timeout = false;
-		for (Throwable t = failure; t != null; t = t.getCause()) {
-			if (t instanceof TimeoutException) timeout = true;
-			String message = t.getMessage();
-			if (message != null && message.startsWith(AbstractLLMAdapter.LLM_TIMEOUT_PREFIX)) {
-				llmFailure = true;
+	/**
+	 * Whether a transition's failure means the agent cannot continue, rather
+	 * than that the work it took failed: the transition said so
+	 * ({@link CannotContinueException}), or the failure is unexpected — a venue
+	 * fault, logged at ERROR where its Job failed — which would meet every unit
+	 * of work the same way (AGENT_LOOP.md §3.4).
+	 */
+	private static boolean agentCannotContinue(Throwable failure) {
+		return CannotContinueException.find(failure) != null
+			|| covia.exception.CoviaException.reasonOf(failure) == null;
+	}
+
+	/**
+	 * Holds a suspended agent's work for its resume: queued tasks and chats
+	 * stay, and each waiting Job says the agent is suspended. Only what the
+	 * stopped cycle took and cannot give back is settled: a chat whose message
+	 * is already in its conversation fails with {@code error}, and a task
+	 * completion the cycle parked is applied if its merge committed (the task
+	 * left the queue) and dropped otherwise, so that task runs again.
+	 */
+	private void holdForResume(AString ownerDID, AString agentId, String error) {
+		AgentKey key = new AgentKey(ownerDID, agentId);
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent == null) return;
+		ConcurrentHashMap<Blob, AMap<AString, ACell>> parked = deferredCompletions.remove(key);
+		if (parked != null) {
+			Index<Blob, ACell> queued = agent.getTasks();
+			parked.keySet().removeIf(queued::containsKey);
+			completeDeferredJobs(parked);
+		}
+		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
+		if (agentChats != null) {
+			for (Blob sid : agentChats.keySet()) failPresentedChats(key, sid, agent, error, null);
+		}
+		noteSuspended(key, agent);
+	}
+
+	/** Tells every Job waiting on a suspended agent that it is suspended, and why. */
+	private void noteSuspended(AgentKey key, AgentState agent) {
+		String note = SUSPENDED_WAITING.formatted(key.id(), suspendedDetail(agent.getRecord()));
+		for (Job waiting : waitingJobs(key, agent)) waiting.progress(note, null);
+	}
+
+	/** Every Job waiting on the agent: its queued tasks' and its chat callers'. */
+	private java.util.List<Job> waitingJobs(AgentKey key, AgentState agent) {
+		java.util.List<Job> jobs = new java.util.ArrayList<>();
+		for (Blob taskId : agent.getTasks().keySet()) {
+			Job task = engine.jobs().getJob(taskId);
+			if (task != null && !task.isFinished()) jobs.add(task);
+		}
+		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
+		if (agentChats != null) {
+			for (ConcurrentHashMap<Blob, Job> chats : agentChats.values()) {
+				for (Job chat : chats.values()) {
+					if (chat != null && !chat.isFinished()) jobs.add(chat);
+				}
 			}
 		}
-		return llmFailure && timeout;
+		return jobs;
 	}
 
 	/**
@@ -5107,13 +5173,19 @@ public class AgentAdapter extends AAdapter {
 	private boolean failIfSuspended(Job job, AgentState agent, AString agentId) {
 		AMap<AString, ACell> record = agent.getRecord();
 		if (record == null || !AgentState.SUSPENDED.equals(record.get(Fields.STATUS))) return false;
+		job.fail(SUSPENDED_CODE, SUSPENDED_REFUSAL.formatted(agentId, suspendedDetail(record),
+			AgentState.suspensionDetail(record) != null ? SUSPENDED_ASK_ADVICE : SUSPENDED_RESUME_ADVICE));
+		return true;
+	}
+
+	/** Why the agent is suspended, as {@code ": <cause>"}: the deliberate stop,
+	 *  else the fault, else nothing. */
+	private static String suspendedDetail(AMap<AString, ACell> record) {
+		if (record == null) return "";
 		AString stop = AgentState.suspensionDetail(record);
 		ACell error = record.get(AgentState.KEY_ERROR);
-		String detail = stop != null ? ": " + stop
+		return stop != null ? ": " + stop
 			: error != null ? ": " + conciseDetail(error, 512) : "";
-		job.fail(SUSPENDED_CODE, SUSPENDED_REFUSAL.formatted(agentId, detail,
-			stop != null ? SUSPENDED_ASK_ADVICE : SUSPENDED_RESUME_ADVICE));
-		return true;
 	}
 
 	private AgentState requireAgent(AString callerDID, AString agentId) {

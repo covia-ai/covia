@@ -291,6 +291,8 @@ public class TestAdapter extends AAdapter {
                     return new CompletableFuture<>();
                 case "hold":
                     return CompletableFuture.supplyAsync(() -> handleHold(input), VIRTUAL_EXECUTOR);
+                case "failllm":
+                    return handleFailLlm(input);
                 case "delay":
                     // Handled via invoke() override for caller DID propagation
                     return CompletableFuture.failedFuture(
@@ -331,6 +333,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("loopllm",      BASE+"testloopllm.json");
 			installTestAsset("nevertoolllm", BASE+"testnevertoolllm.json");
 			installTestAsset("neverfailllm", BASE+"testneverfailllm.json");
+			installTestAsset("failllm",      BASE+"testfailllm.json");
 			installTestAsset("subgoalllm",   BASE+"testsubgoalllm.json");
 			installTestAsset("subgoalechollm", BASE+"testsubgoalechollm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
@@ -1725,6 +1728,39 @@ public class TestAdapter extends AAdapter {
         AString error = RT.ensureString(RT.getIn(input, Fields.ERROR));
         if (error != null) throw new JobFailedException(error.toString());
         return RT.getIn(input, Fields.RESULT);
+    }
+
+    /** The reason {@code failllm} gives for each failure it scripts. */
+    public static final String FAILLLM_REASON = "failllm scripted failure: %s";
+
+    /**
+     * A level-3 LLM that fails the way its {@code model} names, for the
+     * agent run loop's failure rules (AGENT_LOOP.md §3.4): {@code setup}
+     * ({@code ConfigurationException}), {@code unavailable}, {@code value} (a
+     * failure value), {@code content} ({@code InvalidInputException}) or
+     * {@code bug} ({@code IllegalStateException}). A {@code :<gate>} suffix
+     * waits at that {@link TestGate} first, so a test can queue more work
+     * while the cycle is held. Any other model replies with text.
+     */
+    private CompletableFuture<ACell> handleFailLlm(ACell input) {
+        AString modelCell = RT.ensureString(RT.getIn(input, Fields.MODEL));
+        String[] model = (modelCell != null) ? modelCell.toString().split(":", 2) : new String[] {""};
+        return CompletableFuture.supplyAsync(() -> {
+            if (model.length > 1) {
+                TestGate gate = TEST_GATES.get(model[1]);
+                if (gate == null) throw new IllegalStateException("Unknown test gate: " + model[1]);
+                gate.pass();
+            }
+            String reason = FAILLLM_REASON.formatted(model[0]);
+            return switch (model[0]) {
+                case "setup" -> throw new covia.exception.ConfigurationException(reason);
+                case "unavailable" -> throw new UnavailableException(reason);
+                case "value" -> Status.failure(reason);
+                case "content" -> throw new InvalidInputException(reason);
+                case "bug" -> throw new IllegalStateException(reason);
+                default -> Maps.of("role", Strings.create("assistant"), "content", Strings.create("ok"));
+            };
+        }, VIRTUAL_EXECUTOR);
     }
 
     private JobFailedException handleError(ACell input) {

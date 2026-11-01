@@ -243,7 +243,7 @@ public class JobCancellationTest {
 	// ========== Cancel agent:request ==========
 
 	@Test
-	public void testCancelRequestLeavesTaskInAgent() {
+	public void testCancelRequestTakesItsTaskOutOfTheQueue() {
 		createNeverAgent("req-cancel-agent");
 
 		Job reqJob = engine.jobs().invokeOperation(
@@ -258,12 +258,9 @@ public class JobCancellationTest {
 		reqJob.cancel();
 		assertEquals("CANCELLED", reqJob.getStatus().toString());
 
-		// The task is still in the agent's task Index — cancellation doesn't
-		// clean it up. The agent will eventually pick it up, find the Job
-		// is finished, and skip it.
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("req-cancel-agent");
-		assertNotNull(agent.getTasks(), "Agent should still have tasks");
+		// A cancelled request leaves the queue, so the agent never runs work
+		// nobody is waiting for, even once its Job is no longer in memory.
+		pollUntilTaskRemoved("req-cancel-agent", taskId, 5000);
 	}
 
 	@Test
@@ -284,11 +281,17 @@ public class JobCancellationTest {
 		assertEquals("CANCELLED", reqJob.getStatus().toString(),
 			"the explicit cancellation must win before the worker is released");
 
-		// Suspending cancels the never-ending transition and drives the agent's
-		// late error/queue-drain path, which will attempt to settle the task.
-		// That path must not replace the already-committed terminal state.
+		// The cancelled request has left the queue. Suspending then cancels the
+		// never-ending transition, which was still working on it, and resuming
+		// finds nothing to run. Neither path may replace the already-committed
+		// terminal state.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, "req-cancel-agent2"),
+			ctx).awaitResult(5000);
+		assertEquals("CANCELLED", reqJob.getStatus().toString());
+		engine.jobs().invokeOperation(
+			"v/ops/agent/resume",
 			Maps.of(Fields.AGENT_ID, "req-cancel-agent2"),
 			ctx).awaitResult(5000);
 		pollUntilTaskRemoved("req-cancel-agent2", reqJob.getID(), 5000);
@@ -562,6 +565,9 @@ public class JobCancellationTest {
 					|| agent.getTasks().get(taskId) == null) return;
 			Thread.yield();
 		}
-		fail("Timed out waiting for agent to remove cancelled task " + taskId);
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		fail("Timed out waiting for agent to remove cancelled task " + taskId
+			+ " (status=" + agent.getStatus() + ", timeline=" + agent.getTimeline().count()
+			+ ", task=" + agent.getTasks().get(taskId) + ")");
 	}
 }

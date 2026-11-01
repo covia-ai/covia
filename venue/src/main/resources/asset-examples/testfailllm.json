@@ -1,0 +1,32 @@
+{
+	"name": "Test failllm",
+	"description": "Test LLM that fails the way its model names (setup, unavailable, value, content or bug), optionally after a test gate (model 'setup:<gate>'), for the agent run loop's failure rules.",
+	"dateCreated": "2026-11-01T00:00:00Z",
+	"operation": {
+		"adapter": "test:failllm",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array"
+				},
+				"model": {
+					"type": "string",
+					"description": "setup, unavailable, value, content or bug, optionally followed by ':<gate>'"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"content": {
+					"type": "string"
+				}
+			}
+		}
+	}
+}
