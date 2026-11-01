@@ -154,7 +154,7 @@ class UserAdapterTest {
 
 		ExecutionException both = assertThrows(ExecutionException.class,
 			() -> create(Maps.of(Fields.DID, "did:example:alice", "username", "alice")));
-		assertInstanceOf(IllegalArgumentException.class, both.getCause());
+		assertInstanceOf(InvalidInputException.class, both.getCause());
 
 		ExecutionException badUsername = assertThrows(ExecutionException.class,
 			() -> create(Maps.of("username", "alice/admin")));

@@ -13,6 +13,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Asset;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -116,7 +120,7 @@ public class ConnectionsAdapter extends AAdapter {
 			return switch (getSubOperation(meta)) {
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx));
 				case "status" -> CompletableFuture.completedFuture(handleStatus(ctx, input));
-				default -> CompletableFuture.failedFuture(new IllegalArgumentException(
+				default -> CompletableFuture.failedFuture(new NotSupportedException(
 					"Unknown connections operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
@@ -140,7 +144,7 @@ public class ConnectionsAdapter extends AAdapter {
 		ACell rawProvider = RT.getIn(input, Fields.PROVIDER);
 		AString only = RT.ensureString(rawProvider);
 		if (rawProvider != null && (only == null || only.isEmpty())) {
-			throw new IllegalArgumentException("provider must be a non-empty string");
+			throw new InvalidInputException("provider must be a non-empty string");
 		}
 
 		Provider selected = (only != null) ? provider(only.toString()) : null;
@@ -157,13 +161,13 @@ public class ConnectionsAdapter extends AAdapter {
 		for (Provider provider : PROVIDERS) {
 			if (provider.name().equals(name)) return provider;
 		}
-		throw new IllegalArgumentException("Unknown connection provider '" + name
-			+ "'; available: " + PROVIDERS.stream().map(Provider::name).toList());
+		throw new NotFoundException("Unknown connection provider '" + name
+			+ "'; available: " + PROVIDERS.stream().map(Provider::name).toList(), name);
 	}
 
 	private static AString requireUser(RequestContext ctx) {
 		if (ctx == null || ctx.isAnonymous() || ctx.getUserDID() == null) {
-			throw new IllegalArgumentException(
+			throw new AuthException(
 				"connections:status needs an authenticated caller — connection status belongs to a venue user");
 		}
 		return ctx.getUserDID();
