@@ -32,6 +32,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingText;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -918,7 +919,7 @@ public class TelegramAdapterTest {
 		telegram.files.put(fileId, new byte[] {4});
 		for (String name : List.of("../escape.pdf", "a/b.pdf", "a\\b.pdf", "report.pdf:stream", "a%2fb", "a#b", "NUL", "report.", " padded ")) {
 			assertFalse(TelegramMedia.safeFileName(name));
-			assertEquals(TelegramMedia.INVALID_FILE_NAME, assertThrows(IllegalArgumentException.class, () ->
+			assertEquals(TelegramMedia.INVALID_FILE_NAME, assertThrows(InvalidInputException.class, () ->
 				adapter.handleDownload(RequestContext.of(OWNER), Maps.of("file_id", fileId, "fileName", name))).getMessage());
 		}
 		var message = telegram.message(16002, "private", ALLOWED_ID, "alice");
@@ -937,11 +938,11 @@ public class TelegramAdapterTest {
 		telegram.files.put("invalid_destination", new byte[] {1});
 		int before = telegram.downloads.get();
 		for (ACell invalid : new ACell[] {Strings.EMPTY, Strings.create(" "), CVMLong.ONE}) {
-			assertEquals(TelegramMedia.INVALID_DESTINATION, assertThrows(IllegalArgumentException.class,
+			assertEquals(TelegramMedia.INVALID_DESTINATION, assertThrows(InvalidInputException.class,
 				() -> adapter.handleDownload(RequestContext.of(OWNER), Maps.of("file_id", "invalid_destination", "destination", invalid))).getMessage());
 		}
 		assertEquals(before, telegram.downloads.get());
-		var failure = assertThrows(IllegalArgumentException.class, () -> adapter.handleDownload(RequestContext.of(OWNER),
+		var failure = assertThrows(InvalidInputException.class, () -> adapter.handleDownload(RequestContext.of(OWNER),
 			Maps.of("file_id", "invalid_destination", "destination", "unsupported://destination")));
 		assertTrue(failure.getMessage().startsWith(TelegramMedia.UNSUPPORTED_DESTINATION));
 	}

@@ -60,8 +60,11 @@ import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.exception.StillStartingException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
@@ -576,7 +579,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		User from = senderOf(update);
 		Long fromId = from == null ? null : from.id();
 		String fromName = from == null ? null : from.username();
-		if (!admitted(update)) throw new IllegalStateException(NOT_ADMITTED);
+		if (!admitted(update)) throw new NotSupportedException(NOT_ADMITTED);
 		String text = messageText(m);
 		if (!text.isEmpty()) {
 			if (addressedToAnotherBot(text)) return;   // /cmd@otherbot in a group
@@ -850,7 +853,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		AVector<ACell> images = Vectors.empty();
 		for (JsonObject media : TelegramMedia.attachments(m)) {
 			if (media.has("file_size") && media.get("file_size").getAsLong() > TelegramMedia.MAX_BYTES) {
-				throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+				throw new ResponseException(TelegramMedia.TOO_LARGE);
 			}
 			AMap<AString, ACell> attachment = download(media.get("file_id").getAsString())
 				.merge(RT.castMap(JSON.parse(media.toString())));
@@ -891,11 +894,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		ACell info = call("getFile", Map.of("file_id", fileId));
 		AString path = RT.ensureString(RT.getIn(info, "file_path"));
 		if (path == null || !path.toString().matches("[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*")
-				|| path.toString().contains("..")) throw new IllegalArgumentException(TelegramMedia.INVALID_PATH);
+				|| path.toString().contains("..")) throw new ResponseException(TelegramMedia.INVALID_PATH);
 		ACell size = RT.getIn(info, "file_size");
-		if (size instanceof CVMLong n && n.longValue() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+		if (size instanceof CVMLong n && n.longValue() > TelegramMedia.MAX_BYTES) throw new ResponseException(TelegramMedia.TOO_LARGE);
 		// Both official and local Bot API servers use /file/bot<token>/<path>.
-		if (!apiUrl.endsWith("/bot")) throw new IllegalArgumentException("Telegram downloads require an apiUrl ending in /bot");
+		if (!apiUrl.endsWith("/bot")) throw new ConfigurationException("Telegram downloads require an apiUrl ending in /bot");
 		String base = apiUrl.substring(0, apiUrl.length() - 4) + "/file/bot";
 		OkHttpClient client = http;
 		String liveToken = token;
@@ -903,9 +906,9 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		Request request = new Request.Builder().url(base + liveToken + "/" + path).build();
 		try (Response response = client.newCall(request).execute()) {
 			if (!response.isSuccessful() || response.body() == null) throw new JobFailedException(TelegramMedia.DOWNLOAD_FAILED);
-			if (response.body().contentLength() > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+			if (response.body().contentLength() > TelegramMedia.MAX_BYTES) throw new ResponseException(TelegramMedia.TOO_LARGE);
 			byte[] bytes = response.body().byteStream().readNBytes(TelegramMedia.MAX_BYTES + 1);
-			if (bytes.length > TelegramMedia.MAX_BYTES) throw new IllegalArgumentException(TelegramMedia.TOO_LARGE);
+			if (bytes.length > TelegramMedia.MAX_BYTES) throw new ResponseException(TelegramMedia.TOO_LARGE);
 			ACell metadata = fileMetadataRoot == null ? null : storage.read(fileMetadataPath(fileId));
 			AString originalName = RT.ensureString(RT.getIn(metadata, "file_name"));
 			AString originalType = RT.ensureString(RT.getIn(metadata, "mime_type"));
@@ -1122,11 +1125,11 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	/** {@link #sendMessage} without the target check: the runner's own replies, addressed to an admitted update's chat. */
 	private ACell deliver(Map<String, Object> params) {
 		if (params.get("chat_id") == null) {
-			throw new IllegalArgumentException("chat_id is required: a Telegram chat id or @channelusername");
+			throw new InvalidInputException("chat_id is required: a Telegram chat id or @channelusername");
 		}
 		Object textObj = params.get("text");
 		String text = (textObj == null) ? "" : String.valueOf(textObj);
-		if (text.isBlank()) throw new IllegalArgumentException("text is required");
+		if (text.isBlank()) throw new InvalidInputException("text is required");
 		ACell last = null;
 		boolean first = true;
 		for (String chunk : MessagingText.split(text, MAX_MESSAGE_LENGTH)) {

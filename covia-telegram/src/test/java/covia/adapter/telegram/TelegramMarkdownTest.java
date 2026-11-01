@@ -20,6 +20,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 
 /**
  * Markdown to Telegram HTML ({@link TelegramMarkdown}, {@code telegram:format}).
@@ -227,7 +228,7 @@ public class TelegramMarkdownTest {
 		ACell hooked = TelegramAdapter.handleFormat(Maps.of(
 			"response", Maps.of("text", "**hi**"), "authentication", Maps.of("identity", "telegram:5551")));
 		assertEquals("<b>hi</b>", RT.getIn(hooked, Fields.TEXT).toString());
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> TelegramAdapter.handleFormat(Maps.of("response", Strings.create("  "), "authentication", Maps.empty())),
 			"a turn that ended without a reply has nothing to format, and the bot sends nothing");
 		// A hook's parse_mode wins over the bot's; one Telegram does not know does not.
@@ -240,7 +241,7 @@ public class TelegramMarkdownTest {
 			"matched as Telegram matches it, sent as Telegram spells it");
 		// A blank markdown gives way to text.
 		assertEquals("<i>i</i>", RT.getIn(TelegramAdapter.handleFormat(Maps.of("markdown", "  ", "text", "*i*")), Fields.TEXT).toString());
-		IllegalArgumentException nothing = assertThrows(IllegalArgumentException.class,
+		InvalidInputException nothing = assertThrows(InvalidInputException.class,
 			() -> TelegramAdapter.handleFormat(Maps.of("authentication", Maps.empty())));
 		assertEquals(TelegramAdapter.NOTHING_TO_FORMAT, nothing.getMessage());
 	}
