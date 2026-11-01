@@ -1,305 +1,125 @@
-# Covia - Federated AI Orchestration Platform
+# Covia
 
-## Vision
+Covia's runtime: venues host operations, invoking one creates a job run by an
+adapter, and agents, assets and user state live in Convex lattices. The
+normative specs are the COGs in covia-docs (`docs/protocol/cogs/`);
+`venue/docs/` holds the implementation design of each subsystem.
 
-Covia is the open-source infrastructure for federated AI orchestration. It enables AI models, agents, and data to collaborate across organisational boundaries, clouds, and jurisdictions — with built-in governance and without centralising control. Built on the Convex lattice platform for decentralised coordination.
+## Layout
 
-## Project Structure
+| Path | Contents |
+|------|----------|
+| `covia-core/` | Grid client library and shared types (`Asset`, `Job`, `Operation`, `Venue`, `Status`), constants in `covia.api` (`Fields`, `Abilities`), auth strategies, `VenueHTTP` |
+| `venue/` | The venue runtime, built as `venue/target/covia.jar` (main class `covia.venue.MainVenue`); guide in `venue/CLAUDE.md`, design docs in `venue/docs/` |
+| `covia-sql`, `covia-telegram`, `covia-discord`, `covia-whatsapp`, `covia-slack`, `covia-sonnylabs`, `covia-documents`, `covia-speech`, `covia-claude-code`, `covia-python-adapter` | Optional venue modules: shaded `-module.jar`s loaded through config, not in `covia.jar` |
+| `covia-python/` | Java FFM bridge to embedded CPython |
+| `workbench/` | Shared Swing components (`covia.gui.markdown`, `covia.gui.components`) and a REPL demo |
+| `skills/` | Claude Code and Codex skills (see Skills) |
+| `deploy/` | Operator guide, Caddyfile, Docker and cloud deployment |
+| `dev/` | Gitignored personal configs and scratch files |
 
-```
-covia/                          # ai.covia:covia (parent POM)
-├── covia-core/                 # Grid client library and shared abstractions
-│   └── src/main/java/covia/
-│       ├── api/                #   API field constants (Fields.java)
-│       ├── exception/          #   Exception hierarchy (CoviaException, etc.)
-│       ├── grid/               #   Core types: Asset, Job, Operation, Grid, Venue, Status
-│       ├── grid/auth/          #   Auth strategies: NoAuth, BearerAuth, KeyPairAuth, LocalAuth
-│       ├── grid/client/        #   HTTP client implementation (VenueHTTP)
-│       └── grid/impl/          #   Content implementations (BlobContent, LatticeContent)
-├── covia-python/               # Dependency-light Java FFM bridge to embedded CPython
-├── covia-python-adapter/       # Optional Python operations venue module
-│                               #   (shaded "module" jar, not in covia.jar)
-├── venue/                      # Main venue server runtime (produces covia.jar)
-│   └── src/main/java/covia/
-│       ├── adapter/            #   Adapter framework and implementations
-│       ├── lattice/            #   Lattice definitions (Covia.ROOT, Covia.VENUE)
-│       ├── venue/              #   Engine, MainVenue, Config, Auth, LocalVenue
-│       ├── venue/api/          #   REST API (CoviaAPI), MCP, A2A, UserAPI
-│       ├── venue/server/       #   HTTP server (VenueServer, CoviaWebApp, SSE, AuthMiddleware)
-│       └── venue/storage/      #   Storage backends (Lattice, File, Memory)
-├── covia-sql/                  # SQL adapter venue module (convex-db + Calcite;
-│                               #   shaded "module" jar loaded via config, not in covia.jar)
-├── covia-telegram/             # Telegram bot venue module (operator-declared bots →
-│                               #   agents/operations, telegram:send; shaded "module" jar)
-├── covia-discord/              # Discord bot venue module (Gateway inbound + REST outbound;
-│                               #   agents/operations, discord:send; shaded "module" jar)
-├── covia-whatsapp/             # WhatsApp Cloud API venue module (signed webhook intake,
-│                               #   agents/operations/relay, whatsapp:send; shaded "module" jar)
-├── covia-slack/                # Slack venue module (signed Events API webhooks or Socket
-│                               #   Mode, agents/operations/relay, slack:send; shaded "module" jar)
-├── covia-sonnylabs/            # SonnyLabs prompt-injection scanning venue module
-│                               #   (POST /v1/scans; shaded "module" jar)
-├── covia-documents/            # PDF/Office text extraction venue module (PDFBox, POI;
-│                               #   file:read mode "extract"; shaded "module" jar)
-├── covia-speech/               # Speech venue module: transcribe and speak in-process (sherpa-onnx) or
-│                               #   over an OpenAI-compatible audio API, an engine per direction; shaded "module" jar
-├── covia-claude-code/          # Claude Code CLI venue module (runs/resumable sessions in
-│                               #   authorised project dirs; shaded "module" jar, not in covia.jar)
-├── workbench/                  # Shared Swing components/utilities and a REPL demo
-│   └── src/main/java/covia/gui/  markdown/, components/; Bench, ReplPanel, LAF
-├── .claude/                    # Claude Code config (settings.json tracked; rest gitignored)
-├── skills/                     # Claude Code skills (junction .claude/skills → skills/)
-│   ├── adapters/               #   Adapter discovery, invocation, runtime enable/disable/configure, module load/unload
-│   ├── ap-demo/                #   AP invoice audit trail demo (Alice/Bob/Carol)
-│   ├── agent/                  #   Agent creation and management
-│   ├── venue-setup/            #   Build and run a venue (local/VM/Docker)
-│   ├── venue-status/           #   Venue health check
-│   ├── grid-test/              #   Smoke test venue operations
-│   ├── workspace/              #   Browse/read/write lattice data
-│   ├── secret/                 #   Manage API keys and credentials
-│   ├── telegram/               #   Connect a venue to Telegram (bots → agents, send, allow-list)
-│   ├── slack/                  #   Connect a venue to Slack (Socket Mode or Events API → agents, send)
-│   ├── federation/             #   Cross-venue grid operations
-│   ├── hitl/                   #   Human-in-the-Loop requests (send, respond, teach agents, test)
-│   └── ucan/                   #   Capability token management
-├── deploy/                     # Deployment: operator guide (README.md), Caddyfile,
-│                               #   azure/ec2 (dev venues), gcp (stable venues), docker/
-├── Dockerfile                  # Primary container build (Alpine, Java 25)
-└── BUILD.md                    # Build and release workflow
-```
+Dependency versions are in the root `pom.xml` (`convex.version` is 0.8.18).
 
-## Requirements
+## Build and run
 
-- **Java 21+** (JDK; the published Docker image runs on Java 25). Not JDK 25
-  before 25.0.3: JDK-8370887 makes virtual-thread timeouts fire tens of seconds
-  late, so jobs stall and tests fail intermittently. The build warns on one, and
-  CI fails (`-Dcovia.jdk.check=ERROR`); run tests on JDK 21–24 or 25.0.3+
-- **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.18**
+- JDK 21+ (25+ recommended) and Maven 3.7+. Never test on JDK 25 before
+  25.0.3: JDK-8370887 fires virtual-thread timeouts tens of seconds late, so
+  jobs stall and tests fail. The build warns on one; `-Dcovia.jdk.check=ERROR`
+  (CI and release) fails it.
+- `mvn clean install` builds and tests everything (`-DskipTests` skips tests);
+  `mvn test -pl venue` tests one module. `covia.jar` is assembled in
+  `install`, not `package`.
+- Heavy tests are opt-in: `-Dcovia.tests.durability=true` (forks JVMs) and
+  `-Dcovia.tests.integration=true` (external services); see `BUILD.md`.
+- Never kill a running `mvn test`: it orphans venue JVMs. Let it finish, and
+  stop a stray venue JVM only by its `jps` PID.
+- In a worktree, build with `-pl <module> -am`: sibling SNAPSHOTs may be
+  missing from `~/.m2`, and installing them overwrites what other checkouts
+  build against. Rebuild `covia.jar` there with
+  `mvn -pl venue -am install -DskipTests -Dmaven.install.skip=true`.
+- A test that fails locally but passes on CI may be running on unreleased
+  Convex: a local Convex `mvn install` overwrites the released jars in
+  `~/.m2`. Compare their sha1 with Maven Central; `-Dmaven.repo.local=<dir>`
+  gives a CI-equivalent run.
+- Run a venue with `java -jar venue/target/covia.jar [config]`.
+  `local-dev.json` is two ephemeral venues (8080, 8081); a personal
+  persistent config goes under `dev/` (venue-setup skill).
 
-## Build & Run
+## Branches and deploys
 
-```bash
-# Full build (all modules)
-mvn clean install
+`develop` is the working branch and `master` takes releases (`BUILD.md`). CI
+deploys from both: a push to `develop` redeploys the dev venues (venue-3 on
+EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
+(venue-test, venue-1, venue-2).
 
-# Build without tests
-mvn clean install -DskipTests
+## Conventions
 
-# Run venue server (default config, port 8080)
-java -jar venue/target/covia.jar
-
-# Run with the checked-in ephemeral dev config (temp store, wiped on exit)
-java -jar venue/target/covia.jar local-dev.json
-
-# Run with a personal persistent config (gitignored under /dev/;
-# stable DID, etch+secrets survive restarts — see venue-setup skill)
-java -jar venue/target/covia.jar dev/local.json
-
-# Run tests
-mvn test
-
-# Test specific module
-mvn test -pl venue
-mvn test -pl covia-core
-```
-
-**Main class:** `covia.venue.MainVenue`
-**Executable JAR:** `venue/target/covia.jar` (fat JAR with all dependencies)
-
-## Branch Strategy
-
-`develop` for active development, `master` for releases. See `BUILD.md` for the full release flow.
-
-## Key Dependencies
-
-| Dependency | Version | Purpose |
-|------------|---------|---------|
-| Convex | 0.8.18 | Lattice platform, immutable data, cryptography |
-| Javalin | 7.2.4 | HTTP server with OpenAPI/Swagger/ReDoc |
-| LangChain4j | 1.22.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
-| MCP SDK | 2.1.0 | Model Context Protocol |
-| A2A | 1.4.0.Final | Agent-to-Agent protocol |
-| JUnit | 6.1.3 | Testing |
-| SLF4J/Logback | 2.0.20/1.6.6 | Logging |
-
-## Architecture Overview
-
-```
-Client (REST / MCP / A2A)
-    |
-VenueServer (Javalin HTTP, OpenAPI)
-    |
-CoviaAPI / UserAPI / MCP / A2A endpoints
-    |
-Engine (core state, adapters, assets, content, identity)
-    ├── Asset Registry    (content-addressed by CAD3 hash, lattice-backed)
-    ├── Adapter Registry  (pluggable execution backends)
-    ├── Content Storage   (lattice / file / memory)
-    └── JobManager        (job lifecycle, per-user persistence, recovery)
-    |
-Adapter Layer (35 built-in adapters plus 9 loadable modules — canonical table in venue/CLAUDE.md)
-    ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file, archive
-    ├── Execution:     langchain (LLMs), mcp, http, convex, crypto, jvm, schema, json, orchestrator, scheduler
-    ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox), project (WBS tree; skills only so far)
-    ├── Federation:    grid (run/invoke/jobStatus), a2a, remoteagent, p2p (Convex P2P node, opt-in), ucan (granting surface, COG-17)
-    ├── Admin:         user (registration), auth, venue (runtime adapter/module lifecycle), oauth (connected accounts), connections
-    └── Testing:       test (echo, delay, never, chat, pause, ...)
-```
-
-### Core Abstractions
-
-- **Asset** — Immutable content-addressed resource (CAD3 value hash of metadata). Can be an operation, artifact, or reference.
-- **Operation** — An Asset with an `"operation"` field; executable via an adapter with JSON Schema input/output.
-- **Job** — Execution state for an operation invocation. Jobs are long-lived and have NO framework-level timeout (they can run for days, weeks, or months). Lifecycle: `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (also `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED`). Clients may time out polling and reconnect; after reconnect they re-acquire the latest job status by ID.
-- **Venue** — A grid node that hosts operations and manages state. Identified by DID.
-- **Adapter** — Bridges operations to execution environments. Extends `AAdapter`, receives resolved metadata and a `RequestContext` for every invocation.
-- **Lattice** — CRDT-based persistent state with merge semantics (commutative, associative, idempotent).
-
-### Lattice State Structure
-
-Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design in `venue/docs/GRID_LATTICE_DESIGN.md`.
-
-### Protocols
-
-- **REST** — `/api/v1/` with OpenAPI docs at `/swagger` and `/redoc`
-- **SSE** — Server-sent events for real-time job updates (`/api/v1/jobs/{id}/sse`) and live agent run-loop events (`/api/v1/agents/{id}/sse`, #394)
-- **MCP** — Model Context Protocol JSON-RPC endpoint
-- **A2A** — Agent-to-Agent federated protocol
-- **OAuth 2.1** — optional authorization server (`auth.oauth.provider`): registered clients obtain venue bearers via code+PKCE; access tokens are venue-signed UCAN JWTs (`/oauth/authorize`, `/oauth/token`)
-- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). A venue may declare `did:web:<hostname>` as its stable identity; otherwise its key-derived `did:key` remains the identity. Consumers preserve the presented DID as-is (`alsoKnownAs` is informational, never a rebinding instruction). Remote routing and signature verification dispatch by DID method: `did:key` and `did:web` are built in, while future methods such as `did:convex` plug in without changing federation or UCAN code (#167, #343).
-
-## Development Conventions
-
-- **Venue execution:** A venue is an atomically updated running lattice application
-  instance. Compose live changes through component updates and transactions.
-  Whole-venue LWW is snapshot selection for backup, replication and failover;
-  it cannot generally merge arbitrary forked executions or their external effects.
-  Failover must fence the previous authoritative writer. Adapter-owned components
-  live under `:adapters`, not user/venue `w`; each adapter owns its schema.
-
-- **Upstream first:** Before adding a fix or abstraction, inspect the dependency's
-  existing APIs and fixes at the version we use. Prefer upstream functionality
-  over local workarounds. If the required capability is missing, request an
-  upstream improvement rather than implementing a competing workaround in Covia.
-
-Workbench's shared `covia.gui.markdown` and `covia.gui.components` packages use
-the JDK and CommonMark only. Hosts supply appearance, layout and link actions;
-do not introduce application colours, fonts, look-and-feel setup or venue calls.
-Use Swing components and text sizing on the event thread. The demo's FlatLaf
-and venue dependencies are optional for consumers of the library.
-
-- **Package naming:** `covia.<module>.<feature>` (e.g., `covia.venue.api`, `covia.adapter`, `covia.grid.auth`)
-- **Constants:** Use `Strings.intern()` for field names and status strings (see `Fields.java`, `Status.java`)
-- **Async:** Return `CompletableFuture` from adapters; use virtual threads for IO-bound work
-- **Immutability:** Use Convex ACell hierarchy for persistent data (AMap, AVector, Index)
-- **Content addressing:** Assets identified by CAD3 value hash (SHA3-256 of canonical encoding)
-- **Jobs:** Use `engine.jobs()` accessor for all job operations (submit, query, cancel, etc.)
-- **Adapters:** Follow `venue/docs/ADAPTERS.md`, including its publication, configuration, private-state, capability, module, and test invariants.
-- **Tests:** JUnit 6, use `Engine.createTemp()` for test instances
-- **API contracts are defined in docs:** every externally used API contract is cleanly defined in the relevant design doc or COG, in terms its callers can see, and the code implements it. Internal types and components never appear in a contract or decide its answers
-- **Message wording lives in constants:** a refusal or error message is built from a constant on the class that owns it (`VenueAuthenticator.Reason`, `Auth.KEY_ALREADY_BOUND`), and tests assert against the constant, never the wording — a rewording must break no test
-- **Expected failures are typed:** a failure a caller can cause or act on is a `CoviaException` subtype whose message says what failed and why, raised where that is known; library exceptions are wrapped where they are called. Anything else reaching a caller is a runtime or venue bug — logged at ERROR, reported as unexpected. Throw sites still using JDK exceptions migrate under #644
-- **Checks return reasons:** a check returns `null` when it passes and a human-readable reason when it does not (`CapabilityChecker.allows`, `UcanJwtValidator.Validation`, `VenueAuthenticator.Verdict`), so the reason bubbles back to the caller unchanged
-- **Prefer editing** existing files over creating new ones
+- **Upstream first:** before adding a fix or abstraction, check the
+  dependency's API at the version in use and prefer it. When a capability is
+  missing, ask upstream rather than building a competing workaround here.
+- **Packages:** `covia.<module>.<feature>`.
+- **Constants:** fixed strings (field names, abilities, statuses) are shared
+  constants in `covia.api.Fields`, `covia.api.Abilities` and
+  `covia.grid.Status`, interned in their declaration. Never inline
+  `Strings.intern` or `Strings.create` for a fixed string in logic;
+  `Strings.create` is for dynamic strings.
+- **Data:** persistent values use the Convex `ACell` types (`AMap`,
+  `AVector`, `Index`).
+- **Jobs:** every job operation goes through `engine.jobs()`.
+- **API contracts are defined in docs:** every externally used API contract
+  is defined in the relevant design doc or COG, in terms its callers can see,
+  and the code implements it. Internal types and components never appear in a
+  contract or decide its answers.
+- **Message wording lives in constants:** a refusal or error message is built
+  from a constant on the class that owns it (`VenueAuthenticator.Reason`,
+  `Auth.KEY_ALREADY_BOUND`), and tests assert against the constant, never the
+  wording, so a rewording breaks no test.
+- **Expected failures are typed:** a failure a caller can cause or act on is a
+  `CoviaException` subtype whose message says what failed and why, raised
+  where that is known; library exceptions are wrapped where they are called.
+  Anything else reaching a caller is a runtime or venue bug, logged at ERROR
+  and reported as unexpected.
+- **Checks return reasons:** a check returns `null` when it passes and a
+  human-readable reason when it does not (`CapabilityChecker.allows`,
+  `UcanJwtValidator.Validation`, `VenueAuthenticator.Verdict`), so the reason
+  reaches the caller unchanged.
+- **Tests:** JUnit 6; fixtures and rules are in `venue/CLAUDE.md` (Testing).
+  A passing build prints nothing but Maven's `[INFO]`, `[WARNING]` and
+  `[ERROR]` lines: a test that provokes an ERROR log wraps it in
+  `TestLogs.quiet` in an `@Isolated` class.
+- **Lattice reads are consistent:** once a CAS commits, every thread reads the
+  write. A flaky agent test is a timing assumption, a same-tick LWW tie or a
+  lifecycle race; never add a read-after-write retry.
+- **CHANGELOG:** one short headline per change, optionally with `(#issue)`.
+  List what operators and API users see (operations, abilities, config keys,
+  REST, MCP and A2A behaviour, modules), never Java API changes.
 
 ### Adding a New Adapter
 
-The canonical authoring and system contract is
-**`venue/docs/ADAPTERS.md`**. It covers `AAdapter`, configuration hooks,
-catalog publication, `AdapterState`, capability enforcement, lifecycle,
-optional module packaging, and required tests.
+`venue/docs/ADAPTERS.md` is the canonical contract: `AAdapter`, configuration,
+catalog publication, `AdapterState`, capabilities, lifecycle, module packaging
+and required tests. Operation metadata is covered there and in
+`venue/docs/OPERATIONS.md`; the adapter tables are in `venue/CLAUDE.md`.
 
-Operation metadata examples and rules are in `venue/docs/ADAPTERS.md` and
-`venue/docs/OPERATIONS.md`.
+## Where things are documented
 
-## Current State
-
-### What Works Well
-
-- Clean adapter abstraction with many pluggable backends
-- Lattice foundation with CRDT merge semantics
-- Content-addressed assets (CAD3 value hash)
-- Async job model with CompletableFuture and SSE
-- Per-user job persistence and ownership enforcement
-- Multi-protocol support (REST, MCP, A2A, DID)
-- Federated cross-venue invocation via GridAdapter
-- Strategy-pattern auth (NoAuth, Bearer, KeyPair, Local)
-
-### In Progress
-
-- **Capability enforcement** — largely landed: point-of-action `requireCapability` (adapter-pinned) + the single cross-user gate `Engine.crossUserAllows` (public-user parity #254 + agent admission `config.accepts` #447 + UCAN proofs); granting is production-gated at surfaces (`ucan:issue`, HITL) per COG-17. See `venue/docs/UCAN.md`. Remaining: custodial attestation trust policy (C3b), resource-precise pins for agent-state mutations.
-
----
-
-## TODOs
-
-The list below tracks engineering tasks. For the developer-experience and open-source-readiness roadmap (onboarding, packaging, CI gate, versioning, docs, community scaffolding, operability), see **`DX_PLAN.md`** — the public-facing companion to this section.
-
-### P0 — Critical (blocks production use)
-
-- [x] Authorization enforcement, agent workspace CRUD (`/w/`, `/o/`, `/h/`), UCAN capability enforcement — shipped; see `venue/docs/UCAN.md` and COG-13/16/17.
-
-### P1 — High (security and reliability)
-
-- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution under `secret/use` (another principal's as `<did>/s/NAME`, grants bindable to a url); capability-gated `secret:extract` restricted to direct owner calls (no agents, MCP tools or recorded jobs).
-
-- [ ] **Per-operation rate limiting** — request-rate and concurrent-job caps exist (see `venue/docs/CONFIG.md`); per-operation limits do not.
-
-### P2 — Medium (code quality and operability)
-
-- [x] Decompose Engine.java — `JobManager` extracted; callers use `engine.jobs()`.
-
-- [ ] **Wire LatticeContent into pinned content-addressable storage** — the `AContent` view over content pinned in the lattice `:data` region (content rides state replication, addressed by hash; pairs with `asset:pin`). Implemented and unit-tested; awaiting its consumer in the storage backend / client SDK.
-  - File: `covia-core/.../grid/impl/LatticeContent.java`
-
-- [x] **Add VenueHTTP test coverage** — real-venue contract tests cover direct run, status, polling and caller-side timeouts, content round-trips, concurrent use, authentication, and error paths. Deterministic client tests cover 429 retry/backoff behavior.
-  - Files: `venue/src/test/java/covia/grid/client/VenueHTTPTest.java`, `covia-core/src/test/java/covia/grid/client/VenueHTTPRetryTest.java`
-
-- [x] **Complete auth strategy tests** — `KeyPairAuth` has deterministic claim/signing tests, bearer authentication and rejection paths run against real venues, and unsupported token minting is covered. Focused tests also cover constructor/header behavior for `NoAuth` and `BearerAuth`, plus `LocalAuth` DID propagation and no-header behavior through the in-process path.
-  - Directory: `covia-core/src/test/java/`
-
-- [x] **Add SSRF and CORS regression coverage** — HTTPAdapter allow/block policy, private/loopback targets, invalid schemes, configured CORS origins, loopback/PNA behavior, and disabled CORS are covered.
-  - Files: `venue/src/test/java/covia/adapter/http/HTTPTest.java`, `venue/src/test/java/covia/venue/VenueServerTest.java`
-
-- [x] **Add remaining focused test coverage**:
-  - `/config` page redaction (public info only)
-  - LangChainAdapter IO timeout
-  - Thread safety of `Asset.meta()` (concurrent access)
-
-- [ ] **Metrics export** — Add Prometheus-compatible metrics for operations, jobs, adapters, storage.
-
-### P3 — Future (design goals from venue/CLAUDE.md)
-
-- [ ] **Asset versioning** — Track version history, deprecation, and lineage in lattice
-- [ ] **Cross-venue trust policies** — Policy-based access control between venues; venue reputation/attestation. Self-sovereign cross-venue grants + authority forwarding (identity tokens; venue identity only for the venue itself) shipped (covia#100 C3a, `venue/docs/UCAN.md` §5.6); remaining = custodial attestation + the venue trust policy (C3b)
-- [ ] **Capability negotiation** — Discovery endpoint for venue capabilities via DID documents
-- [ ] **Signed operations** — Cryptographic attribution for every job submission
-- [ ] **Compliance reporting** — Data lineage tracking and audit log queries
-- [ ] **Workbench expansion** — Currently a REPL demo plus the shared Markdown and text components; add configuration, multi-operation support, proper logging
-- [ ] **Job restart API** — Consider `PUT /api/v1/jobs/{id}/restart` for re-running failed/cancelled/completed jobs. Semantics need thought: new job with same input? Same job ID? How to handle operations that have changed since original invocation? May be better as a client-side convenience (re-invoke with original params) rather than a server primitive.
-
-## Module-Specific Guides
-
-- **DX_PLAN.md** — Public developer-experience roadmap: onboarding, packaging, build reproducibility, CI quality gate, versioning, docs, community scaffolding, open-core boundary, operability
-- **venue/docs/ADAPTERS.md** — Canonical adapter system and authoring contract
-- **venue/docs/MODELS.md** — Model definition assets (design): models as operation assets under `v/models/`
-- **venue/docs/GRID_LATTICE_DESIGN.md** — Grid lattice design: addressing, namespaces, UCAN capabilities, federation, agents, lattice mechanics, implementation phases
-- **venue/CLAUDE.md** — Detailed venue module architecture, design objectives, adapter reference, API endpoints, and development guidelines
-- **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation progress
+- `venue/CLAUDE.md`: venue architecture, adapter and API tables, testing.
+- `venue/docs/`: one design doc per subsystem, among them `ADAPTERS.md`,
+  `JOBS.md`, `UCAN.md`, `AUTH.md`, `PERSISTENCE.md`, `SKILLS.md`,
+  `AGENT_LOOP.md`, `EMBEDDING.md`, `GRID_LATTICE_DESIGN.md` (lattice layout,
+  defined in code by `covia.lattice.Covia`) and `CONFIG.md` (operator
+  reference).
+- `BUILD.md`: build details and the release flow. `DX_PLAN.md`: the public
+  developer-experience roadmap. `deploy/README.md`: the operator guide.
 
 ## Skills
 
-Reusable agent skills live in `skills/` (tracked in git). Claude Code reads
-them from `.claude/skills/`; Codex reads them from `.agents/skills/`. Both are
-local junctions to the same canonical directory.
-
-### Setup
-
-The junctions must be created once per checkout (they are gitignored):
+Skills live in `skills/` (tracked). Each `SKILL.md` describes itself, so no
+list is kept here. Claude Code reads them through `.claude/skills` and Codex
+through `.agents/skills`, gitignored junctions made once per checkout:
 
 ```bash
-# Windows (from covia root)
+# Windows (from the covia root)
 cmd /c "mklink /J .claude\skills skills"
 cmd /c "mklink /J .agents\skills skills"
 
@@ -308,25 +128,6 @@ ln -s ../skills .claude/skills
 ln -s ../skills .agents/skills
 ```
 
-In Claude Code, invoke them as `/skill-name`. In Codex CLI or the IDE
-extension, use `/skills` to browse them or `$skill-name` to invoke one
-explicitly. They can also trigger implicitly from their descriptions.
-Examples: `/ap-demo setup` in Claude or `$venue-setup` in Codex.
-
-### Shared Configuration
-
-`.mcp.json` (committed) defines the shared MCP server config; `.claude/settings.json` (committed) holds tool permissions. Environment-specific overrides go in `.claude/settings.local.json` (gitignored).
-
-### Discovering Skills
-
-Skills are self-describing: each `skills/<name>/SKILL.md` carries a frontmatter
-`description` that the Claude Code harness surfaces automatically in-session —
-no list is maintained here (it would only drift). Browse `skills/` for the
-full set; invoke as `/<name>`.
-
-## Resources
-
-- **Docs:** https://docs.covia.ai
-- **Discord:** https://discord.gg/fywdrKd8QT
-- **GitHub:** https://github.com/covia-ai/covia
-- **Convex (dependency):** https://github.com/Convex-Dev/convex
+Invoke one as `/<name>` in Claude Code or `$<name>` in Codex. `.mcp.json`
+and `.claude/settings.json` are tracked; local overrides go in
+`.claude/settings.local.json`.
