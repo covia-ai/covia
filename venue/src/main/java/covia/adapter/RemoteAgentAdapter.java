@@ -15,6 +15,7 @@ import covia.adapter.remote.VenueRemoteAgent;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
@@ -145,7 +146,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			|| !(Status.PENDING.equals(status) || Status.STARTED.equals(status) || Status.PAUSED.equals(status)
 			|| Status.INPUT_REQUIRED.equals(status) || Status.AUTH_REQUIRED.equals(status) || Status.COMPLETE.equals(status)
 			|| Status.FAILED.equals(status) || Status.REJECTED.equals(status) || Status.CANCELLED.equals(status))) {
-			throw new IllegalArgumentException(INVALID_TASK);
+			throw new ResponseException(INVALID_TASK);
 		}
 		if (Status.COMPLETE.equals(status)) {
 			job.completeWith(snapshot.get(Fields.OUTPUT), data -> observation(data, snapshot, status));

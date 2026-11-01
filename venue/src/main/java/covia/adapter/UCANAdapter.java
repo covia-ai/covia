@@ -131,7 +131,7 @@ public class UCANAdapter extends AAdapter {
 		ACell prfCell = RT.getIn(input, UCAN.PRF);
 		AVector<ACell> prf = RT.ensureVector(prfCell);
 		if (prfCell != null && prf == null) {
-			throw new IllegalArgumentException("prf must be an array of UCAN JWTs");
+			throw new InvalidInputException("prf must be an array of UCAN JWTs");
 		}
 		if (prf != null && prf.isEmpty()) prf = null;
 		if (prf != null && !engine.isDirectVenue(ctx)) {
@@ -254,7 +254,7 @@ public class UCANAdapter extends AAdapter {
 		try {
 			if (DID.fromString(audDID.toString()) == null) throw new IllegalArgumentException();
 		} catch (RuntimeException e) {
-			throw new IllegalArgumentException("aud must be a valid audience DID: " + audDID);
+			throw new InvalidInputException("aud must be a valid audience DID: " + audDID);
 		}
 		AKeyPair venueKP = engine.getKeyPair();
 		// Mint the Convex UCAN JWT profile (0.8.11): the ucv claim and an
@@ -292,7 +292,7 @@ public class UCANAdapter extends AAdapter {
 			UcanJwtValidator.Validation parent = (jwt != null)
 				? UcanJwtValidator.validate(jwt, now, engine.didVerifier()) : null;
 			if (parent == null || !parent.valid()) {
-				throw new IllegalArgumentException(PRF_INVALID + " (prf[" + i + "]"
+				throw new InvalidInputException(PRF_INVALID + " (prf[" + i + "]"
 					+ ((parent != null) ? ": " + parent.reason() : ": expected a JWT string") + ")");
 			}
 			if (!venueDID.equals(parent.token().getAudience())) {

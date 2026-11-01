@@ -22,6 +22,9 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.Audit;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.lattice.Covia;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -117,7 +120,7 @@ public class UserAdapter extends AAdapter {
 				case "authentication-add" -> authenticationAdd(ctx, input);
 				case "authentication-revoke" -> authenticationRevoke(ctx, input);
 				case "authentication-list" -> authenticationList(ctx, input);
-				default -> throw new IllegalArgumentException(
+				default -> throw new NotSupportedException(
 					"Unknown user operation: " + subOperation);
 			});
 		} catch (Exception e) {
@@ -140,7 +143,7 @@ public class UserAdapter extends AAdapter {
 		try {
 			AString userDID = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
 			AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
-			if (operation == null) throw new IllegalArgumentException("operation is required");
+			if (operation == null) throw new InvalidInputException("operation is required");
 			RequestContext sudo = engine.sudoContext(ctx, userDID);
 			return engine.jobs().invokeInternal(operation, RT.getIn(input, Fields.INPUT), sudo);
 		} catch (Exception e) {
@@ -155,11 +158,11 @@ public class UserAdapter extends AAdapter {
 		AVector<ACell> authenticationKeys =
 			RT.ensureVector(RT.getIn(input, Fields.AUTHENTICATION_KEYS));
 		if ((suppliedDID == null) == (username == null)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Specify exactly one of 'did' or 'username'");
 		}
 		if (suppliedDID != null && authenticationKeys != null) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"authenticationKeys are supported only for venue-managed usernames");
 		}
 
@@ -189,7 +192,7 @@ public class UserAdapter extends AAdapter {
 					for (long i = 0; i < authenticationKeys.count(); i++) {
 						AString key = RT.ensureString(authenticationKeys.get(i));
 						if (!engine.getAuth().isAuthenticationKeyActive(username, key)) {
-							throw new IllegalArgumentException(
+							throw new ConflictException(
 								"Named user already has authenticator history; "
 								+ "use user:authentication-add for rotation");
 						}
@@ -219,12 +222,12 @@ public class UserAdapter extends AAdapter {
 		AString did = requireDID(targetDID(ctx, input));
 		requireSelfOrVenueUserAuthority(ctx, did, Abilities.USER_EXPORT);
 		ACell secrets = RT.getIn(input, SECRETS);
-		if (secrets != null && !(secrets instanceof CVMBool)) throw new IllegalArgumentException(INVALID_SECRETS);
+		if (secrets != null && !(secrets instanceof CVMBool)) throw new InvalidInputException(INVALID_SECRETS);
 		AccountKey recipient = null;
 		ACell suppliedKey = RT.getIn(input, ACCOUNT_KEY);
 		if (suppliedKey != null) {
 			ABlob key = Blobs.parse(suppliedKey);
-			if (key == null || key.count() != AccountKey.LENGTH) throw new IllegalArgumentException(INVALID_ACCOUNT_KEY);
+			if (key == null || key.count() != AccountKey.LENGTH) throw new InvalidInputException(INVALID_ACCOUNT_KEY);
 			recipient = AccountKey.create(key);
 		}
 		Blob export = new UserExports(engine).exportUser(did, recipient, !CVMBool.FALSE.equals(secrets));
@@ -241,7 +244,7 @@ public class UserAdapter extends AAdapter {
 		AString did = requireDID(RT.ensureString(RT.getIn(input, Fields.DID)));
 		requireVenueUserAuthority(ctx, Abilities.USER_IMPORT);
 		ABlob export = Blobs.parse(RT.getIn(input, EXPORT));
-		if (export == null) throw new IllegalArgumentException(UserExports.NOT_AN_EXPORT);
+		if (export == null) throw new InvalidInputException(UserExports.NOT_AN_EXPORT);
 		boolean created = new UserExports(engine).importUser(export, did, seed(ctx, input));
 		return Maps.of(Fields.DID, did, CREATED, CVMBool.create(created));
 	}
@@ -260,10 +263,10 @@ public class UserAdapter extends AAdapter {
 		ACell supplied = RT.getIn(input, Fields.SEED);
 		if (supplied == null) return null;
 		AString ref = RT.ensureString(supplied);
-		if (ref == null || !Engine.isSecretRef(ref.toString())) throw new IllegalArgumentException(SEED_REF_REQUIRED);
+		if (ref == null || !Engine.isSecretRef(ref.toString())) throw new InvalidInputException(SEED_REF_REQUIRED);
 		String value = engine.resolveSecret(ref.toString(), ctx);
 		ABlob seed = (value == null) ? null : Blobs.parse(value);
-		if (seed == null || seed.count() != AKeyPair.SEED_LENGTH) throw new IllegalArgumentException(INVALID_SEED);
+		if (seed == null || seed.count() != AKeyPair.SEED_LENGTH) throw new InvalidInputException(INVALID_SEED);
 		return AKeyPair.create(seed.toFlatBlob());
 	}
 
@@ -305,7 +308,7 @@ public class UserAdapter extends AAdapter {
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
 		AString label = RT.ensureString(RT.getIn(input, Fields.LABEL));
-		if (key == null) throw new IllegalArgumentException("key is required");
+		if (key == null) throw new InvalidInputException("key is required");
 		boolean added = engine.getAuth().addAuthenticationKey(
 			id, key, ctx.getCallerDID(), label);
 		engine.flush();
@@ -319,7 +322,7 @@ public class UserAdapter extends AAdapter {
 		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
 		AString id = engine.managedUserName(did);
 		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
-		if (key == null) throw new IllegalArgumentException("key is required");
+		if (key == null) throw new InvalidInputException("key is required");
 		boolean revoked = engine.getAuth().revokeAuthenticationKey(
 			id, key, ctx.getCallerDID(), engine.isDirectVenue(ctx));
 		engine.flush();
@@ -359,7 +362,7 @@ public class UserAdapter extends AAdapter {
 	private AString targetManagedUser(RequestContext ctx, ACell input, AString ability) {
 		AString did = targetDID(ctx, input);
 		if (engine.managedUserName(did) == null) {
-			throw new IllegalArgumentException(
+			throw new NotSupportedException(
 				"Authentication keys belong only to venue-managed named users");
 		}
 		requireSelfOrVenueUserAuthority(ctx, did, ability);

@@ -20,6 +20,11 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.venue.AssetStore;
 import covia.venue.RequestContext;
@@ -59,7 +64,7 @@ public class AssetAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		if (ctx.getCallerDID() == null) {
 			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Asset operations require an authenticated caller"));
+				new AuthException("Asset operations require an authenticated caller"));
 		}
 
 		try {
@@ -70,7 +75,7 @@ public class AssetAdapter extends AAdapter {
 				case "list"    -> CompletableFuture.completedFuture(handleList(input, ctx));
 				case "pin"     -> CompletableFuture.completedFuture(handlePin(input, ctx));
 				default -> CompletableFuture.failedFuture(
-					new IllegalArgumentException("Unknown asset operation: " + getSubOperation(meta)));
+					new NotSupportedException("Unknown asset operation: " + getSubOperation(meta)));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -92,14 +97,14 @@ public class AssetAdapter extends AAdapter {
 			try {
 				parsed = convex.core.util.JSON.parse(s.toString());
 			} catch (Exception e) {
-				throw new IllegalArgumentException("metadata string is not valid JSON: " + e.getMessage());
+				throw new InvalidInputException("metadata string is not valid JSON: " + e.getMessage());
 			}
 			metadata = (parsed instanceof AMap) ? (AMap<AString, ACell>) parsed : null;
 		} else {
 			metadata = null;
 		}
 		if (metadata == null) {
-			throw new IllegalArgumentException("metadata is required and must be a JSON object or JSON string");
+			throw new InvalidInputException("metadata is required and must be a JSON object or JSON string");
 		}
 
 		// Optional content — two explicit paths, no inference:
@@ -108,12 +113,12 @@ public class AssetAdapter extends AAdapter {
 		ACell contentCell = RT.getIn(input, Fields.CONTENT);
 		ACell contentTextCell = RT.getIn(input, K_CONTENT_TEXT);
 		if (contentCell != null && contentTextCell != null) {
-			throw new IllegalArgumentException("Provide content (hex Blob) or contentText (string), not both");
+			throw new InvalidInputException("Provide content (hex Blob) or contentText (string), not both");
 		}
 		ABlob content;
 		if (contentTextCell != null) {
 			AString text = RT.ensureString(contentTextCell);
-			if (text == null) throw new IllegalArgumentException("contentText must be a string");
+			if (text == null) throw new InvalidInputException("contentText must be a string");
 			content = Blob.wrap(text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
 		} else {
 			content = toBlob(contentCell);
@@ -137,18 +142,18 @@ public class AssetAdapter extends AAdapter {
 			} else if (contentField instanceof AMap) {
 				contentMeta = (AMap<AString, ACell>) contentField;
 			} else {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"metadata.content must be a JSON object when content bytes are supplied");
 			}
 
 			if (contentMeta.containsKey(Fields.SHA256)) {
 				AString existingHash = RT.ensureString(contentMeta.get(Fields.SHA256));
 				if (existingHash == null) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"metadata.content.sha256 must be a hex string");
 				}
 				if (!existingHash.equals(hashHex)) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"Content hash mismatch. Declared: " + existingHash + ", Actual: " + hashHex);
 				}
 				// Declared and matching — metadata is stored exactly as supplied.
@@ -185,9 +190,9 @@ public class AssetAdapter extends AAdapter {
 				Blob b = Blob.fromHex(str.substring(2));
 				if (b != null) return b;
 			}
-			throw new IllegalArgumentException("content string must be hex-encoded (0x...), got: " + str.substring(0, Math.min(20, str.length())) + "...");
+			throw new InvalidInputException("content string must be hex-encoded (0x...), got: " + str.substring(0, Math.min(20, str.length())) + "...");
 		}
-		throw new IllegalArgumentException("content must be a Blob (hex string 0x...), got: " + cell.getClass().getSimpleName());
+		throw new InvalidInputException("content must be a Blob (hex string 0x...), got: " + cell.getClass().getSimpleName());
 	}
 
 	private static final AString K_EXISTS = Strings.intern("exists");
@@ -207,11 +212,11 @@ public class AssetAdapter extends AAdapter {
 			AString value = RT.ensureString(RT.getIn(input, alias));
 			if (value == null) continue;
 			if (ref != null && !ref.equals(value)) {
-				throw new IllegalArgumentException("ref conflicts with legacy '" + alias + "'");
+				throw new InvalidInputException("ref conflicts with legacy '" + alias + "'");
 			}
 			ref = value;
 		}
-		if (ref == null) throw new IllegalArgumentException("ref is required");
+		if (ref == null) throw new InvalidInputException("ref is required");
 		return ref;
 	}
 
@@ -305,7 +310,7 @@ public class AssetAdapter extends AAdapter {
 				return withContentType(result, resolved.contentType());
 			}
 		} catch (java.io.IOException e) {
-			throw new IllegalArgumentException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
+			throw new UnavailableException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
 		}
 
 		// CAS fallback: an asset (a/) is per-DID like w — gate the cross-user read
@@ -486,11 +491,11 @@ public class AssetAdapter extends AAdapter {
 				// remote definition durable. Metadata arrives hash-verified;
 				// content (if the metadata declares any) sha256-verified.
 				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);   // source read checked above
-				if (fetched == null) throw new IllegalArgumentException("Asset not found: " + pathStr);
+				if (fetched == null) throw new NotFoundException("Asset not found: " + pathStr, pathStr.toString());
 				metaString = fetched.getMetadata();
 				content = engine.fetchRemoteContent(ctx, pathStr);
 			} else {
-				throw new IllegalArgumentException("Asset not found: " + pathStr);
+				throw new NotFoundException("Asset not found: " + pathStr, pathStr.toString());
 			}
 		} else {
 			// Non-hash reference: walk the universal resolver. The resolved
@@ -499,7 +504,7 @@ public class AssetAdapter extends AAdapter {
 			ACell value = engine.resolvePathUnchecked(pathStr, ctx);
 			if (value != null) {
 				if (!(value instanceof AMap)) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"Cannot pin non-map value at " + pathStr
 						+ " (got " + value.getClass().getSimpleName() + ")");
 				}
@@ -509,11 +514,11 @@ public class AssetAdapter extends AAdapter {
 				// any other remote definition. resolvePath is local-only, so
 				// a miss here is the expected route for remote bindings.
 				Asset fetched = engine.resolveAssetUnchecked(pathStr, ctx);
-				if (fetched == null) throw new IllegalArgumentException("Path not found: " + pathStr);
+				if (fetched == null) throw new NotFoundException("Path not found: " + pathStr, pathStr.toString());
 				metaString = fetched.getMetadata();
 				content = engine.fetchRemoteContent(ctx, pathStr);
 			} else {
-				throw new IllegalArgumentException("Path not found: " + pathStr);
+				throw new NotFoundException("Path not found: " + pathStr, pathStr.toString());
 			}
 		}
 

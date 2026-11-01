@@ -25,7 +25,12 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.ATransformCursor;
 import covia.adapter.agent.ContextAssembler;
 import covia.api.Fields;
+import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.RequestContext;
@@ -247,7 +252,7 @@ public class TestAdapter extends AAdapter {
                 case "neverfailllm": {
                     ACell r = handleNeverToolLlm(input, true);
                     return (r == null)
-                        ? CompletableFuture.failedFuture(new IllegalStateException("scripted L3 failure"))
+                        ? CompletableFuture.failedFuture(new UnavailableException("scripted L3 failure"))
                         : CompletableFuture.completedFuture(withMockTokens(r, input));
                 }
                 case "subgoalllm":
@@ -277,7 +282,7 @@ public class TestAdapter extends AAdapter {
                     // Capability gate that always fails — the capability it gates
                     // never applies. Useful for verifying deny paths end-to-end.
                     return CompletableFuture.failedFuture(
-                        new IllegalStateException("denied by test policy gate"));
+                        new AuthException("denied by test policy gate"));
                 case "amountgate":
                     return handleAmountGate(input);
                 case "never":
@@ -298,7 +303,7 @@ public class TestAdapter extends AAdapter {
                     );
                 default:
                     return CompletableFuture.failedFuture(
-                        new IllegalArgumentException("Unknown test operation: " + testOp)
+                        new NotSupportedException("Unknown test operation: " + testOp)
                     );
             }
         } catch (Exception e) {
@@ -519,7 +524,7 @@ public class TestAdapter extends AAdapter {
             ACell read = ((CoviaAdapter) engine.getAdapter("covia"))
                 .handleRead(ctx, Maps.of(Fields.PATH, readPath));
             if (!convex.core.data.prim.CVMBool.TRUE.equals(RT.getIn(read, "exists"))) {
-                throw new IllegalArgumentException("taskcomplete input path not found: " + readPath);
+                throw new NotFoundException("taskcomplete input path not found: " + readPath, readPath.toString());
             }
             newInput = RT.getIn(read, Fields.VALUE);
         }
@@ -1249,11 +1254,11 @@ public class TestAdapter extends AAdapter {
         ACell amountCell = RT.getIn(input, Fields.INPUT, "amount");
         CVMLong amount = RT.ensureLong(amountCell);
         if (amount == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
+            return CompletableFuture.failedFuture(new AuthException(
                 "amount gate: no numeric 'amount' in the invocation input — denying by default"));
         }
         if (amount.longValue() > 2000) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
+            return CompletableFuture.failedFuture(new AuthException(
                 "amount gate: " + amount + " exceeds the limit of 2000"));
         }
         return CompletableFuture.completedFuture(Maps.of(
@@ -1668,7 +1673,7 @@ public class TestAdapter extends AAdapter {
         // Always throw an error with the input message
         ACell message = RT.getIn(input, "message");
         if (message == null) {
-            throw new IllegalArgumentException("Error operation requires a 'message' parameter");
+            throw new InvalidInputException("Error operation requires a 'message' parameter");
         }
         return new JobFailedException(RT.ensureString(message).toString());
     }
@@ -1677,18 +1682,18 @@ public class TestAdapter extends AAdapter {
         // Get length parameter
         ACell lengthCell = RT.getIn(input, "length");
         if (lengthCell == null) {
-            throw new IllegalArgumentException("Random operation requires a 'length' parameter");
+            throw new InvalidInputException("Random operation requires a 'length' parameter");
         }
-        
+
         // Parse length
         int length;
         try {
             length = (int)CVMLong.parse(lengthCell).longValue();
             if (length <= 0 || length > 1024) {
-                throw new IllegalArgumentException("Length must be between 1 and 1024");
+                throw new InvalidInputException("Length must be between 1 and 1024");
             }
         } catch (NumberFormatException | NullPointerException e) {
-            throw new IllegalArgumentException("Length must be a valid number");
+            throw new InvalidInputException("Length must be a valid number");
         }
         
         // Generate random bytes

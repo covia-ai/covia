@@ -64,6 +64,9 @@ import com.sun.net.httpserver.HttpServer;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ConversationRenderer;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -762,7 +765,7 @@ public class LangChainAdapterTest {
 			Maps.of("role", "user", "content", Vectors.of(
 				Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", "w/nothing/here")))));
 		var adapter = (LangChainAdapter) engine.getAdapter("langchain");
-		Exception e = assertThrows(IllegalArgumentException.class,
+		Exception e = assertThrows(NotFoundException.class,
 			() -> adapter.resolveImageRefs(messages, ctx));
 		assertTrue(e.getMessage().contains("w/nothing/here"), e.getMessage());
 	}
@@ -806,7 +809,7 @@ public class LangChainAdapterTest {
 		var messages = Vectors.of(
 			Maps.of("role", "user", "content", Vectors.of(
 				Maps.of("type", "video", "source", Maps.of("data", "x")))));
-		Exception e = assertThrows(IllegalArgumentException.class,
+		Exception e = assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.toChatMessages(messages));
 		assertTrue(e.getMessage().contains("video"), e.getMessage());
 	}
@@ -817,7 +820,7 @@ public class LangChainAdapterTest {
 			Maps.of("role", "user", "content", Vectors.of(
 				Maps.of("type", "image", "source", Maps.of(
 					"type", "url", "url", "https://example.com/x.jpg")))));
-		Exception e = assertThrows(IllegalArgumentException.class,
+		Exception e = assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.toChatMessages(messages));
 		assertTrue(e.getMessage().contains("base64"), e.getMessage());
 	}
@@ -1566,7 +1569,7 @@ public class LangChainAdapterTest {
 		assertEquals(0.9, anthropic.defaultRequestParameters().topP());
 		assertEquals(2048, anthropic.defaultRequestParameters().maxOutputTokens());
 
-		IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+		InvalidInputException missing = assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
 				"claude-sonnet-5", java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE));
 		assertTrue(missing.getMessage().contains("effective maxTokens"));
@@ -1576,7 +1579,7 @@ public class LangChainAdapterTest {
 			java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
 		assertNull(plain.defaultRequestParameters().temperature());
 		assertNull(plain.defaultRequestParameters().topP());
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(NotSupportedException.class,
 			() -> LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
 				java.time.Duration.ofSeconds(5), nativeTuning),
 			"an unsupported providerOptions map must fail rather than disappear silently");
@@ -1647,15 +1650,15 @@ public class LangChainAdapterTest {
 		assertNull(none.topP());
 		assertNull(none.maxTokens());
 
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"temperature\": \"hot\"}")));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 0}")));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": 2147483648}")));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"maxTokens\": \"1024\"}")));
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.extractTuning(JSON.parse("{\"providerOptions\": true}")));
 	}
 

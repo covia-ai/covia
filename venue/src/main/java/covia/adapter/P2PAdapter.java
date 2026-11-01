@@ -44,6 +44,8 @@ import convex.p2p.P2PNode;
 import convex.p2p.P2PUser;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -230,7 +232,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 					engine.requireVenueAuthority(ctx, RESOURCE, Abilities.P2P_MANAGE);
 					return connect(input);
 				default:
-					throw new IllegalArgumentException("Unknown p2p operation: " + sub);
+					throw new NotSupportedException("Unknown p2p operation: " + sub);
 			}
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -249,10 +251,16 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	private CompletableFuture<ACell> connect(ACell input) {
 		Running r = running;
-		if (r == null) return CompletableFuture.failedFuture(new IllegalStateException(NOT_JOINED));
-		Peer peer = peer(input, "input");
+		if (r == null) return CompletableFuture.failedFuture(new NotSupportedException(NOT_JOINED));
+		Peer peer;
+		try {
+			peer = peer(input, "input");
+		} catch (IllegalArgumentException e) {
+			// The peer parser also reads operator config; here it read this call's input
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		if (peer.key().equals(engine.getAccountKey())) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException(SELF_CONNECT));
+			return CompletableFuture.failedFuture(new InvalidInputException(SELF_CONNECT));
 		}
 		return dial(r.node, peer).thenApply(c -> Maps.of(
 			Fields.DID, UCAN.toDIDKey(peer.key()), K_CONNECTED, CVMBool.TRUE));

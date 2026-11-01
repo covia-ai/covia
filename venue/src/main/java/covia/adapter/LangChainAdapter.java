@@ -29,6 +29,9 @@ import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -534,7 +537,7 @@ public class LangChainAdapter extends AAdapter {
 		Boolean cache = (cacheCell instanceof CVMBool b) ? b.booleanValue() : null;
 		ACell optionsCell = RT.getIn(input, AbstractLLMAdapter.K_PROVIDER_OPTIONS);
 		if (optionsCell != null && !(optionsCell instanceof AMap<?, ?>)) {
-			throw new IllegalArgumentException("providerOptions must be a map");
+			throw new InvalidInputException("providerOptions must be a map");
 		}
 		return new ModelTuning(maxTokens,
 			asDouble(RT.getIn(input, "temperature"), "temperature"),
@@ -545,11 +548,11 @@ public class LangChainAdapter extends AAdapter {
 	private static Integer asPositiveInt(ACell value, String field) {
 		if (value == null) return null;
 		if (!(value instanceof CVMLong number)) {
-			throw new IllegalArgumentException(field + " must be a positive integer, got: " + value);
+			throw new InvalidInputException(field + " must be a positive integer, got: " + value);
 		}
 		long n = number.longValue();
 		if (n <= 0 || n > Integer.MAX_VALUE) {
-			throw new IllegalArgumentException(field + " must be between 1 and "
+			throw new InvalidInputException(field + " must be between 1 and "
 				+ Integer.MAX_VALUE + ", got: " + n);
 		}
 		return (int) n;
@@ -581,7 +584,7 @@ public class LangChainAdapter extends AAdapter {
 	private static Double asDouble(ACell v, String field) {
 		if (v == null) return null;
 		convex.core.data.prim.CVMDouble d = RT.castDouble(v);
-		if (d == null) throw new IllegalArgumentException(field + " must be a number, got: " + v);
+		if (d == null) throw new InvalidInputException(field + " must be a number, got: " + v);
 		return d.doubleValue();
 	}
 
@@ -686,7 +689,7 @@ public class LangChainAdapter extends AAdapter {
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null) {
-			throw new IllegalArgumentException("providerOptions are not supported by the Ollama client");
+			throw new NotSupportedException("providerOptions are not supported by the Ollama client");
 		}
 		var builder = OllamaChatModel.builder()
 			.baseUrl(baseUrl)
@@ -744,7 +747,7 @@ public class LangChainAdapter extends AAdapter {
 		Map<String, Object> providerOptions = tuning.nativeOptions();
 		if (providerOptions != null && (providerOptions.containsKey("compaction")
 				|| String.valueOf(providerOptions.get("context_management")).contains("compact_20260112"))) {
-			throw new IllegalArgumentException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
+			throw new NotSupportedException("compaction" + ModelCallOptions.UPSTREAM_REQUIRED);
 		}
 		// Thinking blocks are bound only under adaptive thinking: Anthropic refuses
 		// block_binding beside any other type (Sonnet 5.5's between_tools, Haiku
@@ -810,7 +813,7 @@ public class LangChainAdapter extends AAdapter {
 		// effective value here also keeps authored operations from silently falling
 		// through to langchain4j's hidden 1024-token default (#391).
 		if (tuning.maxTokens() == null) {
-			throw new IllegalArgumentException("Anthropic requires an effective maxTokens; "
+			throw new InvalidInputException("Anthropic requires an effective maxTokens; "
 				+ "declare operation.default.maxTokens or supply maxTokens in the call");
 		}
 		builder = builder.maxTokens(tuning.maxTokens());
@@ -1400,7 +1403,7 @@ public class LangChainAdapter extends AAdapter {
 		if (pending.isEmpty()) return messages;
 		ACell preceding = messages.isEmpty() ? null : RT.getIn(messages.get(messages.count() - 1), K_ROLE);
 		if (!ROLE_USER.equals(preceding) && !ROLE_TOOL.equals(preceding)) {
-			throw new IllegalArgumentException(ModelCallOptions.INVALID_SYSTEM_POSITION);
+			throw new InvalidInputException(ModelCallOptions.INVALID_SYSTEM_POSITION);
 		}
 		for (ACell message : pending) messages = messages.conj(message);
 		pending.clear();
@@ -1521,30 +1524,30 @@ public class LangChainAdapter extends AAdapter {
 			String t = (type != null) ? type.toString() : null;
 			if ("text".equals(t)) {
 				AString text = RT.ensureString(RT.getIn(block, "text"));
-				if (text == null) throw new IllegalArgumentException(
+				if (text == null) throw new InvalidInputException(
 					"content[" + i + "]: text block requires a 'text' string");
 				contents.add(TextContent.from(text.toString()));
 			} else if ("image".equals(t)) {
 				AString srcType = RT.ensureString(RT.getIn(block, "source", "type"));
 				if (!"base64".equals(srcType != null ? srcType.toString() : null)) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"content[" + i + "]: image source.type must be \"base64\" (got "
 						+ srcType + ")");
 				}
 				AString mediaType = RT.ensureString(RT.getIn(block, "source", "mediaType"));
 				AString data = RT.ensureString(RT.getIn(block, "source", "data"));
 				if (mediaType == null || data == null) {
-					throw new IllegalArgumentException(
+					throw new InvalidInputException(
 						"content[" + i + "]: image source requires 'mediaType' and 'data' (base64)");
 				}
 				contents.add(ImageContent.from(data.toString(), mediaType.toString()));
 			} else {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"content[" + i + "]: unknown block type '" + t
 					+ "' — supported: text, image");
 			}
 		}
-		if (contents.isEmpty()) throw new IllegalArgumentException(
+		if (contents.isEmpty()) throw new InvalidInputException(
 			"user content array must contain at least one block");
 		return contents;
 	}
@@ -1593,7 +1596,7 @@ public class LangChainAdapter extends AAdapter {
 	 *  unresolvable image is a wrong answer, not a degraded one. */
 	private ACell resolveImageAsset(ACell block, RequestContext ctx) {
 		AString ref = RT.ensureString(RT.getIn(block, "source", "ref"));
-		if (ref == null) throw new IllegalArgumentException(
+		if (ref == null) throw new InvalidInputException(
 			"image asset source requires a content 'ref' (asset, workspace, file, DLFS, or DID URL)");
 		try {
 			// Unified reference-addressed content resolution (Engine.resolveContent):
@@ -1604,8 +1607,8 @@ public class LangChainAdapter extends AAdapter {
 			byte[] bytes = (resolved != null) ? resolved.content().getBlob().getBytes() : null;
 			String mime = (resolved != null) ? resolved.contentType() : null;
 			if (bytes == null || bytes.length == 0) {
-				throw new IllegalArgumentException(
-					"image ref '" + ref + "' did not resolve to content");
+				throw new NotFoundException(
+					"image ref '" + ref + "' did not resolve to content", ref.toString());
 			}
 
 			// Explicit mediaType on the block wins; else asset contentType; else sniff.
@@ -1613,7 +1616,7 @@ public class LangChainAdapter extends AAdapter {
 			if (mtOverride != null) mime = mtOverride.toString();
 			if (mime == null) mime = covia.utils.MimeUtils.guess(ref.toString(), bytes);
 			if (mime == null || !mime.startsWith("image/")) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"image ref '" + ref + "' has no image media type (got " + mime
 					+ ") — set source.mediaType explicitly");
 			}
@@ -1628,7 +1631,7 @@ public class LangChainAdapter extends AAdapter {
 		} catch (RuntimeException e) {
 			throw e;
 		} catch (Exception e) {
-			throw new IllegalArgumentException(
+			throw new UnavailableException(
 				"failed to read image ref '" + ref + "': " + e.getMessage(), e);
 		}
 	}

@@ -40,6 +40,7 @@ import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.Covia;
 import covia.lattice.NamespaceResolver;
@@ -346,7 +347,7 @@ public class CoviaAdapter extends AAdapter {
 		long maxSize = resolveMaxSize(input);
 		long size = Cells.storageSize(page);
 		if (size > maxSize) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"slice response " + size + " bytes exceeds maxSize " + maxSize
 				+ " — reduce limit (or, if a single entry is oversize, read it directly "
 				+ "or use covia:inspect for a summarised view). slice returns exact values, never summarised.");
@@ -408,7 +409,7 @@ public class CoviaAdapter extends AAdapter {
 		ACell pathsCell = RT.getIn(input, K_PATHS);
 		ACell pathCell = RT.getIn(input, Fields.PATH);
 		if ((pathCell == null) == (pathsCell == null)) {
-			throw new IllegalArgumentException("Provide exactly one of 'path' or 'paths'");
+			throw new InvalidInputException("Provide exactly one of 'path' or 'paths'");
 		}
 
 		// Budget
@@ -424,20 +425,20 @@ public class CoviaAdapter extends AAdapter {
 		// Single path
 		if (pathCell != null) {
 			AString path = RT.ensureString(pathCell);
-			if (path == null) throw new IllegalArgumentException("'path' must be a string");
+			if (path == null) throw new InvalidInputException("'path' must be a string");
 			String rendered = explorePath(ctx, path.toString(), budget, compact);
 			return Maps.of(K_RESULT, Strings.create(rendered));
 		}
 
 		// Multiple paths
 		if (!(pathsCell instanceof AVector<?> pathsVec) || pathsVec.isEmpty()) {
-			throw new IllegalArgumentException("'paths' must be a non-empty array of strings");
+			throw new InvalidInputException("'paths' must be a non-empty array of strings");
 		}
 		int perPath = Math.max(10, budget / (int) pathsVec.count());
 		AMap<AString, ACell> results = Maps.empty();
 		for (long i = 0; i < pathsVec.count(); i++) {
 			AString path = RT.ensureString(pathsVec.get(i));
-			if (path == null) throw new IllegalArgumentException("'paths' must contain only strings");
+			if (path == null) throw new InvalidInputException("'paths' must contain only strings");
 			String pathStr = path.toString();
 			String rendered = explorePath(ctx, pathStr, perPath, compact);
 			results = results.assoc(path, Strings.create(rendered));
@@ -574,8 +575,8 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleCopy(RequestContext ctx, ACell input) {
 		AString from = RT.ensureString(RT.getIn(input, K_FROM));
 		AString to = RT.ensureString(RT.getIn(input, K_TO));
-		if (from == null) throw new IllegalArgumentException("'from' is required");
-		if (to == null) throw new IllegalArgumentException("'to' is required");
+		if (from == null) throw new InvalidInputException("'from' is required");
+		if (to == null) throw new InvalidInputException("'to' is required");
 
 		// Reads the source (handleWrite enforces crud/write on the destination).
 		engine.requireResourceAccess(ctx, from, Capability.CRUD_READ);
@@ -721,7 +722,7 @@ public class CoviaAdapter extends AAdapter {
 		AAdapter adapter = engine.getAdapter("grid");
 		if (!(adapter instanceof GridAdapter grid)) {
 			return CompletableFuture.failedFuture(
-				new IllegalStateException("Remote output path requires the grid adapter"));
+				new UnavailableException("Remote output path requires the grid adapter"));
 		}
 		return grid.writeRemotePath(ctx, remoteVenue, path, value);
 	}
@@ -985,7 +986,7 @@ public class CoviaAdapter extends AAdapter {
 	private static ACell projectFields(AMap<AString, ACell> desc, ACell value,
 			ACell fieldsCell, ACell input) {
 		if (!(value instanceof AMap)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"fields projection requires a keyed node (map/Index) at the path; found: "
 					+ Types.get(value).toAString());
 		}
@@ -1042,27 +1043,27 @@ public class CoviaAdapter extends AAdapter {
 				try {
 					parsed = JSON.parse(str);
 				} catch (Exception e) {
-					throw new IllegalArgumentException("fields looks like a JSON array but is not valid JSON: " + str);
+					throw new InvalidInputException("fields looks like a JSON array but is not valid JSON: " + str);
 				}
 				if (!(parsed instanceof AVector<?> pv)) {
-					throw new IllegalArgumentException("fields must be an array of strings or a comma-separated string");
+					throw new InvalidInputException("fields must be an array of strings or a comma-separated string");
 				}
 				addFieldVector(pv, out);
 			} else {
 				for (String part : str.split(",")) {
 					String trimmed = part.trim();
-					if (trimmed.isEmpty()) throw new IllegalArgumentException("fields contains a blank field name");
+					if (trimmed.isEmpty()) throw new InvalidInputException("fields contains a blank field name");
 					out.add(Strings.create(trimmed));
 				}
 			}
 		} else if (fieldsCell instanceof AVector<?> v) {
 			addFieldVector(v, out);
 		} else {
-			throw new IllegalArgumentException("fields must be a comma-separated string or an array of strings");
+			throw new InvalidInputException("fields must be a comma-separated string or an array of strings");
 		}
-		if (out.isEmpty()) throw new IllegalArgumentException("fields must name at least one subpath");
+		if (out.isEmpty()) throw new InvalidInputException("fields must name at least one subpath");
 		if (out.size() > MAX_PROJECT_FIELDS) {
-			throw new IllegalArgumentException("fields names " + out.size()
+			throw new InvalidInputException("fields names " + out.size()
 				+ " subpaths; the maximum is " + MAX_PROJECT_FIELDS);
 		}
 		return out.toArray(new AString[0]);
@@ -1072,7 +1073,7 @@ public class CoviaAdapter extends AAdapter {
 	private static void addFieldVector(AVector<?> v, java.util.List<AString> out) {
 		for (long i = 0; i < v.count(); i++) {
 			AString f = RT.ensureString((ACell) v.get(i));
-			if (f == null || f.isEmpty()) throw new IllegalArgumentException("fields entries must be non-empty strings");
+			if (f == null || f.isEmpty()) throw new InvalidInputException("fields entries must be non-empty strings");
 			out.add(f);
 		}
 	}

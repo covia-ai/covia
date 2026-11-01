@@ -21,7 +21,10 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.CoviaException;
+import covia.exception.InvalidDefinitionException;
+import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.exception.NotSupportedException;
 import covia.api.Abilities;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -71,7 +74,7 @@ public class MCPAdapter extends AAdapter {
 		// getSubOperation returns everything after "mcp:", e.g. "tools:call" or "tools:list"
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
-			throw new IllegalArgumentException("Insufficient specification for MCP operation");
+			throw new InvalidDefinitionException("Insufficient specification for MCP operation");
 		}
 
 		String[] subParts = subOp.split(":");
@@ -79,7 +82,7 @@ public class MCPAdapter extends AAdapter {
 
 		if (feature.equals("tools")) {
 			if (subParts.length < 2) {
-				throw new IllegalArgumentException("MCP tools operation requires function (call/list)");
+				throw new InvalidDefinitionException("MCP tools operation requires function (call/list)");
 			}
 			String function = subParts[1];
 
@@ -172,13 +175,13 @@ public class MCPAdapter extends AAdapter {
 					}
 				}, VIRTUAL_EXECUTOR);
 			} else {
-				throw new UnsupportedOperationException("Unsupported tools function: " + function);
+				throw new NotSupportedException("Unsupported tools function: " + function);
 			}
 		} else if (feature.equals("server")) {
 			// Server bridging (#80): register / refresh / remove external MCP
 			// servers whose tools materialise as ordinary catalog operations.
 			if (subParts.length < 2) {
-				throw new IllegalArgumentException("MCP server operation requires function (add/remove/refresh)");
+				throw new InvalidDefinitionException("MCP server operation requires function (add/remove/refresh)");
 			}
 			String function = subParts[1];
 			return CompletableFuture.supplyAsync(() -> {
@@ -187,7 +190,7 @@ public class MCPAdapter extends AAdapter {
 						case "add" -> handleAddServer(ctx, input);
 						case "remove" -> handleRemoveServer(ctx, input);
 						case "refresh" -> handleRefresh(ctx, input);
-						default -> throw new UnsupportedOperationException(
+						default -> throw new NotSupportedException(
 							"Unsupported server function: " + function);
 					};
 				} catch (CoviaException | IllegalArgumentException e) {
@@ -201,14 +204,14 @@ public class MCPAdapter extends AAdapter {
 			// server at any catalog path — the tool is the entity, the server
 			// is just where it happens to live.
 			if (subParts.length < 2) {
-				throw new IllegalArgumentException("MCP tool operation requires function (add)");
+				throw new InvalidDefinitionException("MCP tool operation requires function (add)");
 			}
 			String function = subParts[1];
 			return CompletableFuture.supplyAsync(() -> {
 				try {
 					return switch (function) {
 						case "add" -> handleAddTool(ctx, input);
-						default -> throw new UnsupportedOperationException(
+						default -> throw new NotSupportedException(
 							"Unsupported tool function: " + function);
 					};
 				} catch (CoviaException | IllegalArgumentException e) {
@@ -218,7 +221,7 @@ public class MCPAdapter extends AAdapter {
 				}
 			}, VIRTUAL_EXECUTOR);
 		} else {
-			throw new UnsupportedOperationException("Unsupported MCP feature: " + feature);
+			throw new NotSupportedException("Unsupported MCP feature: " + feature);
 		}
 	}
 
@@ -543,7 +546,7 @@ public class MCPAdapter extends AAdapter {
 	ACell handleAddServer(RequestContext ctx, ACell input) throws Exception {
 		String name = requireServerName(input);
 		AString url = RT.ensureString(RT.getIn(input, K_URL));
-		if (url == null) throw new IllegalArgumentException("url is required");
+		if (url == null) throw new InvalidInputException("url is required");
 		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
 		boolean venueScope = isVenueScope(ctx, input);
 
@@ -608,11 +611,11 @@ public class MCPAdapter extends AAdapter {
 	 */
 	ACell handleAddTool(RequestContext ctx, ACell input) throws Exception {
 		AString url = RT.ensureString(RT.getIn(input, Fields.SERVER));
-		if (url == null) throw new IllegalArgumentException(
+		if (url == null) throw new InvalidInputException(
 			"server is required — the MCP server's base URL, e.g. https://host/mcp");
 		AString toolName = RT.ensureString(RT.getIn(input, Fields.TOOL));
 		if (toolName == null || !toolName.toString().matches("[A-Za-z0-9_-]{1,128}")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"tool is required — the remote tool's name exactly as the server lists it"
 				+ " (see v/ops/mcp/tools-list)");
 		}
@@ -647,7 +650,7 @@ public class MCPAdapter extends AAdapter {
 		ACell defsCell = RT.getIn(input, Fields.DEFAULT);
 		if (defsCell != null) {
 			AMap<AString, ACell> defaults = RT.ensureMap(defsCell);
-			if (defaults == null) throw new IllegalArgumentException(
+			if (defaults == null) throw new InvalidInputException(
 				"default must be an object of argument values to fill in when the caller omits them");
 			if (defaults.count() > 0) opMeta = withDefaults(opMeta, defaults);
 		}
@@ -670,14 +673,14 @@ public class MCPAdapter extends AAdapter {
 	 *  {@code o/} or the venue's {@code v/ops/}, naming the op itself. */
 	private static String requireToolPath(ACell input) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
-		if (p == null) throw new IllegalArgumentException(
+		if (p == null) throw new InvalidInputException(
 			"path is required — the catalog location for the bridged tool,"
 			+ " e.g. o/research/search_papers (your own operations)"
 			+ " or v/ops/... (venue catalog, needs the mcp/manage ability)");
 		String path = p.toString();
 		boolean ok = (path.startsWith("o/") && path.length() > 2 && !path.endsWith("/"))
 			|| (path.startsWith("v/ops/") && path.length() > 6 && !path.endsWith("/"));
-		if (!ok) throw new IllegalArgumentException(
+		if (!ok) throw new InvalidInputException(
 			"path must be under o/ (your operations) or v/ops/ (venue catalog),"
 			+ " naming the op itself — e.g. o/research/search_papers. Got: " + path);
 		return path;
@@ -731,7 +734,7 @@ public class MCPAdapter extends AAdapter {
 	ACell handleRefresh(RequestContext ctx, ACell input) throws Exception {
 		AString path = RT.ensureString(RT.getIn(input, Fields.PATH));
 		AString nameArg = RT.ensureString(RT.getIn(input, Fields.NAME));
-		if (path != null && nameArg != null) throw new IllegalArgumentException(
+		if (path != null && nameArg != null) throw new InvalidInputException(
 			"Provide either name (refresh a mirrored server) or path (refresh curated tools), not both");
 		if (path != null) return refreshPath(ctx, path.toString());
 
@@ -1019,7 +1022,7 @@ public class MCPAdapter extends AAdapter {
 	private static String requireServerName(ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (name == null || !name.toString().matches("[a-z0-9-]{1,64}")) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Server name is required and must match [a-z0-9-]{1,64}");
 		}
 		return name.toString();

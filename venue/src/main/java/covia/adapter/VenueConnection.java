@@ -13,6 +13,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
@@ -85,7 +86,7 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				saved = saved.assoc(Fields.VENUE, Strings.create(targetDID));
 				principal = venueDID;
 			}
-			default -> throw new IllegalArgumentException(
+			default -> throw new InvalidInputException(
 				"authenticateAs must be one of: anonymous, caller, venue");
 		}
 
