@@ -1154,7 +1154,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 					? Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.COMPLETE, Fields.RESULT, result)
 					: Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.FAILED,
 						Fields.ERROR, Strings.create(toolFailure(failure, operation.toString())));
-				agents.deliverSessionMessage(owner, agentId, sessionId, engine.getDIDString(), null, outcome);
+				if (!agents.deliverSessionMessage(owner, agentId, sessionId, engine.getDIDString(), null, outcome)) {
+					log.info("Late outcome of {} not delivered: agent {} or its session is gone", operation, agentId);
+				}
 			} finally {
 				// Only after delivery: the message, not the count, now brings the task back.
 				release.run();
