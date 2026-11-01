@@ -1,0 +1,29 @@
+{
+	"name": "zendesk",
+	"description": "Work with Zendesk tickets, users, and organisations using the user's own subdomain and API token. Load for ticket/user reads, searches, and creating tickets.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Zendesk\nA multi-value connection: your **subdomain** rides the base URL and your **Basic auth** rides a header. Calls go through `v/ops/http/get` / `v/ops/http/post` against `https://{s/ZENDESK_SITE}.zendesk.com/api/v2` with `secretHeaders: {\"Authorization\": \"s/ZENDESK_AUTH\"}` (the stored value is the complete `Basic <base64(email/token:api_token)>` header; enable token access in Admin Center -> Apps and integrations -> APIs). The venue substitutes `{s/ZENDESK_SITE}` and injects the header; neither value appears in the request you write.\n\nCommon calls:\n- Whoami: `GET /users/me.json`\n- Tickets: `GET /tickets.json?sort_by=created_at&sort_order=desc&per_page=100`\n- One ticket: `GET /tickets/{id}.json`\n- Search: `GET /search.json?query=<encoded>` (e.g. `type:ticket status:open`)\n- Users: `GET /users/search.json?query=<encoded>`\n- Create a ticket: `POST /tickets.json` body `{\"ticket\": {\"subject\": \"...\", \"comment\": {\"body\": \"...\"}}}`\n\nRules:\n- Check `status`; errors are `{error, description}` or `{details}`. 401/403 = bad token or the token lacks the role.\n- URL-encode `query` with `v/ops/jvm/url-encode`. Results paginate via `next_page`.\n- The subdomain is the part before `.zendesk.com`; both it and the auth header must be configured for the connection to work.\n"
+	},
+	"connection": {
+		"baseUrl": "https://{s/ZENDESK_SITE}.zendesk.com/api/v2",
+		"auth": {
+			"kind": "secret-header",
+			"alternatives": [
+				"s/ZENDESK_AUTH"
+			]
+		},
+		"required": [
+			"s/ZENDESK_SITE",
+			"s/ZENDESK_AUTH"
+		]
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
