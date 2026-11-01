@@ -2148,7 +2148,7 @@ MySQL refuse writes in that transaction; for a driver that ignores read-only,
 statements that commit on their own (DDL on some databases, non-transactional
 tables) are not undone, so register such a database with a read-only database
 user. The module ships its own `sql`
-agent skill from its jar (materialises at `v/skills/data/sql` exactly when the
+agent skill from its jar (materialises at `v/skills/data/sql` when the
 module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 
 Registered databases are shared: every signed-in user may query them and,
