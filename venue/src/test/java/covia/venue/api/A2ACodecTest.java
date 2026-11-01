@@ -3,6 +3,7 @@ package covia.venue.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -302,6 +303,13 @@ public class A2ACodecTest {
 		Blob id = A2ACodec.extractTaskId(params);
 		assertNotNull(id);
 		assertEquals("000000000000000000000000deadbeef", id.toHexString());
+	}
+
+	@Test
+	public void extractTaskId_notHexIsRefused() {
+		Map<String, Object> params = Map.of("message",
+				Map.of("role", "user", "taskId", "not-a-task"));
+		assertThrows(IllegalArgumentException.class, () -> A2ACodec.extractTaskId(params));
 	}
 
 	// ======== History ========

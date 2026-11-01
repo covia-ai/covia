@@ -110,4 +110,4 @@ unchanged. A timeout becomes `UnavailableException`, and an interrupt a
 | Jobs | `FAILED` with the reason as `error`, and an `errorCode` where the adapter defines one | COG-8; [JOBS.md](JOBS.md) |
 | Agent tool loop | An `Error:` result carrying the reason | [AGENT_LOOP.md](AGENT_LOOP.md) |
 | MCP | A tool result marked `isError` carrying the reason | [OPERATIONS.md](OPERATIONS.md#mcp-exposure) |
-| A2A | The JSON-RPC error the situation maps to | [A2A_AGENTS.md](A2A_AGENTS.md) |
+| A2A | The JSON-RPC error the situation maps to | [A2A_AGENTS.md](A2A_AGENTS.md#errors) |

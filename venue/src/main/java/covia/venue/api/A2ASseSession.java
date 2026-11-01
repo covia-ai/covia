@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
+import org.a2aproject.sdk.spec.A2AErrorCodes;
 import org.a2aproject.sdk.spec.StreamingEventKind;
 import org.a2aproject.sdk.spec.Task;
 import org.a2aproject.sdk.spec.TaskStatusUpdateEvent;
@@ -16,6 +17,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import covia.adapter.AAdapter;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -85,6 +87,15 @@ public class A2ASseSession {
 		// connections after a timeout and the peer may abort at any time.
 		sseClient.onClose(this::close);
 
+		try {
+			attach();
+		} catch (Exception e) {
+			fail(e);
+		}
+	}
+
+	/** Sends the initial frames and, unless the Job has finished, subscribes to it. */
+	private void attach() {
 		// Access-control check against the caller via the RequestContext path;
 		// gives us an authoritative snapshot for the initial frame.
 		AMap<AString, ACell> data = engine.jobs().getJobData(taskId, rctx);
@@ -126,24 +137,38 @@ public class A2ASseSession {
 		if (Job.isFinished(data)) {
 			sendFrame(A2ACodec.toStatusUpdate(data));
 			close();
-			return;
 		}
-
 	}
 
 	private synchronized void onJobUpdate(Job job) {
 		if (closed.get()) return;
-		AMap<AString, ACell> data = job.getData();
 		try {
-			TaskStatusUpdateEvent update = A2ACodec.toStatusUpdate(data);
+			TaskStatusUpdateEvent update = A2ACodec.toStatusUpdate(job.getData());
 			sendFrame(update);
 			if (update.isFinal()) {
 				close();
 			}
 		} catch (Exception e) {
-			log.warn("A2A SSE frame send failed, closing session: {}", e.getMessage());
-			close();
+			fail(e);
 		}
+	}
+
+	/**
+	 * Ends the stream on a failure: one JSON-RPC {@code INTERNAL} error frame
+	 * carrying the failure as {@link AAdapter#describeFailure} renders it,
+	 * never an unexpected failure's text, which is logged at ERROR. Sending
+	 * never fails for a peer that has gone (the emitter closes the client), so
+	 * what reaches here is a venue error.
+	 */
+	private void fail(Exception e) {
+		if (!AAdapter.isExpectedFailure(e)) {
+			log.error("A2A stream for task {} failed", taskId.toHexString(), e);
+		}
+		Map<String, Object> error = new LinkedHashMap<>();
+		error.put("code", A2AErrorCodes.INTERNAL.code());
+		error.put("message", AAdapter.describeFailure(e));
+		sendEnvelope("error", error);
+		close();
 	}
 
 	/**
@@ -152,27 +177,26 @@ public class A2ASseSession {
 	 * discriminator ({@code "task"}, {@code "statusUpdate"}, etc.) already.
 	 */
 	private void sendFrame(StreamingEventKind payload) {
-		Map<String, Object> envelope = new LinkedHashMap<>();
-		envelope.put("jsonrpc", "2.0");
-		envelope.put("id", rpcRequestId);
 		// The 1.2 SDK deliberately registers its streaming union adapter for
 		// the StreamingEventKind interface, not each concrete record. Supplying
 		// the declared type preserves the protocol's {task: ...},
 		// {statusUpdate: ...} discriminator wrapper inside result.
-		envelope.put("result", JsonUtil.OBJECT_MAPPER.toJsonTree(
-			payload, StreamingEventKind.class));
-		String json = JsonUtil.OBJECT_MAPPER.toJson(envelope);
-		sseClient.sendEvent(json);
+		sendEnvelope("result", JsonUtil.OBJECT_MAPPER.toJsonTree(payload, StreamingEventKind.class));
+	}
+
+	/** Emits one JSON-RPC response for this request, its {@code result} or {@code error} member set. */
+	private void sendEnvelope(String member, Object value) {
+		Map<String, Object> envelope = new LinkedHashMap<>();
+		envelope.put("jsonrpc", "2.0");
+		envelope.put("id", rpcRequestId);
+		envelope.put(member, value);
+		sseClient.sendEvent(JsonUtil.OBJECT_MAPPER.toJson(envelope));
 	}
 
 	public void close() {
 		if (!closed.compareAndSet(false, true)) return;
 		Job job = this.subscribedJob;
 		if (job != null) job.unsubscribe(listener);
-		try {
-			sseClient.close();
-		} catch (Exception ignored) {
-			// peer already gone
-		}
+		sseClient.close();
 	}
 }

@@ -572,6 +572,8 @@ public class A2ACodec {
 	/**
 	 * Extract the taskId from the `message` field of a SendMessage params map.
 	 * Returns null if the message has no taskId (i.e. this is a new task).
+	 *
+	 * @throws IllegalArgumentException if the taskId is not hex
 	 */
 	@SuppressWarnings("unchecked")
 	public static Blob extractTaskId(Map<String, Object> messageParams) {
@@ -580,10 +582,8 @@ public class A2ACodec {
 		if (!(mObj instanceof Map)) return null;
 		Object taskId = ((Map<String, Object>) mObj).get("taskId");
 		if (taskId == null) return null;
-		try {
-			return Blob.parse(taskId.toString());
-		} catch (Exception e) {
-			throw new IllegalArgumentException("Invalid taskId: " + taskId);
-		}
+		Blob id = Blob.parse(taskId.toString());
+		if (id == null) throw new IllegalArgumentException("Invalid taskId: " + taskId);
+		return id;
 	}
 }

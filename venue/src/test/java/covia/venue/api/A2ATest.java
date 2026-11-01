@@ -251,6 +251,27 @@ public class A2ATest {
 		assertEquals(-32700.0, toDouble(err.get("code")), 0.001);
 	}
 
+	/** Params the SDK's record refuses — a message without role or parts —
+	 *  are the caller's error, not the venue's. */
+	@Test
+	public void messageMissingRequiredFields_returnsInvalidParams() throws Exception {
+		Map<String, Object> resp = rpcCall("req-12", "SendMessage",
+				Map.of("message", Map.of("messageId", "msg-incomplete")));
+		Map<String, Object> err = cast(resp.get("error"));
+		assertNotNull(err, "Expected error, got: " + resp);
+		assertEquals(-32602.0, toDouble(err.get("code")), 0.001);
+		assertEquals(A2A.INVALID_PARAMS + "SendMessage", err.get("message"));
+	}
+
+	@Test
+	public void paramsOfWrongShape_returnInvalidParams() throws Exception {
+		Map<String, Object> resp = rpcCall("req-13", "GetTask", "not-an-object");
+		Map<String, Object> err = cast(resp.get("error"));
+		assertNotNull(err, "Expected error, got: " + resp);
+		assertEquals(-32602.0, toDouble(err.get("code")), 0.001);
+		assertEquals(A2A.INVALID_PARAMS + "GetTask", err.get("message"));
+	}
+
 	@Test
 	public void missingMethod_returnsInvalidRequest() throws Exception {
 		Map<String, Object> envelope = new LinkedHashMap<>();

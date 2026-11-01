@@ -170,6 +170,40 @@ batches the messages queued on one session into one shared reply
 door is whatever `a2a.defaultChatOp` names; an operator who points it at an
 agent chat inherits chat semantics there.
 
+## Errors
+
+A JSON-RPC request is answered with HTTP 200. A failure is a JSON-RPC `error`
+whose `code` names the situation and whose `message` is the reason
+([ERRORS.md](ERRORS.md)). The front door and the per-agent endpoints answer
+alike:
+
+| Situation | Code |
+| --- | --- |
+| The body is not JSON | `-32700` parse error |
+| The body is empty, or names no method | `-32600` invalid request |
+| The method is not an A2A method | `-32601` method not found |
+| An A2A method the venue does not implement: the push notification config methods and `ListTasks` | `-32004` unsupported operation |
+| The params do not fit the method, a task id is missing or not hex, or a continuation's `contextId` is not its task's session | `-32602` invalid params |
+| A task id names none of the caller's tasks (on a per-agent endpoint, none of the caller's tasks for that agent); a task the caller may read but not write is not found either | `-32001` task not found |
+| A message the task does not take: it has finished, takes no messages, is not running on this venue, or refuses it; `SubscribeToTask` on a finished task; a fresh `SendMessage` to a front door with no `defaultChatOp` | `-32004` unsupported operation |
+| `CancelTask` on a finished task, or one the venue will not cancel | `-32002` task not cancelable |
+| The front door's chat operation, or the agent, does not take a fresh message | `-32006` invalid agent response |
+| Anything else | `-32603` internal error |
+
+An unexpected failure answers `-32603` with only `Unexpected venue error
+(ClassName)`, never its text, and the venue logs it at ERROR. An expected
+failure that no situation above describes, such as an admission refusal or a
+venue that is shutting down, also answers `-32603`, with its reason.
+
+On a stream (`SendStreamingMessage`, `SubscribeToTask`), a refusal before the
+stream opens is an ordinary JSON-RPC response. A failure after it opens arrives
+as one `-32603` error event, and the stream closes.
+
+Two answers are HTTP rather than JSON-RPC. Access to a per-agent endpoint is
+refused before the body is read: 404 for an anonymous caller, 403 for an
+authenticated one (see Resolution and authorisation). An Agent Card request
+that fails answers 500, naming only the type of an unexpected failure.
+
 ## Relationship to the venue-as-single-agent model
 
 The current single-agent behaviour stays as the **front-door** case: an operator
@@ -227,4 +261,5 @@ Shipped:
 
 The route, publication and task-mapping contract is covered by
 `A2AAgentCardTest`; common JSON-RPC and codec behavior is covered by `A2ATest`,
-`A2ACodecTest` and `A2AExtendedCardTest`.
+`A2ACodecTest` and `A2AExtendedCardTest`, and the answer to an unexpected
+failure by `A2AFaultTest`.
