@@ -2,6 +2,9 @@ package covia.venue;
 
 import java.io.IOException;
 
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
+
 /**
  * Host seam for store maintenance (covia#452). The host —
  * {@link covia.venue.server.VenueServer} — owns the store; the Engine only
@@ -38,17 +41,17 @@ public interface StoreControl {
 	/**
 	 * Reports the store's collection state.
 	 *
-	 * @throws IllegalStateException when the store is not a persistent file
+	 * @throws NotSupportedException when the store is not a persistent file
 	 */
 	Status status() throws IOException;
 
 	/**
 	 * Runs one full online cycle on the calling thread and cuts over.
 	 *
-	 * @throws IllegalStateException when the store is not a persistent file, a
-	 *         cycle is already running, a cycle already completed in this
-	 *         process (restart to collect again), or free disk is short of the
-	 *         current file size
+	 * @throws NotSupportedException when the store is not a persistent file, or
+	 *         a cycle already completed in this process (restart to collect again)
+	 * @throws UnavailableException when a cycle is already running, or free disk
+	 *         is short of the current file size
 	 * @throws IOException on a storage failure; the cycle is cancelled and the
 	 *         original file remains authoritative
 	 */
@@ -58,13 +61,13 @@ public interface StoreControl {
 	 * The checkpoint is ready to open/copy only after the original store closes.
 	 * Existing embedded hosts must opt in explicitly. */
 	default Result collect(String backupFile) throws IOException {
-		if (backupFile != null) throw new UnsupportedOperationException(BACKUP_UNSUPPORTED);
+		if (backupFile != null) throw new NotSupportedException(BACKUP_UNSUPPORTED);
 		return collect();
 	}
 
 	/** Null retention inherits host policy; false opts out; true chooses a fresh backup path. */
 	default Result collect(String backupFile, Boolean retainSuperseded) throws IOException {
-		if (Boolean.TRUE.equals(retainSuperseded)) throw new UnsupportedOperationException(BACKUP_UNSUPPORTED);
+		if (Boolean.TRUE.equals(retainSuperseded)) throw new NotSupportedException(BACKUP_UNSUPPORTED);
 		return collect(backupFile);
 	}
 

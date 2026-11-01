@@ -49,6 +49,9 @@ import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.CoviaApplication;
@@ -1498,7 +1501,7 @@ public class VenueServer {
 
 		private EtchStore etchStore() {
 			if (!(store instanceof EtchStore etch) || !config.isPersistentFileStore()) {
-				throw new IllegalStateException("Store garbage collection needs a persistent file store;"
+				throw new NotSupportedException("Store garbage collection needs a persistent file store;"
 					+ " this venue's store is '" + config.getStore() + "'");
 			}
 			return etch;
@@ -1530,7 +1533,7 @@ public class VenueServer {
 			File file = etch.getFile();
 			boolean retain = retainSuperseded == null ? config.isEtchGcRetainSuperseded() : retainSuperseded;
 			if (backupFile != null && Boolean.FALSE.equals(retainSuperseded)) {
-				throw new IllegalArgumentException(covia.adapter.VenueAdapter.BACKUP_RETENTION_DISABLED);
+				throw new InvalidInputException(covia.adapter.VenueAdapter.BACKUP_RETENTION_DISABLED);
 			}
 			// Reject occupied/reserved paths before starting a cycle. Convex
 			// validates again and creates the link without replacing anything.
@@ -1538,16 +1541,16 @@ public class VenueServer {
 			File backup = requested == null ? null : etch.validateGCBackup(requested);
 			synchronized (cycleLock) {
 				if (collectedStore != null) {
-					throw new IllegalStateException("The store was already collected in this process;"
+					throw new NotSupportedException("The store was already collected in this process;"
 						+ " restart the venue to collect again (the collected file is adopted on the next start)");
 				}
 				if (collecting || etch.isGCInProgress()) {
-					throw new IllegalStateException("A store collection is already in progress");
+					throw new UnavailableException("A store collection is already in progress");
 				}
 				long bytes = file.length();
 				long free = Files.getFileStore(file.getAbsoluteFile().toPath()).getUsableSpace();
 				if (free < bytes) {
-					throw new IllegalStateException("Not enough free disk to collect the store: the cycle needs about "
+					throw new UnavailableException("Not enough free disk to collect the store: the cycle needs about "
 						+ bytes + " bytes, " + free + " available");
 				}
 				collecting = true;

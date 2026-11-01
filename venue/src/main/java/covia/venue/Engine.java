@@ -86,6 +86,7 @@ import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.exception.RemoteFetchException;
 import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
@@ -1087,7 +1088,7 @@ public class Engine {
 			String sha256, long startupTimeoutMillis, covia.grid.Job job) {
 		VenueProcess control = processControl;
 		if (control == null) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Process restart is unavailable: this venue is not managed by MainVenue");
 		}
 		return control.requestRestart(successor, sha256, startupTimeoutMillis, job);
@@ -1109,12 +1110,12 @@ public class Engine {
 	/**
 	 * The host's store maintenance seam, for venue-owned operations.
 	 *
-	 * @throws IllegalStateException when the host installed none
+	 * @throws NotSupportedException when the host installed none
 	 */
 	public StoreControl storeControl() {
 		StoreControl control = storeControl;
 		if (control == null) {
-			throw new IllegalStateException(
+			throw new NotSupportedException(
 				"Store maintenance is unavailable: this venue's host installed no store control");
 		}
 		return control;
