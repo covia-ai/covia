@@ -911,11 +911,12 @@ public class CoviaAPI extends ACoviaAPI {
 			responses = {
 				@OpenApiResponse(status = "200", description = "Operation output",
 					content = @OpenApiContent(type = "application/json", from = Object.class)),
-				@OpenApiResponse(status = "400", description = "Malformed request, or the operation ran "
-					+ "and failed; the message gives its reason, whatever the failure, an authority "
-					+ "check inside the operation included"),
+				@OpenApiResponse(status = "400", description = "Malformed request, or the job failed with "
+					+ "the reason the message gives, an authority check inside the operation included. "
+					+ "A failed job may have had side effects before it failed"),
 				@OpenApiResponse(status = "403", description = "The venue refused the run before the operation started"),
-				@OpenApiResponse(status = "500", description = "The operation failed unexpectedly: a venue error"),
+				@OpenApiResponse(status = "500", description = "The job failed unexpectedly: a venue error. "
+					+ "It may have had side effects before it failed"),
 				@OpenApiResponse(status = "503", description = "Venue shutting down; retry once it is back")
 			})
 	protected void runOperation(Context ctx) {
