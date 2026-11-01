@@ -22,6 +22,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.grid.Asset;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -594,12 +595,12 @@ public final class ToolPalette {
 	static AMap<AString, ACell> operationToolDefinition(AMap<AString, ACell> metadata,
 			AString nameOverride, AString descriptionOverride) {
 		if (!(RT.getIn(metadata, Fields.OPERATION) instanceof AMap)) {
-			throw new IllegalArgumentException("Tool metadata must contain an operation object");
+			throw new InvalidDefinitionException("Tool metadata must contain an operation object");
 		}
 		AString name = (nameOverride != null) ? nameOverride
 			: RT.ensureString(RT.getIn(metadata, Fields.OPERATION, Fields.TOOL_NAME));
 		if (name == null || name.toString().isBlank()) {
-			throw new IllegalArgumentException("Tool metadata must declare operation.toolName");
+			throw new InvalidDefinitionException("Tool metadata must declare operation.toolName");
 		}
 		AString description = (descriptionOverride != null) ? descriptionOverride
 			: RT.ensureString(metadata.get(Fields.DESCRIPTION));

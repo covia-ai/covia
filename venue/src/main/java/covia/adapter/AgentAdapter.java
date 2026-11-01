@@ -1791,7 +1791,7 @@ public class AgentAdapter extends AAdapter {
 					Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft.users(), data ->
 						data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
 							.assoc(Fields.SESSION_ID, sid).assoc(DELIVERY_ACCEPTED, CVMBool.TRUE));
-					if (changed == null) throw new IllegalStateException(DELIVERY_JOB_UNAVAILABLE);
+					if (changed == null) throw new NotSupportedException(DELIVERY_JOB_UNAVAILABLE);
 					notification.set(changed);
 				}
 			});
