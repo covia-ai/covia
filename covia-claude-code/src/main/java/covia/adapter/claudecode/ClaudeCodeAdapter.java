@@ -31,7 +31,12 @@ import covia.adapter.remote.ARemoteAgentAdapter;
 import covia.adapter.remote.RemoteInteraction;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -345,7 +350,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		String resolved = engine.resolveSecret(value, first);
 		if (resolved == null && second != null) resolved = engine.resolveSecret(value, second);
 		if (resolved == null) {
-			throw new IllegalStateException("Claude Code environment variable " + name + " refers to secret "
+			throw new ConfigurationException("Claude Code environment variable " + name + " refers to secret "
 				+ value + ", which is not set (store it with v/ops/secret/set)");
 		}
 		return resolved;
@@ -503,7 +508,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	private static String optString(ACell input, AString key) {
 		ACell v = RT.getIn(input, key);
 		if (v == null) return null;
-		if (!(v instanceof AString s)) throw new IllegalArgumentException(key + " must be a string");
+		if (!(v instanceof AString s)) throw new InvalidInputException(key + " must be a string");
 		return s.isEmpty() ? null : s.toString();
 	}
 
@@ -546,7 +551,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
-		if (subOp == null) throw new IllegalArgumentException("Insufficient specification for claudecode operation");
+		if (subOp == null) throw new InvalidDefinitionException("Insufficient specification for claudecode operation");
 		return switch (subOp) {
 			case "run", "session" -> throw new UnsupportedOperationException(subOp + " runs through the job-aware invoke path");
 			case "sessions" -> CompletableFuture.supplyAsync(() -> handleSessions(ctx, input), VIRTUAL_EXECUTOR);
@@ -554,7 +559,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			case "projects" -> CompletableFuture.supplyAsync(() -> handleProjects(ctx), VIRTUAL_EXECUTOR);
 			case "create" -> CompletableFuture.supplyAsync(() -> handleCreate(ctx, input), VIRTUAL_EXECUTOR);
 			case "delete" -> CompletableFuture.supplyAsync(() -> handleDelete(ctx, input), VIRTUAL_EXECUTOR);
-			default -> throw new UnsupportedOperationException("Unsupported claudecode operation: " + subOp);
+			default -> throw new NotSupportedException("Unsupported claudecode operation: " + subOp);
 		};
 	}
 
@@ -575,25 +580,25 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 
 	/** Resolve project, options and session for a call, and gate it. */
 	private Plan plan(RequestContext ctx, ACell input, boolean promptRequired) {
-		if (input != null && RT.castMap(input) == null) throw new IllegalArgumentException("input must be an object");
+		if (input != null && RT.castMap(input) == null) throw new InvalidInputException("input must be an object");
 		String prompt = optString(input, K_PROMPT);
-		if (promptRequired && prompt == null) throw new IllegalArgumentException("prompt is required: what Claude Code should do");
+		if (promptRequired && prompt == null) throw new InvalidInputException("prompt is required: what Claude Code should do");
 		String resumeId = optString(input, K_SESSION);
 		if (resumeId != null && !resumeId.matches("[A-Za-z0-9-]{8,64}")) {
-			throw new IllegalArgumentException("session must be a Claude Code session id");
+			throw new InvalidInputException("session must be a Claude Code session id");
 		}
 		String projectName = optString(input, K_PROJECT);
 		ProjectSpec project = null;
 		if (projectName != null) {
 			project = project(projectName);
-			if (project == null) throw new IllegalArgumentException("Unknown project: " + projectName
-				+ " — claudecode:projects lists the projects you can use");
+			if (project == null) throw new NotFoundException("Unknown project: " + projectName
+				+ " — claudecode:projects lists the projects you can use", projectName);
 		} else if (resumeId != null) {
 			ClaudeSession known;
 			synchronized (pool) { known = byId.get(resumeId); }
 			if (known != null) project = project(known.project.name());
-			if (project == null) throw new IllegalArgumentException("Session " + resumeId
-				+ " is not known to this venue (it may predate a restart) — name its project too");
+			if (project == null) throw new NotFoundException("Session " + resumeId
+				+ " is not known to this venue (it may predate a restart) — name its project too", resumeId);
 		} else {
 			List<ProjectSpec> mine = new ArrayList<>();
 			for (ProjectSpec p : allProjects()) if (canAccess(ctx, p)) mine.add(p);
@@ -605,7 +610,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			} else {
 				List<String> names = new ArrayList<>();
 				for (ProjectSpec p : mine) names.add(p.name());
-				throw new IllegalArgumentException("Several projects are available; specify 'project': " + names);
+				throw new InvalidInputException("Several projects are available; specify 'project': " + names);
 			}
 		}
 		requireProjectAccess(ctx, project);
@@ -624,14 +629,20 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			ACell nested = in.get(K_OPTIONS);
 			if (nested != null) {
 				AMap<AString, ACell> nm = RT.castMap(nested);
-				if (nm == null) throw new IllegalArgumentException("options must be an object");
+				if (nm == null) throw new InvalidInputException("options must be an object");
 				for (long i = 0; i < nm.count(); i++) {
 					var e = nm.entryAt(i);
 					callOpts = callOpts.assoc(e.getKey(), e.getValue());
 				}
 			}
 		}
-		RunOptions call = RunOptions.parse(callOpts.isEmpty() ? null : callOpts, RunOptions.CALL_KEYS, "input", true);
+		RunOptions call;
+		try {
+			call = RunOptions.parse(callOpts.isEmpty() ? null : callOpts, RunOptions.CALL_KEYS, "input", true);
+		} catch (IllegalArgumentException e) {
+			// The options parser also reads operator config; here it read the call's input
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		String requestedMode = call.permissionMode();
 		if (RunOptions.BYPASS_PERMISSIONS.equals(requestedMode)
 				&& !RunOptions.BYPASS_PERMISSIONS.equals(base.permissionMode())) {
@@ -654,7 +665,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 		synchronized (pool) {
 			if (plan.resumeId() != null) s = byId.get(plan.resumeId());
 			if (s != null && !s.project.name().equals(plan.project().name())) {
-				throw new IllegalArgumentException("Session " + plan.resumeId() + " " + SESSION_OF_ANOTHER_PROJECT);
+				throw new InvalidInputException("Session " + plan.resumeId() + " " + SESSION_OF_ANOTHER_PROJECT);
 			}
 			if (s != null && (!s.project.equals(plan.project()) || !s.options.equals(plan.options()))) {
 				restart = s;
@@ -783,7 +794,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			ACell body = record.get(Fields.MESSAGE);
 			if (RT.bool(RT.getIn(body, K_END))) { end(); return; }
 			String prompt = messageText(body);
-			if (prompt == null) throw new IllegalArgumentException(MESSAGE_REQUIRED);
+			if (prompt == null) throw new InvalidInputException(MESSAGE_REQUIRED);
 			message(prompt);
 		}
 
@@ -829,7 +840,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 							// Opened without a prompt, or restored after a venue restart: the first
 							// turn resolves the session, resuming the recorded one on a fresh process.
 							ProjectSpec project = project(plan.project().name());
-							if (project == null) throw new IllegalStateException("Project '" + plan.project().name() + "' no longer exists");
+							if (project == null) throw new NotFoundException("Project '" + plan.project().name() + "' no longer exists", plan.project().name());
 							s = resolveSession(ctx, new Plan(project, plan.options(), storedSession(), prompt));
 							session = s;
 						}
@@ -913,7 +924,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 
 	ACell handleSessions(RequestContext ctx, ACell input) {
 		String projectName = optString(input, K_PROJECT);
-		if (projectName != null && project(projectName) == null) throw new IllegalArgumentException("Unknown project: " + projectName);
+		if (projectName != null && project(projectName) == null) throw new NotFoundException("Unknown project: " + projectName, projectName);
 		Map<String, Boolean> access = new LinkedHashMap<>();
 		AVector<ACell> out = Vectors.empty();
 		for (ClaudeSession s : knownSessions()) {
@@ -929,12 +940,12 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 
 	ACell handleStop(RequestContext ctx, ACell input) {
 		String id = optString(input, K_SESSION);
-		if (id == null) throw new IllegalArgumentException("session is required");
+		if (id == null) throw new InvalidInputException("session is required");
 		ClaudeSession s;
 		synchronized (pool) { s = byId.get(id); }
-		if (s == null) throw new IllegalArgumentException("Unknown session: " + id);
+		if (s == null) throw new NotFoundException("Unknown session: " + id, id);
 		ProjectSpec p = project(s.project.name());
-		if (p == null) throw new IllegalArgumentException("Unknown session: " + id);
+		if (p == null) throw new NotFoundException("Unknown session: " + id, id);
 		requireProjectAccess(ctx, p);
 		boolean wasLive = s.isLive();
 		s.stop("requested by " + ctx.getCallerDID());
@@ -965,21 +976,27 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	ACell handleCreate(RequestContext ctx, ACell input) {
 		engine.requireVenueAuthority(ctx, VENUE_RESOURCE, ABILITY_MANAGE);
 		AMap<AString, ACell> in = RT.castMap(input);
-		if (in == null) throw new IllegalArgumentException("create expects an object: {name, path, user?, description?, options?}");
+		if (in == null) throw new InvalidInputException("create expects an object: {name, path, user?, description?, options?}");
 		AString nameCell = RT.ensureString(in.get(Fields.NAME));
-		if (nameCell == null || nameCell.isEmpty()) throw new IllegalArgumentException("name is required");
+		if (nameCell == null || nameCell.isEmpty()) throw new InvalidInputException("name is required");
 		String name = nameCell.toString();
 		AString callerUser = ctx.getUserDID();
 		String defaultUser = (callerUser == null || engine.getDIDString().equals(callerUser))
 			? ProjectSpec.VENUE_USER : callerUser.toString();
-		ProjectSpec spec = ProjectSpec.parse(name, in.dissoc(Fields.NAME), true, ProjectSpec.Managed.RUNTIME, defaultUser);
+		ProjectSpec spec;
+		try {
+			spec = ProjectSpec.parse(name, in.dissoc(Fields.NAME), true, ProjectSpec.Managed.RUNTIME, defaultUser);
+		} catch (IllegalArgumentException e) {
+			// The project parser also reads operator config; here it read the call's input
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		synchronized (this) {
 			if (configProjects.containsKey(name)) {
-				throw new IllegalArgumentException("Project '" + name + "' is declared in the venue config; "
+				throw new ConflictException("Project '" + name + "' is declared in the venue config; "
 					+ "change it there (or with v/ops/venue/adapter/configure), not with create");
 			}
 			if (runtimeProjects.containsKey(name)) {
-				throw new IllegalArgumentException("Project '" + name + "' already exists — delete it first to replace it");
+				throw new ConflictException("Project '" + name + "' already exists — delete it first to replace it");
 			}
 			writePath(REGISTRY_PATH + "/" + name, spec.record());
 			runtimeProjects.put(name, spec);
@@ -992,14 +1009,14 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 	ACell handleDelete(RequestContext ctx, ACell input) {
 		engine.requireVenueAuthority(ctx, VENUE_RESOURCE, ABILITY_MANAGE);
 		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));
-		if (nameCell == null || nameCell.isEmpty()) throw new IllegalArgumentException("name is required");
+		if (nameCell == null || nameCell.isEmpty()) throw new InvalidInputException("name is required");
 		String name = nameCell.toString();
 		synchronized (this) {
 			if (configProjects.containsKey(name)) {
-				throw new IllegalArgumentException("Project '" + name + "' is declared in the venue config; "
+				throw new NotSupportedException("Project '" + name + "' is declared in the venue config; "
 					+ "remove it there (or with v/ops/venue/adapter/configure), not with delete");
 			}
-			if (runtimeProjects.remove(name) == null) throw new IllegalArgumentException("Unknown project: " + name);
+			if (runtimeProjects.remove(name) == null) throw new NotFoundException("Unknown project: " + name, name);
 			deletePath(REGISTRY_PATH + "/" + name);
 		}
 		List<ClaudeSession> victims = new ArrayList<>();

@@ -34,6 +34,8 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Config;
@@ -213,7 +215,7 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(pid, ((CVMLong) sessionStatus(OWNER_CTX, session).get(ClaudeSession.K_PID)).longValue(), "same warm process");
 
 		// project is optional when the session is known — but a wrong project is refused.
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(NotFoundException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("session", "not-a-known-session-id", "prompt", "count"), OWNER_CTX));
 
 		// Stop the process explicitly; the session survives and resumes on a fresh process.
@@ -399,7 +401,7 @@ public class ClaudeCodeAdapterTest {
 		// With exactly one accessible project it need not be named.
 		assertEquals("gamma", str(run(OTHER_CTX, "v/ops/claudecode/run", Maps.of("prompt", "hi")), "project"));
 		// OWNER has several: must name one.
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("prompt", "hi"), OWNER_CTX));
+		assertThrows(InvalidInputException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("prompt", "hi"), OWNER_CTX));
 
 		AVector<ACell> mine = RT.ensureVector(run(OTHER_CTX, "v/ops/claudecode/projects", Maps.empty()).get(ClaudeCodeAdapter.K_PROJECTS));
 		assertEquals(1, mine.count());
@@ -433,7 +435,7 @@ public class ClaudeCodeAdapterTest {
 			{OTHER_CTX, "v/ops/claudecode/session", "gamma"},
 			{OWNER_CTX, "v/ops/claudecode/run", "beta"}};
 		for (Object[] a : attempts) {
-			IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+			InvalidInputException refused = assertThrows(InvalidInputException.class,
 				() -> engine.jobs().invokeOperation((String) a[1],
 					Maps.of("project", a[2], "session", session, "prompt", "count"), (RequestContext) a[0]));
 			assertTrue(refused.getMessage().contains(ClaudeCodeAdapter.SESSION_OF_ANOTHER_PROJECT), refused.getMessage());
@@ -526,9 +528,9 @@ public class ClaudeCodeAdapterTest {
 
 	@Test
 	public void testCallOptionsCannotSetOperatorSettings() {
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(InvalidInputException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("project", "alpha", "prompt", "hi", "options", Maps.of("addDirs", Vectors.of("/etc"))), OWNER_CTX));
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(InvalidInputException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("project", "alpha", "prompt", "hi", "options", Maps.of("env", Maps.of("X", "y"))), OWNER_CTX));
 	}
 
@@ -567,7 +569,7 @@ public class ClaudeCodeAdapterTest {
 		AMap<AString, ACell> deleted = run(engine.venueContext(), "v/ops/claudecode/delete", Maps.of("name", "rt"));
 		assertEquals(CVMBool.TRUE, deleted.get(ClaudeCodeAdapter.K_DELETED));
 		assertNull(engine.resolvePath(Strings.create(ClaudeCodeAdapter.REGISTRY_PATH + "/rt"), engine.venueContext()));
-		assertThrows(IllegalArgumentException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+		assertThrows(NotFoundException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
 			Maps.of("project", "rt", "prompt", "hi"), OWNER_CTX));
 		Job delCfg = engine.jobs().invokeOperation("v/ops/claudecode/delete", Maps.of("name", "alpha"), engine.venueContext());
 		assertThrows(RuntimeException.class, () -> delCfg.awaitResult(10_000));
