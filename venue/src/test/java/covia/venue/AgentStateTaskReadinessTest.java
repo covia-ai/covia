@@ -11,6 +11,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 
@@ -44,9 +45,15 @@ public class AgentStateTaskReadinessTest {
 		return agent.getTasks().get(TASK);
 	}
 
+	/** Starts a cycle on the task, as the run loop does: its next input is shown. */
+	private void startCycle() {
+		assertEquals(AgentState.CycleStart.NO_SESSION,
+			agent.beginCycle(TASK, row(), null, null, Vectors.empty(), 0));
+	}
+
 	/** Shows the task its input and parks it, as a cycle that yields does. */
 	private void presentAndPark() {
-		agent.claimTaskInput(TASK, 0);
+		startCycle();
 		agent.parkTask(TASK, 0);
 		assertTrue(AgentState.isParked(row()));
 	}
@@ -54,7 +61,7 @@ public class AgentStateTaskReadinessTest {
 	@Test
 	public void aTaskNotParkedIsReady() {
 		assertTrue(agent.isTaskReady(row(), NOW), "a fresh task is ready");
-		agent.claimTaskInput(TASK, 0);
+		startCycle();
 		assertTrue(agent.isTaskReady(row(), NOW),
 			"a task shown its input but not parked was interrupted mid-cycle, and runs again");
 	}
@@ -89,16 +96,17 @@ public class AgentStateTaskReadinessTest {
 	}
 
 	@Test
-	public void claimingTheTaskUnparksIt() {
+	public void startingACycleUnparksTheTask() {
 		presentAndPark();
-		assertNull(agent.claimTaskInput(TASK, 0), "nothing new to claim");
+		assertNull(AgentState.nextTaskInput(row()), "nothing new to show");
+		startCycle();
 		assertFalse(AgentState.isParked(row()),
 			"a task in a cycle is not parked, so a restart mid-cycle runs it again");
 	}
 
 	@Test
 	public void parkingWithAStaleRevisionDoesNothing() {
-		agent.claimTaskInput(TASK, 0);
+		startCycle();
 		agent.parkTask(TASK, 7);
 		assertFalse(AgentState.isParked(row()));
 	}

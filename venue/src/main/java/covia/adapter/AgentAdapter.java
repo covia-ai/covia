@@ -3936,6 +3936,15 @@ public class AgentAdapter extends AAdapter {
 					stuckTaskId = null;
 					stuckCount = 0;
 				}
+				if (pickedTask != null) {
+					Job taskJob = engine.jobs().getJob(pickedTask.getKey());
+					// Tasks are also a public lattice primitive and need not have a
+					// corresponding Job. Only a present terminal Job invalidates one.
+					if (taskJob != null && taskJob.isFinished()) {
+						agent.removeTask(pickedTask.getKey());
+						continue;
+					}
+				}
 				AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
 				AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
 
@@ -3959,28 +3968,42 @@ public class AgentAdapter extends AAdapter {
 						filteredInbox = (AVector<ACell>) pv;
 					}
 				}
-				long presentedSessionPendingCount = filteredInbox.count();
+
+				// The cycle takes its input in one transaction, before its runtime
+				// runs (AGENT_LOOP.md §4.4): the task's next input is marked shown,
+				// the session is claimed, and the presented messages and the task's
+				// input become turns in its conversation. Nothing after this may
+				// abandon the cycle, since only its merge settles what it took.
+				ACell pickedTaskInput = (pickedTask != null) ? AgentState.nextTaskInput(pickedTask.getValue()) : null;
+				ACell cycleClaim = null;
+				if (pickedTask != null || pickedSessionRecord != null) {
+					ACell epoch = Blob.createRandom(new java.util.Random(), 8);
+					AVector<ACell> inputTurns = cycleInputTurns(filteredInbox, pickedTaskInput,
+						(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
+						(pickedTask != null) ? pickedTask.getValue() : null, startTs);
+					AgentState.CycleStart started = agent.beginCycle(
+						(pickedTask != null) ? pickedTask.getKey() : null,
+						(pickedTask != null) ? pickedTask.getValue() : null,
+						(pickedSessionRecord != null) ? pickedSessionBlob : null,
+						epoch, inputTurns, filteredInbox.count());
+					// A continuation landed on the task since it was picked: nothing
+					// was taken, so pick again and present the fresh input.
+					if (started == AgentState.CycleStart.MOVED) continue;
+					if (started == AgentState.CycleStart.SESSION) {
+						cycleClaim = epoch;
+					} else if (pickedTask == null) {
+						continue; // the session went before the cycle could claim it
+					}
+				}
 
 				// Per-cycle ctx: scope to the agent, picked task, and session so
 				// path resolvers (n/, t/, c/) can address the right slot, and
 				// agent:completeTask / agent:failTask can identify which
 				// agent + task they're acting on.
 				RequestContext cycleCtx = ctx.withAgentId(agentId);
-				long pickedTaskRevision = -1L;
-				ACell pickedTaskInput = null;
 				if (pickedTask != null) {
-					pickedTaskRevision = AgentState.taskRevision(pickedTask.getValue());
-					pickedTaskInput = agent.claimTaskInput(
-						pickedTask.getKey(), pickedTaskRevision);
-					ACell currentTask = agent.getTasks().get(pickedTask.getKey());
-					if (currentTask == null) continue;
-					if (AgentState.taskRevision(currentTask) != pickedTaskRevision) {
-						// Continuation won the claim race. Re-snapshot so the fresh
-						// revision — and only its next unpresented input — is used.
-						continue;
-					}
 					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
-						pickedTaskRevision);
+						AgentState.taskRevision(pickedTask.getValue()));
 				}
 				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
 
@@ -3988,12 +4011,6 @@ public class AgentAdapter extends AAdapter {
 				// live executor attempt actually picks the external request/chat.
 				if (pickedTask != null) {
 					Job taskJob = engine.jobs().getJob(pickedTask.getKey());
-					// Tasks are also a public lattice primitive and need not have a
-					// corresponding Job. Only a present terminal Job invalidates one.
-					if (taskJob != null && taskJob.isFinished()) {
-						agent.removeTask(pickedTask.getKey());
-						continue;
-					}
 					if (taskJob != null && Status.PENDING.equals(taskJob.getStatus())) {
 						taskJob.setStatus(Status.STARTED);
 					}
@@ -4022,9 +4039,13 @@ public class AgentAdapter extends AAdapter {
 							Strings.create(pickedTask.getKey().toHexString()));
 					}
 				}
+				// The session as picked, its pending listing the messages this cycle
+				// took, and the cycle's claim on it: a runtime that keeps its frames
+				// live writes under that claim, fenced against any later cycle.
 				if (pickedSessionRecord != null) {
 					AMap<AString, ACell> sessionMap = pickedSessionRecord
 						.assoc(Fields.SESSION_ID, pickedSession);
+					if (cycleClaim != null) sessionMap = sessionMap.assoc(AgentState.KEY_IN_CYCLE, cycleClaim);
 					transitionInput = transitionInput.assoc(Fields.SESSION, sessionMap);
 				}
 				AMap<AString, ACell> agentConfig = agent.getConfig();
@@ -4032,12 +4053,11 @@ public class AgentAdapter extends AAdapter {
 					transitionInput = transitionInput.assoc(AgentState.KEY_CONFIG, agentConfig);
 				}
 
-				// Does the transition adapter own the session's frames + drain
-				// itself (lattice-resident frames)? Resolved from the ADAPTER,
-				// not the transition output — an errored/cancelled transition
-				// produces no output, and gating on output shape would
-				// double-drain pending and re-append turns the adapter already
-				// wrote live.
+				// Does the transition adapter write its own turns live
+				// (lattice-resident frames)? Resolved from the ADAPTER, not the
+				// transition output — an errored/cancelled transition produces no
+				// output, and gating on output shape would re-append turns the
+				// adapter already wrote live.
 				boolean framesOwned = isFramesOwningOp(transitionOp, ctx);
 
 				// Invoke transition. Blocks on the vthread — cheap, and any
@@ -4139,7 +4159,7 @@ public class AgentAdapter extends AAdapter {
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, currentState, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, filteredInbox, resolvedPending,
-					presentedSessionPendingCount, startTs, allTaskResults, cannotContinue, cycle);
+					startTs, allTaskResults, cannotContinue, cycle);
 				lastResult = merged.lastResult();
 				allTaskResults = merged.allTaskResults();
 			}
@@ -4218,7 +4238,7 @@ public class AgentAdapter extends AAdapter {
 			ACell transitionResult, ACell snapshotState, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob,
-			AVector<ACell> filteredInbox, ACell pending, long presentedSessionPendingCount,
+			AVector<ACell> filteredInbox, ACell pending,
 			long startTs, AMap<AString, ACell> allTaskResults, boolean cannotContinue,
 			AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
@@ -4227,14 +4247,10 @@ public class AgentAdapter extends AAdapter {
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
 		// A null state result is "no change" (AgentState.applyStateChange), so a
-		// timed-out transition simply leaves the record's state alone.
-		// A transition may still return frames for direct-call compatibility.
-		// Live session ownership is declared by the adapter's FramesOwning marker,
-		// not inferred from this optional output.
-		ACell framesCell = RT.getIn(transitionResult, Fields.FRAMES);
-		@SuppressWarnings("unchecked")
-		AVector<ACell> adapterFrames = (framesCell instanceof AVector)
-			? (AVector<ACell>) framesCell : null;
+		// timed-out transition simply leaves the record's state alone. Frames a
+		// transition returns serve its direct callers only: a session's
+		// conversation is written by the cycle's start, by a runtime that keeps
+		// its frames live, and by the turns this merge appends.
 
 		// Peek the parked envelopes (don't remove yet) so an exception
 		// before completeDeferredJobs leaves them visible to the outer
@@ -4310,47 +4326,12 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Build turns to append to frames[0].conversation for an ordinary
-		// transition adapter. Frame ownership is explicit; adapterFrames remains
-		// the legacy output path for non-owning custom adapters.
-		// Order: inbox messages → picked task input → assistant response.
-		// Every user turn keeps the provenance its envelope or task recorded.
+		// The turns a runtime that leaves the conversation to the run loop adds
+		// to frames[0].conversation: its own turns, then its reply. The cycle's
+		// input is already there, written when the cycle began; a runtime that
+		// keeps its frames live has written its turns itself.
 		AVector<ACell> turnsToAppend = Vectors.empty();
-		if (pickedSessionBlob != null && leanError == null && adapterFrames == null && !framesOwned) {
-			if (filteredInbox != null) {
-				for (long i = 0; i < filteredInbox.count(); i++) {
-					ACell envelope = filteredInbox.get(i);
-					ACell msgContent = RT.getIn(envelope, Fields.MESSAGE);
-					if (msgContent != null) {
-						AMap<AString, ACell> turn = Maps.of(
-							AgentState.K_ROLE,    AgentState.ROLE_USER,
-							AgentState.K_CONTENT, msgContent,
-							AgentState.K_TURN_TS, CVMLong.create(startTs),
-							AgentState.K_SOURCE,  AgentState.SOURCE_CHAT);
-						// Preserve the originating Job id as durable provenance for
-						// audit and result correlation.
-						ACell envJobId = RT.getIn(envelope, Fields.JOB_ID);
-						if (envJobId != null) turn = turn.assoc(Fields.JOB_ID, envJobId);
-						turnsToAppend = turnsToAppend.conj(
-							withRecordedProvenance(turn, envelope));
-					}
-				}
-			}
-			if (pickedTaskInput != null) {
-				AMap<AString, ACell> turn = Maps.of(
-					AgentState.K_ROLE,    AgentState.ROLE_USER,
-					AgentState.K_CONTENT, pickedTaskInput,
-					AgentState.K_TURN_TS, CVMLong.create(startTs),
-					AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST);
-				// The task is keyed by the delegating agent:request Job id — record it
-				// so the target agent's turn ties back to the calling job, as chat
-				// turns do (#378).
-				if (pickedTask != null) {
-					turn = turn.assoc(Fields.JOB_ID, Strings.create(pickedTask.getKey().toHexString()));
-				}
-				turnsToAppend = turnsToAppend.conj(withRecordedProvenance(turn,
-					(pickedTask != null) ? pickedTask.getValue() : null));
-			}
+		if (pickedSessionBlob != null && leanError == null && !framesOwned) {
 			if (transitionTurns != null) {
 				for (long i = 0; i < transitionTurns.count(); i++) {
 					AMap<AString, ACell> turn = normaliseTransitionTurn(
@@ -4375,23 +4356,13 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Merge results atomically (timeline, state, task cleanup, history,
-		// session pending drain). History append lands in the
-		// same CAS as the timeline, so external readers never see a cycle
-		// that wrote one but not the other.
-		//
-		// FramesOwning transitions (lattice-resident frames) already wrote
-		// their frames live and drained the presented pending at cycle start
-		// (presentSessionCycleInput) — the merge must not re-drain (it would drop
-		// mid-transition arrivals) and must not rewrite frames (the live
-		// stack is authoritative; a merge rewrite would also mask any missed
-		// live-write in testing). The merge still clears the session's
-		// inCycle claim, appends the timeline entry and removes completed tasks.
+		// Merge results atomically (timeline, state, task cleanup, the
+		// runtime's turns, the end of the session claim). The turns land in the
+		// same CAS as the timeline, so external readers never see a cycle that
+		// wrote one but not the other.
 		AMap<AString, ACell> merged = agent.mergeRunResult(
 			snapshotState, newState, taskResults,
 			timelineEntry, pickedSessionBlob, turnsToAppend,
-			framesOwned ? 0 : presentedSessionPendingCount,
-			framesOwned ? null : adapterFrames,
 			cycleTokens);
 
 		// The live tap's commit event (#394): the entry and turns are
@@ -4619,6 +4590,49 @@ public class AgentAdapter extends AAdapter {
 		if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
 		ACell authentication = RT.getIn(source, Fields.AUTHENTICATION);
 		return (authentication == null) ? turn : turn.assoc(Fields.AUTHENTICATION, authentication);
+	}
+
+	/**
+	 * The user turns for a cycle's input, in order: one per presented message,
+	 * then the task's input. Each records the job it came from ({@code jobId}:
+	 * a chat's, or the task's request, #378) and keeps the provenance its
+	 * envelope or task recorded: who asked, as the venue authenticated them
+	 * (COG-20 §4).
+	 *
+	 * @param messages the presented message envelopes
+	 * @param taskInput the task's input shown this cycle, or null
+	 * @param taskJobId the task's request Job id, or null
+	 * @param task the task's row or formatted record, carrying its provenance
+	 */
+	public static AVector<ACell> cycleInputTurns(AVector<ACell> messages, ACell taskInput,
+			ACell taskJobId, ACell task, long ts) {
+		AVector<ACell> turns = Vectors.empty();
+		CVMLong tsCell = CVMLong.create(ts);
+		for (long i = 0; messages != null && i < messages.count(); i++) {
+			ACell envelope = messages.get(i);
+			ACell content = RT.getIn(envelope, Fields.MESSAGE);
+			if (content == null) content = RT.getIn(envelope, AgentState.K_CONTENT);
+			if (content == null && envelope instanceof AString) content = envelope;
+			if (content == null) continue;
+			AMap<AString, ACell> turn = Maps.of(
+				AgentState.K_ROLE, AgentState.ROLE_USER,
+				AgentState.K_CONTENT, content,
+				AgentState.K_TURN_TS, tsCell,
+				AgentState.K_SOURCE, AgentState.SOURCE_CHAT);
+			ACell jobId = RT.getIn(envelope, Fields.JOB_ID);
+			if (jobId != null) turn = turn.assoc(Fields.JOB_ID, jobId);
+			turns = turns.conj(withRecordedProvenance(turn, envelope));
+		}
+		if (taskInput != null) {
+			AMap<AString, ACell> turn = Maps.of(
+				AgentState.K_ROLE, AgentState.ROLE_USER,
+				AgentState.K_CONTENT, taskInput,
+				AgentState.K_TURN_TS, tsCell,
+				AgentState.K_SOURCE, AgentState.SOURCE_REQUEST);
+			if (taskJobId != null) turn = turn.assoc(Fields.JOB_ID, taskJobId);
+			turns = turns.conj(withRecordedProvenance(turn, task));
+		}
+		return turns;
 	}
 
 	/** Adds framework audit metadata to an adapter-emitted LLM/tool message

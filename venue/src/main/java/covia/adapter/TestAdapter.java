@@ -293,6 +293,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.supplyAsync(() -> handleHold(input), VIRTUAL_EXECUTOR);
                 case "failllm":
                     return handleFailLlm(input);
+                case "step":
+                    return CompletableFuture.supplyAsync(() -> handleStep(ctx, input), VIRTUAL_EXECUTOR);
                 case "delay":
                     // Handled via invoke() override for caller DID propagation
                     return CompletableFuture.failedFuture(
@@ -334,6 +336,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("nevertoolllm", BASE+"testnevertoolllm.json");
 			installTestAsset("neverfailllm", BASE+"testneverfailllm.json");
 			installTestAsset("failllm",      BASE+"testfailllm.json");
+			installTestAsset("step",         BASE+"teststep.json");
 			installTestAsset("subgoalllm",   BASE+"testsubgoalllm.json");
 			installTestAsset("subgoalechollm", BASE+"testsubgoalechollm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
@@ -1761,6 +1764,65 @@ public class TestAdapter extends AAdapter {
                 default -> Maps.of("role", Strings.create("assistant"), "content", Strings.create("ok"));
             };
         }, VIRTUAL_EXECUTOR);
+    }
+
+    /** The reason the {@code step} transition gives when its script fails the cycle. */
+    public static final String STEP_FAILED = "step scripted failure";
+
+    /**
+     * An agent transition for run-loop tests that leaves the conversation to
+     * the run loop (it is not {@code FramesOwning}). Its script is the text of
+     * the cycle's newest input: the task's input, else the last message the
+     * cycle took, else (a task run again after an interruption, its input
+     * already shown) the conversation's last user turn. It is read as words in
+     * order: {@code hold:<gate>} waits at that
+     * {@link TestGate}, then stops if the cycle was cancelled meanwhile;
+     * {@code complete} and {@code failtask} resolve the task; {@code fail},
+     * {@code cannot} and {@code bug} fail the cycle as a failure of the work,
+     * as one the agent cannot continue from, and as a venue fault; and
+     * {@code yield} ends the cycle without a reply. Otherwise it replies with
+     * what it saw: {@code {saw: [message text...], input?: task input}}.
+     */
+    private ACell handleStep(RequestContext ctx, ACell input) {
+        AVector<ACell> messages = AgentAdapter.effectiveMessages(input);
+        AVector<ACell> saw = Vectors.empty();
+        for (long i = 0; i < messages.count(); i++) saw = saw.conj(RT.getIn(messages.get(i), Fields.MESSAGE));
+        ACell taskInput = RT.getIn(input, Fields.NEW_INPUT);
+        AMap<AString, ACell> seen = Maps.of("saw", saw);
+        if (taskInput != null) seen = seen.assoc(Fields.INPUT, taskInput);
+        ACell script = (taskInput != null) ? taskInput : (saw.isEmpty() ? null : saw.get(saw.count() - 1));
+        if (script == null) {
+            AMap<AString, ACell> root = RT.ensureMap(RT.getIn(input, Fields.SESSION, AgentState.KEY_FRAMES, CVMLong.ZERO));
+            AVector<ACell> turns = (root == null) ? null : covia.adapter.agent.GoalTreeContext.activeConversation(root);
+            for (long i = (turns == null) ? -1 : turns.count() - 1; i >= 0 && script == null; i--) {
+                if (AgentState.ROLE_USER.equals(RT.getIn(turns.get(i), AgentState.K_ROLE))) {
+                    script = RT.getIn(turns.get(i), AgentState.K_CONTENT);
+                }
+            }
+        }
+        boolean reply = true;
+        for (String word : String.valueOf(script).split("\\s+")) {
+            if (word.startsWith("hold:")) {
+                TestGate gate = TEST_GATES.get(word.substring(5));
+                if (gate == null) throw new IllegalStateException("Unknown test gate: " + word.substring(5));
+                gate.pass();
+                java.util.concurrent.atomic.AtomicBoolean cancelled = ctx.getCancellation();
+                if (cancelled != null && cancelled.get()) throw new CancellationException("step cancelled");
+                continue;
+            }
+            switch (word) {
+                case "complete" -> engine.jobs().invokeInternal("v/ops/agent/complete-task",
+                    Maps.of(Fields.RESULT, seen), ctx).join();
+                case "failtask" -> engine.jobs().invokeInternal("v/ops/agent/fail-task",
+                    Maps.of(Fields.ERROR, Strings.create(STEP_FAILED)), ctx).join();
+                case "fail" -> throw new InvalidInputException(STEP_FAILED);
+                case "cannot" -> throw new covia.adapter.agent.CannotContinueException(STEP_FAILED, null);
+                case "bug" -> throw new IllegalStateException(STEP_FAILED);
+                case "yield" -> reply = false;
+                default -> {}
+            }
+        }
+        return reply ? Maps.of(Fields.RESPONSE, seen) : Maps.empty();
     }
 
     private JobFailedException handleError(ACell input) {

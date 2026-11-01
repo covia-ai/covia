@@ -114,17 +114,25 @@ public class GoalTreeLatticeFramesTest {
 	// ========== I3: the lattice is the single authoritative copy ==========
 
 	/**
-	 * A sessioned cycle writes every frame mutation live and emits NO frames
-	 * on its output — the session record is the single copy (the FramesOwning
-	 * gate keeps the framework's merge out of frames, so a missed live-write
-	 * site would be immediately visible as missing lattice state, with
-	 * nothing papering over it). Direct-invoke (local-store) runs still
+	 * A cycle on a claimed session writes every frame mutation live and emits
+	 * NO frames on its output — the session record is the single copy (the
+	 * FramesOwning gate keeps the framework's merge out of frames, so a missed
+	 * live-write site would be immediately visible as missing lattice state,
+	 * with nothing papering over it). Direct-invoke (local-store) runs still
 	 * return the stack in the output for their callers.
 	 */
 	@Test
 	public void testSessionedRunWritesLiveAndEmitsNoFrames() {
 		createAgent("inv-agent", "v/test/ops/llm", 0);
 		Blob sid = mintSession("inv-agent", "aa112233445566778899aabbccddee01");
+
+		// Start the cycle as the run loop does: claim the session and move the
+		// input into its conversation, then hand the runtime the claim.
+		AVector<ACell> messages = Vectors.of(
+			(ACell) Maps.of(Strings.create("message"), Strings.create("hello lattice")));
+		ACell claim = Strings.create("test-claim");
+		assertEquals(AgentState.CycleStart.SESSION, agent("inv-agent").beginCycle(null, null, sid, claim,
+			covia.adapter.AgentAdapter.cycleInputTurns(messages, null, null, null, 1), 0));
 
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		RequestContext ctx = RequestContext.of(ALICE_DID).withSessionId(sid);
@@ -133,8 +141,8 @@ public class GoalTreeLatticeFramesTest {
 			AgentState.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo agent.")),
-			Fields.MESSAGES, Vectors.of(
-				(ACell) Maps.of(Strings.create("message"), Strings.create("hello lattice"))));
+			Fields.SESSION, Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				AgentState.KEY_IN_CYCLE, claim, AgentState.KEY_PENDING, messages));
 
 		ACell output = adapter.processGoal(null, ctx, input);
 

@@ -39,56 +39,27 @@ interface FrameStore {
 	}
 
 	/**
-	 * Opens the one canonical frame store used by both LLM runtimes. A real
-	 * session is claimed with an epoch fence, any dangling tool calls are
-	 * repaired, then the presented input is appended and drained atomically.
-	 * Direct invocations use the same frame shape behind a local store.
+	 * Opens the one canonical frame store used by both LLM runtimes. A cycle
+	 * the run loop began on a session carries its claim in the input's
+	 * {@code session.inCycle}: the cycle's start has already closed dangling
+	 * tool calls and moved its input into the conversation, so the store
+	 * writes through to the session, fenced by that claim. Any other
+	 * invocation (unsessioned, or a task whose session is gone) works on a
+	 * local stack built from its input. A stack that still holds child frames
+	 * was interrupted.
 	 */
 	static Opened open(Engine engine, RequestContext ctx, AString agentId,
 			ACell input, AVector<ACell> messages, String rootDescription,
-			long cycleTs, Logger log) {
+			long cycleTs) {
 		Blob sid = ctx.getSessionId();
-		AgentState agent = resolveAgentState(engine, ctx, agentId);
-		if (sid != null && agent != null && agent.getSession(sid) != null) {
-			boolean interrupted = agent.getSessionCycleEpoch(sid) != null;
-			ACell epoch = Blob.createRandom(new java.util.Random(), 8);
-			if (!agent.session(sid).beginCycle(epoch, null, 0)) {
+		ACell claim = RT.getIn(input, Fields.SESSION, AgentState.KEY_IN_CYCLE);
+		if (sid != null && claim != null) {
+			AgentState agent = resolveAgentState(engine, ctx, agentId);
+			if (agent == null || agent.getSession(sid) == null) {
 				return failed("Session vanished before cycle start: " + sid);
 			}
-			FrameStore store = new LatticeFrameStore(
-				agent, sid, epoch, ctx.getCancellation());
-			interrupted |= store.frames().count() > 1;
-
-			AString repair = convex.core.data.Strings.create(
-				"Error: this tool call did not return — its effects may or may not "
-				+ "have applied; verify before retrying.");
-			if (!store.frames().isEmpty()) {
-				if (!store.update(f -> GoalTreeContext.repairDanglingToolCalls(f, repair))) {
-					return failed("Session cycle was superseded during interruption repair: " + sid);
-				}
-				AVector<ACell> check = store.frames();
-				if (check.isEmpty() || GoalTreeContext.repairDanglingToolCalls(check, repair) != check) {
-					log.warn("Interruption repair observed stale frames for agent {}, session {}; retrying",
-						agentId, sid);
-					if (!store.update(f -> GoalTreeContext.repairDanglingToolCalls(f, repair))) {
-						return failed("Session cycle was superseded during interruption repair: " + sid);
-					}
-					check = store.frames();
-					if (GoalTreeContext.repairDanglingToolCalls(check, repair) != check) {
-						// An invariant, not this cycle's work: every cycle on this
-						// session would fail here, so the agent cannot continue.
-						throw new IllegalStateException("Interruption cleanup could not repair dangling tool calls "
-							+ "for session " + sid);
-					}
-				}
-			}
-
-			AVector<ACell> turns = cycleInputTurns(messages, input, cycleTs);
-			long drainCount = (messages != null) ? messages.count() : 0;
-			if (!agent.session(sid).presentCycleInput(epoch, turns, drainCount)) {
-				return failed("Session cycle was superseded before input presentation: " + sid);
-			}
-			return new Opened(store, interrupted, null);
+			FrameStore store = new LatticeFrameStore(agent, sid, claim, ctx.getCancellation());
+			return new Opened(store, store.frames().count() > 1, null);
 		}
 
 		AVector<ACell> frames = AgentAdapter.sessionFrames(input);
@@ -112,55 +83,19 @@ interface FrameStore {
 		return (user != null) ? user.agent(agentId.toString()) : null;
 	}
 
-	/** Appends the presented chat/request turns to the root conversation. */
+	/** Appends a cycle's input turns ({@link AgentAdapter#cycleInputTurns})
+	 * to the root conversation of a local stack. */
 	@SuppressWarnings("unchecked")
 	static AVector<ACell> appendCycleInputTurns(AVector<ACell> frames,
 			AVector<ACell> messages, ACell input, long ts) {
 		if (frames == null || frames.isEmpty()) return frames;
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-		AVector<ACell> turns = cycleInputTurns(messages, input, ts);
+		AVector<ACell> turns = AgentAdapter.cycleInputTurns(messages, RT.getIn(input, Fields.NEW_INPUT),
+			RT.getIn(input, Fields.JOB_ID), RT.getIn(input, Fields.TASKS, CVMLong.ZERO), ts);
 		for (long i = 0; i < turns.count(); i++) {
 			root = GoalTreeContext.appendTurn(root, turns.get(i));
 		}
 		return frames.assoc(0, root);
-	}
-
-	/**
-	 * Builds the durable user turns presented at the start of a cycle. Each
-	 * keeps the provenance its envelope or task recorded: who asked, as the venue
-	 * authenticated them (COG-20 §4).
-	 */
-	static AVector<ACell> cycleInputTurns(AVector<ACell> messages, ACell input, long ts) {
-		AVector<ACell> turns = Vectors.empty();
-		CVMLong tsCell = CVMLong.create(ts);
-		for (long i = 0; messages != null && i < messages.count(); i++) {
-			ACell envelope = messages.get(i);
-			ACell content = RT.getIn(envelope, Fields.MESSAGE);
-			if (content == null) content = RT.getIn(envelope, AgentState.K_CONTENT);
-			if (content == null && envelope instanceof AString) content = envelope;
-			if (content == null) continue;
-			AMap<AString, ACell> turn = Maps.of(
-				AgentState.K_ROLE, AgentState.ROLE_USER,
-				AgentState.K_CONTENT, content,
-				AgentState.K_TURN_TS, tsCell,
-				AgentState.K_SOURCE, AgentState.SOURCE_CHAT);
-			ACell jobId = RT.getIn(envelope, Fields.JOB_ID);
-			if (jobId != null) turn = turn.assoc(Fields.JOB_ID, jobId);
-			turns = turns.conj(AgentAdapter.withRecordedProvenance(turn, envelope));
-		}
-
-		ACell request = RT.getIn(input, Fields.NEW_INPUT);
-		if (request != null) {
-			AMap<AString, ACell> turn = Maps.of(
-				AgentState.K_ROLE, AgentState.ROLE_USER,
-				AgentState.K_CONTENT, request,
-				AgentState.K_TURN_TS, tsCell,
-				AgentState.K_SOURCE, AgentState.SOURCE_REQUEST);
-			ACell jobId = RT.getIn(input, Fields.JOB_ID);
-			if (jobId != null) turn = turn.assoc(Fields.JOB_ID, jobId);
-			turns = turns.conj(AgentAdapter.withRecordedProvenance(turn, RT.getIn(input, Fields.TASKS, CVMLong.ZERO)));
-		}
-		return turns;
 	}
 
 	/** The current frame stack (never null; empty vector when unset). */

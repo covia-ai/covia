@@ -356,12 +356,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			|| (tasks != null && tasks.count() > 0)
 			|| (pending != null && pending.count() > 0);
 
-		// LLMAgent is the one-frame form of the shared frame runtime. Claim the
-		// session, repair any interrupted tool exchange, and persist this cycle's
-		// presented input before the first inference, exactly as GoalTree does.
+		// LLMAgent is the one-frame form of the shared frame runtime: it works on
+		// the session the cycle's start claimed and gave this cycle's input,
+		// exactly as GoalTree does.
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input, messages,
 			GoalTreeContext.describeTransitionInput(messages, tasks, pending),
-			convex.core.util.Utils.getCurrentTimestamp(), log);
+			convex.core.util.Utils.getCurrentTimestamp());
 		if (opened.failed()) {
 			CycleRecord.Result cycle = CycleRecord.end();
 			AMap<AString, ACell> failed = Maps.of(

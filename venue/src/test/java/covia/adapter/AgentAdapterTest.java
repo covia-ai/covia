@@ -2890,9 +2890,8 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
 		assertNotNull(meta.get(Strings.intern("parties")), "meta.parties must exist");
 
-		// Drain proof — the run loop did snapshot session.pending and pass
-		// its count to mergeRunResult. (The chat-handler dual-write puts the
-		// message in session.pending; if the merge didn't drain it, count > 0.)
+		// The cycle took the chat's message from session.pending into the
+		// conversation when it began.
 		assertEquals(0, ((AVector<?>) session.get(Strings.intern("pending"))).count(),
 			"session.pending must have been drained by the cycle");
 	}
@@ -3670,16 +3669,15 @@ public class AgentAdapterTest {
 				Maps.of(Fields.AGENT_ID, id, Fields.REASON, "Owner is reviewing this agent"), ctx).awaitResult(5000);
 			assertEquals(AgentState.SUSPENDED, awaitFinished(agent));
 			AString detail = AgentState.suspensionDetail(agent.getRecord());
-			// The stopped cycle never merged, so this transition (which does not
-			// own its frames) gave the chat back: both the chat and the queued
-			// task wait for resume, and say why. A frames-owning runtime's chat
-			// is already in its conversation and fails instead (AgentSuspensionTest).
-			for (Job waiting : new Job[] {chat, queued}) {
-				assertFalse(waiting.isFinished(), "a suspended agent keeps its queue");
-				assertEquals(AgentAdapter.SUSPENDED_WAITING.formatted(id, ": " + detail),
-					Job.progressMessage(waiting.getData().get(Fields.PROGRESS)));
-			}
-			assertTrue(agent.hasSessionPending(), "the chat is queued again");
+			// The stopped cycle took the chat's message into its conversation
+			// when it began, so it can never be presented again: the chat fails
+			// with the stop. The queued task waits for resume and says why.
+			assertThrows(covia.exception.JobFailedException.class, () -> chat.awaitResult(5000));
+			assertTrue(chat.getErrorMessage().contains(detail.toString()), chat.getErrorMessage());
+			assertFalse(queued.isFinished(), "a suspended agent keeps its queue");
+			assertEquals(AgentAdapter.SUSPENDED_WAITING.formatted(id, ": " + detail),
+				Job.progressMessage(queued.getData().get(Fields.PROGRESS)));
+			assertFalse(agent.hasSessionPending(), "the stopped cycle took the chat's message");
 			assertNull(agent.getError(), "a deliberate cancellation is not a fault");
 			assertEquals(1, agent.getTasks().count());
 			assertEquals(1, agent.getTimeline().count());
@@ -3694,7 +3692,6 @@ public class AgentAdapterTest {
 				&& detail.equals(e.data().get(Fields.ERROR))));
 			assertTrue(events.stream().anyMatch(e -> covia.venue.AgentEvents.CYCLE_END.equals(e.type())
 				&& detail.equals(e.data().get(Fields.ERROR))));
-			chat.cancel();
 			queued.cancel();
 		}
 	}

@@ -581,7 +581,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		long cycleTs = convex.core.util.Utils.getCurrentTimestamp();
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input,
-			messages, rootDescription, cycleTs, log);
+			messages, rootDescription, cycleTs);
 		if (opened.failed()) {
 			return Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error());
 		}

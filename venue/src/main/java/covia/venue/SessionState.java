@@ -79,33 +79,24 @@ public final class SessionState extends ALatticeComponent<ACell>
 	static final AString K_DESCRIPTION  = Strings.intern("description");
 	static final AString K_CONVERSATION = Strings.intern("conversation");
 
-	/** Claims an attempt, migrates frames and records/drains input in one update.
-	 * A later attempt may supersede an abandoned epoch after restart. */
+	/**
+	 * Claims an attempt and takes its input in one update: migrates frames and
+	 * loads, closes the tool calls an interrupted attempt left without a result,
+	 * appends the input turns, and drains the presented pending prefix,
+	 * preserving messages received since. A later attempt supersedes an
+	 * abandoned epoch after restart.
+	 */
 	public boolean beginCycle(ACell epoch, AVector<ACell> turns, long drainCount) {
 		return update(session -> {
 			if (session.containsKey(K_FRAMES)) {
-				AVector<ACell> frames = sessionFrames(session);
-				session = session.assoc(K_FRAMES, GoalTreeContext.migrateFrames(frames));
+				AVector<ACell> frames = GoalTreeContext.migrateFrames(sessionFrames(session));
+				if (!frames.isEmpty()) {
+					frames = GoalTreeContext.repairDanglingToolCalls(frames, GoalTreeContext.TOOL_CALL_DID_NOT_RETURN);
+				}
+				session = session.assoc(K_FRAMES, frames);
 			}
 			session = migrateLegacySessionLoads(session);
 			session = session.assoc(K_IN_CYCLE, epoch);
-			if (turns != null && turns.count() > 0) {
-				session = appendTurnsToRoot(session, turns);
-			}
-			if (drainCount > 0) {
-				session = drainPendingPrefix(session, drainCount);
-			}
-			return session;
-		});
-	}
-
-	/** Records input only while this attempt owns the session; drains the same
-	 * pending prefix in that update, preserving messages received subsequently. */
-	public boolean presentCycleInput(ACell expectedEpoch,
-			AVector<ACell> turns, long drainCount) {
-		return update(session -> {
-			if (!Objects.equals(expectedEpoch, session.get(K_IN_CYCLE))) return null;
-
 			if (turns != null && turns.count() > 0) {
 				session = appendTurnsToRoot(session, turns);
 			}
@@ -288,18 +279,12 @@ public final class SessionState extends ALatticeComponent<ACell>
 		});
 	}
 
-	/** Complete the session part of an agent cycle within its transaction.
-	 * Validate replacement frames before appending root turns; only consume
-	 * the presented pending prefix, preserving input received during execution. */
-	void finishCycle(AVector<ACell> frames, AVector<ACell> turns,
-			long drainCount, AMap<AString, ACell> tokens) {
+	/** Complete the session part of an agent cycle within its transaction: the
+	 * runtime's own turns, the cycle's token usage, and the end of its claim.
+	 * The cycle's input entered the conversation when it began. */
+	void finishCycle(AVector<ACell> turns, AMap<AString, ACell> tokens) {
 		update(session -> {
-			if (frames != null) {
-				GoalTreeContext.validateFramesUpdate(sessionFrames(session), frames);
-				session = session.assoc(K_FRAMES, frames);
-			}
 			if (turns != null && !turns.isEmpty()) session = appendTurnsToRoot(session, turns);
-			if (drainCount > 0) session = drainPendingPrefix(session, drainCount);
 			if (tokens != null) session = bumpMetaTokens(session, tokens);
 			return session.dissoc(K_IN_CYCLE);
 		});

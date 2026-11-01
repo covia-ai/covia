@@ -114,6 +114,11 @@ public class GoalTreeContext {
 
 	// ========== Interrupted-conversation repair (pure) ==========
 
+	/** The tool result a cycle start gives each call an interrupted cycle left without one. */
+	public static final AString TOOL_CALL_DID_NOT_RETURN = Strings.intern(
+		"Error: this tool call did not return — its effects may or may not "
+		+ "have applied; verify before retrying.");
+
 	/**
 	 * Repairs an interrupted frame stack: every dangling toolCall — an
 	 * entry of an assistant turn's {@code toolCalls} with no later tool-result

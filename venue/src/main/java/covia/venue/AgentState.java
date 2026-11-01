@@ -615,43 +615,66 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * Claims the next input for a task revision exactly once. Input zero is the
-	 * original {@code input}; later inputs are continuation envelopes' messages.
-	 * Returns null when all inputs were already presented or the revision raced.
-	 * A claim also unparks the task: it is in a cycle now, so a restart before
-	 * that cycle ends finds it interrupted rather than waiting.
+	 * The input a task has not been shown yet: its original {@code input}
+	 * first, then each continuation's message in turn. Null once every input
+	 * has been shown.
 	 */
 	@SuppressWarnings("unchecked")
-	public ACell claimTaskInput(Blob taskId, long expectedRevision) {
-		java.util.concurrent.atomic.AtomicReference<ACell> claimed =
-			new java.util.concurrent.atomic.AtomicReference<>();
-		update(r -> {
-			claimed.set(null);
-			Index<Blob, ACell> tasks = extractTasks(r);
-			ACell rawTask = tasks.get(taskId);
-			if (!(rawTask instanceof AMap<?, ?>) || taskRevision(rawTask) != expectedRevision) return r;
-			AMap<AString, ACell> task = ((AMap<AString, ACell>) rawTask).dissoc(K_PARKED);
-			long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count)
-				? count.longValue() : 0L;
-			ACell input;
-			if (presented == 0) {
-				input = task.get(Fields.INPUT);
-			} else {
-				AVector<ACell> continuations =
-					(task.get(K_CONTINUATIONS) instanceof AVector<?> v)
-						? (AVector<ACell>) v : Vectors.empty();
-				long index = presented - 1;
-				if (index >= continuations.count()) {
-					return isParked(rawTask) ? r.assoc(K_TASKS, tasks.assoc(taskId, task)) : r;
+	public static ACell nextTaskInput(ACell taskData) {
+		if (!hasUnpresentedTaskInputs(taskData)) return null;
+		AMap<AString, ACell> task = (AMap<AString, ACell>) taskData;
+		long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
+		if (presented == 0) return task.get(Fields.INPUT);
+		AVector<ACell> continuations = (AVector<ACell>) task.get(K_CONTINUATIONS);
+		return RT.getIn(continuations.get(presented - 1), Fields.MESSAGE);
+	}
+
+	/** What {@link #beginCycle} took. */
+	public enum CycleStart {
+		/** The picked task's row changed after it was picked, so nothing was taken. */
+		MOVED,
+		/** The task's next input was taken; there was no session to claim. */
+		NO_SESSION,
+		/** The session was claimed and the cycle's input is in its conversation. */
+		SESSION
+	}
+
+	/**
+	 * Begins a cycle in one transaction, so what the cycle takes is recorded
+	 * where it is taken. The picked task, while its row is exactly as picked,
+	 * has its next input ({@link #nextTaskInput}) marked shown and is no longer
+	 * parked: it is in a cycle now, so a restart before the cycle ends finds it
+	 * interrupted rather than waiting. The picked session, when it exists, is
+	 * claimed and given the cycle's input ({@link SessionState#beginCycle}).
+	 *
+	 * @param taskId the picked task, or null
+	 * @param pickedTask the task's row as it was picked
+	 * @param sid the picked session, or null
+	 * @param epoch the cycle's claim on the session
+	 * @param turns user turns for the presented messages, then the task's input
+	 * @param drainCount how many presented messages leave the session's pending queue
+	 */
+	@SuppressWarnings("unchecked")
+	public CycleStart beginCycle(Blob taskId, ACell pickedTask, Blob sid, ACell epoch,
+			AVector<ACell> turns, long drainCount) {
+		CycleStart[] result = {CycleStart.MOVED};
+		transact(draft -> {
+			result[0] = CycleStart.MOVED;
+			if (taskId != null) {
+				ACell current = draft.getTasks().get(taskId);
+				if (current == null || !current.equals(pickedTask)) return;
+				AMap<AString, ACell> task = ((AMap<AString, ACell>) current).dissoc(K_PARKED);
+				if (hasUnpresentedTaskInputs(task)) {
+					long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
+					task = task.assoc(K_PRESENTED_INPUTS, CVMLong.create(presented + 1));
 				}
-				ACell envelope = continuations.get(index);
-				input = RT.getIn(envelope, Fields.MESSAGE);
+				AMap<AString, ACell> claimed = task;
+				draft.update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, claimed)));
 			}
-			claimed.set(input);
-			task = task.assoc(K_PRESENTED_INPUTS, CVMLong.create(presented + 1));
-			return r.assoc(K_TASKS, tasks.assoc(taskId, task));
+			result[0] = (sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount))
+				? CycleStart.SESSION : CycleStart.NO_SESSION;
 		});
-		return claimed.get();
+		return result[0];
 	}
 
 	/**
@@ -996,35 +1019,15 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	// ========== Run loop merge ==========
 
 	/**
-	 * Atomic merge with frame-conversation append + session pending drain.
-	 *
-	 * <p>When {@code historySid != null}:
-	 * <ul>
-	 *   <li>If {@code turnsToAppend} is non-empty, turns are appended to
-	 *       the root frame history of {@code sessions[historySid]} and
-	 *       {@code meta.turns} is bumped. (The root frame is minted lazily
-	 *       here if the session has no frames yet.)</li>
-	 *   <li>The first {@code presentedSessionPendingCount} entries of
-	 *       {@code sessions[historySid].pending} are dropped — the run loop
-	 *       snapshots the count pre-transition and passes it here so that
-	 *       messages arriving during the transition (the tail) are preserved
-	 *       for the next cycle.</li>
-	 * </ul>
-	 * All performed inside the same CAS as the timeline / state writes.
-	 * {@code cycleTokens}, when non-null, is added to the picked session's
-	 * {@code meta.tokens} in that CAS.</p>
-	 *
-	 * <p>This atomic-update guarantee matches the deferred-completion
-	 * ordering invariant: an external observer never sees a cycle that
-	 * wrote the timeline but not the frame conversation / pending drain.</p>
-	 *
-	 * <p>When {@code newFrames} is non-null, the picked session's
-	 * {@code frames} vector is replaced wholesale before any turn append —
-	 * the adapter owns its own frame-stack changes (subgoal pushes/pops,
-	 * tool turns, compactions). Any {@code turnsToAppend} are still applied
-	 * to the root frame history on top, which is how concurrent
-	 * intake (drained pending envelopes → user turns at root) co-exists
-	 * with adapter-owned stack emission.</p>
+	 * Atomic merge of a finished cycle: state, completed tasks and the
+	 * timeline entry, and, when {@code historySid != null}, the end of the
+	 * cycle on that session. {@code turnsToAppend} (the runtime's own turns
+	 * and its reply, for a runtime that leaves the conversation to the run
+	 * loop) are appended to the session's root frame and {@code meta.turns} is
+	 * bumped; {@code cycleTokens}, when non-null, is added to its
+	 * {@code meta.tokens}; and the cycle's claim ends. The cycle's input
+	 * entered the conversation when it began ({@link #beginCycle}), so an
+	 * observer never sees a cycle's timeline entry without its input.
 	 *
 	 * <p>{@code state} is merged, not replaced: the transition's result is
 	 * applied as its <em>change</em> against {@code snapshotState} — the value
@@ -1044,8 +1047,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 			AMap<AString, ACell> timelineEntry,
 			Blob historySid,
 			AVector<ACell> turnsToAppend,
-			long presentedSessionPendingCount,
-			AVector<ACell> newFrames,
 			AMap<AString, ACell> cycleTokens) {
 		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
 		transact(draft -> {
@@ -1054,8 +1055,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 				.assoc(K_TASKS, removeCompletedTasks(extractTasks(r), taskResults))
 				.assoc(K_TIMELINE, extractTimeline(r).conj(timelineEntry))
 				.dissoc(K_ERROR));
-			if (historySid != null) draft.session(historySid).finishCycle(
-				newFrames, turnsToAppend, presentedSessionPendingCount, cycleTokens);
+			if (historySid != null) draft.session(historySid).finishCycle(turnsToAppend, cycleTokens);
 			result.set(draft.getRecord());
 		});
 		return result.get();
