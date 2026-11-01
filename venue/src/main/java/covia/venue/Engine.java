@@ -4587,6 +4587,18 @@ public class Engine {
 		return owner != null && isOwnSecret(owner, ctx);
 	}
 
+	/**
+	 * Whether {@code secretRef} names a secret the operator provisions: one in
+	 * the venue's own store (its configured secrets and process environment)
+	 * or the public principal's. A credential from there that a remote service
+	 * refuses is the operator's to fix, not the caller's.
+	 */
+	public boolean isOperatorSecretRef(String secretRef, RequestContext ctx) {
+		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
+		AString owner = secretOwner(secretRef, ctx.getUserDID());
+		return owner != null && (isVenuePrincipal(owner) || isPublicPrincipal(owner));
+	}
+
 	/** The DID whose store {@code secretRef} names: {@code caller} for the own
 	 *  forms, the whole DID of {@code <did>/s/NAME}; null when malformed. */
 	private static AString secretOwner(String secretRef, AString caller) {

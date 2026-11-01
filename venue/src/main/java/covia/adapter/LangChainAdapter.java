@@ -28,9 +28,12 @@ import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.ToolCallIds;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Status;
@@ -145,6 +148,48 @@ public class LangChainAdapter extends AAdapter {
 	static final AString ROLE_USER      = Strings.intern("user");
 	static final AString ROLE_ASSISTANT = Strings.intern("assistant");
 	static final AString ROLE_TOOL      = Strings.intern("tool");
+
+	// ========== Provider failures (ERRORS.md) ==========
+	// Each names the provider and model and what failed, never the provider's
+	// own words: a model reads these, and a provider's text quoted here would
+	// reach it as the venue's statement. A trailing %s takes httpNote(status).
+
+	/** The provider refused the venue's own API key: the operator's to fix. */
+	public static final String OPERATOR_KEY_REFUSED =
+		"Model provider %s refused the venue's API key for model %s; the venue operator must configure a valid key";
+	/** The provider refused the API key the caller supplied, as input or from its own secrets. */
+	public static final String CALLER_KEY_REFUSED =
+		"Model provider %s refused the API key supplied for model %s; check the apiKey input or the secret it comes from";
+	public static final String PROVIDER_RATE_LIMITED =
+		"Model provider %s rate-limited the request for model %s; retry later";
+	public static final String PROVIDER_TIMED_OUT =
+		"Model provider %s did not answer in time for model %s; retry later";
+	public static final String PROVIDER_FAILED =
+		"Model provider %s failed to answer for model %s%s; retry later";
+	public static final String PROVIDER_UNREACHABLE =
+		"Could not reach model provider %s for model %s, or the connection failed; check the url and retry";
+	public static final String MODEL_NOT_FOUND =
+		"Model provider %s has no model %s, or the url names no model API; check the model id and the url";
+	public static final String FEATURE_NOT_SUPPORTED =
+		"Model provider %s does not support a feature this request uses for model %s";
+	public static final String CONTENT_FILTERED =
+		"Model provider %s declined the request for model %s: its content filter refused it";
+	public static final String REQUEST_REFUSED =
+		"Model provider %s refused the request for model %s%s";
+	public static final String MALFORMED_RESPONSE =
+		"Model provider %s answered for model %s with a response the venue could not read";
+	/** A context-size refusal, recognised by {@link AbstractLLMAdapter#CONTEXT_TOO_LARGE}. */
+	public static final String PROVIDER_CONTEXT_TOO_LARGE = AbstractLLMAdapter.CONTEXT_TOO_LARGE
+		+ ": model provider %s refused the request for model %s";
+	/** Ollama refused the connection: almost always topology, Docker against the host (#224). */
+	public static final String OLLAMA_UNREACHABLE = "Ollama not reachable at %s — if the venue runs in Docker,"
+		+ " set adapters.langchain.ollamaUrl in venue config (or the OLLAMA_BASE_URL environment variable)"
+		+ " to http://host.docker.internal:11434 and start Ollama with OLLAMA_HOST=0.0.0.0";
+
+	/** Provider wording for a context-window refusal, read only to recognise one. */
+	private static final List<String> CONTEXT_SIZE_MARKERS = List.of(
+		"context_length_exceeded", "maximum context length", "prompt is too long",
+		"input is too long", "too many input tokens", "request too large", "context window");
 
 	@Override
 	public String getName() {
@@ -345,7 +390,7 @@ public class LangChainAdapter extends AAdapter {
 			resolvedModel = AbstractLLMAdapter.resolveModel(engine, Asset.fromMeta(meta),
 				(modelName != null) ? Strings.create(modelName) : null, null, ctx);
 		} catch (RuntimeException e) {
-			return CompletableFuture.completedFuture(Status.failure("Cannot resolve model: " + e.getMessage()));
+			return CompletableFuture.completedFuture(Status.failure("Cannot resolve model: " + describeFailure(e)));
 		}
 		final String finalModelName = (resolvedModel.modelId() != null)
 			? resolvedModel.modelId().toString() : null;
@@ -354,12 +399,13 @@ public class LangChainAdapter extends AAdapter {
 		// named, else the provider's own. A granted key's url caveat is checked
 		// against that destination; a denial is a failure, never a thrown error.
 		final String destination = (urlParam != null) ? urlParam.toString() : defaultBaseUrl(provider);
-		final String apiKey;
+		final ApiKey key;
 		try {
-			apiKey = resolveApiKey(meta, input, ctx, destination);
+			key = resolveApiKey(meta, input, ctx, destination);
 		} catch (AuthException e) {
 			return CompletableFuture.completedFuture(Status.failure(e.getMessage()));
 		}
+		final String apiKey = key.value();
 
 		// Providers that need a key must fail fast with a clear message —
 		// without this, langchain4j's Anthropic builder throws synchronously
@@ -474,12 +520,7 @@ public class LangChainAdapter extends AAdapter {
 					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools,
 						responseFormatCell, cacheMarks);
 				} catch (RuntimeException e) {
-					// A connect failure against Ollama is almost always topology
-					// (Docker vs host) — turn the bare ConnectException into a
-					// 30-second self-serve diagnosis (#224).
-					String hint = (ollamaUrl != null) ? ollamaConnectHint(ollamaUrl, e) : null;
-					if (hint != null) throw new covia.exception.JobFailedException(hint);
-					throw e;
+					throw providerFailure(provider, resolvedModelName, key.operators(), ollamaUrl, e);
 				}
 				if (legacyOutput) {
 					// Wrap assistant message as {response: content}
@@ -604,26 +645,101 @@ public class LangChainAdapter extends AAdapter {
 		return "http://localhost:11434";
 	}
 
-	/** A diagnosable message for an Ollama connect failure, or null when the
-	 *  failure isn't connectivity. Names the resolved URL and the venue-level
-	 *  knob — the usual cause is a Dockerised venue reaching for its own
-	 *  localhost (#224). */
-	static String ollamaConnectHint(String resolvedUrl, Throwable e) {
-		boolean connectivity = false;
+	/**
+	 * The failure a provider call reports, typed for what went wrong
+	 * (ERRORS.md): a langchain4j or connection failure becomes the Covia type,
+	 * named by provider and model, never in the provider's words. The
+	 * provider's text is read only to recognise a context-size refusal.
+	 * Anything else, a cancellation included, passes on unchanged.
+	 *
+	 * @param operatorKey whether the API key sent was the operator's rather than the caller's
+	 * @param ollamaUrl the Ollama base URL called, or null for a hosted provider
+	 */
+	static RuntimeException providerFailure(String provider, String model, boolean operatorKey,
+			String ollamaUrl, RuntimeException e) {
+		if (e instanceof CoviaException || causedBy(e, InterruptedException.class)) return e;
+		Integer status = httpStatus(e);
+		RuntimeException failure;
+		if (ollamaUrl != null && isConnectFailure(e)) {
+			// Almost always topology: a Dockerised venue reaching for its own localhost (#224).
+			String at = origin(ollamaUrl);
+			failure = new UnavailableException(OLLAMA_UNREACHABLE.formatted(at != null ? at : "its configured url"));
+		} else if (e instanceof dev.langchain4j.exception.AuthenticationException) {
+			failure = operatorKey
+				? new ConfigurationException(OPERATOR_KEY_REFUSED.formatted(provider, model))
+				: new InvalidInputException(CALLER_KEY_REFUSED.formatted(provider, model));
+		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
+			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model));
+		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
+			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model));
+		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
+			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, httpNote(status)));
+		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
+			failure = new NotFoundException(MODEL_NOT_FOUND.formatted(provider, model), model);
+		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
+			failure = new NotSupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
+		} else if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
+			failure = new ResponseException(CONTENT_FILTERED.formatted(provider, model));
+		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
+			failure = mentionsContextSize(e)
+				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model))
+				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, httpNote(status)));
+		} else if (e instanceof dev.langchain4j.exception.JsonReadException) {
+			failure = new ResponseException(MALFORMED_RESPONSE.formatted(provider, model));
+		} else if (status != null) {
+			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, httpNote(status)));
+		} else if (e instanceof dev.langchain4j.exception.UnresolvedModelServerException
+				|| causedBy(e, java.io.IOException.class)
+				|| causedBy(e, java.nio.channels.UnresolvedAddressException.class)) {
+			// The HTTP client wraps every IOException in a bare RuntimeException.
+			failure = new UnavailableException(PROVIDER_UNREACHABLE.formatted(provider, model));
+		} else {
+			return e;
+		}
+		failure.initCause(e);
+		return failure;
+	}
+
+	/** A status for a message, from httpStatus: " (HTTP 400)", or nothing when unknown. */
+	static String httpNote(Integer status) {
+		return (status != null) ? " (HTTP " + status + ")" : "";
+	}
+
+	/** The status of the HTTP answer behind a langchain4j failure, or null when there was none. */
+	private static Integer httpStatus(Throwable e) {
 		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
-			if (t instanceof java.net.ConnectException
-					|| t instanceof java.net.UnknownHostException
-					|| t instanceof java.net.NoRouteToHostException
-					|| t instanceof java.net.http.HttpConnectTimeoutException) {
-				connectivity = true;
-				break;
+			if (t instanceof dev.langchain4j.exception.HttpException http) return http.statusCode();
+		}
+		return null;
+	}
+
+	private static boolean causedBy(Throwable e, Class<? extends Throwable> type) {
+		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
+			if (type.isInstance(t)) return true;
+		}
+		return false;
+	}
+
+	/** Whether the connection itself failed: refused, no route, no such host, or no connect in time. */
+	private static boolean isConnectFailure(Throwable e) {
+		return causedBy(e, java.net.ConnectException.class)
+			|| causedBy(e, java.net.UnknownHostException.class)
+			|| causedBy(e, java.net.NoRouteToHostException.class)
+			|| causedBy(e, java.net.http.HttpConnectTimeoutException.class)
+			|| causedBy(e, java.nio.channels.UnresolvedAddressException.class);
+	}
+
+	/** Whether the provider's own text says the context exceeded the model's window. */
+	private static boolean mentionsContextSize(Throwable e) {
+		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
+			String message = t.getMessage();
+			if (message == null) continue;
+			String m = message.toLowerCase(java.util.Locale.ROOT);
+			for (String marker : CONTEXT_SIZE_MARKERS) {
+				if (m.contains(marker)) return true;
 			}
 		}
-		if (!connectivity) return null;
-		return "Ollama not reachable at " + resolvedUrl
-			+ " — if the venue runs in Docker, set adapters.langchain.ollamaUrl in venue config"
-			+ " (or the OLLAMA_BASE_URL environment variable) to http://host.docker.internal:11434"
-			+ " and start Ollama with OLLAMA_HOST=0.0.0.0";
+		return false;
 	}
 
 	static boolean providerNeedsApiKey(String provider) {
@@ -1031,15 +1147,30 @@ public class LangChainAdapter extends AAdapter {
 	 * The API key for a call: the caller's {@code apiKey} (a literal, or a
 	 * reference resolved under the caller's authority for {@code destination}),
 	 * else the operation's default key reference ({@link #keyReference}).
-	 * A reference that does not resolve yields null rather than the literal:
+	 * A reference that does not resolve yields no value rather than the literal:
 	 * "/s/foo" sent as an API key produces a misleading 401 from the provider
 	 * (see #91).
 	 */
-	String resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx, String destination) {
+	ApiKey resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx, String destination) {
 		AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
-		if (apiKeyParam != null && !Engine.isSecretRef(apiKeyParam.toString())) return apiKeyParam.toString();
+		if (apiKeyParam != null && !Engine.isSecretRef(apiKeyParam.toString())) {
+			return new ApiKey(apiKeyParam.toString(), false);
+		}
 		String ref = (apiKeyParam != null) ? apiKeyParam.toString() : keyReference(meta);
-		return (ref != null) ? engine.resolveSecret(ref, ctx, destination) : null;
+		if (ref == null) return new ApiKey(null, false);
+		return new ApiKey(engine.resolveSecret(ref, ctx, destination), engine.isOperatorSecretRef(ref, ctx));
+	}
+
+	/**
+	 * An API key for a call, and whether it is the operator's: provisioned in
+	 * the venue's or the public store rather than supplied by the caller. A
+	 * key the provider refuses is then the operator's to fix, or the caller's.
+	 */
+	record ApiKey(String value, boolean operators) {
+		@Override
+		public String toString() {
+			return "ApiKey[operators=" + operators + "]";   // never the value
+		}
 	}
 
 	/** The operation's default key reference, {@code s/<operation.secretKey>}:
