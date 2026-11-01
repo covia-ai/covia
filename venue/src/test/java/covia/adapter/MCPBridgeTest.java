@@ -375,21 +375,50 @@ public class MCPBridgeTest {
 		});
 		rejecting.start();
 		try {
-			String server = "http://localhost:" + rejecting.getAddress().getPort() + "/mcp/";
+			String origin = "http://localhost:" + rejecting.getAddress().getPort();
+			String server = origin + "/mcp/?token=private-token";
 			Job job = engine.jobs().invokeOperation("v/ops/mcp/tools-list",
 				Maps.of(Fields.SERVER, server), RequestContext.of(ALICE_DID));
 			assertThrows(Exception.class, () -> job.awaitResult(15000));
 			assertEquals(Status.FAILED, job.getStatus());
 
-			String error = job.getErrorMessage();
-			assertTrue(error.contains("Cannot initialize MCP client for server " + server), error);
-			assertTrue(error.contains("Authorization error"), error);
-			assertTrue(error.contains("URL names the MCP endpoint"), error);
-			assertTrue(error.contains("credentials") && error.contains("protocol version"), error);
+			// The refusal is typed and names the server by its origin only:
+			// the url's query may carry a credential.
+			assertEquals(McpClientSession.CREDENTIAL_REFUSED.formatted(origin, McpClientSession.TOOLS_LIST,
+				" (HTTP 401)"), job.getErrorMessage());
 			assertEquals("/mcp", requestedPath.get(),
 				"a trailing slash on an explicit MCP endpoint must not append another /mcp");
 		} finally {
 			rejecting.stop(0);
+		}
+	}
+
+	@Test
+	public void testToolCallServerErrorIsTypedWithoutItsText() throws Exception {
+		// A server answering with an HTTP error is a ResponseException naming
+		// the server and the tool; its response body never reaches the caller.
+		HttpServer failing = HttpServer.create(new InetSocketAddress(0), 0);
+		failing.createContext("/mcp", exchange -> {
+			exchange.getRequestBody().readAllBytes();
+			byte[] body = "internal trace SERVER-SAYS-leak-456".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(500, body.length);
+			try (var out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		failing.start();
+		try {
+			String origin = "http://localhost:" + failing.getAddress().getPort();
+			Job job = engine.jobs().invokeOperation("v/ops/mcp/tools-call",
+				Maps.of(Fields.SERVER, origin + "/mcp", Fields.TOOL_NAME, "lookup",
+					Fields.ARGUMENTS, Maps.empty()),
+				RequestContext.of(ALICE_DID));
+			assertThrows(Exception.class, () -> job.awaitResult(15000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(McpClientSession.BAD_ANSWER.formatted(origin,
+				McpClientSession.TOOL_CALL.formatted("lookup")), job.getErrorMessage());
+		} finally {
+			failing.stop(0);
 		}
 	}
 
@@ -630,17 +659,6 @@ public class MCPBridgeTest {
 		// a bare error still says something useful
 		assertTrue(MCPAdapter.errorText(new CallToolResult(List.of(), true, null, null))
 			.contains("no error detail"));
-	}
-
-	@Test
-	public void testRootCauseMessage() {
-		Exception inner = new java.io.IOException("Connection refused");
-		Exception wrapped = new java.util.concurrent.CompletionException(new RuntimeException(inner));
-		assertEquals("Connection refused", MCPAdapter.rootCauseMessage(wrapped));
-		// message-less chain falls back to the class name
-		assertEquals("IllegalStateException", MCPAdapter.rootCauseMessage(new IllegalStateException()));
-		// a plain message passes through
-		assertEquals("plain", MCPAdapter.rootCauseMessage(new RuntimeException("plain")));
 	}
 
 	private static boolean vectorContains(AVector<ACell> v, String s) {

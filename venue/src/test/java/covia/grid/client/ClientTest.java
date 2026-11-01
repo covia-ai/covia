@@ -297,4 +297,15 @@ public class ClientTest {
 		
 		assertEquals(Maps.empty(),a.run(Maps.empty()));
 	}
+
+	@Test
+	public void testAssetRunFailurePassesOnAsReported() throws IOException {
+		// A failed run reaches the caller as the type the venue reported it
+		// with, not rewrapped as a JobFailedException carrying its description.
+		Venue v = Grid.connect(TestServer.BASE_URL);
+		Asset a = v.resolveAsset("v/test/ops/error");
+		assertNotNull(a);
+		assertThrows(covia.exception.ResponseException.class,
+			() -> a.run(Maps.of("message", "boom")));
+	}
 }
