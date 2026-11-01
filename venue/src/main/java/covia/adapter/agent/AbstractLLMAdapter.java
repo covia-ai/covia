@@ -1114,19 +1114,16 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * Explains a failed tool call to the model. An expected failure
-	 * ({@link AAdapter#isSelfDescribing}) is its own reason. Anything else —
-	 * including an expected type thrown without a reason — is a runtime or
+	 * ({@link AAdapter#isExpectedFailure}) is its own reason. Anything else —
+	 * including a CoviaException thrown without a reason — is a runtime or
 	 * venue bug: it is logged here at ERROR with its stack, and the model is
-	 * told it was unexpected, the class and message kept for debugging.
+	 * told it was unexpected and its type, never its text.
 	 */
 	public static String toolFailure(Throwable failure, String toolName) {
 		Throwable cause = unwrap(failure);
-		String message = cause.getMessage();
-		if (isExpectedFailure(cause)) return conciseDetail(message, MAX_FAILURE_CHARS);
+		if (isExpectedFailure(cause)) return conciseDetail(cause.getMessage(), MAX_FAILURE_CHARS);
 		log.error("Unexpected failure in tool {}", toolName, cause);
-		boolean explained = message != null && !message.isBlank();
-		String detail = cause.getClass().getSimpleName() + (explained ? ": " + message : "");
-		return conciseDetail(UNEXPECTED_TOOL_FAILURE + " (" + detail + ")", MAX_FAILURE_CHARS);
+		return UNEXPECTED_TOOL_FAILURE + " (" + cause.getClass().getSimpleName() + ")";
 	}
 
 	/** The result of a tool call whose operation outran its budget. */

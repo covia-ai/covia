@@ -19,6 +19,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.TestServer;
@@ -59,11 +60,11 @@ public class InvokeWaitTest {
 	@Test
 	public void testMalformedWaitRejected() {
 		// Bad inputs are rejected, never silently treated as absent.
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs("soon", null));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs("-5", null));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create("whenever")));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, CVMLong.create(-1)));
-		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, convex.core.data.Maps.of("ms", CVMLong.create(5))));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs("soon", null));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs("-5", null));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create("whenever")));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, CVMLong.create(-1)));
+		assertThrows(InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, convex.core.data.Maps.of("ms", CVMLong.create(5))));
 	}
 
 	@Test

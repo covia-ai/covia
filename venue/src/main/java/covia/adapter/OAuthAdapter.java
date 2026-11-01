@@ -44,6 +44,7 @@ import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
 import covia.lattice.Namespace;
 import covia.venue.AdapterState;
@@ -558,7 +559,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	 * {@link Callback} the route renders — never an exception in the user's
 	 * browser.
 	 */
-	public Callback callback(String providerName, String state, String code, String error, String errorDescription) {
+	public Callback callback(String providerName, String state, String code, String error) {
 		Pending pend = (state != null && !state.isBlank()) ? pending.remove(state) : null;
 		long now = System.currentTimeMillis();
 		if (pend == null || pend.expiresAt() < now) {
@@ -568,9 +569,11 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			return new Callback(false, providerName, "This connection request was for another provider", null, null);
 		}
 		if (error != null && !error.isBlank()) {
-			return new Callback(false, providerName, "The provider refused the connection: " + error
-				+ ((errorDescription != null && !errorDescription.isBlank()) ? " — " + errorDescription : ""),
-				pend.returnTo(), null);
+			// Only the OAuth error code is shown: the description arrives in the
+			// redirect's query string, which anyone can write
+			String refused = identifier(error);
+			return new Callback(false, providerName, "The provider refused the connection"
+				+ ((refused != null) ? ": " + refused : ""), pend.returnTo(), null);
 		}
 		if (code == null || code.isBlank()) {
 			return new Callback(false, providerName, "The provider sent no authorization code", pend.returnTo(), null);
@@ -766,23 +769,27 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			response = http.send(request, HttpResponse.BodyHandlers.ofString());
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new IOException("Interrupted while calling " + p.tokenEndpoint());
+			throw new UnavailableException("Interrupted while calling the " + p.name() + " token endpoint");
+		} catch (IOException e) {
+			throw new UnavailableException("The " + p.name() + " token endpoint could not be reached", e);
 		}
 		ACell body;
 		try {
 			body = JSON.parse(response.body());
 		} catch (Exception e) {
-			throw new IOException(p.name() + " token endpoint returned " + response.statusCode() + " with a non-JSON body");
+			throw new ResponseException(p.name() + " token endpoint returned " + response.statusCode()
+				+ " with a non-JSON body", response);
 		}
 		AMap<AString, ACell> tokens = RT.ensureMap(body);
 		String error = (tokens != null) ? str(tokens, Strings.intern("error")) : null;
 		if (response.statusCode() != 200 || tokens == null || error != null) {
-			String description = (tokens != null) ? str(tokens, Strings.intern("error_description")) : null;
-			throw new IOException(p.name() + " token endpoint returned " + response.statusCode()
-				+ ((error != null) ? ": " + error : "") + ((description != null) ? " — " + description : ""));
+			// The OAuth error code is quoted; its description is the provider's free text
+			String code = identifier(error);
+			throw new ResponseException(p.name() + " token endpoint returned " + response.statusCode()
+				+ ((code != null) ? ": " + code : ""), response);
 		}
 		if (str(tokens, Strings.intern("access_token")) == null) {
-			throw new IOException(p.name() + " token endpoint returned no access_token");
+			throw new ResponseException(p.name() + " token endpoint returned no access_token", response);
 		}
 		return tokens;
 	}

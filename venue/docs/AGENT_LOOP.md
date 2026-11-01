@@ -682,12 +682,11 @@ loop thread with no hop.
 #### Tool failures and unbound names
 
 Every failed call returns an `"Error: …"` result the model can act on
-(`AbstractLLMAdapter.toolFailure`). An expected failure — a `CoviaException`,
-and for now the JDK argument, state and unsupported-operation exceptions
-(#644) — is its own reason. Anything else is a runtime or venue bug: it is
-logged at ERROR with its stack, and the result says it was an unexpected venue
-error, not caused by the call's input, with the class and message for
-debugging. Timeouts and interruptions have their own results.
+(`AbstractLLMAdapter.toolFailure`). An expected failure, a `CoviaException`
+with a reason, is its own reason. Anything else is a runtime or venue bug: it
+is logged at ERROR with its stack, and the result says it was an unexpected
+venue error, not caused by the call's input, naming only its class
+([ERRORS.md](ERRORS.md)). Timeouts and interruptions have their own results.
 
 A name the palette binds to no route (`dispatchUnbound`) runs nothing unless
 it resolves to an operation, which is dispatched as one. Otherwise the result

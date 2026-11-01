@@ -212,7 +212,8 @@ There are two distinct configuration hooks:
 An override of `configure` should validate the whole proposed configuration
 before changing live fields, throw `IllegalArgumentException` with an
 actionable message for malformed known settings, and reject unknown settings
-when `strict` is true. Security boundaries and reserved settings must remain
+when `strict` is true. The Engine reports it as the failure of whoever supplied
+the settings ([ERRORS.md](ERRORS.md)). Security boundaries and reserved settings must remain
 enforced even in lenient mode. Return `false` only to decline a valid but
 unavailable configuration. The reserved `enabled` key is owned by the
 framework.

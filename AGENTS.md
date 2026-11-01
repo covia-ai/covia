@@ -199,7 +199,7 @@ and venue dependencies are optional for consumers of the library.
 - **Tests:** JUnit 6, use `Engine.createTemp()` for test instances
 - **API contracts are defined in docs:** every externally used API contract is cleanly defined in the relevant design doc or COG, in terms its callers can see, and the code implements it. Internal types and components never appear in a contract or decide its answers
 - **Message wording lives in constants:** a refusal or error message is built from a constant on the class that owns it (`VenueAuthenticator.Reason`, `Auth.KEY_ALREADY_BOUND`), and tests assert against the constant, never the wording — a rewording must break no test
-- **Expected failures are typed:** a failure a caller can cause or act on is a `CoviaException` subtype whose message says what failed and why, raised where that is known; library exceptions are wrapped where they are called. Anything else reaching a caller is a runtime or venue bug — logged at ERROR, reported as unexpected. Throw sites still using JDK exceptions migrate under #644
+- **Expected failures are typed:** a failure a caller can cause or act on is a `CoviaException` subtype whose message says what failed and why, raised where that is known; library exceptions are wrapped where they are called. Anything else reaching a caller is a runtime or venue bug — logged at ERROR, reported as unexpected. See `venue/docs/ERRORS.md`
 - **Checks return reasons:** a check returns `null` when it passes and a human-readable reason when it does not (`CapabilityChecker.allows`, `UcanJwtValidator.Validation`, `VenueAuthenticator.Verdict`), so the reason bubbles back to the caller unchanged
 - **Prefer editing** existing files over creating new ones
 

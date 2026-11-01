@@ -19,6 +19,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.server.AuthMiddleware;
@@ -89,7 +90,7 @@ class UserDeletionTest {
 		assertNull(engine.getVenueState().users().get(did));
 		assertFalse(engine.getVenueState().users().getAll().containsKey(did));
 		assertTrue(engine.gridScheduler().list(ctx).isEmpty());
-		assertThrows(IllegalArgumentException.class, () -> ((UserAdapter) engine.getAdapter("user"))
+		assertThrows(NotFoundException.class, () -> ((UserAdapter) engine.getAdapter("user"))
 			.info(engine.venueContext(), Maps.of(Fields.DID, did)));
 		assertThrows(AuthException.class, () -> engine.admitUser(did));
 		assertThrows(AuthException.class, () -> retained.cursor().path(Strings.create("w")).set(Maps.of("late", true)));

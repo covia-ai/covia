@@ -684,7 +684,12 @@ public class MCP extends McpServer {
 				return protocolError(-32602, "Unknown tool: " + toolName);
 			}
 		} catch (Exception e) {
-			return toolError(messageOf(e));
+			// An expected failure is its reason; anything else is a venue error,
+			// logged here and named only by its type
+			if (!covia.adapter.AAdapter.isExpectedFailure(e)) {
+				log.error("Unexpected failure in MCP tool call {}", RT.getIn(params, Fields.NAME), e);
+			}
+			return toolError(covia.adapter.AAdapter.describeFailure(e));
 		}
 	}
 
@@ -737,10 +742,6 @@ public class MCP extends McpServer {
 	}
 
 	/** An exception's message, never null: a bare toolError(null) tells the caller nothing. */
-	private static String messageOf(Throwable e) {
-		return (e.getMessage() != null) ? e.getMessage() : e.toString();
-	}
-
 	/**
 	 * A long tool call's response as an SSE stream, opened only when the call
 	 * outlasts one keep-alive interval, so a quick call is answered as before.

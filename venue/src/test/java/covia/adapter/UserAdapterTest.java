@@ -31,6 +31,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -246,7 +247,7 @@ class UserAdapterTest {
 			() -> adapter.authenticationList(RequestContext.of(selfSovereign),
 				Maps.of(Fields.DID, managedDid)));
 		AString unregistered = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		assertThrows(IllegalArgumentException.class,
+		assertThrows(NotFoundException.class,
 			() -> adapter.authenticationList(engine.venueContext(),
 				Maps.of(Fields.DID, unregistered)));
 	}

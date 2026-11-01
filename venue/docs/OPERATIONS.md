@@ -227,7 +227,7 @@ Content type is carried independently of the bytes. For assets, `metadata.conten
 
 Resolution distinguishes a **genuine absence** from an **operational failure**, and never lets one masquerade as the other (#174):
 
-- **Absence is `null`.** A reference that does not resolve — a local miss, or a remote `did:web` reference whose publisher is *reachable but holds no such asset / does not bind the name* — returns `null`. This is an expected outcome; callers handle it. On the invoke path it becomes an explicit **"operation not found"** (HTTP 400 / `IllegalArgumentException`). `resolvePath` never touches the network, so it never fails operationally — its misses are always genuine absences.
+- **Absence is `null`.** A reference that does not resolve — a local miss, or a remote `did:web` reference whose publisher is *reachable but holds no such asset / does not bind the name* — returns `null`. This is an expected outcome; callers handle it. On the invoke path it becomes an explicit **"operation not found"** (`NotFoundException`, HTTP 400). `resolvePath` never touches the network, so it never fails operationally — its misses are always genuine absences.
 - **Operational failure throws.** When a remote fetch fails for an operational reason — the venue is **unreachable**, returns an **error**, the venue reference is **malformed**, or it returns **metadata that fails the content-addressing check** — `resolveAsset` / the fetch family throw a `RemoteFetchException` naming the venue. A down venue is *not* a missing operation.
 
 **Where the error surfaces** follows one rule: `null` is fine wherever absence is expected; the error is raised where the result is *used* for something that can't work with absence.
@@ -483,6 +483,11 @@ This is runtime discovery metadata, not part of the immutable operation asset.
 Exposure does not grant permission to invoke an operation: the normal capability
 checks still apply. REST/native invocation remains subject to its own checks
 and operation restrictions, independently of MCP exposure.
+
+A `tools/call` that the venue accepts and that then fails answers a tool result
+marked `isError`. Its text is the failure's reason, or, for an unexpected
+failure, that a venue error occurred and its type ([ERRORS.md](ERRORS.md)). A
+malformed request or an unknown tool answers a JSON-RPC error instead.
 
 ### Lattice primitives
 

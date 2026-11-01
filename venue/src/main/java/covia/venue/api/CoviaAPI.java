@@ -360,8 +360,7 @@ public class CoviaAPI extends ACoviaAPI {
 					boolean isOperation = a.meta().get(Fields.OPERATION) != null;
 					if (isOperation == wantOperations.booleanValue()) matching.add(h);
 				} catch (IOException e) {
-					buildError(ctx, 500, "Error retrieving venue asset "
-						+ engine().assetDIDURL(h) + ": " + e.getMessage());
+					storageFailure(ctx, "Retrieving venue asset " + engine().assetDIDURL(h), e);
 					return;
 				}
 			}
@@ -408,7 +407,7 @@ public class CoviaAPI extends ACoviaAPI {
 				item.put(Fields.METADATA, asset.meta());
 				assetsList.add(item);
 			} catch (IOException e) {
-				buildError(ctx, 500, "Error retrieving venue asset " + id + ": " + e.getMessage());
+				storageFailure(ctx, "Retrieving venue asset " + id, e);
 				return;
 			}
 		}
@@ -533,7 +532,7 @@ public class CoviaAPI extends ACoviaAPI {
 				ctx.result(asset.getMetadata().toString());
 				ctx.status(200);
 			} catch (IOException e) {
-				buildError(ctx,500,"Error retrieving venue asset: "+e.getMessage());
+				storageFailure(ctx, "Retrieving venue asset", e);
 			}
 			return;
 		}
@@ -570,7 +569,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx,403,"Not authorised to read asset: "+ref);
 		} catch (IOException e) {
-			buildError(ctx,500,"Error retrieving asset: "+e.getMessage());
+			storageFailure(ctx, "Retrieving asset", e);
 		}
 	}
 
@@ -798,7 +797,7 @@ public class CoviaAPI extends ACoviaAPI {
 			// preview/download go through, and callers need to see why.
 			buildError(ctx,403,e.getMessage());
 		} catch (IOException e) {
-			buildError(ctx,500,"Error retrieving asset content: "+e.getMessage());
+			storageFailure(ctx, "Retrieving asset content", e);
 		}
 	}
 
@@ -883,10 +882,10 @@ public class CoviaAPI extends ACoviaAPI {
 
 		} catch (AuthException e) {
 			buildError(ctx,403,"Not authorised to store asset content: "+idString);
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			this.buildError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
 		} catch (IOException e) {
-			this.buildError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
+			storageFailure(ctx, "Storing asset content", e);
 		}
 	}
 
@@ -961,10 +960,10 @@ public class CoviaAPI extends ACoviaAPI {
 			if (run.job() != null) {
 				// The venue accepted the run; the operation then failed. However
 				// it failed, that is the job's outcome, not an HTTP refusal.
+				// An unexpected failure was logged when the job failed.
 				if (AAdapter.isExpectedFailure(cause)) {
 					buildError(ctx, 400, "Error running operation: " + cause.getMessage());
 				} else {
-					log.error("Unexpected failure running operation {}", op, cause);
 					buildError(ctx, 500, "Operation failed: " + AAdapter.describeFailure(cause));
 				}
 			} else if (cause instanceof AuthException) {
@@ -983,9 +982,6 @@ public class CoviaAPI extends ACoviaAPI {
 				log.error("Unexpected failure running operation {}", op, cause);
 				buildError(ctx, 500, "Operation failed: " + AAdapter.describeFailure(cause));
 			}
-		} catch (Exception e) {
-			buildError(ctx, 500, "Unexpected failure running operation: " + e);
-			log.warn("Unexpected exception handling client run", e);
 		}
 	}
 	
@@ -1084,11 +1080,6 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			Job job=engine().jobs().submitOperation(op,input,rctx);
-			if (job==null) {
-				buildError(ctx,404,"Operation does not exist");
-				return;
-			}
-
 			boolean completedWithinWait = awaitCompletion(job, waitMs);
 
 			this.buildResult(ctx, completedWithinWait ? 200 : 201, job.getData());
@@ -1108,13 +1099,10 @@ public class CoviaAPI extends ACoviaAPI {
 			ctx.header("Retry-After", Long.toString(e.getRetryAfterSeconds()));
 			this.buildError(ctx, 429, e.getMessage());
 			return;
-		} catch (CoviaException | IllegalArgumentException | IllegalStateException e) {
-			// Any other expected refusal of the invocation.
+		} catch (CoviaException e) {
+			// Any other expected refusal of the invocation; anything else is a
+			// venue error, which the server's handler reports
 			this.buildError(ctx, 400, "Error invoking operation: " + e.getMessage());
-			return;
-		} catch (Exception e) {
-			this.buildError(ctx, 500, "Unexpected failure invoking operation: "+e);
-			log.warn("Unexpected exception handling client invoke",e);
 		}
 	}
 
@@ -1155,7 +1143,7 @@ public class CoviaAPI extends ACoviaAPI {
 	 * @param queryParam Raw {@code wait} query parameter (may be null)
 	 * @param bodyField {@code wait} field from the request body (may be null)
 	 * @return Wait window in ms; 0 for the default asynchronous behaviour
-	 * @throws IllegalArgumentException if {@code wait} is present but malformed
+	 * @throws InvalidInputException if {@code wait} is present but malformed
 	 */
 	static long parseWaitMs(String queryParam, ACell bodyField) {
 		if (queryParam != null) return parseWaitToken(queryParam.trim());
@@ -1164,7 +1152,7 @@ public class CoviaAPI extends ACoviaAPI {
 		if (convex.core.data.prim.CVMBool.FALSE.equals(bodyField)) return 0;
 		if (bodyField instanceof convex.core.data.prim.CVMLong l) return clampWait(l.longValue());
 		if (bodyField instanceof AString s) return parseWaitToken(s.toString().trim());
-		throw new IllegalArgumentException(
+		throw new InvalidInputException(
 			"Invalid wait value: expected boolean or milliseconds, got " + bodyField.getClass().getSimpleName());
 	}
 
@@ -1176,13 +1164,13 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			return clampWait(Long.parseLong(token));
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Invalid wait value: expected true, false or milliseconds, got '" + token + "'");
 		}
 	}
 
 	private static long clampWait(long ms) {
-		if (ms < 0) throw new IllegalArgumentException("Invalid wait value: negative milliseconds " + ms);
+		if (ms < 0) throw new InvalidInputException("Invalid wait value: negative milliseconds " + ms);
 		return Math.min(ms, MAX_WAIT_MS);
 	}
 
@@ -1275,9 +1263,9 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 202, response);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (NotFoundException | IllegalArgumentException e) {
+		} catch (NotFoundException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (ConflictException | NotSupportedException | IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		} catch (covia.exception.ResponseException e) {
 			buildError(ctx, 502, e.getMessage());
@@ -1369,7 +1357,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException | NotSupportedException | IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1404,7 +1392,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (ConflictException | NotSupportedException | IllegalStateException e) {
+		} catch (ConflictException | NotSupportedException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
 	}
@@ -1803,7 +1791,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			path = expandValueScope(ctx, rctx, path);
 			input = buildValueInput(ctx, path);
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -1824,7 +1812,7 @@ public class CoviaAPI extends ACoviaAPI {
 				case "aggregate" -> covia.handleAggregate(rctx, input);
 				// The count fast path is aggregate with no grouping.
 				case "count"     -> covia.handleAggregate(rctx, input.dissoc(Strings.intern("groupBy")));
-				default -> throw new IllegalArgumentException("Unknown values op: " + op);
+				default -> throw new IllegalStateException("Unknown values op: " + op);
 			};
 			// Content-addressed conditional read — only for `read`, where a path
 			// resolves to a single value whose CAD3 hash is a free, exact validator.
@@ -1851,12 +1839,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, result);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			// Bad request parameters (e.g. a fields projection on a non-keyed
 			// node, or over the field cap) — the caller's error, not the venue's.
 			buildError(ctx, 400, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
 	}
 
@@ -1893,7 +1879,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			return m.assoc(Strings.intern(name), CVMLong.create(Long.parseLong(v.trim())));
 		} catch (NumberFormatException e) {
-			throw new IllegalArgumentException("Invalid integer query parameter '" + name + "': " + v);
+			throw new InvalidInputException("Invalid integer query parameter '" + name + "': " + v);
 		}
 	}
 
@@ -1938,7 +1924,7 @@ public class CoviaAPI extends ACoviaAPI {
 		boolean scopedPath = isExecutionScopedNamespace(path);
 		if (!scopedPath) {
 			if (isExecutionScopedRequest(ctx)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"'agent', 'task', and 'session' are only valid with n/, t/, or c/ paths");
 			}
 			return path;
@@ -1967,13 +1953,13 @@ public class CoviaAPI extends ACoviaAPI {
 				yield agent.ownerDID() + "/g/" + agent.agentId()
 					+ "/sessions/" + sessionId.toHexString() + "/c" + suffix;
 			}
-			default -> throw new IllegalArgumentException("Unsupported scoped namespace: " + namespace);
+			default -> throw new IllegalStateException("Unsupported scoped namespace: " + namespace);
 		};
 	}
 
 	private static AgentScope parseAgentScope(String ref, RequestContext rctx) {
 		if (ref == null || ref.isBlank()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Missing 'agent' query parameter for execution-scoped path");
 		}
 
@@ -1982,7 +1968,7 @@ public class CoviaAPI extends ACoviaAPI {
 		if (ref.startsWith("did:")) {
 			AString agentDID = Strings.create(ref);
 			if (!Principals.isAgentDID(agentDID)) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"'agent' must be a bare agent id or a full agent DID ending ':g:<agentId>'");
 			}
 			owner = Principals.userOf(agentDID);
@@ -1990,7 +1976,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} else {
 			owner = rctx.getUserDID();
 			if (owner == null) {
-				throw new IllegalArgumentException(
+				throw new InvalidInputException(
 					"A bare 'agent' id requires an authenticated caller");
 			}
 			agentId = Strings.create(ref);
@@ -1998,32 +1984,31 @@ public class CoviaAPI extends ACoviaAPI {
 
 		if (agentId == null || agentId.count() == 0
 				|| agentId.toString().contains("/") || agentId.toString().contains(":")) {
-			throw new IllegalArgumentException("'agent' must name a single agent id");
+			throw new InvalidInputException("'agent' must name a single agent id");
 		}
 		// Apply the canonical agent-DID syntax validation in one place.
-		Principals.agentDID(owner, agentId);
+		try {
+			Principals.agentDID(owner, agentId);
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		return new AgentScope(owner, agentId);
 	}
 
 	private static Blob parseBlobParam(Context ctx, String name, String namespace) {
 		String raw = ctx.queryParam(name);
 		if (raw == null || raw.isBlank()) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"Missing '" + name + "' query parameter for " + namespace + " path");
 		}
-		try {
-			Blob id = Blob.parse(raw.trim());
-			if (id == null) throw new IllegalArgumentException();
-			return id;
-		} catch (RuntimeException e) {
-			throw new IllegalArgumentException(
-				"Invalid '" + name + "' query parameter: expected a hex id");
-		}
+		Blob id = Blob.parse(raw.trim());
+		if (id == null) throw new InvalidInputException("Invalid '" + name + "' query parameter: expected a hex id");
+		return id;
 	}
 
 	private static void rejectParam(Context ctx, String name, String namespace) {
 		if (hasParam(ctx, name)) {
-			throw new IllegalArgumentException(
+			throw new InvalidInputException(
 				"'" + name + "' is not valid with a " + namespace + " path");
 		}
 	}
@@ -2096,7 +2081,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -2124,10 +2109,8 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.list(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
 	}
 
@@ -2151,10 +2134,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.info(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (IllegalArgumentException e) {
+		} catch (NotFoundException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		} catch (InvalidInputException e) {
+			buildError(ctx, 400, e.getMessage());
 		}
 	}
 
@@ -2169,11 +2152,12 @@ public class CoviaAPI extends ACoviaAPI {
 				Maps.of(Fields.DID, Strings.create(ctx.pathParam("did"))), rctx).join();
 			buildResult(ctx, 200, result);
 		} catch (RuntimeException e) {
-			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
+				? e.getCause() : e;
+			// A venue error is the server handler's to log and answer
+			if (!AAdapter.isExpectedFailure(cause)) throw e;
 			buildError(ctx, cause instanceof AuthException ? 403
-				: cause instanceof ShuttingDownException ? 503
-				: (cause instanceof IllegalArgumentException || cause instanceof InvalidInputException
-					|| cause instanceof NotFoundException) ? 400 : 500, cause.getMessage());
+				: cause instanceof ShuttingDownException ? 503 : 400, cause.getMessage());
 		}
 	}
 
@@ -2199,10 +2183,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, user.authenticationList(rctx, input));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (NotFoundException e) {
+			buildError(ctx, 404, e.getMessage());
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (RuntimeException e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
 	}
 
@@ -2223,10 +2207,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, dlfs.listDrives(rctx));
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (Exception e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		} catch (IOException e) {
+			storageFailure(ctx, "Listing drives", e);
 		}
 	}
 
@@ -2262,10 +2246,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 403, e.getMessage());
 		} catch (NotFoundException e) {
 			buildError(ctx, 404, e.getMessage());
-		} catch (InvalidInputException | UnavailableException | IllegalArgumentException e) {
+		} catch (InvalidInputException | UnavailableException e) {
 			buildError(ctx, 400, e.getMessage());
-		} catch (Exception e) {
-			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		} catch (IOException e) {
+			storageFailure(ctx, "Listing the directory", e);
 		}
 	}
 
@@ -2304,7 +2288,7 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 			return;
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
@@ -2454,7 +2438,10 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 			ctx.status(200);
 		} catch (RuntimeException e) {
-			Throwable cause = e instanceof java.util.concurrent.CompletionException ? e.getCause() : e;
+			Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
+				? e.getCause() : e;
+			// A venue error is the server handler's to log and answer
+			if (!AAdapter.isExpectedFailure(cause)) throw e;
 			buildError(ctx, cause instanceof AuthException ? 403 : 400, cause.getMessage());
 		}
 	}

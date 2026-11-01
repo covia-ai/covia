@@ -25,6 +25,7 @@ import convex.core.lang.RT;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
@@ -272,7 +273,7 @@ public class AgentQueryTest {
 	public void providerFailureDoesNotSuspendAgent() {
 		AgentState agent = create("llmagent", Maps.empty());
 		ACell before = agent.getRecord();
-		model.reply = input -> CompletableFuture.failedFuture(new IllegalStateException(FAILURE));
+		model.reply = input -> CompletableFuture.failedFuture(new UnavailableException(FAILURE));
 		Job job = query("question");
 		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 		assertTrue(job.getErrorMessage().contains(FAILURE));
@@ -613,7 +614,7 @@ public class AgentQueryTest {
 	public void summariseFailureOrCancellationDoesNotPublish() throws Exception {
 		AgentState agent = createSummarisable("llmagent");
 		ACell before = agent.getRecord();
-		model.reply = input -> CompletableFuture.failedFuture(new IllegalStateException(FAILURE));
+		model.reply = input -> CompletableFuture.failedFuture(new UnavailableException(FAILURE));
 		Job failed = summarise(false);
 		assertThrows(JobFailedException.class, () -> failed.awaitResult(5000));
 		assertEquals(before, agent.getRecord());

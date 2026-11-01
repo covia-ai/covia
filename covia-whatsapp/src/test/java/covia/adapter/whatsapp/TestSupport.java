@@ -60,7 +60,7 @@ final class TestSupport {
     final int failures;
     FlakyAgents(int failures) { this.failures = failures; }
     @Override public covia.grid.Job deliverSession(ACell input, RequestContext ctx) {
-      if (calls.incrementAndGet() <= failures) throw new IllegalStateException(FAILURE);
+      if (calls.incrementAndGet() <= failures) throw new covia.exception.UnavailableException(FAILURE);
       return super.deliverSession(input, ctx);
     }
     @Override public java.util.concurrent.CompletableFuture<ACell> wakeAgent(AString owner, AString agent, boolean force) {

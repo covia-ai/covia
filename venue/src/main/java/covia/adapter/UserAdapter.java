@@ -24,6 +24,7 @@ import covia.venue.Audit;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.lattice.Covia;
 import covia.venue.Engine;
@@ -31,6 +32,7 @@ import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.UserExports;
 import covia.venue.Users;
+import covia.venue.VenueState;
 import covia.venue.VenueJob;
 
 /**
@@ -282,7 +284,7 @@ public class UserAdapter extends AAdapter {
 		}
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) {
-			throw new IllegalArgumentException("User is not registered at this venue: " + did);
+			throw new NotFoundException(VenueState.UNKNOWN_USER + ": " + did, did.toString());
 		}
 		return summary(user);
 	}
@@ -347,7 +349,7 @@ public class UserAdapter extends AAdapter {
 		// holds no authenticators for it: the answer is empty, not an error, and
 		// clients list every user's authenticators uniformly (#524).
 		if (engine.getVenueState().users().get(did) == null) {
-			throw new IllegalArgumentException("User is not registered at this venue: " + did);
+			throw new NotFoundException(VenueState.UNKNOWN_USER + ": " + did, did.toString());
 		}
 		return Maps.of(
 			Fields.DID, did,

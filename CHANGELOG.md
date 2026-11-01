@@ -49,6 +49,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `VenueServer.launch` throws a startup failure as its own type.
 - `ConflictException` means two values that cannot both stand; a job, session or interaction that does not take the request is `NotSupportedException`, still 409.
 - A remote agent that answers for a different task answers 502.
+- Expected failures are Covia exception types; a JDK exception reaching a caller is a venue error, logged and shown only by its type (#644).
+- A REST refusal a route does not list answers 400; a venue error answers 500.
+- A store collection cancelled by `venue:gc` ends CANCELLED.
 
 ### Removed
 
@@ -81,6 +84,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Chat bindings authenticate each sender; unlisted senders are anonymous.
 - REST secret listing, operation lookup, job streams and agent lookup check the caller.
 - `auth:identity-token` refuses restricted self-tokens and the public principal.
+- Errors never quote a remote service's response body or an unexpected failure's message.
 
 ### Migration
 

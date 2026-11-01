@@ -20,9 +20,6 @@ public final class ApiErrors {
 	/** Media type of an error body. */
 	public static final String PROBLEM_JSON = "application/problem+json";
 
-	/** Opening of the reason for a failure no route answered: a venue error. */
-	public static final String INTERNAL_ERROR = "Internal server error: ";
-
 	private ApiErrors() {}
 
 	/** Writes an error response with the given 4xx or 5xx status and reason. */
@@ -36,10 +33,11 @@ public final class ApiErrors {
 	public static String body(int status, String reason) {
 		StringBuilder sb = new StringBuilder("{");
 		HttpStatus known = HttpStatus.forStatus(status);
-		if (known != HttpStatus.UNKNOWN) {
-			sb.append("\"title\": \"").append(JSON.escape(known.getMessage())).append("\", ");
-		}
-		String detail = JSON.escape(reason).toString();
+		String title = (known != HttpStatus.UNKNOWN) ? known.getMessage() : null;
+		if (title != null) sb.append("\"title\": \"").append(JSON.escape(title)).append("\", ");
+		// A refusal raised without a reason still says what its status means
+		boolean explained = reason != null && !reason.isBlank();
+		String detail = JSON.escape(explained ? reason : (title != null ? title : "Error")).toString();
 		return sb.append("\"status\": ").append(status)
 			.append(", \"detail\": \"").append(detail)
 			.append("\", \"error\": \"").append(detail).append("\"}")

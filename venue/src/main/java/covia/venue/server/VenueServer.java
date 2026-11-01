@@ -50,6 +50,7 @@ import convex.node.NodeServer;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
+import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
@@ -1128,11 +1129,15 @@ public class VenueServer {
 		});
 
 		routes.exception(Exception.class, (e, ctx) -> {
-			// A route answers the outcomes it defines; anything else that escapes
-			// it is a venue error, whatever its type (COG-21)
-			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
+			// A route answers the outcomes it defines. An expected failure that
+			// escapes it is a refusal in a situation it does not list, a 400 with
+			// its reason; anything else is a venue error, a 500 naming only its
+			// type (COG-21)
+			String reason = CoviaException.reasonOf(e);
+			if (reason == null) log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) {
-				ApiErrors.write(ctx, 500, ApiErrors.INTERNAL_ERROR + covia.adapter.AAdapter.describeFailure(e));
+				if (reason != null) ApiErrors.write(ctx, 400, reason);
+				else ApiErrors.write(ctx, 500, covia.adapter.AAdapter.describeFailure(e));
 				return;
 			}
 			// A generic title with the exception under details: the class and
@@ -1330,8 +1335,7 @@ public class VenueServer {
 		// The response carries a one-time code: kept out of caches and Referer headers
 		ctx.header("Cache-Control", "no-store").header("Referrer-Policy", "no-referrer");
 		covia.adapter.OAuthAdapter.Callback done = oauth.callback(ctx.pathParam("provider"),
-			ctx.queryParam("state"), ctx.queryParam("code"),
-			ctx.queryParam("error"), ctx.queryParam("error_description"));
+			ctx.queryParam("state"), ctx.queryParam("code"), ctx.queryParam("error"));
 		if (done.redirect() != null) {
 			ctx.redirect(done.redirect());
 			return;

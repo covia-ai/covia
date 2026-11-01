@@ -21,6 +21,8 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotSupportedException;
 import covia.venue.TestLogs;
 
 /**
@@ -35,7 +37,7 @@ public class ToolFailureTest {
 	@Test
 	public void testExpectedFailureIsItsOwnReason() {
 		String reason = "refs[2] is not a hex hash";
-		assertEquals(reason, AbstractLLMAdapter.toolFailure(new IllegalArgumentException(reason), "op"));
+		assertEquals(reason, AbstractLLMAdapter.toolFailure(new InvalidInputException(reason), "op"));
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(new AuthException(reason), "op"));
 	}
 
@@ -46,13 +48,13 @@ public class ToolFailureTest {
 		String reason = "no such record";
 		ExecutionException wrapped = null;
 		try {
-			CompletableFuture.failedFuture(new IllegalArgumentException(reason)).get();
+			CompletableFuture.failedFuture(new InvalidInputException(reason)).get();
 		} catch (ExecutionException e) {
 			wrapped = e;
 		}
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(wrapped, "op"));
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(
-			new CompletionException(new ExecutionException(new IllegalStateException(reason))), "op"));
+			new CompletionException(new ExecutionException(new NotSupportedException(reason))), "op"));
 		assertTrue(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new AuthException(reason))));
 		assertFalse(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new NullPointerException(reason))));
 	}
@@ -64,9 +66,14 @@ public class ToolFailureTest {
 				new CompletionException(new NullPointerException("x is null")), "op");
 			assertTrue(npe.startsWith(AbstractLLMAdapter.UNEXPECTED_TOOL_FAILURE), npe);
 			assertTrue(npe.contains(NullPointerException.class.getSimpleName()), npe);
+			assertFalse(npe.contains("x is null"), "the model never sees an unexpected failure's text: " + npe);
+
+			// A JDK exception is unexpected whatever its message says.
+			String jdk = AbstractLLMAdapter.toolFailure(new IllegalArgumentException("bad ref"), "op");
+			assertTrue(jdk.startsWith(AbstractLLMAdapter.UNEXPECTED_TOOL_FAILURE), jdk);
 
 			// An expected type thrown without a reason explains nothing either.
-			String blank = AbstractLLMAdapter.toolFailure(new IllegalArgumentException(), "op");
+			String blank = AbstractLLMAdapter.toolFailure(new InvalidInputException((String) null), "op");
 			assertTrue(blank.startsWith(AbstractLLMAdapter.UNEXPECTED_TOOL_FAILURE), blank);
 		});
 	}
@@ -76,7 +83,7 @@ public class ToolFailureTest {
 		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
 			.fallback((call, ctx) -> {
 				if ("bug".equals(call.id().toString())) throw new NullPointerException();
-				throw new CompletionException(new IllegalArgumentException("bad input"));
+				throw new CompletionException(new InvalidInputException("bad input"));
 			});
 		List<AMap<AString, ACell>> messages = new ArrayList<>();
 		ToolCycleEngine.BatchSink sink = new ToolCycleEngine.BatchSink() {

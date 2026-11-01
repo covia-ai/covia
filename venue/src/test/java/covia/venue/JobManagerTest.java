@@ -13,6 +13,7 @@ import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -53,7 +54,11 @@ import covia.test.Rendezvous;
  * infrastructure. Real two-venue exercises live in
 	 * {@code covia.venue.grid.CrossVenueTest}; the loopback dispatch path
 	 * inside one venue is covered by {@code GridAdapterTest}.</p>
+ *
+ * <p>Isolated because a test provoking a venue fault silences the loggers
+ * that report it.</p>
  */
+@Isolated("silences the AAdapter and JobManager loggers")
 public class JobManagerTest {
 	@Test
 	public void legacyJobReadsArePureAndNextWriteDropsOnlyTheChain() {
@@ -158,7 +163,13 @@ public class JobManagerTest {
 	}
 
 	@Test
-	public void testSynchronousAdapterErrorsSettleDurableJobs() {
+	public void testSynchronousAdapterErrorsSettleDurableJobs() throws Exception {
+		// A linkage error is a venue fault, logged at ERROR where the job fails
+		TestLogs.quiet(AAdapter.class, () -> TestLogs.quiet(JobManager.class,
+			this::synchronousAdapterErrorsSettleDurableJobs));
+	}
+
+	private void synchronousAdapterErrorsSettleDurableJobs() {
 		Engine eng = Engine.createTemp(null);
 		try {
 			var invoked = new java.util.concurrent.atomic.AtomicReference<Job>();

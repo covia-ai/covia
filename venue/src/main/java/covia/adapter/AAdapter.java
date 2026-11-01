@@ -1091,24 +1091,14 @@ public abstract class AAdapter {
 	}
 
 	/**
-	 * Render a Throwable into a non-empty diagnostic string for {@link Job#fail}:
-	 * unwrap async wrappers, use the message when present, else fall back to the
-	 * exception's {@code toString()} so a failure never surfaces as a blank error.
+	 * Render a Throwable for a caller, as {@link Job#fail} records it: an
+	 * expected failure's reason, or the type of anything else, never its text
+	 * ({@link covia.exception.CoviaException#describe}).
 	 */
 	public static String describeFailure(Throwable t) {
 		if (t == null) return "Operation failed without an error detail";
 		Throwable cause = unwrap(t);
-		String msg = cause.getMessage();
-		String text;
-		if (msg == null || msg.isBlank()) {
-			text = cause.getClass().getSimpleName() + " (no detail)";
-		} else if (isSelfDescribing(cause)) {
-			text = msg;
-		} else {
-			// A JVM error's or library exception's message alone can be opaque —
-			// NoClassDefFoundError's is just a class name — so name the type.
-			text = cause.getClass().getSimpleName() + ": " + msg;
-		}
+		String text = covia.exception.CoviaException.describe(cause);
 		if (cause instanceof LinkageError) {
 			text += " — a class could not be loaded; if a jar was rebuilt or replaced while the venue "
 				+ "was running, restart the venue";
@@ -1116,28 +1106,25 @@ public abstract class AAdapter {
 		return conciseDetail(text, MAX_FAILURE_CHARS);
 	}
 
+	/** A remote's code or request id fit to quote in a message: an identifier, never free text. */
+	private static final java.util.regex.Pattern IDENTIFIER = java.util.regex.Pattern.compile("[A-Za-z0-9._:-]{1,80}");
+
 	/**
-	 * Whether a failure was expected: a self-describing type carrying its
-	 * reason (#644), looking through async wrappers. Anything else reaching a
-	 * caller — including an expected type thrown without a reason — is a
-	 * runtime or venue bug.
+	 * A remote's error code or request id if it reads as an identifier, else
+	 * null: a message may quote that, never a remote's free text (ERRORS.md).
 	 */
-	public static boolean isExpectedFailure(Throwable t) {
-		Throwable cause = unwrap(t);
-		String message = cause.getMessage();
-		return message != null && !message.isBlank() && isSelfDescribing(cause);
+	public static String identifier(String value) {
+		return (value != null && IDENTIFIER.matcher(value).matches()) ? value : null;
 	}
 
 	/**
-	 * Whether a throwable's message reads as a complete diagnostic on its own:
-	 * Covia's own exceptions and the standard argument/state/unsupported
-	 * families are written for humans; everything else is named by type too.
+	 * Whether a failure was expected: a CoviaException carrying its reason
+	 * (#644), looking through async wrappers. Anything else reaching a caller —
+	 * including a CoviaException thrown without a reason — is a runtime or
+	 * venue bug.
 	 */
-	public static boolean isSelfDescribing(Throwable t) {
-		return t instanceof covia.exception.CoviaException
-			|| t instanceof IllegalArgumentException
-			|| t instanceof IllegalStateException
-			|| t instanceof UnsupportedOperationException;
+	public static boolean isExpectedFailure(Throwable t) {
+		return covia.exception.CoviaException.reasonOf(t) != null;
 	}
 
 	/**

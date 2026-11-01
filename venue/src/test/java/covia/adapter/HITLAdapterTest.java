@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.Capability;
@@ -35,6 +36,7 @@ import covia.venue.RequestContext;
 import covia.venue.Config;
 import covia.venue.AgentState;
 import covia.venue.TestEngine;
+import covia.venue.TestLogs;
 import covia.venue.User;
 
 /**
@@ -48,8 +50,11 @@ import covia.venue.User;
  * violations, respond-after-expiry, and cancel. Domain-rule edge cases are
  * unit-tested engine-free in {@code HitlValidationTest}.
  *
- * <p>Per-test key pairs isolate user namespaces on the shared engine.</p>
+ * <p>Per-test key pairs isolate user namespaces on the shared engine.
+ * Isolated because the tests injecting venue faults silence the logger that
+ * reports them.</p>
  */
+@Isolated("silences the AAdapter logger")
 public class HITLAdapterTest {
 
 	private static final Engine engine;
@@ -224,6 +229,11 @@ public class HITLAdapterTest {
 
 	@Test
 	public void resolutionAndSessionDeliveryRollbackTogetherAndSurviveRestart() throws Exception {
+		// The injected delivery failure is a venue fault, logged at ERROR where the job fails
+		TestLogs.quiet(AAdapter.class, this::resolutionAndSessionDeliveryRollBackTogether);
+	}
+
+	private void resolutionAndSessionDeliveryRollBackTogether() throws Exception {
 		AMap<AString, ACell> config = Maps.of(Config.PORT, 0, Config.BIND_ADDRESS, "127.0.0.1",
 			Config.STORE, covia.venue.TestTemp.etchFile("hitl-rollback").toString(), Config.SEED, AKeyPair.createSeeded(7481).getSeed().toHexString());
 		AString owner = Strings.create("did:test:atomic-hitl");
@@ -300,6 +310,11 @@ public class HITLAdapterTest {
 
 	@Test
 	public void resolutionCommitsFinalJobBeforeFlushAndSurvivesRestart() throws Exception {
+		// The injected flush failure is a venue fault, logged at ERROR where the job fails
+		TestLogs.quiet(AAdapter.class, this::resolutionCommitsFinalJobBeforeFlush);
+	}
+
+	private void resolutionCommitsFinalJobBeforeFlush() throws Exception {
 		var key = AKeyPair.generate();
 		var file = covia.venue.TestTemp.etchFile("hitl-resolved");
 		class BarrierEngine extends Engine {

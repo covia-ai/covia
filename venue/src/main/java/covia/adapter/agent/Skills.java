@@ -315,7 +315,7 @@ public final class Skills {
 			} catch (RuntimeException e) {
 				// A skill that cannot be resolved or bound now is not hinted.
 				// Only an unexplained failure is a fault worth reporting.
-				if (!covia.adapter.AAdapter.isSelfDescribing(e)) {
+				if (!covia.adapter.AAdapter.isExpectedFailure(e)) {
 					log.error("Skill {} failed while finding providers of {}", entry.path(), toolName, e);
 				}
 			}

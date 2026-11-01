@@ -18,6 +18,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import covia.api.Fields;
 import covia.exception.CoviaException;
+import covia.exception.InvalidInputException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.TestEngine;
@@ -229,12 +230,12 @@ public class AAdapterInstallTest {
 
 	@Test
 	public void testFailureDescriptionIsNonBlankSingleLineAndBounded() {
-		assertEquals("RuntimeException (no detail)",
+		assertEquals(CoviaException.UNEXPECTED.formatted("RuntimeException"),
 			ProbeAdapter.probeFailure(new RuntimeException()));
 		String detail = ProbeAdapter.probeFailure(
-			new RuntimeException("first line\n" + "x".repeat(2000)));
+			new InvalidInputException("first line\n" + "x".repeat(2000)));
 		assertTrue(!detail.contains("\n"), detail);
-		assertTrue(detail.startsWith("RuntimeException: first line "), detail);
+		assertTrue(detail.startsWith("first line "), detail);
 		assertTrue(detail.length() <= 1025, "bounded diagnostic was " + detail.length() + " chars");
 	}
 

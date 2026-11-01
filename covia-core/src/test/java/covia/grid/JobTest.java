@@ -24,6 +24,7 @@ import covia.api.Fields;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
+import covia.exception.NotSupportedException;
 
 public class JobTest {
 	private static final AString LEGACY_PREV = Strings.intern("prev");
@@ -441,14 +442,14 @@ public class JobTest {
 	@Test
 	public void testPauseAndResumeErrorsExplainExpectedStateOrAction() {
 		Job pending = Job.create(Maps.of(Fields.ID, "pending", Fields.STATUS, Status.PENDING));
-		IllegalStateException pendingPause = assertThrows(IllegalStateException.class, pending::pause);
+		NotSupportedException pendingPause = assertThrows(NotSupportedException.class, pending::pause);
 		assertTrue(pendingPause.getMessage().contains("expected STARTED"));
 
 		Job running = Job.create(Maps.of(Fields.ID, "running", Fields.STATUS, Status.STARTED));
-		IllegalStateException unsupportedPause = assertThrows(IllegalStateException.class, running::pause);
+		NotSupportedException unsupportedPause = assertThrows(NotSupportedException.class, running::pause);
 		assertTrue(unsupportedPause.getMessage().contains("cancel it if appropriate"));
 
-		IllegalStateException runningResume = assertThrows(IllegalStateException.class, running::resume);
+		NotSupportedException runningResume = assertThrows(NotSupportedException.class, running::resume);
 		assertTrue(runningResume.getMessage().contains("expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED"));
 	}
 

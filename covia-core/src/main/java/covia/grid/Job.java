@@ -23,6 +23,7 @@ import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
+import covia.exception.NotSupportedException;
 
 /**
  * Class representing a Covia Job.
@@ -661,7 +662,7 @@ public class Job {
 	/**
 	 * Pause this Job. Commits STARTED &rarr; PAUSED, then triggers the registered
 	 * {@linkplain #setPauseHook pause hook}. A throwing hook fails the Job.
-	 * @throws IllegalStateException if the job is finished, not STARTED, or has no
+	 * @throws NotSupportedException if the job is finished, not STARTED, or has no
 	 *         pause hook registered (a status flip while work continues is not a
 	 *         pause; unsupported pause surfaces as HTTP 409).
 	 */
@@ -669,18 +670,20 @@ public class Job {
 		Runnable hook = onPause;
 		boolean changed = commitUpdate(job -> {
 			if (!Status.STARTED.equals(job.get(Fields.STATUS))) {
-				throw new IllegalStateException("Cannot pause job: expected STARTED");
+				throw new NotSupportedException("Cannot pause job: expected STARTED");
 			}
-			if (hook == null) throw new IllegalStateException(
+			if (hook == null) throw new NotSupportedException(
 				"Cannot pause job: its operation does not support pausing; cancel it if appropriate");
 			return job.assoc(Fields.STATUS, Status.PAUSED);
 		}, null, () -> runContinuation(hook));
-		if (!changed) throw new IllegalStateException("Cannot pause job: status is terminal (" + getStatus() + ")");
+		if (!changed) throw new NotSupportedException("Cannot pause job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**
 	 * Atomically resumes a paused Job, then triggers its continuation. The hook
 	 * observes STARTED and may complete or suspend the Job again immediately.
+	 * @throws NotSupportedException if the job is not paused or waiting, or has
+	 *         no resume hook registered
 	 */
 	public void resume() {
 		Runnable hook = onResume;
@@ -688,13 +691,13 @@ public class Job {
 			ACell status = job.get(Fields.STATUS);
 			if (!Status.PAUSED.equals(status) && !Status.INPUT_REQUIRED.equals(status)
 					&& !Status.AUTH_REQUIRED.equals(status)) {
-				throw new IllegalStateException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
+				throw new NotSupportedException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
 			}
-			if (hook == null) throw new IllegalStateException(
+			if (hook == null) throw new NotSupportedException(
 				"Cannot resume job: its operation does not provide a resume action");
 			return job.assoc(Fields.STATUS, Status.STARTED);
 		}, null, () -> runContinuation(hook));
-		if (!changed) throw new IllegalStateException("Cannot resume job: status is terminal (" + getStatus() + ")");
+		if (!changed) throw new NotSupportedException("Cannot resume job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**

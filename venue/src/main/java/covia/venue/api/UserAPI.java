@@ -78,10 +78,10 @@ public class UserAPI extends ACoviaAPI {
 		final AString did;
 		try {
 			did = engine().managedUserDID(Strings.create(userId));
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			buildError(ctx, 400, e.getMessage());
 			return;
-		} catch (ConfigurationException | IllegalStateException e) {
+		} catch (ConfigurationException e) {
 			buildError(ctx, 404, "This venue does not publish managed user DIDs");
 			return;
 		}
