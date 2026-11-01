@@ -255,6 +255,11 @@ public class Fields {
 	public static final StringShort TASK_ID = Strings.intern("taskId");
 	public static final StringShort CANCELLED = Strings.intern("cancelled");
 	public static final StringShort DELETED = Strings.intern("deleted");
+	/** Path-write results: whether a value was already at the path, and whether missing parents were built. */
+	public static final StringShort EXISTED = Strings.intern("existed");
+	public static final StringShort PATH_CREATED = Strings.intern("pathCreated");
+	/** Element count of a vector after an append. */
+	public static final StringShort NEW_SIZE = Strings.intern("newSize");
 	public static final StringShort RESPONSE_SCHEMA = Strings.intern("responseSchema");
 	/** Requester opt-in: enforce {@link #RESPONSE_SCHEMA} at task completion (#376). */
 	public static final StringShort STRICT = Strings.intern("strict");

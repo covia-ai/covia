@@ -1474,7 +1474,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepSetCreatesIntermediateMaps() {
 		ACell[] keys = WorkspaceRoot.parseStringPath("w/a/b/c");
-		ACell result = WorkspaceRoot.deepSet(null, keys, 2, Strings.create("leaf"));
+		ACell result = covia.lattice.DataComponent.deepSet(null, keys, 2, Strings.create("leaf"));
 
 		// Should create {b: {c: "leaf"}}
 		assertNotNull(result);
@@ -1485,7 +1485,7 @@ public class CoviaAdapterTest {
 	public void testDeepDeletePreservesSiblings() {
 		ACell root = Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2));
 		ACell[] keys = WorkspaceRoot.parseStringPath("w/entry/x");
-		ACell result = WorkspaceRoot.deepDelete(root, keys, 2);
+		ACell result = covia.lattice.DataComponent.deepDelete(root, keys, 2);
 
 		// y should remain, x should be gone
 		assertNotNull(result);
@@ -1498,7 +1498,7 @@ public class CoviaAdapterTest {
 		ACell root = Maps.of("present", Maps.of("value", CVMLong.ONE));
 		ACell[] keys = WorkspaceRoot.parseStringPath("w/missing/leaf");
 
-		ACell result = WorkspaceRoot.deepDelete(root, keys, 1);
+		ACell result = covia.lattice.DataComponent.deepDelete(root, keys, 1);
 
 		assertSame(root, result, "delete must not materialise a missing branch as null");
 	}

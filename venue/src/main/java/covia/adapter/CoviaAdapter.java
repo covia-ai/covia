@@ -26,13 +26,8 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.ALattice;
 import covia.lattice.WorkspaceRoot;
-import static covia.lattice.WorkspaceRoot.deepGet;
-import static covia.lattice.WorkspaceRoot.deepSet;
-import static covia.lattice.WorkspaceRoot.deepDelete;
-import static covia.lattice.WorkspaceRoot.deepAppend;
-import static covia.lattice.WorkspaceRoot.parentExisted;
-import static covia.lattice.WorkspaceRoot.leafExisted;
-import static covia.lattice.WorkspaceRoot.leafPresentIn;
+import static covia.lattice.DataComponent.deepGet;
+import static covia.lattice.DataComponent.leafPresentIn;
 import static covia.lattice.WorkspaceRoot.buildSubPath;
 import static covia.lattice.WorkspaceRoot.parseStringPath;
 
@@ -44,6 +39,7 @@ import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.Covia;
+import covia.lattice.DataComponent;
 import covia.lattice.NamespaceResolver;
 import covia.lattice.ExtensionNamespaceResolver;
 import covia.lattice.SessionNamespaceResolver;
@@ -60,19 +56,12 @@ import covia.venue.Users;
  * namespace. Callers supply a JSON-friendly path (e.g. {@code "g/my-agent/state"})
  * and this adapter navigates the lattice to read or list values.</p>
  *
- * <h3>Key resolution — why we delegate to the lattice</h3>
+ * <h3>Key resolution</h3>
  *
- * <p>The user's lattice is a tree of nested lattice types. Each level may
- * use a different internal key type: {@code KeyedLattice} uses Keywords
- * ({@code :g}), {@code StringKeyedLattice} uses AString, {@code IndexLattice}
- * uses Blob keys, etc. A JSON caller doesn't know (or care) about these
- * internal types — they just say {@code "g"} or {@code "my-agent"}.</p>
- *
- * <p>{@link ALattice#resolvePath(ACell...)} walks the lattice hierarchy and
- * calls {@link ALattice#resolveKey(ACell)} at each level to translate the
- * JSON-level key into the canonical CVM key for that lattice type. For
- * example, a {@code KeyedLattice} resolves {@code "g"} → {@code :g} via
- * blob-based comparison against its known child keys.</p>
+ * <p>Callers name keys in JSON form: {@code "g"}, {@code "my-agent"}, a hex
+ * job ID, a list position. Navigation interprets each key by the value it
+ * meets ({@link covia.lattice.DataComponent}): a map key, an Index key as a
+ * blob or hex string, or a vector index.</p>
  *
  * <p>For the reverse direction (listing keys back to the caller),
  * {@link ALattice#toJSONKey(ACell)} converts CVM keys to JSON-friendly
@@ -154,14 +143,6 @@ public class CoviaAdapter extends AAdapter {
 	private static final AString K_VALUE   = Strings.intern("value");
 	private static final AString K_VALUES  = Strings.intern("values");
 	private static final AString K_EXISTS  = Strings.intern("exists");
-	private static final AString K_PATH_CREATED = Strings.intern("pathCreated");
-	private static final AString K_NEW_SIZE     = Strings.intern("newSize");
-	// Mutation outcome fields (#147): existed = a value was already at the target
-	// before the op (created vs replaced); deleted = a value was removed; index =
-	// where an appended element landed.
-	private static final AString K_EXISTED = Strings.intern("existed");
-	private static final AString K_DELETED = Strings.intern("deleted");
-	private static final AString K_INDEX   = Strings.intern("index");
 	private static final AString K_VALUE_BYTES  = Strings.intern("valueBytes");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 	private static final AString K_MAX_SIZE  = Strings.intern("maxSize");
@@ -621,28 +602,11 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Creating a key changes the map that holds it, so a write that creates
-	 * levels of its path is also authorised at the nearest level that exists.
-	 * A namespace always exists. This runs on the value the write applies to,
-	 * inside its atomic update, so the check always matches what the write
-	 * creates.
+	 * The data a resolved path names, addressed as the caller named it so that
+	 * creating its missing levels is authorised at the nearest level that exists.
 	 */
-	private void requireCreateAccess(RequestContext ctx, ACell input, ACell[] keys,
-			ACell current, int from) {
-		int missing = WorkspaceRoot.missingLevels(current, keys, from);
-		if (missing == 0) return;
-		engine.requireLocalAccess(ctx, ancestor(capResource(input), missing), Capability.CRUD_WRITE);
-	}
-
-	/**
-	 * The resource {@code levels} levels above {@code resource}, never above its
-	 * namespace ({@code w}, or {@code <did>/w} for another user's).
-	 */
-	private static AString ancestor(AString resource, int levels) {
-		String[] segments = resource.toString().split("/", -1);
-		int namespace = resource.toString().startsWith("did:") ? 1 : 0;
-		int keep = Math.max(namespace + 1, segments.length - levels);
-		return Strings.create(String.join("/", java.util.Arrays.copyOf(segments, keep)));
+	private static DataComponent data(NamespaceResolver.ResolvedNamespace target, ACell input) {
+		return target.cursor().data(capResource(input), target.remainingKeys(), target.requireExistingRecord());
 	}
 
 	/**
@@ -651,7 +615,7 @@ public class CoviaAdapter extends AAdapter {
 	 * <p>Physical writable namespaces are {@code w/} and {@code o/}; virtual
 	 * resolvers enforce their own policies, including opt-in {@code x/} views.
 	 * Deep paths create intermediate maps as needed within one atomic update,
-	 * authorised at the nearest level that exists ({@link #requireCreateAccess}).</p>
+	 * authorised at the nearest level that exists ({@link DataComponent#write}).</p>
 	 *
 	 * @return {@code {existed, pathCreated?}} — {@code existed:false} created a new
 	 *         value, {@code true} replaced an existing one; {@code pathCreated:true}
@@ -677,41 +641,7 @@ public class CoviaAdapter extends AAdapter {
 		ACell value = RT.getIn(input, Fields.VALUE);
 
 		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
-		WorkspaceRoot baseCursor = target.cursor();
-		final ACell[] keys = target.remainingKeys();
-		final boolean[] built = {false};
-		final boolean[] existed = {false};
-		// deepSet first so a shape conflict throws its descriptive error (#146);
-		// pathCreated is read from the pre-state and means "a missing parent
-		// container had to be built" — not whether the leaf already had a value
-		// (that is `existed`).
-		updateTree(baseCursor, keys, target.requireExistingRecord(),
-			(current, from) -> {
-			requireCreateAccess(ctx, input, keys, current, from);
-			existed[0] = leafExisted(current, keys, from);
-			ACell next = deepSet(current, keys, from, value);
-			// pathCreated reports building a nested parent below the namespace;
-			// creating the namespace + its direct child (keys.length <= 2) is
-			// not "hierarchy" — so only paths deeper than that can report it.
-			built[0] = keys.length > 2 && !parentExisted(current, keys, from);
-			return next;
-		});
-		return writeResult(existed[0], built[0]);
-	}
-
-	/**
-	 * Changes the caller's tree at a path. The tree refuses a path that does
-	 * not fit it (a key on a scalar or a list, an index out of range, a scoped
-	 * path with no parent record) with an IllegalArgumentException, which here
-	 * is the caller's input.
-	 */
-	private static void updateTree(WorkspaceRoot cursor, ACell[] keys, boolean requireExistingRecord,
-			WorkspaceRoot.PathUpdate update) {
-		try {
-			cursor.update(keys, requireExistingRecord, update);
-		} catch (IllegalArgumentException e) {
-			throw new InvalidInputException(e.getMessage(), e);
-		}
+		return data(target, input).write(ctx, value);
 	}
 
 	/**
@@ -726,12 +656,7 @@ public class CoviaAdapter extends AAdapter {
 		ACell input = Maps.of(Fields.PATH, path);
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		var target = resolvePathTarget(ctx, path, Capability.CRUD_WRITE);
-		final ACell[] keys = target.remainingKeys();
-		updateTree(target.cursor(), keys, target.requireExistingRecord(),
-			(current, from) -> {
-			requireCreateAccess(ctx, input, keys, current, from);
-			return deepSet(current, keys, from, change.apply(deepGet(current, keys, from)));
-		});
+		data(target, input).update(ctx, change);
 	}
 
 	/**
@@ -784,17 +709,6 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Mutation result shared by {@code covia:write} and {@code covia:copy}:
-	 * {@code existed} (a value was already at the target — created vs replaced) is
-	 * always present; {@code pathCreated} appears only when a missing parent
-	 * hierarchy had to be built.
-	 */
-	private static ACell writeResult(boolean existed, boolean built) {
-		AMap<AString, ACell> out = Maps.of(K_EXISTED, CVMBool.of(existed));
-		return built ? out.assoc(K_PATH_CREATED, CVMBool.TRUE) : out;
-	}
-
-	/**
 	 * Deletes a value at a path in the user's lattice.
 	 *
 	 * <p>Same namespace restrictions as {@link #handleWrite}, plus {@code s/}
@@ -815,27 +729,16 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
 		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
 		WorkspaceRoot cursor = target.cursor();
-		if (cursor == null) return Maps.of(K_DELETED, CVMBool.FALSE);
+		if (cursor == null) return Maps.of(Fields.DELETED, CVMBool.FALSE);
 		final ACell[] keys = target.remainingKeys();
-		boolean requireExistingRecord = target.requireExistingRecord();
-		// A missing unscoped target linearises as an immediate no-op. Avoid
-		// descending through a PathCursor merely to write null back: that would
-		// materialise an absent wrapped namespace even though nothing was deleted.
-		if (!requireExistingRecord && !cursor.contains(keys)) {
-			return Maps.of(K_DELETED, CVMBool.FALSE);
-		}
-		final boolean[] deleted = {false};
-		updateTree(cursor, keys, requireExistingRecord,
-			(current, from) -> {
-			deleted[0] = leafExisted(current, keys, from);
-			return deepDelete(current, keys, from);
-		});
-		if (cursor.userNamespaces() && deleted[0] && keys.length == 2 && NS_SECRETS.equals(keys[0].toString())) {
+		AMap<AString, ACell> result = data(target, input).delete();
+		boolean deleted = CVMBool.TRUE.equals(result.get(Fields.DELETED));
+		if (cursor.userNamespaces() && deleted && keys.length == 2 && NS_SECRETS.equals(keys[0].toString())) {
 			// The name only, never the value — the same trail as secret:set.
 			engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
 				covia.venue.Audit.K_NAME, keys[1], covia.venue.Audit.K_TARGET, ctx.getUserDID());
 		}
-		return Maps.of(K_DELETED, CVMBool.of(deleted[0]));
+		return result;
 	}
 
 	/**
@@ -855,37 +758,7 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		var target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		ACell element = RT.getIn(input, Fields.VALUE);
-		WorkspaceRoot baseCursor = target.cursor();
-		final ACell[] keys = target.remainingKeys();
-		final boolean[] built = {false};
-		final boolean[] existed = {false};
-		final long[] newSize = {0};
-		updateTree(baseCursor, keys, target.requireExistingRecord(),
-			(current, from) -> {
-			requireCreateAccess(ctx, input, keys, current, from);
-			existed[0] = leafExisted(current, keys, from);
-			ACell next = deepAppend(current, keys, from, element);
-			built[0] = keys.length > 2 && !parentExisted(current, keys, from);
-			ACell leaf = deepGet(next, keys, from);
-			newSize[0] = (leaf instanceof AVector) ? ((AVector<?>) leaf).count() : 0;
-			return next;
-		});
-		return appendResult(existed[0], newSize[0], built[0]);
-	}
-
-	/**
-	 * Result of {@code covia:append}: {@code existed} (the collection was already
-	 * there — extended vs freshly created), {@code index} (the position the element
-	 * landed = {@code newSize - 1}), and {@code newSize} (the resulting element
-	 * count) are always present; {@code pathCreated} appears only when a missing
-	 * parent hierarchy was built.
-	 */
-	private static ACell appendResult(boolean existed, long newSize, boolean built) {
-		AMap<AString, ACell> out = Maps.of(
-			K_EXISTED, CVMBool.of(existed),
-			K_INDEX, CVMLong.create(Math.max(0, newSize - 1)),
-			K_NEW_SIZE, CVMLong.create(newSize));
-		return built ? out.assoc(K_PATH_CREATED, CVMBool.TRUE) : out;
+		return data(target, input).append(ctx, element);
 	}
 
 	// ========== Write path helpers ==========
@@ -1293,16 +1166,14 @@ public class CoviaAdapter extends AAdapter {
 	 * <p>Accepts two forms:</p>
 	 * <ul>
 	 *   <li><b>String:</b> {@code "g/my-agent/timeline/3"} — split on {@code /},
-	 *       all segments become AString. The lattice's {@code resolveKey} at each
-	 *       level handles type translation (string → keyword, string → blob, etc.)</li>
+	 *       all segments become AString; navigation interprets each by the value
+	 *       it meets</li>
 	 *   <li><b>Vector:</b> {@code ["g", "my-agent", "timeline", 3]} — elements
 	 *       used directly, allowing callers to pass pre-typed keys (e.g. integers
 	 *       for vector indexing)</li>
 	 * </ul>
 	 *
-	 * <p>Important: these are <em>JSON-level</em> keys, not canonical CVM keys.
-	 * They must be passed through {@link ALattice#resolvePath} before being used
-	 * for cursor navigation.</p>
+	 * <p>These are <em>JSON-level</em> keys, not canonical CVM keys.</p>
 	 */
 	static ACell[] parsePath(ACell pathCell) {
 		if (pathCell == null) return new ACell[0];

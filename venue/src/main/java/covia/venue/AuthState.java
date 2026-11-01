@@ -15,7 +15,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -25,7 +25,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 
 /** Stored authentication directory and key lifecycle rules. No providers or runtime services. */
-public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
+public final class AuthState extends ACoviaComponent<AMap<AString, AMap<AString, ACell>>>
 		implements TransactionalComponent<AMap<AString, AMap<AString, ACell>>, AuthState> {
 	private final VenueContext context;
 

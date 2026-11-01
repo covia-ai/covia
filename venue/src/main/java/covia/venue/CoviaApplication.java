@@ -31,7 +31,7 @@ public final class CoviaApplication
 	private final boolean ephemeral;
 	private final LatticeHost<Index<Keyword, ACell>> host;
 	/** Shared by every venue component; its clock is this application's merge clock. */
-	private final VenueContext venueContext = VenueContext.create(() -> getContext().currentTimestamp());
+	private volatile VenueContext venueContext = VenueContext.create(() -> getContext().currentTimestamp());
 
 	private CoviaApplication(LatticeHost<Index<Keyword, ACell>> host,
 			boolean ephemeral) {
@@ -85,6 +85,14 @@ public final class CoviaApplication
 	/** The policy shared by this application's venue components. */
 	public VenueContext venueContext() {
 		return venueContext;
+	}
+
+	/**
+	 * Replaces the shared policy. Venue components connected afterwards use
+	 * the new one; the engine installs its access check before connecting.
+	 */
+	void setVenueContext(VenueContext context) {
+		this.venueContext = java.util.Objects.requireNonNull(context, "context");
 	}
 
 	/** Returns the caller-owned host store for internal adapter integration. */

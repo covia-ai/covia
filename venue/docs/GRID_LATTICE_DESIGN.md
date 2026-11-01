@@ -313,7 +313,8 @@ ALatticeComponent` is the base of every component a caller can address.
 `resolve(keys, from)` returns the component at that position. It sees no
 request, takes as many keys per step as the component's rules cover (as cursor
 paths do), and builds each child only from its own cursor, so a walk from a
-draft root stays in the draft.
+draft root stays in the draft. `read()` returns the value as callers see it:
+a job reads as its current state.
 
 | Component | Routes |
 |-----------|--------|
@@ -322,18 +323,27 @@ draft root stays in the draft.
 | `AgentState` | `sessions/<id>` to `SessionState` |
 
 `DataComponent` is the fallback for a position no other component claims,
-reading keys by value type: a map key, a vector index, an Index key.
+reading keys by value type: a map key, a vector index, an Index key. Because
+that navigation is on values, its position is the nearest container's cursor
+plus the keys below it.
 
-**Operations define writability.** `read()`, `update(ctx, change)` and
-`delete(ctx)` on the component at the position are the only ways to use it.
-Each makes its own checks and then changes its cursor in one atomic update;
-cursors carry no write policy. A `DataComponent` refuses changes unless the
-component above it opts its data in: `WorkspaceRegion` for `w` and `o`,
-`AgentState` for `n`, `SessionState` for `c`, `JobState` for `temp`.
+**Operations define writability.** A component's domain operations are the
+only ways to change it. Each makes its own checks and then changes its cursor
+in one atomic update; cursors carry no write policy. `DataComponent`'s
+operations are `write`, `append`, `delete` and `update` (a function of the
+current value). The component above it supplies its edits, which apply a
+change to the container atomically, or none, leaving its data read-only:
+`WorkspaceRegion` for `w` and `o`, `AgentState` for `n`, `SessionState` for
+`c`, `JobState` for `temp`, whose edits also require the record to exist.
 `SecretStore` accepts only removal of a whole secret. Refusals are typed and
 carry a reason from a constant on the refusing component. Checks that depend on
-the stored value run inside the update: the owning record must exist, and
-creating missing levels needs write authority at the nearest level that exists.
+the stored value run inside the update: creating missing levels needs write
+authority at the nearest level that exists.
+
+**Engine policy reaches components through `VenueContext`.** One instance is
+shared by the venue's components and passed down unchanged. It holds the write
+clock and the access check (`engine.requireLocalAccess`), which the engine
+installs when the venue starts; until then it refuses all access.
 
 `ACoviaComponent` is shaped so that it could move onto the Convex component
 hierarchy.
@@ -671,7 +681,8 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `WorkspaceRoot` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; merge remains at the enclosing venue |
 | `LatticeContext` | Application policy for clock, signing and owner verification, used by the root merge; installed once on `CoviaApplication`, which also signs the venue record with it |
-| `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) |
+| `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) and the access check the engine installs |
+| `ACoviaComponent`, `DataComponent` (Covia) | Base of addressable components (`resolve`, `read`); data no component claims, edited only through edits its parent supplies (§4.6) |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions

@@ -17,7 +17,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
@@ -31,7 +31,7 @@ import covia.api.Fields;
  * atomic cursor updates; changes spanning sessions and agent state compose
  * through upstream transactions, without external locking or I/O.</p>
  */
-public class AgentState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, AgentState> {
+public class AgentState extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, AgentState> {
 	@Override
 	public AgentState withCursor(AForkableCursor<ACell> draft) {
 		return new AgentState(context, draft, agentId);

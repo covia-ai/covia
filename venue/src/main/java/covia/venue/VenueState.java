@@ -27,9 +27,9 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
-import static convex.lattice.LatticeComponent.resolve;
+import convex.lattice.LatticeComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.Timestamped;
 import convex.lattice.cursor.SignedCursor;
@@ -68,7 +68,7 @@ import covia.venue.storage.LatticeStorage;
  * a snapshot rather than replaying operations. Live work uses {@code transact}.
  * Children have no independent publication or merge boundary.</p>
  */
-public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
+public class VenueState extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
 	/** The venue schema version: the number of {@link VenueMigrations#STEPS}. */
 	public static final long CURRENT_VERSION = VenueMigrations.STEPS.size();
 	public static final String INVALID_STATE = "Venue state must be a keyword-keyed Index";
@@ -152,9 +152,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey,
 			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
-		var owners = resolve(root, Covia.ROOT, Covia.GRID, Covia.VENUES);
+		var owners = LatticeComponent.resolve(root, Covia.ROOT, Covia.GRID, Covia.VENUES);
 		var signing = Covia.VENUE_OWNERS.signingFor(ownerKey);
-		var signed = SignedCursor.<ACell>create(resolve(owners, Covia.VENUE_OWNERS, ownerKey), value -> signing.sign(value, signer));
+		var signed = SignedCursor.<ACell>create(LatticeComponent.resolve(owners, Covia.VENUE_OWNERS, ownerKey), value -> signing.sign(value, signer));
 		return new VenueState(signed, ownerKey, context);
 	}
 
@@ -230,7 +230,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return AssetStore cursor wrapper
 	 */
 	public AssetStore assets() {
-		return new AssetStore(resolve(cursor(), Covia.VENUE, Covia.ASSETS));
+		return new AssetStore(LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.ASSETS));
 	}
 
 	/**
@@ -239,7 +239,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(context, resolve(cursor(), Covia.VENUE, Covia.USER_DATA));
+		return new Users(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.USER_DATA));
 	}
 
 	/** Atomically provisions account state and its login directory row. */
@@ -438,12 +438,12 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Stored authentication directory; provider/runtime policy belongs to Auth. */
 	public AuthState auth() {
-		return new AuthState(context, resolve(cursor(), Covia.VENUE, Covia.USERS));
+		return new AuthState(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.USERS));
 	}
 
 	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
 	public ScheduleState schedule() {
-		return new ScheduleState(context, resolve(cursor(), Covia.VENUE, Covia.SCHEDULE));
+		return new ScheduleState(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.SCHEDULE));
 	}
 
 	/**
@@ -452,7 +452,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return LatticeStorage instance backed by this venue's cursor
 	 */
 	public LatticeStorage contentStorage() {
-		return new LatticeStorage(resolve(cursor(), Covia.VENUE, Covia.STORAGE));
+		return new LatticeStorage(LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.STORAGE));
 	}
 
 	/**

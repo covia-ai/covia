@@ -8,7 +8,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
@@ -39,7 +39,7 @@ import covia.grid.Job;
  * Merge is whole-value at the venue {@code :value}; these namespaces are
  * navigation structure only.
  */
-public class User extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, User> {
+public class User extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, User> {
 	@Override
 	public User withCursor(AForkableCursor<ACell> draft) {
 		return new User(context, draft, did);

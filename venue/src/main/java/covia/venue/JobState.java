@@ -8,7 +8,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
@@ -19,7 +19,7 @@ import covia.lattice.Covia;
 /** Primary record of an existing venue job. Updates never create a missing row.
  * Transactions compose data changes only; execution and notifications belong
  * to the runtime after the enclosing transaction commits. */
-public final class JobState extends ALatticeComponent<ACell>
+public final class JobState extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, JobState> {
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
@@ -37,6 +37,9 @@ public final class JobState extends ALatticeComponent<ACell>
 	}
 
 	public AMap<AString, ACell> getRecord() { return Job.currentState(RT.ensureMap(cursor().get())); }
+
+	/** The job as callers see it: its current state. */
+	@Override public ACell read() { return getRecord(); }
 
 	/** Pure record edit; null rejects the edit. Returns the committed record or
 	 * null for a rejected/missing row, resetting acceptance on every retry. */

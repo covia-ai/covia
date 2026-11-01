@@ -10,7 +10,7 @@ import convex.core.data.Index;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 
@@ -24,7 +24,7 @@ import convex.lattice.cursor.AForkableCursor;
  *
  * <p>Each asset record is a 3-element vector: [json, content, metaMap].</p>
  */
-public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>> implements TransactionalComponent<Index<AString, AVector<ACell>>, AssetStore> {
+public class AssetStore extends ACoviaComponent<Index<AString, AVector<ACell>>> implements TransactionalComponent<Index<AString, AVector<ACell>>, AssetStore> {
 	@Override
 	public AssetStore withCursor(AForkableCursor<Index<AString, AVector<ACell>>> draft) {
 		return new AssetStore(draft);

@@ -9,11 +9,12 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.AUpdateCursor;
+import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
+import covia.lattice.DataComponent;
 import covia.lattice.WorkspaceRoot;
 
 /**
@@ -23,7 +24,7 @@ import covia.lattice.WorkspaceRoot;
  * atomic root; external effects belong after commit. Snapshot reconciliation
  * remains a whole-venue recovery policy, not a merge of adapter operations.
  */
-public final class AdapterState extends ALatticeComponent<ACell>
+public final class AdapterState extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, AdapterState> {
 	private static final Pattern ADAPTER_NAME = Pattern.compile("[a-z][a-z0-9-]*");
 	private final VenueContext context;
@@ -101,17 +102,17 @@ public final class AdapterState extends ALatticeComponent<ACell>
 
 	/** Optional type-aware path access for map/vector-shaped adapter values. */
 	public ACell read(String relative) {
-		return WorkspaceRoot.deepGet(get(), keys(relative, true), 0);
+		return DataComponent.deepGet(get(), keys(relative, true), 0);
 	}
 	public void write(String relative, ACell value) {
 		Objects.requireNonNull(value, "Adapter state values must be non-null; use delete()");
 		ACell[] path = keys(relative, false);
-		update(current -> WorkspaceRoot.deepSet(current, path, 0, value));
+		update(current -> DataComponent.deepSet(current, path, 0, value));
 	}
 	public boolean delete(String relative) {
 		ACell[] path = keys(relative, false);
-		ACell previous = cursor().getAndUpdate(current -> WorkspaceRoot.deepDelete(current, path, 0));
-		return WorkspaceRoot.leafPresentIn(previous, path);
+		ACell previous = cursor().getAndUpdate(current -> DataComponent.deepDelete(current, path, 0));
+		return DataComponent.leafPresentIn(previous, path);
 	}
 
 	private static ACell[] keys(String path, boolean allowEmpty) {

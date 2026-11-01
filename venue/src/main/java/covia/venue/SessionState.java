@@ -13,7 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -26,7 +26,7 @@ import static covia.venue.AgentState.*;
  * sessions are never created by this view; creation belongs to AgentState.
  * Transactions compose session changes without runtime services or external I/O.
  */
-public final class SessionState extends ALatticeComponent<ACell>
+public final class SessionState extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, SessionState> {
 	private final VenueContext context;
 	private final Blob id;

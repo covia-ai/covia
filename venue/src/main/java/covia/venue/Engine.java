@@ -592,6 +592,8 @@ public class Engine {
 			// Preserve application owner verification and clock policy, overriding
 			// only Covia's signing capability.
 			application.setContext(application.getContext().withSigningKey(this.keyPair));
+			// Components check access through the shared policy; the venue connects below.
+			application.setVenueContext(application.venueContext().withAccess(this::requireLocalAccess));
 			// Authentication also serves manually assembled engines without a
 			// public operation catalogue. Its availability follows normal lifecycle.
 			AuthAdapter auth = new AuthAdapter();

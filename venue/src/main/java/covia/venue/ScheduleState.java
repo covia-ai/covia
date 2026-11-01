@@ -17,7 +17,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
-import convex.lattice.ALatticeComponent;
+import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
@@ -27,7 +27,7 @@ import covia.exception.InvalidInputException;
 import covia.lattice.Covia;
 
 /** Stored schedule records and recurrence rules. No timers or job execution. */
-public final class ScheduleState extends ALatticeComponent<ACell>
+public final class ScheduleState extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, ScheduleState> {
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
