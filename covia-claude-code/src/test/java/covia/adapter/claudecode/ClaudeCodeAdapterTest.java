@@ -402,6 +402,9 @@ public class ClaudeCodeAdapterTest {
 		assertEquals("gamma", str(run(OTHER_CTX, "v/ops/claudecode/run", Maps.of("prompt", "hi")), "project"));
 		// OWNER has several: must name one.
 		assertThrows(InvalidInputException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run", Maps.of("prompt", "hi"), OWNER_CTX));
+		// Someone with none has nothing to run in.
+		assertThrows(NotFoundException.class, () -> engine.jobs().invokeOperation("v/ops/claudecode/run",
+			Maps.of("prompt", "hi"), RequestContext.of(Strings.create("did:test:claudecode-nobody"))));
 
 		AVector<ACell> mine = RT.ensureVector(run(OTHER_CTX, "v/ops/claudecode/projects", Maps.empty()).get(ClaudeCodeAdapter.K_PROJECTS));
 		assertEquals(1, mine.count());

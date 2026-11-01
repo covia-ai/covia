@@ -34,6 +34,7 @@ import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.exception.ResponseException;
 import covia.exception.UnavailableException;
 import covia.python.PythonException;
 import covia.python.PythonRuntime;
@@ -113,6 +114,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			try {
 				if (closed) throw new NotSupportedException("Python instance is closed: " + id);
 				return script.call(function, arguments);
+			} catch (PythonException e) {
+				throw pythonFailure(e);
 			} finally {
 				lifecycle.readLock().unlock();
 			}
@@ -381,7 +384,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 				templates = Map.copyOf(prepared);
 				installInstanceAssets();
 			}
-		} catch (IOException | PythonException | ConfigurationException e) {
+		} catch (IOException | PythonException | ConfigurationException | IllegalArgumentException e) {
 			close();
 			throw new ConfigurationException("Failed to install Python operations", e);
 		} catch (RuntimeException e) {
@@ -497,7 +500,11 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			try {
 				if (closed) throw new UnavailableException("Python adapter is closed");
 				if (operation == null) return invokeInstance(id, ctx, input);
-				return operation.script().call(operation.definition().function(), input);
+				try {
+					return operation.script().call(operation.definition().function(), input);
+				} catch (PythonException e) {
+					throw pythonFailure(e);
+				}
 			} finally {
 				lifecycle.readLock().unlock();
 			}
@@ -531,16 +538,21 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			long owned = instances.keySet().stream()
 				.filter(key -> key.owner().equals(owner)).count();
 			if (owned >= instanceConfig.maxPerUser()) {
-				throw new IllegalStateException("Python instance limit reached for user ("
+				throw new UnavailableException("Python instance limit reached for user ("
 					+ instanceConfig.maxPerUser() + ")");
 			}
 			if (instances.size() >= instanceConfig.maxTotal()) {
-				throw new IllegalStateException("Venue Python instance limit reached ("
+				throw new UnavailableException("Venue Python instance limit reached ("
 					+ instanceConfig.maxTotal() + ")");
 			}
 			String id = UUID.randomUUID().toString();
-			PythonScript script = runtime.load(template.source(),
-				template.definition().script() + "#instance-" + id);
+			PythonScript script;
+			try {
+				script = runtime.load(template.source(),
+					template.definition().script() + "#instance-" + id);
+			} catch (PythonException e) {
+				throw pythonFailure(e);
+			}
 			Instance instance = new Instance(id, createdBy, template, script);
 			instances.put(new InstanceKey(owner, id), instance);
 			return instance.descriptor();
@@ -580,6 +592,11 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 
 	private static NotFoundException instanceNotFound(String id) {
 		return new NotFoundException("Python instance not found: " + id, id);
+	}
+
+	/** An error raised by the operator's Python code, which the caller is told in Python's words. */
+	private static ResponseException pythonFailure(PythonException e) {
+		return new ResponseException(e.getMessage(), e);
 	}
 
 	private AString requireOwner(RequestContext ctx) {

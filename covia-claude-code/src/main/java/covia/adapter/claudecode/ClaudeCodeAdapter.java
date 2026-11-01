@@ -605,8 +605,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			if (mine.size() == 1) {
 				project = mine.get(0);
 			} else if (mine.isEmpty()) {
-				throw new IllegalArgumentException("No Claude Code project is available to you — the venue "
-					+ "operator declares projects under adapters.claudecode.projects (or claudecode:create with venue authority)");
+				throw new NotFoundException("No Claude Code project is available to you — the venue "
+					+ "operator declares projects under adapters.claudecode.projects (or claudecode:create with venue authority)", null);
 			} else {
 				List<String> names = new ArrayList<>();
 				for (ProjectSpec p : mine) names.add(p.name());
