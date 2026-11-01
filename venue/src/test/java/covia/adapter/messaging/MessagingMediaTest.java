@@ -17,6 +17,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
@@ -80,7 +81,7 @@ class MessagingMediaTest {
 		assertEquals("dlfs/whatsapp/note.ogg", RT.getIn(heard, "ref").toString(), "the stored reference stays");
 		assertEquals("elsewhere", RT.getIn(heard, "result", "ref").toString(), "the hook's own output is kept apart");
 		for (ACell invalid : new ACell[] {null, Maps.of("text", ""), Maps.of("text", 42)}) {
-			assertEquals(MessagingMedia.PROCESSOR_RESULT, assertThrows(IllegalArgumentException.class,
+			assertEquals(MessagingMedia.PROCESSOR_RESULT, assertThrows(InvalidDefinitionException.class,
 				() -> MessagingMedia.processed(attachment, invalid)).getMessage());
 		}
 		assertNull(MessagingMedia.imageBlock(attachment), "audio is no image block");

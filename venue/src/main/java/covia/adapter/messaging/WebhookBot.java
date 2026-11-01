@@ -22,6 +22,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
@@ -295,6 +296,9 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, writer));
 			} catch (java.io.IOException e) {
 				throw new UnavailableException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory, e);
+			} catch (IllegalArgumentException e) {
+				// No content provider takes the owner's media drive: the venue's setup.
+				throw new ConfigurationException(e.getMessage(), e);
 			}
 			if (spec.mediaOperation() != null) {
 				attachment = MessagingMedia.processed(attachment, router.runForAgent(spec.mediaOperation(),

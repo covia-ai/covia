@@ -16,6 +16,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
+import covia.exception.InvalidDefinitionException;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -141,12 +142,12 @@ public final class MessagingMedia {
 
 	/** Retain a {@code mediaOperation} result without letting it overwrite transport metadata. */
 	public static AMap<AString, ACell> processed(AMap<AString, ACell> attachment, ACell result) {
-		if (!(result instanceof AMap<?, ?> given)) throw new IllegalArgumentException(PROCESSOR_RESULT);
+		if (!(result instanceof AMap<?, ?> given)) throw new InvalidDefinitionException(PROCESSOR_RESULT);
 		AMap<AString, ACell> map = RT.castMap(given);
 		ACell text = map.get(Fields.TEXT);
 		if (map.containsKey(Fields.TEXT)) {
 			if (!(text instanceof AString string) || string.toString().isBlank()) {
-				throw new IllegalArgumentException(PROCESSOR_RESULT);
+				throw new InvalidDefinitionException(PROCESSOR_RESULT);
 			}
 			attachment = attachment.assoc(Fields.TEXT, text);
 		}

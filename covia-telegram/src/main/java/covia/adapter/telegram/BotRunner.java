@@ -60,7 +60,9 @@ import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotSupportedException;
@@ -743,7 +745,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 
 	static String formattedReply(ACell result) {
 		ACell text = result instanceof AString ? result : result instanceof AMap<?, ?> ? RT.getIn(result, Fields.TEXT) : null;
-		if (!(text instanceof AString string) || string.toString().isBlank()) throw new IllegalArgumentException(INVALID_REPLY);
+		if (!(text instanceof AString string) || string.toString().isBlank()) throw new InvalidDefinitionException(INVALID_REPLY);
 		return string.toString();
 	}
 
@@ -855,8 +857,14 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if (media.has("file_size") && media.get("file_size").getAsLong() > TelegramMedia.MAX_BYTES) {
 				throw new ResponseException(TelegramMedia.TOO_LARGE);
 			}
-			AMap<AString, ACell> attachment = download(media.get("file_id").getAsString())
-				.merge(RT.castMap(JSON.parse(media.toString())));
+			AMap<AString, ACell> attachment;
+			try {
+				attachment = download(media.get("file_id").getAsString());
+			} catch (IllegalArgumentException e) {
+				// No content provider takes the owner's media drive: the venue's setup.
+				throw new ConfigurationException(e.getMessage(), e);
+			}
+			attachment = attachment.merge(RT.castMap(JSON.parse(media.toString())));
 			if (spec.mediaOperation() != null) {
 				ACell processed = conversations.runForAgent(spec.mediaOperation(), attachment
 					.assoc(Strings.intern("caption"), Strings.create(text)).assoc(Fields.AUTHENTICATION, authentication));
@@ -1060,7 +1068,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	 * to the chat of an update this bot admitted, which for an allow-listed bot
 	 * is an allowed user's private chat (see {@link #handle}).</p>
 	 *
-	 * @throws IllegalArgumentException naming the rule and the offending target
+	 * @throws AuthException naming the rule and the offending target
 	 */
 	void requireAllowedTarget(String method, Map<String, Object> params) {
 		if (spec.open() || params == null) return;
@@ -1075,7 +1083,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 				msg.append("; resolved handles: ").append(resolved())
 					.append(" — a person listed by @username becomes addressable once they have written to the bot");
 			}
-			throw new IllegalArgumentException(msg.append(')').toString());
+			throw new AuthException(msg.append(')').toString());
 		}
 	}
 

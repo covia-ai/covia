@@ -28,6 +28,7 @@ import covia.api.Fields;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
+import covia.exception.AuthException;
 import covia.exception.NotSupportedException;
 import covia.exception.ResponseException;
 
@@ -172,7 +173,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	@Override protected ACell send(WebhookBot<BotSpec> bot, AMap<AString, ACell> input) {
 		MessagingSettings.known(input, java.util.Set.of("bot", "to", "text", "reply_to"));
 		String to = MessagingSettings.id(input, "to", BotSpec.PHONE);
-		if (!bot.spec().allows(to)) throw new IllegalArgumentException(DESTINATION_DENIED);
+		if (!bot.spec().allows(to)) throw new AuthException(DESTINATION_DENIED);
 		return deliver(bot, to, text(input, MAX_TEXT), MessagingSettings.optional(input, "reply_to"));
 	}
 	@Override protected void sendReply(WebhookBot<BotSpec> bot, AMap<AString, ACell> event, String text) {

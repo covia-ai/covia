@@ -21,6 +21,7 @@ import covia.adapter.messaging.WebhookBot;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
+import covia.exception.AuthException;
 import covia.exception.ResponseException;
 
 /** Optional Slack Events API and Socket Mode module for DMs and explicitly admitted channel mentions. */
@@ -133,7 +134,7 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	@Override protected ACell send(WebhookBot<BotSpec> bot, AMap<AString, ACell> input) {
 		MessagingSettings.known(input, java.util.Set.of("bot", "channel", "text", "thread_ts"));
 		String channel = MessagingSettings.id(input, "channel", BotSpec.CHANNEL_ID);
-		if (!bot.spec().allowsChannel(channel)) throw new IllegalArgumentException(DESTINATION_DENIED);
+		if (!bot.spec().allowsChannel(channel)) throw new AuthException(DESTINATION_DENIED);
 		String thread = MessagingSettings.optional(input, "thread_ts");
 		if (thread != null) MessagingSettings.id(input, "thread_ts", BotSpec.TIMESTAMP);
 		return deliver(bot, channel, text(input, MAX_TEXT), thread);

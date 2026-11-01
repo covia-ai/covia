@@ -32,6 +32,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.messaging.AMessagingAdapter;
 import covia.adapter.messaging.MessagingText;
+import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -536,13 +537,13 @@ public class TelegramAdapterTest {
 		assertEquals(Strings.create("r1"), RT.getIn(result, "result", "recordId"));
 		for (ACell invalid : new ACell[] {null, Strings.create("bare transcript"), Maps.of("text", null), Maps.of("text", 12), Maps.of("text", " ")}) {
 			assertEquals(TelegramMedia.PROCESSOR_RESULT,
-				assertThrows(IllegalArgumentException.class, () -> TelegramMedia.processed(attachment, invalid)).getMessage());
+				assertThrows(InvalidDefinitionException.class, () -> TelegramMedia.processed(attachment, invalid)).getMessage());
 		}
 		assertEquals("Rendered", BotRunner.formattedReply(Strings.create("Rendered")));
 		assertEquals("Rendered", BotRunner.formattedReply(Maps.of("text", "Rendered")));
 		for (ACell invalid : new ACell[] {null, Maps.empty(), Maps.of("internalCard", "do not leak"), Strings.EMPTY}) {
 			assertEquals(BotRunner.INVALID_REPLY,
-				assertThrows(IllegalArgumentException.class, () -> BotRunner.formattedReply(invalid)).getMessage());
+				assertThrows(InvalidDefinitionException.class, () -> BotRunner.formattedReply(invalid)).getMessage());
 		}
 		for (AString option : List.of(BotSpec.K_MEDIA_OPERATION, BotSpec.K_REPLY_OPERATION)) {
 			assertThrows(IllegalArgumentException.class, () -> BotSpec.parse("bad", Maps.of("token", "t", "user", OWNER,
