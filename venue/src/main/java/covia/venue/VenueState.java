@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Function;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ABlob;
@@ -21,6 +22,7 @@ import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.MapEntry;
+import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -81,11 +83,11 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	private final AccountKey ownerKey;
-	private final LatticeContext context;
+	private final VenueContext context;
 	/** The venue value as one timestamped record: local edits stamp it, merges keep the newest. */
 	private final Timestamped<ACell> record;
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 
 	@Override
 	public AForkableCursor<ACell> cursor() { return record.cursor(); }
@@ -100,8 +102,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return record.getLattice().merge(own, other);
 	}
 
-	/** Binds storage and its explicit signing/clock policy. */
-	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, LatticeContext context) {
+	/** Binds signed storage and the policy its components share. */
+	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
 		super(cursor);
 		this.ownerKey = ownerKey;
 		this.context = context;
@@ -121,8 +123,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/**
 	 * Connects a venue component beneath a containing Covia application.
-	 * The component copies its parent's policy and explicitly composes the
-	 * signing and timestamp boundaries. Publication belongs to the host.
+	 * The component signs with the application's signing policy as it stands
+	 * now and shares the application's {@link VenueContext}. Publication
+	 * belongs to the host.
 	 */
 	public static VenueState connect(CoviaApplication parent,
 			AccountKey ownerKey) {
@@ -132,7 +135,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		if (ownerKey == null) {
 			throw new IllegalArgumentException("Venue owner key must not be null");
 		}
-		return fromRoot(parent.cursor(), ownerKey, parent.getContext());
+		LatticeContext signing = parent.getContext();
+		return fromRoot(parent.cursor(), ownerKey, value -> signing.sign(ownerKey, value), parent.venueContext());
 	}
 
 	/**
@@ -141,13 +145,16 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 *
 	 * @param root Root lattice cursor
 	 * @param ownerKey Venue owner's account key
-	 * @param context Signing and timestamp policy for this component
+	 * @param signer Signs a venue value as the owner, or returns null when it
+	 *        cannot; the owner's signing rule checks each result
+	 * @param context Policy shared by the venue's components
 	 * @return VenueState connected to the root cursor
 	 */
-	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey, LatticeContext context) {
+	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey,
+			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
 		var owners = resolve(root, Covia.ROOT, Covia.GRID, Covia.VENUES);
 		var signing = Covia.VENUE_OWNERS.signingFor(ownerKey);
-		var signed = SignedCursor.<ACell>create(resolve(owners, Covia.VENUE_OWNERS, ownerKey), value -> signing.sign(context, value));
+		var signed = SignedCursor.<ACell>create(resolve(owners, Covia.VENUE_OWNERS, ownerKey), value -> signing.sign(value, signer));
 		return new VenueState(signed, ownerKey, context);
 	}
 
@@ -212,7 +219,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		ACell root = Objects.requireNonNull(store, "store").getRootData();
 		if (root == null) return Optional.empty();
 		VenueState venue = fromRoot(Cursors.root(root), Objects.requireNonNull(ownerKey, "ownerKey"),
-			LatticeContext.create(null, null));
+			value -> null, VenueContext.SYSTEM);
 		if (venue.get() == null) return Optional.empty();
 		return Optional.of(new StoredVersions(venue.version(), venue.adapterVersions()));
 	}

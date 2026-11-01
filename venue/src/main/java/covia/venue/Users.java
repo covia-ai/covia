@@ -7,7 +7,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
@@ -33,9 +32,9 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 		return new Users(context, draft);
 	}
 
-	private final LatticeContext context;
+	private final VenueContext context;
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 
 	public static final String ACCOUNT_DELETED = "User account has been deleted";
 	static final AString GENERATION = Strings.intern("generation");
@@ -72,7 +71,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 		return current != null ? current : Maps.empty();
 	}
 
-	Users(LatticeContext context, AForkableCursor<AMap<AString, ACell>> cursor) {
+	Users(VenueContext context, AForkableCursor<AMap<AString, ACell>> cursor) {
 		super(cursor);
 		this.context = context;
 	}

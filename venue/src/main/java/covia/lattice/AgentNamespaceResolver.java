@@ -33,7 +33,7 @@ public class AgentNamespaceResolver implements NamespaceResolver {
 			.recordCursor(Namespace.G, agentId);
 		ACell[] rewritten = keys.clone();
 		rewritten[0] = K_N;
-		return new ResolvedNamespace(new WorkspaceRoot(agentCursor, adapter.engine.getLatticeContext(), false), rewritten, true);
+		return new ResolvedNamespace(new WorkspaceRoot(agentCursor, adapter.engine.getVenueState().getContext(), false), rewritten, true);
 	}
 
 	@Override

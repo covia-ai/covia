@@ -19,7 +19,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.lattice.Covia;
@@ -38,13 +37,13 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		return new AgentState(context, draft, agentId);
 	}
 
-	private final LatticeContext context;
+	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 
 	@Override
 	public AForkableCursor<ACell> cursor() { return edits; }
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 
 	public static final AString KEY_AGENT = Strings.intern("agent");
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
@@ -150,7 +149,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 
 	private final AString agentId;
 
-	AgentState(LatticeContext context, AForkableCursor<ACell> cursor,
+	AgentState(VenueContext context, AForkableCursor<ACell> cursor,
 			AString agentId) {
 		super(cursor);
 		this.context = context;

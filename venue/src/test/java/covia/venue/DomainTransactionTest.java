@@ -16,14 +16,12 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AccountKey;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.SignedData;
 import convex.core.data.prim.CVMLong;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.Cursors;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
@@ -264,12 +262,10 @@ class DomainTransactionTest {
 	void agentRecordHasOneStampPolicyIncludingReplacementAndNoOps() {
 		var clockReads = new AtomicInteger();
 		var ticks = new AtomicLong(100);
-		var context = new LatticeContext() {
-			@Override public CVMLong currentTimestamp() {
-				clockReads.incrementAndGet();
-				return CVMLong.create(ticks.get());
-			}
-		};
+		var context = VenueContext.create(() -> {
+			clockReads.incrementAndGet();
+			return CVMLong.create(ticks.get());
+		});
 		var agent = new AgentState(context, Cursors.root(null), Strings.create("assistant"));
 		agent.initialise(Maps.empty(), null);
 		assertEquals(1, clockReads.getAndSet(0));
@@ -349,14 +345,12 @@ class DomainTransactionTest {
 		var key = AKeyPair.generate();
 		var signatures = new AtomicInteger();
 		var fail = new AtomicBoolean();
-		var context = new LatticeContext() {
-			@Override public <T extends ACell> SignedData<T> sign(AccountKey owner, T value) {
-				signatures.incrementAndGet();
-				if (fail.get()) throw new IllegalStateException("test signer unavailable");
-				return key.signData(value);
-			}
+		java.util.function.Function<ACell, SignedData<ACell>> signer = value -> {
+			signatures.incrementAndGet();
+			if (fail.get()) throw new IllegalStateException("test signer unavailable");
+			return key.signData(value);
 		};
-		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), context);
+		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), signer, VenueContext.SYSTEM);
 		var id = Strings.create("alice");
 		convex.core.data.AMap<AString, ACell> profile = Maps.of(Fields.NAME, Strings.create("Alice"));
 		ACell before = venue.get();
@@ -494,11 +488,8 @@ class DomainTransactionTest {
 	void commitDoesNotApplyTheComponentsTimestampPolicyTwice() {
 		var key = AKeyPair.generate();
 		var ticks = new AtomicLong(100);
-		LatticeContext context = new LatticeContext() {
-			@Override public CVMLong currentTimestamp() { return CVMLong.create(ticks.incrementAndGet()); }
-		};
-		context = context.withSigningKey(key);
-		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), context);
+		var context = VenueContext.create(() -> CVMLong.create(ticks.incrementAndGet()));
+		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), key::signData, context);
 		var staged = new AtomicReference<ACell>();
 		venue.transact(draft -> {
 			draft.users().ensure(DID).ensureAgent("assistant", Maps.empty(), null);
@@ -524,14 +515,12 @@ class DomainTransactionTest {
 		var key = AKeyPair.generate();
 		var signatures = new AtomicInteger();
 		var fail = new AtomicBoolean();
-		var context = new LatticeContext() {
-			@Override public <T extends ACell> SignedData<T> sign(AccountKey account, T value) {
-				signatures.incrementAndGet();
-				if (fail.get()) throw new IllegalStateException("test signer unavailable");
-				return key.signData(value);
-			}
+		java.util.function.Function<ACell, SignedData<ACell>> signer = value -> {
+			signatures.incrementAndGet();
+			if (fail.get()) throw new IllegalStateException("test signer unavailable");
+			return key.signData(value);
 		};
-		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), context);
+		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), signer, VenueContext.SYSTEM);
 		venue.transact(draft -> {
 			var user = draft.users().ensure(DID);
 			user.workspaceRoot().write(path("w/a"), CVMLong.ONE);

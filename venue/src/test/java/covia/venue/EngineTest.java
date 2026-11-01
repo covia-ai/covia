@@ -82,8 +82,12 @@ public class EngineTest {
 
 		LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor,
 				boolean failAfterSchedulerStart) throws IOException {
-			super(new Config(null), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)),
-				convex.core.crypto.AKeyPair.generate());
+			this(CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), failAfterSchedulerStart);
+		}
+
+		LifecycleTestEngine(CoviaApplication application,
+				boolean failAfterSchedulerStart) throws IOException {
+			super(new Config(null), application, convex.core.crypto.AKeyPair.generate());
 			this.failAfterSchedulerStart = failAfterSchedulerStart;
 		}
 
@@ -189,8 +193,9 @@ public class EngineTest {
 	public void testConnectedVenueStateUsesAtomicLocalWriteOrderAtSameTimestamp() throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 
-		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
-		engine.latticeContext = convex.lattice.LatticeContext.EMPTY.withTimestamp(CVMLong.create(1_000L));
+		var application = CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null));
+		application.setContext(convex.lattice.LatticeContext.EMPTY.withTimestamp(CVMLong.create(1_000L)));
+		LifecycleTestEngine engine = new LifecycleTestEngine(application, false);
 		AString did = Strings.create("did:test:connected-engine-state");
 		Blob jobId = Blob.parse("0x0001");
 

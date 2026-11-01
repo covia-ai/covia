@@ -352,7 +352,7 @@ public class DLFSAdapterTest {
 			isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			var deleted = root.get();
-			assertEquals(deleted.get(Covia.DLFS), Covia.ROOT.merge(isolated.getLatticeContext(), legacy, deleted).get(Covia.DLFS));
+			assertEquals(deleted.get(Covia.DLFS), Covia.ROOT.merge(application.getContext(), legacy, deleted).get(Covia.DLFS));
 			application.merge(legacy);
 			assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
 		} finally {
@@ -379,7 +379,7 @@ public class DLFSAdapterTest {
 			AKeyPair dlfsKey = AKeyPair.create(convex.core.data.Blob.fromHex(isolated.getVenueState().users().get(ALICE_DID).secrets()
 				.decrypt("DLFS_KEY", covia.venue.SecretStore.keys(isolated.getKeyPair())).toString()));
 			convex.dlfs.DLFSRegion.connect(root.path(Covia.DLFS), null,
-				dlfsKey::signData, isolated.getLatticeContext()::currentTimestamp)
+				dlfsKey::signData, isolated.getVenueState().getContext()::currentTimestamp)
 				.merge(convex.core.lang.RT.getIn(left, Covia.DLFS));
 			assertEquals("left", Files.readString(drive.getPath("/left.txt")));
 			assertEquals("right", Files.readString(drive.getPath("/right.txt")));

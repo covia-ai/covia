@@ -55,7 +55,7 @@ public class TempNamespaceResolver implements NamespaceResolver {
 		AForkableCursor<ACell> jobCursor = adapter.ensureUser(ctx).recordCursor(Namespace.J, scopedJobId);
 		ACell[] rewritten = keys.clone();
 		rewritten[0] = K_TEMP;
-		return new ResolvedNamespace(new WorkspaceRoot(jobCursor, adapter.engine.getLatticeContext(), false), rewritten, true);
+		return new ResolvedNamespace(new WorkspaceRoot(jobCursor, adapter.engine.getVenueState().getContext(), false), rewritten, true);
 	}
 
 	@Override

@@ -19,11 +19,11 @@ import convex.lattice.ALattice;
 import convex.lattice.LatticeOps;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.generic.JSONLattice;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
+import covia.venue.VenueContext;
 
 /**
  * Path operations and transactions over an already-authorised workspace.
@@ -32,7 +32,7 @@ import covia.grid.Job;
  * record envelopes, stored nulls, and map/vector navigation semantics.
  * External requests must pass authority checks before obtaining this view.
  */
-public record WorkspaceRoot(AForkableCursor<ACell> cursor, LatticeContext context,
+public record WorkspaceRoot(AForkableCursor<ACell> cursor, VenueContext context,
 		boolean userNamespaces) implements TransactionalComponent<ACell, WorkspaceRoot> {
 
 	@Override

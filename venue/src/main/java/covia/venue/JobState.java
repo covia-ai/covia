@@ -9,7 +9,6 @@ import convex.core.data.AVector;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
@@ -22,10 +21,10 @@ import covia.lattice.Covia;
  * to the runtime after the enclosing transaction commits. */
 public final class JobState extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, JobState> {
-	private final LatticeContext context;
+	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 
-	JobState(LatticeContext context, AForkableCursor<ACell> storage) {
+	JobState(VenueContext context, AForkableCursor<ACell> storage) {
 		super(storage);
 		this.context = context;
 		this.edits = StampedCursor.create(storage, context::currentTimestamp,

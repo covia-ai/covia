@@ -509,7 +509,7 @@ The **interior** of `:value` (`:version`, `:assets`, `:storage`, `:did`,
 `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`,
 `:user-data → <DID> → {j, g, s, w, o, h, a}`) is navigable but has no merge of
 its own. Writes are stamped on the way up by a stamp-on-write boundary (Convex
-`StampedCursor`) whose time comes from the `LatticeContext` write clock.
+`StampedCursor`) whose time comes from the `VenueContext` write clock.
 
 The `w`, `o` and `h` namespaces are `WorkspaceRoot` regions: a
 `{updated, data}` container whose `data` is what callers see. Navigating
@@ -670,7 +670,8 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `WorkspaceRoot` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; merge remains at the enclosing venue |
-| `LatticeContext` | Live application policy for clock, signing and owner verification; installed once at the hosted root and resolved per logical write |
+| `LatticeContext` | Application policy for clock, signing and owner verification, used by the root merge; installed once on `CoviaApplication`, which also signs the venue record with it |
+| `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions

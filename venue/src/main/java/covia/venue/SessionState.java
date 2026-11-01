@@ -14,7 +14,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -29,10 +28,10 @@ import static covia.venue.AgentState.*;
  */
 public final class SessionState extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, SessionState> {
-	private final LatticeContext context;
+	private final VenueContext context;
 	private final Blob id;
 
-	SessionState(LatticeContext context, AForkableCursor<ACell> cursor, Blob id) {
+	SessionState(VenueContext context, AForkableCursor<ACell> cursor, Blob id) {
 		super(cursor);
 		this.context = context;
 		this.id = id;

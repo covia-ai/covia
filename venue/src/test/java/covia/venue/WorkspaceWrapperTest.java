@@ -17,7 +17,6 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
@@ -134,9 +133,7 @@ public class WorkspaceWrapperTest {
 	public void testWrapperPreservesMetadataAndRatchetsContextClock() {
 		var userRoot = Cursors.<ACell>root(convex.core.data.Maps.empty());
 		var policy = new java.util.concurrent.atomic.AtomicLong(200);
-		LatticeContext context = new LatticeContext() {
-			@Override public CVMLong currentTimestamp() { return CVMLong.create(policy.get()); }
-		};
+		var context = VenueContext.create(() -> CVMLong.create(policy.get()));
 		AForkableCursor<ACell> data = new WorkspaceRoot(userRoot, context, true).child(Namespace.W);
 		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 		data.set(Maps.of("a", CVMLong.ONE));
@@ -176,7 +173,7 @@ public class WorkspaceWrapperTest {
 	@Test
 	public void testWrapperBoundaryAppliesOnlyAtNamespaceRoot() {
 		var userRoot = Cursors.<ACell>root(convex.core.data.Maps.empty());
-		var data = new WorkspaceRoot(userRoot, LatticeContext.create(CVMLong.create(300), null), true).child(Namespace.W);
+		var data = new WorkspaceRoot(userRoot, VenueContext.create(() -> CVMLong.create(300)), true).child(Namespace.W);
 		AForkableCursor<ACell> container = userRoot.path(Namespace.W);
 
 		AForkableCursor<ACell> nested = data.withDefault(convex.core.data.Maps.empty()).path(Strings.intern("nested"))

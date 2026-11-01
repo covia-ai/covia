@@ -143,7 +143,7 @@ public final class Covia {
 		return ts;
 	}
 
-	/** Injects the write-clock timestamp (from the LatticeContext) into the venue value's {@code :timestamp}. */
+	/** Injects the write-clock timestamp (from the VenueContext) into the venue value's {@code :timestamp}. */
 	@SuppressWarnings("unchecked")
 	public static ACell stampVenue(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {

@@ -114,7 +114,7 @@ public final class UserExports {
 			Fields.VERSION, CVMLong.create(VERSION),
 			Fields.DID, did,
 			K_VENUE, engine.getDIDString(),
-			K_EXPORTED, engine.getLatticeContext().currentTimestamp(),
+			K_EXPORTED, engine.getVenueState().getContext().currentTimestamp(),
 			K_USER, state.dissoc(Namespace.S));
 		ACell meta = RT.getIn(record, Covia.K_META);
 		if (meta != null) export = export.assoc(Covia.K_META, meta);

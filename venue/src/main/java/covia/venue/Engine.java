@@ -51,7 +51,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
@@ -125,7 +124,6 @@ public class Engine {
 	 * Components supply merge policy; the cursor supplies atomic updates and sync.
  	 */
 	protected AForkableCursor<Index<Keyword,ACell>> lattice;
-	protected LatticeContext latticeContext = LatticeContext.EMPTY;
 
 	/** Venue state wrapper providing typed access to assets, jobs, and child cursors */
 	protected VenueState venueState;
@@ -593,10 +591,7 @@ public class Engine {
 			// Set signing context only when active startup begins.
 			// Preserve application owner verification and clock policy, overriding
 			// only Covia's signing capability.
-			LatticeContext ctx = application.getContext()
-				.withSigningKey(this.keyPair);
-			this.latticeContext = ctx;
-			application.setContext(ctx);
+			application.setContext(application.getContext().withSigningKey(this.keyPair));
 			// Authentication also serves manually assembled engines without a
 			// public operation catalogue. Its availability follows normal lifecycle.
 			AuthAdapter auth = new AuthAdapter();
@@ -3632,11 +3627,6 @@ public class Engine {
 		return agent;
 	}
 
-	/** Signing and live write-clock policy supplied to venue components. */
-	public LatticeContext getLatticeContext() {
-		return latticeContext;
-	}
-
 	/** Gets the live root cursor for top-level lattice regions. */
 	public AForkableCursor<Index<Keyword, ACell>> getRootCursor() {
 		return lattice;
@@ -3652,7 +3642,7 @@ public class Engine {
 		var region = convex.dlfs.DLFSRegion.connect(
 			convex.lattice.LatticeComponent.resolve(lattice, Covia.ROOT, Covia.DLFS),
 			application.hostStore(), ownerKey::signData,
-			latticeContext::currentTimestamp);
+			application.venueContext()::currentTimestamp);
 		return region.drives(ownerKey.getAccountKey());
 	}
 

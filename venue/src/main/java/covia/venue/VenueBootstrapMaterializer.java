@@ -63,7 +63,7 @@ final class VenueBootstrapMaterializer {
 	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
 		var user = engine.getVenueState().users().ensure(engine.getDIDString());
 		var workspace = new WorkspaceRoot(user.workspaceRoot().child(K_W)
-			.withDefault(Maps.empty()).path(K_GLOBAL), engine.getLatticeContext(), false);
+			.withDefault(Maps.empty()).path(K_GLOBAL), engine.getVenueState().getContext(), false);
 		var names = engine.getAdapterNamesInRegistrationOrder();
 		long started = System.currentTimeMillis();
 		workspace.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));

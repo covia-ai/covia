@@ -10,7 +10,6 @@ import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
@@ -46,13 +45,13 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		return new User(context, draft, did);
 	}
 
-	private final LatticeContext context;
+	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 
 	@Override
 	public AForkableCursor<ACell> cursor() { return edits; }
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 
 	private final AString did;
 
@@ -71,7 +70,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		return workspaceRoot().delete(keys);
 	}
 
-	User(LatticeContext context, AForkableCursor<ACell> cursor, AString did) {
+	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
 		super(cursor);
 		this.context = context;
 		this.did = did;

@@ -68,7 +68,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 				return value;
 			}
 		};
-		return new ResolvedNamespace(new WorkspaceRoot(guarded, covia.engine.getLatticeContext(), false), path, false);
+		return new ResolvedNamespace(new WorkspaceRoot(guarded, covia.engine.getVenueState().getContext(), false), path, false);
 	}
 
 	private static void requireWritable(AAdapter adapter, RequestContext ctx, ACell[] path) {

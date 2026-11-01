@@ -43,7 +43,7 @@ public class SessionNamespaceResolver implements NamespaceResolver {
 			.recordCursor(Namespace.G, agentId).path(K_SESSIONS, sessionId);
 		ACell[] rewritten = keys.clone();
 		rewritten[0] = K_C;
-		return new ResolvedNamespace(new WorkspaceRoot(sessionCursor, adapter.engine.getLatticeContext(), false), rewritten, true);
+		return new ResolvedNamespace(new WorkspaceRoot(sessionCursor, adapter.engine.getVenueState().getContext(), false), rewritten, true);
 	}
 
 	@Override

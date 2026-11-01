@@ -16,7 +16,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -28,9 +27,9 @@ import covia.exception.NotSupportedException;
 /** Stored authentication directory and key lifecycle rules. No providers or runtime services. */
 public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		implements TransactionalComponent<AMap<AString, AMap<AString, ACell>>, AuthState> {
-	private final LatticeContext context;
+	private final VenueContext context;
 
-	AuthState(LatticeContext context, AForkableCursor<AMap<AString, AMap<AString, ACell>>> cursor) {
+	AuthState(VenueContext context, AForkableCursor<AMap<AString, AMap<AString, ACell>>> cursor) {
 		super(cursor);
 		this.context = context;
 	}
@@ -40,7 +39,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 		return new AuthState(context, draft);
 	}
 
-	private LatticeContext getContext() { return context; }
+	private VenueContext getContext() { return context; }
 	public static final AString ACTIVE = Strings.intern("active");
 	public static final AString REVOKED = Strings.intern("revoked");
 	/** Refusal messages; tests assert against these, never against the wording. */

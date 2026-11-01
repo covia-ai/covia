@@ -120,7 +120,7 @@ unchanged but fail at runtime against jars built for 0.9.x.
 |-------|--------|
 | `Engine` constructors taking a cursor | `new Engine(config, CoviaApplication, keyPair)`, with `CoviaApplication.open(store, keyPair)` or `connect(host)` |
 | `getRootCursor()` and `User.cursor()` returning `ALatticeCursor` | They return `AForkableCursor`. Source-compatible, but binary-incompatible: recompile |
-| `VenueState.fromRoot(cursor, ownerKey)` | `fromRoot(AForkableCursor, AccountKey, LatticeContext)` |
+| `VenueState.fromRoot(cursor, ownerKey)` | `fromRoot(AForkableCursor, AccountKey, signer, VenueContext)`, or `application.venue(ownerKey)` |
 | `CoviaAdapter.writePathToCursor`, `CoviaAdapter.parseStringPath` | `workspaceRoot().write` inside `user.transact`; `WorkspaceRoot.parseStringPath` |
 | `WrapperLattice`, `Covia.child`, `Engine.connectDLFSDrive` | Removed |
 | A job record's `prev` chain, `Job.getPreviousState` | Gone: a job record is its current state |

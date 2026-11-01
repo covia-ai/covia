@@ -19,7 +19,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 
@@ -48,9 +47,9 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 		return new SecretStore(context, draft);
 	}
 
-	private final LatticeContext context;
+	private final VenueContext context;
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 
 	/** Key version 1: SHA-256 of the venue seed. Read only; nothing encrypts under it. */
 	public static final int KEY_VERSION_1 = 1;
@@ -77,7 +76,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	private static final AString KEY_VERSION_KEY = Strings.intern("keyVersion");
 	private static final CVMLong CURRENT_KEY_VERSION_CELL = CVMLong.create(CURRENT_KEY_VERSION);
 
-	SecretStore(LatticeContext context,
+	SecretStore(VenueContext context,
 			AForkableCursor<AMap<AString, ACell>> cursor) {
 		super(cursor);
 		this.context = context;

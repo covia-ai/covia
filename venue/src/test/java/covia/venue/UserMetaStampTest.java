@@ -39,8 +39,8 @@ public class UserMetaStampTest {
 		return (v instanceof CVMLong l) ? l.longValue() : -1;
 	}
 
-	/** Advances wall time past the current stamp. The application's live
-	 *  LatticeContext resolves this clock at the next logical write. */
+	/** Advances wall time past the current stamp. The venue's shared
+	 *  VenueContext reads this clock at the next logical write. */
 	private void tick() {
 		try { Thread.sleep(3); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
 	}

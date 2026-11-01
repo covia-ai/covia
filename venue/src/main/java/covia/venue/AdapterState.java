@@ -10,7 +10,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.ALatticeComponent;
-import convex.lattice.LatticeContext;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.AUpdateCursor;
@@ -27,12 +26,12 @@ import covia.lattice.WorkspaceRoot;
 public final class AdapterState extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, AdapterState> {
 	private static final Pattern ADAPTER_NAME = Pattern.compile("[a-z][a-z0-9-]*");
-	private final LatticeContext context;
+	private final VenueContext context;
 	private final String name;
 	private final AString owner;
 	private final ACell generation;
 
-	AdapterState(LatticeContext context, AForkableCursor<ACell> cursor, String name, AString owner, ACell generation) {
+	AdapterState(VenueContext context, AForkableCursor<ACell> cursor, String name, AString owner, ACell generation) {
 		super(cursor);
 		this.context = context;
 		this.name = name;
@@ -77,7 +76,7 @@ public final class AdapterState extends ALatticeComponent<ACell>
 			base.path(Covia.ADAPTERS).withDefault(Maps.empty()).path(Strings.create(name)), name, owner, generation);
 	}
 
-	public LatticeContext getContext() { return context; }
+	public VenueContext getContext() { return context; }
 	public String adapterName() { return name; }
 	public ACell get() { return cursor().get(); }
 	public void set(ACell value) { cursor().set(value); }
