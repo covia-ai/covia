@@ -353,7 +353,7 @@ public class SQLAdapter extends AAdapter {
 		ACell result;
 		try {
 			result = runQuery(conn, statement, params, maxRows);
-		} catch (SQLException | RuntimeException e) {
+		} catch (SQLException | RuntimeException | Error e) {
 			// The query's own failure is the one to report
 			try {
 				conn.rollback();
