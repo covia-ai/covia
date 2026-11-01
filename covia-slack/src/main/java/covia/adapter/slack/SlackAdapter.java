@@ -21,6 +21,7 @@ import covia.adapter.messaging.WebhookBot;
 import covia.adapter.webhook.WebhookRequest;
 import covia.adapter.webhook.WebhookResponse;
 import covia.adapter.webhook.WebhookSignatures;
+import covia.exception.ResponseException;
 
 /** Optional Slack Events API and Socket Mode module for DMs and explicitly admitted channel mentions. */
 public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
@@ -110,7 +111,7 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		return sockets.lease(bot, bot.credential(BotSpec.APP_TOKEN), (token, members) -> {
 			ACell opened = MessagingHttp.post(apiUrl() + "/apps.connections.open", token, Maps.empty());
 			AString url = RT.ensureString(RT.getIn(opened, MessagingSettings.key("url")));
-			if (!CVMBool.TRUE.equals(RT.getIn(opened, MessagingSettings.key("ok"))) || url == null) throw new IllegalStateException(CONNECTION_REFUSED);
+			if (!CVMBool.TRUE.equals(RT.getIn(opened, MessagingSettings.key("ok"))) || url == null) throw new ResponseException(CONNECTION_REFUSED);
 			return SocketModeConnection.open(this, members, MessagingHttp.socket(url.toString()));
 		});
 	}
@@ -149,8 +150,8 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		if (thread != null) body = body.assoc(MessagingSettings.key("thread_ts"), convex.core.data.Strings.create(thread));
 		String url = apiUrl() + "/chat.postMessage";
 		ACell result = MessagingHttp.post(url, bot.credential("token", url), body);
-		if (!CVMBool.TRUE.equals(RT.getIn(result, MessagingSettings.key("ok")))) throw new IllegalStateException(API_ERROR);
-		if (RT.ensureString(RT.getIn(result, MessagingSettings.key("ts"))) == null) throw new IllegalStateException(INVALID_RESPONSE);
+		if (!CVMBool.TRUE.equals(RT.getIn(result, MessagingSettings.key("ok")))) throw new ResponseException(API_ERROR);
+		if (RT.ensureString(RT.getIn(result, MessagingSettings.key("ts"))) == null) throw new ResponseException(INVALID_RESPONSE);
 		return result;
 	}
 }

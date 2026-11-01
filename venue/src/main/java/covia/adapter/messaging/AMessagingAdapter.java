@@ -25,6 +25,10 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.MessagingBot.Managed;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
+import covia.exception.NotFoundException;
+import covia.exception.NotSupportedException;
 import covia.grid.Principals;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
@@ -267,14 +271,14 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		if (name != null && !name.isEmpty()) {
 			R runner = user == null ? null : runner(user, name.toString());
 			if (runner == null) runner = runner(name.toString());
-			if (runner == null) throw new IllegalArgumentException(UNKNOWN_BOT.formatted(providerName(), name));
+			if (runner == null) throw new NotFoundException(UNKNOWN_BOT.formatted(providerName(), name), name.toString());
 			return runner;
 		}
 		List<R> mine = new ArrayList<>();
 		for (R runner : runnerList()) if (user != null && user.equals(runner.spec().userDID(engine))) mine.add(runner);
 		if (mine.size() == 1) return mine.getFirst();
-		if (mine.isEmpty()) throw new IllegalArgumentException(NO_BOT.formatted(providerName(), user));
-		throw new IllegalArgumentException(AMBIGUOUS_BOT.formatted(providerName()));
+		if (mine.isEmpty()) throw new NotFoundException(NO_BOT.formatted(providerName(), user), null);
+		throw new InvalidInputException(AMBIGUOUS_BOT.formatted(providerName()));
 	}
 
 	protected final void requireBotAccess(RequestContext ctx, R runner, AString ability) {
@@ -294,7 +298,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	/** Override to require every provider-specific credential to be a secret reference. */
 	protected void validateRuntimeCredentials(AMap<AString, ACell> settings) {
 		AString token = RT.ensureString(settings.get(K_TOKEN));
-		if (!isSecretReference(token == null ? null : token.toString())) throw new IllegalArgumentException(SECRET_REFERENCE_REQUIRED);
+		if (!isSecretReference(token == null ? null : token.toString())) throw new InvalidInputException(SECRET_REFERENCE_REQUIRED);
 	}
 
 	protected final synchronized ACell handleCreate(RequestContext ctx, ACell input) {
@@ -302,17 +306,22 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException(getName() + ":create" + AUTH_REQUIRED);
 		AMap<AString, ACell> in = RT.castMap(input);
-		if (in == null) throw new IllegalArgumentException(SETTINGS_REQUIRED);
+		if (in == null) throw new InvalidInputException(SETTINGS_REQUIRED);
 		AString nameCell = RT.ensureString(in.get(Fields.NAME));
-		if (nameCell == null || nameCell.isEmpty()) throw new IllegalArgumentException(NAME_REQUIRED);
+		if (nameCell == null || nameCell.isEmpty()) throw new InvalidInputException(NAME_REQUIRED);
 		String name = nameCell.toString();
-		if (in.containsKey(K_USER)) throw new IllegalArgumentException(IMPLICIT_USER);
+		if (in.containsKey(K_USER)) throw new InvalidInputException(IMPLICIT_USER);
 		validateRuntimeCredentials(in);
 		AMap<AString, ACell> settings = in.dissoc(Fields.NAME);
-		S spec = parseBot(name, settings.assoc(K_USER, owner), true);
+		S spec;
+		try {
+			spec = parseBot(name, settings.assoc(K_USER, owner), true);
+		} catch (IllegalArgumentException e) {
+			throw new InvalidInputException(e.getMessage(), e);
+		}
 		engine.requireAuthority(ctx, resource(owner, name), Strings.intern(getName() + "/manage"));
 		String key = runtimeKey(owner, name);
-		if (runners.containsKey(key)) throw new IllegalArgumentException(DUPLICATE_BOT.formatted(providerName(), name));
+		if (runners.containsKey(key)) throw new ConflictException(DUPLICATE_BOT.formatted(providerName(), name));
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
 		AString principal = ctx.getCallerDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new IllegalArgumentException(FOREIGN_PRINCIPAL.formatted(principal));
@@ -339,14 +348,14 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException(getName() + ":delete" + AUTH_REQUIRED);
 		AString nameCell = RT.ensureString(RT.getIn(input, Fields.NAME));
-		if (nameCell == null || nameCell.isEmpty()) throw new IllegalArgumentException(NAME_REQUIRED);
+		if (nameCell == null || nameCell.isEmpty()) throw new InvalidInputException(NAME_REQUIRED);
 		String name = nameCell.toString();
 		engine.requireAuthority(ctx, resource(owner, name), Strings.intern(getName() + "/manage"));
 		R runner = runners.remove(runtimeKey(owner, name));
 		if (runner == null) {
 			R config = runners.get(name);
-			if (config != null && owner.equals(config.spec().userDID(engine))) throw new IllegalArgumentException(CONFIG_BOT.formatted(name));
-			throw new IllegalArgumentException(MISSING_BOT.formatted(providerName(), name));
+			if (config != null && owner.equals(config.spec().userDID(engine))) throw new NotSupportedException(CONFIG_BOT.formatted(name));
+			throw new NotFoundException(MISSING_BOT.formatted(providerName(), name), name);
 		}
 		runner.stop();
 		principals.remove(runtimeKey(owner, name));

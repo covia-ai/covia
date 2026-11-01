@@ -5,6 +5,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import covia.exception.ConfigurationException;
 import covia.venue.Engine;
 
 /** Provider-independent identity and routing of a messaging binding. */
@@ -20,7 +21,7 @@ public interface MessagingBotSpec {
 	default AString userDID(Engine engine) {
 		if (!"public".equals(userRef())) return Strings.create(userRef());
 		if (engine == null || !engine.config().isPublicAccess()) {
-			throw new IllegalStateException("bot '" + name() + "'" + PUBLIC_ACCESS_DISABLED);
+			throw new ConfigurationException("bot '" + name() + "'" + PUBLIC_ACCESS_DISABLED);
 		}
 		return Strings.create(engine.getDIDString() + ":public");
 	}

@@ -26,6 +26,7 @@ import covia.adapter.messaging.MessagingSettings;
 import covia.adapter.messaging.WebhookBot;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
+import covia.exception.ResponseException;
 import covia.venue.RequestContext;
 import io.javalin.websocket.WsContext;
 
@@ -287,7 +288,7 @@ class SlackSocketModeTest {
 			assertNull(((AMap<?, ?>) status).get(Strings.intern("webhookPath")));
 			assertNotNull(((AMap<?, ?>) status).get(Strings.intern("connection")));
 		}
-		assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(IllegalArgumentException.class,
+		assertEquals(MessagingHttp.INVALID_SOCKET_URL, assertThrows(ResponseException.class,
 			() -> MessagingHttp.socket("ws://example.com/link")).getMessage());
 	}
 }

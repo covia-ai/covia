@@ -22,6 +22,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.messaging.*;
 import covia.adapter.webhook.*;
 import covia.api.Fields;
+import covia.exception.ResponseException;
 import covia.venue.*;
 import covia.venue.server.VenueServer;
 
@@ -177,7 +178,7 @@ class SlackAdapterTest {
 		try (Fixture f = new Fixture(spec())) {
 			for (String response : new String[] {"{\"ok\":true}", "{\"ok\":true,\"ts\":null}", "{\"ok\":true,\"ts\":42}"}) {
 				f.api.response = response;
-				assertEquals(SlackAdapter.INVALID_RESPONSE, assertThrows(IllegalStateException.class,
+				assertEquals(SlackAdapter.INVALID_RESPONSE, assertThrows(ResponseException.class,
 					() -> f.adapter.send(f.bot(), Maps.of("channel", "C123", "text", "test receipt"))).getMessage());
 				f.api.take();
 			}

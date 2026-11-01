@@ -23,6 +23,7 @@ import covia.adapter.messaging.ChannelAuthentication.Channel;
 import covia.adapter.webhook.WebhookInbox;
 import covia.api.Fields;
 import covia.exception.NotSupportedException;
+import covia.exception.UnavailableException;
 import covia.venue.RequestContext;
 
 /**
@@ -101,10 +102,10 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		return adapter.resolveCredential(MessagingSettings.required(spec.settings(), field), this, destination);
 	}
 	public void requireReady() {
-		if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+		if (!running || !adapter.isActive()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
 		for (String field : spec.credentialFields()) {
 			String value = credential(field);
-			if (value == null || value.isBlank()) throw new IllegalStateException(MessagingHttp.UNAVAILABLE);
+			if (value == null || value.isBlank()) throw new UnavailableException(MessagingHttp.UNAVAILABLE);
 		}
 	}
 	boolean ready() {
@@ -167,7 +168,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 	 */
 	public void accept(String id, AMap<AString, ACell> event) {
 		if (relay != null) {
-			if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+			if (!running || !adapter.isActive()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
 			relay.accept(id, event);
 			return;
 		}
@@ -176,7 +177,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		// cannot return while an acceptance is still able to recreate deleted state.
 		synchronized (adapter.engine) {
 			synchronized (this) {
-				if (!running || !adapter.isActive()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+				if (!running || !adapter.isActive()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
 				receipt = inbox.accept(id, event.assoc(VERSION, version));
 			}
 		}
@@ -293,7 +294,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 				// The stored name, ref and size win over the provider's own description.
 				attachment = item.merge(MessagingMedia.store(adapter.engine, fetched.bytes(), type, directory, name, writer));
 			} catch (java.io.IOException e) {
-				throw new IllegalStateException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory);
+				throw new UnavailableException(MessagingMedia.UNSUPPORTED_DESTINATION + ": " + directory, e);
 			}
 			if (spec.mediaOperation() != null) {
 				attachment = MessagingMedia.processed(attachment, router.runForAgent(spec.mediaOperation(),
@@ -312,7 +313,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		covia.grid.Job job;
 		synchronized (adapter.engine) {
 			synchronized (this) {
-				if (!ready()) throw new IllegalStateException(AWebhookMessagingAdapter.UNAVAILABLE);
+				if (!ready()) throw new UnavailableException(AWebhookMessagingAdapter.UNAVAILABLE);
 				job = router.deliver(conversation, message, channel, (draft, sid, jid) -> inbox.deliver(draft, id, sid, jid));
 			}
 		}
