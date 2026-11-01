@@ -18,9 +18,18 @@
 				"v/ops/grid/run",
 				"v/ops/grid/job-status",
 				"v/ops/grid/job-result",
+				"v/ops/preferences",
 				"subgoal",
 				"compact",
 				"more_tools"
+			],
+			"context": [
+				{
+					"ref": "x/preferences",
+					"label": "User preferences",
+					"volatile": true,
+					"trusted": false
+				}
 			],
 			"loads": {
 				"v/skills/data/lattice": {

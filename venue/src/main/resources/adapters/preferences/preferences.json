@@ -1,0 +1,35 @@
+{
+	"name": "Preferences",
+	"description": "Change the user's preferences: one map of what every agent acting for them should know, such as units, tone, timezone or diet. Your current preferences are in context; read x/preferences if they are not. Pick the change with `command`. 'set' stores `value` at `path`. 'remove' deletes the entry at `path`; with a `value`, it removes the items equal to it from the list at `path`. 'append' adds `value` to the end of the list at `path`, creating the list if needed. 'insert' puts `value` into a list before a position, with `path` ending in the position. 'merge' merges a map `value` into the map at `path`, or into all preferences when there is no path; a key set to null is removed, and any other value, a list included, replaces what was there. A path separates keys with '/', such as 'units' or 'diet/allergies'; a number picks a list item, counting from 0. Every command except merge needs a path. Use append or insert to add to a list.",
+	"dateCreated": "2026-11-01T00:00:00Z",
+	"operation": {
+		"adapter": "preferences:edit",
+		"readOnly": false,
+		"toolName": "preferences",
+		"input": {
+			"type": "object",
+			"properties": {
+				"command": {
+					"type": "string",
+					"enum": ["set", "remove", "append", "insert", "merge"],
+					"description": "The change to make."
+				},
+				"path": {
+					"type": "string",
+					"description": "Where in the preferences: keys separated by '/', such as 'units', 'diet/allergies' or 'diet/allergies/0'. Required for every command except merge."
+				},
+				"value": {
+					"description": "The value to set, append or insert; a map to merge; or, for remove, the list item to take out."
+				}
+			},
+			"required": ["command"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"ok": { "type": "boolean", "description": "True when the change was made." },
+				"removed": { "type": "boolean", "description": "False when remove found nothing to remove." }
+			}
+		}
+	}
+}

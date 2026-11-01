@@ -17,6 +17,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `outbound/any`: the venue's standing to dial any outbound target, delegable by grant.
 - Venues prove their DID by address or challenge (`auth.venueProof`, `auth.requireVenueProof`).
 - An agent tool call past `toolCallTimeoutMs` delivers its outcome to the session when it ends (#607).
+- Per-user preferences at `x/preferences`, edited with the `preferences` tool and pinned by the standard and chat-bot agent templates (`adapters.preferences.maxBytes`).
 
 ### Changed
 

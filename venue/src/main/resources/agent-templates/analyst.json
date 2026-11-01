@@ -12,7 +12,16 @@
 				"v/ops/covia/aggregate",
 				"v/ops/schema/validate",
 				"v/ops/schema/infer",
-				"v/ops/schema/coerce"
+				"v/ops/schema/coerce",
+				"v/ops/preferences"
+			],
+			"context": [
+				{
+					"ref": "x/preferences",
+					"label": "User preferences",
+					"volatile": true,
+					"trusted": false
+				}
 			],
 			"loads": {
 				"v/skills/data/lattice": {

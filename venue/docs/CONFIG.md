@@ -1391,6 +1391,14 @@ Currently defined:
   maximum and permits an explicit `exp: null`. With a finite ceiling, null and
   later expiries are rejected before the request reaches the approver. A grant
   that omits `exp` uses the shorter of the seven-day default and this ceiling.
+- `preferences.maxBytes` — the most one user's preferences (`x/preferences`)
+  may hold, measured as the map's Convex storage size (default `4096`). An
+  edit that would go over it is refused unless it makes the preferences
+  smaller, so lowering the limit never stops a user tidying up.
+  `preferences.users.<did>.maxBytes` sets one user's limit instead. Both must
+  be positive integers. The venue limit is published at
+  `v/adapters/preferences/config`; per-user limits are not. See
+  [PREFERENCES.md](PREFERENCES.md).
 - `orchestrator.maxItems` — maximum number of elements accepted by one
   `foreach` step (default `50`). The complete input is rejected before any
   iteration starts when this limit is exceeded. Set explicitly to `null` for no

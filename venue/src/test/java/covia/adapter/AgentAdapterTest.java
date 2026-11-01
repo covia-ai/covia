@@ -590,8 +590,8 @@ public class AgentAdapterTest {
 		assertEquals(engine.config().getDefaultTransitionOp(), config.get(Fields.OPERATION));
 		assertEquals(engine.config().getDefaultLlmOperation(),
 			config.get(Strings.intern("llmOperation")));
-		assertEquals(3, RT.ensureVector(config.get(Strings.intern("tools"))).count(),
-			"no-config agent should start with skilled inspect/read/list tools");
+		assertEquals(4, RT.ensureVector(config.get(Strings.intern("tools"))).count(),
+			"no-config agent should start with skilled inspect/read/list/preferences tools");
 		assertEquals(2, RT.ensureVector(config.get(Strings.intern("skillsets"))).count(),
 			"no-config agent should discover workspace and venue skills");
 		assertNull(config.get(Strings.intern("model")),

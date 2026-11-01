@@ -1182,6 +1182,7 @@ public class Engine {
 			new LangChainAdapter(),
 			new CoviaAdapter(),
 			new covia.adapter.UserMemoryAdapter(),
+			new covia.adapter.PreferencesAdapter(),
 			new covia.adapter.SkillsAdapter(),
 			new AssetAdapter(),
 			new GridAdapter(),

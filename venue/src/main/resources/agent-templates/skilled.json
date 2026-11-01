@@ -12,12 +12,19 @@
 					},
 					"label": "Agent memory (edit using path n/memory)",
 					"trusted": false
+				},
+				{
+					"ref": "x/preferences",
+					"label": "User preferences",
+					"volatile": true,
+					"trusted": false
 				}
 			],
 			"tools": [
 				"v/ops/covia/inspect",
 				"v/ops/covia/read",
-				"v/ops/covia/list"
+				"v/ops/covia/list",
+				"v/ops/preferences"
 			],
 			"loads": {
 				"v/skills/data/lattice": {
