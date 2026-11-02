@@ -263,6 +263,10 @@ Adapter-owned state uses `AdapterState`; see
   `TestTemp.etch`. A test class in the default suite takes a second or two at
   most. `TestEngine.ENGINE` is Etch-backed so store machinery such as online
   GC runs on it under the suite's own load (`SharedEngineOnlineGcTest`)
+- A test waits on a signal from the code under test, never a sleep or timed
+  poll: an agent's run-loop events (`AgentWatch`), a Job's updates
+  (`TestEngine.awaitJob`), a `TestAdapter.TestGate` that holds
+  `v/test/ops/hold` work in flight, or a `TestSignal` a stub calls
 - Size and durability assertions call `engine.flush()` first: the venue
   persists on a 100 ms sweep
 - A test that needs an Etch store of its own (restart, recovery, GC, the root,
