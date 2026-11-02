@@ -33,7 +33,7 @@ import covia.grid.Job;
  *   <li>{@code "s"} — user's encrypted credentials</li>
  *   <li>{@code "w"} — user's workspace data ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "o"} — user's operations ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "h"} — HITL requests ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "h"} — HITL requests ({@link Inbox}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "a"} — content-addressed assets</li>
  * </ul>
  * Merge is whole-value at the venue {@code :value}; these namespaces are
@@ -323,46 +323,15 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return cursor().get();
 	}
 
-	// ========== HITL inbox (h/ namespace, COG-16) ==========
-
-	/**
-	 * Gets this user's HITL request records ({@code h/} inbox) keyed by
-	 * request id. Never null.
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getHitlRequests() {
-		ACell v = workspaceRoot().child(Namespace.H).get();
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : convex.core.data.Maps.empty();
+	/** This user's HITL inbox ({@code h/}). */
+	public Inbox inbox() {
+		return new Inbox(workspaceRoot().child(Namespace.H));
 	}
 
-	/**
-	 * Gets a single HITL request record from this user's inbox.
-	 *
-	 * @param id Request id (job id hex)
-	 * @return Record map, or null if absent
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getHitlRequest(AString id) {
-		ACell v = getHitlRequests().get(id);
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
-	}
-
-	/**
-	 * Writes a HITL request record into this user's inbox. Venue-mediated —
-	 * records are created and resolved only by the framework (the {@code h/}
-	 * namespace is not writable via {@code covia:write}).
-	 *
-	 * @param id Request id (job id hex)
-	 * @param record Request record map
-	 */
-	@SuppressWarnings("unchecked")
-	public void putHitlRequest(AString id, AMap<AString, ACell> record) {
-		workspaceRoot().child(Namespace.H).updateAndGet(data -> {
-			AMap<AString, ACell> m = (data instanceof AMap)
-				? (AMap<AString, ACell>) data
-				: convex.core.data.Maps.empty();
-			return m.assoc(id, record);
-		});
+	@Override
+	public ACoviaComponent<?> resolve(ACell[] keys, int from) {
+		if (from < keys.length && Namespace.H.equals(keys[from])) return inbox().resolve(keys, from + 1);
+		return super.resolve(keys, from);
 	}
 
 }

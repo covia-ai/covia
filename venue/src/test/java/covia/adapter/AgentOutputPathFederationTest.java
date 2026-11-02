@@ -24,6 +24,7 @@ import covia.grid.Job;
 import covia.grid.Principals;
 import covia.exception.JobFailedException;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.TwoVenueTestServer;
 
 /**
@@ -35,7 +36,7 @@ public class AgentOutputPathFederationTest {
 
 	@Test
 	public void outputPathFailsClosedWithoutRemoteIdentityCredential() {
-		AString caller = Strings.create("did:key:zOutputPathFederationCaller");
+		AString caller = TestEngine.uniqueDID("OutputPathFederationCaller");
 		RequestContext ctx = RequestContext.of(caller);
 		String agentId = "remote-output-worker";
 
@@ -123,7 +124,7 @@ public class AgentOutputPathFederationTest {
 		// Snapshots from before 0.10.0 name only the caller: an agent of this venue
 		// that exists is restored in its owner's namespace, any other agent-shaped
 		// name in its own.
-		AString legacyOwner = Strings.create("did:key:zLegacySnapshotOwner");
+		AString legacyOwner = TestEngine.uniqueDID("LegacySnapshotOwner");
 		TwoVenueTestServer.ENGINE_A.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "worker", Fields.CONFIG, Maps.empty()),
 			RequestContext.of(legacyOwner)).awaitResult(10_000);

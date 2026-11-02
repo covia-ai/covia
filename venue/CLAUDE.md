@@ -247,6 +247,14 @@ Adapter-owned state uses `AdapterState`; see
 
 - Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`)
   — never a fresh Engine per test unless persistence/restart is under test
+- Every test class can run again in the same JVM, which is how an intermittent
+  failure is reproduced: a scratch JUnit `LauncherFactory` harness loops the
+  class under CPU load with the suite's parallel settings, calling
+  `TestEngine.nextRun()` between runs so `uniqueDID` gives each test an
+  identity no earlier run used. A class with an engine of its own starts it in
+  `@BeforeAll` and closes it in `@AfterAll`, and venue-global state a class
+  writes (the public identity's drives and secrets) must not stop a second
+  run: it removes that state in `@AfterAll` or overwrites it
 - Cross-venue tests use the shared `TwoVenueTestServer` (static venues,
   per-test identities) — never spin venues per test
 - Launching a venue is the expensive part: tell a feature's story as one

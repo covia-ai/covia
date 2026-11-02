@@ -2012,7 +2012,7 @@ public class LangChainAdapterTest {
 		// Readiness must reflect the CALLER's secret store — same venue,
 		// different callers, different answers.
 		covia.venue.Engine engine = covia.venue.TestEngine.ENGINE;
-		AString did = Strings.create("did:key:z6Mk-test-models-discovery");
+		AString did = covia.venue.TestEngine.uniqueDID("models-discovery");
 		covia.venue.RequestContext ctx = covia.venue.RequestContext.of(did);
 
 		ACell before = engine.jobs().invokeInternal("v/ops/langchain/models",
@@ -2043,7 +2043,7 @@ public class LangChainAdapterTest {
 
 		ACell other = engine.jobs().invokeInternal("v/ops/langchain/models",
 			Maps.of(Strings.create("provider"), Strings.create("anthropic")),
-			covia.venue.RequestContext.of(Strings.create("did:key:z6Mk-test-models-other")))
+			covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("models-other")))
 			.get(10, java.util.concurrent.TimeUnit.SECONDS);
 		assertEquals(convex.core.data.prim.CVMBool.FALSE,
 			RT.getIn(RT.ensureVector(RT.getIn(other, "providers")).get(0), "ready"),
@@ -2054,7 +2054,7 @@ public class LangChainAdapterTest {
 	public void testModelsDiscoveryFullListing() throws Exception {
 		covia.venue.Engine engine = covia.venue.TestEngine.ENGINE;
 		ACell result = engine.jobs().invokeInternal("v/ops/langchain/models", Maps.empty(),
-			covia.venue.RequestContext.of(Strings.create("did:key:z6Mk-test-models-full")))
+			covia.venue.RequestContext.of(covia.venue.TestEngine.uniqueDID("models-full")))
 			.get(15, java.util.concurrent.TimeUnit.SECONDS);
 		var providers = RT.ensureVector(RT.getIn(result, "providers"));
 		assertEquals(8, providers.count(), "7 hosted + ollama");

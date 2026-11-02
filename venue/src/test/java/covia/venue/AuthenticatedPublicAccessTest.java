@@ -125,9 +125,10 @@ public class AuthenticatedPublicAccessTest {
 
 	@Test
 	public void testPublicSecretsAreNobodysWithoutAGrant() {
-		// Operator-style provisioning into the public store.
+		// Operator-style provisioning into the public store, which is the
+		// venue's own and so outlives this run.
 		engine.jobs().invokeOperation("v/ops/secret/set",
-			Maps.of("name", "PUB_FALLBACK_KEY", "value", "public-value"),
+			Maps.of("name", "PUB_FALLBACK_KEY", "value", "public-value", Fields.OVERWRITE, CVMBool.TRUE),
 			PUBLIC).awaitResult(5000);
 
 		// The public principal with an unrestricted scope owns the store...
@@ -153,7 +154,7 @@ public class AuthenticatedPublicAccessTest {
 		// The default public scope also cannot use the direct result-only path.
 		RequestContext anonymous = PUBLIC.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(PUBLIC_DID));
 		engine.jobs().invokeOperation("v/ops/secret/set",
-			Maps.of("name", "NO_EXTRACT", "value", "sensitive"),
+			Maps.of("name", "NO_EXTRACT", "value", "sensitive", Fields.OVERWRITE, CVMBool.TRUE),
 			PUBLIC).awaitResult(5000);
 		var denied = assertThrows(java.util.concurrent.CompletionException.class,
 			() -> engine.jobs().runOperation("v/ops/secret/extract", Maps.of("name", "NO_EXTRACT"), anonymous).join());

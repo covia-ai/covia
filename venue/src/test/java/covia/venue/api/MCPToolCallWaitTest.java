@@ -20,12 +20,19 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
+import convex.auth.jwt.JWT;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
@@ -44,9 +51,11 @@ import covia.venue.server.VenueServer;
  * own with small limits.</p>
  */
 @TestInstance(Lifecycle.PER_CLASS)
+@Execution(ExecutionMode.SAME_THREAD) // Every anonymous call takes one of the same two places.
 public class MCPToolCallWaitTest {
 
 	private static final long CEILING_MS = 500;
+	private static final String INITIALIZE = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":0}";
 
 	private VenueServer server;
 	private String base;
@@ -67,8 +76,7 @@ public class MCPToolCallWaitTest {
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
 				Config.ENABLED, true, Config.CAPS, Strings.create("unrestricted")))));
 		base = "http://localhost:" + server.port() + "/mcp";
-		HttpResponse<String> init = http.send(post("{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":0}", "application/json"),
-			HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> init = http.send(post(INITIALIZE, "application/json"), HttpResponse.BodyHandlers.ofString());
 		session = init.headers().firstValue("Mcp-Session-Id").orElseThrow();
 	}
 
@@ -78,13 +86,27 @@ public class MCPToolCallWaitTest {
 	}
 
 	private HttpRequest post(String body, String accept) {
+		return post(body, accept, null, session);
+	}
+
+	/** A request from the caller a bearer names, or the anonymous caller when it is null. */
+	private HttpRequest post(String body, String accept, String bearer, String sessionId) {
 		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base))
 			.header("Content-Type", "application/json")
 			.header("Accept", accept)
 			.timeout(Duration.ofSeconds(20))
 			.POST(HttpRequest.BodyPublishers.ofString(body));
-		if (session != null) b.header("Mcp-Session-Id", session);
+		if (bearer != null) b.header("Authorization", "Bearer " + bearer);
+		if (sessionId != null) b.header("Mcp-Session-Id", sessionId);
 		return b.build();
+	}
+
+	/** A bearer a new key issues for itself. */
+	private String selfIssued() {
+		AKeyPair key = AKeyPair.generate();
+		AString did = UCAN.toDIDKey(key.getAccountKey());
+		return JWT.signPublic(Maps.of(JWT.SUB, did, JWT.AUD, server.getEngine().getDIDString(),
+			JWT.EXP, CVMLong.create(System.currentTimeMillis() / 1000 + 3600)), key).toString();
 	}
 
 	private static String never(int id, String meta) {
@@ -161,23 +183,35 @@ public class MCPToolCallWaitTest {
 
 	@Test
 	public void eachCallerHasALimitAndACallerThatLeavesFreesItsPlace() throws Exception {
-		// Fill the caller's two places with streams the venue is holding (it has written to them).
+		// A signed-in caller's calls wait for an hour, so only leaving frees a place.
+		String bearer = selfIssued();
+		String own = http.send(post(INITIALIZE, "application/json", bearer, null), HttpResponse.BodyHandlers.ofString())
+			.headers().firstValue("Mcp-Session-Id").orElseThrow();
+
+		// Fill the caller's two places with calls the venue is holding as streams.
 		InputStream[] held = new InputStream[2];
 		for (int i = 0; i < 2; i++) {
-			held[i] = http.send(post(never(10 + i, ""), "application/json, text/event-stream"),
-				HttpResponse.BodyHandlers.ofInputStream()).body();
-			assertTrue(held[i].read() >= 0, "the venue holds call " + i);
+			HttpResponse<InputStream> r = http.send(post(never(10 + i, ""), "application/json, text/event-stream", bearer, own),
+				HttpResponse.BodyHandlers.ofInputStream());
+			assertTrue(streams(r), "the venue holds call " + i);
+			held[i] = r.body();
 		}
-		HttpResponse<String> over = http.send(post(never(12, ""), "application/json"), HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> over = http.send(post(never(12, ""), "application/json", bearer, own), HttpResponse.BodyHandlers.ofString());
 		assertTrue(over.body().contains("Too many tool calls"), "a third at once is refused, and told why: " + over.body());
 
 		// Leave both: the venue notices at its next keep-alive and frees the places.
 		for (InputStream in : held) in.close();
-		String body;
-		do {
-			body = http.send(post(never(13, ""), "application/json"), HttpResponse.BodyHandlers.ofString()).body();
-		} while (body.contains("Too many tool calls"));
-		assertEquals("running", RT.getIn(result(body), "structuredContent", "status").toString(),
-			"admitted once they left, and waited for as usual: " + body);
+		HttpResponse<InputStream> admitted;
+		while (!streams(admitted = http.send(post(never(13, ""), "application/json, text/event-stream", bearer, own),
+				HttpResponse.BodyHandlers.ofInputStream()))) {
+			String refusal = new String(admitted.body().readAllBytes(), StandardCharsets.UTF_8);
+			assertTrue(refusal.contains("Too many tool calls"), "refused only while its places are taken: " + refusal);
+		}
+		admitted.body().close();
+	}
+
+	/** Whether the venue is holding a call, answering it as a stream. */
+	private static boolean streams(HttpResponse<?> r) {
+		return r.headers().firstValue("Content-Type").orElse("").startsWith("text/event-stream");
 	}
 }

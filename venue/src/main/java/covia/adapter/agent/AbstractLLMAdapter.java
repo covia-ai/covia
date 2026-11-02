@@ -425,13 +425,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/** Collects what one batch produces — the tool-result turns in order
-	 *  and each call's wall-clock — for the step report. */
+	 *  and each call's wall-clock — for the step report, and appends each turn
+	 *  to the stepped frame as it arrives, as the live loop's sink does, so a
+	 *  later call in the batch sees the frame a live one would. */
 	protected static final class StepSink implements ToolCycleEngine.BatchSink {
+		private final FrameTools frame;
 		private AVector<ACell> turns = Vectors.empty();
 		private final Map<AString, Long> millis = new java.util.HashMap<>();
 
+		StepSink(FrameTools frame) { this.frame = frame; }
+
 		@Override
-		public void append(AMap<AString, ACell> message) { turns = turns.conj(message); }
+		public void append(AMap<AString, ACell> message) {
+			turns = turns.conj(message);
+			frame.appendTurn(message);
+		}
 
 		@Override
 		public void recordCall(ToolCycleEngine.ToolCall call, ToolCycleEngine.ToolOutcome outcome, long ms) {

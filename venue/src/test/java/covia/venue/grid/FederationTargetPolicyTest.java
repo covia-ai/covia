@@ -9,6 +9,7 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -53,9 +54,14 @@ public class FederationTargetPolicyTest {
 	private static final Engine ENGINE = TestEngine.ENGINE;
 
 	/** An operator who allows both loopback names and blocks one of them. */
-	private static final Engine LISTED = listedEngine();
+	private static Engine LISTED;
 
 	private RequestContext ctx;
+
+	@BeforeAll
+	static void startListed() {
+		LISTED = listedEngine();
+	}
 
 	@BeforeEach
 	void setUp(TestInfo info) {

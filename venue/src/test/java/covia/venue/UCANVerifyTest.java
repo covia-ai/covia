@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
@@ -33,8 +34,10 @@ import covia.grid.auth.UcanTokens;
  */
 public class UCANVerifyTest {
 
-	private static final Engine engine;
-	static {
+	private static Engine engine;
+
+	@BeforeAll
+	static void startEngine() {
 		engine = Engine.createTemp(Maps.of(
 			Config.HOSTNAME, Strings.create("verify.test.covia.example"),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
