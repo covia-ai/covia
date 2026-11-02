@@ -33,8 +33,8 @@ import java.util.function.Predicate;
  * manifest stays fixed while the writable tier changes. A runtime adds only
  * its specialised tools to the registry (goaltree: {@code subgoal},
  * {@code complete}, {@code fail}); the stable task tools are
- * {@link TaskTools}. The handlers here are parameterised by the writable loads
- * tier, which is the only thing the runtimes differ in.
+ * {@link TaskTools}. The handlers here act on one loads tier, the frame's
+ * own; {@link FrameTools} wires them to a frame.
  */
 final class HarnessTools {
 	private HarnessTools() {}
@@ -347,7 +347,6 @@ final class HarnessTools {
 		if (!(opsCell instanceof AVector<?>)) {
 			return Strings.create("Error: operations must be an array of operation paths");
 		}
-		if (!scope.writable) return Strings.create(scope.unavailableMessage);
 		AVector<ACell> requested = (AVector<ACell>) opsCell;
 		try {
 			// Authorise the whole batch before resolving or storing any binding.
@@ -414,27 +413,23 @@ final class HarnessTools {
 			scope.skillSources, effective, operation);
 	}
 
-	/** Mutable view of the innermost loads tier for a flat session or frame. */
+	/** Mutable view of a frame's own loads tier, the innermost and the one
+	 *  the load tools write. */
 	static final class LoadScope {
 		final Engine engine;
 		final RequestContext context;
 		final AMap<AString, ACell> outerLoads;
-		final boolean writable;
-		final String unavailableMessage;
 		final Skills.SkillSources skillSources;
 		final AMap<AString, ACell> config;
 		AMap<AString, ACell> loads;
 
 		LoadScope(Engine engine, RequestContext context,
 				AMap<AString, ACell> loads, AMap<AString, ACell> outerLoads,
-				boolean writable, String unavailableMessage, Skills.SkillSources skillSources,
-				AMap<AString, ACell> config) {
+				Skills.SkillSources skillSources, AMap<AString, ACell> config) {
 			this.engine = engine;
 			this.context = context;
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.outerLoads = (outerLoads != null) ? outerLoads : Maps.empty();
-			this.writable = writable;
-			this.unavailableMessage = unavailableMessage;
 			this.skillSources = (skillSources != null) ? skillSources : Skills.SkillSources.EMPTY;
 			this.config = config;
 		}
@@ -462,7 +457,6 @@ final class HarnessTools {
 			+ "{\"id\", \"job\"} a finished job's result. Optional: budget in bytes, label.");
 		if (forms > 1) return Strings.create(
 			"Error: give exactly one of path, text, op or job — context_load pins one entry per call.");
-		if (!scope.writable) return Strings.create(scope.unavailableMessage);
 		long budget = AbstractLLMAdapter.clampLoadBudget(
 			RT.getIn(input, AbstractLLMAdapter.K_BUDGET));
 		AString label = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_LABEL));
@@ -507,7 +501,6 @@ final class HarnessTools {
 		AVector<ACell> paths = RT.ensureVector(RT.getIn(input, AbstractLLMAdapter.K_PATHS));
 		if ((path == null) == (paths == null)) return Strings.create(
 			"Error: give exactly one of path or paths — using exact agent-managed load keys.");
-		if (!scope.writable) return Strings.create(scope.unavailableMessage);
 
 		if (path != null) return unloadOne(path, scope);
 		if (paths.isEmpty() || paths.count() > 50) {
@@ -554,7 +547,6 @@ final class HarnessTools {
 	}
 
 	static ACell skillLoad(ACell input, LoadScope scope) {
-		if (!scope.writable) return Strings.create(scope.unavailableMessage);
 		try {
 			Skills.LoadOutcome outcome = Skills.load(scope.engine, scope.context,
 				scope.skillSources, input,

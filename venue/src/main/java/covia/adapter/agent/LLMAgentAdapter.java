@@ -19,7 +19,6 @@ import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.venue.AgentState;
-import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -82,8 +81,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/** A cycle that lost its session claim: what it was doing. */
 	static final String SESSION_SUPERSEDED = "Session cycle was superseded while %s";
-	/** A context or skill load tried with no session in scope: which kind. */
-	static final String NO_SESSION_FOR_LOADS = "Error: no session in scope — %s loads are per-conversation";
 
 	// ========== Default tool definitions ==========
 	// MCP-style: {name, description, parameters: {type: "object", properties: {...}, required: [...]}}
@@ -130,9 +127,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return CompletableFuture.supplyAsync(() -> processChat(ctx, input), VIRTUAL_EXECUTOR);
 	}
 
-	/** What inspection and step share with a live cycle: the Spec, the tool
-	 *  context the harness tools run against, and the cycle's fixed tools. */
-	private record Preview(ContextAssembler.Spec spec, ToolContext toolCtx, AVector<ACell> fixedTools,
+	/** What inspection and step share with a live cycle: the Spec, the root
+	 *  frame's harness tools, and the cycle's fixed tools. */
+	private record Preview(ContextAssembler.Spec spec, FrameTools frameTools, AVector<ACell> fixedTools,
 			ContextAssembler.Diagnostics diagnostics) {}
 
 	/**
@@ -168,10 +165,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> tasks = (in.task() != null)
 			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, TaskTools.PREVIEW_JOB_ID, Fields.INPUT, in.task()))
 			: null;
-		ToolContext toolCtx = toolContext(config, sourceConfig, capsCtx, tasks,
-			configLoads, frameLoads, in.session() != null, fixed, true);
-		toolCtx.labels = profile.labels();
-		toolCtx.cachePrefix = cachePrefix;
 		AVector<ACell> previewFrames = (sessionFrames != null) ? sessionFrames : Vectors.empty();
 		if (previewFrames.isEmpty()) {
 			previewFrames = Vectors.of((ACell) GoalTreeContext.createFrame("", frameLoads));
@@ -181,34 +174,32 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		previewFrames = FrameStore.appendCycleInputTurns(previewFrames, in.messages(),
 			(in.task() != null) ? Maps.of(Fields.NEW_INPUT, in.task()) : null,
 			convex.core.util.Utils.getCurrentTimestamp());
-		toolCtx.store = new FrameStore.LocalFrameStore(previewFrames);
-		toolCtx.adoptFrames(previewFrames);
-		ACell task = toolCtx.tasks.message();
-		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, profile.labels());
 		boolean hasInput = (in.messages() != null && in.messages().count() > 0)
 			|| (in.pending() != null && in.pending().count() > 0)
-			|| task != null;
-
-		// The loads ride in exactly as the tool loop sets them — stable elements
-		// through withLoads and watched values through the frame observation — so an inspected
-		// context matches a live inference by construction.
-		AVector<ACell> offered = concatTools(fixedTools, loads.tools());
+			|| in.task() != null;
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
 			ContextAssembler.sessionHex(RT.getIn(in.session(), Fields.ID)), null,
 			profile.budget(), profile.labels(), profile.toolCalling(),
-			offered, null, loads.effectiveLoads(),
-			previewFrames, in.pending(), null, hasInput, null, task,
+			fixedTools, null, null,
+			previewFrames, in.pending(), null, hasInput, null, null,
 			fixed.unavailable(), null, null)
-			.withLoads(loads, offered)
 			.withSourceConfig(sourceConfig)
 			.withCachePrefix(cachePrefix);
-		if (!toolCtx.store.observe(0, ContextAssembler.observations(spec, loads),
+		FrameTools frameTools = frameTools(spec, tasks, configLoads, fixed,
+			new FrameStore.LocalFrameStore(previewFrames), true);
+
+		// The loads ride in exactly as the tool loop sets them — stable elements
+		// through withLoads and watched values through the frame observation — so an inspected
+		// context matches a live inference by construction.
+		Loads.Snapshot loads = frameTools.refreshLoadSnapshot();
+		spec = spec.withLoads(loads, concatTools(fixedTools, loads.tools()))
+			.withTask(frameTools.tasks.message());
+		if (!frameTools.store.observe(0, ContextAssembler.observations(spec, loads),
 				convex.core.util.Utils.getCurrentTimestamp())) {
 			throw new IllegalStateException("Could not preview watched context observations");
 		}
-		toolCtx.adoptFrames(toolCtx.store.frames());
-		spec = spec.withFrames(toolCtx.frames);
+		spec = spec.withFrames(frameTools.reload());
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
 			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")
@@ -218,7 +209,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 		ContextAssembler.Diagnostics diagnostics = new ContextAssembler.Diagnostics(
 			entries, loads.diagnostics(), fixed.unavailable());
-		return new Preview(spec, toolCtx, fixedTools, diagnostics);
+		return new Preview(spec, frameTools, fixedTools, diagnostics);
 	}
 
 	@Override
@@ -238,7 +229,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> stepContext(Inspection in, AMap<AString, ACell> assistant, RequestContext ctx) {
 		Preview p = preview(in, ctx);
-		ToolContext toolCtx = p.toolCtx();
+		FrameTools frameTools = p.frameTools();
 		AMap<AString, ACell> reply = assistant;
 		AVector<ACell> calls = RT.ensureVector(reply.get(K_TOOL_CALLS));
 		if (calls == null && p.spec().task() != null) {
@@ -250,31 +241,31 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 		if (calls == null) return Step.done(reply, reply.get(K_CONTENT)).report();
 
-		toolCtx.turnText = RT.ensureString(reply.get(K_CONTENT));
+		frameTools.turnText = RT.ensureString(reply.get(K_CONTENT));
 		StepSink sink = new StepSink();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
-			calls, 0, toolRegistry(), toolCtx, sink, log);
+			calls, 0, frameTools.registry(), frameTools, sink, log);
 		AVector<ACell> turns = Vectors.of((ACell) reply).concat(sink.turns());
 
-		ACell task = toolCtx.tasks.message();
+		ACell task = frameTools.tasks.message();
 		ContextAssembler.Spec next;
-		boolean compacted = toolCtx.pendingCompactSummary != null;
+		boolean compacted = frameTools.pendingCompactSummary != null;
 		if (compacted) {
 			AVector<ACell> frames = FrameStore.appendCycleInputTurns(
-				toolCtx.frames, p.spec().input(), null, convex.core.util.Utils.getCurrentTimestamp());
+				frameTools.store.frames().assoc(0, frameTools.activeFrame), p.spec().input(), null,
+				convex.core.util.Utils.getCurrentTimestamp());
 			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
 			root = GoalTreeContext.appendTurn(root, reply);
 			for (long i = 0; i < sink.turns().count(); i++) {
 				root = GoalTreeContext.appendTurn(root, sink.turns().get(i));
 			}
-			frames = frames.assoc(0,
-				GoalTreeContext.compactFrame(root, toolCtx.pendingCompactSummary));
-			toolCtx.adoptFrames(frames);
+			frameTools.activeFrame = GoalTreeContext.compactFrame(root, frameTools.pendingCompactSummary);
+			frames = frames.assoc(0, frameTools.activeFrame);
 			next = p.spec().afterCompaction(frames);
 		} else {
 			next = p.spec().withToolLoop(turns);
 		}
-		Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, p.spec().labels());
+		Loads.Snapshot loads = frameTools.refreshLoadSnapshot();
 		AVector<ACell> tools = concatTools(p.fixedTools(), loads.tools());
 		next = next
 			.withLoads(loads, tools)
@@ -365,28 +356,18 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 		FrameStore store = opened.store();
 
-		// Context scope chain (#142): agent config (operator-pinned) → root frame
-		// (runtime-managed). A cycle with no session in scope
-		// has no writable tier and context_load/unload fail diagnosably.
-		boolean sessionInScope = RT.getIn(input, Fields.SESSION) != null;
+		// Context scope chain (#142): agent config (operator-pinned) → root frame,
+		// whose loads are the conversation's own.
 		AMap<AString, ACell> configLoads = ContextChain.operatorLoads(
 			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
 
 		AVector<ACell> sessionFrames = store.frames();
-		AMap<AString, ACell> frameLoads = GoalTreeContext.rootLoads(sessionFrames);
 		AMap<AString, ACell> config = model.config();
 		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, config);
 		FixedPalette fixed = fixedPalette(recordConfig, ctx,
 			sessionFrames, cachePrefix);
 		AVector<ACell> fixedTools = fixed.tools();
-
-		ToolContext toolCtx = toolContext(config, recordConfig, capsCtx, tasks,
-			configLoads, frameLoads, sessionInScope, fixed, false);
-		toolCtx.labels = profile.labels();
-		toolCtx.cachePrefix = cachePrefix;
-		toolCtx.store = store;
-		toolCtx.adoptFrames(sessionFrames);
 
 		// Everything the assembler needs for this cycle; the loop supplies what
 		// changes per inference — loads, this cycle's turns, the outstanding task.
@@ -398,10 +379,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			fixed.unavailable(), null, null)
 			.withSourceConfig(recordConfig)
 			.withCachePrefix(cachePrefix);
+		FrameTools frameTools = frameTools(spec, tasks, configLoads, fixed, store, false);
 
-		// ctx (uncapped) makes the provider call; capsCtx flows through toolCtx
-		// for tool dispatch.
-		AVector<ACell> newMessages = invokeWithToolLoop(model, spec, fixedTools, ctx, toolCtx);
+		// ctx (uncapped) makes the provider call; the agent's authority flows
+		// through frameTools for tool dispatch.
+		AVector<ACell> newMessages = invokeWithToolLoop(model, spec, fixedTools, ctx, frameTools);
 
 		// Filter out empty assistant messages (e.g. when LLM produces only <think> tags)
 		// to avoid polluting the transcript with useless entries
@@ -450,32 +432,27 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (store instanceof FrameStore.LocalFrameStore) {
 			output = output.assoc(Fields.FRAMES, store.frames());
 		}
-		output = toolCtx.tasks.promote(output);
+		output = frameTools.tasks.promote(output);
 		return CycleRecord.endInto(output);
 	}
 
 	/**
-	 * The context harness tools run against for one cycle. Its root-frame loads
-	 * are the innermost writable tier for this runtime; the
-	 * agent tier rides along read-only so pinned ownership can be enforced.
+	 * The root frame's harness tools for one cycle. The root's loads are the
+	 * conversation's own; the agent tier rides along read-only so pinned
+	 * ownership can be enforced.
+	 *
+	 * @param preview whether the tasks are only shown, never resolved
 	 */
-	private ToolContext toolContext(AMap<AString, ACell> config,
-			AMap<AString, ACell> sourceConfig, RequestContext capsCtx,
-			AVector<ACell> tasks,
-			AMap<AString, ACell> configLoads, AMap<AString, ACell> frameLoads,
-			boolean sessionInScope, FixedPalette fixed, boolean preview) {
-		long timeoutMs = resolveToolCallTimeoutMs(config);
-		ToolContext toolCtx = new ToolContext(capsCtx,
-			new TaskTools.Tasks(engine, capsCtx, tasks, timeoutMs, preview),
-			frameLoads, timeoutMs, fixed.toolIndex());
-		toolCtx.outerLoads = configLoads;
-		toolCtx.sourceConfig = sourceConfig;
-		toolCtx.sessionInScope = sessionInScope;
-		toolCtx.skillSources = Skills.sourcesOf(config);
-		toolCtx.baseToolStart = Math.toIntExact(TaskTools.DEFINITIONS.count() + fixed.harness().count());
-		toolCtx.baseToolEnd = Math.toIntExact(toolCtx.baseToolStart + fixed.baseTools().count());
-		toolCtx.fixedNames = ToolPalette.names(fixed.tools());
-		return toolCtx;
+	private FrameTools frameTools(ContextAssembler.Spec spec, AVector<ACell> tasks,
+			AMap<AString, ACell> configLoads, FixedPalette fixed, FrameStore store, boolean preview) {
+		long timeoutMs = resolveToolCallTimeoutMs(spec.config());
+		FrameTools frameTools = new FrameTools(this, spec,
+			new TaskTools.Tasks(engine, spec.capsCtx(), tasks, timeoutMs, preview),
+			fixed.toolIndex(), configLoads, timeoutMs, store, 0);
+		frameTools.baseToolStart = Math.toIntExact(TaskTools.DEFINITIONS.count() + fixed.harness().count());
+		frameTools.baseToolEnd = Math.toIntExact(frameTools.baseToolStart + fixed.baseTools().count());
+		frameTools.offered = ToolPalette.names(fixed.tools());
+		return frameTools;
 	}
 
 	private record FixedPalette(AVector<ACell> baseTools, AVector<ACell> harness,
@@ -526,47 +503,45 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> invokeWithToolLoop(
 			ModelSetup model, ContextAssembler.Spec spec,
-			AVector<ACell> fixedTools, RequestContext ctx, ToolContext toolCtx) {
+			AVector<ACell> fixedTools, RequestContext ctx, FrameTools frameTools) {
 		AMap<AString, ACell> config = spec.config();
 		AVector<ACell> messages = Vectors.empty();
 		int maxToolIterations = resolveMaxToolIterations(config);
-		ToolCycleEngine.Registry<ToolContext> registry = toolRegistry();
+		ToolCycleEngine.Registry<FrameTools> registry = frameTools.registry();
 		@SuppressWarnings("unchecked")
 		final AVector<ACell>[] sinkMessages = new AVector[] { messages };
 		ToolCycleEngine.BatchSink sink = new ToolCycleEngine.BatchSink() {
 			@Override
 			public void append(AMap<AString, ACell> message) {
 				sinkMessages[0] = sinkMessages[0].conj(message);
-				toolCtx.appendTurn(normaliseRootTurn(message));
+				frameTools.appendTurn(normaliseRootTurn(message));
 			}
 		};
 		boolean retriedAfterTruncation = false;
 
 		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
-			if (toolCtx.pendingCompactSummary != null) {
-				compactRoot(toolCtx, toolCtx.pendingCompactSummary);
-				toolCtx.pendingCompactSummary = null;
-				spec = spec.afterCompaction(toolCtx.frames);
+			if (frameTools.pendingCompactSummary != null) {
+				spec = spec.afterCompaction(compactRoot(frameTools, frameTools.pendingCompactSummary));
+				frameTools.pendingCompactSummary = null;
 			}
-			toolCtx.adoptFrames(toolCtx.store.frames());
+			AVector<ACell> frames = frameTools.reload();
 			// Existing messages stay intact; this cycle's turns and any changed
 			// observations extend them.
-			Loads.Snapshot loads = toolCtx.refreshLoadSnapshot(engine, spec.labels());
-			ACell taskMessage = toolCtx.tasks.message();
+			Loads.Snapshot loads = frameTools.refreshLoadSnapshot();
+			ACell taskMessage = frameTools.tasks.message();
 			AVector<ACell> tools = concatTools(fixedTools, loads.tools());
 			ContextAssembler.Spec inference = spec
 				.withLoads(loads, tools)
-				.withFrames(toolCtx.frames)
+				.withFrames(frames)
 				.withToolLoop(Vectors.empty())
 				.withNotice(ContextAssembler.withReplyNotice(null, replying(taskMessage, tools)))
 				.withTask(taskMessage);
-			if (!toolCtx.store.observe(0, ContextAssembler.observations(inference, loads),
+			if (!frameTools.store.observe(0, ContextAssembler.observations(inference, loads),
 					convex.core.util.Utils.getCurrentTimestamp())) {
 				throw new JobFailedException(SESSION_SUPERSEDED.formatted("observing context"));
 			}
-			toolCtx.adoptFrames(toolCtx.store.frames());
-			inference = inference.withFrames(toolCtx.frames);
-			inference = prepareRendering(inference, toolCtx);
+			inference = inference.withFrames(frameTools.reload());
+			inference = prepareRendering(inference, frameTools);
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
 			ACell assistant = invokeLevel3(model, prompt, ctx);
@@ -579,7 +554,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				log.warn("LLM response reached its output token limit — retrying once without partial output");
 				AMap<AString, ACell> retry = RT.ensureMap(stampTs(truncationRetryTurn()));
 				messages = messages.conj(retry);
-				appendRootTurn(toolCtx, retry);
+				appendRootTurn(frameTools, retry);
 				iteration--; // truncation recovery is not a tool iteration
 				continue;
 			}
@@ -607,17 +582,17 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 					if (!completion.accepted()) log.warn("LLM response schema violation: {}", completion.rejection());
 				}
 				AMap<AString, ACell> finalTurn = RT.ensureMap(stampTs(assistant));
-				appendRootTurn(toolCtx, finalTurn);
+				appendRootTurn(frameTools, finalTurn);
 				return messages.conj(finalTurn);
 			}
 
 			AMap<AString, ACell> callTurn = RT.ensureMap(stampTs(assistant));
 			messages = messages.conj(callTurn);
-			appendRootTurn(toolCtx, callTurn);
-			toolCtx.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
+			appendRootTurn(frameTools, callTurn);
+			frameTools.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
 			sinkMessages[0] = messages;
-			ToolCycleEngine.executeBatch(calls, iteration, registry, toolCtx, sink, log);
-			persistRootFrame(toolCtx);
+			ToolCycleEngine.executeBatch(calls, iteration, registry, frameTools, sink, log);
+			persistRootFrame(frameTools);
 			messages = sinkMessages[0];
 		}
 
@@ -631,25 +606,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * uncached model, leaving append-only conversation untouched. */
 	@SuppressWarnings("unchecked")
 	private ContextAssembler.Spec prepareRendering(
-			ContextAssembler.Spec spec, ToolContext toolCtx) {
-		if (toolCtx.frames.isEmpty()) return spec;
+			ContextAssembler.Spec spec, FrameTools frameTools) {
+		if (frameTools.activeFrame == null) return spec;
 		if (!ContextAssembler.renderingUpdateRequired(spec)) return spec;
-		ContextAssembler.Rendered candidate = null;
-		if (spec.cachePrefix()) {
-			AMap<AString, ACell> fixedIndex = ToolPalette.mergeIndex(
-				toolCtx.toolIndex, toolCtx.currentPinnedToolIndex);
-			fixedIndex = ToolPalette.mergeIndex(fixedIndex,
-				ToolPalette.loadOwners(toolCtx.currentLoadToolIndex));
-			AMap<AString, ACell> manifestIndex = new ToolPalette.Palette(
-				null, fixedIndex, null).forManifest(spec.tools()).toolIndex();
-			int baseStart = spec.toolCalling() ? toolCtx.baseToolStart : 0;
-			int baseEnd = spec.toolCalling() ? toolCtx.baseToolEnd : 0;
-			candidate = ContextAssembler.initialise(spec).withToolIndex(
-				manifestIndex, baseStart, baseEnd);
-			toolCtx.toolIndex = manifestIndex;
-		}
-		ContextAssembler.Rendered rendering = candidate;
-		if (!toolCtx.store.update(frames -> {
+		ContextAssembler.Rendered rendering = frameTools.rendering(spec);
+		if (!frameTools.store.update(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 			AMap<AString, ACell> prepared = ContextAssembler.applyRendering(
@@ -658,8 +619,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		})) {
 			throw new JobFailedException(SESSION_SUPERSEDED.formatted("preparing context"));
 		}
-		toolCtx.adoptFrames(toolCtx.store.frames());
-		return spec.withFrames(toolCtx.frames);
+		return spec.withFrames(frameTools.reload());
 	}
 
 	private static AMap<AString, ACell> normaliseRootTurn(AMap<AString, ACell> turn) {
@@ -676,27 +636,29 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return turn;
 	}
 
-	private static void appendRootTurn(ToolContext toolCtx, AMap<AString, ACell> turn) {
+	private static void appendRootTurn(FrameTools frameTools, AMap<AString, ACell> turn) {
 		turn = normaliseRootTurn(turn);
-		if (!toolCtx.store.appendRoot(turn)) {
+		if (!frameTools.store.appendRoot(turn)) {
 			throw new JobFailedException(SESSION_SUPERSEDED.formatted("appending conversation"));
 		}
-		toolCtx.adoptFrames(toolCtx.store.frames());
+		frameTools.reload();
 	}
 
 	/** Commits a completed tool batch's results, events and load changes together. */
-	private static void persistRootFrame(ToolContext toolCtx) {
-		AMap<AString, ACell> root = toolCtx.activeFrame;
-		if (root == null || !toolCtx.store.replace(0, root)) {
+	private static void persistRootFrame(FrameTools frameTools) {
+		AMap<AString, ACell> root = frameTools.activeFrame;
+		if (root == null || !frameTools.store.replace(0, root)) {
 			throw new JobFailedException(SESSION_SUPERSEDED.formatted("committing tool results"));
 		}
-		toolCtx.adoptFrames(toolCtx.store.frames());
+		frameTools.reload();
 	}
 
+	/** Applies a requested compaction to the root frame as this cycle last saw it.
+	 *  @return the stack after it */
 	@SuppressWarnings("unchecked")
-	private static void compactRoot(ToolContext toolCtx, String summary) {
-		AMap<AString, ACell> expected = toolCtx.activeFrame;
-		if (!toolCtx.store.update(frames -> {
+	private static AVector<ACell> compactRoot(FrameTools frameTools, String summary) {
+		AMap<AString, ACell> expected = frameTools.activeFrame;
+		if (!frameTools.store.update(frames -> {
 			if (frames.isEmpty()) return frames;
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
 			if (!root.equals(expected)) return null;
@@ -704,160 +666,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		})) {
 			throw new JobFailedException(SESSION_SUPERSEDED.formatted("compacting conversation"));
 		}
-		toolCtx.adoptFrames(toolCtx.store.frames());
-	}
-
-	/**
-	 * Per-cycle harness registry. Completion becomes terminal only after the
-	 * lifecycle venue operation succeeds; a rejected completion remains
-	 * retryable and does not fence later calls in the provider batch.
-	 */
-	private ToolCycleEngine.Registry<ToolContext> toolRegistry() {
-		return new ToolCycleEngine.Registry<ToolContext>()
-			.activityLabels((name, toolCtx) -> toolCtx.activityLabel(name))
-			.register(TaskTools.COMPLETE, (call, toolCtx) -> toolCtx.tasks.complete(call, toolCtx.turnText))
-			.register(TaskTools.FAIL, (call, toolCtx) -> toolCtx.tasks.fail(call, toolCtx.turnText))
-			.register(HarnessTools.CONTEXT_LOAD, this::handleContextLoad)
-			.register(HarnessTools.CONTEXT_UNLOAD, this::handleContextUnload)
-			.register(HarnessTools.SKILL_LOAD, this::handleSkillLoad)
-			.register(HarnessTools.MORE_TOOLS, this::handleMoreTools)
-			.register(HarnessTools.INVOKE_TOOL, this::handleInvokeTool)
-			.register(HarnessTools.COMPACT, this::handleCompact)
-			.fallback((call, toolCtx) -> ToolCycleEngine.ToolOutcome.result(
-				dispatchActiveTool(call.name(), call.input(), toolCtx)));
-	}
-
-	private ACell dispatchActiveTool(String name, ACell input, ToolContext toolCtx) {
-		AString operation = toolCtx.operation(name);
-		if (operation != null) return dispatchTool(name, input, operation, toolCtx.ctx, toolCtx.toolCallTimeoutMs);
-		return dispatchUnbound(name, input, toolCtx.ctx, new HarnessTools.ToolSurface(
-			loadScope(toolCtx, ""), toolCtx.callableNames()), toolCtx.toolCallTimeoutMs);
-	}
-
-	// ========== Built-in tool execution ==========
-
-	// ========== Built-in context tools ==========
-
-	ACell handleContextLoad(ACell input, ToolContext toolCtx) {
-		HarnessTools.LoadScope scope = loadScope(toolCtx,
-			NO_SESSION_FOR_LOADS.formatted("context"));
-		ACell result = HarnessTools.contextLoad(input, scope);
-		toolCtx.setLoads(scope.loads);
-		return result;
-	}
-
-	private ToolCycleEngine.ToolOutcome handleContextLoad(
-			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
-		AMap<AString, ACell> before = toolCtx.getLoads();
-		ACell result = handleContextLoad(call.input(), toolCtx);
-		return loadedOutcome(call, toolCtx, before, result);
-	}
-
-	/**
-	 * {@code skill_load} — thin glue only: the adapter checks the tier is
-	 * writable, delegates ALL skill semantics to {@link Skills#load}, and
-	 * writes the returned entry into the loads tier exactly as
-	 * {@code context_load} does. Rendering and tool activation then follow
-	 * from the entry via the generic context assembly (ContextAssembler), so
-	 * this runtime carries no knowledge of what a skill IS.
-	 */
-	ACell handleSkillLoad(ACell input, ToolContext toolCtx) {
-		HarnessTools.LoadScope scope = loadScope(toolCtx,
-			NO_SESSION_FOR_LOADS.formatted("skill"));
-		ACell result = HarnessTools.skillLoad(input, scope);
-		toolCtx.setLoads(scope.loads);
-		return result;
-	}
-
-	private ToolCycleEngine.ToolOutcome handleSkillLoad(
-			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
-		AMap<AString, ACell> before = toolCtx.getLoads();
-		ACell result = handleSkillLoad(call.input(), toolCtx);
-		return loadedOutcome(call, toolCtx, before, result);
-	}
-
-	private ToolCycleEngine.ToolOutcome loadedOutcome(ToolCycleEngine.ToolCall call,
-			ToolContext toolCtx, AMap<AString, ACell> before, ACell result) {
-		AString key = RT.ensureString(RT.getIn(result, K_PATH));
-		if (key == null || before.equals(toolCtx.getLoads())) {
-			return ToolCycleEngine.ToolOutcome.result(result);
-		}
-		AString eventId = ContextAssembler.contextEventId(call.id(), call.iteration(), key);
-		Loads.Snapshot beforeSnapshot = loadSnapshot(toolCtx, before);
-		Loads.Append appended = Loads.append(
-			engine, toolCtx.ctx, toolCtx.getLoads(), key, toolCtx.labels, eventId);
-		toolCtx.setLoads(appended.loads());
-		Loads.Snapshot afterSnapshot = loadSnapshot(toolCtx, toolCtx.getLoads());
-		toolCtx.adoptLoadSnapshot(afterSnapshot);
-		AVector<ACell> events = (AVector<ACell>) appended.messages().concat(
-			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot));
-		return ToolCycleEngine.ToolOutcome.result(result, events);
-	}
-
-	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
-		HarnessTools.LoadScope scope = loadScope(toolCtx,
-			NO_SESSION_FOR_LOADS.formatted("context"));
-		ACell result = HarnessTools.contextUnload(input, scope);
-		toolCtx.setLoads(scope.loads);
-		return result;
-	}
-
-	private ToolCycleEngine.ToolOutcome handleContextUnload(
-			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
-		AMap<AString, ACell> before = toolCtx.getLoads();
-		Loads.Snapshot beforeSnapshot = loadSnapshot(toolCtx, before);
-		ACell result = handleContextUnload(call.input(), toolCtx);
-		Loads.Snapshot afterSnapshot = loadSnapshot(toolCtx, toolCtx.getLoads());
-		toolCtx.adoptLoadSnapshot(afterSnapshot);
-		return ToolCycleEngine.ToolOutcome.result(result,
-			HarnessTools.toolStateEvent(beforeSnapshot, afterSnapshot));
-	}
-
-	private ToolCycleEngine.ToolOutcome handleMoreTools(
-			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
-		AMap<AString, ACell> before = toolCtx.getLoads();
-		Loads.Snapshot active = loadSnapshot(toolCtx, before);
-		HarnessTools.LoadScope scope = loadScope(toolCtx,
-			"Error: no session in scope — tool loads are per-conversation");
-		ACell result = HarnessTools.moreTools(call.input(), scope,
-			name -> toolCtx.containsFixedName(name)
-				|| active.toolIndex().containsKey(Strings.create(name)));
-		toolCtx.setLoads(scope.loads);
-		return loadedOutcome(call, toolCtx, before, result);
-	}
-
-	private ToolCycleEngine.ToolOutcome handleInvokeTool(
-			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
-		HarnessTools.Invocation invocation = HarnessTools.invocation(call.input());
-		if (invocation.error() != null) return ToolCycleEngine.ToolOutcome.result(invocation.error());
-		return ToolCycleEngine.ToolOutcome.result(
-			dispatchActiveTool(invocation.name(), invocation.input(), toolCtx));
-	}
-
-	private ToolCycleEngine.ToolOutcome handleCompact(
-			ToolCycleEngine.ToolCall call, ToolContext toolCtx) {
-		HarnessTools.Compaction compact = HarnessTools.compaction(call.input());
-		if (compact.error() != null) return ToolCycleEngine.ToolOutcome.result(compact.error());
-		AMap<AString, ACell> root = toolCtx.frames.isEmpty()
-			? null : RT.ensureMap(toolCtx.frames.get(0));
-		long turns = (root != null) ? GoalTreeContext.countLiveTurns(root) : 0;
-		toolCtx.pendingCompactSummary = compact.summary();
-		return ToolCycleEngine.ToolOutcome.result(Strings.create(
-			"Compacted " + turns + " turns into an archived summary. Context freed."));
-	}
-
-	private Loads.Snapshot loadSnapshot(ToolContext toolCtx, AMap<AString, ACell> loads) {
-		boolean resolvePinned = !toolCtx.cachePrefix || ContextAssembler.rendered(
-			toolCtx.frames, toolCtx.sourceConfig, true) == null;
-		return Loads.describe(engine, toolCtx.ctx,
-			ContextChain.effective(toolCtx.outerLoads, loads),
-			toolCtx::excludesLoadName, resolvePinned);
-	}
-
-	private HarnessTools.LoadScope loadScope(ToolContext toolCtx, String unavailableMessage) {
-		return new HarnessTools.LoadScope(engine, toolCtx.ctx, toolCtx.getLoads(),
-			toolCtx.outerLoads, toolCtx.sessionInScope, unavailableMessage,
-			toolCtx.skillSources, toolCtx.sourceConfig);
+		return frameTools.reload();
 	}
 
 	/** @see TaskTools#renderTaskText */
@@ -904,138 +713,5 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> concatTools(AVector<ACell> fixed, AVector<ACell> loads) {
 		return (AVector<ACell>) fixed.concat(loads);
-	}
-
-	// ========== Tool context ==========
-
-	/**
-	 * Mutable context passed through the tool call loop for built-in tool state.
-	 */
-	static class ToolContext {
-		final RequestContext ctx;
-		final TaskTools.Tasks tasks;
-		final long toolCallTimeoutMs;
-		AMap<AString, ACell> toolIndex;
-		/** The root frame being assembled between atomic store updates. */
-		AMap<AString, ACell> activeFrame;
-		/** Effective loads of the OUTER tiers (agent config.loads) — read-only environment. */
-		AMap<AString, ACell> outerLoads = Maps.empty();
-		/** Whether a session is in scope; without one there is no writable tier. */
-		boolean sessionInScope = true;
-		/** Text content of the assistant message whose tool batch is currently
-		 *  executing — the fallback payload for an empty {@code complete_task}
-		 *  (the dual of #215: control emitted as a tool, answer emitted as
-		 *  text). Null when the turn carried no text. */
-		AString turnText;
-		AString labels = Labels.BRACKET;
-		boolean cachePrefix = true;
-		AMap<AString, ACell> sourceConfig;
-		AVector<ACell> frames = Vectors.empty();
-		FrameStore store;
-		String pendingCompactSummary;
-		/** Skill sources from {@code config.skills} + {@code config.skillsets} —
-		 *  opaque to this runtime ({@link Skills} owns the semantics). */
-		Skills.SkillSources skillSources = Skills.SkillSources.EMPTY;
-		int baseToolStart;
-		int baseToolEnd;
-		/** Names of the fixed tools offered: task, harness and configured. */
-		java.util.Set<String> fixedNames = java.util.Set.of();
-		private AMap<AString, ACell> currentLoadToolIndex = Maps.empty();
-		private AMap<AString, ACell> currentPinnedToolIndex = Maps.empty();
-
-		/**
-		 * Tools contributed by the effective loads — the generic "a loads
-		 * entry may declare tools" rule ({@link ToolPalette}).
-		 * Projected for every inference from the loads' materialised bindings. The
-		 * route set is replaced atomically, so unloading a source retracts both
-		 * its advertised definition and its name-to-operation dispatch route.
-		 */
-		AVector<ACell> loadTools(Engine engine) {
-			return refreshLoadSnapshot(engine, Labels.BRACKET).tools();
-		}
-
-		Loads.Snapshot refreshLoadSnapshot(Engine engine, AString labels) {
-			boolean materialiseLive = ContextAssembler.rendered(
-				frames, sourceConfig, cachePrefix) == null;
-			Loads.Snapshot snapshot = Loads.resolveForInference(engine, ctx,
-				ContextChain.effective(outerLoads, getLoads()), this::excludesLoadName, labels,
-				materialiseLive);
-			adoptLoadSnapshot(snapshot);
-			return snapshot;
-		}
-
-		void adoptLoadSnapshot(Loads.Snapshot snapshot) {
-			currentLoadToolIndex = snapshot.toolIndex();
-			currentPinnedToolIndex = snapshot.pinnedToolIndex();
-		}
-
-		AString operation(String name) {
-			AString operation = ToolPalette.operation(currentLoadToolIndex, name);
-			return (operation != null) ? operation : ToolPalette.operation(toolIndex, name);
-		}
-
-		/** Every tool name offered: the fixed tools and those the loads added. */
-		java.util.Set<String> callableNames() {
-			java.util.Set<String> names = ToolPalette.names(currentLoadToolIndex);
-			names.addAll(fixedNames);
-			return names;
-		}
-
-		String activityLabel(String name) {
-			AString operation = ToolPalette.operation(currentLoadToolIndex, name);
-			return (operation != null) ? ToolPalette.labelFor(currentLoadToolIndex, name).toString()
-				: ToolPalette.labelFor(toolIndex, name).toString();
-		}
-
-		boolean excludesLoadName(String name, AString owner) {
-			return ToolPalette.excludesLoadName(
-				toolIndex, HARNESS_TOOL_NAMES, name, owner);
-		}
-
-		boolean containsFixedName(String name) {
-			return HARNESS_TOOL_NAMES.contains(name)
-				|| (toolIndex != null && toolIndex.containsKey(Strings.create(name)));
-		}
-
-		ToolContext(RequestContext ctx, AVector<ACell> tasks,
-				AMap<AString, ACell> toolIndex, AMap<AString, ACell> loads) {
-			// No live task boundary: the tasks resolve in preview, never reaching a job.
-			this(ctx, new TaskTools.Tasks(null, ctx, tasks, DEFAULT_TOOL_CALL_TIMEOUT_MS, true),
-				loads, DEFAULT_TOOL_CALL_TIMEOUT_MS, toolIndex);
-		}
-
-		private ToolContext(RequestContext ctx, TaskTools.Tasks tasks,
-				AMap<AString, ACell> loads, long toolCallTimeoutMs,
-				AMap<AString, ACell> toolIndex) {
-			this.ctx = ctx;
-			this.tasks = tasks;
-			this.toolIndex = (toolIndex != null) ? toolIndex : Maps.empty();
-			this.activeFrame = GoalTreeContext.createFrame("", loads);
-			this.frames = Vectors.of(activeFrame);
-			this.toolCallTimeoutMs = toolCallTimeoutMs;
-		}
-
-		void adoptFrames(AVector<ACell> frames) {
-			this.frames = (frames != null) ? frames : Vectors.empty();
-			this.activeFrame = this.frames.isEmpty()
-				? null : RT.ensureMap(this.frames.get(0));
-		}
-
-		void appendTurn(AMap<AString, ACell> turn) {
-			if (activeFrame == null) return;
-			activeFrame = GoalTreeContext.appendTurn(activeFrame, turn);
-			frames = frames.assoc(0, activeFrame);
-		}
-
-		void setLoads(AMap<AString, ACell> loads) {
-			if (activeFrame == null) return;
-			activeFrame = GoalTreeContext.withLoads(activeFrame, loads);
-			frames = frames.assoc(0, activeFrame);
-		}
-
-		AMap<AString, ACell> getLoads() {
-			return (activeFrame != null)
-				? GoalTreeContext.getLoads(activeFrame) : Maps.empty();
-		}
 	}
 }
