@@ -1,14 +1,10 @@
 package covia.venue;
 
-import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import convex.core.data.Strings;
 import convex.core.data.Maps;
 import convex.core.data.AString;
-import convex.core.data.Blob;
-import convex.core.data.Index;
-import convex.core.data.ACell;
 
 /**
  * Shared {@link Engine} singleton for venue unit tests that don't need their
@@ -50,8 +46,6 @@ import convex.core.data.ACell;
  * }</pre>
  */
 public class TestEngine {
-
-	private static final long POLL_INTERVAL_MS = 5;
 
 	/**
 	 * Shared Engine instance for venue unit tests. Lazily initialised on
@@ -120,81 +114,31 @@ public class TestEngine {
 	}
 
 	/**
-	 * Waits for an asynchronous post-condition without relying on a blind sleep.
-	 * The condition is checked immediately and then at a short fixed interval.
-	 * Interruptions fail the test instead of being mistaken for success.
+	 * Waits until {@code job} satisfies {@code condition}, checked now and on
+	 * each update of the Job ({@link covia.grid.Job#subscribe}), so the test
+	 * waits on the Job's own signal rather than polling it.
 	 *
-	 * @param condition condition that becomes true on success
-	 * @param timeoutMs maximum wait in milliseconds
+	 * @param timeoutMs bound that only a Job that never changes reaches
 	 * @param timeoutMessage diagnostic constructed only on timeout/interruption
 	 * @throws AssertionError if interrupted or the deadline expires
 	 */
-	public static void awaitCondition(BooleanSupplier condition, long timeoutMs,
-			Supplier<String> timeoutMessage) {
-		if (timeoutMs < 0) throw new IllegalArgumentException("timeoutMs must be non-negative");
-		long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs);
-		do {
-			if (condition.getAsBoolean()) return;
-			if (System.nanoTime() >= deadline) break;
-			try {
-				Thread.sleep(POLL_INTERVAL_MS);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError("Interrupted while waiting: " + timeoutMessage.get(), e);
-			}
-		} while (true);
-		throw new AssertionError(timeoutMessage.get());
-	}
-
-	/** Waits until an agent reaches the requested persisted status. */
-	public static void awaitAgentStatus(AgentState agent, AString expected, long timeoutMs) {
-		awaitCondition(() -> expected.equals(agent.getStatus()), timeoutMs,
-			() -> "Agent did not reach " + expected + " within " + timeoutMs
-				+ "ms (status=" + agent.getStatus() + ")");
-	}
-
-	/**
-	 * Polls until the agent is idle (status {@code SLEEPING} with no
-	 * session pending and no tasks) or the timeout elapses. Tests should
-	 * wait on task/chat/request Jobs for results; this helper is for cases
-	 * that drive the agent via a fallback trigger + direct lattice writes
-	 * and need a quiescence signal before making assertions.
-	 *
-	 * @throws AssertionError if the agent is not idle within the timeout.
-	 */
-	public static void awaitAgentIdle(AgentState agent, long timeoutMs) {
-		awaitCondition(() -> {
-			AString status = agent.getStatus();
-			Index<Blob, ACell> tasks = agent.getTasks();
-			return AgentState.SLEEPING.equals(status)
-				&& !agent.hasSessionPending()
-				&& (tasks == null || tasks.count() == 0);
-		}, timeoutMs, () -> "Agent did not become idle within "
-			+ timeoutMs + "ms (status=" + agent.getStatus()
-			+ ", hasSessionPending=" + agent.hasSessionPending()
-			+ ", tasks=" + (agent.getTasks() == null ? 0 : agent.getTasks().count()) + ")");
-	}
-
-	/**
-	 * Polls until the agent's timeline has at least {@code minCount} entries
-	 * or the timeout elapses. Use this when asserting on the output of a
-	 * cycle whose transition may yield on an async op — the merge (and
-	 * therefore the timeline write) happens on resume, not at trigger
-	 * return. Timeline count only grows, so "at least N" is a safe
-	 * quiescence signal.
-	 *
-	 * @throws AssertionError if the timeline does not reach {@code minCount}
-	 *                        within the timeout.
-	 */
-	public static void awaitTimelineCount(AgentState agent, int minCount, long timeoutMs) {
-		awaitCondition(() -> {
-			convex.core.data.AVector<?> tl = agent.getTimeline();
-			return tl != null && tl.count() >= minCount;
-		}, timeoutMs, () -> {
-			convex.core.data.AVector<?> tl = agent.getTimeline();
-			return "Agent timeline did not reach " + minCount
-			+ " entries within " + timeoutMs + "ms (current="
-			+ (tl == null ? 0 : tl.count()) + ", status=" + agent.getStatus() + ")";
-		});
+	public static void awaitJob(covia.grid.Job job, java.util.function.Predicate<covia.grid.Job> condition,
+			long timeoutMs, Supplier<String> timeoutMessage) {
+		java.util.concurrent.CompletableFuture<Void> met = new java.util.concurrent.CompletableFuture<>();
+		java.util.function.Consumer<covia.grid.Job> listener = j -> { if (condition.test(j)) met.complete(null); };
+		job.subscribe(listener);
+		try {
+			listener.accept(job);
+			met.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+		} catch (java.util.concurrent.TimeoutException e) {
+			throw new AssertionError(timeoutMessage.get() + " (status=" + job.getStatus() + ")");
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new AssertionError("Interrupted while waiting: " + timeoutMessage.get(), e);
+		} catch (java.util.concurrent.ExecutionException e) {
+			throw new AssertionError(e.getCause());
+		} finally {
+			job.unsubscribe(listener);
+		}
 	}
 }

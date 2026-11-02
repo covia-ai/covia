@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -59,13 +60,15 @@ public class AgentSelfChatTest {
 		agent.appendSessionPending(sid, Maps.of(
 			Strings.intern("content"), Strings.create("START")));
 
-		Job run = engine.jobs().invokeOperation("v/ops/agent/trigger",
-			Maps.of(Fields.AGENT_ID, "selfchat-agent"), ctx);
-		run.awaitResult(30000);
+		try (AgentWatch watch = AgentWatch.open(engine, did, "selfchat-agent")) {
+			Job run = engine.jobs().invokeOperation("v/ops/agent/trigger",
+				Maps.of(Fields.AGENT_ID, "selfchat-agent"), ctx);
+			run.awaitResult(30000);
 
-		// Two cycles must complete: the initial START cycle (which self-
-		// messaged) and the FOLLOWUP cycle kicked by that message.
-		TestEngine.awaitTimelineCount(agent, 2, 15000);
+			// Two cycles must complete: the initial START cycle (which self-
+			// messaged) and the FOLLOWUP cycle kicked by that message.
+			watch.awaitRest(2);
+		}
 
 		assertEquals(2, agent.getTimeline().count(),
 			"Timeline should record both cycles (initial + self-kicked FOLLOWUP)");

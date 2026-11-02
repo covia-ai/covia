@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -63,10 +64,11 @@ class RelayRoutesTest {
 
 			CompletableFuture<HttpResponse<String>> held = client.sendAsync(request(
 				URI.create(endpoint.toString().replace("/echo", "/hold")), "{}", auth), HttpResponse.BodyHandlers.ofString());
-			Thread.sleep(200);
+			assertTrue(echo.holding.await(10, TimeUnit.SECONDS), "the held action reaches the adapter");
 			assertFalse(held.isDone(), "an action may hold the response");
 			echo.release.complete(WebhookResponse.text(200, "released"));
-			assertEquals("released", held.get(5, TimeUnit.SECONDS).body());
+			// Only a response that waited for the action can carry what it released.
+			assertEquals("released", held.get(10, TimeUnit.SECONDS).body());
 
 			assertTrue(server.getEngine().disableAdapter(echo.getName()));
 			assertEquals(404, send(client, endpoint, "{}", auth).statusCode());
@@ -97,13 +99,18 @@ class RelayRoutesTest {
 	/** Answers "binding|action|method|caller", or holds a {@code hold} action until released. */
 	private static final class Echo extends AAdapter implements RelayHandler {
 		final CompletableFuture<WebhookResponse> release = new CompletableFuture<>();
+		/** Counted down when a {@code hold} action reaches the adapter. */
+		final CountDownLatch holding = new CountDownLatch(1);
 		@Override public String getName() { return "test-relay"; }
 		@Override public String getDescription() { return "Test relay"; }
 		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 			return CompletableFuture.failedFuture(new UnsupportedOperationException());
 		}
 		@Override public CompletableFuture<WebhookResponse> handleRelay(String binding, String action, AString caller, WebhookRequest request) {
-			if ("hold".equals(action)) return release;
+			if ("hold".equals(action)) {
+				holding.countDown();
+				return release;
+			}
 			return CompletableFuture.completedFuture(new WebhookResponse(200, "text/plain", Map.of(),
 				(binding + "|" + action + "|" + request.method() + "|" + caller).getBytes(StandardCharsets.UTF_8)));
 		}

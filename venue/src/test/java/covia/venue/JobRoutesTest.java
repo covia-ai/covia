@@ -14,7 +14,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
@@ -245,24 +244,15 @@ public class JobRoutesTest {
 		}
 	}
 
-	private void awaitHttpStatus(String id, String wanted) {
-		AtomicReference<String> lastBody = new AtomicReference<>();
-		TestEngine.awaitCondition(() -> {
-			try {
-				HttpResponse<String> status = http.send(
-					HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
-					HttpResponse.BodyHandlers.ofString());
-				lastBody.set(status.body());
-				return status.statusCode() == 200 && status.body().contains(wanted);
-			} catch (IOException e) {
-				lastBody.set(e.toString());
-				return false;
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError("interrupted while polling job " + id, e);
-			}
-		}, 5000, () -> "job " + id + " did not reach " + wanted
-			+ "; last response=" + lastBody.get());
+	/** Waits for the venue's Job to finish, then checks its status route reports the terminal {@code wanted}. */
+	private void awaitHttpStatus(String id, String wanted) throws Exception {
+		Job job = TestServer.ENGINE.jobs().getJob(Job.parseID(id));
+		if (job != null) TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "job " + id + " did not finish");
+		HttpResponse<String> status = http.send(
+			HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, status.statusCode(), status.body());
+		assertTrue(status.body().contains(wanted), "job " + id + " did not reach " + wanted + ": " + status.body());
 	}
 
 	/**

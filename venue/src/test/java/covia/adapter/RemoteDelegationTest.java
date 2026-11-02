@@ -31,6 +31,8 @@ import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RemoteJobs;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
+import covia.venue.TestSignal;
 
 class RemoteDelegationTest {
 	/** Gates prove local cancellation completes while remote IO remains blocked. */
@@ -115,7 +117,7 @@ class RemoteDelegationTest {
 	private void cancellationPropagatesLocallyBeforeRemoteAcknowledgement(String protocol) throws Exception {
 		try (CancellationPeer peer = new CancellationPeer(protocol)) {
 			Job child = peer.submit();
-			await(() -> RemoteJobs.descriptor(child) != null && RemoteJobs.descriptor(child).get(RemoteJobs.REMOTE_ID) != null);
+			awaitRemoteId(child);
 			Job parent = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
 			parent.setCancelHook(child::cancel);
 			java.util.concurrent.CompletableFuture.runAsync(parent::cancel).get(2, TimeUnit.SECONDS);
@@ -126,8 +128,9 @@ class RemoteDelegationTest {
 			assertEquals(RemoteJobs.OUTCOME_REQUESTED, convex.core.lang.RT.getIn(child.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
 			peer.cancelResponse.countDown();
 			awaitOutcome(child, RemoteJobs.OUTCOME_ACKNOWLEDGED);
-			await(() -> RemoteJobs.OUTCOME_ACKNOWLEDGED.equals(convex.core.lang.RT.getIn(
-				peer.engine.jobs().getJobData(child.getID(), peer.engine.venueContext()), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
+			// The venue's Job record is its durable row, so the row holds the outcome too.
+			assertEquals(RemoteJobs.OUTCOME_ACKNOWLEDGED, convex.core.lang.RT.getIn(
+				peer.engine.jobs().getJobData(child.getID(), peer.engine.venueContext()), Fields.CANCELLATION, RemoteJobs.OUTCOME));
 			child.completeWith(Strings.create("late result"));
 			child.cancel();
 			assertEquals(Status.CANCELLED, child.getStatus());
@@ -144,7 +147,7 @@ class RemoteDelegationTest {
 		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, TimeUnit.DAYS.toMillis(1)));
 		try (CancellationPeer peer = new CancellationPeer(protocol, config)) {
 			Job running = peer.submit();
-			await(() -> RemoteJobs.descriptor(running) != null && RemoteJobs.descriptor(running).get(RemoteJobs.REMOTE_ID) != null);
+			awaitRemoteId(running);
 			int sends = peer.sends.get();
 			Thread closer = Thread.ofVirtual().start(peer.engine::close);
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -206,7 +209,7 @@ class RemoteDelegationTest {
 				peer.cancelStatus = scenario == 3 ? "COMPLETE" : scenario == 4 ? "STARTED" : "CANCELLED";
 				peer.wrongId = scenario == 5;
 				Job job = peer.submit();
-				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+				awaitRemoteId(job);
 				job.cancel(); peer.cancelResponse.countDown();
 				awaitOutcome(job, scenario == 0 ? RemoteJobs.OUTCOME_REJECTED
 					: scenario == 3 ? RemoteJobs.OUTCOME_FINISHED : RemoteJobs.OUTCOME_UNKNOWN);
@@ -221,7 +224,7 @@ class RemoteDelegationTest {
 		try (CancellationPeer peer = new CancellationPeer("a2a")) {
 			peer.rpcReject = true;
 			Job job = peer.submit();
-			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			awaitRemoteId(job);
 			job.cancel(); peer.cancelResponse.countDown();
 			awaitOutcome(job, RemoteJobs.OUTCOME_REJECTED);
 			assertEquals(convex.core.data.prim.CVMLong.create(-32002), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, Fields.ERROR_CODE));
@@ -233,7 +236,7 @@ class RemoteDelegationTest {
 		try (CancellationPeer peer = new CancellationPeer("a2a")) {
 			peer.a2aCancelState = "UNSPECIFIED";
 			Job job = peer.submit();
-			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			awaitRemoteId(job);
 			job.cancel(); peer.cancelResponse.countDown();
 			awaitOutcome(job, RemoteJobs.OUTCOME_UNKNOWN);
 			assertNull(convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.REMOTE_STATUS));
@@ -244,11 +247,16 @@ class RemoteDelegationTest {
 		try (CancellationPeer peer = new CancellationPeer("grid")) {
 			Job job = peer.engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "grid:jobResult")),
 				Maps.of(Fields.VENUE, peer.url(), Fields.ID, ID), peer.engine.venueContext());
-			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			awaitRemoteId(job);
 			// Recovery must preserve the same ownership boundary.
 			peer.engine.getAdapter("grid").recoverJob(job);
 			job.cancel();
-			assertFalse(peer.cancelReceived.await(150, TimeUnit.MILLISECONDS));
+			// Closing the venue waits out its grace window for every remote request it
+			// has started, so a cancellation sent for the observer would have arrived.
+			peer.cancelResponse.countDown();
+			peer.engine.close();
+			assertEquals(1, peer.cancelReceived.getCount(), "the remote job was not cancelled");
+			assertEquals(0, peer.cancels.get());
 			assertNull(job.getData().get(Fields.CANCELLATION));
 		}
 	}
@@ -256,7 +264,7 @@ class RemoteDelegationTest {
 	@Test void lateCancellationEvidenceDoesNotRecreateDeletedJob() throws Exception {
 		try (CancellationPeer peer = new CancellationPeer("grid")) {
 			Job job = peer.submit();
-			await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+			awaitRemoteId(job);
 			job.cancel();
 			assertTrue(peer.cancelReceived.await(5, TimeUnit.SECONDS));
 			assertTrue(peer.engine.jobs().deleteJob(job.getID(), peer.engine.venueContext()));
@@ -281,7 +289,7 @@ class RemoteDelegationTest {
 			Job job;
 			try {
 				job = first.jobs().invokeOperation("v/ops/grid/run", Maps.of(Fields.VENUE, peer.url(), Fields.OPERATION, "v/ops/work"), first.venueContext());
-				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+				awaitRemoteId(job);
 			} finally { first.close(); }
 			assertEquals(0, peer.cancels.get());
 			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
@@ -298,8 +306,8 @@ class RemoteDelegationTest {
 		}
 	}
 
-	private static void awaitOutcome(Job job, AString outcome) throws Exception {
-		await(() -> outcome.equals(convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
+	private static void awaitOutcome(Job job, AString outcome) {
+		await(job, j -> outcome.equals(convex.core.lang.RT.getIn(j.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
 	}
 
 	private static final String ID = "00112233445566778899aabbccddeeff";
@@ -310,6 +318,8 @@ class RemoteDelegationTest {
 		final AtomicInteger submits = new AtomicInteger();
 		final AtomicInteger polls = new AtomicInteger();
 		final AtomicBoolean complete = new AtomicBoolean();
+		/** Signalled as each request is handled. */
+		final TestSignal handled = new TestSignal();
 		volatile boolean loseAck;
 		volatile boolean brokenPoll;
 		volatile AMap<AString, ACell> recoveredSnapshot;
@@ -327,6 +337,7 @@ class RemoteDelegationTest {
 				} else if (path.endsWith("/jobs/" + ID)) {
 					polls.incrementAndGet(); code = brokenPoll ? 503 : 200; body = snapshot();
 				} else { code = 404; body = "unexpected request"; }
+				handled.signal();
 				byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
 				exchange.sendResponseHeaders(code, bytes.length);
 				try (var out = exchange.getResponseBody()) { out.write(bytes); }
@@ -350,7 +361,7 @@ class RemoteDelegationTest {
 			try {
 				peer.brokenPoll = true;
 				Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				await(() -> peer.polls.get() > 0);
+				peer.handled.await("a status poll", () -> peer.polls.get() > 0);
 				assertEquals(Status.STARTED, job.getStatus());
 				peer.brokenPoll = false;
 				peer.complete.set(true);
@@ -368,7 +379,8 @@ class RemoteDelegationTest {
 			engine.registerAdapter(new GridAdapter());
 			try {
 				Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				await(() -> Strings.create("acceptance-unknown").equals(RemoteJobs.descriptor(job).get(RemoteJobs.OBSERVATION)));
+				await(job, j -> RemoteJobs.descriptor(j) != null
+					&& Strings.create("acceptance-unknown").equals(RemoteJobs.descriptor(j).get(RemoteJobs.OBSERVATION)));
 				assertEquals(Status.STARTED, job.getStatus());
 				assertFalse(job.future().isDone());
 				assertEquals(1, peer.submits.get());
@@ -389,7 +401,7 @@ class RemoteDelegationTest {
 			Job job;
 			try {
 				job = first.jobs().invokeOperation("v/ops/grid/run", peer.input(), first.venueContext());
-				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+				awaitRemoteId(job);
 			} finally { first.close(); }
 			assertFalse(job.isFinished(), "shutdown must not invent a remote cancellation");
 			peer.complete.set(true);
@@ -423,7 +435,7 @@ class RemoteDelegationTest {
 			Job job;
 			try {
 				job = first.jobs().invokeOperation("v/ops/grid/run", peer.input(), user);
-				await(() -> RemoteJobs.descriptor(job) != null && RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID) != null);
+				awaitRemoteId(job);
 			} finally { first.close(); }
 			// The operator has since withdrawn the peer's host from the allow list
 			Engine second = new Engine(unlisted, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
@@ -439,10 +451,14 @@ class RemoteDelegationTest {
 		}
 	}
 
-	private static void await(java.util.function.BooleanSupplier condition) throws Exception {
-		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-		while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
-		assertTrue(condition.getAsBoolean());
+	/** Waits until {@code job} satisfies {@code condition}, checked as the Job is updated. */
+	private static void await(Job job, java.util.function.Predicate<Job> condition) {
+		TestEngine.awaitJob(job, condition, 10_000, () -> "job did not reach the expected state: " + job.getData());
+	}
+
+	/** Waits until the remote job's id is bound to {@code job}. */
+	private static void awaitRemoteId(Job job) {
+		await(job, j -> RemoteJobs.descriptor(j) != null && RemoteJobs.descriptor(j).get(RemoteJobs.REMOTE_ID) != null);
 	}
 
 	@Test void remoteAdapterUnableToRecoverExecutionFailsTheMirrorWithoutResubmission() throws Exception {
@@ -451,7 +467,7 @@ class RemoteDelegationTest {
 			engine.registerAdapter(new GridAdapter());
 			try {
 				Job mirror = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				await(() -> peer.polls.get() > 0);
+				peer.handled.await("a status poll", () -> peer.polls.get() > 0);
 				// Model the executing venue restarting: its ordinary adapter cannot
 				// restore the computation, although the Job record survived.
 				Job remote = Job.create(Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
@@ -478,6 +494,8 @@ class RemoteDelegationTest {
 		AtomicInteger polls = new AtomicInteger();
 		AtomicBoolean complete = new AtomicBoolean();
 		AtomicBoolean returnImmediately = new AtomicBoolean();
+		// Signalled by each request the peer handles and each update of the Job
+		TestSignal progress = new TestSignal();
 		peer.createContext("/a2a", exchange -> {
 			String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 			ACell body = convex.core.util.JSON.parse(request);
@@ -489,6 +507,7 @@ class RemoteDelegationTest {
 				returnImmediately.set(convex.core.data.prim.CVMBool.TRUE.equals(
 					convex.core.lang.RT.getIn(body, "params", "configuration", "returnImmediately")));
 			} else if (polls.incrementAndGet() == 1) status = 503;
+			progress.signal();
 			String state = complete.get() ? "TASK_STATE_COMPLETED"
 				: send && !initiallyInterrupted ? "TASK_STATE_WORKING" : "TASK_STATE_" + interrupted;
 			byte[] response = ("{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{"
@@ -509,7 +528,8 @@ class RemoteDelegationTest {
 			Job job = engine.jobs().invokeOperation(meta, Maps.of(Fields.URL,
 				"http://127.0.0.1:" + peer.getAddress().getPort(), Fields.MESSAGE, message), engine.venueContext());
 			AString expected = Strings.create(interrupted);
-			try { await(() -> polls.get() >= 2 && expected.equals(job.getStatus())); }
+			job.subscribe(j -> progress.signal());
+			try { progress.await(expected + " after two polls", () -> polls.get() >= 2 && expected.equals(job.getStatus())); }
 			catch (AssertionError e) { throw new AssertionError("submits=" + submits + ", polls=" + polls + ", job=" + job.getData(), e); }
 			assertEquals(expected, job.getStatus());
 			assertFalse(job.future().isDone());

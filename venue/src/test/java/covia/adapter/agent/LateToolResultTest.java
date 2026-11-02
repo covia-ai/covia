@@ -19,7 +19,9 @@ import covia.adapter.AgentAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -66,7 +68,8 @@ public class LateToolResultTest {
 		String okGate = "late-ok-" + did;
 		String badGate = "late-bad-" + did;
 		try (TestAdapter.TestGate ok = TestAdapter.createGate(okGate);
-				TestAdapter.TestGate bad = TestAdapter.createGate(badGate)) {
+				TestAdapter.TestGate bad = TestAdapter.createGate(badGate);
+				AgentWatch watch = AgentWatch.open(engine, did, "late-step")) {
 			// Both calls run together, so the step pays the limit once.
 			AMap<AString, ACell> stepped = RT.ensureMap(engine.jobs().invokeOperation(
 				"v/ops/agent/step", Maps.of(
@@ -87,14 +90,14 @@ public class LateToolResultTest {
 
 			ok.release();
 			bad.release();
-		}
 
-		// Each outcome is a message in the asking session, which wakes the agent.
-		TestEngine.awaitCondition(() -> {
-			if (agent.getSession(sid) == null) return false;
-			String c = conversation(agent, sid);
-			return c.contains("finished-late") && c.contains("broke-late");
-		}, 10_000, () -> "both late outcomes should reach the session: " + conversation(agent, sid));
+			// Each outcome is a message in the asking session, which wakes the agent.
+			watch.awaitState("both late outcomes in the session", () -> {
+				if (agent.getSession(sid) == null) return false;
+				String c = conversation(agent, sid);
+				return c.contains("finished-late") && c.contains("broke-late");
+			});
+		}
 		String c = conversation(agent, sid);
 		assertTrue(c.contains("COMPLETE") && c.contains("FAILED"),
 			"each outcome carries its status: " + c);
@@ -116,24 +119,25 @@ public class LateToolResultTest {
 
 		String gateName = "late-task-" + did;
 		Job job;
-		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
+				AgentWatch watch = AgentWatch.open(engine, did, "late-task")) {
 			// toolllm calls hold, which outlives the limit; the model then
 			// replies with text, a yield backed by the call still running.
 			job = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(
 				Fields.AGENT_ID, "late-task",
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
-			TestEngine.awaitTimelineCount(agent, 1, 10_000);
-			TestEngine.awaitAgentStatus(agent, AgentState.SLEEPING, 10_000);
+			watch.awaitRest(1);
+			assertEquals(AgentState.SLEEPING, agent.getStatus());
 			assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
 				"a task waiting on a late call is parked, not failed");
 			assertFalse(job.isFinished());
 			gate.release();
-		}
 
-		// The outcome arrives in the task's session and runs it again. toolllm
-		// replies with text once more, leaving nothing outstanding this time.
-		Job asked = job;
-		assertThrows(Exception.class, () -> asked.awaitResult(10_000));
+			// The outcome arrives in the task's session and runs it again. toolllm
+			// replies with text once more, leaving nothing outstanding this time.
+			watch.awaitRest(2);
+		}
+		assertEquals(Status.FAILED, job.getStatus());
 		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
 		assertEquals(2, agent.getTimeline().count());
 		ACell shown = RT.getIn(agent.getTimeline().get(1), Fields.MESSAGES);

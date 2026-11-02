@@ -874,10 +874,8 @@ public class JobManagerTest {
 		synchronized (venueJob) {
 			updater = Thread.ofVirtual().start(() ->
 				job.update(data -> data.assoc(marker, CVMLong.ONE)));
-			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-			while (!CVMLong.ONE.equals(job.getData().get(marker))
-					&& System.nanoTime() < deadline) Thread.onSpinWait();
-			assertEquals(CVMLong.ONE, job.getData().get(marker));
+			TestEngine.awaitJob(job, j -> CVMLong.ONE.equals(j.getData().get(marker)), 10_000,
+				() -> "the late update did not commit");
 			assertTrue(engine.jobs().deleteJob(job.getID(), ctx));
 		}
 		updater.join(TimeUnit.SECONDS.toMillis(5));

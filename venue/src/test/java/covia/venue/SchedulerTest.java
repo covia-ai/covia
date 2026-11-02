@@ -507,17 +507,20 @@ public class SchedulerTest {
 
 	/**
 	 * An immediately-due event is fired by the alarm without any manual trigger.
-	 * Polls the owner's list (generous timeout) — robust under the shared,
-	 * parallel timer thread since the event is the test's own.
+	 * Its operation waits at a test gate: the alarm claims an event before it
+	 * dispatches the fire, so once the gate is reached the event has left the
+	 * owner's list.
 	 */
 	@Test
 	public void testAlarmFiresImmediatelyDueEvent() throws Exception {
-		sched.schedule(s("v/test/ops/echo"), s("tick"), ctx, System.currentTimeMillis());
+		String gateName = "alarm-fires-" + did;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			sched.schedule(s("v/test/ops/hold"), Maps.of("gate", gateName), ctx, System.currentTimeMillis());
 
-		TestEngine.awaitCondition(() -> sched.list(ctx).isEmpty(), 5_000,
-			() -> "immediately-due event remained scheduled: " + sched.list(ctx));
-		assertTrue(sched.list(ctx).isEmpty(),
-			"the alarm should fire and remove an immediately-due event");
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the alarm should fire the immediately-due event");
+			assertTrue(sched.list(ctx).isEmpty(),
+				"the alarm should fire and remove an immediately-due event: " + sched.list(ctx));
+		}
 	}
 
 	// --------------------------------------------------------------- recurrence
@@ -556,13 +559,17 @@ public class SchedulerTest {
 	@Test
 	public void testRecurringEventReinsertsAndKeepsHandle() throws Exception {
 		long start = System.currentTimeMillis();
-		Blob handle = sched.schedule(s("v/test/ops/echo"), s("tick"), ctx, start, everyHour(), null, s("hourly tick"));
-
-		TestEngine.awaitCondition(
-			() -> !sched.list(ctx).isEmpty() && only(sched.list(ctx)).get(ScheduleState.K_LAST_FIRED) != null,
-			5_000, () -> "recurring event did not fire: " + sched.list(ctx));
-
-		AMap<AString, ACell> rec = only(sched.list(ctx));
+		String gateName = "recurring-fires-" + did;
+		Blob handle;
+		AMap<AString, ACell> rec;
+		// The fire waits at a test gate: the alarm moves the event to its next
+		// slot before it dispatches the fire, so once the gate is reached it has.
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			handle = sched.schedule(s("v/test/ops/hold"), Maps.of("gate", gateName), ctx, start, everyHour(), null,
+				s("hourly tick"));
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the recurring event should fire");
+			rec = only(sched.list(ctx));
+		}
 		assertEquals(CVMLong.create(start + HOUR), rec.get(ScheduleState.K_TIME),
 			"re-inserted one interval on from its original slot");
 		assertEquals(everyHour(), rec.get(ScheduleState.K_REPEAT));

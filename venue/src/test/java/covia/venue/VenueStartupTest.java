@@ -261,7 +261,7 @@ public class VenueStartupTest {
 			release.complete(null);
 			server = launch.get(10, TimeUnit.SECONDS);
 			assertNotNull(adapter.fired.get(5, TimeUnit.SECONDS));
-			TestEngine.awaitAgentIdle(agent, 5_000);
+			AgentWatch.awaitIdle(server.getEngine(), server.getEngine().getDIDString(), agent);
 			assertNull(agent.getError());
 			assertEquals(1, adapter.calls.get(), "queued input must run exactly once after setup");
 		} finally {
@@ -364,7 +364,8 @@ public class VenueStartupTest {
 			Engine engine = prepared.get(10, TimeUnit.SECONDS);
 			assertTrue(launch.cancel(true));
 			assertTrue(adapter.closed.await(5, TimeUnit.SECONDS));
-			TestEngine.awaitCondition(engine::isClosing, 5_000, () -> "Engine was not closed");
+			// The engine is marked closing before it closes its adapters.
+			assertTrue(engine.isClosing(), "Engine was not closed");
 			assertEquals(0, adapter.starts.get());
 			assertEquals(Status.PAUSED, hookJob.get().getStatus(), "cancelled launch must suspend hook work");
 			assertFalse(hook.isDone(), "the embedder owns the supplied stage");

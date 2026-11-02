@@ -7,13 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -277,7 +275,7 @@ public class EngineTest {
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
 
-		waitForJobCompletion((Blob)jobID, 5000);
+		waitForJobCompletion(job);
 
 		ACell finalStatus = venue.jobs().getJobData((Blob)jobID, venue.venueContext());
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
@@ -295,7 +293,7 @@ public class EngineTest {
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
 
-		waitForJobCompletion((Blob)jobID, 5000);
+		waitForJobCompletion(job);
 
 		ACell finalStatus = venue.jobs().getJobData((Blob)jobID, venue.venueContext());
 		assertEquals("FAILED", RT.getIn(finalStatus, "status").toString());
@@ -310,7 +308,7 @@ public class EngineTest {
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
 
-		ACell finalStatus = waitForJobCompletion((Blob)jobID, 5000);
+		ACell finalStatus = waitForJobCompletion(job);
 
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
 
@@ -325,8 +323,7 @@ public class EngineTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, venue.venueContext()).awaitResult(5000);
-		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
+		ACell result = waitForJobCompletion(venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, venue.venueContext()));
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK
 		} else {
@@ -334,24 +331,10 @@ public class EngineTest {
 		}
 	}
 
-	private ACell waitForJobCompletion(Object jobID, long timeoutMillis) {
-		Blob id=Job.parseID(jobID);
-		long startTime = System.currentTimeMillis();
-		ACell status = venue.jobs().getJobData(id, venue.venueContext());
-		while (System.currentTimeMillis() - startTime < timeoutMillis) {
-			status = venue.jobs().getJobData(id, venue.venueContext());
-			String jobStatus = RT.getIn(status, "status").toString();
-			if (!jobStatus.equals("PENDING")) {
-				return status;
-			}
-			try {
-				TimeUnit.MILLISECONDS.sleep(100);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				fail("Test interrupted while waiting for job completion");
-			}
-		}
-		return RT.assocIn(status, Status.FAILED,"status");
+	/** Waits for {@code job} to finish and returns its record. */
+	private ACell waitForJobCompletion(Job job) {
+		TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "job did not finish");
+		return venue.jobs().getJobData(job.getID(), venue.venueContext());
 	}
 
 	@Test
@@ -412,7 +395,7 @@ public class EngineTest {
 		ACell input = Maps.of("message", "Fail fast");
 		Job job = venue.jobs().invokeOperation("v/test/ops/error", input, venue.venueContext());
 
-		TestEngine.awaitCondition(job::isFinished, 5000,
+		TestEngine.awaitJob(job, Job::isFinished, 10_000,
 			() -> "error job did not reach a terminal state");
 		assertTrue(job.isFinished(), "Job should be finished");
 

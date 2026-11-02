@@ -25,6 +25,7 @@ import convex.core.data.Blob;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -254,12 +255,14 @@ public class GoalTreeAdapterTest {
 
 		// taskllm reads the task message and calls complete_task: the caller's
 		// job completes with the delivered result, the frame ends.
-		ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, "task-tools-goal", Fields.MESSAGE, "do the thing", "timeout", 15000L),
-			ALICE).awaitResult(20000);
-		assertNotNull(result, "the task's result reaches the requester");
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "task-tools-goal")) {
+			ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "task-tools-goal", Fields.MESSAGE, "do the thing", "timeout", 15000L),
+				ALICE).awaitResult(20000);
+			assertNotNull(result, "the task's result reaches the requester");
+			watch.awaitCycles(1);
+		}
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("task-tools-goal");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
 		assertEquals(1, inferences.count(), "complete_task is terminal: no closing inference: " + inferences);
@@ -280,12 +283,15 @@ public class GoalTreeAdapterTest {
 					"llmOperation", "v/test/ops/subgoalechollm",
 					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
 			ALICE).awaitResult(5000);
-		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "subgoal-record", Fields.MESSAGE, "decompose this"),
-			ALICE).awaitResult(15000);
-		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+		ACell chat;
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "subgoal-record")) {
+			chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "subgoal-record", Fields.MESSAGE, "decompose this"),
+				ALICE).awaitResult(15000);
+			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+			watch.awaitCycles(1);
+		}
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-record");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
@@ -332,12 +338,14 @@ public class GoalTreeAdapterTest {
 					"model", TestAdapter.SUBGOAL_DEEPEN,
 					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
 			ALICE).awaitResult(5000);
-		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "subgoal-deep", Fields.MESSAGE, "decompose this"),
-			ALICE).awaitResult(15000);
-		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "subgoal-deep")) {
+			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "subgoal-deep", Fields.MESSAGE, "decompose this"),
+				ALICE).awaitResult(15000);
+			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+			watch.awaitCycles(1);
+		}
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-deep");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
 
 		// Each subgoal's child rides under its call; the deepest frame's call ran none.
 		ACell call = RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
@@ -367,8 +375,9 @@ public class GoalTreeAdapterTest {
 		return names;
 	}
 
-	/** An agent offered only subgoal: its child scripted by {@code model}. */
-	private void createSubgoalAgent(String agentId, AString model) {
+	/** An agent offered only subgoal: its child scripted by {@code model}.
+	 *  Returns a watch on it, opened before any work. */
+	private AgentWatch createSubgoalAgent(String agentId, AString model) {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, agentId,
 				Fields.CONFIG, Maps.of(
@@ -377,12 +386,13 @@ public class GoalTreeAdapterTest {
 					"model", model,
 					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
 			ALICE).awaitResult(5000);
+		return AgentWatch.open(engine, ALICE_DID, agentId);
 	}
 
-	/** The root's subgoal call in the agent's first timeline entry. */
-	private ACell rootSubgoalCall(String agentId) {
+	/** The root's subgoal call in the agent's first timeline entry, once its cycle has merged. */
+	private ACell rootSubgoalCall(String agentId, AgentWatch watch) {
+		watch.awaitCycles(1);
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		return RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
 			.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
 	}
@@ -391,29 +401,31 @@ public class GoalTreeAdapterTest {
 	 *  subgoal of an agent offered only subgoal hands its parent structured data. */
 	@Test
 	public void testAChildReturnsStructuredDataWithComplete() {
-		createSubgoalAgent("subgoal-complete", TestAdapter.SUBGOAL_CHILD_COMPLETES);
-		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "subgoal-complete", Fields.MESSAGE, "decompose this"),
-			ALICE).awaitResult(15000);
-		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+		try (AgentWatch watch = createSubgoalAgent("subgoal-complete", TestAdapter.SUBGOAL_CHILD_COMPLETES)) {
+			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "subgoal-complete", Fields.MESSAGE, "decompose this"),
+				ALICE).awaitResult(15000);
+			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
 
-		ACell call = rootSubgoalCall("subgoal-complete");
-		assertEquals(GoalTreeContext.STATUS_COMPLETE, RT.getIn(call, Fields.RESULT, Fields.STATUS), call.toString());
-		assertEquals(Strings.create(TestAdapter.SUBGOAL_CHILD_RESULT),
-			RT.getIn(call, Fields.RESULT, Fields.RESULT, "answer"), call.toString());
+			ACell call = rootSubgoalCall("subgoal-complete", watch);
+			assertEquals(GoalTreeContext.STATUS_COMPLETE, RT.getIn(call, Fields.RESULT, Fields.STATUS), call.toString());
+			assertEquals(Strings.create(TestAdapter.SUBGOAL_CHILD_RESULT),
+				RT.getIn(call, Fields.RESULT, Fields.RESULT, "answer"), call.toString());
+		}
 	}
 
 	/** The task is the root's: a child that calls complete_task is told it is
 	 *  not offered it, and the task completes with the root's answer. */
 	@Test
 	public void testAChildCannotResolveTheTask() {
-		createSubgoalAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK);
-		ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.MESSAGE, "decompose this", "timeout", 15000L),
-			ALICE).awaitResult(20000);
-		assertEquals(Strings.create("root done"), RT.getIn(result, Fields.OUTPUT), String.valueOf(result));
-
-		AMap<AString, ACell> child = RT.ensureMap(RT.getIn(rootSubgoalCall("subgoal-task"), Fields.FRAME));
+		AMap<AString, ACell> child;
+		try (AgentWatch watch = createSubgoalAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK)) {
+			ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.MESSAGE, "decompose this", "timeout", 15000L),
+				ALICE).awaitResult(20000);
+			assertEquals(Strings.create("root done"), RT.getIn(result, Fields.OUTPUT), String.valueOf(result));
+			child = RT.ensureMap(RT.getIn(rootSubgoalCall("subgoal-task", watch), Fields.FRAME));
+		}
 		ACell childCall = RT.ensureVector(RT.getIn(RT.ensureVector(child.get(Fields.INFERENCES)).get(0),
 			Fields.CALLS)).get(0);
 		assertEquals(TaskTools.COMPLETE, RT.getIn(childCall, "name").toString());
@@ -433,16 +445,19 @@ public class GoalTreeAdapterTest {
 					"model", TestAdapter.SUBGOAL_CHILD_FAILS,
 					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
 			ALICE).awaitResult(5000);
-		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "subgoal-fails", Fields.MESSAGE, "decompose this"),
-			ALICE).awaitResult(15000);
-		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString(), "the parent carried on");
+		ACell chat;
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "subgoal-fails")) {
+			chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "subgoal-fails", Fields.MESSAGE, "decompose this"),
+				ALICE).awaitResult(15000);
+			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString(), "the parent carried on");
+			watch.awaitCycles(1);
+		}
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-fails");
 		AMap<AString, ACell> session = agent.getSession(
 			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count(), "the failed child was popped");
 
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		AVector<ACell> inferences = RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0)).get(Fields.INFERENCES));
 		ACell call = RT.ensureVector(RT.getIn(inferences.get(0), Fields.CALLS)).get(0);
 		assertEquals("subgoal", RT.getIn(call, "name").toString());
@@ -852,16 +867,18 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "strict-goal-schema-agent",
 			Fields.CONFIG, config), ALICE).awaitResult(5000);
 
-		engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(
-			Fields.AGENT_ID, "strict-goal-schema-agent",
-			Fields.INPUT, "return a typed answer",
-			Fields.RESPONSE_SCHEMA, simpleSchema(),
-			Fields.STRICT, CVMBool.TRUE,
-			"timeout", 15000L), ALICE).awaitResult(20000);
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "strict-goal-schema-agent")) {
+			engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(
+				Fields.AGENT_ID, "strict-goal-schema-agent",
+				Fields.INPUT, "return a typed answer",
+				Fields.RESPONSE_SCHEMA, simpleSchema(),
+				Fields.STRICT, CVMBool.TRUE,
+				"timeout", 15000L), ALICE).awaitResult(20000);
+			watch.awaitCycles(1);
+		}
 
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
 			.agent("strict-goal-schema-agent");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		assertEquals(0, agent.getTasks().count());
 		ACell taskResults = RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS);
 		assertNotNull(taskResults);
@@ -1101,8 +1118,7 @@ public class GoalTreeAdapterTest {
 		// Cancel immediately
 		job.cancel();
 
-		TestEngine.awaitCondition(job::isFinished, 2000,
-			() -> "cancelled GoalTree job did not finish (status=" + job.getStatus() + ")");
+		TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "cancelled GoalTree job did not finish");
 		assertEquals(Status.CANCELLED, job.getStatus(), job.getErrorMessage());
 	}
 

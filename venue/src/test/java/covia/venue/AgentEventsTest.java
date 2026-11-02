@@ -10,7 +10,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,7 +58,10 @@ public class AgentEventsTest {
 	private static final class Capture implements Consumer<Event> {
 		final List<Event> events = new CopyOnWriteArrayList<>();
 
-		@Override public void accept(Event e) { events.add(e); }
+		@Override public void accept(Event e) {
+			events.add(e);
+			synchronized (this) { notifyAll(); }
+		}
 
 		List<String> types() {
 			List<String> out = new ArrayList<>();
@@ -76,13 +82,28 @@ public class AgentEventsTest {
 
 		/** Waits for an event of the type carrying the given status (or any, when null). */
 		void await(AString type, AString status, long timeoutMs) {
-			TestEngine.awaitCondition(() -> {
+			awaitUntil(() -> {
 				for (Event e : all(type)) {
 					if (status == null || status.equals(RT.getIn(e.data(), Fields.STATUS))) return true;
 				}
 				return false;
 			}, timeoutMs, () -> "no " + type + (status != null ? " " + status : "")
 				+ " event within " + timeoutMs + "ms; saw " + types());
+		}
+
+		/** Waits until {@code condition} holds, checked now and as each event arrives. */
+		synchronized void awaitUntil(BooleanSupplier condition, long timeoutMs, Supplier<String> timeoutMessage) {
+			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+			while (!condition.getAsBoolean()) {
+				long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+				if (remaining <= 0) throw new AssertionError(timeoutMessage.get());
+				try {
+					wait(remaining);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError("Interrupted while waiting: " + timeoutMessage.get(), e);
+				}
+			}
 		}
 	}
 
@@ -461,7 +482,7 @@ public class AgentEventsTest {
 				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "mint B"), ctx);
 			other.awaitResult(10_000);
 			// Both cycles committed and the last run has exited.
-			TestEngine.awaitCondition(() -> whole.all(AgentEvents.CYCLE_END).size() >= 2
+			whole.awaitUntil(() -> whole.all(AgentEvents.CYCLE_END).size() >= 2
 				&& AgentEvents.RUN_END.equals(whole.events.get(whole.events.size() - 1).type()),
 				5_000, () -> "two cycles then a run end: " + whole.types());
 		}

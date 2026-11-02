@@ -38,6 +38,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Admission;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -1302,7 +1303,7 @@ public class AgentAdapterTest {
 
 			// The record shows a stable palette and an appended tool-addition event.
 			AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
-			TestEngine.awaitTimelineCount(agent, 1, 10000);
+			AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 			AVector<ACell> inferences = RT.ensureVector(
 				RT.getIn(agent.getTimeline().get(0), Fields.INFERENCES));
 			assertEquals(3, inferences.count(), runtime + ": " + inferences);
@@ -1432,7 +1433,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "record-agent", Fields.MESSAGE, "use your tool"),
 			RequestContext.of(ALICE_DID)).awaitResult(10000);
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("record-agent");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 
 		// The cycle's standing context: the head, once, on the entry — not per inference.
@@ -1489,7 +1490,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		assertThrows(Exception.class, () -> chat.awaitResult(10000));
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("failing-record-agent");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 		assertTrue(entry.get(Fields.RESULT).toString().contains(AgentAdapter.TRANSITION_FAILED),
 			entry.get(Fields.RESULT).toString());
@@ -3474,7 +3475,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "result-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
-		covia.venue.TestEngine.awaitTimelineCount(resultAgent, 1, 5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, resultAgent, 1);
 
 		// Trigger only kicks the cycle — read the response off the
 		// timeline entry written by the run loop.
@@ -3814,8 +3815,7 @@ public class AgentAdapterTest {
 
 		// Wait until the live executor reports the never-completing transition.
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("del-wedge");
-		TestEngine.awaitCondition(() -> AgentState.RUNNING.equals(observableStatus(agent)), 5000,
-			() -> "agent did not enter RUNNING (status=" + observableStatus(agent) + ")");
+		AgentWatch.awaitAgent(engine, ALICE_DID, agent, "RUNNING", a -> AgentState.RUNNING.equals(observableStatus(a)));
 		assertEquals(AgentState.RUNNING, observableStatus(agent),
 			"agent should be blocked in the never-completing transition");
 		assertEquals(AgentState.RUNNING, agent.getStatus(),
@@ -5384,7 +5384,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState suspended = user.agent("susp-ow");
-		TestEngine.awaitTimelineCount(suspended, 1, 5000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, suspended, 1);
 		assertEquals(AgentState.SUSPENDED, awaitFinished(suspended));
 		assertNotNull(suspended.getError());
 		assertFalse(waitingRequest.isFinished(), "a suspended agent keeps its queue");
@@ -5445,12 +5445,11 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState old = user.agent("run-ow");
-		TestEngine.awaitCondition(() -> AgentState.RUNNING.equals(observableStatus(old)), 5000,
-			() -> "agent did not enter RUNNING (status=" + observableStatus(old) + ")");
+		AgentWatch.awaitAgent(engine, ALICE_DID, old, "RUNNING", a -> AgentState.RUNNING.equals(observableStatus(a)));
 		assertEquals(AgentState.RUNNING, observableStatus(old));
 		assertEquals(AgentState.RUNNING, old.getStatus());
-		TestEngine.awaitCondition(() -> Status.STARTED.equals(stuck.getStatus()), 5000,
-			() -> "request job did not enter STARTED (status=" + stuck.getStatus() + ")");
+		TestEngine.awaitJob(stuck, j -> Status.STARTED.equals(j.getStatus()), 10_000,
+			() -> "request job did not enter STARTED");
 
 		// Config and state changes land on the record now and apply to future
 		// transitions; the never-completing transition keeps the snapshot it
@@ -6356,12 +6355,11 @@ public class AgentAdapterTest {
 				Fields.MESSAGE, Maps.of("content", "secret")),
 			RequestContext.of(ALICE_DID));
 
-		// Chat mints its session at intake; recover the sid from the agent
-		// record (poll briefly — intake is synchronous but dispatch may not be)
+		// Chat mints its session at intake, then wakes the agent; recover the
+		// sid from the agent record
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("del-chat-agent");
-		TestEngine.awaitCondition(() -> agent.getSessions().count() > 0, 5000,
-			() -> "chat did not mint a session");
+		AgentWatch.awaitAgent(engine, ALICE_DID, agent, "a session", a -> a.getSessions().count() > 0);
 		assertEquals(1, agent.getSessions().count(), "chat should have minted a session");
 		Blob sid = agent.getSessions().entrySet().iterator().next().getKey();
 

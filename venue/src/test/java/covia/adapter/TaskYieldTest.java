@@ -19,7 +19,9 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
+import covia.venue.AgentEvents;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -29,17 +31,14 @@ import covia.venue.User;
  * A task that yields runs again only when something it waits on brings it
  * back: a person's answer, a call past its time limit, or a wake time. One
  * that yields with none of these fails at once (AGENT_LOOP.md §4.6). Every
- * case is driven by test transitions and lattice state, with no clock waits.
+ * case is driven by test transitions and lattice state, with no clock waits:
+ * the tests wait on the run loop's own events.
  */
 public class TaskYieldTest {
 
 	private static final long HOUR_MS = 3_600_000;
 
 	private final Engine engine = TestEngine.ENGINE;
-
-	private AgentAdapter agents() {
-		return (AgentAdapter) engine.getAdapter("agent");
-	}
 
 	private AgentState create(RequestContext owner, String agentId, AMap<AString, ACell> config,
 			AMap<AString, ACell> state) {
@@ -54,11 +53,6 @@ public class TaskYieldTest {
 			Maps.of(Fields.AGENT_ID, agentId, Fields.INPUT, Maps.of("ask", ask)), owner);
 	}
 
-	/** Waits for the agent's run to reach a rest state (its loop's own completion). */
-	private void awaitRest(AgentState agent, RequestContext owner) throws Exception {
-		agents().awaitRunFinished(agent.getAgentId(), owner, 10_000);
-	}
-
 	private static long timelineCount(AgentState agent) {
 		AVector<ACell> timeline = agent.getTimeline();
 		return (timeline == null) ? 0 : timeline.count();
@@ -69,11 +63,13 @@ public class TaskYieldTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		AgentState agent = create(owner, "idle-yield", Maps.of(Fields.OPERATION, "v/test/ops/echo"), null);
 
-		Job job = request(owner, "idle-yield", "do something");
-		assertThrows(Exception.class, () -> job.awaitResult(10_000));
-		assertEquals(Status.FAILED, job.getStatus());
-		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
-		awaitRest(agent, owner);
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "idle-yield")) {
+			Job job = request(owner, "idle-yield", "do something");
+			assertThrows(Exception.class, () -> job.awaitResult(10_000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
+			watch.awaitRest(1);
+		}
 		assertEquals(1, timelineCount(agent), "the task ran once, not until the loop cap");
 		assertEquals(0, agent.getTasks().count());
 	}
@@ -85,43 +81,42 @@ public class TaskYieldTest {
 		AgentState agent = create(owner, "wake-yield",
 			Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
 			Maps.of(Fields.WAKE_TIME, CVMLong.create(later)));
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "wake-yield")) {
+			Job job = request(owner, "wake-yield", "come back later");
+			watch.awaitRest(1);
+			Blob taskId = job.getID();
+			ACell row = agent.getTasks().get(taskId);
+			assertTrue(AgentState.isParked(row), "a yield with a wake time parks the task");
+			assertEquals(CVMLong.create(later), RT.getIn(row, Fields.WAKE_TIME));
+			assertFalse(job.isFinished(), "the caller's job waits with its task");
 
-		Job job = request(owner, "wake-yield", "come back later");
-		TestEngine.awaitTimelineCount(agent, 1, 10_000);
-		awaitRest(agent, owner);
-		Blob taskId = job.getID();
-		ACell row = agent.getTasks().get(taskId);
-		assertTrue(AgentState.isParked(row), "a yield with a wake time parks the task");
-		assertEquals(CVMLong.create(later), RT.getIn(row, Fields.WAKE_TIME));
-		assertFalse(job.isFinished(), "the caller's job waits with its task");
+			// Before its wake time a parked task is not work, so a plain kick runs nothing.
+			engine.jobs().invokeOperation("v/ops/agent/trigger",
+				Maps.of(Fields.AGENT_ID, "wake-yield", Fields.FORCE, false), owner).awaitResult(5000);
+			assertEquals(1, timelineCount(agent));
 
-		// Before its wake time a parked task is not work, so a plain kick runs nothing.
-		engine.jobs().invokeOperation("v/ops/agent/trigger",
-			Maps.of(Fields.AGENT_ID, "wake-yield", Fields.FORCE, false), owner).awaitResult(5000);
-		assertEquals(1, timelineCount(agent));
+			// A forced kick runs a cycle, but not on the parked task.
+			engine.jobs().invokeOperation("v/ops/agent/trigger",
+				Maps.of(Fields.AGENT_ID, "wake-yield"), owner).awaitResult(10_000);
+			assertEquals(2, timelineCount(agent));
+			assertNull(RT.getIn(agent.getTimeline().get(1), Fields.TASKS),
+				"a forced kick does not present a parked task");
+			assertTrue(AgentState.isParked(agent.getTasks().get(taskId)));
 
-		// A forced kick runs a cycle, but not on the parked task.
-		engine.jobs().invokeOperation("v/ops/agent/trigger",
-			Maps.of(Fields.AGENT_ID, "wake-yield"), owner).awaitResult(10_000);
-		assertEquals(2, timelineCount(agent));
-		assertNull(RT.getIn(agent.getTimeline().get(1), Fields.TASKS),
-			"a forced kick does not present a parked task");
-		assertTrue(AgentState.isParked(agent.getTasks().get(taskId)));
+			// Time passes: the wake time is now behind us, the scheduler fires, and the task runs.
+			engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
+				AgentState.ThreadKind.TASK, taskId, System.currentTimeMillis() - 1);
+			watch.awaitRest(3);
+			assertNotNull(RT.getIn(agent.getTimeline().get(2), Fields.TASKS),
+				"the task's own wake presents it again");
+			assertTrue(AgentState.isParked(agent.getTasks().get(taskId)),
+				"it asked for a later wake again, so it is parked again");
+			assertFalse(job.isFinished());
 
-		// Time passes: the wake time is now behind us, the scheduler fires, and the task runs.
-		engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
-			AgentState.ThreadKind.TASK, taskId, System.currentTimeMillis() - 1);
-		TestEngine.awaitTimelineCount(agent, 3, 10_000);
-		awaitRest(agent, owner);
-		assertNotNull(RT.getIn(agent.getTimeline().get(2), Fields.TASKS),
-			"the task's own wake presents it again");
-		assertTrue(AgentState.isParked(agent.getTasks().get(taskId)),
-			"it asked for a later wake again, so it is parked again");
-		assertFalse(job.isFinished());
-
-		// Leave nothing armed in the shared engine.
-		engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
-			AgentState.ThreadKind.TASK, taskId, 0);
+			// Leave nothing armed in the shared engine.
+			engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
+				AgentState.ThreadKind.TASK, taskId, 0);
+		}
 	}
 
 	@Test
@@ -129,9 +124,11 @@ public class TaskYieldTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		AgentState agent = create(owner, "ask-yield", Maps.of(Fields.OPERATION, "v/test/ops/askhuman"), null);
 
-		Job job = request(owner, "ask-yield", "decide for me");
-		TestEngine.awaitTimelineCount(agent, 1, 10_000);
-		awaitRest(agent, owner);
+		Job job;
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "ask-yield")) {
+			job = request(owner, "ask-yield", "decide for me");
+			watch.awaitRest(1);
+		}
 		assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
 			"an open ask from the task's cycle parks the task");
 		assertTrue(agent.hasPendingFor(job.getID()));
@@ -155,9 +152,11 @@ public class TaskYieldTest {
 		// toolllm asks through hitl_request, then replies with text: a yield
 		// backed by the ask, which the task id carried through the harness
 		// ties to this task.
-		Job job = request(owner, "harness-ask", "ask-human");
-		TestEngine.awaitTimelineCount(agent, 1, 10_000);
-		awaitRest(agent, owner);
+		Job job;
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "harness-ask")) {
+			job = request(owner, "harness-ask", "ask-human");
+			watch.awaitRest(1);
+		}
 		assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
 			"an ask made through the LLM harness parks its task");
 		assertFalse(job.isFinished());
@@ -179,11 +178,13 @@ public class TaskYieldTest {
 			Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
 			Maps.of(Fields.WAKE_TIME, CVMLong.create(1)));
 
-		Job job = request(owner, "past-wake", "spin");
-		assertThrows(Exception.class, () -> job.awaitResult(10_000));
-		assertTrue(job.getErrorMessage().contains("loop iterations"),
-			"the cap fails the task: " + job.getErrorMessage());
-		awaitRest(agent, owner);
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "past-wake")) {
+			Job job = request(owner, "past-wake", "spin");
+			assertThrows(Exception.class, () -> job.awaitResult(10_000));
+			assertTrue(job.getErrorMessage().contains("loop iterations"),
+				"the cap fails the task: " + job.getErrorMessage());
+			watch.awaitEvent("run:end", e -> AgentEvents.RUN_END.equals(e.type()));
+		}
 		assertEquals(0, agent.getTasks().count());
 	}
 
@@ -199,19 +200,20 @@ public class TaskYieldTest {
 			Fields.OPERATION, "v/ops/llmagent/chat",
 			"llmOperation", "v/test/ops/taskllm",
 			"model", "parallel-task-fail-test"), null);
+		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "fails-a-task")) {
+			Job first = request(owner, "fails-a-task", "cannot be done");
+			assertThrows(Exception.class, () -> first.awaitResult(10_000));
+			assertEquals("failed deliberately", first.getErrorMessage());
+			watch.awaitRest(1);
+			assertEquals(AgentState.SLEEPING, agent.getStatus(),
+				"failing a task is not a fault in the agent: " + agent.getError());
 
-		Job first = request(owner, "fails-a-task", "cannot be done");
-		assertThrows(Exception.class, () -> first.awaitResult(10_000));
-		assertEquals("failed deliberately", first.getErrorMessage());
-		awaitRest(agent, owner);
-		assertEquals(AgentState.SLEEPING, agent.getStatus(),
-			"failing a task is not a fault in the agent: " + agent.getError());
-
-		Job second = request(owner, "fails-a-task", "nor can this");
-		assertThrows(Exception.class, () -> second.awaitResult(10_000));
-		assertEquals("failed deliberately", second.getErrorMessage(),
-			"the next task gets its own cycle and its own outcome");
-		awaitRest(agent, owner);
+			Job second = request(owner, "fails-a-task", "nor can this");
+			assertThrows(Exception.class, () -> second.awaitResult(10_000));
+			assertEquals("failed deliberately", second.getErrorMessage(),
+				"the next task gets its own cycle and its own outcome");
+			watch.awaitRest(2);
+		}
 		assertEquals(2, timelineCount(agent));
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 	}

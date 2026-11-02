@@ -35,6 +35,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.Config;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.TestEngine;
 import covia.venue.TestLogs;
 import covia.venue.User;
@@ -186,12 +187,14 @@ public class HITLAdapterTest {
 		assertEquals(Strings.create("hitl-agent"), record.get(Hitl.AGENT));
 		assertEquals(Strings.create(sid.toHexString()), record.get(Fields.SESSION_ID));
 
-		respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
-		assertEquals(Status.COMPLETE, request.getStatus());
-		assertFalse(agent.getPending().containsKey(request.getID()));
-		assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
-			agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "hitl-agent")) {
+			respond(ALICE, Hitl.answer(id.toString()).answer("path", "left").build());
+			assertEquals(Status.COMPLETE, request.getStatus());
+			assertFalse(agent.getPending().containsKey(request.getID()));
+			assertEquals(Maps.of(Fields.INPUT, 0, Fields.AUTH, 0),
+				agents.agentInfo(ALICE, Strings.create("hitl-agent")).get(Fields.AWAITING));
+			watch.awaitCycles(1);
+		}
 		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
 			RT.getIn(owner.agent("hitl-agent").getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
@@ -300,7 +303,10 @@ public class HITLAdapterTest {
 		var second = covia.venue.server.VenueServer.launch(config);
 		try {
 			var agent = second.getEngine().getVenueState().users().get(owner).agent("asker");
-			TestEngine.awaitTimelineCount(agent, 1, 10000);
+			// The restarted venue wakes the agent as it boots: the cycle may already have run.
+			try (AgentWatch watch = AgentWatch.open(second.getEngine(), owner, "asker")) {
+				watch.awaitState("a timeline entry", () -> agent.getTimeline() != null && agent.getTimeline().count() >= 1);
+			}
 			assertTrue(agent.getSession(sid).toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
 			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
 		} finally { second.close(); }
@@ -351,9 +357,7 @@ public class HITLAdapterTest {
 				var expiring = java.util.concurrent.CompletableFuture.runAsync(() ->
 					((HITLAdapter) first.getAdapter("hitl")).rearmExpiries(), AAdapter.VIRTUAL_EXECUTOR);
 				for (Job pending : java.util.List.of(answer, reject, expire)) {
-					long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-					while (!pending.isFinished() && System.nanoTime() < deadline) Thread.sleep(10);
-					assertTrue(pending.isFinished(), "resolution includes the final Job record");
+					TestEngine.awaitJob(pending, Job::isFinished, 10_000, () -> "resolution includes the final Job record");
 				}
 				assertThrows(java.util.concurrent.ExecutionException.class, () -> answering.future().get(5, TimeUnit.SECONDS));
 				assertThrows(java.util.concurrent.ExecutionException.class, () -> expiring.get(5, TimeUnit.SECONDS));

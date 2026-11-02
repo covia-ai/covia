@@ -25,6 +25,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -49,12 +50,6 @@ public class AgentRestartTest {
 		AMap<AString, ACell> info = ((AgentAdapter) e.getAdapter("agent"))
 			.agentInfo(RequestContext.of(ALICE), Strings.create(agentId));
 		return RT.ensureString(info.get(Fields.STATUS));
-	}
-
-	private static void awaitAgentStatus(Engine e, String agentId, AString expected) throws InterruptedException {
-		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-		while (!expected.equals(status(e, agentId)) && System.nanoTime() < deadline) Thread.sleep(10);
-		assertEquals(expected, status(e, agentId));
 	}
 
 	@Test
@@ -82,7 +77,8 @@ public class AgentRestartTest {
 						Fields.INPUT, Maps.of("ask", "outlive the venue")), alice);
 				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS),
 					"the task transition never reached its test gate");
-				awaitAgentStatus(first, agentId, AgentState.RUNNING);
+				// The loop holds its running slot before its transition starts.
+				assertEquals(AgentState.RUNNING, status(first, agentId));
 				assertFalse(request.isFinished(),
 					"a queued task Job is PENDING/STARTED while the agent holds it");
 				first.syncState();
@@ -151,15 +147,14 @@ public class AgentRestartTest {
 					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
 					AgentState.KEY_STATE, later), alice).awaitResult(5000);
 			}
-			waking = first.jobs().invokeOperation("v/ops/agent/request",
-				Maps.of(Fields.AGENT_ID, "parked-waking", Fields.INPUT, Maps.of("ask", "wait")), alice);
-			orphaned = first.jobs().invokeOperation("v/ops/agent/request",
-				Maps.of(Fields.AGENT_ID, "parked-orphan", Fields.INPUT, Maps.of("ask", "wait")), alice);
-			AgentAdapter agents = (AgentAdapter) first.getAdapter("agent");
-			for (String agentId : new String[] {"parked-waking", "parked-orphan"}) {
-				AgentState agent = first.getVenueState().users().get(ALICE).agent(agentId);
-				covia.venue.TestEngine.awaitTimelineCount(agent, 1, 10_000);
-				agents.awaitRunFinished(Strings.create(agentId), alice, 10_000);
+			try (AgentWatch wakingWatch = AgentWatch.open(first, ALICE, "parked-waking");
+					AgentWatch orphanWatch = AgentWatch.open(first, ALICE, "parked-orphan")) {
+				waking = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, "parked-waking", Fields.INPUT, Maps.of("ask", "wait")), alice);
+				orphaned = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, "parked-orphan", Fields.INPUT, Maps.of("ask", "wait")), alice);
+				wakingWatch.awaitRest(1);
+				orphanWatch.awaitRest(1);
 			}
 			AgentState orphan = first.getVenueState().users().get(ALICE).agent("parked-orphan");
 			assertTrue(AgentState.isParked(orphan.getTasks().get(orphaned.getID())));

@@ -376,19 +376,21 @@ public class CapabilityGateTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		Job chatJob = engine.jobs().invokeOperation(
-			"v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "gated-agent",
-				Fields.MESSAGE, Strings.create("use your tool")),
-			RequestContext.of(ALICE_DID));
-		ACell result = chatJob.awaitResult(10000);
-		String response = convex.core.lang.RT.getIn(result, Fields.RESPONSE).toString();
-		assertTrue(response.contains("Capability denied by gate"),
-			"the gate denial must reach the model as the tool result: " + response);
+		try (covia.venue.AgentWatch watch = covia.venue.AgentWatch.open(engine, ALICE_DID, "gated-agent")) {
+			Job chatJob = engine.jobs().invokeOperation(
+				"v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "gated-agent",
+					Fields.MESSAGE, Strings.create("use your tool")),
+				RequestContext.of(ALICE_DID));
+			ACell result = chatJob.awaitResult(10000);
+			String response = convex.core.lang.RT.getIn(result, Fields.RESPONSE).toString();
+			assertTrue(response.contains("Capability denied by gate"),
+				"the gate denial must reach the model as the tool result: " + response);
+			watch.awaitRest(1);
+		}
 
 		covia.venue.User user = engine.getVenueState().users().get(ALICE_DID);
 		covia.venue.AgentState agent = user.agent("gated-agent");
-		TestEngine.awaitAgentStatus(agent, covia.venue.AgentState.SLEEPING, 2000);
 		assertEquals(covia.venue.AgentState.SLEEPING, agent.getStatus(),
 			"a handled gate denial is not an agent failure");
 	}

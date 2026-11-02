@@ -480,8 +480,10 @@ class A2AAdapterTest {
 					Fields.URL, Strings.create("http://localhost:" + peer.getAddress().getPort()),
 					Fields.MESSAGE, coviaMessageRecord("research this")));
 			convex.core.data.Blob id = seed.getID();
-			TestEngine.awaitCondition(() -> "Reading the sources".equals(Job.progressMessage(
-					RT.getIn(TestServer.ENGINE.jobs().getJobData(id), Fields.PROGRESS))), 10_000,
+			Job mirror = TestServer.ENGINE.jobs().getJob(id);
+			assertNotNull(mirror, "the mirror Job is live while its remote task runs");
+			TestEngine.awaitJob(mirror, j -> "Reading the sources".equals(Job.progressMessage(
+					j.getData().get(Fields.PROGRESS))), 10_000,
 					() -> "no progress on the mirror: " + TestServer.ENGINE.jobs().getJobData(id));
 			assertEquals(Status.STARTED, RT.ensureString(TestServer.ENGINE.jobs().getJobData(id).get(Fields.STATUS)));
 		} finally {
@@ -598,39 +600,34 @@ class A2AAdapterTest {
 	}
 
 	/**
-	 * Poll the local engine directly (bypassing HTTP) until the job leaves the
+	 * Waits on the local engine's live Job (bypassing HTTP) until it leaves the
 	 * PENDING/STARTED transient states. Used by tests that expect a stable but
-	 * non-terminal outcome (e.g. INPUT_REQUIRED). Up to 5s.
+	 * non-terminal outcome (e.g. INPUT_REQUIRED).
 	 */
-	private static AMap<AString, ACell> awaitStable(Blob jobId) throws InterruptedException {
-		long deadline = System.currentTimeMillis() + 5000;
-		AMap<AString, ACell> data = null;
-		while (System.currentTimeMillis() < deadline) {
-			// Direct active-cache lookup bypasses ownership — fine for test
-			// observation; we're just waiting for status to settle.
-			data = TestServer.ENGINE.jobs().getJobData(jobId);
-			if (data != null) {
-				AString status = RT.ensureString(data.get(Fields.STATUS));
-				if (status != null && !Status.PENDING.equals(status) && !Status.STARTED.equals(status)) {
-					return data;
-				}
-			}
-			Thread.sleep(50);
+	private static AMap<AString, ACell> awaitStable(Blob jobId) {
+		// Direct active-cache lookup bypasses ownership — fine for test
+		// observation; we're just waiting for status to settle.
+		Job job = TestServer.ENGINE.jobs().getJob(jobId);
+		if (job != null) {
+			TestEngine.awaitJob(job, j -> !Status.PENDING.equals(j.getStatus()) && !Status.STARTED.equals(j.getStatus()),
+				10_000, () -> "Job never left PENDING/STARTED");
 		}
-		throw new AssertionError("Job never left PENDING/STARTED: "
-				+ (data == null ? "null" : data.get(Fields.STATUS)));
+		AMap<AString, ACell> data = TestServer.ENGINE.jobs().getJobData(jobId);
+		assertNotNull(data, "the Job has a record");
+		return data;
 	}
 
-	private static AString awaitRemoteTaskId(covia.venue.Engine engine, Blob jobId)
-			throws InterruptedException {
-		long deadline = System.currentTimeMillis() + 5000;
-		while (System.currentTimeMillis() < deadline) {
-			AMap<AString, ACell> data = engine.jobs().getJobData(jobId,
-				RequestContext.of(Strings.create(engine.getDIDString() + ":public")));
-			AString taskId = data != null ? RT.ensureString(data.get(Fields.REMOTE_TASK_ID)) : null;
-			if (taskId != null) return taskId;
-			Thread.sleep(50);
+	/** Waits for the A2A mirror Job to record the remote task it follows. */
+	private static AString awaitRemoteTaskId(covia.venue.Engine engine, Blob jobId) {
+		Job mirror = engine.jobs().getJob(jobId);
+		if (mirror != null) {
+			TestEngine.awaitJob(mirror, j -> j.getData().get(Fields.REMOTE_TASK_ID) != null, 10_000,
+				() -> "A2A mirror never recorded its remote task id: " + engine.jobs().getJobData(jobId));
 		}
-		throw new AssertionError("A2A mirror never recorded its remote task id: " + engine.jobs().getJobData(jobId));
+		AMap<AString, ACell> data = engine.jobs().getJobData(jobId,
+			RequestContext.of(Strings.create(engine.getDIDString() + ":public")));
+		AString taskId = data != null ? RT.ensureString(data.get(Fields.REMOTE_TASK_ID)) : null;
+		assertNotNull(taskId, "A2A mirror never recorded its remote task id: " + data);
+		return taskId;
 	}
 }

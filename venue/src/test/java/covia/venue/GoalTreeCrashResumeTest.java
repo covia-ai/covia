@@ -67,9 +67,11 @@ public class GoalTreeCrashResumeTest {
 
 	private static final AString ALICE = Strings.create("did:key:z6MkCrashBoundaryAlice");
 
-	private static void await(BooleanSupplier condition, long timeoutMs, String description) {
-		TestEngine.awaitCondition(condition, timeoutMs,
-			() -> "timeout waiting for: " + description);
+	/** Waits until {@code condition} holds, checked now and as each of the agent's run-loop events arrives. */
+	private static void await(Engine engine, String agentId, BooleanSupplier condition, String description) {
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE, agentId)) {
+			watch.awaitState(description, condition);
+		}
 	}
 
 	private static AMap<AString, ACell> config(AKeyPair keyPair) {
@@ -156,7 +158,7 @@ public class GoalTreeCrashResumeTest {
 			RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO))));
 		second.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after migration"), alice).awaitResult(5000);
-		await(() -> restored.getSessionCycleEpoch(sid) == null, 5000, "migrated chat committed");
+		await(second, agentId, () -> restored.getSessionCycleEpoch(sid) == null, "migrated chat committed");
 		second.jobs().invokeOperation("v/ops/agent/compact-session", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), "summary", "keep all completed exchanges"), alice).awaitResult(5000);
 		AMap<AString, ACell> compacted = RT.ensureMap(RT.getIn(restored.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
@@ -172,7 +174,7 @@ public class GoalTreeCrashResumeTest {
 		assertEquals(compacted, RT.getIn(reopened.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		third.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after restart"), alice).awaitResult(5000);
-		await(() -> reopened.getSessionCycleEpoch(sid) == null, 5000, "reopened chat committed");
+		await(third, agentId, () -> reopened.getSessionCycleEpoch(sid) == null, "reopened chat committed");
 		AMap<AString, ACell> appended = RT.ensureMap(RT.getIn(reopened.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		AVector<ACell> retained = GoalTreeContext.history(compacted);
 		assertEquals(retained, GoalTreeContext.history(appended).slice(0, retained.count()));
@@ -210,7 +212,7 @@ public class GoalTreeCrashResumeTest {
 				Fields.INPUT, Strings.create("use the slow tool")),
 			RequestContext.of(ALICE));
 		requestId = request.getID();
-		await(() -> parkedInTool(first, "request-agent", sid), 10_000, "request parked in tool");
+		await(first, "request-agent", () -> parkedInTool(first, "request-agent", sid), "request parked in tool");
 		assertEquals(Status.STARTED, request.getStatus());
 		assertEquals(AgentState.RUNNING, agent(first, "request-agent").getStatus());
 		assertNotNull(agent(first, "request-agent").getSessionCycleEpoch(sid));
@@ -260,7 +262,7 @@ public class GoalTreeCrashResumeTest {
 				Fields.MESSAGE, Strings.create("use the slow tool")),
 			RequestContext.of(ALICE));
 		delivery.awaitResult(5000);
-		await(() -> parkedInTool(first, "message-agent", sid), 10_000, "message parked in tool");
+		await(first, "message-agent", () -> parkedInTool(first, "message-agent", sid), "message parked in tool");
 		first.flush();
 		closeActivePhase();
 
@@ -292,14 +294,13 @@ public class GoalTreeCrashResumeTest {
 					Fields.SESSION_ID, Strings.create(sid.toHexString()),
 					Fields.MESSAGE, Strings.create("use the slow tool")),
 				RequestContext.of(ALICE)).awaitResult(5000);
-			await(() -> parkedInTool(engine, "repair-agent", sid),
-				10_000, "message parked in tool");
+			await(engine, "repair-agent", () -> parkedInTool(engine, "repair-agent", sid), "message parked in tool");
 
 			engine.jobs().invokeOperation("v/ops/agent/suspend",
 				Maps.of(Fields.AGENT_ID, "repair-agent"),
 				RequestContext.of(ALICE)).awaitResult(5000);
-			await(() -> agent(engine, "repair-agent").getSessionCycleEpoch(sid) == null,
-				10_000, "cycle fence cleared after suspension");
+			await(engine, "repair-agent", () -> agent(engine, "repair-agent").getSessionCycleEpoch(sid) == null,
+				"cycle fence cleared after suspension");
 			engine.jobs().invokeOperation("v/ops/agent/resume",
 				Maps.of(Fields.AGENT_ID, "repair-agent"),
 				RequestContext.of(ALICE)).awaitResult(5000);
@@ -309,9 +310,8 @@ public class GoalTreeCrashResumeTest {
 					Fields.SESSION_ID, Strings.create(sid.toHexString()),
 					Fields.MESSAGE, Strings.create("start a fresh attempt")),
 				RequestContext.of(ALICE)).awaitResult(5000);
-			await(() -> String.valueOf(rootConversation(engine, "repair-agent", sid))
-				.contains("did not return"), 10_000,
-				"fresh attempt settled the dangling call explicitly");
+			await(engine, "repair-agent", () -> String.valueOf(rootConversation(engine, "repair-agent", sid))
+				.contains("did not return"), "fresh attempt settled the dangling call explicitly");
 		} finally {
 			closeActivePhase();
 		}

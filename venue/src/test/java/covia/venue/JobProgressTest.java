@@ -30,8 +30,8 @@ public class JobProgressTest {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext ctx = RequestContext.of(did);
 		Job job = engine.jobs().invokeOperation("v/test/ops/progress", Maps.of("hold", true), ctx);
-		TestEngine.awaitCondition(() -> "step 2".equals(Job.progressMessage(job.getData().get(Fields.PROGRESS))),
-			5_000, () -> "no progress: " + job.getData());
+		TestEngine.awaitJob(job, j -> "step 2".equals(Job.progressMessage(j.getData().get(Fields.PROGRESS))),
+			10_000, () -> "no progress: " + job.getData());
 
 		AMap<AString, ACell> recorded = record(did, job);
 		assertNotNull(recorded, "the Job is durable");

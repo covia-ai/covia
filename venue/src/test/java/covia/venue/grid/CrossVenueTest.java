@@ -30,6 +30,7 @@ import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.UcanTokens;
 import covia.grid.client.VenueHTTP;
+import covia.venue.TestEngine;
 import covia.venue.TwoVenueTestServer;
 
 /**
@@ -166,10 +167,9 @@ public class CrossVenueTest {
 			Fields.OPERATION, "v/ops/jvm/string-concat",
 			Fields.INPUT, Maps.of("first", "x", "second", "y")));
 		try {
-			long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
 			Job local = TwoVenueTestServer.ENGINE_A.jobs().getJob(seed.getID(), TwoVenueTestServer.ENGINE_A.venueContext());
-			while (System.nanoTime() < deadline && !Strings.create("acceptance-unknown").equals(
-				RT.getIn(local.getData(), "delegation", "observation"))) Thread.sleep(5);
+			TestEngine.awaitJob(local, j -> Strings.create("acceptance-unknown").equals(
+				RT.getIn(j.getData(), "delegation", "observation")), 10_000, () -> "no uncertain acceptance recorded");
 			assertEquals(Status.STARTED, local.getStatus());
 			assertEquals(Strings.create("acceptance-unknown"), RT.getIn(local.getData(), "delegation", "observation"));
 			assertTrue(!local.future().isDone());

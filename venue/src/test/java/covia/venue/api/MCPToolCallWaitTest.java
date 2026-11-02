@@ -13,7 +13,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterAll;
@@ -145,18 +144,19 @@ public class MCPToolCallWaitTest {
 
 	@Test
 	public void cancellingACallEndsIt() throws Exception {
-		CompletableFuture<HttpResponse<String>> call = http.sendAsync(post(never(3, ""), "application/json, text/event-stream"),
-			HttpResponse.BodyHandlers.ofString());
-		// Until the venue holds the call there is nothing to cancel: keep asking until it answers.
-		HttpResponse<String> r = null;
-		while (!call.isDone() || r == null) {
+		// The venue holds the call before it opens the call's stream with a first
+		// keep-alive, so once the response has begun there is a call to cancel.
+		HttpResponse<InputStream> r = http.send(post(never(3, ""), "application/json, text/event-stream"),
+			HttpResponse.BodyHandlers.ofInputStream());
+		try (InputStream in = r.body()) {
+			assertTrue(r.headers().firstValue("Content-Type").orElse("").contains("text/event-stream"),
+				"a long call is answered as a stream");
 			http.send(post("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":3}}",
 				"application/json"), HttpResponse.BodyHandlers.ofString());
-			if (call.isDone()) r = call.get();
-			else Thread.onSpinWait();
+			String body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+			String data = body.lines().filter(l -> l.startsWith("data: ")).reduce((a, b) -> b).map(l -> l.substring(6)).orElse(body);
+			assertEquals("Cancelled", RT.getIn(result(data), "structuredContent", "message").toString(), body);
 		}
-		String data = r.body().lines().filter(l -> l.startsWith("data: ")).reduce((a, b) -> b).map(l -> l.substring(6)).orElse(r.body());
-		assertEquals("Cancelled", RT.getIn(result(data), "structuredContent", "message").toString(), r.body());
 	}
 
 	@Test

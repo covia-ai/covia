@@ -2,11 +2,12 @@ package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.concurrent.TimeUnit;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
-import java.util.concurrent.atomic.AtomicReference;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -25,6 +26,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -366,7 +368,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "e2e-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
-		TestEngine.awaitTimelineCount(e2eAgent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, e2eAgent, 1);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("e2e-agent");
@@ -399,7 +401,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		TestEngine.awaitTimelineCount(multiAgent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, multiAgent, 1);
 
 		// Second run
 		multiAgent.appendSessionPending(multiSid, Maps.of(
@@ -409,7 +411,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		TestEngine.awaitTimelineCount(multiAgent, 2, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, multiAgent, 2);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("multi-run-agent");
@@ -508,7 +510,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "tool-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
-		TestEngine.awaitTimelineCount(toolAgent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, toolAgent, 1);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("tool-agent");
@@ -544,7 +546,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "bad-args-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		AString response = RT.ensureString(
 			RT.getIn(user.agent("bad-args-agent").getTimeline().get(0), Fields.RESULT));
@@ -1157,7 +1159,7 @@ public class LLMAgentAdapterTest {
 		engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "skill-e2e-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		agent = user.agent("skill-e2e-agent");
 		AString turn1 = RT.ensureString(RT.getIn(agent.getTimeline().get(0), Fields.RESULT));
@@ -1177,7 +1179,7 @@ public class LLMAgentAdapterTest {
 		engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "skill-e2e-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 2, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 2);
 
 		agent = user.agent("skill-e2e-agent");
 		AString turn2 = RT.ensureString(RT.getIn(agent.getTimeline().get(1), Fields.RESULT));
@@ -1322,7 +1324,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "task-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		// Verify agent state — task should be removed after completion
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
@@ -1361,7 +1363,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "text-complete-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		assertEquals(0, agent.getTasks().count(), "empty complete_task with turn text must complete the task");
 		ACell timelineEntry = agent.getTimeline().get(0);
@@ -1409,7 +1411,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "strict-schema-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		assertEquals(0, agent.getTasks().count(), "conforming retry must complete the task");
 		ACell taskResults = RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS);
@@ -1446,7 +1448,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "advisory-schema-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		// The advisory schema renders as guidance, so the mock's schema guard
 		// (which looks for the enforced marker) fails the task — UNLESS the
@@ -1461,39 +1463,38 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testRequestStoresSchemaAndStrictOnTask() throws Exception {
-		engine.jobs().invokeOperation(
-			"v/ops/agent/create",
-			Maps.of(
-				Fields.AGENT_ID, "schema-request-agent",
-				Fields.CONFIG, Maps.of(
-					Fields.OPERATION, "v/ops/llmagent/chat",
-					"llmOperation", "v/test/ops/taskllm",
-					"model", "no-complete-test")
-			),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		// The transition holds at a test gate, so the task stays queued and
+		// inspectable while its cycle runs.
+		String gateName = "schema-request-" + ALICE_DID;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			engine.jobs().invokeOperation(
+				"v/ops/agent/create",
+				Maps.of(
+					Fields.AGENT_ID, "schema-request-agent",
+					Fields.CONFIG, Maps.of(
+						Fields.OPERATION, "v/test/ops/taskcomplete",
+						"testGate", gateName)
+				),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		engine.jobs().invokeOperation(
-			"v/ops/agent/request",
-			Maps.of(
-				Fields.AGENT_ID, "schema-request-agent",
-				Fields.INPUT, Maps.of("task", "typed work"),
-				Fields.RESPONSE_SCHEMA, answerSchema(),
-				Fields.STRICT, CVMBool.TRUE,
-				"timeout", CVMLong.create(0)),
-			RequestContext.of(ALICE_DID));
+			engine.jobs().invokeOperation(
+				"v/ops/agent/request",
+				Maps.of(
+					Fields.AGENT_ID, "schema-request-agent",
+					Fields.INPUT, Maps.of("task", "typed work"),
+					Fields.RESPONSE_SCHEMA, answerSchema(),
+					Fields.STRICT, CVMBool.TRUE,
+					"timeout", CVMLong.create(0)),
+				RequestContext.of(ALICE_DID));
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the task's cycle runs");
 
-		// The task record is added synchronously by handleRequest; the
-		// no-complete mock never resolves it, so it stays inspectable.
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("schema-request-agent");
-		long deadline = System.currentTimeMillis() + 10000;
-		while (agent.getTasks().count() == 0 && System.currentTimeMillis() < deadline) {
-			Thread.sleep(50);
+			User user = engine.getVenueState().users().get(ALICE_DID);
+			AgentState agent = user.agent("schema-request-agent");
+			assertEquals(1, agent.getTasks().count(), "task must be queued");
+			ACell record = agent.getTasks().entryAt(0).getValue();
+			assertNotNull(RT.getIn(record, Fields.RESPONSE_SCHEMA), "schema must persist on the task record");
+			assertEquals(CVMBool.TRUE, RT.getIn(record, Fields.STRICT), "strict must persist on the task record");
 		}
-		assertEquals(1, agent.getTasks().count(), "task must be queued");
-		ACell record = agent.getTasks().entryAt(0).getValue();
-		assertNotNull(RT.getIn(record, Fields.RESPONSE_SCHEMA), "schema must persist on the task record");
-		assertEquals(CVMBool.TRUE, RT.getIn(record, Fields.STRICT), "strict must persist on the task record");
 	}
 
 	@Test
@@ -1567,7 +1568,7 @@ public class LLMAgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("parallel-task-agent");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 		assertEquals(Status.COMPLETE, taskJob.getStatus());
 
 		ACell read = engine.jobs().invokeOperation(
@@ -1737,7 +1738,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "capped-task-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(),
@@ -1795,7 +1796,7 @@ public class LLMAgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("tokens-agent");
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		AMap<AString, ACell> t1 = entryTokens(agent.getTimeline().get(0));
 		assertNotNull(t1, "the entry's inferences must carry the cycle's tokens");
@@ -1819,7 +1820,7 @@ public class LLMAgentAdapterTest {
 				Fields.MESSAGE, Strings.create("second, longer message"),
 				Fields.SESSION_ID, sid),
 			RequestContext.of(ALICE_DID)).awaitResult(10000);
-		TestEngine.awaitTimelineCount(agent, 2, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 2);
 
 		AMap<AString, ACell> t2 = entryTokens(agent.getTimeline().get(1));
 		assertNotNull(t2, "second cycle must also be measured");
@@ -1860,16 +1861,13 @@ public class LLMAgentAdapterTest {
 		Blob taskJobId = Job.parseID(RT.getIn(snapshot, Fields.ID));
 		assertNotNull(taskJobId, "async request snapshot must carry the task job id");
 
-		// Poll the persisted record, not the active cache — a finished job is
-		// evicted from the cache and lives on as its lattice record.
-		AtomicReference<AMap<AString, ACell>> observed = new AtomicReference<>();
-		TestEngine.awaitCondition(() -> {
-			AMap<AString, ACell> current = engine.jobs().getJobData(
-				taskJobId, RequestContext.of(ALICE_DID));
-			observed.set(current);
-			return current != null && Job.isFinished(current);
-		}, 15000, () -> "task job did not finish; last record=" + observed.get());
-		AMap<AString, ACell> record = observed.get();
+		// Wait on the live task Job; once finished it is evicted from the cache
+		// and lives on as its lattice record, which is what is checked.
+		Job taskJob = engine.jobs().getJob(taskJobId, RequestContext.of(ALICE_DID));
+		if (taskJob != null) {
+			TestEngine.awaitJob(taskJob, Job::isFinished, 15000, () -> "task job did not finish");
+		}
+		AMap<AString, ACell> record = engine.jobs().getJobData(taskJobId, RequestContext.of(ALICE_DID));
 		assertNotNull(record, "task job record must exist");
 		assertEquals(Status.COMPLETE, RT.getIn(record, Fields.STATUS));
 		ACell jobTokens = RT.getIn(record, Fields.TOKENS);
@@ -1988,7 +1986,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "textctl-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
-		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(),
@@ -2032,7 +2030,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("stubborn-agent");
 		assertEquals(0, agent.getTasks().count(), "the yielded task must be removed");
-		TestEngine.awaitAgentIdle(agent, 10000);
+		AgentWatch.awaitIdle(engine, ALICE_DID, agent);
 		assertEquals(1, agent.getTimeline().count(), "the task ran exactly once");
 	}
 
@@ -2100,7 +2098,7 @@ public class LLMAgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("scoped-deny-agent");
-		TestEngine.awaitAgentStatus(agent, AgentState.SLEEPING, 2000);
+		AgentWatch.awaitStatus(engine, ALICE_DID, agent, AgentState.SLEEPING);
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
 			"a handled denial is not an agent failure — no suspension, no loop");
 	}
@@ -2171,7 +2169,7 @@ public class LLMAgentAdapterTest {
 		// still take its next one, so it is not suspended (AGENT_LOOP.md §3.4).
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("loop-agent");
-		TestEngine.awaitAgentIdle(agent, 5000);
+		AgentWatch.awaitIdle(engine, ALICE_DID, agent);
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
 			"giving up on a task leaves the agent running");
 		assertNull(agent.getError());

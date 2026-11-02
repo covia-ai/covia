@@ -251,21 +251,14 @@ public class VenueServerTest {
 		}
 	}
 
-	private void awaitClientStatus(Job job, AString expected, long timeoutMs) {
-		TestEngine.awaitCondition(() -> {
-			try {
-				covia.updateJobStatus(job);
-				return expected.equals(job.getStatus());
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new AssertionError("interrupted while polling remote job", e);
-			} catch (ExecutionException | TimeoutException e) {
-				return false;
-			} catch (RuntimeException e) {
-				return false;
-			}
-		}, timeoutMs, () -> "remote job did not reach " + expected
-			+ " (status=" + job.getStatus() + ")");
+	/** Waits for the venue's Job to reach {@code expected}, then has the client read it. */
+	private void awaitClientStatus(Job job, AString expected) throws Exception {
+		Job served = venue.jobs().getJob(job.getID());
+		assertNotNull(served, "the venue holds the started Job");
+		TestEngine.awaitJob(served, j -> expected.equals(j.getStatus()), 10_000,
+			() -> "venue job did not reach " + expected);
+		covia.updateJobStatus(job);
+		assertEquals(expected, job.getStatus());
 	}
 
 	@Test
@@ -699,9 +692,9 @@ public class VenueServerTest {
 		
 		// Start the operation via the client. Should start but not complete.
 		// The 201 record is whatever had committed when it was serialised, so
-		// the run is observed by polling rather than off that first snapshot.
+		// the run is observed on the venue's Job rather than off that first snapshot.
 		Job job = covia.startJob(TestOps.NEVER, input);
-		awaitClientStatus(job, Status.STARTED, 5000);
+		awaitClientStatus(job, Status.STARTED);
 		assertFalse(job.isFinished());
 	}
 	
@@ -716,7 +709,7 @@ public class VenueServerTest {
 		Job job=covia.startJob(TestOps.NEVER, input);
 
 		// Step 2: Read the durable status without relying on timing.
-		awaitClientStatus(job, Status.STARTED, 5000);
+		awaitClientStatus(job, Status.STARTED);
 
 		Blob jobId = job.getID();
 		assertNotNull(jobId, "Job ID should be returned");
@@ -751,7 +744,7 @@ public class VenueServerTest {
 	public void testPauseAndResumeNeverOp() throws Exception {
 		// Start a never-completing job
 		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, "pause test"));
-		awaitClientStatus(job, Status.STARTED, 5000);
+		awaitClientStatus(job, Status.STARTED);
 		String jobId = job.getID().toHexString();
 
 		// Pause the running job via API
@@ -776,7 +769,7 @@ public class VenueServerTest {
 	public void testPauseOpResumeViaAPI() throws Exception {
 		// Start the auto-pausing operation
 		Job job = covia.startJob(TestOps.PAUSE, Maps.of(Fields.MESSAGE, "pause op test"));
-		awaitClientStatus(job, Status.PAUSED, 5000);
+		awaitClientStatus(job, Status.PAUSED);
 		assertEquals(Status.PAUSED, job.getStatus(), "Pause op should auto-pause");
 		String jobId = job.getID().toHexString();
 
