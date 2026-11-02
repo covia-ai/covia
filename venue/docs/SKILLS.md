@@ -286,7 +286,7 @@ skill_load {
 }
 ```
 
-A `name` that matches nothing fails with a message naming the skills that ARE available, so an agent can correct itself from the error rather than guessing again. Exactly one of `name` / `ref`. `name` is an index lookup across the agent's effective sources (the configured skills and skillsets, plus what loaded skills contribute). A `ref` is accepted when that exact ref is in the effective index or is already loaded. Any other direct ref requires an explicit `skill/load` capability on that resource before Covia resolves it as trusted instructions. The ordinary skill metadata/content read checks still apply; load authority is not read authority. No session/frame in scope → diagnosable error, same rule as `context_load`.
+A `name` that matches nothing fails with a message naming the skills that ARE available, so an agent can correct itself from the error rather than guessing again. Exactly one of `name` / `ref`. `name` is an index lookup across the agent's effective sources (the configured skills and skillsets, plus what loaded skills contribute). A `ref` is accepted when that exact ref is in the effective index or is already loaded. Any other direct ref requires an explicit `skill/load` capability on that resource before Covia resolves it as trusted instructions. The ordinary skill metadata/content read checks still apply; load authority is not read authority. A loaded skill lasts as long as the conversation it was loaded in (AGENT_LOOP.md §3.6).
 
 ### 5.2 What loading does
 

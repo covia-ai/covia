@@ -631,42 +631,67 @@ contract, the banded section sequence, entry grammar, and the scope chain.
 
 ### 3.6 Tool Palette
 
-Agents declare their tools in `config.tools` — a curated list of
-operation paths and harness tool names. Zero tools by default — a bare
-chatbot just responds with text. Agents that want the built-in tool set
-opt in via `defaultTools: true`.
+Agents declare their tools in `config.tools`: operation references and
+harness tool names. With none, a bare chatbot answers with text.
+`defaultTools: true` adds a read-only pack (`v/ops/covia/inspect`, `read` and
+`list`).
 
 ```json
 "tools": ["v/ops/covia/read", "v/ops/covia/write", "subgoal", "compact"]
 ```
 
-Entries are either **operation paths** (resolved to LLM tool definitions
-from the asset metadata: name, description, parameters) or **harness tool
-names** (resolved to built-in tool definitions provided by the adapter).
+An operation reference becomes a tool definition from the operation's
+metadata (name, description, parameters); a harness tool name becomes the
+runtime's own definition.
 
 #### Harness tools
 
-All opt-in — include by name in `config.tools` if needed.
+A harness tool is run by the agent runtime itself rather than dispatched as
+an operation. This section defines them for both runtimes; GOAL_TREE.md
+describes goaltree's frame controls in use.
 
-| Tool | Purpose |
-|------|---------|
-| `subgoal` | Delegate a sub-task to an isolated child frame |
-| `complete` | Return structured result (auto-injected with typed outputs) |
-| `fail` | Report failure with structured error (auto-injected with typed outputs) |
-| `compact` | Archive conversation to a summary, freeing context space |
-| `context_load` | Pin workspace data in context across turns |
-| `context_unload` | Remove pinned data |
-| `more_tools` | Discover and add operations at runtime |
+| Tool | Runtime | Purpose |
+|------|---------|---------|
+| `complete_task`, `fail_task` | both | Resolve or fail the agent's task (§3.4.1) |
+| `context_load` | both | Pin workspace data, an asset or an operation's result in context across turns |
+| `context_unload` | both | Remove loads by the keys `context_load`, `skill_load` or `more_tools` returned |
+| `skill_load` | both | Load a skill: its instructions and its tools |
+| `more_tools` | both | Add operations as tools, as a load |
+| `invoke_tool` | both | Call a tool a load added after the initial tool list |
+| `compact` | both | Archive the conversation into a summary the agent writes, freeing context space |
+| `subgoal` | goaltree | Delegate a sub-task to a child frame |
+| `complete` | goaltree | End the frame with a result |
+| `fail` | goaltree | End the frame with a structured error |
 
-**Typed outputs:** When `config.outputs` is set, `complete` and `fail`
-are auto-injected with schema-enforced parameters — no need to list them in
-`tools`. The LLM's tool call arguments must match the declared schema (enforced
-by OpenAI `strictTools`). Text-only responses are rejected. Flattened: the
-entire tool input IS the result — `complete({field: val})`, not
+A frame is offered the harness tools listed in `config.tools`, and:
+
+| Tool | Also offered | Never offered |
+|------|--------------|---------------|
+| `complete_task`, `fail_task` | At the root frame, always; a call with no task outstanding is refused | In a child frame: the task is the root's |
+| `skill_load` | When the agent declares skills or skillsets | |
+| `context_unload` | When the agent declares skills or skillsets, or with `more_tools`, whose results are loads | |
+| `invoke_tool` | With `skill_load` or `more_tools`, which add tools later | |
+| `complete`, `fail` | At the root with typed outputs, with schema-typed parameters; in every child frame, untyped, since they are how a subgoal returns | |
+| `subgoal` | | In a frame at the depth limit: a stack holds the root and at most nine nested subgoals |
+
+**Only offered tools run.** A call to a harness tool the frame is not offered
+runs nothing and is answered as an unbound name (below); it is no barrier in
+its batch. The check is one lookup in the set of names the frame is sent.
+
+Loads made by `context_load`, `skill_load` and `more_tools` last as long as
+the conversation they were made in. A call with no stored session has a
+conversation of its own, so its loads last for that call.
+
+**Typed outputs:** When `config.outputs` is set, the root frame's `complete`
+and `fail` take schema-enforced parameters — no need to list them in `tools`.
+The LLM's tool call arguments must match the declared schema (enforced by
+OpenAI `strictTools`). Text-only responses are rejected. Flattened: the entire
+tool input IS the result — `complete({field: val})`, not
 `complete({result: {field: val}})`.
 
-**Auto-compact:** When conversation exceeds 20 turns and the agent has `compact`
-in its tool set, a system hint nudges the LLM to compact before context overflow.
+**Compaction nudge:** in goaltree, once a frame holds more than 20 live turns
+and is offered `compact`, the tail tells the model to compact. Both runtimes
+also warn on the context budget (AGENT_CONTEXT.md §3.4).
 
 #### Operation tools
 
@@ -686,8 +711,9 @@ they are not repeated in every provider-facing tool schema.
 
 #### Capability enforcement
 
-Tool calls are checked against the agent's `caps` before dispatch. Denied calls
-return an error listing the agent's actual capabilities. The system prompt
+The operation a tool call runs checks the agent's `caps` itself; the runtime
+has no name-keyed gate. A denied call returns an error listing the agent's
+actual capabilities. The system prompt
 includes a caps section so the LLM knows its boundaries upfront.
 
 See [UCAN.md](./UCAN.md) for the capability model.
@@ -697,9 +723,8 @@ See [UCAN.md](./UCAN.md) for the capability model.
 A reply may request several tool calls at once. The batch runs as ordered
 **waves** (`ToolCycleEngine`): ordinary operation calls that sit next to each
 other in the batch run **concurrently**, one virtual thread each, so a model's
-parallel reads and writes overlap instead of queueing; a harness tool
-(`complete`, `fail`, `subgoal`, `compact`, `context_load`/`unload`,
-`skill_load`, `more_tools`) is a **barrier** — it runs alone, on the loop
+parallel reads and writes overlap instead of queueing; a harness tool the
+frame is offered is a **barrier** — it runs alone, on the loop
 thread, after the wave before it has finished and before the wave after it
 starts, because it mutates the harness context or ends the cycle and its
 position in the batch is its meaning. Whatever order calls finish in, results
@@ -725,7 +750,8 @@ says why, and what would make it callable when that is certain:
 
 | Name | Answer |
 |---|---|
-| A harness tool of this runtime, through `invoke_tool` | Call it directly |
+| A harness tool of this runtime the frame is offered, through `invoke_tool` | Call it directly |
+| A harness tool of this runtime the frame is not offered | It is not among the tools offered here |
 | Another runtime's harness tool | Not available under this runtime |
 | Equal to a callable tool up to case and `-`/`_` | The callable name |
 | Provided by an advertised skill, with `skill_load` offered | `skill_load` one of the skills that provide it |
@@ -740,12 +766,11 @@ An operation reference is resolved once and dispatched as resolved.
 #### Additional tools
 
 Level 2 also passes through any **external MCP tools** configured for the agent
-(via `config.tools` or MCP server bindings). These are treated identically to
-default tools in the tool call loop — the LLM sees a flat list of all available
-tools regardless of source.
+(via `config.tools` or MCP server bindings). These are treated like any other
+tool in the tool call loop — the LLM sees a flat list of all available tools
+regardless of source.
 
 The agent creator controls the tool set:
-- Default tools are always present (cannot be removed)
 - External MCP tools are added via agent configuration
 - Capability-gated tools appear only when the agent has the required `caps`
 

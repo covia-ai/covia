@@ -791,7 +791,7 @@ What the budget does, and nothing else:
 |----------|-----------|
 | any | per-entry render sizing: a structured entry is capped at a twentieth of what remains when it renders (§5.3) |
 | ≥ 70% | the tail carries one line — `[Context budget]`; it names exact `loaded_context` keys only when agent-managed entries exist, otherwise says the persistent material is pinned |
-| ≥ 90% | the line says compaction is required before further work; the harness offers `compact` |
+| ≥ 90% | the line says compaction is required before further work: to use `compact` when the agent is offered it, otherwise that it has none |
 | over | the prompt is sent anyway; if the provider rejects it the cycle fails with the size and the remedy (`agent:context`, `context_unload`, `compact`) |
 
 **Never silent.** Byte accounting is not a token bound across providers, so the runtime never removes or rewrites context on its own authority. A soft `context_unload` prevents future use but cannot reclaim already rendered bytes; explicit compaction or reset does that. An inventory of what is loaded does not belong in every prompt either: it restates the events already rendered and its byte counts would change every inference.
@@ -945,7 +945,7 @@ context and never needs `context_unload`.
 
 A loads entry is `key → spec`. By default the key **is** the entry's source — a lattice path, an asset, a content ref — and the spec carries only modifiers. A spec may instead declare exactly one of `ref`, `text`, `op` + `input`, or `job` + `path`, in which case the key is its identity. Ownership, not map shape or age, decides whether that identity is unloadable.
 
-Only agent-managed elements expose an **unload key**, in the `loaded_context` result map or a loaded-skill header. `context_unload` accepts one exact key or a `paths` array of exact keys. It rejects display labels, ordinary tool arguments, and pinned keys; it never manufactures a mask over pinned context. The base tool remains present whenever the scope has a writable tier, including while that tier is empty, so loading or unloading context does not mutate section 0.
+Only agent-managed elements expose an **unload key**, in the `loaded_context` result map or a loaded-skill header. `context_unload` accepts one exact key or a `paths` array of exact keys. It rejects display labels, ordinary tool arguments, and pinned keys; it never manufactures a mask over pinned context. The base tool remains present while it is offered (AGENT_LOOP.md §3.6), including while the frame holds no loads, so loading or unloading context does not mutate section 0.
 
 A successful soft unload appends a compact state event listing the affected keys and any skill/tool deactivations; it never repeats their content. When the agent called `context_unload`, its persisted tool result is that event. An owner-initiated change uses an attributed system event. Folding the newest event for a key determines whether it is active, while the prior bytes remain honest history until compaction or reset.
 
@@ -1141,7 +1141,7 @@ inner child frames. Rules:
 - **Unload is ownership-safe:** only an agent-managed entry in the innermost writable tier can be removed. Removing a local shadow reveals any pinned outer entry. Pinned entries cannot be hidden with `context_unload`.
 - **Frames read config, never mutate it** — one writer per durable frame.
 - **Budgets are advisory** — never a basis for silent eviction.
-- **No session in scope → no writable tier**: `context_load`/`unload` fail with a diagnosable result.
+- **Loads live in the conversation they were made in.** A run with no stored session has a conversation for the call, so its loads last for that call.
 
 The chain is resolved when initial context is rendered. Later loads and reloads
 resolve only their requested keys and append results to `frame.conversation`.
@@ -1236,6 +1236,7 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 | Frame rendering, observation state, compaction and turn normalisation (§5.6) | `GoalTreeContext`, `ConversationRenderer` |
 | Current conversation selection for active and ancestor rendering (§5.6) | `GoalTreeContext.activeConversation` |
 | Skills index and skill elements | `Skills` |
+| One frame's shared harness tools and the loads they write (AGENT_LOOP.md §3.6) | `FrameTools`, `HarnessTools` |
 | Authority and the model setup: `capsContext`, `modelSetup` | `AbstractLLMAdapter` |
 | The edge (§3.5): system normalisation, cache marks and native tool-state events | `LangChainAdapter` |
 | llmagent spec | `LLMAgentAdapter` |

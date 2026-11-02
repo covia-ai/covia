@@ -37,8 +37,9 @@ import covia.venue.RequestContext;
  * {@code tools} (strict allowlist, #92). {@code defaultTools: true} adds the
  * deliberately minimal read-only pack in
  * {@link ToolPalette#DEFAULT_TOOL_OPS}; capability tools arrive via skills
- * ({@code skill_load}). Task tools ({@code complete_task}, {@code fail_task})
- * are added dynamically when tasks are pending.</p>
+ * ({@code skill_load}). The task tools ({@code complete_task},
+ * {@code fail_task}) are always offered; which harness tools are offered,
+ * and that only those run, is AGENT_LOOP.md §3.6.</p>
  *
  * <p>Additional tools can be configured via {@code tools} in the agent's config.
  * Each entry is a string (operation name) or map with {@code operation} plus optional
@@ -112,8 +113,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			+ "invokes a level 3 grid operation for LLM calls. Supports tool call "
 			+ "loops: when the LLM requests tool calls, executes them as grid "
 			+ "operations and feeds results back until a text response is produced. "
-			+ "Built-in tools: complete_task, fail_task (added dynamically when "
-			+ "tasks are pending). All other tools dispatch via the grid.";
+			+ "Built-in tools: complete_task and fail_task, which resolve the "
+			+ "agent's task. All other tools dispatch via the grid.";
 	}
 
 	@Override

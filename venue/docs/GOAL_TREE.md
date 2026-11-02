@@ -172,33 +172,16 @@ Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B,
 
 ## Harness Tools
 
-Six shared controls and four goal-tree controls are configurable through
-`config.tools` alongside operation paths (`HarnessTools.offered`). A bare
-chatbot gets only the stable `complete_task` / `fail_task` task boundary; their
-handlers return a scoped error when no task is outstanding. Declared skills
-imply stable `skill_load`, `context_unload` and `invoke_tool` definitions.
-`invoke_tool` is the portable dispatcher for exact definitions appended later
-by `skill_load` or `more_tools`; providers with native tool-state events may map
-the same stored state directly. Typed outputs additionally inject `complete` /
-`fail`.
+The harness tools, which frames are offered which, and how a call to one is
+answered are defined in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette).
+Goal-tree adds three frame controls to the tools both runtimes share:
+`subgoal`, `complete` and `fail`. A child frame is always offered `complete`
+and `fail`, and `subgoal` until the depth limit; the task tools stay with the
+root.
 
 ```json5
 "tools": ["subgoal", "compact", "more_tools", "v/ops/covia/read"]
 ```
-
-| Name | Runtime | Purpose |
-|------|---------|---------|
-| `context_load` | shared | Pin a lattice path in context across turns |
-| `context_unload` | shared | Remove exact agent-managed load keys returned by `context_load`, `skill_load` or `more_tools` |
-| `skill_load` | shared | Load a skill from the index (implied by declared skills) |
-| `more_tools` | shared | Create a persistent tool-only load from operation paths; remove it by its returned key with `context_unload` |
-| `invoke_tool` | shared | Invoke an operation introduced by a later tool-addition event (automatically implied where needed) |
-| `complete_task` | shared task boundary | Resolve the in-scope caller task; stable definition, scoped at execution |
-| `fail_task` | shared task boundary | Fail the in-scope caller task; stable definition, scoped at execution |
-| `subgoal` | goaltree | Delegate work to an isolated child frame |
-| `complete` | goaltree | Return a structured result (auto-injected with typed outputs) |
-| `fail` | goaltree | Report failure with a structured error (auto-injected with typed outputs) |
-| `compact` | shared | Replace visible conversation with assistant memory while retaining the exact old vector |
 
 ### Typed outputs auto-inject complete/fail
 
@@ -370,7 +353,7 @@ The root frame is session-scoped, not transition-scoped. It is created when the 
 
 The root frame never calls `complete` in normal chat flow — chat sessions run indefinitely. Bracketing per question happens via `compact`.
 
-**If `complete` is called at chat-root (mis-use):** the harness treats it as an implicit compact with the result as summary, appends the compact segment to the root conversation, and continues the session. The session is not terminated by a stray `complete`. This keeps the agent resilient to LLM confusion between "end this subgoal" and "end the session" — the agent can't accidentally close a chat. (For agents that *should* terminate on `complete`, the caller is invoking one-shot style — the one-shot path below.)
+**If `complete` is called at the root:** it ends the cycle, not the session. Its arguments are the cycle's answer: the reply to the message, or the result of a task the agent has not resolved itself. The next message opens a new cycle in the same root frame.
 
 ### One-shot invocations (short-lived)
 
@@ -398,7 +381,7 @@ This means every frame terminates on either an explicit `complete`/`fail` tool c
 
 ## Nesting
 
-`subgoal` nests naturally. Each call adds a frame. Each `complete` (or text-only response) pops one:
+`subgoal` nests naturally. Each call adds a frame. Each `complete` (or text-only response) pops one. A stack holds the root and at most nine nested subgoals (`MAX_SUBGOAL_DEPTH`); the frame at the limit is not offered `subgoal`, so it must complete or fail:
 
 ```
 Parent calls: subgoal("Research all vendors")
@@ -723,7 +706,7 @@ As goals get more complex, the agent can opt into more tools:
 9. **Loads are lexically scoped.** Children inherit parent loads. Shadowing supported. Pop restores parent's version.
 10. **Four scoped namespaces, distinct lifetimes.** `w/` (user, permanent), `n/` (agent, permanent), `c/` (session, cross-turn), `t/` (Job, per-transition). Agents pick the tightest scope that fits. `t/` is shared across subgoals within a transition but resets between transitions; cross-turn memory goes in `c/`.
 11. **Sequential execution.** `subgoal` blocks the parent. Later children see earlier results in ancestor context.
-12. **Nesting is natural.** A child can call `subgoal`. The stack grows. Each `complete` pops one frame.
+12. **Nesting is natural.** A child can call `subgoal`, up to the depth limit. The stack grows. Each `complete` pops one frame.
 13. **Session IS a root frame.** Root frame is created at session creation and persists for the session's life. Transitions append to it; they do not rebuild it. Chat sessions never `complete` the root; one-shot invocations do.
 14. **The frame stack is the session's conversation record.** `sessions/<sid>/frames[0].conversation` holds everything — user turns, assistant turns, tool calls, tool results, segments, and child-frame references. There is no `session.history` field, no per-adapter transcript, no debug snapshot on failure; the full stack on the lattice is the only record.
 15. **Text-only = implicit complete.** Natural LLM API contract. No bouncing.

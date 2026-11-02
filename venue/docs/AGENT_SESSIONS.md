@@ -642,7 +642,7 @@ The chat adapter is parameterised by two flags:
 
 Flat + persistent is a chatbot. Framed + persistent is a durable goal history across completed attempts. Framed + non-persistent is a one-shot decomposition.
 
-Harness tools (`more_tools`, `context_load`, `context_unload`, `compact`, typed `complete`/`fail`) use the same shared registry and conversation representation. Only hierarchy controls such as `subgoal` depend on multi-frame mode.
+Harness tools are defined in [AGENT_LOOP.md §3.6](./AGENT_LOOP.md#36-tool-palette). Both runtimes share their implementation and the conversation representation; only goaltree's frame controls (`subgoal`, `complete`, `fail`) depend on multi-frame mode.
 
 ---
 

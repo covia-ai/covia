@@ -27,6 +27,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `agent:context` and `agent:step` fail with the reason when the agent's `llmOperation`, or its model's provider, does not resolve.
 - A suspended agent keeps its queued work; waiting jobs say it is suspended, and the work runs after `agent:resume`.
 - Cancelling an `agent:request` job takes its task out of the agent's queue.
+- An agent can call only the harness tools it is offered; any other is answered as not offered.
+- Goal-tree subgoals nest, up to nine below the root, and every subgoal can return with `complete` or `fail`; only the root resolves the task.
+- Context, skill and tool loads work in a call with no session, and last for that call.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.
@@ -75,7 +78,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
-- A goal-tree subgoal whose model call fails, or that nests too deep, reaches its parent as a failed subgoal (`{status: "failed", result}`), and a failed child leaves the frame stack.
+- A goal-tree subgoal whose model call fails reaches its parent as a failed subgoal (`{status: "failed", result}`), and a failed child leaves the frame stack.
 - `agent:context` and `agent:step` on an `llmagent` agent show a task's request turn, as the live cycle sends it.
 - Cancel, pause, resume and messages by id reach a just-submitted job.
 - REST errors share one body: RFC 9457 problem details (`application/problem+json`), with `error` repeating `detail` (COG-21).
