@@ -248,11 +248,9 @@ When the agent calls `compact`:
 
 Repeated compaction nests the earlier segment together with the newer turns. This bounds the provider-visible representation without changing or duplicating the audit history. The segment renders as an `assistant` message: an agent-written summary may describe untrusted tool data and must not acquire system authority merely because it was persisted.
 
-The `summary` parameter is required — only the LLM knows what matters in the work done so far. The harness prompts when compaction is needed but the agent writes the summary:
+The `summary` parameter is required — only the LLM knows what matters in the work done so far. The harness prompts when compaction is needed but the agent writes the summary.
 
-**Auto-compact nudge (current):** When live turn count exceeds `AUTO_COMPACT_THRESHOLD` (20) and the agent has `compact` in its tool set, the harness adds a line to the tail: "Your conversation has N turns. Call compact(summary) now to free context space before continuing." The LLM decides whether to compact.
-
-Both runtimes also use the byte-budget thresholds of AGENT_CONTEXT.md §3.4: a warning at 70%, escalating at 90% when `compact` is available. There is no hard truncation: if the agent ignores the warning and the provider rejects the prompt, the cycle fails loudly. The runtime never removes context on its own authority.
+The prompt is the byte-budget warning of AGENT_CONTEXT.md §3.4, the same in both runtimes: a warning at 70%, escalating at 90% to name `compact` when it is offered. There is no hard truncation: if the agent ignores the warning and the provider rejects the prompt, the cycle fails loudly. The runtime never removes context on its own authority.
 
 The compacted-segment encoding is part of the single durable context-state
 contract in

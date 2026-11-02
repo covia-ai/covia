@@ -643,7 +643,7 @@ duplicate.
 | 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
 | 10 | Changed watched context | append-only conversation | `system` or `assistant` / `tool` | A new observation for a `volatile` declaration, emitted only when its canonical rendered value differs (§5.5) |
 | 11 | Budget warning | inference tail | `system` | **Only** when the budget is under pressure (§3.4) |
-| 12 | Runtime notice | inference tail | `system` | The runtime's word on this turn: goal-tree's compaction nudge, and, on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
+| 12 | Runtime notice | inference tail | `system` | The runtime's word on this turn: on a conversational turn with tools (no task, not a subgoal, no typed outputs), how it is answered — the final message is the reply, so text beside a tool call reaches no one |
 | 13 | Current date | inference tail | `system` | One line; changes daily |
 | 14 | Unavailable tools | inference tail | `system` | Configured tools that did not resolve this cycle |
 | 15 | Outstanding task | inference tail | `user` | The task the agent must complete or fail — the last thing before the reply |
@@ -689,7 +689,7 @@ Only notices and the outstanding task are rendered there. A volatile
 declaration opts into a pre-inference observation; its value becomes durable
 conversation only on a canonical change. Nothing else is made fresh implicitly.
 
-**Warnings are never conversation.** The budget warning, the compaction nudge, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
+**Warnings are never conversation.** The budget warning, the reply notice, the date and the unavailable-tools notice describe the state of *this inference*. They belong in the tail, render once, and vanish when the condition does. A warning written into the conversation would be re-read on every later inference as though it were still true.
 
 ### 3.2.3 Tool definitions
 

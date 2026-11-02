@@ -81,13 +81,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	static final int MAX_SUBGOAL_DEPTH = 10;
 
-	/** Live turn count above which the auto-compact nudge fires */
-	static final int AUTO_COMPACT_THRESHOLD = 20;
-
 	static final String TOOL_SUBGOAL        = "subgoal";
 	static final String TOOL_COMPLETE       = "complete";
 	static final String TOOL_FAIL           = "fail";
-	static final String TOOL_COMPACT        = HarnessTools.COMPACT;
 
 	// ========== Harness tool definitions ==========
 
@@ -1044,7 +1040,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * The Spec one inference of a frame assembles from — rebuilt before every
 	 * call: appended persistent loads skipped, watched loads resolved under the
 	 * agent's authority and atomically observed, the frame stack (ancestors compacted, the
-	 * active frame in full), the compaction nudge once the frame has grown.
+	 * active frame in full).
 	 */
 	@SuppressWarnings("unchecked")
 	private ContextAssembler.Spec inferenceSpec(FrameToolContext frameTools,
@@ -1058,11 +1054,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		frameTools.baseToolEnd = Math.toIntExact(frameTools.baseToolStart + frameTools.baseTools.count());
 		frameTools.offered = ToolPalette.names(fixedTools);
 		Loads.Snapshot loads = frameTools.refreshLoadSnapshot();
-		long liveTurns = GoalTreeContext.countLiveTurns(frameTools.activeFrame);
-		String notice = (liveTurns > AUTO_COMPACT_THRESHOLD && hasCompactTool(harnessForFrame))
-			? "Your conversation has " + liveTurns
-				+ " turns. Call compact(summary) now to free context space before continuing."
-			: null;
 		ContextAssembler.Spec base = frameTools.cycleSpec
 			.forFrame(frameL3Config, (frameTools.frameIndex > 0) ? CHILD_FRAME_NOTICE : null)
 			.withFrames(stack);
@@ -1074,7 +1065,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		boolean replying = root && task == null && frameTools.cycle.typedRootHarnessTools() == null;
 		ContextAssembler.Spec inference = base
 			.withLoads(loads, concatTools(fixedTools, loads.tools()))
-			.withNotice(ContextAssembler.withReplyNotice(notice, replying))
+			.withNotice(replying ? ContextAssembler.REPLY_NOTICE : null)
 			.withTask(task);
 		if (!frameTools.store.observe(frameTools.frameIndex,
 				ContextAssembler.observations(inference, loads),
@@ -1214,11 +1205,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	// ========== Helpers ==========
-
-	/** Returns true if the tool set includes the compact tool. */
-	private static boolean hasCompactTool(AVector<ACell> tools) {
-		return hasToolNamed(tools, TOOL_COMPACT);
-	}
 
 	/** Returns true if the tool set includes a definition with the given name. */
 	private static boolean hasToolNamed(AVector<ACell> tools, String toolName) {

@@ -30,6 +30,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - An agent can call only the harness tools it is offered; any other is answered as not offered.
 - Goal-tree subgoals nest, up to nine below the root, and every subgoal can return with `complete` or `fail`; only the root resolves the task.
 - Context, skill and tool loads work in a call with no session, and last for that call.
+- Goal-tree agents are no longer told to compact after 20 turns; in both runtimes the context-budget warning alone prompts compaction.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.
