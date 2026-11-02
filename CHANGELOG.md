@@ -75,7 +75,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
-- A goal-tree subgoal whose model call fails reaches its parent as a failed subgoal and leaves the frame stack.
+- A goal-tree subgoal whose model call fails, or that nests too deep, reaches its parent as a failed subgoal (`{status: "failed", result}`), and a failed child leaves the frame stack.
+- `agent:context` and `agent:step` on an `llmagent` agent show a task's request turn, as the live cycle sends it.
 - Cancel, pause, resume and messages by id reach a just-submitted job.
 - REST errors share one body: RFC 9457 problem details (`application/problem+json`), with `error` repeating `detail` (COG-21).
 - Cancelling a finished job answers its record, even once it has left memory.
