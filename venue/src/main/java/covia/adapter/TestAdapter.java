@@ -1164,13 +1164,36 @@ public class TestAdapter extends AAdapter {
     }
 
     /**
-     * Test LLM that calls the never-completing op v/test/ops/never as its
-     * first tool call — with a short toolCallTimeoutMs the dispatch blocks
-     * for a deterministic window, letting tests observe mid-run lattice state
-     * (dangling toolCall, inCycle claim, live frames). After the tool result
-     * (a timeout error) arrives: returns text, or — {@code failAfterTool} —
-     * signals the caller to fail the L3 call (scripted mid-cycle failure).
-     * Returns null in the fail case.
+     * The blocking tool call the {@code nevertoolllm}, {@code neverfailllm}
+     * and {@code subgoalllm} test LLMs make, keeping the frame loop inside
+     * the tool dispatch so tests can observe mid-run lattice state. With a
+     * {@code hold:<gate>} model it calls {@code v/test/ops/hold}, which
+     * finishes when the test releases that {@link TestGate}; otherwise
+     * {@code v/test/ops/never}, which only the agent's
+     * {@code toolCallTimeoutMs} ends.
+     */
+    private static AMap<AString, ACell> blockingToolCall(String id, ACell input) {
+        AString model = RT.ensureString(RT.getIn(input, Fields.MODEL));
+        String name = "v/test/ops/never";
+        ACell arguments = Strings.create("{}");
+        if (model != null && model.toString().startsWith("hold:")) {
+            name = "v/test/ops/hold";
+            arguments = Maps.of("gate", model.toString().substring(5), Fields.RESULT, "released");
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create(id),
+                "name", Strings.create(name),
+                "arguments", arguments
+            )));
+    }
+
+    /**
+     * Test LLM whose first turn makes the {@link #blockingToolCall}. After the
+     * tool result arrives: returns text, or — {@code failAfterTool} — signals
+     * the caller to fail the L3 call (scripted mid-cycle failure). Returns
+     * null in the fail case.
      */
     private ACell handleNeverToolLlm(ACell input, boolean failAfterTool) {
         if (hasToolResultMessage(input)) {
@@ -1179,22 +1202,16 @@ public class TestAdapter extends AAdapter {
                 "role", Strings.create("assistant"),
                 "content", Strings.create("gave up on the slow tool"));
         }
-        return Maps.of(
-            "role", Strings.create("assistant"),
-            "toolCalls", Vectors.of(Maps.of(
-                "id", Strings.create("call_never"),
-                "name", Strings.create("v/test/ops/never"),
-                "arguments", Strings.create("{}")
-            )));
+        return blockingToolCall("call_never", input);
     }
 
     /**
      * Test LLM for subgoal recursion with an observable mid-run window: the
      * ROOT frame's first turn issues a subgoal; the CHILD frame (recognised
-     * by its goal text) calls the never op (blocking for toolCallTimeoutMs),
-     * then completes with text; the root then completes on seeing the
-     * subgoal's tool result. Drives push → live child frame (with callId)
-     * → atomic pop, all observable on the lattice during the block.
+     * by its goal text) makes the {@link #blockingToolCall}, then completes
+     * with text; the root then completes on seeing the subgoal's tool
+     * result. Drives push → live child frame (with callId) → atomic pop,
+     * all observable on the lattice during the block.
      */
     @SuppressWarnings("unchecked")
     private ACell handleSubgoalLlm(ACell input) {
@@ -1215,15 +1232,7 @@ public class TestAdapter extends AAdapter {
                 "role", Strings.create("assistant"),
                 "content", Strings.create(inChild ? "sub done" : "root done"));
         }
-        if (inChild) {
-            return Maps.of(
-                "role", Strings.create("assistant"),
-                "toolCalls", Vectors.of(Maps.of(
-                    "id", Strings.create("call_child_never"),
-                    "name", Strings.create("v/test/ops/never"),
-                    "arguments", Strings.create("{}")
-                )));
-        }
+        if (inChild) return blockingToolCall("call_child_never", input);
         return Maps.of(
             "role", Strings.create("assistant"),
             "toolCalls", Vectors.of(Maps.of(

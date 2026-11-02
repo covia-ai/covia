@@ -1,6 +1,6 @@
 {
 	"name": "Test subgoalllm",
-	"description": "Test LLM driving subgoal recursion with an observable window: root issues a subgoal; the child calls v/test/ops/never (blocking), then completes; the root completes on the subgoal result.",
+	"description": "Test LLM driving subgoal recursion with an observable window: root issues a subgoal; the child makes a blocking tool call (v/test/ops/hold at the gate a 'hold:<gate>' model names, else v/test/ops/never), then completes; the root completes on the subgoal result.",
 	"dateCreated": "2026-07-14T00:00:00Z",
 	"operation": {
 		"adapter": "test:subgoalllm",
@@ -13,6 +13,10 @@
 				},
 				"tools": {
 					"type": "array"
+				},
+				"model": {
+					"type": "string",
+					"description": "'hold:<gate>' to block at that test gate instead of calling v/test/ops/never"
 				}
 			}
 		},

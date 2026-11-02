@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -30,6 +31,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.NotSupportedException;
 import covia.venue.Engine;
@@ -103,10 +105,8 @@ public class ToolCycleEngineTest {
 				return ok("ran " + c.id());
 			});
 		Sink sink = new Sink();
-		long started = System.nanoTime();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			Vectors.of(call("a", "op"), call("b", "op"), call("c", "op")), 0, registry, new Object(), sink, log);
-		long millis = (System.nanoTime() - started) / 1_000_000;
 
 		assertFalse(batch.isTerminal());
 		assertFalse(batch.aborted());
@@ -114,7 +114,6 @@ public class ToolCycleEngineTest {
 		for (AMap<AString, ACell> m : sink.messages) {
 			assertEquals("ran " + id(m), content(m), "every call passed the barrier");
 		}
-		assertTrue(millis < 4000, "the wave must not have serialised (took " + millis + "ms)");
 	}
 
 	@Test
@@ -144,12 +143,16 @@ public class ToolCycleEngineTest {
 	public void testHarnessToolIsAnOrderedBarrier() throws Exception {
 		// [op1, op2, control, op3]: the operation wave before the control tool
 		// finishes before it runs, and the one after it does not start until
-		// it has returned — the control tool keeps its position.
+		// it has returned — the control tool keeps its position. The test holds
+		// the first wave open with both calls in flight, so a control tool that
+		// did not wait for it would run while it is held.
 		ConcurrentLinkedQueue<String> events = new ConcurrentLinkedQueue<>();
-		Thread caller = Thread.currentThread();
+		CountDownLatch waveStarted = new CountDownLatch(2);
+		CountDownLatch releaseWave = new CountDownLatch(1);
+		CompletableFuture<Thread> caller = new CompletableFuture<>();
 		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
 			.register(CONTROL, (c, ctx) -> {
-				assertSame(caller, Thread.currentThread(), "harness tools run on the calling thread");
+				assertSame(caller.getNow(null), Thread.currentThread(), "harness tools run on the calling thread");
 				events.add("control");
 				return ToolCycleEngine.ToolOutcome.result(Strings.create("loaded"), Vectors.of(
 					Maps.of(AbstractLLMAdapter.K_ROLE, AbstractLLMAdapter.ROLE_SYSTEM,
@@ -157,14 +160,32 @@ public class ToolCycleEngineTest {
 			})
 			.fallback((c, ctx) -> {
 				events.add(c.id() + ":start");
-				Thread.sleep(50);
+				if (!"3".equals(c.id().toString())) {
+					waveStarted.countDown();
+					assertTrue(releaseWave.await(10, TimeUnit.SECONDS), "the test releases the first wave");
+				}
 				events.add(c.id() + ":end");
 				return ok("ran");
 			});
 		Sink sink = new Sink();
-		ToolCycleEngine.executeBatch(
-			Vectors.of(call("1", "op"), call("2", "op"), call("ctl", CONTROL), call("3", "op")),
-			0, registry, new Object(), sink, log);
+		CompletableFuture<ToolCycleEngine.BatchResult> batch = new CompletableFuture<>();
+		Thread.ofVirtual().start(() -> {
+			caller.complete(Thread.currentThread());
+			try {
+				batch.complete(ToolCycleEngine.executeBatch(
+					Vectors.of(call("1", "op"), call("2", "op"), call("ctl", CONTROL), call("3", "op")),
+					0, registry, new Object(), sink, log));
+			} catch (Throwable t) {
+				batch.completeExceptionally(t);
+			}
+		});
+		try {
+			assertTrue(waveStarted.await(10, TimeUnit.SECONDS), "both calls of the first wave are in flight");
+			assertFalse(events.contains("control"), "the control tool waits for the wave: " + events);
+		} finally {
+			releaseWave.countDown();
+		}
+		batch.get(10, TimeUnit.SECONDS);
 
 		List<String> seq = new ArrayList<>(events);
 		int control = seq.indexOf("control");
@@ -297,43 +318,64 @@ public class ToolCycleEngineTest {
 	// ========== end to end: a real batch through agent:step ==========
 
 	@Test
-	public void testStepRunsAParallelBatchConcurrently() {
-		// Two 400ms delays requested in one reply: sequential execution takes
-		// at least 800ms, concurrent about 400ms. The per-call ms in the step
-		// result still reports each call's own wall clock.
+	public void testStepRunsAParallelBatchConcurrently() throws Exception {
+		// Two held calls requested in one reply, each at its own gate: both
+		// reach their gates before either is released, which a batch run one
+		// call at a time could never do. The per-call ms in the step result
+		// still reports each call's own wall clock: at least the span the test
+		// saw it held, at most the whole step.
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "parallel-step-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/llm",
 					"systemPrompt", "You step.",
-					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/delay")))),
+					Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/hold")))),
 			RequestContext.of(did)).awaitResult(5000);
 
-		AMap<AString, ACell> delayed = Maps.of(
-			Fields.OPERATION, Strings.create("v/test/ops/echo"),
-			Fields.DELAY, CVMLong.create(400),
-			Fields.INPUT, Maps.of(Strings.create("x"), CVMLong.create(1)));
+		String[] gateNames = {"parallel-step-d1-" + did, "parallel-step-d2-" + did};
+		long[] heldSince = new long[2];
+		long released;
 		long started = System.nanoTime();
-		AMap<AString, ACell> stepped = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/step",
-			Maps.of(Fields.AGENT_ID, "parallel-step-agent", Fields.MESSAGE, "wait twice",
-				"assistant", Maps.of("content", "Waiting.", "toolCalls", Vectors.of(
-					Maps.of("id", "d1", "name", "test_delay", "arguments", delayed),
-					Maps.of("id", "d2", "name", "test_delay", "arguments", delayed)))),
-			RequestContext.of(did)).awaitResult(10000));
+		AMap<AString, ACell> stepped;
+		try (TestAdapter.TestGate d1 = TestAdapter.createGate(gateNames[0]);
+				TestAdapter.TestGate d2 = TestAdapter.createGate(gateNames[1])) {
+			// agent:step runs on the invoking thread, so it gets one of its own.
+			CompletableFuture<ACell> step = CompletableFuture.supplyAsync(() -> engine.jobs().invokeOperation(
+				"v/ops/agent/step",
+				Maps.of(Fields.AGENT_ID, "parallel-step-agent", Fields.MESSAGE, "wait twice",
+					"assistant", Maps.of("content", "Waiting.", "toolCalls", Vectors.of(
+						Maps.of("id", "d1", "name", "test_hold", "arguments", held(gateNames[0])),
+						Maps.of("id", "d2", "name", "test_hold", "arguments", held(gateNames[1]))))),
+				RequestContext.of(did)).awaitResult(10000), r -> Thread.ofVirtual().start(r));
+			assertTrue(d1.awaitEntered(10, TimeUnit.SECONDS), "d1 reaches its gate");
+			heldSince[0] = System.nanoTime();
+			assertTrue(d2.awaitEntered(10, TimeUnit.SECONDS), "d2 reaches its gate while d1 is held");
+			heldSince[1] = System.nanoTime();
+			released = System.nanoTime();
+			d1.release();
+			d2.release();
+			stepped = RT.ensureMap(step.get(10, TimeUnit.SECONDS));
+		}
 		long millis = (System.nanoTime() - started) / 1_000_000;
 
 		AVector<ACell> calls = RT.ensureVector(stepped.get(Strings.intern("calls")));
 		assertNotNull(calls, stepped.toString());
 		assertEquals(2, calls.count());
-		for (long i = 0; i < calls.count(); i++) {
+		for (int i = 0; i < calls.count(); i++) {
 			assertNull(RT.getIn(calls.get(i), "isError"), calls.get(i).toString());
 			assertEquals(CVMLong.create(1), RT.getIn(calls.get(i), "result", "x"));
 			long ms = RT.ensureLong(RT.getIn(calls.get(i), "ms")).longValue();
-			assertTrue(ms >= 350, "each call reports its own wall clock: " + ms);
+			long heldMs = (released - heldSince[i]) / 1_000_000;
+			assertTrue(ms >= heldMs && ms <= millis,
+				"each call reports its own wall clock: " + ms + "ms, held " + heldMs + "ms, step " + millis + "ms");
 		}
 		assertEquals("d1", RT.getIn(calls.get(0), "id").toString());
 		assertEquals("d2", RT.getIn(calls.get(1), "id").toString());
-		assertTrue(millis < 750, "two 400ms calls must overlap, took " + millis + "ms");
+	}
+
+	/** {@code v/test/ops/hold} arguments: wait at the gate, then return {@code {x: 1}}. */
+	private static AMap<AString, ACell> held(String gate) {
+		return Maps.of("gate", gate, Fields.RESULT, Maps.of(Strings.create("x"), CVMLong.create(1)));
 	}
 }
