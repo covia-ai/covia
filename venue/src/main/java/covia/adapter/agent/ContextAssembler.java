@@ -105,12 +105,6 @@ public final class ContextAssembler {
 		+ "write alongside a tool call is not shown to the reader, so put your whole answer in that final "
 		+ "message rather than referring back to earlier text.";
 
-	/** {@code notice} with the {@link #REPLY_NOTICE} after it, when {@code replying}. */
-	static String withReplyNotice(String notice, boolean replying) {
-		if (!replying) return notice;
-		return (notice == null) ? REPLY_NOTICE : notice + "\n\n" + REPLY_NOTICE;
-	}
-
 	/**
 	 * The cache bands of §3.1. A mark records where a band ends. The
 	 * conversation band carries two: where the cycle began ({@code CONVERSATION})

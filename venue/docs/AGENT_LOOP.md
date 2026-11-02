@@ -689,9 +689,8 @@ OpenAI `strictTools`). Text-only responses are rejected. Flattened: the entire
 tool input IS the result — `complete({field: val})`, not
 `complete({result: {field: val}})`.
 
-**Compaction nudge:** in goaltree, once a frame holds more than 20 live turns
-and is offered `compact`, the tail tells the model to compact. Both runtimes
-also warn on the context budget (AGENT_CONTEXT.md §3.4).
+**Compaction:** the agent decides when to `compact`. Both runtimes prompt it
+only through the context-budget warning (AGENT_CONTEXT.md §3.4).
 
 #### Operation tools
 

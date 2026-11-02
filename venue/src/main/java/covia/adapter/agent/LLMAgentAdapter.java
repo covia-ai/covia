@@ -270,7 +270,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> tools = concatTools(p.fixedTools(), loads.tools());
 		next = next
 			.withLoads(loads, tools)
-			.withNotice(ContextAssembler.withReplyNotice(null, replying(task, tools)))
+			.withNotice(replyNotice(task, tools))
 			.withTask(task);
 		next = observeStep(next, loads, compacted);
 		return new Step(reply, turns, sink, batch.terminalStatus(), batch.terminalValue(), null, next).report();
@@ -535,7 +535,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.withLoads(loads, tools)
 				.withFrames(frames)
 				.withToolLoop(Vectors.empty())
-				.withNotice(ContextAssembler.withReplyNotice(null, replying(taskMessage, tools)))
+				.withNotice(replyNotice(taskMessage, tools))
 				.withTask(taskMessage);
 			if (!frameTools.store.observe(0, ContextAssembler.observations(inference, loads),
 					convex.core.util.Utils.getCurrentTimestamp())) {
@@ -703,12 +703,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	/**
-	 * Whether this turn is answered by its final message: a conversation, not
-	 * a task (whose message says to resolve it with complete_task), and only
-	 * where there are tools to write text alongside.
+	 * The reply notice when this turn is answered by its final message: a
+	 * conversation, not a task (whose message says to resolve it with
+	 * complete_task), and only where there are tools to write text alongside.
 	 */
-	private static boolean replying(ACell task, AVector<ACell> tools) {
-		return task == null && tools != null && !tools.isEmpty();
+	private static String replyNotice(ACell task, AVector<ACell> tools) {
+		return (task == null && tools != null && !tools.isEmpty()) ? ContextAssembler.REPLY_NOTICE : null;
 	}
 
 	@SuppressWarnings("unchecked")

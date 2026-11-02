@@ -1246,8 +1246,8 @@ public class ContextAssemblerTest {
 
 	@Test
 	public void testRuntimeNoticeRidesTheTail() {
-		String t = tail(ContextAssembler.assemble(spec(null).withNotice("Your conversation has 21 turns.")));
-		assertTrue(t.startsWith("Your conversation has 21 turns.\n\nCurrent date:"), t);
+		String t = tail(ContextAssembler.assemble(spec(null).withNotice(ContextAssembler.REPLY_NOTICE)));
+		assertTrue(t.startsWith(ContextAssembler.REPLY_NOTICE + "\n\nCurrent date:"), t);
 	}
 
 	// ========== Budget ==========
