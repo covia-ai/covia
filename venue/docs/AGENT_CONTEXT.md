@@ -833,7 +833,12 @@ assemble(Spec)                                 →  Prompt
 
 - **Authority** first: everything that reads the lattice reads under the agent's capability-narrowed context.
 - **Snapshot** fixes the declarative and effective config, session/frame state
-  and request authority used by the cycle.
+  and request authority used by the cycle. The model setup is resolved here,
+  once: the LLM operation, the effective config (the identity prompt as text,
+  the operation's model default added) and the model profile. Every inference
+  in the cycle uses it, and inspection resolves it the same way. A setup that
+  does not resolve fails the cycle and the inspection with the same reason
+  (AGENT_LOOP.md §3.4).
 - **Initialisation** records the declarative source-config cell in the returned
   value and renders the model profile, fixed palette, skills index and starting
   effective loads. Cached mode persists that value once per applicable config;
@@ -1231,7 +1236,7 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 | Frame rendering, observation state, compaction and turn normalisation (§5.6) | `GoalTreeContext`, `ConversationRenderer` |
 | Current conversation selection for active and ancestor rendering (§5.6) | `GoalTreeContext.activeConversation` |
 | Skills index and skill elements | `Skills` |
-| Authority and the model profile: `capsContext`, `modelProfileFor` | `AbstractLLMAdapter` |
+| Authority and the model setup: `capsContext`, `modelSetup` | `AbstractLLMAdapter` |
 | The edge (§3.5): system normalisation, cache marks and native tool-state events | `LangChainAdapter` |
 | llmagent spec | `LLMAgentAdapter` |
 | goaltree spec | `GoalTreeAdapter` |

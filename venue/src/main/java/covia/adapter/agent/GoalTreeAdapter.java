@@ -159,11 +159,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/** Everything a cycle holds constant across its frames and inferences;
 	 *  each frame adds its index and fixed base-tool projection. */
-	record Cycle(AMap<AString, ACell> config, AString llmOperation,
+	record Cycle(ModelSetup model,
 			AMap<AString, ACell> toolIndex,
 			RequestContext ctx, ContextAssembler.Spec spec, AVector<ACell> typedRootHarnessTools,
 			long toolCallTimeoutMs, AMap<AString, ACell> outerLoads, TaskTools.Tasks tasks,
-			AVector<ACell> unavailable) {}
+			AVector<ACell> unavailable) {
+		/** The config the root frame's calls carry. */
+		AMap<AString, ACell> config() {
+			return model.config();
+		}
+	}
 
 	/** The provider-fixed operation/skill part of a root frame's manifest. */
 	private record FixedPalette(AVector<ACell> baseTools,
@@ -266,7 +271,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// responseFormat above is a deterministic invocation projection of its
 		// configured outputs, not a second configuration generation.
 		AMap<AString, ACell> sourceConfig = config;
-		l3Config = effectiveModelConfig(l3Config, ctx);
+		ModelSetup model = modelSetup(l3Config, ctx);
+		l3Config = model.config();
 
 		// Same scope-chain view as processGoal (agent config + root frame), so the inspected
 		// skills index carries the right (loaded) markers.
@@ -311,7 +317,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
 		TaskTools.Tasks taskTools = new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, true);
 		AVector<ACell> harness = harnessForFrame(config, 0, typedTools);
-		ModelProfile profile = modelProfileFor(l3Config, ctx);
+		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, l3Config);
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
 			rootFrames, cachePrefix);
@@ -347,7 +353,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			convex.core.util.Utils.getCurrentTimestamp());
 		rootFrames = rootFrames.assoc(0, observedRoot);
 		spec = spec.withFrames(rootFrames);
-		Cycle cycle = new Cycle(l3Config, getLLMOperation(l3Config), fixed.toolIndex(),
+		Cycle cycle = new Cycle(model, fixed.toolIndex(),
 			capsCtx, spec, typedTools, toolCallTimeoutMs, outerLoads, taskTools,
 			fixed.unavailable());
 		AVector<ACell> entries = Vectors.empty();
@@ -564,7 +570,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			l3Config = config.assoc(K_RESPONSE_FORMAT, responseFormat);
 		}
 		AMap<AString, ACell> sourceConfig = config;
-		l3Config = effectiveModelConfig(l3Config, ctx);
+		ModelSetup model = modelSetup(l3Config, ctx);
+		l3Config = model.config();
 
 		// Build typed root-frame tools only from the stable configured contract.
 		AVector<ACell> typedHarnessTools = null;
@@ -605,12 +612,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Authority, palette and the cycle's Spec. Harness tool names in
 		// config.tools are skipped by the palette — they're resolved separately
 		// by resolveHarnessTools / buildTypedRootHarnessTools.
-		ModelProfile profile = modelProfileFor(l3Config, ctx);
+		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, l3Config);
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
 			frames, cachePrefix);
 		AVector<ACell> baseTools = fixed.baseTools();
-		AString llmOperation = getLLMOperation(l3Config);
 
 		// Everything the assembler needs that holds for the whole cycle; each
 		// frame and inference supplies the rest (AGENT_CONTEXT.md §8).
@@ -627,7 +633,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared
 		// with subgoal recursion.
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
-		Cycle cycle = new Cycle(l3Config, llmOperation, fixed.toolIndex(), capsCtx, cycleSpec,
+		Cycle cycle = new Cycle(model, fixed.toolIndex(), capsCtx, cycleSpec,
 			typedHarnessTools, toolCallTimeoutMs, outerLoads,
 			new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, false),
 			fixed.unavailable());
@@ -737,7 +743,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		final int frameIndex;
 		final Cycle cycle;
 		final AMap<AString, ACell> config;
-		final AString llmOperation;
 		final RequestContext ctx;
 		final ContextAssembler.Spec cycleSpec;
 		final long toolCallTimeoutMs;
@@ -762,7 +767,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			this.baseTools = baseTools;
 			this.cycle = cycle;
 			this.config = cycle.config();
-			this.llmOperation = cycle.llmOperation();
 			this.toolIndex = cycle.toolIndex();
 			this.ctx = cycle.ctx();
 			this.cycleSpec = cycle.spec();
@@ -1011,7 +1015,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	FrameResult runFrame(Job job, FrameStore store, int frameIndex,
 			AVector<ACell> baseToolsParam, Cycle cycle) {
 		AMap<AString, ACell> config = cycle.config();
-		AString llmOperation = cycle.llmOperation();
 		RequestContext ctx = cycle.ctx();
 		ContextAssembler.Spec cycleSpec = cycle.spec();
 		AVector<ACell> typedRootHarnessTools = cycle.typedRootHarnessTools();
@@ -1025,9 +1028,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		boolean typedOutputs = (frameIndex == 0 && typedRootHarnessTools != null);
 		// Strip responseFormat from the L3 config for child frames so they
 		// can produce arbitrary results back to the parent
-		AMap<AString, ACell> frameL3Config = (frameIndex == 0)
-			? config
-			: (config != null ? config.dissoc(K_RESPONSE_FORMAT) : null);
+		ModelSetup frameModel = (frameIndex == 0)
+			? cycle.model()
+			: cycle.model().withConfig(config.dissoc(K_RESPONSE_FORMAT));
+		AMap<AString, ACell> frameL3Config = frameModel.config();
 
 		// Inject goal as first user message in the conversation (once, not every iteration)
 		AVector<ACell> frames = store.frames();
@@ -1095,7 +1099,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (inference == null) return abortedResult(store);
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
-			ACell assistant = invokeLevel3(llmOperation, frameL3Config, prompt, ctx);
+			ACell assistant = invokeLevel3(frameModel, prompt, ctx);
 			if (isLengthLimited(assistant)) {
 				if (retriedAfterTruncation) {
 					log.warn("Frame[{}] response reached its output token limit again — failing the frame",

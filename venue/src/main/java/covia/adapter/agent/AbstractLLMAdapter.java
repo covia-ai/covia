@@ -74,6 +74,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final String LLM_CALL_FAILED = "LLM call failed (%s): %s";
 	/** A {@code config.systemPrompt} entry that did not resolve: the entry, then why. */
 	public static final String SYSTEM_PROMPT_UNRESOLVED = "config.systemPrompt did not resolve — %s: %s";
+	/** An LLM operation, or the provider its model names, that did not resolve: the operation, then why. */
+	public static final String LLM_OPERATION_UNRESOLVED = "LLM operation %s did not resolve: %s";
 	/**
 	 * How a level-3 operation's reason begins when the provider refused the
 	 * context as larger than the model accepts. The reason survives a job
@@ -228,9 +230,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	public record ModelProfile(long budget, AString labels, boolean toolCalling,
 			boolean cachePrefix) {
-		public static final ModelProfile DEFAULT =
-			new ModelProfile(ContextAssembler.DEFAULT_BUDGET, LABELS_BRACKET, true, true);
-
 		/** The profile a resolved facet map declares; defaults fill what it does not. */
 		public static ModelProfile of(AMap<AString, ACell> profile) {
 			return new ModelProfile(
@@ -250,19 +249,44 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * The model profile for an agent: the {@code model} facet of its LLM
-	 * operation, resolved for its model, with the agent's own
-	 * {@code config.modelProfile} layered last. Defaults when the asset cannot
-	 * be read: a missing provider must fail at the call, not at assembly.
+	 * What an agent's model calls run under: its LLM operation, the config
+	 * each call carries (the identity prompt as text, the operation's model
+	 * default added) and the model profile its context is assembled to. A
+	 * cycle resolves it once, at its start, and inspection resolves it the
+	 * same way, so every call in the cycle and every view of it meet the
+	 * same setup.
 	 */
-	protected ModelProfile modelProfileFor(AMap<AString, ACell> config, RequestContext ctx) {
-		try {
-			Asset asset = engine.resolveAsset(getLLMOperation(config), ctx);
-			return ModelProfile.of(resolveModel(engine, asset,
-				RT.ensureString(config != null ? config.get(K_MODEL) : null), config, ctx).assemblyProfile());
-		} catch (RuntimeException e) {
-			return ModelProfile.DEFAULT;
+	public record ModelSetup(AString operationRef, Operation operation,
+			AMap<AString, ACell> config, ModelProfile profile) {
+		/** This setup, its calls carrying {@code config}: a goal-tree child frame drops the root's output format. */
+		public ModelSetup withConfig(AMap<AString, ACell> config) {
+			return new ModelSetup(operationRef, operation, config, profile);
 		}
+	}
+
+	/**
+	 * The agent's model setup for {@code config}. One that does not resolve
+	 * (its {@code systemPrompt} entry, its LLM operation, or the provider a
+	 * model operation names) means the agent cannot continue: every cycle
+	 * resolves it again, so every cycle would fail the same way until it is
+	 * fixed.
+	 */
+	protected ModelSetup modelSetup(AMap<AString, ACell> config, RequestContext ctx) {
+		AMap<AString, ACell> effective = resolveSystemPrompt((config != null) ? config : Maps.empty(), ctx);
+		AString ref = getLLMOperation(effective);
+		Operation operation;
+		ResolvedModel model;
+		try {
+			operation = engine.jobs().resolveOperation(ref, ctx);
+			model = resolveModel(engine, operation, RT.ensureString(effective.get(K_MODEL)), effective, ctx);
+		} catch (RuntimeException e) {
+			if (!isExpectedFailure(e)) throw e;
+			throw new CannotContinueException(LLM_OPERATION_UNRESOLVED.formatted(ref, CoviaException.reasonOf(e)), e);
+		}
+		if (effective.get(K_MODEL) == null && model.modelId() != null) {
+			effective = effective.assoc(K_MODEL, model.modelId());
+		}
+		return new ModelSetup(ref, operation, effective, ModelProfile.of(model.assemblyProfile()));
 	}
 
 	/**
@@ -302,36 +326,15 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * The cycle's effective config: the identity prompt resolved to text and
-	 * the operation's model default added, for inspection and L3 input. Both
-	 * runtimes call this once per cycle, so a {@code systemPrompt} entry is
-	 * read once and the head stays identical across the cycle's inferences.
-	 */
-	protected AMap<AString, ACell> effectiveModelConfig(AMap<AString, ACell> config,
-			RequestContext ctx) {
-		AMap<AString, ACell> effective = resolveSystemPrompt((config != null) ? config : Maps.empty(), ctx);
-		if (effective.get(K_MODEL) != null) return effective;
-		try {
-			Asset selected = engine.resolveAsset(getLLMOperation(effective), ctx);
-			AString modelId = resolveModel(engine, selected, null, effective, ctx).modelId();
-			return (modelId != null) ? effective.assoc(K_MODEL, modelId) : effective;
-		} catch (RuntimeException e) {
-			return effective;
-		}
-	}
-
-	/**
 	 * {@code config.systemPrompt} as text. A string is the prompt itself. A map
 	 * is a context entry (AGENT_CONTEXT.md §6.2 — {@code ref}, {@code text},
 	 * {@code op} + {@code input}, {@code job}) resolved through the same
 	 * loader as pinned context and loads, once per cycle, under the cycle's
 	 * identity: a prompt kept at a workspace path or in a DLFS file, or built
-	 * by a read-only operation. A prompt that does not resolve means the agent
-	 * cannot continue: a missing identity is a configuration error, not
-	 * something to render around, and every cycle reads it again, so every
-	 * cycle would fail the same way until it is fixed.
+	 * by a read-only operation. A missing identity is a configuration error,
+	 * not something to render around, so the agent cannot continue.
 	 */
-	protected AMap<AString, ACell> resolveSystemPrompt(AMap<AString, ACell> config, RequestContext ctx) {
+	private AMap<AString, ACell> resolveSystemPrompt(AMap<AString, ACell> config, RequestContext ctx) {
 		ACell prompt = config.get(K_SYSTEM_PROMPT);
 		if (!(prompt instanceof AMap)) return config;
 		@SuppressWarnings("unchecked")
@@ -496,37 +499,22 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Level 3 invocation ==========
 
 	/**
-	 * Invokes a Level 3 LLM operation with messages and optional tools.
+	 * Invokes the setup's level-3 operation with an assembled prompt. The L3
+	 * input carries the setup's config and the prompt's cache marks, so a
+	 * caching provider can place its breakpoints at the band boundaries
+	 * (AGENT_CONTEXT.md §3.1).
 	 *
-	 * @param llmOperation the grid operation (e.g. "v/ops/langchain/openai")
-	 * @param config agent config (model, url, apiKey, responseFormat extracted)
-	 * @param messages full message history for this inference
-	 * @param tools tool definitions (null or empty = no tools)
-	 * @param ctx request context
 	 * @return the L3 result (assistant message with content and/or toolCalls)
 	 */
-	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
-			AVector<ACell> messages, AVector<ACell> tools, RequestContext ctx) {
-		return invokeLevel3(llmOperation, config, buildL3Input(config, messages, tools), messages, ctx);
-	}
-
-	/**
-	 * As {@link #invokeLevel3(AString, AMap, AVector, AVector, RequestContext)}
-	 * for an assembled prompt: the L3 input also carries the prompt's cache
-	 * marks, so a caching provider can place its breakpoints at the band
-	 * boundaries (AGENT_CONTEXT.md §3.1).
-	 */
-	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
-			ContextAssembler.Prompt prompt, RequestContext ctx) {
+	protected ACell invokeLevel3(ModelSetup model, ContextAssembler.Prompt prompt, RequestContext ctx) {
 		// The cycle record (#392) sees every call made from an assembled
 		// prompt: what it newly sent, then the reply verbatim or the failure.
 		CycleRecord record = CycleRecord.current();
 		if (record != null) {
-			record.beginInference(prompt, llmOperation,
-				RT.ensureString(config != null ? config.get(K_MODEL) : null));
+			record.beginInference(prompt, model.operationRef(), RT.ensureString(model.config().get(K_MODEL)));
 		}
 		try {
-			ACell reply = invokeLevel3(llmOperation, config, prompt.toL3Input(config), prompt.messages(), ctx);
+			ACell reply = invokeLevel3(model, prompt.toL3Input(model.config()), prompt.messages(), ctx);
 			if (record != null) record.endInference(reply);
 			return reply;
 		} catch (RuntimeException e) {
@@ -535,8 +523,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		}
 	}
 
-	private ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
-			AMap<AString, ACell> l3Input, AVector<ACell> messages, RequestContext ctx) {
+	private ACell invokeLevel3(ModelSetup model, AMap<AString, ACell> l3Input,
+			AVector<ACell> messages, RequestContext ctx) {
+		AString llmOperation = model.operationRef();
 		// LLM invocation is framework infrastructure: the agent's caps gate
 		// what it can DO via tools, not the inference call itself. Trust is
 		// established by going through invokeInternal — the framework path —
@@ -546,19 +535,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// transition, not stall the agent run loop indefinitely. On timeout the
 		// invocation is cancelled — LangChainAdapter bridges cancellation to a
 		// worker-thread interrupt, closing the in-flight HTTP call.
-		long llmTimeoutMs = resolveLlmTimeoutMs(config);
-		// The operation is resolved apart from the call, so that one which does
-		// not resolve is known for the agent's setup: every call would fail the
-		// same way, so the agent cannot continue. A failure the operation raises
-		// itself is classified below.
-		Operation operation;
-		try {
-			operation = engine.jobs().resolveOperation(llmOperation, ctx);
-		} catch (RuntimeException e) {
-			if (!isExpectedFailure(e)) throw e;
-			throw new CannotContinueException(LLM_CALL_FAILED.formatted(llmOperation, CoviaException.reasonOf(e)), e);
-		}
-		CompletableFuture<ACell> invocation = engine.jobs().invokeInternal(llmOperation, operation, l3Input, ctx, null);
+		long llmTimeoutMs = resolveLlmTimeoutMs(model.config());
+		CompletableFuture<ACell> invocation = engine.jobs().invokeInternal(llmOperation, model.operation(),
+			l3Input, ctx, null);
 		ACell result;
 		try {
 			result = invocation.get(llmTimeoutMs, TimeUnit.MILLISECONDS);

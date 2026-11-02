@@ -14,10 +14,12 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
@@ -249,11 +251,18 @@ public class AgentCycleTest {
 	 * Says "hello" to an agent whose setup is wrong and checks what its one
 	 * cycle did: it took the message, which is a turn in the conversation,
 	 * failed the chat with {@code reason} and suspended the agent with it.
+	 * Inspecting the agent meets the same setup, so it fails the same way.
 	 * Returns the chat's session.
 	 */
 	private Blob assertSuspendedByItsSetup(RequestContext owner, AgentState agent, String reason,
 			String runtime) throws Exception {
-		Job chat = chat(owner, agent.getAgentId().toString(), null, "hello");
+		String agentId = agent.getAgentId().toString();
+		Job inspect = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.MESSAGE, "hello"), owner);
+		assertThrows(JobFailedException.class, () -> inspect.awaitResult(5000), runtime);
+		assertTrue(inspect.getErrorMessage().contains(reason), runtime + ": " + inspect.getErrorMessage());
+
+		Job chat = chat(owner, agentId, null, "hello");
 		assertThrows(JobFailedException.class, () -> chat.awaitResult(10_000), runtime);
 		assertTrue(chat.getErrorMessage().contains(reason), runtime + ": " + chat.getErrorMessage());
 		assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner), runtime);
@@ -319,12 +328,28 @@ public class AgentCycleTest {
 			AgentState agent = create(owner, "no-model", Maps.of(
 				Fields.OPERATION, "v/ops/" + runtime + "/chat",
 				"llmOperation", absent));
-			Blob sid = assertSuspendedByItsSetup(owner, agent, AbstractLLMAdapter.LLM_CALL_FAILED.formatted(
+			Blob sid = assertSuspendedByItsSetup(owner, agent, AbstractLLMAdapter.LLM_OPERATION_UNRESOLVED.formatted(
 				absent, JobManager.CANNOT_RESOLVE_OPERATION + absent), runtime);
 
 			op(owner, "update", "no-model", Maps.of(Fields.CONFIG, Maps.of("llmOperation", "v/test/ops/failllm")));
 			assertRunsAgainOnResume(owner, agent, sid, runtime);
 		}
+	}
+
+	/** A model operation whose provider does not resolve is a setup that does not resolve. */
+	@Test
+	public void aModelWhoseProviderDoesNotResolveSuspendsTheAgent(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		Hash preset = engine.storeAsset(JSON.printPretty(Maps.of(
+			Fields.NAME, "Model without a provider",
+			Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:failllm"),
+			AbstractLLMAdapter.K_MODEL_FACET, Maps.of(
+				AbstractLLMAdapter.K_MODEL_ID, "absent-model",
+				AbstractLLMAdapter.K_MODEL_PROVIDER, "v/test/ops/absent"))), null);
+		String ref = "a/" + preset.toHexString();
+		AgentState agent = create(owner, "no-provider", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", ref));
+		assertSuspendedByItsSetup(owner, agent, AbstractLLMAdapter.LLM_OPERATION_UNRESOLVED.formatted(ref, ""), "llmagent");
 	}
 
 	@Test

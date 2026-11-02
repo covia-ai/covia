@@ -146,16 +146,16 @@ public class SystemPromptTest {
 	}
 
 	@Test
-	public void testResolvedOncePerCycleViaEffectiveConfig() {
-		// The seam both runtimes use: effectiveModelConfig turns the entry into
-		// text, so everything downstream — head, inspection, L3 input — sees a
-		// string and a mid-cycle edit cannot move the cached head.
+	public void testResolvedOncePerCycleInTheModelSetup() {
+		// The seam both runtimes use: the cycle's model setup carries the entry
+		// as text, so everything downstream — head, inspection, L3 input — sees
+		// a string and a mid-cycle edit cannot move the cached head.
 		write("w/prompts/once", Strings.create("Once per cycle."));
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		AMap<AString, ACell> config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"systemPrompt", Maps.of("ref", "w/prompts/once"));
-		AMap<AString, ACell> effective = adapter.effectiveModelConfig(config, ctx);
+		AMap<AString, ACell> effective = adapter.modelSetup(config, ctx).config();
 		assertEquals("Once per cycle.", RT.ensureString(effective.get(AbstractLLMAdapter.K_SYSTEM_PROMPT)).toString());
 	}
 }

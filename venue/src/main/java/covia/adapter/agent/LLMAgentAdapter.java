@@ -146,7 +146,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	private Preview preview(Inspection in, RequestContext ctx) {
 		AMap<AString, ACell> sourceConfig = in.config();
-		AMap<AString, ACell> config = effectiveModelConfig(sourceConfig, ctx);
+		ModelSetup model = modelSetup(sourceConfig, ctx);
+		AMap<AString, ACell> config = model.config();
 		// Same scope-chain view as processChat (agent tier + root frame), so
 		// the inspected skills index carries the right (loaded) markers.
 		AMap<AString, ACell> configLoads = ContextChain.operatorLoads(
@@ -154,7 +155,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> frameLoads = ContextChain.sessionRootLoads(in.session());
 
 		RequestContext capsCtx = capsContext(config, ctx);
-		ModelProfile profile = modelProfileFor(config, ctx);
+		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, config);
 		AVector<ACell> sessionFrames = sessionFramesOf(in.session());
 		if (sessionFrames != null && !sessionFrames.isEmpty()) {
@@ -350,6 +351,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
+		ModelSetup model = modelSetup(recordConfig, ctx);
 
 		// Determine if there is real input for the agent
 		boolean hasInput = (messages != null && messages.count() > 0)
@@ -381,9 +383,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		AVector<ACell> sessionFrames = store.frames();
 		AMap<AString, ACell> frameLoads = GoalTreeContext.rootLoads(sessionFrames);
-		AMap<AString, ACell> config = effectiveModelConfig(recordConfig, ctx);
-		AString llmOperation = getLLMOperation(config);
-		ModelProfile profile = modelProfileFor(config, ctx);
+		AMap<AString, ACell> config = model.config();
+		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, config);
 		FixedPalette fixed = fixedPalette(recordConfig, ctx,
 			sessionFrames, cachePrefix);
@@ -409,7 +410,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		// ctx (uncapped) makes the provider call; capsCtx flows through toolCtx
 		// for tool dispatch.
-		AVector<ACell> newMessages = invokeWithToolLoop(llmOperation, spec, fixedTools, ctx, toolCtx);
+		AVector<ACell> newMessages = invokeWithToolLoop(model, spec, fixedTools, ctx, toolCtx);
 
 		// Filter out empty assistant messages (e.g. when LLM produces only <think> tags)
 		// to avoid polluting the transcript with useless entries
@@ -539,7 +540,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> invokeWithToolLoop(
-			AString llmOperation, ContextAssembler.Spec spec,
+			ModelSetup model, ContextAssembler.Spec spec,
 			AVector<ACell> fixedTools, RequestContext ctx, ToolContext toolCtx) {
 		AMap<AString, ACell> config = spec.config();
 		AVector<ACell> messages = Vectors.empty();
@@ -583,7 +584,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			inference = prepareRendering(inference, toolCtx);
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
-			ACell assistant = invokeLevel3(llmOperation, config, prompt, ctx);
+			ACell assistant = invokeLevel3(model, prompt, ctx);
 			if (isLengthLimited(assistant)) {
 				if (retriedAfterTruncation) {
 					log.warn("LLM response reached its output token limit again — failing the transition");

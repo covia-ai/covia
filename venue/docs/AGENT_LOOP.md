@@ -546,18 +546,19 @@ What happens next depends on what failed:
   took stays queued, and the agent carries on with it. A task the agent already
   resolved keeps its own outcome.
 - **The agent cannot continue.** A transition raises `CannotContinueException`
-  when the next unit of work would fail the same way. The LLM harness raises it
-  when the agent's LLM operation does not resolve to an operation, when a model
-  call fails with `ConfigurationException` (a refused key, a missing model, an
-  invalid setting) or `UnavailableException` (the provider cannot be reached,
-  or keeps failing after the provider library's own retries), or when it
-  returns a failure value, which a level-3 operation returns only for a setup
-  problem. Both LLM runtimes raise it when the agent's `systemPrompt` entry
-  does not resolve, since every cycle reads it again
-  ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §5.1). An unexpected failure, a venue
-  fault logged at ERROR where it happened, counts the same. The agent is
-  suspended with the reason as its `error` (#88: an agent whose key is missing
-  stops after one cycle).
+  when the next unit of work would fail the same way. Both LLM runtimes raise
+  it at the start of a cycle when the agent's model setup does not resolve:
+  its `systemPrompt` entry, its LLM operation, or the provider a model
+  operation names ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §4). Every cycle
+  resolves the setup again, and `agent:context` and `agent:step` fail with the
+  same reason. During the cycle they raise it when a model call fails with
+  `ConfigurationException` (a refused key, a missing model, an invalid
+  setting) or `UnavailableException` (the provider cannot be reached, or keeps
+  failing after the provider library's own retries), or returns a failure
+  value, which a level-3 operation returns only for a setup problem. An
+  unexpected failure, a venue fault logged at ERROR where it happened, counts
+  the same. The agent is suspended with the reason as its `error` (#88: an
+  agent whose key is missing stops after one cycle).
 
 A suspended agent keeps its queue, whether a fault or a deliberate
 `agent:suspend` stopped it. The task the stopped cycle took stays queued and
