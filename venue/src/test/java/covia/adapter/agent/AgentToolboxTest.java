@@ -271,6 +271,10 @@ public class AgentToolboxTest {
 				assistantCall("call_compact", HarnessTools.COMPACT,
 					Maps.of("summary", "TOOLBOX_COMPACT_SUMMARY")), null);
 			exercisedHarness.add(HarnessTools.COMPACT);
+			String[] reply = FrameTools.COMPACTED.split("%d");
+			String compacted = String.valueOf(result(compact, "call_compact"));
+			assertTrue(compacted.startsWith(reply[0]) && compacted.endsWith(reply[1]),
+				where + " answers compact as every runtime does: " + compacted);
 			assertTrue(messages(compact).toString().contains("TOOLBOX_COMPACT_SUMMARY"),
 				where + " compact summary missing from next inference: " + compact);
 			assertFalse(hasSystemContent(compact, "TOOLBOX_COMPACT_SUMMARY"),
@@ -326,6 +330,35 @@ public class AgentToolboxTest {
 				where + " a refused call loaded or read the context: " + step);
 			// A full operation reference still dispatches as one.
 			assertEquals(Maps.of("ok", true), result(step, "call_reference"), where);
+		}
+	}
+
+	/** A harness tool runs only where it is offered: one the agent was not
+	 *  given is refused as such, named directly or through invoke_tool, and
+	 *  nothing runs. */
+	@Test
+	public void unofferedHarnessToolsAreRefused() {
+		String notOffered = "Error: " + AbstractLLMAdapter.HARNESS_NOT_OFFERED;
+		for (AgentRuntime runtime : RUNTIMES) {
+			// more_tools brings invoke_tool and context_unload; not context_load or compact.
+			AMap<AString, ACell> config = Maps.of(
+				Fields.OPERATION, runtime.operation(),
+				"llmOperation", "v/test/ops/llm",
+				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.MORE_TOOLS)));
+			RunningAgent agent = start(runtime, runtime.name() + "-unoffered", config);
+			String where = runtime.name();
+			AMap<AString, ACell> step = step(agent, "call tools it was not given",
+				Maps.of("toolCalls", Vectors.of(
+					Maps.of("id", "call_load", "name", HarnessTools.CONTEXT_LOAD,
+						"arguments", Maps.of("path", CONTEXT_PATH)),
+					invoke("call_compact", HarnessTools.COMPACT, Maps.of("summary", "earlier work")))), null);
+
+			assertEquals(Strings.create(String.format(notOffered, HarnessTools.CONTEXT_LOAD)),
+				result(step, "call_load"), where);
+			assertEquals(Strings.create(String.format(notOffered, HarnessTools.COMPACT)),
+				result(step, "call_compact"), where);
+			assertFalse(messages(step).toString().contains(CONTEXT_MARKER),
+				where + " a refused call loaded the context: " + step);
 		}
 	}
 

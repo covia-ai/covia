@@ -82,9 +82,11 @@ class FrameTools {
 	}
 
 	/** The task tools, the shared harness tools and, for every other name,
-	 *  dispatch as an operation. */
+	 *  dispatch as an operation. A harness tool runs only when this frame
+	 *  offers it; any other is answered as an unbound name. */
 	ToolCycleEngine.Registry<FrameTools> registry() {
 		return new ToolCycleEngine.Registry<FrameTools>()
+			.offered((name, ignored) -> offers(name))
 			.activityLabels((name, ignored) -> activityLabel(name))
 			// The framework's task boundary (TaskTools): a task resolved here
 			// reaches its job at tool time.
@@ -98,6 +100,11 @@ class FrameTools {
 			.register(HarnessTools.COMPACT, (call, ignored) -> compact(call))
 			.fallback((call, ignored) -> ToolCycleEngine.ToolOutcome.result(
 				dispatch(call.name(), call.input())));
+	}
+
+	/** Whether this frame's tool list names the tool. */
+	boolean offers(String name) {
+		return offered.contains(name);
 	}
 
 	/**

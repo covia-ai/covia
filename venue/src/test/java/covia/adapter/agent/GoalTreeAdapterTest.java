@@ -167,12 +167,8 @@ public class GoalTreeAdapterTest {
 			childEffective, java.util.Set.of(), Labels.BRACKET).tools().count());
 		Loads.Snapshot unloaded = Loads.resolve(
 			engine, ALICE, childEffective, java.util.Set.of(), Labels.BRACKET);
-		ACell hallucinated = ((GoalTreeAdapter) engine.getAdapter("goaltree")).dispatchTool(
-			"covia_read", Maps.of("path", "w/probe"), unloaded.operation("covia_read"), ALICE,
-			AbstractLLMAdapter.DEFAULT_TOOL_CALL_TIMEOUT_MS);
-		assertTrue(String.valueOf(hallucinated).startsWith("Error:"),
-			"a manually supplied call after unload must not retain a dispatch route: "
-				+ hallucinated);
+		assertNull(unloaded.operation("covia_read"),
+			"a manually supplied call after unload must not retain a dispatch route");
 		assertTrue(Skills.isSkillEntry(
 			GoalTreeContext.getLoads(parent).get(Strings.create("w/skills/alpha"))),
 			"parent tier untouched by the child's mask");
@@ -304,8 +300,10 @@ public class GoalTreeAdapterTest {
 		AVector<ACell> childContext = RT.ensureVector(frame.get(Fields.CONTEXT));
 		assertTrue(RT.getIn(childContext.get(0), "content").toString().contains(GoalTreeAdapter.CHILD_FRAME_NOTICE),
 			"the child's head is new — it carries the child notice");
-		assertFalse(RT.ensureVector(frame.get(Fields.TOOLS)).toString().contains("subgoal"),
-			"children are not offered subgoal");
+		java.util.Set<String> childTools = recordedTools(frame);
+		assertTrue(childTools.containsAll(java.util.Set.of("subgoal", "complete", "fail")),
+			"a child may nest, and returns with complete or fail: " + childTools);
+		assertFalse(childTools.contains(TaskTools.COMPLETE), "the task is the root's: " + childTools);
 		AVector<ACell> childInferences = RT.ensureVector(frame.get(Fields.INFERENCES));
 		assertEquals(2, childInferences.count(), "child: the echo call, then its answer: " + childInferences);
 		String sent = RT.getIn(childInferences.get(0), Fields.SENT).toString();
@@ -321,10 +319,11 @@ public class GoalTreeAdapterTest {
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count());
 	}
 
-	/** A subgoal nested past the depth limit is refused as a failed subgoal,
-	 *  the same shape as any other, and every frame above it carries on. */
+	/** Subgoals nest until the depth limit. The frame there is not offered
+	 *  subgoal, so its call is refused as any tool it is not offered is, and
+	 *  every frame then completes up to the root. */
 	@Test
-	public void testASubgoalTooDeepIsRefusedAsAFailedSubgoal() {
+	public void testSubgoalsNestUntilTheDepthLimit() {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "subgoal-deep",
 				Fields.CONFIG, Maps.of(
@@ -340,19 +339,86 @@ public class GoalTreeAdapterTest {
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-deep");
 		TestEngine.awaitTimelineCount(agent, 1, 10000);
 
-		// Each subgoal's child rides under its call; the refused one has none.
+		// Each subgoal's child rides under its call; the deepest frame's call ran none.
 		ACell call = RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
 			.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
+		AMap<AString, ACell> deepest = null;
 		int children = 0;
 		for (AMap<AString, ACell> frame = RT.ensureMap(RT.getIn(call, Fields.FRAME)); frame != null;
 				frame = RT.ensureMap(RT.getIn(call, Fields.FRAME))) {
+			assertEquals(GoalTreeContext.STATUS_COMPLETE, RT.getIn(call, Fields.RESULT, Fields.STATUS),
+				"every subgoal completed: " + call);
 			children++;
+			deepest = frame;
 			call = RT.ensureVector(RT.getIn(RT.ensureVector(frame.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
 		}
 		assertEquals(GoalTreeAdapter.MAX_SUBGOAL_DEPTH - 1, children, "frames 1 to the limit ran");
-		assertEquals("failed", String.valueOf(RT.getIn(call, Fields.RESULT, Fields.STATUS)), call.toString());
-		assertEquals(GoalTreeAdapter.SUBGOAL_TOO_DEEP.formatted(GoalTreeAdapter.MAX_SUBGOAL_DEPTH),
-			String.valueOf(RT.getIn(call, Fields.RESULT, Fields.RESULT)));
+		assertFalse(recordedTools(deepest).contains("subgoal"),
+			"the frame at the limit is not offered subgoal");
+		assertEquals(Strings.create("Error: " + String.format(AbstractLLMAdapter.HARNESS_NOT_OFFERED, "subgoal")),
+			RT.getIn(call, Fields.RESULT));
+	}
+
+	/** The names of the tools a frame's record says it was sent. */
+	private static java.util.Set<String> recordedTools(AMap<AString, ACell> frame) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		AVector<ACell> tools = RT.ensureVector(frame.get(Fields.TOOLS));
+		for (long i = 0; tools != null && i < tools.count(); i++) names.add(tools.get(i).toString());
+		return names;
+	}
+
+	/** An agent offered only subgoal: its child scripted by {@code model}. */
+	private void createSubgoalAgent(String agentId, AString model) {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/subgoalechollm",
+					"model", model,
+					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
+			ALICE).awaitResult(5000);
+	}
+
+	/** The root's subgoal call in the agent's first timeline entry. */
+	private ACell rootSubgoalCall(String agentId) {
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		return RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
+			.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
+	}
+
+	/** A child returns with complete whatever the agent's tools list: a
+	 *  subgoal of an agent offered only subgoal hands its parent structured data. */
+	@Test
+	public void testAChildReturnsStructuredDataWithComplete() {
+		createSubgoalAgent("subgoal-complete", TestAdapter.SUBGOAL_CHILD_COMPLETES);
+		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "subgoal-complete", Fields.MESSAGE, "decompose this"),
+			ALICE).awaitResult(15000);
+		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+
+		ACell call = rootSubgoalCall("subgoal-complete");
+		assertEquals(GoalTreeContext.STATUS_COMPLETE, RT.getIn(call, Fields.RESULT, Fields.STATUS), call.toString());
+		assertEquals(Strings.create(TestAdapter.SUBGOAL_CHILD_RESULT),
+			RT.getIn(call, Fields.RESULT, Fields.RESULT, "answer"), call.toString());
+	}
+
+	/** The task is the root's: a child that calls complete_task is told it is
+	 *  not offered it, and the task completes with the root's answer. */
+	@Test
+	public void testAChildCannotResolveTheTask() {
+		createSubgoalAgent("subgoal-task", TestAdapter.SUBGOAL_CHILD_RESOLVES_TASK);
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "subgoal-task", Fields.MESSAGE, "decompose this", "timeout", 15000L),
+			ALICE).awaitResult(20000);
+		assertEquals(Strings.create("root done"), RT.getIn(result, Fields.OUTPUT), String.valueOf(result));
+
+		AMap<AString, ACell> child = RT.ensureMap(RT.getIn(rootSubgoalCall("subgoal-task"), Fields.FRAME));
+		ACell childCall = RT.ensureVector(RT.getIn(RT.ensureVector(child.get(Fields.INFERENCES)).get(0),
+			Fields.CALLS)).get(0);
+		assertEquals(TaskTools.COMPLETE, RT.getIn(childCall, "name").toString());
+		assertEquals(Strings.create("Error: " + String.format(AbstractLLMAdapter.HARNESS_NOT_OFFERED, TaskTools.COMPLETE)),
+			RT.getIn(childCall, Fields.RESULT));
 	}
 
 	/** A subgoal is its parent's tool: when the child's model call fails, the
@@ -976,7 +1042,8 @@ public class GoalTreeAdapterTest {
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/compactllm"),
-				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
+				Strings.create("systemPrompt"), Strings.create("You are a test agent."),
+				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.COMPACT))),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));
 

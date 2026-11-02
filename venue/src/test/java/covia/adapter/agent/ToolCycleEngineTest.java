@@ -180,6 +180,32 @@ public class ToolCycleEngineTest {
 	}
 
 	@Test
+	public void testAnUnofferedHarnessToolGoesToTheFallbackInItsWave() throws Exception {
+		// [op, control, op] with the control tool not offered: its handler
+		// never runs, and it is no barrier — all three meet at the fallback's
+		// barrier, which they can only do together.
+		CyclicBarrier barrier = new CyclicBarrier(3);
+		AtomicInteger handled = new AtomicInteger();
+		ToolCycleEngine.Registry<Object> registry = new ToolCycleEngine.Registry<Object>()
+			.offered((name, ctx) -> !CONTROL.equals(name))
+			.register(CONTROL, (c, ctx) -> {
+				handled.incrementAndGet();
+				return ok("handled");
+			})
+			.fallback((c, ctx) -> {
+				barrier.await(5, TimeUnit.SECONDS);
+				return ok("answered " + c.name());
+			});
+		Sink sink = new Sink();
+		ToolCycleEngine.executeBatch(
+			Vectors.of(call("a", "op"), call("ctl", CONTROL), call("b", "op")), 0, registry, new Object(), sink, log);
+
+		assertEquals(0, handled.get(), "an unoffered harness tool's handler never runs");
+		assertEquals(List.of("answered op", "answered " + CONTROL, "answered op"),
+			sink.messages.stream().map(ToolCycleEngineTest::content).toList());
+	}
+
+	@Test
 	public void testSingleCallRunsOnTheCallingThread() {
 		// The common case pays no thread hop, so a nested harness still sees
 		// this thread's CycleRecord.

@@ -1239,6 +1239,12 @@ public class TestAdapter extends AAdapter {
     public static final String SUBGOAL_CHILD_FAILED = "subgoalechollm scripted child failure";
     /** The model that makes every {@code subgoalechollm} frame issue a subgoal. */
     public static final AString SUBGOAL_DEEPEN = Strings.intern("deepen");
+    /** The model that makes {@code subgoalechollm}'s child return with {@code complete}. */
+    public static final AString SUBGOAL_CHILD_COMPLETES = Strings.intern("child-completes");
+    /** The model that makes {@code subgoalechollm}'s child call {@code complete_task}. */
+    public static final AString SUBGOAL_CHILD_RESOLVES_TASK = Strings.intern("child-resolves-task");
+    /** What the child's {@code complete} or {@code complete_task} returns. */
+    public static final String SUBGOAL_CHILD_RESULT = "from the child";
 
     /** Whether a {@code subgoalechollm} call is the child's, recognised by its goal text. */
     @SuppressWarnings("unchecked")
@@ -1260,8 +1266,11 @@ public class TestAdapter extends AAdapter {
      * result. Push, run, pop — the child's exchange survives only in the
      * cycle record (#392). With model {@link #SUBGOAL_CHILD_FAILS} the
      * child's model call fails instead, as a refusal of its content; with
-     * model {@link #SUBGOAL_DEEPEN} every frame issues a subgoal of its own
-     * until one is refused for depth.
+     * {@link #SUBGOAL_CHILD_COMPLETES} the child returns
+     * {@code {answer: SUBGOAL_CHILD_RESULT}} with {@code complete}; with
+     * {@link #SUBGOAL_CHILD_RESOLVES_TASK} it calls {@code complete_task};
+     * with {@link #SUBGOAL_DEEPEN} every frame issues a subgoal of its own
+     * until one is not offered it.
      */
     private ACell handleSubgoalEchoLlm(ACell input) {
         boolean inChild = inSubgoalChild(input);
@@ -1270,13 +1279,23 @@ public class TestAdapter extends AAdapter {
                 "role", Strings.create("assistant"),
                 "content", Strings.create(inChild ? "sub done" : "root done"));
         }
-        if (inChild && !SUBGOAL_DEEPEN.equals(RT.getIn(input, Fields.MODEL))) {
+        ACell model = RT.getIn(input, Fields.MODEL);
+        if (inChild && !SUBGOAL_DEEPEN.equals(model)) {
+            String name = "v/test/ops/echo";
+            String arguments = "{\"echo\":\"" + SUBGOAL_CHILD_RESULT + "\"}";
+            if (SUBGOAL_CHILD_COMPLETES.equals(model)) {
+                name = "complete";
+                arguments = "{\"answer\":\"" + SUBGOAL_CHILD_RESULT + "\"}";
+            } else if (SUBGOAL_CHILD_RESOLVES_TASK.equals(model)) {
+                name = "complete_task";
+                arguments = "{\"result\":\"" + SUBGOAL_CHILD_RESULT + "\"}";
+            }
             return Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
-                    "id", Strings.create("call_child_echo"),
-                    "name", Strings.create("v/test/ops/echo"),
-                    "arguments", Strings.create("{\"echo\":\"from the child\"}")
+                    "id", Strings.create("call_child"),
+                    "name", Strings.create(name),
+                    "arguments", Strings.create(arguments)
                 )));
         }
         return Maps.of(

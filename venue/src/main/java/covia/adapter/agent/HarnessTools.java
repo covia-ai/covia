@@ -165,7 +165,7 @@ final class HarnessTools {
 	static final String NO_TOOLS = "no tools are available";
 	/** The tail naming a short tool list. */
 	static final String ONLY_TOOLS = "your only tools are: %s";
-	/** The tail when the tool list is long, or not known here. */
+	/** The tail when the tool list is long. */
 	static final String USE_TOOL_LIST = "call only the tools in your tool list";
 	/** At most this many providing skills, or callable tools, are named. */
 	static final int MAX_NAMED = 5;
@@ -182,10 +182,9 @@ final class HarnessTools {
 	 * cannot be called, and what would make it callable when that is certain
 	 * (#643). A near miss of a callable name is named; a tool is hinted for
 	 * {@code skill_load} only when this agent is offered it and an advertised
-	 * skill would bind exactly that name. A null surface knows nothing to hint.
+	 * skill would bind exactly that name.
 	 */
 	static String unboundTool(String name, ToolSurface surface) {
-		if (surface == null) return noSuchTool(name, null);
 		String near = nearMiss(name, surface.callable());
 		if (near != null) return String.format(TOOL_NEAR_MISS, name, near);
 		LoadScope scope = surface.scope();
@@ -203,10 +202,10 @@ final class HarnessTools {
 	}
 
 	/** The answer for a name nothing provides, ending with what the session
-	 *  can call: none, a short list, or its tool list; null when not known. */
+	 *  can call: none, a short list, or its tool list. */
 	static String noSuchTool(String name, Set<String> callable) {
 		String tail;
-		if (callable == null || callable.size() > MAX_NAMED) tail = USE_TOOL_LIST;
+		if (callable.size() > MAX_NAMED) tail = USE_TOOL_LIST;
 		else if (callable.isEmpty()) tail = NO_TOOLS;
 		else tail = String.format(ONLY_TOOLS, String.join(", ", new java.util.TreeSet<>(callable)));
 		return String.format(NO_SUCH_TOOL, name) + "; " + tail;

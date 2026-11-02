@@ -73,11 +73,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	static final int MAX_ITERATIONS = 50;
 
 	/**
-	 * Maximum subgoal nesting depth. Each {@code subgoal} call recurses into a
-	 * child frame, and each frame can run up to {@link #MAX_ITERATIONS} LLM
-	 * calls — unbounded nesting risks many hours of work and deep stack growth.
-	 * At this depth the harness refuses further decomposition and the model must
-	 * make progress (complete/fail) at the current level.
+	 * Maximum frames in a stack: the root and nine nested subgoals. Each
+	 * {@code subgoal} call recurses into a child frame, and each frame can run
+	 * up to {@link #MAX_ITERATIONS} LLM calls — unbounded nesting risks many
+	 * hours of work and deep stack growth. A frame at this depth is not offered
+	 * {@code subgoal}, so the model must complete or fail at that level.
 	 */
 	static final int MAX_SUBGOAL_DEPTH = 10;
 
@@ -98,9 +98,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	private static final AString AGENT_OUTPUT      = Strings.intern("agent_output");
 	/** A frame the cycle no longer holds: the frame's index. */
 	static final String FRAME_SUPERSEDED = "Frame stack no longer holds frame %d — cycle superseded";
-	/** A subgoal refused for nesting too deep: the depth limit. */
-	static final String SUBGOAL_TOO_DEEP = "Maximum subgoal depth (%d) reached. Complete or "
-		+ "fail the current goal at this level instead of decomposing further.";
 	private static final String HARNESS_BASE = "/adapters/goaltree/harness/";
 
 	static final AMap<AString, ACell> TOOL_DEF_SUBGOAL =
@@ -769,10 +766,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					"Error: description is required for a subgoal"));
 			}
 			log.info("Subgoal pushed: {}", description);
-			if (frameIndex + 1 >= MAX_SUBGOAL_DEPTH) {
-				return ToolCycleEngine.ToolOutcome.result(subgoalResult(GoalTreeContext.STATUS_FAILED,
-					Strings.create(SUBGOAL_TOO_DEEP.formatted(MAX_SUBGOAL_DEPTH))));
-			}
 
 			AMap<AString, ACell> childLoads = GoalTreeContext.getLoads(activeFrame);
 			AMap<AString, ACell> declared;
@@ -1006,13 +999,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	/**
-	 * The harness tools a frame offers, from {@code config.tools}. Child
-	 * frames exclude {@code subgoal} (prevents unnecessary nesting from
-	 * smaller models). The root frame adds the typed complete/fail tools when
-	 * typed outputs are active, deduplicated against any complete/fail in
-	 * config.tools — typed wins. {@code skill_load} is offered automatically
-	 * when the agent declares skill sources — same rule as llmagent; skills
-	 * semantics live in {@link Skills} and the context assembly.
+	 * The harness tools a frame offers, from {@code config.tools} by the
+	 * shared rule ({@link HarnessTools#offered}). The root frame adds the
+	 * typed complete/fail tools when typed outputs are active, deduplicated
+	 * against any complete/fail in config.tools — typed wins. A child frame is
+	 * always offered complete and fail: they are how a subgoal returns. A
+	 * frame at the depth limit is not offered {@code subgoal}.
 	 */
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> harnessForFrame(AMap<AString, ACell> config, int frameIndex,
@@ -1033,11 +1025,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		} else if (frameIndex == 0) {
 			harness = configHarness;
 		} else {
-			harness = Vectors.empty();
-			for (long i = 0; i < configHarness.count(); i++) {
-				ACell n = RT.getIn(configHarness.get(i), K_NAME);
-				if (n != null && !TOOL_SUBGOAL.equals(n.toString())) harness = harness.conj(configHarness.get(i));
+			harness = configHarness;
+			if (!hasToolNamed(harness, TOOL_COMPLETE)) harness = harness.conj(TOOL_DEF_COMPLETE);
+			if (!hasToolNamed(harness, TOOL_FAIL)) harness = harness.conj(TOOL_DEF_FAIL);
+		}
+		if (frameIndex + 1 >= MAX_SUBGOAL_DEPTH) {
+			AVector<ACell> belowLimit = Vectors.empty();
+			for (long i = 0; i < harness.count(); i++) {
+				ACell n = RT.getIn(harness.get(i), K_NAME);
+				if (n == null || !TOOL_SUBGOAL.equals(n.toString())) belowLimit = belowLimit.conj(harness.get(i));
 			}
+			harness = belowLimit;
 		}
 		return harness;
 	}

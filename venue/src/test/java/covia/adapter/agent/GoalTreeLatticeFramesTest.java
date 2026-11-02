@@ -51,13 +51,19 @@ public class GoalTreeLatticeFramesTest {
 
 	// ========== helpers ==========
 
-	private void createAgent(String agentId, String llmOp, long toolTimeoutMs) {
+	/** @param tools the harness tools the agent is offered */
+	private void createAgent(String agentId, String llmOp, long toolTimeoutMs, String... tools) {
 		AMap<AString, ACell> config = Maps.of(
 			Fields.OPERATION, Strings.create("v/ops/goaltree/chat"),
 			Strings.create("llmOperation"), Strings.create(llmOp),
 			Strings.create("systemPrompt"), Strings.create("You are a test agent."));
 		if (toolTimeoutMs > 0) {
 			config = config.assoc(Strings.create("toolCallTimeoutMs"), CVMLong.create(toolTimeoutMs));
+		}
+		if (tools.length > 0) {
+			AVector<ACell> offered = Vectors.empty();
+			for (String tool : tools) offered = offered.conj(Strings.create(tool));
+			config = config.assoc(Fields.TOOLS, offered);
 		}
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
@@ -268,7 +274,7 @@ public class GoalTreeLatticeFramesTest {
 
 	@Test
 	public void testSubgoalChildLiveOnLatticeAndAtomicPop() {
-		createAgent("sub-agent", "v/test/ops/subgoalllm", 2000);
+		createAgent("sub-agent", "v/test/ops/subgoalllm", 2000, "subgoal");
 		Blob sid = mintSession("sub-agent", "aa112233445566778899aabbccddee04");
 
 		Job chatJob = chat("sub-agent", sid, "decompose the work");

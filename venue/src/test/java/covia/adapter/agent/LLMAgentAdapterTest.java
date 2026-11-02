@@ -606,7 +606,8 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "flat-compact-agent",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm"),
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm",
+				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.COMPACT))),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "compact this"))));
 
 		assertTrue(RT.getIn(output, Fields.RESPONSE).toString().contains("Compact verified"));
@@ -880,26 +881,27 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 	}
 
-	/** An llmagent root frame's harness tools, as a cycle of an agent with this
+	/** A runtime's root frame harness tools, as a cycle of an agent with this
 	 *  config and these outer loads has them, every harness tool offered. */
-	private FrameTools frameTools(RequestContext ctx, AMap<AString, ACell> config,
+	private FrameTools frameTools(String runtime, RequestContext ctx, AMap<AString, ACell> config,
 			AMap<AString, ACell> outerLoads) {
+		AbstractLLMAdapter adapter = (AbstractLLMAdapter) engine.getAdapter(runtime);
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(engine, ctx, ctx, config,
 			null, null, 0, null, null, null, null, null, null, null, false, null, null, null, null, null);
-		FrameTools tools = new FrameTools((LLMAgentAdapter) engine.getAdapter("llmagent"), spec,
+		FrameTools tools = new FrameTools(adapter, spec,
 			previewTasks(ctx, null), null, outerLoads, AbstractLLMAdapter.DEFAULT_TOOL_CALL_TIMEOUT_MS,
 			new FrameStore.LocalFrameStore(Vectors.of((ACell) GoalTreeContext.createFrame(""))), 0);
-		tools.offered = LLMAgentAdapter.HARNESS_TOOL_NAMES;
+		tools.offered = adapter.harnessToolNames();
 		return tools;
 	}
 
 	private FrameTools frameTools(RequestContext ctx) {
-		return frameTools(ctx, Maps.empty(), null);
+		return frameTools("llmagent", ctx, Maps.empty(), null);
 	}
 
 	/** Tools of an agent whose skills are the skillset at {@code w/skills}. */
 	private FrameTools skillFrameTools() {
-		return frameTools(RequestContext.of(ALICE_DID),
+		return frameTools("llmagent", RequestContext.of(ALICE_DID),
 			Maps.of("skillsets", Vectors.of((ACell) Strings.create("w/skills"))), null);
 	}
 
@@ -1076,6 +1078,12 @@ public class LLMAgentAdapterTest {
 		assertTrue(Skills.isSkillEntry(loads.get(Strings.create("w/skills/alpha"))));
 	}
 
+	/** An agent whose scripted model loads a context entry, then unloads it. */
+	private static final AMap<AString, ACell> CONTEXT_LIFECYCLE_CONFIG = Maps.of(
+		"llmOperation", "v/test/ops/skillllm",
+		Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.CONTEXT_LOAD),
+			Strings.create(HarnessTools.CONTEXT_UNLOAD)));
+
 	@Test
 	public void testContextLoadAndUnloadAreVisibleWithinCurrentTransition() {
 		engine.jobs().invokeOperation("v/ops/covia/write",
@@ -1086,8 +1094,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "context-immediate-agent",
-			AgentState.KEY_CONFIG, Maps.of(
-				"llmOperation", "v/test/ops/skillllm"),
+			AgentState.KEY_CONFIG, CONTEXT_LIFECYCLE_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of(
 				"content", "run generic context lifecycle")),
 			Fields.SESSION, Maps.of(Fields.ID, Strings.create("context-session")));
@@ -1119,7 +1126,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = step(adapter, RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "context-no-session-agent",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/skillllm"),
+			AgentState.KEY_CONFIG, CONTEXT_LIFECYCLE_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "run generic context lifecycle"))));
 		assertEquals("CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
@@ -2386,8 +2393,7 @@ public class LLMAgentAdapterTest {
 			Strings.create("v/test/ops/echo"), ctx, 5000);
 
 		// Grid-dispatch path: tool name IS the op reference.
-		ACell viaGrid = adapter.dispatchTool("v/test/ops/echo", input,
-			null, ctx, 5000);
+		ACell viaGrid = frameTools(ctx).dispatch("v/test/ops/echo", input);
 
 		// Same op, same input, both paths: identical result — the
 		// Bob/Charlie divergence (#89) cannot recur.
@@ -2400,12 +2406,9 @@ public class LLMAgentAdapterTest {
 		// A string input to internal dispatch STAYS a string — even when it
 		// looks like JSON. Normalisation happens once at the LLM wire
 		// boundary, never inside the dispatch chain.
-		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		RequestContext ctx = RequestContext.of(ALICE_DID);
 		AString jsonish = Strings.create("{\"key\":\"value\"}");
 
-		ACell result = adapter.dispatchTool("v/test/ops/echo", jsonish,
-			null, ctx, 5000);
+		ACell result = frameTools(RequestContext.of(ALICE_DID)).dispatch("v/test/ops/echo", jsonish);
 		assertEquals(jsonish, result, "internal dispatch must not silently parse string inputs");
 	}
 
@@ -2911,7 +2914,7 @@ public class LLMAgentAdapterTest {
 
 	/** context_unload cannot hide operator-pinned context. */
 	@Test public void testUnloadRejectsConfigLoad() throws Exception {
-		FrameTools tools = frameTools(RequestContext.of(ALICE_DID), Maps.empty(),
+		FrameTools tools = frameTools("llmagent", RequestContext.of(ALICE_DID), Maps.empty(),
 			Maps.of(Strings.create("w/pinned"), Maps.of(Strings.create("budget"), CVMLong.create(400))));
 
 		ACell result = call(tools, HarnessTools.CONTEXT_UNLOAD, Maps.of("path", "w/pinned"));
@@ -2953,31 +2956,28 @@ public class LLMAgentAdapterTest {
 	 * is the agent-visible surface; venue logs are not.
 	 */
 	@Test
-	public void testWrongRuntimeHarnessToolFailsDiagnosably() {
-		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		RequestContext ctx = RequestContext.of(ALICE_DID);
+	public void testWrongRuntimeHarnessToolFailsDiagnosably() throws Exception {
+		FrameTools llmagent = frameTools(RequestContext.of(ALICE_DID));
 
-		ACell result = adapter.dispatchTool("subgoal", Maps.empty(), null, ctx, 1000);
-		String msg = RT.ensureString(result).toString();
+		String msg = RT.ensureString(call(llmagent, "subgoal", Maps.empty())).toString();
 		assertTrue(msg.startsWith("Error:"), msg);
 		assertTrue(msg.contains("goaltree harness tool"), msg);
 		assertTrue(msg.contains("llmagent"), msg);
 
-		// A runtime's own harness tool reaches dispatch only through
-		// invoke_tool, and is told to call it directly. Every llmagent harness
-		// name is also goaltree's: the shared tools and the task tools.
-		ACell own = adapter.dispatchTool("context_load", Maps.empty(), null, ctx, 1000);
-		assertEquals("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, "context_load"),
-			RT.ensureString(own).toString());
-		GoalTreeAdapter goaltree = (GoalTreeAdapter) engine.getAdapter("goaltree");
-		ACell task = goaltree.dispatchTool(TaskTools.COMPLETE, Maps.empty(), null, ctx, 1000);
-		assertEquals("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, TaskTools.COMPLETE),
-			RT.ensureString(task).toString());
+		// A runtime's own harness tool, offered, is told to be called directly
+		// when it comes through invoke_tool. Every llmagent harness name is
+		// also goaltree's: the shared tools and the task tools.
+		assertEquals(Strings.create("Error: "
+				+ String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, HarnessTools.CONTEXT_LOAD)),
+			call(llmagent, HarnessTools.INVOKE_TOOL, Maps.of("name", HarnessTools.CONTEXT_LOAD)));
+		FrameTools goaltree = frameTools("goaltree", RequestContext.of(ALICE_DID), Maps.empty(), null);
+		assertEquals(Strings.create("Error: "
+				+ String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY, TaskTools.COMPLETE)),
+			call(goaltree, HarnessTools.INVOKE_TOOL, Maps.of("name", TaskTools.COMPLETE)));
 
 		// A genuinely unknown name is neither a tool nor an operation reference.
-		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), null, ctx, 1000);
-		assertEquals("Error: " + HarnessTools.noSuchTool("no_such_tool_xyz", null),
-			RT.ensureString(unknown).toString());
+		assertEquals(Strings.create("Error: " + HarnessTools.noSuchTool("no_such_tool_xyz", llmagent.offered)),
+			call(llmagent, "no_such_tool_xyz", Maps.empty()));
 	}
 
 	// ========== agent:context includes loads-derived exchanges (#418) ==========

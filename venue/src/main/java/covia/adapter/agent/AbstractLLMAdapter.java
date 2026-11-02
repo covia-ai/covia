@@ -884,18 +884,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Tool dispatch ==========
 
 	/**
-	 * Dispatches a tool call to its operation, after the host's tool guards;
-	 * with no resolved route, through {@link #dispatchUnbound}. The operation
+	 * Dispatches a tool call to the operation the palette routes it to, after
+	 * the host's tool guards ({@link FrameTools#dispatch}). The operation
 	 * enforces capabilities itself, under the agent's grant scope on
 	 * {@code ctx}.
 	 *
-	 * <p>Subclasses should call this for non-harness tools (i.e. after checking
-	 * their own built-in tools like subgoal/complete/compact).</p>
-	 *
 	 * @param toolName the tool name as returned by the LLM
 	 * @param input the tool call arguments
-	 * @param operation resolved operation route, or null when the palette binds
-	 *        no route ({@link #dispatchUnbound}, knowing no surface to hint from)
+	 * @param operation the route the palette binds the name to
 	 * @param ctx request context for the tool dispatch — carries the agent's
 	 *        grant scope ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; a call that outruns it
@@ -905,7 +901,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
 			AString operation, RequestContext ctx, long timeoutMs) {
-		if (operation == null) return dispatchUnbound(toolName, input, ctx, null, timeoutMs);
 		// Capability enforcement happens at the operation's own enforcement point
 		// under the agent's grant scope carried on ctx — no name-keyed gate here.
 		// The host's guards come first: a call they refuse never runs.
@@ -914,24 +909,27 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return invokeOperation(operation, input, ctx, timeoutMs);
 	}
 
-	/** A harness tool of this runtime named through {@code invoke_tool}. */
+	/** A harness tool of this runtime, offered here, named through {@code invoke_tool}. */
 	static final String CALL_HARNESS_DIRECTLY = "'%s' is a harness tool; call it directly, not through invoke_tool";
+	/** A harness tool of this runtime that the frame is not offered. */
+	static final String HARNESS_NOT_OFFERED = "'%s' is not among the tools offered here";
 
 	/**
 	 * Dispatches a tool name the active palette binds to no route (#643). The
 	 * name is either an operation reference, dispatched as one, or nothing this
-	 * session can call: then nothing runs, and the model is told why and, when
+	 * frame can call: then nothing runs, and the model is told why and, when
 	 * {@code surface} shows it for certain, how to make the tool callable
 	 * ({@link HarnessTools#unboundTool}).
 	 *
-	 * @param surface what the session can call and acquire; null when unknown
+	 * @param surface what the frame can call and acquire
 	 */
 	protected ACell dispatchUnbound(String toolName, ACell input, RequestContext ctx,
 			HarnessTools.ToolSurface surface, long timeoutMs) {
-		// This runtime intercepts its own harness tools by name, so one arriving
-		// here came through invoke_tool.
+		// This runtime runs its own harness tools by name where they are
+		// offered, so an offered one arriving here came through invoke_tool.
 		if (harnessToolNames().contains(toolName)) {
-			return Strings.create("Error: " + String.format(CALL_HARNESS_DIRECTLY, toolName));
+			String reason = surface.callable().contains(toolName) ? CALL_HARNESS_DIRECTLY : HARNESS_NOT_OFFERED;
+			return Strings.create("Error: " + String.format(reason, toolName));
 		}
 		// Another runtime's harness tool exists in no catalog: name the actual
 		// reason rather than a resolution miss (#143).

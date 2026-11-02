@@ -143,7 +143,5 @@ public class HarnessToolsTest {
 		Set<String> many = new HashSet<>();
 		for (int i = 0; i <= HarnessTools.MAX_NAMED; i++) many.add("t" + i);
 		assertEquals(head + HarnessTools.USE_TOOL_LIST, HarnessTools.noSuchTool("x", many));
-		assertEquals(head + HarnessTools.USE_TOOL_LIST, HarnessTools.noSuchTool("x", null),
-			"an unknown tool list is referred to, not guessed");
 	}
 }

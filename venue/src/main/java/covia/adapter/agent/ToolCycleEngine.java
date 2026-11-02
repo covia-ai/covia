@@ -189,14 +189,15 @@ final class ToolCycleEngine {
 
 	/**
 	 * Name-to-handler registry with one fallback for ordinary operation tools.
-	 * A name with its own handler is a harness tool — a barrier in a batch;
-	 * everything else is an operation call and may run alongside its
-	 * neighbours.
+	 * A name with its own handler is a harness tool — a barrier in a batch —
+	 * when the context offers it; everything else goes to the fallback and
+	 * may run alongside its neighbours.
 	 */
 	static final class Registry<C> {
 		private final Map<String, ToolHandler<C>> handlers = new HashMap<>();
 		private ToolHandler<C> fallback;
 		private java.util.function.BiFunction<String, C, String> activityLabels;
+		private java.util.function.BiPredicate<String, C> offered = (name, context) -> true;
 
 		Registry<C> register(String name, ToolHandler<C> handler) {
 			handlers.put(name, handler);
@@ -205,6 +206,12 @@ final class ToolCycleEngine {
 
 		Registry<C> fallback(ToolHandler<C> handler) {
 			fallback = handler;
+			return this;
+		}
+
+		/** Which harness tools the context offers; without it, every one. */
+		Registry<C> offered(java.util.function.BiPredicate<String, C> offered) {
+			this.offered = offered;
 			return this;
 		}
 
@@ -218,14 +225,13 @@ final class ToolCycleEngine {
 			return (label != null && !label.isBlank()) ? label : name;
 		}
 
-		/** True for a tool the harness handles itself. */
-		boolean isHarnessTool(String name) {
-			return handlers.containsKey(name);
+		/** True for a tool the harness handles itself and the context offers. */
+		boolean isHarnessTool(String name, C context) {
+			return handlers.containsKey(name) && offered.test(name, context);
 		}
 
 		ToolOutcome dispatch(ToolCall call, C context) throws Exception {
-			ToolHandler<C> handler = handlers.get(call.name());
-			if (handler == null) handler = fallback;
+			ToolHandler<C> handler = isHarnessTool(call.name(), context) ? handlers.get(call.name()) : fallback;
 			if (handler == null) {
 				return ToolOutcome.result(Strings.create("Error: unknown tool: " + call.name()));
 			}
@@ -274,8 +280,9 @@ final class ToolCycleEngine {
 		while (i < decoded.size()) {
 			// The next wave: one harness tool alone, or every adjacent operation call.
 			int end = i + 1;
-			if (!registry.isHarnessTool(decoded.get(i).call().name())) {
-				while (end < decoded.size() && !registry.isHarnessTool(decoded.get(end).call().name())) end++;
+			if (!registry.isHarnessTool(decoded.get(i).call().name(), context)) {
+				while (end < decoded.size()
+					&& !registry.isHarnessTool(decoded.get(end).call().name(), context)) end++;
 			}
 			List<Decoded> wave = decoded.subList(i, end);
 			i = end;
