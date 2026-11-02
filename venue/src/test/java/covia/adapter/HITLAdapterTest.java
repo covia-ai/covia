@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.parallel.Isolated;
@@ -57,8 +58,10 @@ import covia.venue.User;
 @Isolated("silences the AAdapter logger")
 public class HITLAdapterTest {
 
-	private static final Engine engine;
-	static {
+	private static Engine engine;
+
+	@BeforeAll
+	static void startEngine() {
 		engine = Engine.createTemp(Maps.of(
 			Config.HOSTNAME, Strings.create("hitl.test.covia.example"),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));

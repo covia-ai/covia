@@ -8,11 +8,14 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.core.data.Maps;
+import convex.core.data.Strings;
 import covia.adapter.DLFSAdapter;
 import covia.venue.server.VenueServer;
 
@@ -33,6 +36,14 @@ public class DLFSWebDAVTest {
 		http = TestHTTP.CLIENT;
 		// Only MKCOL creates a drive; the tests below write into this one.
 		assertEquals(201, request("MKCOL", "test-drive/", null).statusCode(), "MKCOL should create the drive");
+	}
+
+	/** The drive is the shared server's public identity's, so it goes with this class. */
+	@AfterAll
+	public void removeDrive() {
+		RequestContext publicCtx = RequestContext.of(Strings.create(server.getEngine().getDIDString() + ":public"));
+		server.getEngine().jobs().invokeOperation("v/ops/dlfs/delete-drive",
+			Maps.of("drive", "test-drive"), publicCtx).awaitResult(5000);
 	}
 
 	private HttpResponse<String> request(String method, String path, String body) throws Exception {

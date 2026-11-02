@@ -91,13 +91,28 @@ public class TestEngine {
 		collected = successor;
 	}
 
+	/** Which run of the tests this JVM is on; see {@link #nextRun()}. */
+	private static final java.util.concurrent.atomic.AtomicInteger RUN = new java.util.concurrent.atomic.AtomicInteger(1);
+
+	/**
+	 * Starts another run of the tests in this JVM: from now on
+	 * {@link #uniqueDID} gives every test a DID no earlier run used, so a
+	 * class can run again on the shared engine without meeting the users,
+	 * agents and sessions its last run left there. A harness that loops test
+	 * classes in one JVM calls this between runs, while no test is running.
+	 */
+	public static void nextRun() {
+		RUN.incrementAndGet();
+	}
+
 	/**
 	 * Generates a unique user DID per test method based on the test class
 	 * and method name. Use this in {@code @BeforeEach} so each test sees a
 	 * fresh user namespace within the shared Engine.
 	 *
-	 * <p>The returned DID is deterministic for a given test name — useful
-	 * for debugging — but unique across all tests in the suite.</p>
+	 * <p>The returned DID is deterministic for a given test name within a
+	 * run — useful for debugging — but unique across all tests in the suite,
+	 * and across runs (see {@link #nextRun()}).</p>
 	 *
 	 * @param info JUnit's TestInfo (inject via @BeforeEach parameter)
 	 * @return A DID string like {@code "did:key:z6Mk-test-MyClass-myMethod"}
@@ -107,16 +122,19 @@ public class TestEngine {
 			.map(c -> c.getSimpleName()).orElse("Unknown");
 		String methodName = info.getTestMethod()
 			.map(m -> m.getName()).orElse("unknown");
-		return Strings.create("did:key:z6Mk-test-" + className + "-" + methodName);
+		return uniqueDID(className + "-" + methodName);
 	}
 
 	/**
 	 * Generates a unique DID from an arbitrary discriminator string.
 	 * Use when {@link org.junit.jupiter.api.TestInfo} isn't available
-	 * (e.g. in helper methods called from multiple tests).
+	 * (e.g. in helper methods called from multiple tests). The first run
+	 * gives {@code "did:key:z6Mk-test-<discriminator>"}; a later one appends
+	 * {@code "-run<n>"}.
 	 */
 	public static AString uniqueDID(String discriminator) {
-		return Strings.create("did:key:z6Mk-test-" + discriminator);
+		int run = RUN.get();
+		return Strings.create("did:key:z6Mk-test-" + discriminator + (run > 1 ? "-run" + run : ""));
 	}
 
 	/**

@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -77,15 +78,22 @@ public class VenueIdentityProofTest {
 	private static final Engine ENGINE = TestEngine.ENGINE;
 
 	/** An operator who turns proof off, and accepts bearer credentials without an audience. */
-	private static final Engine LAX = engine(Maps.of(
-		Config.REQUIRE_VENUE_PROOF, CVMBool.FALSE, Config.REQUIRE_AUD, CVMBool.FALSE));
+	private static Engine LAX;
 
 	/** An operator who lists proof by address only. */
-	private static final Engine ADDRESS_ONLY = engine(Maps.of(VenueProofs.VENUE_PROOF,
-		Vectors.of(Maps.of(AuthMethods.ADAPTER, "auth", AuthMethods.IMPLEMENTATION, AuthAdapter.ADDRESS_PROOF))));
+	private static Engine ADDRESS_ONLY;
 
 	/** An operator who lists no proof mechanism. */
-	private static final Engine NO_PROOF = engine(Maps.of(VenueProofs.VENUE_PROOF, Vectors.empty()));
+	private static Engine NO_PROOF;
+
+	@BeforeAll
+	static void startEngines() {
+		LAX = engine(Maps.of(
+			Config.REQUIRE_VENUE_PROOF, CVMBool.FALSE, Config.REQUIRE_AUD, CVMBool.FALSE));
+		ADDRESS_ONLY = engine(Maps.of(VenueProofs.VENUE_PROOF,
+			Vectors.of(Maps.of(AuthMethods.ADAPTER, "auth", AuthMethods.IMPLEMENTATION, AuthAdapter.ADDRESS_PROOF))));
+		NO_PROOF = engine(Maps.of(VenueProofs.VENUE_PROOF, Vectors.empty()));
+	}
 
 	@AfterAll
 	static void closeEngines() {
