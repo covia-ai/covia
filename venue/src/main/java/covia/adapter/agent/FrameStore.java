@@ -199,8 +199,8 @@ interface FrameStore {
 	}
 
 	/**
-	 * Local stack: the pre-cutover behaviour behind the seam. Used when no
-	 * session is in scope (direct {@code processGoal} invocations,
+	 * Local stack, held in memory for one run. Used when no session is in
+	 * scope (direct {@code processGoal} invocations,
 	 * unsessioned trigger cycles); never aborts. The final value is what
 	 * gets emitted on the transition output.
 	 */

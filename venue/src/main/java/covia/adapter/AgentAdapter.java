@@ -4074,9 +4074,9 @@ public class AgentAdapter extends AAdapter {
 				// Invoke transition. Blocks on the vthread — cheap, and any
 				// work the transition enqueues on the lattice (e.g. a nested
 				// agent:chat that wakes this same agent) is naturally visible
-				// to the next iteration via hasWork(). A cancelled or errored
-				// future surfaces as an error-shaped transitionResult so the
-				// merge path handles it normally. The cancellation token rides
+				// to the next iteration via hasWork(). A failed future becomes
+				// an error-shaped transitionResult for the merge; a cancelled one
+				// is handled apart from it. The cancellation token rides
 				// the cycle ctx: cancel(true) does not stop the transition
 				// thread, so long transitions poll the token to stop promptly.
 				java.util.concurrent.atomic.AtomicBoolean cancelToken =
@@ -4382,7 +4382,7 @@ public class AgentAdapter extends AAdapter {
 		tap.end(cycleEndData(merged, leanResponse, leanError, cycleTokens,
 			framesOwned ? null : turnsToAppend));
 
-		// Per-thread scheduled wake (B8.8). Transition result may carry a
+		// Per-thread scheduled wake. Transition result may carry a
 		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
 		// the picked thread. If present, install it via setThreadWakeTime
 		// (lattice-first, then scheduler). If absent but the picked record

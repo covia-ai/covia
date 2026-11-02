@@ -47,13 +47,14 @@ import covia.venue.ToolGuards;
  *
  * <p>Provides shared infrastructure for both the flat conversation model
  * ({@code LLMAgentAdapter}) and the goal tree model ({@code GoalTreeAdapter}).
- * Both adapters use the same Level 3 message format, tool dispatch pipeline,
- * and capability enforcement.</p>
+ * Both adapters use the same Level 3 message format and tool dispatch
+ * pipeline.</p>
  *
  * <h3>Shared responsibilities</h3>
  * <ul>
+ *   <li>Model setup — resolved once per cycle ({@link #modelSetup})</li>
  *   <li>Level 3 invocation — dispatch to LLM via grid operation</li>
- *   <li>Tool dispatch — config tool resolution, capability checking, grid fallthrough</li>
+ *   <li>Tool dispatch — config tool resolution, the host's tool guards, grid fallthrough</li>
  *   <li>Input parsing — canonical structured tool arguments with provider compatibility</li>
  *   <li>Config constants — field keys shared across both adapters</li>
  * </ul>
@@ -782,8 +783,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * provider level. It is an estimate of the context size <em>appropriate</em>
 	 * for the model — what an assembler should target — not the hard window the
 	 * provider enforces. Bytes rather than tokens because bytes are what the
-	 * venue can count without a provider-specific tokenizer; a
-	 * {@code budget.tokens} sibling may follow.
+	 * venue can count without a provider-specific tokenizer.
 	 *
 	 * @param defaultBytes returned when nothing is declared, or the declaration
 	 *        is not a positive integer
@@ -826,9 +826,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * Builds the L3 input map: {@code {messages, tools, model, ...}} — the
-	 * exact payload that goes to the LLM provider operation. Factored out of
-	 * {@link #invokeLevel3} so the same construction can be used for
-	 * inspection (e.g. {@code agent:context}) without actually calling the LLM.
+	 * exact payload that goes to the LLM provider operation, for a live call
+	 * and for inspection alike (through {@code ContextAssembler.Prompt.toL3Input}).
 	 */
 	public static AMap<AString, ACell> buildL3Input(AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools) {
@@ -877,9 +876,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	// ========== Tool dispatch ==========
 
 	/**
-	 * Dispatches a tool call through the capability-checked pipeline.
-	 * Checks capabilities and falls through to grid dispatch when no resolved
-	 * operation route is supplied.
+	 * Dispatches a tool call to its operation, after the host's tool guards;
+	 * with no resolved route, through {@link #dispatchUnbound}. The operation
+	 * enforces capabilities itself, under the agent's grant scope on
+	 * {@code ctx}.
 	 *
 	 * <p>Subclasses should call this for non-harness tools (i.e. after checking
 	 * their own built-in tools like subgoal/complete/compact).</p>
@@ -890,9 +890,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 *        no route ({@link #dispatchUnbound}, knowing no surface to hint from)
 	 * @param ctx request context for the tool dispatch — carries the agent's
 	 *        grant scope ({@link RequestContext#getCaps()})
-	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
-	 *        is converted to an "Error: tool call timed out" string result so
-	 *        the agent loop can continue
+	 * @param timeoutMs per-tool-call wall-clock budget; a call that outruns it
+	 *        gives a result saying so (a sessioned call's outcome reaches the
+	 *        session when it ends), so the agent loop can continue
 	 * @return tool result (ACell)
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
@@ -1001,10 +1001,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * Invokes an operation with a per-call timeout, normally via the no-Job
 	 * internal dispatch path. Sessioned {@code hitl:request} is the deliberate
 	 * exception: it returns its durable Job handle immediately and re-enters the
-	 * session on resolution. {@code invokeInternal} enforces the grant scope carried by
-	 * {@code ctx} (today the agent cycle runs unrestricted at the context
-	 * level); {@link #dispatchTool} has additionally checked the call against
-	 * the agent's own config caps. Times out via
+	 * session on resolution. {@code invokeInternal} enforces the agent's grant
+	 * scope carried by {@code ctx}. Times out via
 	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so a
 	 * stuck downstream op cannot hang the agent loop forever. Inside a cycle
 	 * with a live tap, the progress the operation publishes while it runs is
@@ -1076,8 +1074,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * Resolves the per-tool-call timeout from the agent's merged config.
-	 * Accepts CVMLong (ms) or any numeric ACell; falls back to the default
-	 * if absent, non-numeric, or below the 1s minimum.
+	 * Accepts an integer number of milliseconds; falls back to the default
+	 * if absent, not an integer, or below the 1s minimum.
 	 */
 	public static long resolveToolCallTimeoutMs(AMap<AString, ACell> config) {
 		ACell v = (config != null) ? config.get(K_TOOL_CALL_TIMEOUT_MS) : null;
@@ -1243,43 +1241,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		if (config == null) return DEFAULT_LLM_OPERATION;
 		AString op = RT.ensureString(config.get(K_LLM_OPERATION));
 		return (op != null) ? op : DEFAULT_LLM_OPERATION;
-	}
-
-	/**
-	 * Pretty-prints a Level 3 input map as JSON for inspection. Output is
-	 * stable-ordered ({@code model}, {@code responseFormat}, {@code messages},
-	 * {@code tools}) so diffs across turns stay readable. Used by
-	 * {@code inspectContext} implementations.
-	 */
-	@SuppressWarnings("unchecked")
-	public static AString renderL3InputAsJson(AMap<AString, ACell> l3Input) {
-		AVector<ACell> messages = RT.ensureVector(l3Input.get(K_MESSAGES));
-		AVector<ACell> tools = RT.ensureVector(l3Input.get(K_TOOLS));
-		StringBuilder sb = new StringBuilder("{\n");
-		ACell model = l3Input.get(K_MODEL);
-		if (model != null) {
-			sb.append("  \"model\": ").append(convex.core.util.JSON.toString(model)).append(",\n");
-		}
-		ACell rf = l3Input.get(K_RESPONSE_FORMAT);
-		if (rf != null) {
-			sb.append("  \"responseFormat\": ").append(convex.core.util.JSON.toString(rf)).append(",\n");
-		}
-		sb.append("  \"messages\": [\n");
-		if (messages != null) {
-			for (long i = 0; i < messages.count(); i++) {
-				if (i > 0) sb.append(",\n");
-				sb.append("    ").append(convex.core.util.JSON.toString(messages.get(i)));
-			}
-		}
-		sb.append("\n  ],\n  \"tools\": [\n");
-		if (tools != null) {
-			for (long i = 0; i < tools.count(); i++) {
-				if (i > 0) sb.append(",\n");
-				sb.append("    ").append(convex.core.util.JSON.toString(tools.get(i)));
-			}
-		}
-		sb.append("\n  ]\n}");
-		return Strings.create(sb.toString());
 	}
 
 	/**

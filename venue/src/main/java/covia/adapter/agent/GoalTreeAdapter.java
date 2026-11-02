@@ -162,8 +162,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	record Cycle(ModelSetup model,
 			AMap<AString, ACell> toolIndex,
 			RequestContext ctx, ContextAssembler.Spec spec, AVector<ACell> typedRootHarnessTools,
-			long toolCallTimeoutMs, AMap<AString, ACell> outerLoads, TaskTools.Tasks tasks,
-			AVector<ACell> unavailable) {
+			long toolCallTimeoutMs, AMap<AString, ACell> outerLoads, TaskTools.Tasks tasks) {
 		/** The config the root frame's calls carry. */
 		AMap<AString, ACell> config() {
 			return model.config();
@@ -212,8 +211,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * + the first iteration of {@code runFrame}, minus the actual LLM call.
 	 *
 	 * <p>Returns the map that {@code invokeLevel3} would dispatch:
-	 * {@code {messages, tools, model, ...}}. Used by {@code agent:context}
-	 * for inspection.</p>
+	 * {@code {messages, tools, model, ...}}.</p>
 	 *
 	 * @param recordConfig agent's record-level config
 	 * @param state agent's state
@@ -323,9 +321,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			rootFrames, cachePrefix);
 		AVector<ACell> baseTools = fixed.baseTools();
 		AVector<ACell> fixedTools = (AVector<ACell>) TaskTools.DEFINITIONS.concat(harness).concat(baseTools);
-		AMap<AString, ACell> frameLoads = rootFrames.isEmpty()
-			? Maps.empty()
-			: GoalTreeContext.getLoads((AMap<AString, ACell>) rootFrames.get(0));
 		boolean materialiseLive = ContextAssembler.rendered(
 			rootFrames, sourceConfig, cachePrefix) == null;
 		Loads.Snapshot loads = Loads.resolveForInference(engine, capsCtx, indexLoads,
@@ -335,8 +330,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		// The loads ride in exactly as runFrame sets them — stable elements
 		// through withLoads and watched values through the frame observation — so an inspected
-		// context matches a live inference by construction. The pre-split
-		// elements dropped every loads-derived exchange from inspection (#418).
+		// context matches a live inference by construction.
 		AVector<ACell> offered = concatTools(fixedTools, loads.tools());
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, l3Config,
@@ -354,8 +348,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		rootFrames = rootFrames.assoc(0, observedRoot);
 		spec = spec.withFrames(rootFrames);
 		Cycle cycle = new Cycle(model, fixed.toolIndex(),
-			capsCtx, spec, typedTools, toolCallTimeoutMs, outerLoads, taskTools,
-			fixed.unavailable());
+			capsCtx, spec, typedTools, toolCallTimeoutMs, outerLoads, taskTools);
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
 			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")
@@ -527,9 +520,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// A step runs as its agent, under the agent's authority as it stands now,
 		// whoever invoked it and whatever its input's config names.
 		RequestContext capsCtx = engine.stepContext(ctx, agentId);
-		ACell state = RT.getIn(input, AgentState.KEY_STATE);
-		// S3c: prefer session.pending over agent-level messages when a session
-		// is in scope. effectiveMessages picks the right one (no duplication).
+		// The session's pending messages when a session is in scope, else the agent's.
 		AVector<ACell> messages = covia.adapter.AgentAdapter.effectiveMessages(input);
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
@@ -595,11 +586,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameStore store = opened.store();
 		boolean tidyInterrupted = opened.interrupted();
 		AVector<ACell> frames = store.frames();
-		// The shared context is always built from the ROOT view of the stack —
-		// exactly what every pre-cutover cycle saw (clean cycles end
-		// root-only). An interrupted stack may still hold child frames; the
-		// cleanup driver settles them without execution. Rendering a child's conversation into
-		// the shared history here would leak it into the root's context.
+		// The shared context is always built from the ROOT view of the stack
+		// (clean cycles end root-only). An interrupted stack may still hold
+		// child frames; the cleanup driver settles them without execution.
+		// Rendering a child's conversation into the shared history here would
+		// leak it into the root's context.
 		if (frames.count() > 1) {
 			frames = (AVector<ACell>) frames.slice(0, 1);
 		}
@@ -611,7 +602,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		// Authority, palette and the cycle's Spec. Harness tool names in
 		// config.tools are skipped by the palette — they're resolved separately
-		// by resolveHarnessTools / buildTypedRootHarnessTools.
+		// by harnessForFrame.
 		ModelProfile profile = model.profile();
 		boolean cachePrefix = promptCaching(profile, l3Config);
 		FixedPalette fixed = fixedPalette(sourceConfig, ctx,
@@ -635,8 +626,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
 		Cycle cycle = new Cycle(model, fixed.toolIndex(), capsCtx, cycleSpec,
 			typedHarnessTools, toolCallTimeoutMs, outerLoads,
-			new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, false),
-			fixed.unavailable());
+			new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, false));
 
 		// Run the root frame. typedHarnessTools (if non-null) injects the
 		// typed complete/fail tools alongside the regular harness/operation
@@ -673,7 +663,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			completeTaskViaVenueOp(ctx, failed, result.value());
 		}
 		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
-		if (store instanceof FrameStore.LocalFrameStore && result.frames() != null) {
+		if (store instanceof FrameStore.LocalFrameStore) {
 			output = output.assoc(Fields.FRAMES, result.frames());
 		}
 		if (failed) {
@@ -720,12 +710,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	// ========== Frame execution ==========
 
 	/**
-	 * Result of running a frame — either complete or failed.
-	 *
-	 * <p>{@code frames} always carries the final frame stack so the caller can
-	 * emit it back to {@code mergeRunResult} as {@code Fields.FRAMES}. The
-	 * session record on the lattice is the sole post-mortem — there is no
-	 * separate failure snapshot.</p>
+	 * Result of running a frame — either complete or failed — with the frame
+	 * stack as it then stood. A local (unsessioned) run returns that stack in
+	 * its output; a sessioned run's stack is the session record itself.
 	 */
 	record FrameResult(String status, ACell value, AVector<ACell> frames) {
 		static FrameResult complete(ACell value, AVector<ACell> frames) {
@@ -1008,7 +995,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * when subgoal is called.
 	 *
 	 * @param frameIndex index of the active frame
-	 * @param baseToolsParam configured operation tools (grown by more_tools)
+	 * @param baseTools configured operation tools; tools loaded later arrive as load events
 	 * @param cycle what holds for the whole cycle — config, operation, routes,
 	 *        authority, Spec, typed root tools, timeout, outer loads, tasks.
 	 *        Typed complete/fail tools apply at the root frame only, where the
@@ -1017,14 +1004,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	@SuppressWarnings("unchecked")
 	FrameResult runFrame(Job job, FrameStore store, int frameIndex,
-			AVector<ACell> baseToolsParam, Cycle cycle) {
+			AVector<ACell> baseTools, Cycle cycle) {
 		AMap<AString, ACell> config = cycle.config();
 		RequestContext ctx = cycle.ctx();
 		ContextAssembler.Spec cycleSpec = cycle.spec();
 		AVector<ACell> typedRootHarnessTools = cycle.typedRootHarnessTools();
-
-		// Fixed provider projection; later tools are represented by load events.
-		AVector<ACell> baseTools = baseToolsParam;
 
 		AVector<ACell> harnessForFrame = harnessForFrame(config, frameIndex, typedRootHarnessTools);
 		// Typed outputs only at the root frame — children produce free-form
@@ -1052,15 +1036,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 		}
 
-		// Deferred compact: applied at the start of the next iteration so we never
-		// split an assistant message from its tool results (OpenAI requires every
-		// tool result to follow its assistant tool_calls message)
 		FrameToolContext frameTools = new FrameToolContext(job, store, frameIndex, baseTools, cycle);
 		frameTools.activeFrame = activeFrame;
 		ToolCycleEngine.Registry<FrameToolContext> toolRegistry = frameTools.registry();
 
-		int maxIterations = (frameL3Config != null
-				&& frameL3Config.get(K_MAX_TOOL_ITERATIONS) != null)
+		int maxIterations = (frameL3Config.get(K_MAX_TOOL_ITERATIONS) != null)
 			? resolveMaxToolIterations(frameL3Config) : MAX_ITERATIONS;
 		ToolCycleEngine.BatchSink sink = new ToolCycleEngine.BatchSink() {
 			@Override
@@ -1167,7 +1147,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 			ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 				calls, iteration, toolRegistry, frameTools, sink, log);
-			if (batch.isAborted()) return abortedResult(store);
+			if (batch.aborted()) return abortedResult(store);
 			if (batch.isTerminal()) {
 				boolean failed = "failed".equals(batch.terminalStatus());
 				frameTools.activeFrame = GoalTreeContext.appendTurn(
@@ -1316,7 +1296,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 *   <li>terminal child (status marker) — popped with its recorded outcome;
 	 *       a text completion's value is recovered from its final turn, an
 	 *       unrecoverable value becomes an honest "may be lost" note. Never
-	 *       re-run (I8).</li>
+	 *       re-run.</li>
 	 *   <li>live child — popped un-run with an "interrupted — re-issue if
 	 *       needed" failure. Internal execution is never resumed.</li>
 	 * </ul>
@@ -1371,14 +1351,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		}
 
 		return runFrame(job, store, 0, baseTools, cycle);
-	}
-
-	/** Transition output for a cycle that lost frame ownership mid-flight. */
-	private static AMap<AString, ACell> abortedOutput(FrameStore store) {
-		FrameResult aborted = abortedResult(store);
-		return Maps.of(
-			AgentState.KEY_STATE, Maps.empty(),
-			Fields.ERROR, aborted.value());
 	}
 
 	/** Resolves outside the lattice update, then atomically installs or removes
@@ -1504,19 +1476,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	/**
 	 * Resolves the agent's typed outputs declaration. Returns the
 	 * {@code outputs} map from config when present. Otherwise, when
-	 * {@code responseFormat} declares a JSON schema, synthesises a
-	 * shimmed outputs declaration so existing agents that only specify
-	 * responseFormat get the typed-tool treatment too.
+	 * {@code responseFormat} declares a JSON schema, an outputs declaration
+	 * with that schema, so an agent that specifies only responseFormat gets
+	 * the typed tools too.
 	 *
 	 * <p>Returns null if neither outputs nor a schema-bearing responseFormat
-	 * is declared — the agent uses the legacy untyped harness tools.</p>
+	 * is declared — the agent uses the untyped harness tools.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> resolveOutputs(AMap<AString, ACell> config) {
 		if (config == null) return null;
 		ACell explicit = config.get(K_OUTPUTS);
 		if (explicit instanceof AMap) return (AMap<AString, ACell>) explicit;
-		// Migration shim: lift responseFormat.schema into outputs.complete.schema
+		// A schema-bearing responseFormat stands for outputs.complete.schema
 		if (hasSchemaResponseFormat(config)) {
 			AMap<AString, ACell> rf = (AMap<AString, ACell>) config.get(K_RESPONSE_FORMAT);
 			ACell schema = rf.get(K_SCHEMA);

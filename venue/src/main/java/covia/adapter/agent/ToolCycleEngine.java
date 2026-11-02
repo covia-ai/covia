@@ -159,10 +159,6 @@ final class ToolCycleEngine {
 			return new ToolOutcome(result, null, null, true, false, events);
 		}
 
-		static ToolOutcome recorded() {
-			return recorded(null);
-		}
-
 		/** A handler that persisted its result itself; {@code result} is what
 		 *  it recorded, kept for the cycle record. */
 		static ToolOutcome recorded(ACell result) {
@@ -181,7 +177,6 @@ final class ToolCycleEngine {
 	/** Outcome of a complete provider batch. */
 	record BatchResult(String terminalStatus, ACell terminalValue, boolean aborted) {
 		boolean isTerminal() { return terminalStatus != null; }
-		boolean isAborted() { return aborted; }
 	}
 
 	@FunctionalInterface

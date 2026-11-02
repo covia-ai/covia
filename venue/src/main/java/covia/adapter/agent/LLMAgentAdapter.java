@@ -18,7 +18,6 @@ import covia.adapter.AgentAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
-import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -80,13 +79,6 @@ import covia.venue.RequestContext;
 public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning {
 
 	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
-
-	// State field keys
-
-	// Config keys specific to this adapter (parent provides K_CONFIG, K_LLM_OPERATION,
-	// K_MODEL, K_SYSTEM_PROMPT, K_URL, K_API_KEY, K_TOOLS, K_RESPONSE_FORMAT,
-	// K_CONTEXT, K_CAPS, K_TOOL_CALL_TIMEOUT_MS).
-	private static final AString K_DEFAULT_TOOLS   = Strings.intern("defaultTools");
 
 	// ========== Default tool definitions ==========
 	// MCP-style: {name, description, parameters: {type: "object", properties: {...}, required: [...]}}
@@ -171,7 +163,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> tasks = (in.task() != null)
 			? Vectors.of((ACell) Maps.of(Fields.JOB_ID, TaskTools.PREVIEW_JOB_ID, Fields.INPUT, in.task()))
 			: null;
-		ToolContext toolCtx = toolContext(config, sourceConfig, capsCtx, tasks, in.pending(),
+		ToolContext toolCtx = toolContext(config, sourceConfig, capsCtx, tasks,
 			configLoads, frameLoads, in.session() != null, fixed, true);
 		toolCtx.labels = profile.labels();
 		toolCtx.cachePrefix = cachePrefix;
@@ -191,8 +183,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		// The loads ride in exactly as the tool loop sets them — stable elements
 		// through withLoads and watched values through the frame observation — so an inspected
-		// context matches a live inference by construction. The pre-split
-		// elements dropped every loads-derived exchange from inspection (#418).
+		// context matches a live inference by construction.
 		AVector<ACell> offered = concatTools(fixedTools, loads.tools());
 		ContextAssembler.Spec spec = new ContextAssembler.Spec(
 			engine, ctx, capsCtx, config,
@@ -341,10 +332,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// A step runs as its agent, under the agent's authority as it stands now,
 		// whoever invoked it and whatever its input's config names.
 		RequestContext capsCtx = engine.stepContext(ctx, agentId);
-		ACell state = RT.getIn(input, AgentState.KEY_STATE);
-		// S3c: prefer session.pending over agent-level messages when a session
-		// is in scope. Both carry the same envelopes (S3b dual-write); reading
-		// both would duplicate. effectiveMessages picks the right one.
+		// The session's pending messages when a session is in scope, else the agent's.
 		AVector<ACell> messages = AgentAdapter.effectiveMessages(input);
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
@@ -390,7 +378,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			sessionFrames, cachePrefix);
 		AVector<ACell> fixedTools = fixed.tools();
 
-		ToolContext toolCtx = toolContext(config, recordConfig, capsCtx, tasks, pending,
+		ToolContext toolCtx = toolContext(config, recordConfig, capsCtx, tasks,
 			configLoads, frameLoads, sessionInScope, fixed, false);
 		toolCtx.labels = profile.labels();
 		toolCtx.cachePrefix = cachePrefix;
@@ -476,12 +464,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	private ToolContext toolContext(AMap<AString, ACell> config,
 			AMap<AString, ACell> sourceConfig, RequestContext capsCtx,
-			AVector<ACell> tasks, AVector<ACell> pending,
+			AVector<ACell> tasks,
 			AMap<AString, ACell> configLoads, AMap<AString, ACell> frameLoads,
 			boolean sessionInScope, FixedPalette fixed, boolean preview) {
 		long timeoutMs = resolveToolCallTimeoutMs(config);
-		ToolContext toolCtx = new ToolContext(capsCtx.getAgentId(), capsCtx,
-			new TaskTools.Tasks(engine, capsCtx, tasks, timeoutMs, preview), pending,
+		ToolContext toolCtx = new ToolContext(capsCtx,
+			new TaskTools.Tasks(engine, capsCtx, tasks, timeoutMs, preview),
 			frameLoads, timeoutMs, fixed.toolIndex());
 		toolCtx.outerLoads = configLoads;
 		toolCtx.sourceConfig = sourceConfig;
@@ -531,9 +519,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * executes each tool, appends tool result messages, and calls the LLM again.
 	 * Repeats until a text-only response or the iteration limit.</p>
 	 *
-	 * <p>Built-in tools (complete_task, fail_task, grid_run, grid_invoke,
-	 * message_agent) are intercepted and handled locally. All other tool names
-	 * are dispatched as grid operations.</p>
+	 * <p>This runtime's harness tools (the task tools and the shared context
+	 * tools) are handled here; every other tool name is dispatched as an
+	 * operation.</p>
 	 *
 	 * @return Vector of new messages to append to history (includes any tool call
 	 *         assistant messages, tool result messages, and the final text response)
@@ -943,10 +931,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * Mutable context passed through the tool call loop for built-in tool state.
 	 */
 	static class ToolContext {
-		final AString agentId;
 		final RequestContext ctx;
 		final TaskTools.Tasks tasks;
-		final AVector<ACell> pending;
 		final long toolCallTimeoutMs;
 		AMap<AString, ACell> toolIndex;
 		/** The root frame being assembled between atomic store updates. */
@@ -1030,20 +1016,18 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				|| (toolIndex != null && toolIndex.containsKey(Strings.create(name)));
 		}
 
-		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
+		ToolContext(RequestContext ctx, AVector<ACell> tasks,
 				AMap<AString, ACell> toolIndex, AMap<AString, ACell> loads) {
 			// No live task boundary: the tasks resolve in preview, never reaching a job.
-			this(agentId, ctx, new TaskTools.Tasks(null, ctx, tasks, DEFAULT_TOOL_CALL_TIMEOUT_MS, true),
-				pending, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS, toolIndex);
+			this(ctx, new TaskTools.Tasks(null, ctx, tasks, DEFAULT_TOOL_CALL_TIMEOUT_MS, true),
+				loads, DEFAULT_TOOL_CALL_TIMEOUT_MS, toolIndex);
 		}
 
-		private ToolContext(AString agentId, RequestContext ctx, TaskTools.Tasks tasks, AVector<ACell> pending,
+		private ToolContext(RequestContext ctx, TaskTools.Tasks tasks,
 				AMap<AString, ACell> loads, long toolCallTimeoutMs,
 				AMap<AString, ACell> toolIndex) {
-			this.agentId = agentId;
 			this.ctx = ctx;
 			this.tasks = tasks;
-			this.pending = pending;
 			this.toolIndex = (toolIndex != null) ? toolIndex : Maps.empty();
 			this.activeFrame = GoalTreeContext.createFrame("", loads);
 			this.frames = Vectors.of(activeFrame);
@@ -1066,10 +1050,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (activeFrame == null) return;
 			activeFrame = GoalTreeContext.withLoads(activeFrame, loads);
 			frames = frames.assoc(0, activeFrame);
-		}
-
-		void addLoad(AString path, AMap<AString, ACell> meta) {
-			setLoads(getLoads().assoc(path, meta));
 		}
 
 		AMap<AString, ACell> getLoads() {

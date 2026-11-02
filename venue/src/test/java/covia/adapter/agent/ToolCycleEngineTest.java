@@ -109,7 +109,7 @@ public class ToolCycleEngineTest {
 		long millis = (System.nanoTime() - started) / 1_000_000;
 
 		assertFalse(batch.isTerminal());
-		assertFalse(batch.isAborted());
+		assertFalse(batch.aborted());
 		assertEquals(List.of("a", "b", "c"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
 		for (AMap<AString, ACell> m : sink.messages) {
 			assertEquals("ran " + id(m), content(m), "every call passed the barrier");
@@ -235,7 +235,7 @@ public class ToolCycleEngineTest {
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			Vectors.of(call("1", "op"), call("stop", CONTROL), call("2", "op")),
 			0, registry, new Object(), sink, log);
-		assertTrue(batch.isAborted());
+		assertTrue(batch.aborted());
 		assertEquals(1, dispatched.get());
 		assertEquals(List.of("1"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
 	}
