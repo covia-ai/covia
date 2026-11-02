@@ -321,6 +321,36 @@ public class GoalTreeAdapterTest {
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count());
 	}
 
+	/** A subgoal is its parent's tool: when the child's model call fails, the
+	 *  parent sees a failed subgoal and carries on, and the child is popped. */
+	@Test
+	public void testAFailedSubgoalIsReportedToItsParentAndPopped() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "subgoal-fails",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/subgoalechollm",
+					"model", TestAdapter.SUBGOAL_CHILD_FAILS,
+					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
+			ALICE).awaitResult(5000);
+		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "subgoal-fails", Fields.MESSAGE, "decompose this"),
+			ALICE).awaitResult(15000);
+		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString(), "the parent carried on");
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-fails");
+		AMap<AString, ACell> session = agent.getSession(
+			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
+		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count(), "the failed child was popped");
+
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+		AVector<ACell> inferences = RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0)).get(Fields.INFERENCES));
+		ACell call = RT.ensureVector(RT.getIn(inferences.get(0), Fields.CALLS)).get(0);
+		assertEquals("subgoal", RT.getIn(call, "name").toString());
+		assertEquals("failed", String.valueOf(RT.getIn(call, Fields.RESULT, "status")), call.toString());
+		assertTrue(String.valueOf(RT.getIn(call, Fields.RESULT, Fields.RESULT)).contains(TestAdapter.SUBGOAL_CHILD_FAILED),
+			call.toString());
+	}
+
 	// ========== Tool definitions ==========
 
 	@Test

@@ -217,7 +217,7 @@ When `config.outputs.complete.schema` is declared, the harness auto-injects type
   name: "subgoal",
   description: "Delegate a self-contained piece of work to a child frame. The child runs independently with its own conversation and tool access. Returns the child's result as a tool result.",
   parameters: { description: { type: "string" } },
-  returns: "{status: 'complete', result: any} or {status: 'failed', error: any}"
+  returns: "{status: 'complete' | 'failed', result: any}"
 }
 ```
 
@@ -451,8 +451,14 @@ A user "stop" or "cancel" is not a chat message and doesn't go through this path
 
 ```
 subgoal("Analyse Delta Corp")
--> {"status": "failed", "error": {"reason": "API returned 503", "retryable": true}}
+-> {"status": "failed", "result": {"reason": "API returned 503", "retryable": true}}
 ```
+
+A child fails when it calls `fail`, runs out of iterations, or its own work
+fails, such as a model call the provider refuses. Whatever the cause, the parent
+sees a failed subgoal with the reason as its result, as for any other tool, and
+the cycle carries on. A failure of the agent's setup reaches the parent's next
+model call too, which ends the cycle (AGENT_LOOP.md §3.4).
 
 Parent decides: retry, skip, escalate, or fail itself. The child frame is popped from the stack either way; the parent sees its outcome as the subgoal call's tool result, and the child's own exchange — context, inferences, tool calls and results — is kept under that call in the cycle's timeline entry ([AGENT_LOOP.md §2.4](./AGENT_LOOP.md)). A subgoal pops out of the parent's current context; its history stays available for audit and introspection.
 

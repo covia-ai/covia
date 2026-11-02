@@ -978,6 +978,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			FrameResult childResult;
 			try {
 				childResult = runFrame(job, store, frameIndex + 1, baseTools, cycle);
+			} catch (RuntimeException e) {
+				// The child is this frame's tool: however it failed, the parent
+				// sees a failed subgoal, and the child is popped like any other.
+				childResult = FrameResult.failed(Strings.create(toolFailure(e, call.name())), store.frames());
 			} finally {
 				if (record != null) record.attachFrame(call.id(), record.closeFrame());
 			}

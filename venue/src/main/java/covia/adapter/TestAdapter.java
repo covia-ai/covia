@@ -260,6 +260,9 @@ public class TestAdapter extends AAdapter {
                 case "subgoalllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleSubgoalLlm(input), input));
                 case "subgoalechollm":
+                    if (SUBGOAL_CHILD_FAILS.equals(RT.getIn(input, Fields.MODEL)) && inSubgoalChild(input)) {
+                        return CompletableFuture.failedFuture(new InvalidInputException(SUBGOAL_CHILD_FAILED));
+                    }
                     return CompletableFuture.completedFuture(withMockTokens(handleSubgoalEchoLlm(input), input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleTaskLlm(input), input));
@@ -1230,27 +1233,34 @@ public class TestAdapter extends AAdapter {
             )));
     }
 
+    /** The model that makes {@code subgoalechollm}'s child fail its model call. */
+    public static final AString SUBGOAL_CHILD_FAILS = Strings.intern("child-fails");
+    /** The reason the child's model call gives when it fails. */
+    public static final String SUBGOAL_CHILD_FAILED = "subgoalechollm scripted child failure";
+
+    /** Whether a {@code subgoalechollm} call is the child's, recognised by its goal text. */
+    @SuppressWarnings("unchecked")
+    private static boolean inSubgoalChild(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (!(messagesCell instanceof AVector)) return false;
+        AVector<ACell> messages = (AVector<ACell>) messagesCell;
+        for (long i = 0; i < messages.count(); i++) {
+            AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+            if (content != null && content.toString().contains("run the sub-task")) return true;
+        }
+        return false;
+    }
+
     /**
      * Test LLM for a subgoal that completes: the ROOT issues a subgoal; the
      * CHILD (recognised by its goal text) calls echo once, then answers
      * "sub done"; the root answers "root done" on seeing the subgoal's
      * result. Push, run, pop — the child's exchange survives only in the
-     * cycle record (#392).
+     * cycle record (#392). With model {@link #SUBGOAL_CHILD_FAILS} the
+     * child's model call fails instead, as a refusal of its content.
      */
-    @SuppressWarnings("unchecked")
     private ACell handleSubgoalEchoLlm(ACell input) {
-        boolean inChild = false;
-        ACell messagesCell = RT.getIn(input, "messages");
-        if (messagesCell instanceof AVector) {
-            AVector<ACell> messages = (AVector<ACell>) messagesCell;
-            for (long i = 0; i < messages.count(); i++) {
-                AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
-                if (content != null && content.toString().contains("run the sub-task")) {
-                    inChild = true;
-                    break;
-                }
-            }
-        }
+        boolean inChild = inSubgoalChild(input);
         if (hasToolResultMessage(input)) {
             return Maps.of(
                 "role", Strings.create("assistant"),
