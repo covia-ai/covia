@@ -40,6 +40,9 @@ final class TaskTools {
 
 	/** Stands in for the task job id a live cycle carries ({@code agent:context}, {@code agent:step}). */
 	static final AString PREVIEW_JOB_ID = Strings.intern("preview");
+	/** The venue operations that resolve the in-scope task. */
+	static final AString COMPLETE_TASK_OP = Strings.intern("v/ops/agent/complete-task");
+	static final AString FAIL_TASK_OP = Strings.intern("v/ops/agent/fail-task");
 
 	private static final String BASE = "/adapters/agent/";
 
@@ -168,7 +171,7 @@ final class TaskTools {
 			if (!preview) {
 				try {
 					ACell r = engine.jobs().invokeInternal(
-						failed ? "v/ops/agent/fail-task" : "v/ops/agent/complete-task",
+						failed ? FAIL_TASK_OP : COMPLETE_TASK_OP,
 						Maps.of(failed ? Fields.ERROR : Fields.RESULT, value), ctx)
 						.get(timeoutMs, TimeUnit.MILLISECONDS);
 					if (r != null) opResult = r;

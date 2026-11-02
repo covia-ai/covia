@@ -1237,6 +1237,8 @@ public class TestAdapter extends AAdapter {
     public static final AString SUBGOAL_CHILD_FAILS = Strings.intern("child-fails");
     /** The reason the child's model call gives when it fails. */
     public static final String SUBGOAL_CHILD_FAILED = "subgoalechollm scripted child failure";
+    /** The model that makes every {@code subgoalechollm} frame issue a subgoal. */
+    public static final AString SUBGOAL_DEEPEN = Strings.intern("deepen");
 
     /** Whether a {@code subgoalechollm} call is the child's, recognised by its goal text. */
     @SuppressWarnings("unchecked")
@@ -1257,7 +1259,9 @@ public class TestAdapter extends AAdapter {
      * "sub done"; the root answers "root done" on seeing the subgoal's
      * result. Push, run, pop — the child's exchange survives only in the
      * cycle record (#392). With model {@link #SUBGOAL_CHILD_FAILS} the
-     * child's model call fails instead, as a refusal of its content.
+     * child's model call fails instead, as a refusal of its content; with
+     * model {@link #SUBGOAL_DEEPEN} every frame issues a subgoal of its own
+     * until one is refused for depth.
      */
     private ACell handleSubgoalEchoLlm(ACell input) {
         boolean inChild = inSubgoalChild(input);
@@ -1266,7 +1270,7 @@ public class TestAdapter extends AAdapter {
                 "role", Strings.create("assistant"),
                 "content", Strings.create(inChild ? "sub done" : "root done"));
         }
-        if (inChild) {
+        if (inChild && !SUBGOAL_DEEPEN.equals(RT.getIn(input, Fields.MODEL))) {
             return Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(

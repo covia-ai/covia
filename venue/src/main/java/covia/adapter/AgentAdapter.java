@@ -135,6 +135,8 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPENDED_ASK_ADVICE = "ask whoever stopped the agent before using agent:resume";
 	/** The progress of a Job waiting on a suspended agent: its id, then {@code ": <cause>"} or nothing. */
 	public static final String SUSPENDED_WAITING = "Agent '%s' is suspended%s; this waits until the agent is resumed";
+	/** How a cycle's error begins when its transition failed; the reason follows. */
+	public static final String TRANSITION_FAILED = "Transition failed: ";
 	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
 	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
@@ -1230,7 +1232,7 @@ public class AgentAdapter extends AAdapter {
 		try { opAsset = engine.resolveAsset(llmOp, ctx); }
 		catch (RuntimeException e) { return null; }
 		if (opAsset == null) return null;
-		AString model = RT.ensureString(config.get(Strings.intern("model")));
+		AString model = RT.ensureString(config.get(K_MODEL));
 		AMap<AString, ACell> profile = AbstractLLMAdapter.modelProfile(opAsset.meta(), model, config);
 		AString declared = declaredNoToolCalling(profile, model, llmOp);
 		if (declared != null) return declared;
@@ -1239,7 +1241,7 @@ public class AgentAdapter extends AAdapter {
 		String adapterOp = getAdapterOperation(opAsset.meta());
 		if (adapterOp == null || !adapterOp.startsWith("langchain:ollama")) return null;
 		String modelName = (model != null) ? model.toString() : "qwen";  // langchain Ollama default
-		AString urlCell = RT.ensureString(config.get(Strings.intern("url")));
+		AString urlCell = RT.ensureString(config.get(AbstractLLMAdapter.K_URL));
 		String baseUrl = (urlCell != null) ? urlCell.toString() : "http://localhost:11434";
 		return toolWarningFor(modelName, baseUrl,
 			LangChainAdapter.ollamaModelCapabilities(baseUrl, modelName));
@@ -4120,7 +4122,7 @@ public class AgentAdapter extends AAdapter {
 					Throwable reason = (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
 					cannotContinue = agentCannotContinue(reason);
 					AMap<AString, ACell> failed = Maps.of(Fields.ERROR,
-						Strings.create("Transition failed: " + describeFailure(reason)));
+						Strings.create(TRANSITION_FAILED + describeFailure(reason)));
 					if (carried != null) {
 						failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
 						if (carried.result().tokens() != null) {
@@ -4651,7 +4653,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (turn.get(AgentState.K_SOURCE) == null) {
 			turn = turn.assoc(AgentState.K_SOURCE,
-				Strings.intern("tool").equals(role)
+				AbstractLLMAdapter.ROLE_TOOL.equals(role)
 					? AgentState.SOURCE_TOOL : AgentState.SOURCE_TRANSITION);
 		}
 		return turn;

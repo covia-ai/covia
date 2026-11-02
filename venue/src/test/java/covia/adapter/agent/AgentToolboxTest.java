@@ -384,7 +384,7 @@ public class AgentToolboxTest {
 			assistantCall("call_subgoal", GoalTreeAdapter.TOOL_SUBGOAL,
 				Maps.of("description", "do the sub-task")), null);
 		exercised.add(GoalTreeAdapter.TOOL_SUBGOAL);
-		assertTrue(RT.getIn(firstCall(subgoal), Fields.RESULT).toString().contains("not executed"),
+		assertTrue(RT.getIn(firstCall(subgoal), Fields.RESULT).toString().contains(GoalTreeAdapter.STEP_SUBGOAL_NOTE),
 			"agent:step must state its subgoal boundary: " + subgoal);
 
 		Set<String> expected = new HashSet<>(GoalTreeAdapter.HARNESS_TOOL_REGISTRY.keySet());

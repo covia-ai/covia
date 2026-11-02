@@ -1483,7 +1483,7 @@ public class AgentAdapterTest {
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("failing-record-agent");
 		TestEngine.awaitTimelineCount(agent, 1, 10000);
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
-		assertTrue(entry.get(Fields.RESULT).toString().contains("Transition failed"),
+		assertTrue(entry.get(Fields.RESULT).toString().contains(AgentAdapter.TRANSITION_FAILED),
 			entry.get(Fields.RESULT).toString());
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
 		assertEquals(1, inferences.count(), "the call that failed is recorded: " + entry);
@@ -6216,7 +6216,7 @@ public class AgentAdapterTest {
 			"caller's Job must be FAILED, not stuck PENDING");
 		String err = requestJob.getErrorMessage();
 		assertNotNull(err, "FAILED Job must carry an error message");
-		assertTrue(err.contains("Transition failed"),
+		assertTrue(err.contains(AgentAdapter.TRANSITION_FAILED),
 			"error should describe the transition failure: " + err);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);

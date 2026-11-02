@@ -220,8 +220,8 @@ public class ToolCycleEngineTest {
 		assertEquals("completed", batch.terminalStatus());
 		assertEquals(1, dispatched.get(), "only the call before the terminal ran");
 		assertEquals(List.of("1", "done", "2", "3"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
-		assertTrue(content(sink.messages.get(2)).startsWith("Error: not executed"));
-		assertTrue(content(sink.messages.get(3)).startsWith("Error: not executed"));
+		assertEquals(ToolCycleEngine.NOT_EXECUTED.formatted("completed"), content(sink.messages.get(2)));
+		assertEquals(ToolCycleEngine.NOT_EXECUTED.formatted("completed"), content(sink.messages.get(3)));
 		assertEquals(List.of("1", "done"), sink.recorded, "fenced calls are never recorded as executed");
 	}
 

@@ -80,6 +80,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
 
+	/** A cycle that lost its session claim: what it was doing. */
+	static final String SESSION_SUPERSEDED = "Session cycle was superseded while %s";
+	/** A context or skill load tried with no session in scope: which kind. */
+	static final String NO_SESSION_FOR_LOADS = "Error: no session in scope — %s loads are per-conversation";
+
 	// ========== Default tool definitions ==========
 	// MCP-style: {name, description, parameters: {type: "object", properties: {...}, required: [...]}}
 
@@ -565,7 +570,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.withTask(taskMessage);
 			if (!toolCtx.store.observe(0, ContextAssembler.observations(inference, loads),
 					convex.core.util.Utils.getCurrentTimestamp())) {
-				throw new JobFailedException("Session cycle was superseded while observing context");
+				throw new JobFailedException(SESSION_SUPERSEDED.formatted("observing context"));
 			}
 			toolCtx.adoptFrames(toolCtx.store.frames());
 			inference = inference.withFrames(toolCtx.frames);
@@ -601,15 +606,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 
 			if (!hasCalls) {
-				if (config != null) {
-					// responseFormat is a provider hint here, not a contract: the
-					// same judgement as a typed completion, logged rather than enforced.
-					AMap<AString, ACell> schema = getResponseFormatSchema(config);
-					AString content = RT.ensureString(RT.getIn(assistant, K_CONTENT));
-					if (schema != null && content != null) {
-						Completion completion = Completion.of(content, null, schema, null);
-						if (!completion.accepted()) log.warn("LLM response schema violation: {}", completion.rejection());
-					}
+				// responseFormat is a provider hint here, not a contract: the
+				// same judgement as a typed completion, logged rather than enforced.
+				AMap<AString, ACell> schema = responseFormatSchema(config);
+				AString content = RT.ensureString(RT.getIn(assistant, K_CONTENT));
+				if (schema != null && content != null) {
+					Completion completion = Completion.of(content, null, schema, null);
+					if (!completion.accepted()) log.warn("LLM response schema violation: {}", completion.rejection());
 				}
 				AMap<AString, ACell> finalTurn = RT.ensureMap(stampTs(assistant));
 				appendRootTurn(toolCtx, finalTurn);
@@ -661,7 +664,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				root, spec, rendering);
 			return prepared == root ? frames : frames.assoc(0, prepared);
 		})) {
-			throw new JobFailedException("Session cycle was superseded while preparing context");
+			throw new JobFailedException(SESSION_SUPERSEDED.formatted("preparing context"));
 		}
 		toolCtx.adoptFrames(toolCtx.store.frames());
 		return spec.withFrames(toolCtx.frames);
@@ -684,7 +687,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	private static void appendRootTurn(ToolContext toolCtx, AMap<AString, ACell> turn) {
 		turn = normaliseRootTurn(turn);
 		if (!toolCtx.store.appendRoot(turn)) {
-			throw new JobFailedException("Session cycle was superseded while appending conversation");
+			throw new JobFailedException(SESSION_SUPERSEDED.formatted("appending conversation"));
 		}
 		toolCtx.adoptFrames(toolCtx.store.frames());
 	}
@@ -693,7 +696,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	private static void persistRootFrame(ToolContext toolCtx) {
 		AMap<AString, ACell> root = toolCtx.activeFrame;
 		if (root == null || !toolCtx.store.replace(0, root)) {
-			throw new JobFailedException("Session cycle was superseded while committing tool results");
+			throw new JobFailedException(SESSION_SUPERSEDED.formatted("committing tool results"));
 		}
 		toolCtx.adoptFrames(toolCtx.store.frames());
 	}
@@ -707,7 +710,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (!root.equals(expected)) return null;
 			return frames.assoc(0, GoalTreeContext.compactFrame(root, summary));
 		})) {
-			throw new JobFailedException("Session cycle was superseded while compacting conversation");
+			throw new JobFailedException(SESSION_SUPERSEDED.formatted("compacting conversation"));
 		}
 		toolCtx.adoptFrames(toolCtx.store.frames());
 	}
@@ -745,7 +748,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	ACell handleContextLoad(ACell input, ToolContext toolCtx) {
 		HarnessTools.LoadScope scope = loadScope(toolCtx,
-			"Error: no session in scope — context loads are per-conversation (#142)");
+			NO_SESSION_FOR_LOADS.formatted("context"));
 		ACell result = HarnessTools.contextLoad(input, scope);
 		toolCtx.setLoads(scope.loads);
 		return result;
@@ -768,7 +771,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	ACell handleSkillLoad(ACell input, ToolContext toolCtx) {
 		HarnessTools.LoadScope scope = loadScope(toolCtx,
-			"Error: no session in scope — skill loads are per-conversation (#142)");
+			NO_SESSION_FOR_LOADS.formatted("skill"));
 		ACell result = HarnessTools.skillLoad(input, scope);
 		toolCtx.setLoads(scope.loads);
 		return result;
@@ -801,7 +804,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
 		HarnessTools.LoadScope scope = loadScope(toolCtx,
-			"Error: no session in scope — context loads are per-conversation (#142)");
+			NO_SESSION_FOR_LOADS.formatted("context"));
 		ACell result = HarnessTools.contextUnload(input, scope);
 		toolCtx.setLoads(scope.loads);
 		return result;
@@ -909,20 +912,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> concatTools(AVector<ACell> fixed, AVector<ACell> loads) {
 		return (AVector<ACell>) fixed.concat(loads);
-	}
-
-	/**
-	 * Extracts the JSON Schema from a responseFormat config, if present.
-	 * responseFormat can be: "json" (no schema), "text" (no schema), or {name, schema} (has schema).
-	 */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> getResponseFormatSchema(AMap<AString, ACell> config) {
-		ACell rf = config.get(K_RESPONSE_FORMAT);
-		if (rf instanceof AMap) {
-			ACell schema = ((AMap<AString, ACell>) rf).get(Strings.intern("schema"));
-			if (schema instanceof AMap) return (AMap<AString, ACell>) schema;
-		}
-		return null;
 	}
 
 	// ========== Tool context ==========

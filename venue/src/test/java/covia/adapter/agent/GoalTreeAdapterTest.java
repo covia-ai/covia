@@ -321,6 +321,40 @@ public class GoalTreeAdapterTest {
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count());
 	}
 
+	/** A subgoal nested past the depth limit is refused as a failed subgoal,
+	 *  the same shape as any other, and every frame above it carries on. */
+	@Test
+	public void testASubgoalTooDeepIsRefusedAsAFailedSubgoal() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "subgoal-deep",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/subgoalechollm",
+					"model", TestAdapter.SUBGOAL_DEEPEN,
+					Fields.TOOLS, Vectors.of(Strings.create("subgoal")))),
+			ALICE).awaitResult(5000);
+		ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "subgoal-deep", Fields.MESSAGE, "decompose this"),
+			ALICE).awaitResult(15000);
+		assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-deep");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		// Each subgoal's child rides under its call; the refused one has none.
+		ACell call = RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
+			.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
+		int children = 0;
+		for (AMap<AString, ACell> frame = RT.ensureMap(RT.getIn(call, Fields.FRAME)); frame != null;
+				frame = RT.ensureMap(RT.getIn(call, Fields.FRAME))) {
+			children++;
+			call = RT.ensureVector(RT.getIn(RT.ensureVector(frame.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
+		}
+		assertEquals(GoalTreeAdapter.MAX_SUBGOAL_DEPTH - 1, children, "frames 1 to the limit ran");
+		assertEquals("failed", String.valueOf(RT.getIn(call, Fields.RESULT, Fields.STATUS)), call.toString());
+		assertEquals(GoalTreeAdapter.SUBGOAL_TOO_DEEP.formatted(GoalTreeAdapter.MAX_SUBGOAL_DEPTH),
+			String.valueOf(RT.getIn(call, Fields.RESULT, Fields.RESULT)));
+	}
+
 	/** A subgoal is its parent's tool: when the child's model call fails, the
 	 *  parent sees a failed subgoal and carries on, and the child is popped. */
 	@Test

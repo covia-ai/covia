@@ -92,7 +92,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	// ========== Harness tool definitions ==========
 
 	private static final AString K_OUTPUTS     = Strings.intern("outputs");
-	private static final AString K_SCHEMA      = Strings.intern("schema");
+	/** The outputs entry, and the response format name, of the typed root contract. */
+	private static final AString K_OUTPUT_COMPLETE = Strings.intern(TOOL_COMPLETE);
+	private static final AString K_OUTPUT_FAIL     = Strings.intern(TOOL_FAIL);
+	private static final AString AGENT_OUTPUT      = Strings.intern("agent_output");
+	/** A frame the cycle no longer holds: the frame's index. */
+	static final String FRAME_SUPERSEDED = "Frame stack no longer holds frame %d — cycle superseded";
+	/** A subgoal refused for nesting too deep: the depth limit. */
+	static final String SUBGOAL_TOO_DEEP = "Maximum subgoal depth (%d) reached. Complete or "
+		+ "fail the current goal at this level instead of decomposing further.";
 	private static final String HARNESS_BASE = "/adapters/goaltree/harness/";
 
 	static final AMap<AString, ACell> TOOL_DEF_SUBGOAL =
@@ -255,11 +263,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
 		AMap<AString, ACell> l3Config = config;
 		AVector<ACell> typedTools = null;
-		if (completeSchema != null && config != null) {
-			AMap<AString, ACell> responseFormat = Maps.of(
-				Strings.create("name"), Strings.create("agent_output"),
-				Strings.create("schema"), completeSchema);
-			l3Config = config.assoc(K_RESPONSE_FORMAT, responseFormat);
+		if (completeSchema != null) {
+			l3Config = config.assoc(K_RESPONSE_FORMAT, typedResponseFormat(completeSchema));
 			AMap<AString, ACell> failSchema = outputsFailSchema(outputs);
 			typedTools = (AVector<ACell>) Vectors.of(
 				(ACell) typedCompleteTool(completeSchema),
@@ -554,11 +559,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		boolean typedOutputs = (configuredSchema != null);
 
 		AMap<AString, ACell> l3Config = config;
-		if (typedOutputs && config != null) {
-			AMap<AString, ACell> responseFormat = Maps.of(
-				Strings.create("name"), Strings.create("agent_output"),
-				Strings.create("schema"), configuredSchema);
-			l3Config = config.assoc(K_RESPONSE_FORMAT, responseFormat);
+		if (typedOutputs) {
+			l3Config = config.assoc(K_RESPONSE_FORMAT, typedResponseFormat(configuredSchema));
 		}
 		AMap<AString, ACell> sourceConfig = config;
 		ModelSetup model = modelSetup(l3Config, ctx);
@@ -699,10 +701,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AString errorStr = (value instanceof AString s) ? s
 				: Strings.create(value == null ? "Task failed" : value.toString());
 			opInput = Maps.of(Fields.ERROR, errorStr);
-			opPath = Strings.create("v/ops/agent/fail-task");
+			opPath = TaskTools.FAIL_TASK_OP;
 		} else {
 			opInput = (value != null) ? Maps.of(Fields.RESULT, value) : Maps.empty();
-			opPath = Strings.create("v/ops/agent/complete-task");
+			opPath = TaskTools.COMPLETE_TASK_OP;
 		}
 		engine.jobs().invokeInternal(opPath, opInput, ctx).join();
 	}
@@ -819,8 +821,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AMap<AString, ACell> schema = (!failed && frameIndex == 0) ? rootSchema(config) : null;
 			Completion completion = Completion.of(call.input(), turnText, schema, call.name());
 			if (!completion.accepted()) return ToolCycleEngine.ToolOutcome.result(completion.toolError());
-			ACell result = Maps.of(Strings.create("status"),
-				Strings.create(failed ? "failed" : "complete"));
+			ACell result = Maps.of(Fields.STATUS,
+				failed ? GoalTreeContext.STATUS_FAILED : GoalTreeContext.STATUS_COMPLETE);
 			return ToolCycleEngine.ToolOutcome.terminal(result,
 				failed ? "failed" : "complete", completion.value());
 		}
@@ -919,18 +921,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		@SuppressWarnings("unchecked")
 		private ToolCycleEngine.ToolOutcome subgoal(
 				ToolCycleEngine.ToolCall call) {
-			AString description = RT.ensureString(RT.getIn(call.input(), Strings.create("description")));
+			AString description = RT.ensureString(RT.getIn(call.input(), Fields.DESCRIPTION));
 			if (description == null || description.toString().isBlank()) {
 				return ToolCycleEngine.ToolOutcome.result(Strings.create(
 					"Error: description is required for a subgoal"));
 			}
 			log.info("Subgoal pushed: {}", description);
 			if (frameIndex + 1 >= MAX_SUBGOAL_DEPTH) {
-				return ToolCycleEngine.ToolOutcome.result(Maps.of(
-					Strings.create("status"), Strings.create("error"),
-					Strings.create("error"), Strings.create(
-						"Maximum subgoal depth (" + MAX_SUBGOAL_DEPTH + ") reached. Complete or "
-						+ "fail the current goal at this level instead of decomposing further.")));
+				return ToolCycleEngine.ToolOutcome.result(subgoalResult(GoalTreeContext.STATUS_FAILED,
+					Strings.create(SUBGOAL_TOO_DEEP.formatted(MAX_SUBGOAL_DEPTH))));
 			}
 
 			AMap<AString, ACell> childLoads = GoalTreeContext.getLoads(activeFrame);
@@ -974,11 +973,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 			if (store.aborted()) return ToolCycleEngine.ToolOutcome.abort();
 
-			AMap<AString, ACell> result = Maps.of(
-				Strings.create("status"), Strings.create(childResult.status()));
-			if (childResult.value() != null) {
-				result = result.assoc(Strings.create("result"), childResult.value());
-			}
+			AMap<AString, ACell> result = subgoalResult(Strings.create(childResult.status()), childResult.value());
 			AMap<AString, ACell> withResult = GoalTreeContext.appendTurn(activeFrame,
 				stampTs(toolResultMessage(call.id(), call.name(), result)));
 			if (!store.update(frames -> updateFrame(
@@ -1024,8 +1019,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Inject goal as first user message in the conversation (once, not every iteration)
 		AVector<ACell> frames = store.frames();
 		if (frameIndex >= frames.count()) {
-			return FrameResult.failed(Strings.create(
-				"Frame stack no longer holds frame " + frameIndex + " — cycle superseded"), frames);
+			return FrameResult.failed(Strings.create(FRAME_SUPERSEDED.formatted(frameIndex)), frames);
 		}
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
 		if (GoalTreeContext.activeConversation(activeFrame).isEmpty()) {
@@ -1059,9 +1053,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 			AVector<ACell> currentFrames = store.frames();
 			if (frameIndex >= currentFrames.count()) {
-				return FrameResult.failed(Strings.create(
-					"Frame stack no longer holds frame " + frameIndex
-					+ " — cycle superseded"), currentFrames);
+				return FrameResult.failed(Strings.create(FRAME_SUPERSEDED.formatted(frameIndex)), currentFrames);
 			}
 			frameTools.activeFrame = (AMap<AString, ACell>) currentFrames.get(frameIndex);
 			if (frameTools.pendingCompactSummary != null) {
@@ -1278,7 +1270,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	/** The contract in force at the root frame: the declared output schema
 	 *  when typed outputs are active, else null. */
 	private static AMap<AString, ACell> rootSchema(AMap<AString, ACell> frameL3Config) {
-		return RT.ensureMap(RT.getIn(frameL3Config, K_RESPONSE_FORMAT, K_SCHEMA));
+		return responseFormatSchema(frameL3Config);
+	}
+
+	/** What the parent sees of a subgoal: its status, and its result or the reason it failed. */
+	private static AMap<AString, ACell> subgoalResult(AString status, ACell value) {
+		AMap<AString, ACell> result = Maps.of(Fields.STATUS, status);
+		return (value != null) ? result.assoc(Fields.RESULT, value) : result;
+	}
+
+	/** The responseFormat that asks the provider for the typed output {@code schema}. */
+	private static AMap<AString, ACell> typedResponseFormat(AMap<AString, ACell> schema) {
+		return Maps.of(Fields.NAME, AGENT_OUTPUT, K_SCHEMA, schema);
 	}
 
 	/** The turn that asks again after a rejected typed reply — the rejection
@@ -1313,25 +1316,22 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			AMap<AString, ACell> child = (AMap<AString, ACell>) fs.get(deepest);
 			AString status = GoalTreeContext.getStatus(child);
 
-			String popStatus;
+			AString popStatus;
 			ACell popValue;
 			if (status != null) {
-				popStatus = GoalTreeContext.STATUS_COMPLETE.equals(status) ? "complete" : "failed";
+				popStatus = GoalTreeContext.STATUS_COMPLETE.equals(status)
+					? GoalTreeContext.STATUS_COMPLETE : GoalTreeContext.STATUS_FAILED;
 				ACell recovered = GoalTreeContext.terminalValue(child);
 				popValue = (recovered != null) ? recovered : Strings.create(
 					"Result may be lost — venue restarted at subgoal completion; "
 					+ "re-issue the subgoal if needed");
 			} else {
-				popStatus = "failed";
+				popStatus = GoalTreeContext.STATUS_FAILED;
 				popValue = Strings.create(
 					"Subgoal interrupted — not resumed; re-issue if needed");
 			}
 
-			AMap<AString, ACell> resultMap = Maps.of(
-				Strings.create("status"), Strings.create(popStatus));
-			if (popValue != null) {
-				resultMap = resultMap.assoc(Strings.create("result"), popValue);
-			}
+			AMap<AString, ACell> resultMap = subgoalResult(popStatus, popValue);
 			final AString callId = GoalTreeContext.getCallId(child);
 			final int parentIndex = deepest - 1;
 			final AMap<AString, ACell> popResult = resultMap;
@@ -1461,16 +1461,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return frames.assoc(index, frame);
 	}
 
-	/** True if config declares a responseFormat with a JSON schema (not just "json"/"text"). */
-	private static boolean hasSchemaResponseFormat(AMap<AString, ACell> config) {
-		if (config == null) return false;
-		ACell rf = config.get(K_RESPONSE_FORMAT);
-		if (!(rf instanceof AMap)) return false;
-		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> rfMap = (AMap<AString, ACell>) rf;
-		return rfMap.get(Strings.create("schema")) instanceof AMap;
-	}
-
 	// ========== Typed outputs ==========
 
 	/**
@@ -1489,21 +1479,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ACell explicit = config.get(K_OUTPUTS);
 		if (explicit instanceof AMap) return (AMap<AString, ACell>) explicit;
 		// A schema-bearing responseFormat stands for outputs.complete.schema
-		if (hasSchemaResponseFormat(config)) {
-			AMap<AString, ACell> rf = (AMap<AString, ACell>) config.get(K_RESPONSE_FORMAT);
-			ACell schema = rf.get(K_SCHEMA);
-			return Maps.of(
-				Strings.create(TOOL_COMPLETE),
-				Maps.of(K_SCHEMA, schema));
-		}
-		return null;
+		AMap<AString, ACell> schema = responseFormatSchema(config);
+		return (schema != null) ? Maps.of(K_OUTPUT_COMPLETE, Maps.of(K_SCHEMA, schema)) : null;
 	}
 
 	/** Pulls the {@code complete} schema from a resolved outputs map, or null. */
 	@SuppressWarnings("unchecked")
 	static AMap<AString, ACell> outputsCompleteSchema(AMap<AString, ACell> outputs) {
 		if (outputs == null) return null;
-		ACell entry = outputs.get(Strings.create(TOOL_COMPLETE));
+		ACell entry = outputs.get(K_OUTPUT_COMPLETE);
 		if (!(entry instanceof AMap)) return null;
 		ACell schema = ((AMap<AString, ACell>) entry).get(K_SCHEMA);
 		return (schema instanceof AMap) ? (AMap<AString, ACell>) schema : null;
@@ -1517,7 +1501,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	@SuppressWarnings("unchecked")
 	static AMap<AString, ACell> outputsFailSchema(AMap<AString, ACell> outputs) {
 		if (outputs == null) return null;
-		ACell entry = outputs.get(Strings.create(TOOL_FAIL));
+		ACell entry = outputs.get(K_OUTPUT_FAIL);
 		if (entry instanceof AMap) {
 			ACell schema = ((AMap<AString, ACell>) entry).get(K_SCHEMA);
 			if (schema instanceof AMap) return (AMap<AString, ACell>) schema;

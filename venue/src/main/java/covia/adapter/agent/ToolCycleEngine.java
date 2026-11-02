@@ -64,6 +64,9 @@ import covia.venue.AgentEvents;
  */
 final class ToolCycleEngine {
 
+	/** The result of a call after a terminal one in the same batch: the terminal status. */
+	static final String NOT_EXECUTED = "Error: not executed — an earlier call in this tool batch was terminal (%s).";
+
 	private ToolCycleEngine() {}
 
 	/** A decoded provider tool call. */
@@ -282,8 +285,7 @@ final class ToolCycleEngine {
 			if (terminalStatus != null) {
 				for (Decoded d : wave) {
 					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(d.call().id(), d.call().name(),
-						Strings.create("Error: not executed — an earlier call in this tool batch was terminal ("
-							+ terminalStatus + ")."))));
+						Strings.create(NOT_EXECUTED.formatted(terminalStatus)))));
 				}
 				continue;
 			}

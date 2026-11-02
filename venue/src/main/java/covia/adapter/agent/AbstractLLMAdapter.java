@@ -95,6 +95,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_MODEL_OPTIONS = Strings.intern("modelOptions");
 	public static final AString K_TOOLS           = Strings.intern("tools");
 	public static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
+	/** The JSON Schema in a {@code responseFormat} or an output declaration. */
+	protected static final AString K_SCHEMA = Strings.intern("schema");
 	public static final AString K_CAPS            = Strings.intern("caps");
 	public static final AString K_CONTEXT         = Strings.intern("context");
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
@@ -239,6 +241,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				AbstractLLMAdapter.toolCalling(profile),
 				AbstractLLMAdapter.cachePrefix(profile));
 		}
+	}
+
+	/** The JSON Schema {@code config.responseFormat} asks for, or null: a
+	 *  {@code "json"} or {@code "text"} format names none. */
+	protected static AMap<AString, ACell> responseFormatSchema(AMap<AString, ACell> config) {
+		return RT.ensureMap(RT.getIn(config, K_RESPONSE_FORMAT, K_SCHEMA));
 	}
 
 	/** Whether this invocation should retain and mark a rendered prefix. Models
