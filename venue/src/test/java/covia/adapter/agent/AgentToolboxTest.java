@@ -13,10 +13,12 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
@@ -360,6 +362,50 @@ public class AgentToolboxTest {
 			assertFalse(messages(step).toString().contains(CONTEXT_MARKER),
 				where + " a refused call loaded the context: " + step);
 		}
+	}
+
+	/** agent:step answers compact with the count a live cycle gives: its frame
+	 *  takes the reply and each earlier result as they arrive. compactllm's first
+	 *  reply calls test_echo, then compact. */
+	@Test
+	public void stepAnswersCompactAsALiveCycleDoes() {
+		for (AgentRuntime runtime : RUNTIMES) {
+			String id = runtime.name() + "-compact-count";
+			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, runtime.operation(),
+					"llmOperation", "v/test/ops/compactllm",
+					Fields.TOOLS, Vectors.of(
+						Strings.create(HarnessTools.COMPACT), Strings.create("v/test/ops/echo")))),
+				user).awaitResult(5000);
+			AMap<AString, ACell> stepped = step(new RunningAgent(id, null), "compact this",
+				Maps.of("toolCalls", Vectors.of(
+					Maps.of("id", "call_e1", "name", "test_echo", "arguments", Maps.of("input", "hello")),
+					Maps.of("id", "call_c1", "name", HarnessTools.COMPACT,
+						"arguments", Maps.of("summary", "Made an echo call.")))), null);
+
+			ACell chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, id, Fields.MESSAGE, "compact this"), user).awaitResult(10000);
+			Blob sid = Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString());
+			AMap<AString, ACell> root = RT.ensureMap(RT.getIn(engine.getVenueState().users().get(userDid)
+				.agent(id).getSession(sid), Fields.FRAMES, CVMLong.ZERO));
+			ACell live = archivedToolResult(GoalTreeContext.archivedConversation(root), "call_c1");
+			assertNotNull(live, runtime.name() + " live cycle did not record compact: " + root);
+			assertEquals(live, result(stepped, "call_c1"), runtime.name());
+		}
+	}
+
+	/** A tool call's result in a conversation, looking inside compacted segments. */
+	private static ACell archivedToolResult(AVector<ACell> conversation, String id) {
+		for (long i = 0; conversation != null && i < conversation.count(); i++) {
+			ACell turn = conversation.get(i);
+			ACell found = GoalTreeContext.isSegment(turn)
+				? archivedToolResult(RT.ensureVector(RT.getIn(turn, GoalTreeContext.K_ITEMS)), id)
+				: ("tool".equals(String.valueOf(RT.getIn(turn, "role")))
+					&& id.equals(String.valueOf(RT.getIn(turn, "id")))) ? RT.getIn(turn, "content") : null;
+			if (found != null) return found;
+		}
+		return null;
 	}
 
 	/** With few tools, a name nothing provides is answered with all of them. */

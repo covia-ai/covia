@@ -243,7 +243,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (calls == null) return Step.done(reply, reply.get(K_CONTENT)).report();
 
 		frameTools.turnText = RT.ensureString(reply.get(K_CONTENT));
-		StepSink sink = new StepSink();
+		frameTools.appendTurn(reply);
+		StepSink sink = new StepSink(frameTools);
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			calls, 0, frameTools.registry(), frameTools, sink, log);
 		AVector<ACell> turns = Vectors.of((ACell) reply).concat(sink.turns());
@@ -252,17 +253,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ContextAssembler.Spec next;
 		boolean compacted = frameTools.pendingCompactSummary != null;
 		if (compacted) {
-			AVector<ACell> frames = FrameStore.appendCycleInputTurns(
-				frameTools.store.frames().assoc(0, frameTools.activeFrame), p.spec().input(), null,
-				convex.core.util.Utils.getCurrentTimestamp());
-			AMap<AString, ACell> root = RT.ensureMap(frames.get(0));
-			root = GoalTreeContext.appendTurn(root, reply);
-			for (long i = 0; i < sink.turns().count(); i++) {
-				root = GoalTreeContext.appendTurn(root, sink.turns().get(i));
-			}
-			frameTools.activeFrame = GoalTreeContext.compactFrame(root, frameTools.pendingCompactSummary);
-			frames = frames.assoc(0, frameTools.activeFrame);
-			next = p.spec().afterCompaction(frames);
+			frameTools.activeFrame = GoalTreeContext.compactFrame(
+				frameTools.activeFrame, frameTools.pendingCompactSummary);
+			next = p.spec().afterCompaction(frameTools.store.frames().assoc(0, frameTools.activeFrame));
 		} else {
 			next = p.spec().withToolLoop(turns);
 		}

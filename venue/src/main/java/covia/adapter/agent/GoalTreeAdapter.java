@@ -452,14 +452,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		frameTools.activeFrame = GoalTreeContext.appendTurn(activeFrame, reply);
 		frameTools.turnText = RT.ensureString(reply.get(K_CONTENT));
-		StepSink sink = new StepSink();
+		StepSink sink = new StepSink(frameTools);
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			calls, 0, registry, frameTools, sink, log);
 		AVector<ACell> turns = Vectors.of((ACell) reply).concat(sink.turns());
-		for (long i = 0; i < sink.turns().count(); i++) {
-			frameTools.activeFrame = GoalTreeContext.appendTurn(
-				frameTools.activeFrame, RT.ensureMap(sink.turns().get(i)));
-		}
 		if (batch.isTerminal()) {
 			boolean failed = "failed".equals(batch.terminalStatus());
 			turns = turns.conj(terminalAssistantMessage(batch.terminalValue(), failed));
