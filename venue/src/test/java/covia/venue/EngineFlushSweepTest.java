@@ -83,6 +83,7 @@ public class EngineFlushSweepTest {
 		final AtomicInteger persistCount = new AtomicInteger();
 		final AtomicInteger flushCount = new AtomicInteger();
 		final AtomicReference<ACell> lastPersisted = new AtomicReference<>();
+		final TestSignal flushed = new TestSignal();
 
 		@Override
 		public <T extends ACell> convex.core.data.Ref<T> setRootData(T value) {
@@ -94,6 +95,12 @@ public class EngineFlushSweepTest {
 		@Override
 		public void flush() {
 			flushCount.incrementAndGet();
+			flushed.signal();
+		}
+
+		/** Waits until the store has been flushed at least {@code target} times. */
+		void awaitFlushes(int target, String what) {
+			flushed.await(what + " (flushes=" + flushCount.get() + ")", () -> flushCount.get() >= target);
 		}
 	}
 
@@ -111,23 +118,6 @@ public class EngineFlushSweepTest {
 		return new Engine(testConfig(), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, handler)), AKeyPair.generate()).start();
 	}
 
-	private static void sleep(long ms) throws InterruptedException {
-		Thread.sleep(ms);
-	}
-
-	/**
-	 * Polls a counter until it reaches at least {@code target} or the timeout
-	 * elapses. Returns the final value observed. Uses 20ms polling — fine-
-	 * grained enough to catch transitions, coarse enough not to hammer.
-	 */
-	private static int pollUntil(AtomicInteger counter, int target, long timeoutMs) throws InterruptedException {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (counter.get() < target && System.currentTimeMillis() < deadline) {
-			Thread.sleep(20);
-		}
-		return counter.get();
-	}
-
 	// ========================================================================
 	// Test 1 — Periodic flush fires from the sweep.
 	//
@@ -142,9 +132,7 @@ public class EngineFlushSweepTest {
 		CountingStore handler = new CountingStore();
 		Engine engine = engineWith(handler);
 		try {
-			int flushes = pollUntil(handler.flushCount, 1, 10_000);
-			assertTrue(flushes >= 1,
-				"expected at least 1 periodic flush within 10s, got " + flushes);
+			handler.awaitFlushes(1, "a periodic flush");
 		} finally {
 			engine.close();
 		}
@@ -170,11 +158,8 @@ public class EngineFlushSweepTest {
 			assertTrue(afterExplicit >= 1,
 				"engine.flush() must invoke handler.flush(), got " + afterExplicit);
 
-			// Periodic flushes should resume after the interval. Generous
-			// 10s timeout to absorb CI scheduling jitter.
-			int later = pollUntil(handler.flushCount, afterExplicit + 1, 10_000);
-			assertTrue(later > afterExplicit,
-				"sweep must resume flushing after explicit flush; before=" + afterExplicit + " after=" + later);
+			// Periodic flushes resume after the interval.
+			handler.awaitFlushes(afterExplicit + 1, "the sweep to resume flushing after an explicit flush");
 		} finally {
 			engine.close();
 		}

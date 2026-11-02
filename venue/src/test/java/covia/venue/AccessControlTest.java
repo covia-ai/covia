@@ -261,16 +261,13 @@ public class AccessControlTest {
 		RequestContext bobCtx = RequestContext.of(bob);
 
 		Job aliceJob = engine.jobs().invokeOperation(
-			"v/test/ops/delay", Maps.of("delay", 10000), aliceCtx);
+			"v/test/ops/never", Maps.empty(), aliceCtx);
 
 		// Bob cannot cancel Alice's job
 		assertThrows(AuthException.class,
 			() -> engine.jobs().cancelJob(aliceJob.getID(), bobCtx));
 
-		// Alice can cancel her own job — this MUST also interrupt the
-		// underlying delay thread, otherwise the JVM stalls at the end of
-		// the test waiting for the orphaned sleep to drain (see
-		// TestAdapter.handleDelay + Job.cancel + Job.setCancelHook).
+		// Alice can cancel her own job
 		assertNotNull(engine.jobs().cancelJob(aliceJob.getID(), aliceCtx));
 	}
 

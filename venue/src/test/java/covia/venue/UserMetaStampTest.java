@@ -2,10 +2,16 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.IOException;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
@@ -21,12 +27,33 @@ import convex.core.lang.RT;
  * record's stamped cursor ({@code Covia.stampUserMeta}) on EVERY deep write anywhere in the user's
  * subtree — the activity signal for future identity-lifecycle (TTL) policy.
  * No application code writes these fields; the lattice layer does.
+ *
+ * <p>The venue runs on a write clock that moves only when a test ticks it, so
+ * whether a write stamps does not depend on the wall clock moving.</p>
  */
 public class UserMetaStampTest {
 
-	private final Engine engine = TestEngine.ENGINE;
+	/** The venue's write clock. Only ever moves forward, so tests may share it. */
+	private static final AtomicLong CLOCK = new AtomicLong(1_000);
+	private static Engine engine;
+
 	private AString ALICE_DID;
 	private User user;
+
+	@BeforeAll
+	public static void launch() throws IOException {
+		AKeyPair key = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(key);
+		application.setVenueContext(VenueContext.create(() -> CVMLong.create(CLOCK.get())));
+		engine = new Engine(new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))),
+			application, key).start();
+		Engine.addDemoAssets(engine);
+	}
+
+	@AfterAll
+	public static void close() {
+		engine.close();
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -39,10 +66,10 @@ public class UserMetaStampTest {
 		return (v instanceof CVMLong l) ? l.longValue() : -1;
 	}
 
-	/** Advances wall time past the current stamp. The venue's shared
-	 *  VenueContext reads this clock at the next logical write. */
+	/** Advances the write clock past the current stamp. The venue reads it at
+	 *  the next logical write. */
 	private void tick() {
-		try { Thread.sleep(3); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+		CLOCK.incrementAndGet();
 	}
 
 	@Test
@@ -125,7 +152,7 @@ public class UserMetaStampTest {
 	public void testAgentTimestampNeverMovesBackward() {
 		AgentState agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
 		AString ts = Strings.intern("ts");
-		CVMLong future = CVMLong.create(System.currentTimeMillis() + 60_000);
+		CVMLong future = CVMLong.create(CLOCK.get() + 60_000);
 		agent.cursor().updateAndGet(value ->
 			((convex.core.data.AMap<AString, ACell>) value).assoc(ts, future));
 

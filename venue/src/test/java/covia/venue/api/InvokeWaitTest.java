@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
@@ -187,10 +188,12 @@ public class InvokeWaitTest {
 	public void testShortWaitOnSlowJobReturnsCurrentRecord() throws Exception {
 		// A wait window shorter than the job: graceful degradation to the
 		// asynchronous contract — current record, 201, caller keeps polling.
-		HttpResponse<String> resp = invoke("?wait=100",
-			"{\"operation\":\"v/test/ops/delay\",\"input\":"
-			+ "{\"delay\":3000,\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":4}}}");
-		assertEquals(201, resp.statusCode(), "timeout inside the window degrades to poll");
+		// The job is held at a gate until after the window has closed.
+		try (TestAdapter.TestGate gate = TestAdapter.createGate("invoke-wait-short")) {
+			HttpResponse<String> resp = invoke("?wait=100",
+				"{\"operation\":\"v/test/ops/hold\",\"input\":{\"gate\":\"invoke-wait-short\"}}");
+			assertEquals(201, resp.statusCode(), "timeout inside the window degrades to poll");
+		}
 	}
 
 	@Test

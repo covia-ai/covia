@@ -150,9 +150,12 @@ class VenueProcessTest {
 
 	@Test
 	void realJavaProcessSignalsReadiness() throws Exception {
-		Path probeJar = executableProbeJar();
-		Path result = tempDir.resolve("probe.pid");
-		Path dir = Files.createDirectory(tempDir.resolve("real-handoff"));
+		// Windows keeps the child's jar pinned for a moment after the child has
+		// exited, so its files go where TestTemp clears them later, not @TempDir.
+		Path files = TestTemp.dir("relaunch-probe");
+		Path probeJar = executableProbeJar(files);
+		Path result = files.resolve("probe.pid");
+		Path dir = Files.createDirectory(files.resolve("real-handoff"));
 		String javaName = System.getProperty("os.name", "").startsWith("Windows")
 			? "java.exe" : "java";
 		Path java = Path.of(System.getProperty("java.home"), "bin", javaName);
@@ -172,7 +175,6 @@ class VenueProcessTest {
 			if (child.isAlive()) child.destroyForcibly();
 			child.onExit().get(5, TimeUnit.SECONDS);
 		}
-		awaitDelete(probeJar);
 	}
 
 	@Test
@@ -223,8 +225,8 @@ class VenueProcessTest {
 		return jar;
 	}
 
-	private Path executableProbeJar() throws Exception {
-		Path jar = tempDir.resolve("probe.jar").toAbsolutePath().normalize();
+	private static Path executableProbeJar(Path dir) throws Exception {
+		Path jar = dir.resolve("probe.jar").toAbsolutePath().normalize();
 		Manifest manifest = new Manifest();
 		Attributes attributes = manifest.getMainAttributes();
 		attributes.put(Attributes.Name.MANIFEST_VERSION, "1.0");
@@ -243,19 +245,6 @@ class VenueProcessTest {
 
 	private static String sha(Path jar) throws Exception {
 		return Hashing.sha256(Files.readAllBytes(jar)).toHexString();
-	}
-
-	private static void awaitDelete(Path file) throws Exception {
-		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-		while (true) {
-			try {
-				Files.deleteIfExists(file);
-				return;
-			} catch (java.nio.file.FileSystemException e) {
-				if (System.nanoTime() >= deadline) throw e;
-				Thread.sleep(25);
-			}
-		}
 	}
 
 	private static void deleteHandoff(Path dir) throws Exception {
@@ -290,7 +279,8 @@ class VenueProcessTest {
 			Files.writeString(Path.of(args[0]), Long.toString(pid));
 			Files.writeString(Path.of(System.getenv(VenueRelauncher.READY_FILE_ENV)),
 				Long.toString(pid));
-			Thread.sleep(30_000);
+			// Live until the test stops it, or the test JVM that launched it is gone.
+			ProcessHandle.current().parent().ifPresent(parent -> parent.onExit().join());
 		}
 	}
 }

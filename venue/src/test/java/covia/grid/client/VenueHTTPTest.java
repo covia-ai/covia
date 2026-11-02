@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +34,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
@@ -68,7 +70,7 @@ public class VenueHTTPTest {
 
 	private static final AString OP_ECHO  = Strings.create("v/test/ops/echo");
 	private static final AString OP_NEVER = Strings.create("v/test/ops/never");
-	private static final AString OP_DELAY = Strings.create("v/test/ops/delay");
+	private static final AString OP_HOLD  = Strings.create("v/test/ops/hold");
 	private static final AString OP_ERROR = Strings.create("v/test/ops/error");
 
 	/** Shared client against the shared public test venue. */
@@ -205,18 +207,27 @@ public class VenueHTTPTest {
 
 	@Test
 	public void backoffPollLoopCompletesDelayedJob() throws Exception {
-		// A non-instant job forces several poll iterations through the
-		// exponential-backoff loop before COMPLETE is observed. The wait budget
-		// is explicit and generous: this test asserts the loop *completes* —
-		// boundedness is clientPollingTimeoutIsBoundedAndRemoteJobSurvives's
-		// job — and the shared client's 5s default flaked under parallel load.
-		// On JDK 25 before 25.0.3 (JDK-8370887) the delay op's virtual-thread
-		// sleep can overrun past even this budget; the build warns on such a
-		// JDK and CI refuses one.
-		Job job = client.invokeAndWait(OP_DELAY, Maps.of(
-			Fields.DELAY, CVMLong.create(400),
-			Fields.OPERATION, OP_ECHO,
-			Fields.INPUT, Maps.of(Strings.create("k"), Strings.create("v"))), 30_000);
+		// A job held at a gate is unfinished when invoked, so the client enters
+		// the exponential-backoff poll loop and must observe COMPLETE once the
+		// gate is released. The wait budget is explicit and generous: this test
+		// asserts the loop *completes* — boundedness is
+		// clientPollingTimeoutIsBoundedAndRemoteJobSurvives's job.
+		Job job;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate("venue-http-backoff")) {
+			CompletableFuture<Job> waited = new CompletableFuture<>();
+			Thread.ofVirtual().start(() -> {
+				try {
+					waited.complete(client.invokeAndWait(OP_HOLD, Maps.of(
+						Strings.create("gate"), Strings.create("venue-http-backoff"),
+						Fields.RESULT, Maps.of(Strings.create("k"), Strings.create("v"))), 30_000));
+				} catch (Throwable t) {
+					waited.completeExceptionally(t);
+				}
+			});
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the job reaches its gate");
+			gate.release();
+			job = waited.get(30, TimeUnit.SECONDS);
+		}
 		assertEquals(Status.COMPLETE, job.getStatus(),
 			"the backoff poll loop must return the completed result for a delayed job");
 		assertEquals("v", RT.getIn(job.getOutput(), "k").toString());

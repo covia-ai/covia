@@ -143,9 +143,8 @@ public class JobCancellationTest {
 				Fields.INPUT, Maps.of(Strings.create("value"), Strings.create("delayed"))),
 			ctx);
 
-		pollUntilStatus(job, "STARTED", 2000);
+		awaitStarted(job);
 		job.cancel();
-		pollUntilFinished(job, 2000);
 
 		assertEquals("CANCELLED", job.getStatus().toString(),
 			"Delay job should be cancelled, not still running");
@@ -160,9 +159,8 @@ public class JobCancellationTest {
 				Fields.INPUT, Maps.of(Strings.create("value"), Strings.create("should-not-run"))),
 			ctx);
 
-		pollUntilStatus(job, "STARTED", 2000);
+		awaitStarted(job);
 		job.cancel();
-		pollUntilFinished(job, 2000);
 
 		assertEquals("CANCELLED", job.getStatus().toString(),
 			"Delay job should be cancelled before internal echo ran");
@@ -174,13 +172,16 @@ public class JobCancellationTest {
 	public void testCancelChatReleasesSlot() {
 		createNeverAgent("chat-cancel-agent");
 
-		Job chatJob = engine.jobs().invokeOperation(
-			"v/ops/agent/chat",
-			Maps.of(Fields.AGENT_ID, "chat-cancel-agent",
-				Fields.MESSAGE, Strings.create("hello")),
-			ctx);
-
-		pollUntilStatus(chatJob, "STARTED", 5000);
+		Job chatJob;
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "chat-cancel-agent")) {
+			chatJob = engine.jobs().invokeOperation(
+				"v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "chat-cancel-agent",
+					Fields.MESSAGE, Strings.create("hello")),
+				ctx);
+			awaitCycleStart(watch);
+		}
+		assertEquals(Status.STARTED, chatJob.getStatus());
 
 		AString sidHex = getSessionIdFromAgent("chat-cancel-agent");
 		assertNotNull(sidHex, "Session should have been minted");
@@ -246,13 +247,15 @@ public class JobCancellationTest {
 	public void testCancelRequestTakesItsTaskOutOfTheQueue() {
 		createNeverAgent("req-cancel-agent");
 
-		Job reqJob = engine.jobs().invokeOperation(
-			"v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, "req-cancel-agent",
-				Fields.INPUT, Maps.of(Strings.create("task"), Strings.create("do something"))),
-			ctx);
-
-		pollUntilStatus(reqJob, "STARTED", 5000);
+		Job reqJob;
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "req-cancel-agent")) {
+			reqJob = engine.jobs().invokeOperation(
+				"v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "req-cancel-agent",
+					Fields.INPUT, Maps.of(Strings.create("task"), Strings.create("do something"))),
+				ctx);
+			awaitCycleStart(watch);
+		}
 		Blob taskId = reqJob.getID();
 
 		reqJob.cancel();
@@ -260,7 +263,7 @@ public class JobCancellationTest {
 
 		// A cancelled request leaves the queue, so the agent never runs work
 		// nobody is waiting for, even once its Job is no longer in memory.
-		pollUntilTaskRemoved("req-cancel-agent", taskId, 5000);
+		assertTaskGone("req-cancel-agent", taskId);
 	}
 
 	@Test
@@ -270,13 +273,15 @@ public class JobCancellationTest {
 		// race: it could legitimately fail before cancel() committed.
 		createNeverAgent("req-cancel-agent2");
 
-		Job reqJob = engine.jobs().invokeOperation(
-			"v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, "req-cancel-agent2",
-				Fields.INPUT, Maps.of(Strings.create("message"), Strings.create("hello"))),
-			ctx);
-
-		pollUntilStatus(reqJob, "STARTED", 5000);
+		Job reqJob;
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "req-cancel-agent2")) {
+			reqJob = engine.jobs().invokeOperation(
+				"v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "req-cancel-agent2",
+					Fields.INPUT, Maps.of(Strings.create("message"), Strings.create("hello"))),
+				ctx);
+			awaitCycleStart(watch);
+		}
 		reqJob.cancel();
 		assertEquals("CANCELLED", reqJob.getStatus().toString(),
 			"the explicit cancellation must win before the worker is released");
@@ -294,7 +299,7 @@ public class JobCancellationTest {
 			"v/ops/agent/resume",
 			Maps.of(Fields.AGENT_ID, "req-cancel-agent2"),
 			ctx).awaitResult(5000);
-		pollUntilTaskRemoved("req-cancel-agent2", reqJob.getID(), 5000);
+		assertTaskGone("req-cancel-agent2", reqJob.getID());
 
 		assertEquals("CANCELLED", reqJob.getStatus().toString(),
 			"Cancelled request should stay CANCELLED even after agent processes it");
@@ -328,10 +333,9 @@ public class JobCancellationTest {
 		String opRef = engine.storeAsset(Strings.create(metaJson), null).toHexString();
 
 		Job orchJob = engine.jobs().invokeOperation(opRef, Maps.empty(), ctx);
-		pollUntilStatus(orchJob, "STARTED", 5000);
+		awaitStarted(orchJob);
 
 		orchJob.cancel();
-		pollUntilFinished(orchJob, 5000);
 
 		String status = orchJob.getStatus().toString();
 		assertTrue(status.equals("CANCELLED") || status.equals("FAILED"),
@@ -406,35 +410,43 @@ public class JobCancellationTest {
 		java.util.HashSet<Blob> before = new java.util.HashSet<>();
 		for (var e : engine.jobs().getJobs(ctx).entrySet()) before.add(e.getKey());
 
-		CompletableFuture<Job> triggerDone = new CompletableFuture<>();
-		Thread.ofVirtual().start(() -> {
-			try {
-				triggerDone.complete(engine.jobs().invokeOperation(
-					"v/ops/agent/trigger",
-					Maps.of(Fields.AGENT_ID, "trigger-cancel-agent",
-						Fields.WAIT, CVMLong.create(30000)),
-					ctx));
-			} catch (Throwable t) {
-				triggerDone.completeExceptionally(t);
-			}
-		});
-
 		// The trigger is the only new job for this caller after the snapshot.
-		Blob triggerId = pollForNewJob(ctx, before, 5000);
-		assertNotNull(triggerId, "Trigger job should be submitted and visible");
+		CompletableFuture<Blob> submitted = new CompletableFuture<>();
+		java.util.function.Consumer<Job> onJob = j -> {
+			if (!before.contains(j.getID()) && ALICE_DID.equals(j.getData().get(Fields.CALLER))) {
+				submitted.complete(j.getID());
+			}
+		};
+		engine.jobs().addJobUpdateListener(onJob);
+		CompletableFuture<Job> triggerDone = new CompletableFuture<>();
+		Blob triggerId;
+		try {
+			Thread.ofVirtual().start(() -> {
+				try {
+					triggerDone.complete(engine.jobs().invokeOperation(
+						"v/ops/agent/trigger",
+						Maps.of(Fields.AGENT_ID, "trigger-cancel-agent",
+							Fields.WAIT, CVMLong.create(30000)),
+						ctx));
+				} catch (Throwable t) {
+					triggerDone.completeExceptionally(t);
+				}
+			});
+			triggerId = submitted.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		} finally {
+			engine.jobs().removeJobUpdateListener(onJob);
+		}
+		assertNotNull(engine.jobs().getJobs(ctx).get(triggerId), "Trigger job should be listed");
 
-		long cancelTime = System.currentTimeMillis();
 		// The id was read from the listing, which can run ahead of the live
 		// handle; the cancel must still reach the job.
 		assertNotNull(engine.jobs().cancelJob(triggerId), "Cancel must find the listed trigger job");
 
-		Job triggerJob = triggerDone.get(5, java.util.concurrent.TimeUnit.SECONDS);
-		long elapsed = System.currentTimeMillis() - cancelTime;
+		// Only a cancel that unblocks the wait returns before the 30s WAIT.
+		Job triggerJob = triggerDone.get(10, java.util.concurrent.TimeUnit.SECONDS);
 
 		assertTrue(triggerJob.isFinished(), "Trigger should be finished after cancel");
 		assertEquals("CANCELLED", triggerJob.getStatus().toString());
-		assertTrue(elapsed < 5000,
-			"Cancel must unblock the wait promptly, took " + elapsed + "ms");
 	}
 
 	// ========== Double cancel is safe ==========
@@ -454,15 +466,15 @@ public class JobCancellationTest {
 	public void testSuspendCancelsActiveTransition() {
 		createNeverAgent("suspend-cancel-agent");
 
-		// Submit a task to make the agent run
-		Job reqJob = engine.jobs().invokeOperation(
-			"v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, "suspend-cancel-agent",
-				Fields.INPUT, Maps.of(Strings.create("task"), Strings.create("work"))),
-			ctx);
-
-		// Give the agent time to start the transition
-		pollUntilStatus(reqJob, "STARTED", 5000);
+		// Submit a task to make the agent run, and wait for its transition to start
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "suspend-cancel-agent")) {
+			engine.jobs().invokeOperation(
+				"v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "suspend-cancel-agent",
+					Fields.INPUT, Maps.of(Strings.create("task"), Strings.create("work"))),
+				ctx);
+			awaitCycleStart(watch);
+		}
 
 		// Suspend should cancel the active transition
 		Job suspendJob = engine.jobs().invokeOperation(
@@ -526,48 +538,21 @@ public class JobCancellationTest {
 		}
 	}
 
-	/** Polls the caller's job index for the first job id not in {@code known}. */
-	private Blob pollForNewJob(RequestContext ctx, java.util.Set<Blob> known, long timeoutMs) {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (System.currentTimeMillis() < deadline) {
-			for (var e : engine.jobs().getJobs(ctx).entrySet()) {
-				if (!known.contains(e.getKey())) return e.getKey();
-			}
-			Thread.yield();
-		}
-		return null;
+	/** Waits until the job has started, failing if it finished instead. */
+	private static void awaitStarted(Job job) {
+		TestEngine.awaitJob(job, j -> Status.STARTED.equals(j.getStatus()) || j.isFinished(), 10_000,
+			() -> "job " + job.getID() + " to start");
+		assertEquals(Status.STARTED, job.getStatus(), "the job is still running");
 	}
 
-	private void pollUntilStatus(Job job, String status, long timeoutMs) {
-		if (job == null) return;
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (System.currentTimeMillis() < deadline) {
-			if (status.equals(job.getStatus().toString())) return;
-			if (job.isFinished()) return;
-			Thread.yield();
-		}
+	/** Waits until the agent's run loop is invoking its transition. */
+	private static void awaitCycleStart(AgentWatch watch) {
+		watch.awaitEvent("cycle:start", e -> AgentEvents.CYCLE_START.equals(e.type()));
 	}
 
-	private void pollUntilFinished(Job job, long timeoutMs) {
-		if (job == null) return;
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (!job.isFinished() && System.currentTimeMillis() < deadline) {
-			Thread.yield();
-		}
-	}
-
-	private void pollUntilTaskRemoved(String agentId, Blob taskId, long timeoutMs) {
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		while (System.currentTimeMillis() < deadline) {
-			User user = engine.getVenueState().users().get(ALICE_DID);
-			AgentState agent = (user != null) ? user.agent(agentId) : null;
-			if (agent == null || agent.getTasks() == null
-					|| agent.getTasks().get(taskId) == null) return;
-			Thread.yield();
-		}
+	private void assertTaskGone(String agentId, Blob taskId) {
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
-		fail("Timed out waiting for agent to remove cancelled task " + taskId
-			+ " (status=" + agent.getStatus() + ", timeline=" + agent.getTimeline().count()
-			+ ", task=" + agent.getTasks().get(taskId) + ")");
+		assertTrue(agent.getTasks() == null || agent.getTasks().get(taskId) == null,
+			"the cancelled task has left the agent's queue (status=" + agent.getStatus() + ")");
 	}
 }

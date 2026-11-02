@@ -2,6 +2,9 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -966,21 +969,21 @@ public class OrchestratorTest {
 	}
 
 	@Test
-	public void testStepReferenceInsideArrayCreatesDependency() {
-		// scanDeps must mirror computeInput. Step 0 is deliberately slow: were the
-		// reference buried in the array not scanned as a dependency, step 1 would
-		// start immediately and resolve [0,"value"] against a step that has
-		// produced nothing — silently yielding null rather than failing.
+	public void testStepReferenceInsideArrayCreatesDependency() throws Exception {
+		// scanDeps must mirror computeInput. Step 0 is held at a gate until it is
+		// running: were the reference buried in the array not scanned as a
+		// dependency, step 1 would start alongside it and resolve [0,"value"]
+		// against a step that has produced nothing — silently yielding null
+		// rather than failing.
 		String hash = storeJsonOrchestration("""
 			{
 				"name": "Array dependency",
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [
-						{ "op": "v/test/ops/delay", "input": {
-							"operation": ["const", "v/test/ops/echo"],
-							"input":     ["const", {"value": "late"}],
-							"delay":     ["const", 300] } },
+						{ "op": "v/test/ops/hold", "input": {
+							"gate":   ["input", "gate"],
+							"result": ["const", {"value": "late"}] } },
 						{ "op": "v/test/ops/echo", "input": {
 							"items": ["array", [0, "value"]] } }
 					],
@@ -989,9 +992,15 @@ public class OrchestratorTest {
 			}
 		""");
 
-		Job job = engine.jobs().invokeOperation(hash,
-			Maps.empty(), RequestContext.of(ALICE_DID));
-		ACell result = job.awaitResult(10000);
+		String gateName = "orch-array-dep-" + ALICE_DID;
+		ACell result;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Job job = engine.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("gate"), Strings.create(gateName)), RequestContext.of(ALICE_DID));
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "step 0 is running");
+			gate.release();
+			result = job.awaitResult(10000);
+		}
 
 		AVector<ACell> items = RT.ensureVector(RT.getIn(result, Strings.create("items")));
 		assertNotNull(items);
@@ -1147,37 +1156,50 @@ public class OrchestratorTest {
 	}
 
 	@Test
-	public void testForeachPreservesInputOrderWhenItemsCompleteOutOfOrder() {
+	public void testForeachPreservesInputOrderWhenItemsCompleteOutOfOrder() throws Exception {
 		String hash=storeJsonOrchestration("""
 			{
 				"name": "Ordered foreach",
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "v/test/ops/delay",
+						"op": "v/test/ops/hold",
 						"foreach": {
 							"in": ["input", "items"],
 							"maxConcurrency": 3
 						},
 						"input": {
-							"operation": ["const", "v/test/ops/echo"],
-							"input": { "value": ["item", "value"] },
-							"delay": ["item", "delay"]
+							"gate": ["item", "gate"],
+							"result": { "value": ["item", "value"] }
 						}
 					}],
 					"result": { "items": [0] }
 				}
 			}
 		""");
-		AVector<ACell> input=Vectors.of(
-			Maps.of("value","first","delay",300L),
-			Maps.of("value","second","delay",20L),
-			Maps.of("value","third","delay",100L));
+		// Each item is held at its own gate, all three in flight at once, and
+		// released out of input order.
+		String gate="orch-foreach-order-" + ALICE_DID + "-";
+		AVector<ACell> result;
+		try (TestAdapter.TestGate first=TestAdapter.createGate(gate+"first");
+				TestAdapter.TestGate second=TestAdapter.createGate(gate+"second");
+				TestAdapter.TestGate third=TestAdapter.createGate(gate+"third")) {
+			AVector<ACell> input=Vectors.of(
+				Maps.of("value","first","gate",gate+"first"),
+				Maps.of("value","second","gate",gate+"second"),
+				Maps.of("value","third","gate",gate+"third"));
 
-		Job job=engine.jobs().invokeOperation(hash,
-			Maps.of(Strings.create("items"),input),RequestContext.of(ALICE_DID));
-		AVector<ACell> result=RT.ensureVector(
-			RT.getIn(job.awaitResult(10000),Strings.create("items")));
+			Job job=engine.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("items"),input),RequestContext.of(ALICE_DID));
+			for (TestAdapter.TestGate g : java.util.List.of(first, second, third)) {
+				assertTrue(g.awaitEntered(10, TimeUnit.SECONDS), "every item is in flight");
+			}
+			second.release();
+			third.release();
+			first.release();
+			result=RT.ensureVector(
+				RT.getIn(job.awaitResult(10000),Strings.create("items")));
+		}
 
 		assertEquals(Strings.create("first"),RT.getIn(result.get(0),Strings.create("value")));
 		assertEquals(Strings.create("second"),RT.getIn(result.get(1),Strings.create("value")));
@@ -1606,21 +1628,20 @@ public class OrchestratorTest {
 	}
 
 	@Test
-	public void testFailureStopsLaterStepsFromStarting() {
+	public void testFailureStopsLaterStepsFromStarting() throws Exception {
 		// Containment is not only about direct dependents. Once the run has
 		// failed, no further step should start — otherwise a step whose own
 		// dependency succeeded still applies side effects on behalf of an
 		// orchestration that can no longer succeed. Step 2 depends on step 1
 		// (which succeeds), not on the failing step 0.
 		//
-		// Step 1 is deliberately slow so the ordering is deterministic: step 0
-		// fails immediately, while step 1 is still in flight, so step 2 can only
-		// have become ready in a LATER iteration. Without the fail-fast return
-		// the loop would wait for step 1, release step 2, and write. (With a fast
-		// step 1 this is a genuine race — it may complete and release step 2
-		// before any failure is observed — and no scheduler change can prevent
-		// that, which is why steps already ready or in flight are documented as
-		// running to completion.)
+		// Both steps are held at gates so the ordering is deterministic: step 0
+		// fails while step 1 is still in flight, so step 2 can only become ready
+		// in a LATER iteration. Without the fail-fast return the loop would wait
+		// for step 1, release step 2, and write. (With a fast step 1 this is a
+		// genuine race — it may complete and release step 2 before any failure is
+		// observed — and no scheduler change can prevent that, which is why steps
+		// already ready or in flight are documented as running to completion.)
 		String path = "w/orch281/independent";
 		String hash = storeJsonOrchestration("""
 			{
@@ -1628,11 +1649,12 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [
-						{ "op": "v/test/ops/error", "input": { "message": ["const", "denied"] } },
-						{ "op": "v/test/ops/delay", "input": {
-							"operation": ["const", "v/test/ops/echo"],
-							"input":     ["const", {"value": "ok"}],
-							"delay":     ["const", 500] } },
+						{ "op": "v/test/ops/hold", "input": {
+							"gate":  ["input", "failGate"],
+							"error": ["const", "denied"] } },
+						{ "op": "v/test/ops/hold", "input": {
+							"gate":   ["input", "slowGate"],
+							"result": ["const", {"value": "ok"}] } },
 						{ "op": "v/ops/covia/write", "input": {
 							"path":  ["input", "p"],
 							"value": [1, "value"] } }
@@ -1642,24 +1664,31 @@ public class OrchestratorTest {
 			}
 		""");
 
-		Job job = engine.jobs().invokeOperation(hash,
-			Maps.of(Strings.create("p"), Strings.create(path)),
-			RequestContext.of(ALICE_DID));
-		try {
-			job.awaitResult(5000);
-			fail("Orchestration should fail when step 0 fails");
-		} catch (Exception expected) {
-			assertEquals(Status.FAILED, job.getStatus());
-		}
+		String failGate = "orch-fail-fast-0-" + ALICE_DID;
+		String slowGate = "orch-fail-fast-1-" + ALICE_DID;
+		try (TestAdapter.TestGate failing = TestAdapter.createGate(failGate);
+				TestAdapter.TestGate slow = TestAdapter.createGate(slowGate)) {
+			Job job = engine.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("p"), Strings.create(path),
+					Strings.create("failGate"), Strings.create(failGate),
+					Strings.create("slowGate"), Strings.create(slowGate)),
+				RequestContext.of(ALICE_DID));
+			// The orchestration commits its failure on its own thread, which is
+			// the thread that would go on to release step 2.
+			CompletableFuture<Thread> failedOn = new CompletableFuture<>();
+			job.subscribe(j -> { if (Status.FAILED.equals(j.getStatus())) failedOn.complete(Thread.currentThread()); });
+			assertTrue(failing.awaitEntered(10, TimeUnit.SECONDS), "step 0 is running");
+			assertTrue(slow.awaitEntered(10, TimeUnit.SECONDS), "step 1 is running");
+			failing.release();
+			Thread orchestration = failedOn.get(10, TimeUnit.SECONDS);
+			assertEquals(Status.FAILED, job.getStatus(), "the orchestration fails when step 0 fails");
 
-		// Proving a negative needs a bounded wait. The job fails almost at once,
-		// but step 1 only finishes at ~500ms — and it is releasing step 2 that
-		// would cause the write. Check well past that point, or the assertion
-		// would pass even against the unfixed code.
-		try {
-			Thread.sleep(1500);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
+			// Let step 1 succeed, then wait for the orchestration's thread to end:
+			// had it gone on after the failure, it would have released step 2 and
+			// waited for its write before ending.
+			slow.release();
+			orchestration.join(TimeUnit.SECONDS.toMillis(10));
+			assertFalse(orchestration.isAlive(), "the orchestration has ended");
 		}
 
 		assertFalse(readExists(path),

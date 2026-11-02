@@ -10,8 +10,9 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
@@ -61,15 +62,32 @@ public class HardKillPersistenceTest {
 	 * logback etc.).
 	 */
 	private static final class Child implements AutoCloseable {
+		/** Queued after the last protocol line when the child's stdout closes. */
+		private static final String CLOSED = new String("closed");
+
 		final Process process;
-		final BufferedReader stdout;
 		final PrintWriter stdin;
+		final Thread stdoutPump;
 		final Thread stderrPump;
+		/** Protocol payloads (after the "PROTO " prefix), in order. */
+		final BlockingQueue<String> proto = new LinkedBlockingQueue<>();
 
 		Child(Process p) {
 			this.process = p;
-			this.stdout = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8));
 			this.stdin = new PrintWriter(new OutputStreamWriter(p.getOutputStream(), StandardCharsets.UTF_8), true);
+			// Keep protocol lines; other stdout is log output.
+			this.stdoutPump = new Thread(() -> {
+				try (BufferedReader r = new BufferedReader(
+						new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+					String l;
+					while ((l = r.readLine()) != null) {
+						if (l.startsWith(PROTO + " ")) proto.add(l.substring(PROTO.length() + 1));
+					}
+				} catch (IOException ignored) { /* child died */ }
+				proto.add(CLOSED);
+			}, "hardkill-child-stdout");
+			this.stdoutPump.setDaemon(true);
+			this.stdoutPump.start();
 			// Drain stderr so the child can't block on a full pipe.
 			this.stderrPump = new Thread(() -> {
 				try (BufferedReader r = new BufferedReader(
@@ -92,25 +110,16 @@ public class HardKillPersistenceTest {
 			return readProto();
 		}
 
-		/** Reads stdout lines until one starts with "PROTO ". Returns the suffix. */
+		/** Waits for the child's next protocol line and returns its payload. */
 		String readProto() throws Exception {
-			long deadline = System.currentTimeMillis() + PROTO_TIMEOUT_MS;
-			AtomicReference<String> result = new AtomicReference<>();
-			while (System.currentTimeMillis() < deadline) {
-				if (stdout.ready() || !process.isAlive()) {
-					String line = stdout.readLine();
-					if (line == null) {
-						throw new IOException("child stdout closed (exit=" + process.exitValue() + ")");
-					}
-					if (line.startsWith(PROTO + " ")) {
-						return line.substring(PROTO.length() + 1);
-					}
-					// Non-protocol line — log output. Ignore.
-				} else {
-					Thread.sleep(10);
-				}
+			String payload = proto.poll(PROTO_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+			if (payload == null) throw new IllegalStateException("Timed out waiting for PROTO response");
+			if (payload == CLOSED) {
+				proto.add(CLOSED);
+				throw new IOException("child stdout closed (exit="
+					+ (process.isAlive() ? "running" : process.exitValue()) + ")");
 			}
-			throw new IllegalStateException("Timed out waiting for PROTO response");
+			return payload;
 		}
 
 		@Override public void close() {
@@ -121,8 +130,10 @@ public class HardKillPersistenceTest {
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			} catch (Exception ignored) {}
-			try { stdout.close(); } catch (Exception ignored) {}
-			try { stderrPump.join(5_000); } catch (InterruptedException e) {
+			try {
+				stdoutPump.join(5_000);
+				stderrPump.join(5_000);
+			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
 		}
