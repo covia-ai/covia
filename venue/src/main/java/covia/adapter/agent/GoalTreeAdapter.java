@@ -583,7 +583,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input,
 			messages, rootDescription, cycleTs);
 		if (opened.failed()) {
-			return Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error());
+			return CycleRecord.endInto(Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error()));
 		}
 		FrameStore store = opened.store();
 		boolean tidyInterrupted = opened.interrupted();
@@ -673,13 +673,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		} else {
 			output = output.assoc(Fields.RESPONSE, result.value());
 		}
-		// The cycle record and its token totals (#217: measured only; absent
-		// means the provider reported nothing, never zero). Per-call usage
-		// additionally rides each assistant turn in the frame conversation.
-		CycleRecord.Result record = CycleRecord.end();
-		output = output.assoc(Fields.CYCLE, record.cycle());
-		if (record.tokens() != null) output = output.assoc(Fields.TOKENS, record.tokens());
-		return output;
+		// Per-call usage also rides each assistant turn in the frame conversation.
+		return CycleRecord.endInto(output);
 	}
 
 	/**

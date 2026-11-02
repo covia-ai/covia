@@ -6,6 +6,9 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -18,6 +21,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.exception.CoviaException;
 import covia.exception.JobFailedException;
 import covia.venue.AgentEvents;
 
@@ -51,6 +55,8 @@ import covia.venue.AgentEvents;
  * threads and never share a record.</p>
  */
 public final class CycleRecord {
+
+	private static final Logger log = LoggerFactory.getLogger(CycleRecord.class);
 
 	private static final ThreadLocal<CycleRecord> CURRENT = new ThreadLocal<>();
 
@@ -145,6 +151,18 @@ public final class CycleRecord {
 		if (r == null) return null;
 		CURRENT.remove();
 		return new Result(r.frames.peekLast().toCell(), r.tokens());
+	}
+
+	/**
+	 * Closes the record and adds it to a cycle's {@code output}, with its
+	 * token totals when the provider measured any (absent means it reported
+	 * nothing, never zero). Every way a cycle ends goes through here.
+	 */
+	public static AMap<AString, ACell> endInto(AMap<AString, ACell> output) {
+		Result r = end();
+		if (r == null) return output;
+		output = output.assoc(Fields.CYCLE, r.cycle());
+		return (r.tokens() != null) ? output.assoc(Fields.TOKENS, r.tokens()) : output;
 	}
 
 	/** Adds a reply's provider-reported usage to the open record's totals, if any. */
@@ -328,26 +346,34 @@ public final class CycleRecord {
 
 	/**
 	 * A transition failure carrying the record of what ran before it, so the
-	 * cycle's entry keeps its inferences. The message is the original's and
-	 * the original is the cause; the run loop unwraps it.
+	 * cycle's entry keeps its inferences. The message is what a caller is told
+	 * of the original ({@link CoviaException#describe}) and the original is
+	 * the cause; the run loop unwraps it.
 	 */
 	public static final class Failure extends JobFailedException {
 		private static final long serialVersionUID = 1L;
 		private final transient Result result;
 
 		private Failure(RuntimeException cause, Result result) {
-			super((cause.getMessage() != null) ? cause.getMessage() : cause.toString());
+			super(CoviaException.describe(cause));
 			initCause(cause);
 			this.result = result;
 		}
 
 		public Result result() { return result; }
 
-		/** Wraps when a record is open on this thread; otherwise the failure passes through. */
+		/**
+		 * Wraps when a record is open on this thread; otherwise the failure
+		 * passes through. A venue fault is logged here, where the cycle met it:
+		 * the carrier reads as an expected failure, so the Job it fails does
+		 * not log it.
+		 */
 		public static RuntimeException of(RuntimeException e) {
 			if (e instanceof Failure) return e;
 			Result r = end();
-			return (r == null) ? e : new Failure(e, r);
+			if (r == null) return e;
+			if (CoviaException.reasonOf(e) == null) log.error("Unexpected failure in an agent cycle", e);
+			return new Failure(e, r);
 		}
 
 		/** The carrier in a cause chain, or null. */

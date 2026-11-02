@@ -1107,6 +1107,14 @@ public class AgentAdapterTest {
 		AVector<ACell> taskMessages = RT.ensureVector(withTask.get(Fields.MESSAGES));
 		String last = RT.getIn(taskMessages.get(taskMessages.count() - 1), "content").toString();
 		assertTrue(last.startsWith("[Tasks assigned to you]") && last.contains("Summarise w/report"), last);
+		// Before it, the request turn a live cycle's start writes for the task.
+		boolean requested = false;
+		for (long i = 0; i < taskMessages.count() - 1; i++) {
+			ACell m = taskMessages.get(i);
+			requested |= "user".equals(String.valueOf(RT.getIn(m, "role")))
+				&& String.valueOf(RT.getIn(m, "content")).contains("Summarise w/report");
+		}
+		assertTrue(requested, "the task's request turn: " + taskMessages);
 		java.util.Set<String> toolNames = new java.util.HashSet<>();
 		AVector<ACell> tools = RT.ensureVector(withTask.get(Fields.TOOLS));
 		for (long i = 0; i < tools.count(); i++) toolNames.add(RT.getIn(tools.get(i), "name").toString());

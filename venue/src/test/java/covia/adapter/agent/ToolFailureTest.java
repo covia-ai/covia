@@ -2,6 +2,7 @@ package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -21,6 +22,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.exception.AuthException;
+import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.venue.TestLogs;
@@ -57,6 +59,22 @@ public class ToolFailureTest {
 			new CompletionException(new ExecutionException(new NotSupportedException(reason))), "op"));
 		assertTrue(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new AuthException(reason))));
 		assertFalse(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new NullPointerException(reason))));
+	}
+
+	/** A cycle's failure carrier tells a caller what any failure tells it: an
+	 *  expected one's reason, or that the venue failed, never a fault's text. */
+	@Test
+	public void testACycleFailureSaysWhatACallerIsTold() throws Exception {
+		CycleRecord.begin();
+		assertEquals("bad input", CycleRecord.Failure.of(new InvalidInputException("bad input")).getMessage());
+		TestLogs.quiet(CycleRecord.class, () -> {
+			CycleRecord.begin();
+			IllegalStateException fault = new IllegalStateException("internal detail");
+			RuntimeException carried = CycleRecord.Failure.of(fault);
+			assertEquals(CoviaException.UNEXPECTED.formatted(IllegalStateException.class.getSimpleName()),
+				carried.getMessage());
+			assertSame(fault, carried.getCause(), "the run loop reads the fault itself");
+		});
 	}
 
 	@Test

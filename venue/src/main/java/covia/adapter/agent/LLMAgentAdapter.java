@@ -176,8 +176,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (previewFrames.isEmpty()) {
 			previewFrames = Vectors.of((ACell) GoalTreeContext.createFrame("", frameLoads));
 		}
-		previewFrames = FrameStore.appendCycleInputTurns(previewFrames,
-			in.messages(), null, convex.core.util.Utils.getCurrentTimestamp());
+		// The cycle's input as a live cycle's start writes it: the messages,
+		// then the task's request turn.
+		previewFrames = FrameStore.appendCycleInputTurns(previewFrames, in.messages(),
+			(in.task() != null) ? Maps.of(Fields.NEW_INPUT, in.task()) : null,
+			convex.core.util.Utils.getCurrentTimestamp());
 		toolCtx.store = new FrameStore.LocalFrameStore(previewFrames);
 		toolCtx.adoptFrames(previewFrames);
 		ACell task = toolCtx.tasks.message();
@@ -358,12 +361,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			GoalTreeContext.describeTransitionInput(messages, tasks, pending),
 			convex.core.util.Utils.getCurrentTimestamp());
 		if (opened.failed()) {
-			CycleRecord.Result cycle = CycleRecord.end();
-			AMap<AString, ACell> failed = Maps.of(
-				AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error(),
-				Fields.CYCLE, cycle.cycle());
-			if (cycle.tokens() != null) failed = failed.assoc(Fields.TOKENS, cycle.tokens());
-			return failed;
+			return CycleRecord.endInto(Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error()));
 		}
 		FrameStore store = opened.store();
 
@@ -453,13 +451,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			output = output.assoc(Fields.FRAMES, store.frames());
 		}
 		output = toolCtx.tasks.promote(output);
-
-		// The cycle record and its token totals (#217: measured only; absent
-		// means the provider reported nothing, never zero).
-		CycleRecord.Result cycle = CycleRecord.end();
-		output = output.assoc(Fields.CYCLE, cycle.cycle());
-		if (cycle.tokens() != null) output = output.assoc(Fields.TOKENS, cycle.tokens());
-		return output;
+		return CycleRecord.endInto(output);
 	}
 
 	/**

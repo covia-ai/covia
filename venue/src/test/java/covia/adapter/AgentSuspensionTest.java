@@ -13,6 +13,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.adapter.agent.CycleRecord;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -128,13 +129,14 @@ public class AgentSuspensionTest {
 	public void aVenueFaultSuspendsTheAgent(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		AgentState agent = create(owner, "venue-fault", "bug");
-		// The failed model call is logged at ERROR, as an unexpected failure must be.
-		TestLogs.quiet(AAdapter.class, () -> {
+		// The failed model call is logged at ERROR, as an unexpected failure
+		// must be, by its own Job and by the cycle it failed.
+		TestLogs.quiet(AAdapter.class, () -> TestLogs.quiet(CycleRecord.class, () -> {
 			Job waiting = request(owner, "venue-fault", "go");
 			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
 			assertFalse(waiting.isFinished(), "a suspended agent keeps its queue");
 			assertEquals(suspendedNote(agent), progress(waiting));
-		});
+		}));
 	}
 
 	@Test
