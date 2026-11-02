@@ -520,13 +520,9 @@ public class JobTest {
 		// Fail the job immediately (simulating fast async failure)
 		job.fail("Fast failure");
 
-		// Now try awaitResult - this should NOT hang
-		CompletableFuture<ACell> future = CompletableFuture.supplyAsync(() -> {
-			return job.awaitResult();
-		});
-
-		// Should complete within 1 second (not hang)
-		assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
+		// A waiter arriving now finds the failure already settled, so cannot hang
+		assertTrue(job.future().isCompletedExceptionally());
+		assertThrows(JobFailedException.class, job::awaitResult);
 	}
 
 	/**
@@ -594,18 +590,9 @@ public class JobTest {
 		assertTrue(outerJob.isFinished(), "Outer job should be finished");
 		assertEquals(Status.FAILED, outerJob.getStatus());
 
-		// Now awaitResult on outer job should NOT hang - it should throw immediately
-		CompletableFuture<Object> awaitFuture = CompletableFuture.supplyAsync(() -> {
-			try {
-				return (Object)outerJob.awaitResult();
-			} catch (JobFailedException e) {
-				return e; // Return exception as result
-			}
-		});
-
-		// Should complete within 1 second
-		Object result = awaitFuture.get(1, TimeUnit.SECONDS);
-		assertTrue(result instanceof JobFailedException, "Should have received JobFailedException");
+		// A waiter on the outer job finds its failure already settled, so cannot hang
+		assertTrue(outerJob.future().isCompletedExceptionally());
+		assertThrows(JobFailedException.class, outerJob::awaitResult);
 	}
 
 	/**
@@ -626,18 +613,8 @@ public class JobTest {
 		assertFalse(job.isComplete());
 		assertEquals(Status.FAILED, job.getStatus());
 
-		// Now call awaitResult - this creates the future AFTER job is already failed
-		// This must NOT hang
-		CompletableFuture<Object> future = CompletableFuture.supplyAsync(() -> {
-			try {
-				return (Object)job.awaitResult();
-			} catch (JobFailedException e) {
-				return e;
-			}
-		});
-
-		// Must complete within 1 second
-		Object result = future.get(1, TimeUnit.SECONDS);
-		assertTrue(result instanceof JobFailedException);
+		// The future, made only now, is already settled, so awaitResult cannot hang
+		assertTrue(job.future().isCompletedExceptionally());
+		assertThrows(JobFailedException.class, job::awaitResult);
 	}
 }
