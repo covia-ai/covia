@@ -223,7 +223,7 @@ public class HITLAdapterTest {
 	/** An open request as stored before the requester's namespace was recorded. */
 	private String plantLegacyRecord(String id, AString from, Blob sid) {
 		AMap<AString, ACell> request = Hitl.request("Legacy").ask(Hitl.approval("ok", "OK?").required()).build();
-		engine.getVenueState().users().ensure(ALICE_DID).putHitlRequest(Strings.create(id), Maps.of(
+		engine.getVenueState().users().ensure(ALICE_DID).inbox().put(Strings.create(id), Maps.of(
 			Hitl.ID, id, Hitl.FROM, from, Hitl.TITLE, "Legacy", Hitl.ASKS, request.get(Hitl.ASKS),
 			Hitl.STATUS, Hitl.OPEN, Hitl.CREATED, CVMLong.create(System.currentTimeMillis()),
 			Hitl.AGENT, "legacy-agent", Fields.SESSION_ID, sid.toHexString()));
@@ -256,7 +256,7 @@ public class HITLAdapterTest {
 						"the final Job result must be part of the same draft as the inbox and session");
 					if (failAppend.get()) {
 						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().get(owner).job(Blob.fromHex(requestId.get().toString())).getRecord().get(Fields.STATUS));
-						assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+						assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 						assertTrue(e.getVenueState().users().get(owner).agent("asker").getSessionPending(sid).isEmpty());
 					}
 					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
@@ -280,7 +280,7 @@ public class HITLAdapterTest {
 			requestId.set(Strings.create(ask.getID().toHexString()));
 			var answer = Hitl.answer(requestId.get().toString()).answer("yes", true).build();
 			assertThrows(JobFailedException.class, () -> e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000));
-			assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+			assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 			assertTrue(agent.getSessionPending(sid).isEmpty());
 			assertEquals(Status.INPUT_REQUIRED, ask.getStatus());
 			assertTrue(agent.getPending().containsKey(ask.getID()), "a rolled-back resolution must retain its wait");
@@ -305,7 +305,7 @@ public class HITLAdapterTest {
 			var agent = second.getEngine().getVenueState().users().get(owner).agent("asker");
 			TestEngine.awaitTimelineCount(agent, 1, 10000);
 			assertTrue(agent.getSession(sid).toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
-			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().get(owner).getHitlRequest(requestId.get()).get(Hitl.STATUS));
+			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().get(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 		} finally { second.close(); }
 	}
 
@@ -350,7 +350,7 @@ public class HITLAdapterTest {
 				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
 				User owner = first.getVenueState().users().get(BOB_DID);
 				AString expiryId = Strings.create(expired.toHexString());
-				owner.putHitlRequest(expiryId, owner.getHitlRequest(expiryId).assoc(Hitl.EXPIRES, CVMLong.ZERO));
+				owner.inbox().put(expiryId, owner.inbox().get(expiryId).assoc(Hitl.EXPIRES, CVMLong.ZERO));
 				var expiring = java.util.concurrent.CompletableFuture.runAsync(() ->
 					((HITLAdapter) first.getAdapter("hitl")).rearmExpiries(), AAdapter.VIRTUAL_EXECUTOR);
 				for (Job pending : java.util.List.of(answer, reject, expire)) {
@@ -363,7 +363,7 @@ public class HITLAdapterTest {
 				assertEquals(Status.FAILED, answering.getStatus(), "flush failure is reported without indefinite recovery");
 				assertEquals(Status.COMPLETE, answer.getStatus());
 				assertEquals(Strings.create(token), RT.getIn(answer.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
-				assertFalse(owner.getHitlRequests().toString().contains(token), "h/ must never expose the signed token");
+				assertFalse(owner.inbox().getAll().toString().contains(token), "h/ must never expose the signed token");
 			} finally { first.close(); }
 		}
 		try (var store = convex.etch.EtchStore.create(file)) {
@@ -666,7 +666,7 @@ public class HITLAdapterTest {
 					.grant("w/x", "crud/read", (Long) null)).build(),
 				ctx));
 			assertTrue(permanent.getMessage().contains("requests no expiry"));
-			assertEquals(0, limited.getVenueState().users().get(user).getHitlRequests().count(),
+			assertEquals(0, limited.getVenueState().users().get(user).inbox().getAll().count(),
 				"invalid offers must be rejected before entering the human's inbox");
 		} finally {
 			limited.close();
@@ -794,7 +794,7 @@ public class HITLAdapterTest {
 			restored.cancel();
 			assertFalse(agent.getPending().containsKey(restored.getID()));
 			assertEquals(Hitl.CANCELLED, isolated.getVenueState().users().get(ALICE_DID)
-				.getHitlRequest(Strings.create(restored.getID().toHexString())).get(Hitl.STATUS));
+				.inbox().get(Strings.create(restored.getID().toHexString())).get(Hitl.STATUS));
 		} finally {
 			isolated.close();
 		}

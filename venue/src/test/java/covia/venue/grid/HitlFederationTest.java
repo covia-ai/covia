@@ -153,7 +153,7 @@ public class HitlFederationTest {
 
 		// The record landed in Alice's inbox ON VENUE B, attributed to Bob.
 		AMap<AString, ACell> record = TwoVenueTestServer.ENGINE_B.getVenueState()
-			.users().ensure(aliceDID).getHitlRequest(Strings.create(bare(remoteId)));
+			.users().ensure(aliceDID).inbox().get(Strings.create(bare(remoteId)));
 		assertNotNull(record, "delivery must land in Alice's inbox on venue B");
 		assertEquals(bobDID, record.get(Hitl.FROM),
 			"from is the requester's verified cross-venue identity");
@@ -233,7 +233,7 @@ public class HitlFederationTest {
 
 		// And nothing landed in Alice's inbox on B.
 		assertNull(TwoVenueTestServer.ENGINE_B.getVenueState()
-			.users().ensure(aliceDID).getHitlRequest(Strings.create(bare(remoteId))),
+			.users().ensure(aliceDID).inbox().get(Strings.create(bare(remoteId))),
 			"a denied delivery must leave no record");
 	}
 }

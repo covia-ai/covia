@@ -71,7 +71,7 @@ class UserExportsTest {
 		User user = users.ensure(did);
 		user.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/notes/today"), Strings.create("buy milk"));
 		user.workspaceRoot().write(WorkspaceRoot.parseStringPath("o/greet"), Maps.of("adapter", "test:echo"));
-		user.putHitlRequest(Strings.create("req-1"), Maps.of(Fields.STATUS, "OPEN"));
+		user.inbox().put(Strings.create("req-1"), Maps.of(Fields.STATUS, "OPEN"));
 		user.assets().store(Strings.create("{\"name\":\"note\"}"), Strings.create("asset content"));
 		user.secrets().store("API_KEY", SECRET, KEYS);
 		Blob jobID = Blob.fromHex("0a".repeat(16));

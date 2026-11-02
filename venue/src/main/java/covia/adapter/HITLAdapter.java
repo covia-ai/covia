@@ -188,7 +188,7 @@ public class HITLAdapter extends AAdapter {
 			throw new NotFoundException("HITL target user is not registered at this venue: "
 				+ targetDID, targetDID.toString());
 		}
-		targetUser.putHitlRequest(id, record);
+		targetUser.inbox().put(id, record);
 		Blob jobId = job.getID();
 		trackPending(job, ctx.getTaskId());
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
@@ -237,7 +237,7 @@ public class HITLAdapter extends AAdapter {
 		AString targetDID = target;
 		AString id = Strings.create(job.getID().toHexString());
 		User user = engine.getVenueState().users().get(target);
-		AMap<AString, ACell> record = user == null ? null : user.getHitlRequest(id);
+		AMap<AString, ACell> record = user == null ? null : user.inbox().get(id);
 		if (record != null && !Hitl.OPEN.equals(record.get(Hitl.STATUS))) {
 			// Older records lack a prepared result. Never reissue a grant or pretend
 			// a redacted token is the original answer.
@@ -335,7 +335,7 @@ public class HITLAdapter extends AAdapter {
 		// Structural authorisation: respond reads the CALLER's own inbox only.
 		User user = engine.getVenueState().users().get(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
-		AMap<AString, ACell> record = user.getHitlRequest(id);
+		AMap<AString, ACell> record = user.inbox().get(id);
 		if (record == null) {
 			throw new NotFoundException("No HITL request " + id + " in your inbox", id.toString());
 		}
@@ -607,7 +607,7 @@ public class HITLAdapter extends AAdapter {
 		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
 		User user = engine.getVenueState().users().get(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
-		AMap<AString, ACell> all = user.getHitlRequests();
+		AMap<AString, ACell> all = user.inbox().getAll();
 		AVector<ACell> items = Vectors.empty();
 		for (long i = 0; i < all.count(); i++) {
 			ACell v = all.entryAt(i).getValue();
@@ -667,11 +667,11 @@ public class HITLAdapter extends AAdapter {
 			unavailable.set(false);
 			wake.set(null);
 			User target = draft.get(targetDID);
-			AMap<AString, ACell> record = target == null ? null : target.getHitlRequest(id);
+			AMap<AString, ACell> record = target == null ? null : target.inbox().get(id);
 			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return;
 			AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
 			if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
-			target.putHitlRequest(id, updated);
+			target.inbox().put(id, updated);
 			if (job != null) {
 				Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data -> {
 					if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
@@ -740,7 +740,7 @@ public class HITLAdapter extends AAdapter {
 			if (did == null) continue;
 			User user = engine.getVenueState().users().get(did);
 			if (user == null) continue;
-			AMap<AString, ACell> reqs = user.getHitlRequests();
+			AMap<AString, ACell> reqs = user.inbox().getAll();
 			for (long i = 0; i < reqs.count(); i++) {
 				ACell v = reqs.entryAt(i).getValue();
 				if (!(v instanceof AMap)) continue;
