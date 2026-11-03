@@ -84,14 +84,20 @@ file when you repackage the jar.
 
 Find a user with `engine.getVenueState().users().ensure(did)` or `get(did)`.
 
-- **Workspace.** Use `user.workspaceRoot()`: `read`, `write` and `delete`,
-  with keys from `WorkspaceRoot.parseStringPath("w/...")`. When several
-  writes must land together, wrap them in a transaction, which applies all or
-  nothing and is retried on a conflict:
+- **Workspace.** `user.workspace()` is the user's workspace (`w`). Its
+  `read`, `write`, `append`, `update` and `delete` take keys inside the
+  workspace, from `ValuePath.parse("app/record")`, and the position in them
+  where the path starts, usually 0. A change creates no missing level:
+  `createPath` makes them, and a write below a missing level is refused
+  (`NotFoundException`). When several changes must land together, wrap them
+  in a transaction, which applies all or nothing and is retried on a
+  conflict:
   ```java
   user.transact(draft -> {
-      draft.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/app/record"), record);
-      draft.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/app/stamp"), stamp);
+      Workspace workspace = draft.workspace();
+      workspace.createPath(ValuePath.parse("app"), 0);
+      workspace.write(ValuePath.parse("app/record"), 0, record);
+      workspace.write(ValuePath.parse("app/stamp"), 0, stamp);
   });
   ```
   Keep I/O out of the body: it may run more than once.
@@ -109,6 +115,13 @@ A `did:key` installation can sign for identities nested below it, such as
 caller can mint a token for itself with `auth:identity-token`. See AUTH.md,
 "Nested installation identities below a did:key".
 
+## Upgrading from 0.10.0
+
+| 0.10.0 | Current |
+|--------|---------|
+| `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with keys inside `w` from `ValuePath.parse` (see User data) |
+| `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
+
 ## Upgrading from 0.9.x
 
 0.10.0 moves stored values to a new schema that 0.9.x cannot read. Keep the
@@ -121,7 +134,7 @@ unchanged but fail at runtime against jars built for 0.9.x.
 | `Engine` constructors taking a cursor | `new Engine(config, CoviaApplication, keyPair)`, with `CoviaApplication.open(store, keyPair)` or `connect(host)` |
 | `getRootCursor()` and `User.cursor()` returning `ALatticeCursor` | They return `AForkableCursor`. Source-compatible, but binary-incompatible: recompile |
 | `VenueState.fromRoot(cursor, ownerKey)` | `fromRoot(AForkableCursor, AccountKey, signer, VenueContext)`, or `application.venue(ownerKey)` |
-| `CoviaAdapter.writePathToCursor`, `CoviaAdapter.parseStringPath` | `workspaceRoot().write` inside `user.transact`; `WorkspaceRoot.parseStringPath` |
+| `CoviaAdapter.writePathToCursor`, `CoviaAdapter.parseStringPath` | `user.workspace()` inside `user.transact` (see User data) |
 | `WrapperLattice`, `Covia.child`, `Engine.connectDLFSDrive` | Removed |
 | A job record's `prev` chain, `Job.getPreviousState` | Gone: a job record is its current state |
 | A frame's `conversation` field | `GoalTreeContext.archivedConversation(frame)` |
