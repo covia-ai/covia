@@ -627,7 +627,7 @@ public class A2AAgentCardTest {
 			String queuedGateName = "queued-" + UUID.randomUUID();
 			try (TestAdapter.TestGate queuedGate = TestAdapter.createGate(queuedGateName)) {
 				agentState.updateConfigAndState(
-					agentState.getConfig().assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
+					config -> config.assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
 					agentState.getState());
 				long cyclesBefore = agentState.getTimeline().count();
 				Message fifthTurn = Message.builder().role(Message.Role.ROLE_USER)

@@ -891,7 +891,8 @@ which confers `agent/request` and `agent/message` on the agent (an older public
 `a2a.caps` reads as `accepts: "anyone"`). An agent may therefore create
 sub-agents, never more capable ones,
 and a delegated `agent/create` or `agent/write` confers nothing beyond the
-delegation. An update re-checks only the fields it changes.
+delegation. An update re-checks only the fields it changes, against the config
+it replaces, in the same atomic update.
 
 **A step runs as its agent.** `llmagent:chat` and `goaltree:chat` always run
 as the agent they name, under its current `config.caps`, whoever invokes them

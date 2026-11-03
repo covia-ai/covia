@@ -2,6 +2,8 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -143,6 +145,36 @@ class DomainTransactionTest {
 		assertNull(published.get(), "the rejected retry must replace the first attempt's result");
 		assertNull(SessionState.sessionSummary(agent.getSession(sid), instruction));
 		assertEquals(AgentState.SUSPENDED, agent.getStatus());
+	}
+
+	@Test
+	void configChangeRunsAgainstTheConfigItReplaces() throws Exception {
+		var caps = Strings.create("caps");
+		var model = Strings.create("model");
+		var agent = VenueState.create(AKeyPair.generate()).users().ensure(DID)
+			.ensureAgent("config", Maps.of(caps, "wide", model, "a"), null);
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		var seen = new CopyOnWriteArrayList<ACell>();
+		AMap<AString, ACell> committed;
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> agent.updateConfigAndState(config -> {
+				seen.add(config.get(caps));
+				entered.countDown();
+				await(resume);
+				return config.assoc(model, Strings.create("b"));
+			}, null));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				agent.updateConfigAndState(config -> config.assoc(caps, Strings.create("narrow")), null);
+			} finally { resume.countDown(); }
+			committed = pending.get(10, TimeUnit.SECONDS);
+		}
+		assertEquals(List.of(Strings.create("wide"), Strings.create("narrow")), seen,
+			"a change that lost the race runs again against the config that won");
+		assertEquals(Strings.create("narrow"), committed.get(caps), "the concurrent change stands");
+		assertEquals(Strings.create("b"), committed.get(model));
+		assertEquals(committed, agent.getConfig());
 	}
 
 	@Test

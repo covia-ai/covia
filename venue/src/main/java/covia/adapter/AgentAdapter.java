@@ -2818,29 +2818,19 @@ public class AgentAdapter extends AAdapter {
 		boolean running = isRunning(target.key());
 
 		ACell configInput = RT.getIn(input, Fields.CONFIG);
-		AMap<AString, ACell> newConfig = null;
+		AMap<AString, ACell> resolved = null;
 		if (configInput != null) {
 			try {
-				AMap<AString, ACell> resolved = parseConfigArg(configInput, ctx);
-				newConfig = mergeConfigMaps(agent.getConfig(), resolved);
+				resolved = parseConfigArg(configInput, ctx);
 			} catch (InvalidInputException | IllegalArgumentException e) {
 				job.fail(describeFailure(e));
 				return;
 			}
 		}
 		ACell newState = RT.getIn(input, AgentState.KEY_STATE);
-		if (newConfig == null && newState == null) {
+		if (resolved == null && newState == null) {
 			job.fail("At least one of 'config' or 'state' must be provided");
 			return;
-		}
-		if (newConfig != null) {
-			try {
-				validateComposedConfig(newConfig);
-			} catch (InvalidInputException | IllegalArgumentException e) {
-				job.fail(describeFailure(e));
-				return;
-			}
-			requireConferrable(ctx, target, newConfig, agent.getConfig());
 		}
 		// Config's single home is record.config (#144), and loads live on the
 		// context scope chain (#142) — see handleCreate.
@@ -2853,7 +2843,23 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		agent.updateConfigAndState(newConfig, newState);
+		// The new config is built from the config it replaces and checked against
+		// it inside the record's own update, so a concurrent change is never
+		// overwritten unchecked.
+		AMap<AString, ACell> changes = resolved;
+		AMap<AString, ACell> newConfig;
+		try {
+			AMap<AString, ACell> committed = agent.updateConfigAndState((changes == null) ? null : current -> {
+				AMap<AString, ACell> composed = mergeConfigMaps(current, changes);
+				validateComposedConfig(composed);
+				requireConferrable(ctx, target, composed, current);
+				return composed;
+			}, newState);
+			newConfig = (changes == null) ? null : committed;
+		} catch (InvalidInputException | IllegalArgumentException e) {
+			job.fail(describeFailure(e));
+			return;
+		}
 
 		AMap<AString, ACell> result = Maps.of(
 			Fields.STATUS, agent.getStatus(),

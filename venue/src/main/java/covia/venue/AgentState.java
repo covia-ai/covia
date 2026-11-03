@@ -952,21 +952,29 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	}
 
 	/**
-	 * Merges config and/or state fields into the existing agent record.
+	 * Changes the agent's config and merges state fields into the record, in
+	 * one atomic update.
 	 *
-	 * <p>Incoming maps are shallow-merged into the existing values so that
-	 * updating a single field (e.g. model) does not wipe sibling fields
-	 * (e.g. caps, tools, outputs). Top-level keys in the incoming map
-	 * override the corresponding keys in the existing map; keys not
-	 * present in the incoming map are preserved.</p>
+	 * <p>{@code config} receives the config the record holds (null when it has
+	 * none) and returns its replacement, so anything the new config depends on,
+	 * such as what the caller may confer, is decided against the config it
+	 * replaces. It may run again on a retry, so it must be pure, and an
+	 * exception from it leaves the record unchanged. Null leaves config alone.</p>
+	 *
+	 * <p>Incoming state is shallow-merged into the existing state so that
+	 * updating a single field does not wipe its siblings: top-level keys in the
+	 * incoming map override the existing ones, and the rest are preserved.</p>
+	 *
+	 * @return The config the record holds after the update, or null when the
+	 *         record does not exist
 	 */
 	@SuppressWarnings("unchecked")
-	public void updateConfigAndState(AMap<AString, ACell> config, ACell state) {
-		update(r -> {
+	public AMap<AString, ACell> updateConfigAndState(UnaryOperator<AMap<AString, ACell>> config, ACell state) {
+		AMap<AString, ACell> record = update(r -> {
 			AMap<AString, ACell> u = r;
 			if (config != null) {
-				AMap<AString, ACell> existing = (AMap<AString, ACell>) r.get(K_CONFIG);
-				u = u.assoc(K_CONFIG, merge(existing, config));
+				ACell existing = r.get(K_CONFIG);
+				u = u.assoc(K_CONFIG, config.apply((existing instanceof AMap) ? (AMap<AString, ACell>) existing : null));
 			}
 			if (state instanceof AMap) {
 				AMap<AString, ACell> existing = (AMap<AString, ACell>) r.get(K_STATE);
@@ -979,6 +987,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 			}
 			return u;
 		});
+		ACell committed = (record == null) ? null : record.get(K_CONFIG);
+		return (committed instanceof AMap) ? (AMap<AString, ACell>) committed : null;
 	}
 
 	/**
