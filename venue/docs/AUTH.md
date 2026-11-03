@@ -823,11 +823,15 @@ context.
 **Recorded with the turn.** The agent's ingress (`agent:chat`, `agent:message`,
 `agent:request`) writes the request's `caller` and its `authentication` — the
 projection without `userDID`, which is the caller — onto the session envelope
-and the task record, from the request context only. Message content is never
-read for or rewritten with provenance. Both runtimes (the adapter's cycle merge
-and `FrameStore.cycleInputTurns`) copy both fields onto each user turn, and the
+and the task record, from the request context only; a message to a task goes
+onto its continuation's envelope. Message content is never read for or
+rewritten with provenance. Both runtimes (the adapter's cycle merge and
+`FrameStore.cycleInputTurns`) copy both fields onto each user turn, and the
 task wire shape carries them, so a turn keeps its provenance for as long as
-history keeps the turn (COG-20 §4).
+history keeps the turn (COG-20 §4). A task's turn takes the record of the
+input it shows: the task's for its original input, its continuation's for each
+later one, so a follow-up is attributed to its sender rather than the
+requester.
 
 **Rendered from the record.** `ContextAssembler` renders a `From` label element
 (`Labels.Kind.FROM`, AGENT_CONTEXT.md §1.2) in the agent's dialect:

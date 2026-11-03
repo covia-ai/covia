@@ -3766,6 +3766,35 @@ public class AgentAdapter extends AAdapter {
 		return true;
 	}
 
+	/**
+	 * Delivers a message about something an agent waited on (a tracked call's
+	 * outcome, a HITL answer) inside a caller-owned users transaction. When the
+	 * wait came from a task's cycle and that task is still queued in the
+	 * session, the message is the task's next input, so only its cycle is
+	 * shown it, however many tasks wait in the session; otherwise it goes to
+	 * the session, as any message does. The caller owns authorization, and
+	 * flushes and wakes the agent after commit.
+	 *
+	 * @param taskId the task whose cycle waited, or null
+	 * @param messageId identifies the message, so delivering it to the task again adds nothing
+	 * @return whether the message reached the task or the session
+	 */
+	public boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
+			Blob taskId, AString caller, AString messageId, ACell message) {
+		var owner = users.get(ownerDID);
+		AgentState agent = (owner == null) ? null : owner.agent(agentId);
+		if (agent == null || externalAgents().isExternal(agent)) return false;
+		if (taskId != null) {
+			AMap<AString, ACell> envelope = Maps.of(
+				Fields.CALLER, caller,
+				Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
+				Fields.TASK_ID, Strings.create(taskId.toHexString()),
+				Fields.MESSAGE, message);
+			if (agent.appendTaskContinuation(taskId, sessionId, envelope, messageId)) return true;
+		}
+		return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
+	}
+
 	/** Append to a known local session using the supplied component, including a
 	 * transaction draft. The caller owns authorization and flush/wake after commit. */
 	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
@@ -3785,11 +3814,11 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Tracks a tool call still running past its time limit (#607) in the
-	 * agent's pending index, so its outcome reaches the asking session exactly
-	 * once, after a restart too. The entry names the session and the task
-	 * whose cycle made the call, which keeps that task waiting for it. When
-	 * the job ends, {@link #deliverCallOutcome} moves its outcome from the
-	 * index to the session; while the venue is closing the entry stays, and
+	 * agent's pending index, so its outcome is delivered exactly once, after a
+	 * restart too. The entry names the session and the task whose cycle made
+	 * the call, which keeps that task waiting for it. When the job ends,
+	 * {@link #deliverCallOutcome} moves its outcome from the index to that
+	 * task, else the session; while the venue is closing the entry stays, and
 	 * the restart delivers it instead ({@link #reconcileAgentAfterRestart}).
 	 *
 	 * @param job the call's recorded job: the call itself or its mirror
@@ -3804,7 +3833,7 @@ public class AgentAdapter extends AAdapter {
 		deliverWhenFinished(ownerDID, agentId, job);
 	}
 
-	/** Whether a pending entry is a tracked call ({@link #trackCall}), whose outcome goes to its session. */
+	/** Whether a pending entry is a tracked call ({@link #trackCall}), whose outcome is delivered as a new input. */
 	private static boolean isTrackedCall(ACell entry) {
 		return RT.getIn(entry, Fields.SESSION_ID) != null;
 	}
@@ -3830,14 +3859,15 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Moves a tracked call's outcome from the agent's pending index to the
-	 * session its entry names, in one transaction. Nothing happens when the
-	 * entry has gone, so the outcome is delivered once. When the session has
-	 * gone, the entry goes with nothing delivered, and a task left parked on
-	 * it with nothing else to wait on fails. The caller flushes and wakes the
-	 * agent.
+	 * waiter its entry names ({@link #deliverToWaiter}: the task whose cycle
+	 * made the call, else its session), in one transaction. Nothing happens
+	 * when the entry has gone, so the outcome is delivered once. When the
+	 * session has gone, the entry goes with nothing delivered, and a task left
+	 * parked on it with nothing else to wait on fails. The caller flushes and
+	 * wakes the agent.
 	 *
 	 * @param record the call's final record
-	 * @return whether the outcome reached the session
+	 * @return whether the outcome reached the task or the session
 	 */
 	private boolean deliverCallOutcome(AString ownerDID, AString agentId, Blob jobId, AMap<AString, ACell> record) {
 		var delivered = new java.util.concurrent.atomic.AtomicBoolean();
@@ -3853,10 +3883,12 @@ public class AgentAdapter extends AAdapter {
 			AString sid = RT.ensureString(RT.getIn(entry, Fields.SESSION_ID));
 			if (sid == null) return;
 			tracked.set(true);
-			waitingTask.set(RT.ensureString(RT.getIn(entry, Fields.TASK_ID)));
+			AString taskHex = RT.ensureString(RT.getIn(entry, Fields.TASK_ID));
+			waitingTask.set(taskHex);
 			agent.removePending(jobId);
-			delivered.set(appendSessionMessage(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
-				engine.getDIDString(), null, callOutcome(jobId, record)));
+			delivered.set(deliverToWaiter(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
+				(taskHex != null) ? Blob.fromHex(taskHex.toString()) : null, engine.getDIDString(),
+				Strings.create(jobId.toHexString()), callOutcome(jobId, record)));
 		});
 		if (tracked.get() && !delivered.get()) {
 			log.info("Outcome of job {} not delivered: agent {} has no such session", jobId, agentId);
@@ -4073,9 +4105,10 @@ public class AgentAdapter extends AAdapter {
 				ACell cycleClaim = null;
 				if (pickedTask != null || pickedSessionRecord != null) {
 					ACell epoch = Blob.createRandom(new java.util.Random(), 8);
+					// A continuation keeps its own sender's provenance, not the requester's
 					AVector<ACell> inputTurns = cycleInputTurns(filteredInbox, pickedTaskInput,
 						(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
-						(pickedTask != null) ? pickedTask.getValue() : null, startTs);
+						(pickedTask != null) ? AgentState.nextTaskInputSource(pickedTask.getValue()) : null, startTs);
 					AgentState.CycleStart started = agent.beginCycle(
 						(pickedTask != null) ? pickedTask.getKey() : null,
 						(pickedTask != null) ? pickedTask.getValue() : null,
@@ -4930,8 +4963,8 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Resolves pending Job IDs to a vector of maps with status and output.
-	 * A tracked call is left out: its outcome reaches its own session as a
-	 * message ({@link #trackCall}).
+	 * A tracked call is left out: its outcome is delivered as a new input
+	 * ({@link #trackCall}).
 	 */
 	private AVector<ACell> resolveJobIds(Index<Blob, ACell> ids, AString payloadField) {
 		if (ids == null || ids.count() == 0) return Vectors.empty();
@@ -5223,8 +5256,8 @@ public class AgentAdapter extends AAdapter {
 	 * handle is looked up before the record, so a job that ends between the
 	 * two reads is still seen. A call whose job is live is watched once the
 	 * boot scan is over ({@code afterScan}); one whose job has ended (a mirror
-	 * fails at restart) has its outcome delivered to its session now, which is
-	 * new work for a task waiting on it; one whose job is gone, or is not
+	 * fails at restart) has its outcome delivered now, which is new work for
+	 * the task waiting on it; one whose job is gone, or is not
 	 * running here, has nothing to deliver and stops backing its task.
 	 */
 	private void recoverTrackedCalls(AString ownerDID, User user, AgentState agent, List<Runnable> afterScan) {

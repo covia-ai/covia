@@ -648,7 +648,7 @@ public class HITLAdapter extends AAdapter {
 
 	private record SessionWake(AString owner, AString agent) { }
 
-	/** Resolve once and append to the asking session in the same native transaction.
+	/** Resolve once and deliver to the asking task or session in the same native transaction.
 	 * Tokens have already been prepared; no signing, I/O or live Job mutation is
 	 * allowed inside the retryable draft callback. */
 	private boolean resolveRequest(AString targetDID, AString id, AString status,
@@ -666,6 +666,7 @@ public class HITLAdapter extends AAdapter {
 			notification.set(null);
 			unavailable.set(false);
 			wake.set(null);
+			Blob waitingTask = null;
 			User target = draft.get(targetDID);
 			AMap<AString, ACell> record = target == null ? null : target.inbox().get(id);
 			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return;
@@ -684,7 +685,11 @@ public class HITLAdapter extends AAdapter {
 				// survive to remove this wait, so settle it with the result itself.
 				User owner = draft.get(requester);
 				AgentState askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
-				if (askingAgent != null && askingAgent.getRecord() != null) askingAgent.removePending(job.getID());
+				if (askingAgent != null && askingAgent.getRecord() != null) {
+					AString taskHex = RT.ensureString(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));
+					if (taskHex != null) waitingTask = Blob.fromHex(taskHex.toString());
+					askingAgent.removePending(job.getID());
+				}
 			}
 			resolved.set(true);
 			if (result == null) return;
@@ -695,9 +700,11 @@ public class HITLAdapter extends AAdapter {
 			AString owner = RT.ensureString(record.get(K_REQUESTER_USER));
 			if (owner == null) owner = engine.legacyNamespace(RT.ensureString(record.get(Hitl.FROM)));
 			// The result carries the request ID. This is an independent message,
-			// not a chat waiter tied to the now-terminal HITL Job.
+			// not a chat waiter tied to the now-terminal HITL Job; it goes to the
+			// task whose cycle asked, when there is one, else to the session.
 			if (owner != null && sid != null && agents != null
-					&& agents.appendSessionMessage(draft, owner, agentId, sid, responder, null, result)) {
+					&& agents.deliverToWaiter(draft, owner, agentId, sid, waitingTask, responder,
+						(job != null) ? Strings.create(job.getID().toHexString()) : null, result)) {
 				wake.set(new SessionWake(owner, agentId));
 			} else unavailable.set(true);
 		});

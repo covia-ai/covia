@@ -188,11 +188,12 @@ AGENT_SESSIONS.md for the session model.
 
 The **pending** outbound-Job index holds job references for outstanding waits.
 HITL registers its request there until settlement, including after recovery;
-the Job owns the current status. HITL still delivers its answer through the
-session inbox, because its immediate receipt already completes the original
-tool exchange. A tool call still running past its time limit is tracked there
-too, with the session its outcome goes to (§3.4.2); a cycle is not shown such
-an entry as a job result. No generic async-invoke tool is exposed yet.
+the Job owns the current status. HITL still delivers its answer as a new
+input, because its immediate receipt already completes the original tool
+exchange: to the task whose cycle asked, else to the session inbox (§6.3). A
+tool call still running past its time limit is tracked there too, with the
+session and task its outcome goes to (§3.4.2); a cycle is not shown such an
+entry as a job result. No generic async-invoke tool is exposed yet.
 
 ### 2.4 Timeline Entry
 
@@ -303,8 +304,8 @@ status. They do not assert that the viewer is the intended responder. The counts
 are derived on each read: each pending ID gets one in-memory Job lookup. No
 derived counts are persisted or separately maintained. Cost is O(pending jobs)
 per agent, independent of other venue jobs and completed history, with no payload
-traversal. HITL removes the pending reference on settlement before delivering its
-session response. Existing job notifications can trigger a summary refresh; this adds no
+traversal. HITL removes the pending reference in the transaction that delivers
+its response. Existing job notifications can trigger a summary refresh; this adds no
 new agent status or event type.
 
 ### 2.6 Live events
@@ -602,16 +603,18 @@ running and should not be repeated unless that is safe
 
 In a session, the job is tracked in the agent's pending index with the
 session and the task whose cycle made the call. When the job ends, one
-transaction removes the entry and appends the outcome
-`{id, operation, status, result | error}` to the session as a message from
-the venue, which wakes the agent. A task that yields meanwhile waits for that
-message (§4.6). Shutdown leaves the entry, and the restart delivers the job's
-outcome instead (§6.1), so the session receives it exactly once. If the
-session has gone by then, the entry goes with nothing delivered, and a task
-left parked on it with nothing else to wait on fails
-(`AgentAdapter.TASK_OUTCOME_UNDELIVERED`). A call with no session is told only
-its job (`TOOL_STILL_RUNNING_UNTRACKED`); nothing follows, and
-`grid_job_status` gives the outcome.
+transaction removes the entry and delivers the outcome
+`{id, operation, status, result | error}` from the venue, which wakes the
+agent. It goes to the task as its next input, so it runs that task and no
+other in the session; when the call came from no task, or the task has
+finished, it goes to the session as a message. A task that yields meanwhile
+waits for it (§4.6), and one that receives it during its own cycle cannot
+complete in that cycle (§3.4.1), so it runs again. Shutdown leaves the entry, and the restart delivers the job's outcome
+instead (§6.1), so it is delivered exactly once. If the session has gone by
+then, the entry goes with nothing delivered, and a task left parked on it
+with nothing else to wait on fails (`AgentAdapter.TASK_OUTCOME_UNDELIVERED`).
+A call with no session is told only its job (`TOOL_STILL_RUNNING_UNTRACKED`);
+nothing follows, and `grid_job_status` gives the outcome.
 
 Delivery follows the job's own status, not its result future, which a waiter
 can cancel before the job has finished. The job ends in one commit and the
@@ -946,7 +949,7 @@ all outstanding work and exits to SLEEPING, `false` returns at once, and a
 number of milliseconds is a bounded block. A transition that awaits an ordinary
 async op (LLM or HTTP) simply keeps its virtual thread blocked on `.join()` —
 there is no yield/resume handoff. Sessioned HITL requests return their durable
-handle immediately and re-enter through the asking session (§6.3). A `SLEEPING` return means
+handle immediately and re-enter through the asking task or session (§6.3). A `SLEEPING` return means
 the loop fully drained; a `RUNNING` snapshot from a bounded `wait` means
 the loop is still processing.
 
@@ -1145,14 +1148,15 @@ exit re-check. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
 An agent is eligible to run when any of:
 
 - A session has a message in its `pending` queue (via `agent:message` or
-  `agent:chat`, a HITL answer re-entering the asking session, or the outcome
-  of a tool call that passed its time limit)
+  `agent:chat`, or a HITL answer or the outcome of a tool call that passed its
+  time limit when no queued task waits for it)
 - A task is ready (below)
 
 **Task readiness and yields.** A task is ready unless it is parked. A parked
 task is ready again once something new is there for it: an input it has not
-been shown (a continuation through `agent:message` with its `taskId`), a
-message in its session, or its `wakeTime` having come. The work check and the
+been shown (a continuation through `agent:message` with its `taskId`, or the
+answer or outcome its cycle waited for), a message in its session, or its
+`wakeTime` having come. The work check and the
 choice of task both use this test (`AgentState.isTaskReady`), and the cycle
 takes the oldest ready task.
 
@@ -1282,9 +1286,12 @@ When an agent needs human input, `hitl:request` creates a durable Job and record
 in the target user's **request queue** at `/h/<job-id>`. From a sessioned agent
 tool call it returns `{id, status: INPUT_REQUIRED, title}` immediately. The
 record stores the verified requester, agent and session. When the human answers,
-rejects, or the request expires, HITL resolves the Job, appends the outcome to
-that exact session as a provenance-bearing message, and wakes the agent. The
-Job remains the polling and audit fallback; no model turn waits for the human.
+rejects, or the request expires, HITL resolves the Job, delivers the outcome
+with the responder's provenance, and wakes the agent. The outcome goes to the
+task whose cycle asked as its next input, so it runs that task and no other in
+the session; when no task asked, or the task has finished, it goes to that
+exact session as a message. The Job remains the polling and audit fallback; no
+model turn waits for the human.
 
 External callers keep the standard Job contract: the returned Job remains
 `INPUT_REQUIRED` until it completes or fails.
@@ -1431,9 +1438,9 @@ The step adapter ends up branching on "do I have a task? a session? neither?" �
   `wakeTime = now + ms`. A future `wakeTime` is set only by a transition
   result (§4.6).
 - **Async invoke** — a harness tool that starts an operation without waiting
-  and delivers its outcome to the session when it ends. Today only sessioned
-  HITL asks (§6.3) and tool calls past their time limit (§3.4.2) re-enter this
-  way. Retrying slow work belongs inside the operation's own Job, not in the
+  and delivers its outcome to the asking task or session when it ends. Today
+  only sessioned HITL asks (§6.3) and tool calls past their time limit
+  (§3.4.2) re-enter this way. Retrying slow work belongs inside the operation's own Job, not in the
   run loop or the scheduler.
 - **Session readiness** — a session's own `wakeTime` running a cycle with
   nothing pending, as a task's does (§4.6).

@@ -1170,8 +1170,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * when it is recorded, else a mirror ({@link covia.venue.JobManager#mirror}),
 	 * so the job can be looked up and outlasts a restart. A sessioned agent's
 	 * call is tracked in its pending index ({@link AgentAdapter#trackCall}):
-	 * its outcome reaches the asking session as a message, which wakes the
-	 * agent, and a task that yields meanwhile waits for it. When no job can be
+	 * its outcome reaches the task whose cycle made the call as its next
+	 * input, else the asking session as a message, which wakes the agent, and
+	 * a task that yields meanwhile waits for it. When no job can be
 	 * named, the plain timeout stands.
 	 *
 	 * @param call the call's Job, or null if it never had one

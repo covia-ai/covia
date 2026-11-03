@@ -16,7 +16,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `ucan:issue` takes `prf` to pass on part of a grant made to the venue (#636).
 - `outbound/any`: the venue's standing to dial any outbound target, delegable by grant.
 - Venues prove their DID by address or challenge (`auth.venueProof`, `auth.requireVenueProof`).
-- An agent tool call past `toolCallTimeoutMs` names the recorded job it runs as, and its outcome reaches the session when it ends, after a restart too (#607).
+- An agent tool call past `toolCallTimeoutMs` names the recorded job it runs as, and its outcome reaches the agent when it ends, after a restart too (#607).
 - `recordToolCalls`, per agent with a venue default, records an agent's tool calls as jobs from the start.
 - An MCP read-only tool call past its ceiling names a job that `grid_job_status` and `grid_job_result` can find.
 - Per-user preferences at `x/preferences`, edited with the `preferences` tool and pinned by the standard and chat-bot agent templates (`adapters.preferences.maxBytes`).
@@ -26,6 +26,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
 - A forced `agent:trigger` no longer presents a parked task.
 - An LLM agent's job results show an open HITL ask as still waiting, not as ended with no reason.
+- A HITL answer or a late tool call's outcome goes to the task that waited for it, not to whichever task in its session runs next.
+- A message sent to a task with `agent:message` is shown to the agent as from its sender, not the task's requester.
 - An agent is suspended only when it cannot continue: its model setup is wrong (an `llmOperation` or `systemPrompt` entry that does not resolve among it), its provider cannot be reached, or the venue fails. Other failures, `fail_task` among them, fail only the work (#652).
 - `agent:context` and `agent:step` fail with the reason when the agent's `llmOperation`, or its model's provider, does not resolve.
 - A suspended agent keeps its queued work; waiting jobs say it is suspended, and the work runs after `agent:resume`.

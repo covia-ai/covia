@@ -576,15 +576,17 @@ public class TestAdapter extends AAdapter {
     }
 
     /**
-     * Test task transition that asks its owner a question and yields. With no
-     * message in its session it calls {@code hitl:request} under the cycle's
-     * context and leaves the task queued; once the answer arrives in the
-     * session, it completes the task with that answer.
+     * Test task transition that asks its owner a question and yields. On its
+     * task's first input it calls {@code hitl:request} under the cycle's
+     * context and leaves the task queued; once the answer arrives (as the
+     * task's next input, or for a chat as a message in its session), it
+     * completes the task with that answer.
      */
     private ACell handleAskHuman(RequestContext ctx, ACell input) {
         AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, AgentState.KEY_PENDING));
-        if (inbox != null && inbox.count() > 0) {
-            ACell answer = RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE);
+        ACell answer = (ctx.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
+            : (inbox != null && inbox.count() > 0) ? RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE) : null;
+        if (answer != null) {
             if (ctx.getTaskId() != null) {
                 engine.jobs().invokeInternal("v/ops/agent/complete-task",
                     Maps.of(Fields.RESULT, answer), ctx).join();

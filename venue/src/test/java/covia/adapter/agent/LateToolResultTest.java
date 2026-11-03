@@ -45,7 +45,8 @@ import covia.venue.User;
 /**
  * A tool call that outlives its agent's {@code toolCallTimeoutMs} (#607): the
  * model is told the recorded job it runs as, and when it ends its outcome
- * reaches the asking session as a message, after a restart too.
+ * reaches the task whose cycle made the call as its next input, or else the
+ * asking session as a message, after a restart too.
  * {@code v/test/ops/hold} finishes only when the test releases its gate, so
  * the one real wait is the 1 s minimum limit, paid by the end-to-end cases.
  */
@@ -243,7 +244,7 @@ public class LateToolResultTest {
 			AMap<AString, ACell> task = second.jobs().getJobData(crashed.taskId(), RequestContext.of(RESTART_OWNER));
 			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, String.valueOf(task.get(Fields.ERROR)),
 				"the task ran again on the outcome rather than failing as lost");
-			String shown = String.valueOf(RT.getIn(agent.getTimeline().get(1), Fields.MESSAGES));
+			String shown = conversation(agent, sessionOf(task));
 			assertTrue(shown.contains(crashed.mirrorId().toHexString()) && shown.contains(AAdapter.RESTARTED_DURING_EXECUTION),
 				"the task's cycle was shown the call's failure: " + shown);
 		} finally {
@@ -319,16 +320,101 @@ public class LateToolResultTest {
 			assertFalse(job.isFinished());
 			gate.release();
 
-			// The outcome arrives in the task's session and runs it again. toolllm
-			// replies with text once more, leaving nothing outstanding this time.
+			// The outcome arrives as the task's next input and runs it again.
+			// toolllm replies with text once more, leaving nothing outstanding.
 			watch.awaitRest(2);
 		}
 		assertEquals(Status.FAILED, job.getStatus());
 		assertEquals(AgentAdapter.TASK_YIELDED_IDLE, job.getErrorMessage());
 		assertEquals(2, agent.getTimeline().count());
-		ACell shown = RT.getIn(agent.getTimeline().get(1), Fields.MESSAGES);
-		assertNotNull(shown, "the second cycle was shown the late outcome");
-		assertTrue(shown.toString().contains("late") && shown.toString().contains("COMPLETE"),
-			"the late outcome reached the task's session: " + shown);
+		assertNull(RT.getIn(agent.getTimeline().get(1), Fields.MESSAGES), "the outcome is not a session message");
+		String shown = conversation(agent, sessionOf(job.getData()));
+		assertTrue(shown.contains("late") && shown.contains("COMPLETE"),
+			"the task's second cycle was shown the late outcome: " + shown);
+	}
+
+	private static Blob sessionOf(AMap<AString, ACell> taskJob) {
+		return Blob.fromHex(RT.ensureString(taskJob.get(Fields.SESSION_ID)).toString());
+	}
+
+	/**
+	 * Requests a task of a {@code step} agent, in session {@code sid} or a new
+	 * one, and tracks {@code call} for it while its cycle holds at
+	 * {@code cycle}, as a call that outlives its limit is tracked. The cycle
+	 * then yields, and the task parks on the call.
+	 */
+	private Job parkOnACall(RequestContext owner, AgentState agent, AgentWatch watch, int rest, Blob sid,
+			TestAdapter.TestGate cycle, String cycleGate, Job call) throws Exception {
+		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agent.getAgentId(),
+			Fields.INPUT, "hold:" + cycleGate + " yield");
+		if (sid != null) input = input.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString()));
+		Job task = engine.jobs().invokeOperation("v/ops/agent/request", input, owner);
+		assertTrue(cycle.awaitEntered(10, TimeUnit.SECONDS), "the task's cycle did not start");
+		Blob taskSession = sessionOf(RT.ensureMap(agent.getTasks().get(task.getID())));
+		((AgentAdapter) engine.getAdapter("agent")).trackCall(owner.getUserDID(), agent.getAgentId(),
+			taskSession, task.getID(), call);
+		cycle.release();
+		watch.awaitRest(rest);
+		assertTrue(AgentState.isParked(agent.getTasks().get(task.getID())), "the task parks on its call");
+		return task;
+	}
+
+	@Test
+	public void anOutcomeRunsTheTaskWaitingOnItNotAnotherInItsSession(TestInfo info) throws Exception {
+		AString did = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(did);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "late-pair",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")), owner).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().get(did).agent("late-pair");
+		String older = "late-older-" + did;
+		String newer = "late-newer-" + did;
+		try (TestAdapter.TestGate olderCycle = TestAdapter.createGate(older);
+				TestAdapter.TestGate olderGate = TestAdapter.createGate(older + "-call");
+				TestAdapter.TestGate newerCycle = TestAdapter.createGate(newer);
+				TestAdapter.TestGate newerGate = TestAdapter.createGate(newer + "-call");
+				AgentWatch watch = AgentWatch.open(engine, did, "late-pair")) {
+			Job olderCall = engine.jobs().invokeOperation(HOLD,
+				Maps.of("gate", older + "-call", Fields.RESULT, "older-outcome"), owner);
+			Job newerCall = engine.jobs().invokeOperation(HOLD,
+				Maps.of("gate", newer + "-call", Fields.RESULT, "newer-outcome"), owner);
+			Job olderTask = parkOnACall(owner, agent, watch, 1, null, olderCycle, older, olderCall);
+			Blob sid = sessionOf(RT.ensureMap(agent.getTasks().get(olderTask.getID())));
+			Job newerTask = parkOnACall(owner, agent, watch, 2, sid, newerCycle, newer, newerCall);
+
+			// The newer task's call ends first. Its outcome runs that task, though
+			// the older one waits in the same session and would be picked first.
+			newerGate.release();
+			watch.awaitRest(3);
+			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, newerTask.getErrorMessage(),
+				"the newer task ran on its outcome, and with nothing left to wait on it ends");
+			assertFalse(olderTask.isFinished());
+			assertTrue(AgentState.isParked(agent.getTasks().get(olderTask.getID())),
+				"the older task still waits on its own call");
+			assertEquals(1, agent.getPending().count());
+			assertNotNull(agent.getPending().get(olderCall.getID()));
+			String shown = String.valueOf(RT.getIn(agent.getTimeline().get(2), Fields.RESULT));
+			assertTrue(shown.contains("newer-outcome"), "the newer task's cycle was shown its outcome: " + shown);
+
+			// Shown in the conversation as the venue's, not as its requester's
+			AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(
+				RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
+			ACell outcomeTurn = null;
+			for (long i = turns.count() - 1; i >= 0 && outcomeTurn == null; i--) {
+				ACell turn = turns.get(i);
+				if (AgentState.ROLE_USER.equals(RT.getIn(turn, AgentState.K_ROLE))
+						&& String.valueOf(RT.getIn(turn, AgentState.K_CONTENT)).contains("newer-outcome")) {
+					outcomeTurn = turn;
+				}
+			}
+			assertNotNull(outcomeTurn, "the outcome is a turn in the session's conversation");
+			assertEquals(engine.getDIDString(), RT.getIn(outcomeTurn, Fields.CALLER));
+
+			olderGate.release();
+			watch.awaitRest(4);
+			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, olderTask.getErrorMessage());
+			assertTrue(String.valueOf(RT.getIn(agent.getTimeline().get(3), Fields.RESULT)).contains("older-outcome"),
+				"the older task's cycle was shown its own outcome");
+			assertEquals(0, agent.getPending().count());
+		}
 	}
 }

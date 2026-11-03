@@ -628,6 +628,20 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		return RT.getIn(continuations.get(presented - 1), Fields.MESSAGE);
 	}
 
+	/**
+	 * Who {@link #nextTaskInput} came from, for its provenance: the task row for
+	 * its original input, else the continuation's envelope. Null once every
+	 * input has been shown.
+	 */
+	@SuppressWarnings("unchecked")
+	public static ACell nextTaskInputSource(ACell taskData) {
+		if (!hasUnpresentedTaskInputs(taskData)) return null;
+		AMap<AString, ACell> task = (AMap<AString, ACell>) taskData;
+		long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
+		if (presented == 0) return task;
+		return ((AVector<ACell>) task.get(K_CONTINUATIONS)).get(presented - 1);
+	}
+
 	/** What {@link #beginCycle} took. */
 	public enum CycleStart {
 		/** The picked task's row changed after it was picked, so nothing was taken. */
@@ -735,8 +749,9 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/**
 	 * Whether a task has something to run on: it has not been parked, or it
-	 * has an input it has not been shown, or its wake time has come, or its
-	 * session has messages waiting (a human's answer arrives this way). A task
+	 * has an input it has not been shown (a continuation, or the outcome of
+	 * something its cycle waited on), or its wake time has come, or its
+	 * session has messages waiting. A task
 	 * that is not parked but has been shown its input was interrupted
 	 * mid-cycle, and runs again.
 	 */
