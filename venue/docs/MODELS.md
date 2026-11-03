@@ -19,8 +19,9 @@ lattice path to a *provider* operation (`v/ops/langchain/anthropic`), and
 `model` is that provider's bare id (`claude-sonnet-5-5`). Everything the venue
 knows about a particular model lives wherever it happened to be put:
 
-- assembly facts — context budget, tool calling, label dialect — on the
-  provider operation's `model` facet, per model under `byModel`;
+- assembly facts — context budget, tool calling, label dialect, how late tool
+  results are shown — on the provider operation's `model` facet, per model
+  under `byModel`;
 - the model lists, default model and recommendations that `llm:models`
   reported — in Java (`LangChainAdapter.HOSTED_PROVIDERS`);
 - default inputs for a model — `maxTokens`, a `url`, a deployment's key —

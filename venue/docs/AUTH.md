@@ -825,13 +825,14 @@ context.
 projection without `userDID`, which is the caller — onto the session envelope
 and the task record, from the request context only; a message to a task goes
 onto its continuation's envelope. Message content is never read for or
-rewritten with provenance. Both runtimes (the adapter's cycle merge and
-`FrameStore.cycleInputTurns`) copy both fields onto each user turn, and the
-task wire shape carries them, so a turn keeps its provenance for as long as
+rewritten with provenance. Both runtimes build input turns with
+`AgentAdapter.cycleInputTurns`, which copies both fields onto each user turn,
+and the task wire shape carries them, so a turn keeps its provenance for as long as
 history keeps the turn (COG-20 §4). A task's turn takes the record of the
 input it shows: the task's for its original input, its continuation's for each
 later one, so a follow-up is attributed to its sender rather than the
-requester.
+requester; a cycle without a session is handed that record by the run loop
+(`inputSource`). A tracked tool call's late outcome is recorded as the venue's.
 
 **Rendered from the record.** `ContextAssembler` renders a `From` label element
 (`Labels.Kind.FROM`, AGENT_CONTEXT.md §1.2) in the agent's dialect:
@@ -845,7 +846,8 @@ requester.
   authenticated identity, chat id, thread, space id — differs from the last key
   rendered, starting from the agent's own principal. Per-message fields
   (`message`, adapter extras) are never part of the key. A user turn without a
-  recorded caller renders no element and leaves the key unchanged.
+  recorded caller renders no element and leaves the key unchanged, as does a
+  late tool outcome shown as a tool result (AGENT_CONTEXT.md §5.7).
 - **What.** The relationship is computed from DIDs alone: the agent's own DID,
   its owner's and the venue's. No venue state is consulted, so registering or
   deleting a user never changes an earlier element. The channel part shows the
