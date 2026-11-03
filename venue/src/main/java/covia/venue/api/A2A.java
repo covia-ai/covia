@@ -773,12 +773,16 @@ public class A2A extends ACoviaAPI {
 	 * One catalogue skill per agent the caller owns, via the job-free agent
 	 * list read (#180) — discovery must never mint jobs. The skill id is the
 	 * agent's grid address, which is also its A2A endpoint path under
-	 * {@code /a2a/}.
+	 * {@code /a2a/}. A caller who may not read its agents is offered none.
 	 */
 	private List<AgentSkill> catalogueSkills(RequestContext rctx) {
 		AgentAdapter agents = (AgentAdapter) engine().getAdapter("agent");
-		AVector<ACell> ids = RT.ensureVector(
-				RT.getIn(agents.listAgents(rctx, false, false), Strings.intern("agents")));
+		AVector<ACell> ids;
+		try {
+			ids = RT.ensureVector(RT.getIn(agents.listAgents(rctx, false, false), Strings.intern("agents")));
+		} catch (AuthException e) {
+			return List.of();
+		}
 		if (ids == null || ids.isEmpty()) return List.of();
 
 		String ownerDid = rctx.getCallerDID().toString();

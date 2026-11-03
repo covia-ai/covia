@@ -164,6 +164,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
 	private static final AString K_AGENT_IDS        = Strings.intern("agentIds");
 	private static final AString K_AGENTS           = Strings.intern("agents");
+	/** The collection {@code agent:list} reads: the caller's agents. */
+	private static final AString AGENT_RECORDS      = Strings.intern("g/");
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
 	private static final AString K_MODEL            = Strings.intern("model");
@@ -2285,10 +2287,14 @@ public class AgentAdapter extends AAdapter {
 	 * job-free {@code GET /api/v1/agents} route (#180). {@code annotated} controls
 	 * the entry shape: {@code true} → the status-annotated summary maps
 	 * {@code agent:list} returns ({@code {agentId, status, tasks, error?}});
-	 * {@code false} → bare agent ids.
+	 * {@code false} → bare agent ids. Listing the agents reads their collection,
+	 * so the caller needs {@code crud/read} on {@code g/}.
+	 *
+	 * @throws covia.exception.AuthException when the caller may not read {@code g/}
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> listAgents(RequestContext ctx, boolean includeTerminated, boolean annotated) {
+		engine.requireResourceAccess(ctx, AGENT_RECORDS, Capability.CRUD_READ);
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		AVector<ACell> agents = Vectors.empty();

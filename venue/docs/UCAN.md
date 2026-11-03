@@ -703,6 +703,7 @@ record is an entry no grant of theirs covers.
 | `dlfs:delete` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
+| `hitl:list` | `{ with: "h/", can: "crud/read" }` |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
@@ -713,6 +714,7 @@ record is an entry no grant of theirs covers.
 | `oauth:disconnect` | `{ with: "oauth/<provider>", can: "oauth/disconnect" }` |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
+| `agent:list` (and `GET /api/v1/agents`) | `{ with: "g/", can: "crud/read" }` |
 | `agent:request` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
 | `agent:trigger` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/request" }` |
 | `agent:message` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "agent/message" }` |
@@ -1058,7 +1060,9 @@ and it verifies it on every tool call.
 
 Invoke-classed operations (compute, LLM, external I/O, federation — anything
 that does not act on a specific named lattice resource) require the `invoke`
-ability. Under a restricted `config.caps` scope:
+ability. An operation that also reads lattice data needs `crud/read` on it,
+and a listing needs it on the whole collection it lists (§5.3 table). Under a
+restricted `config.caps` scope:
 
 - **Full tool access** is a one-liner: `{"can": "invoke"}` (or the equivalent
   `{"with": "", "can": "invoke"}`) — an empty/absent `with` is a match-any

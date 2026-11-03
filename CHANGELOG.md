@@ -38,6 +38,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Goal-tree agents are no longer told to compact after 20 turns; in both runtimes the context-budget warning alone prompts compaction.
 - A login being verified when an adapter is enabled, disabled, replaced or reconfigured completes instead of failing; later logins use the new configuration.
 - `covia:write`, `append` and `copy` need write authority at the nearest existing level of a path whose missing levels they create (#617).
+- `agent:list` and `GET /api/v1/agents` need `crud/read` on `g/`, and `hitl:list` on `h/`; invoking the operation alone no longer lists them.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.

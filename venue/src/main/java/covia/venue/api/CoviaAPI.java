@@ -2039,7 +2039,11 @@ public class CoviaAPI extends ACoviaAPI {
 		boolean annotated = !"false".equals(ctx.queryParam("status"));
 		boolean includeTerminated = "true".equals(ctx.queryParam("includeTerminated"));
 		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
-		buildResult(ctx, 200, agent.listAgents(rctx, includeTerminated, annotated));
+		try {
+			buildResult(ctx, 200, agent.listAgents(rctx, includeTerminated, annotated));
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		}
 	}
 
 	@OpenApi(path = ROUTE + "schedules",

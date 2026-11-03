@@ -20,6 +20,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.data.AccountKey;
 import convex.auth.jwt.JWT;
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import covia.adapter.hitl.HitlValidation;
@@ -77,6 +78,9 @@ public class HITLAdapter extends AAdapter {
 
 	/** Delivery ability for cross-user asks: {@code hitl/request} on {@code <target>/h/}. */
 	public static final AString ABILITY_HITL_REQUEST = Abilities.HITL_REQUEST;
+
+	/** The collection {@code hitl:list} reads: the caller's inbox. */
+	private static final AString INBOX = Strings.intern("h/");
 
 	/** Default lifetime for grants offered without an explicit {@code exp} (7 days). */
 	static final long DEFAULT_GRANT_LIFETIME_SECS = 7 * 24 * 3600L;
@@ -600,10 +604,12 @@ public class HITLAdapter extends AAdapter {
 
 	// ========== hitl:list ==========
 
+	/** Listing the inbox reads it, so the caller needs {@code crud/read} on {@code h/}. */
 	@SuppressWarnings("unchecked")
 	private ACell handleList(RequestContext ctx, ACell input) {
 		AString caller = ctx.getUserDID();
 		if (caller == null) throw new AuthException("Authentication required");
+		engine.requireResourceAccess(ctx, INBOX, Capability.CRUD_READ);
 		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
 		User user = engine.getVenueState().users().get(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
