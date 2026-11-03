@@ -122,9 +122,8 @@ public class AgentRestartTest {
 
 	/**
 	 * A parked task survives a restart only while what it waits on does. A
-	 * wake time is durable, so that task stays parked. A call past its time
-	 * limit ran only in memory, so a task left with nothing durable to wait
-	 * on fails at boot rather than waiting forever.
+	 * wake time is durable, so that task stays parked. A task left with
+	 * nothing durable to wait on fails at boot rather than waiting forever.
 	 */
 	@Test
 	public void parkedTaskSurvivesRestartOnlyWithSomethingDurableToWaitOn() throws Exception {

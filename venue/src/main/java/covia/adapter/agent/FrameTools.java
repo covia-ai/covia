@@ -30,6 +30,8 @@ class FrameTools {
 	final RequestContext ctx;
 	final TaskTools.Tasks tasks;
 	final long toolCallTimeoutMs;
+	/** Whether the agent's tool calls are recorded from the start ({@code recordToolCalls}). */
+	final boolean recordToolCalls;
 	/** Effective loads of the agent tier ({@code config.loads}), read-only here. */
 	final AMap<AString, ACell> outerLoads;
 	/** The agent's config as stored: what its tools, skills and loads come from. */
@@ -73,6 +75,7 @@ class FrameTools {
 		this.outerLoads = (outerLoads != null) ? outerLoads : Maps.empty();
 		this.toolCallTimeoutMs = toolCallTimeoutMs;
 		this.sourceConfig = cycleSpec.sourceConfig();
+		this.recordToolCalls = runtime.resolveRecordToolCalls(sourceConfig);
 		this.cachePrefix = cycleSpec.cachePrefix();
 		this.labels = cycleSpec.labels();
 		this.skillSources = Skills.sourcesOf(sourceConfig);
@@ -206,9 +209,9 @@ class FrameTools {
 	 *  runtime's rules for unbound names. */
 	ACell dispatch(String name, ACell input) {
 		AString operation = operation(name);
-		if (operation != null) return runtime.dispatchTool(name, input, operation, ctx, toolCallTimeoutMs);
+		if (operation != null) return runtime.dispatchTool(name, input, operation, ctx, toolCallTimeoutMs, recordToolCalls);
 		return runtime.dispatchUnbound(name, input, ctx,
-			new HarnessTools.ToolSurface(loadScope(), callableNames()), toolCallTimeoutMs);
+			new HarnessTools.ToolSurface(loadScope(), callableNames()), toolCallTimeoutMs, recordToolCalls);
 	}
 
 	// ========== The shared harness tools ==========

@@ -359,6 +359,8 @@ public class Config {
 	public static final AString ENABLE_PRIVATE_JOBS = Strings.intern("enablePrivateJobs");
 	/** Force durable records for read-only run/internal invocations. */
 	public static final AString RECORD_READ_ONLY_OPERATIONS = Strings.intern("recordReadOnlyOperations");
+	/** Venue default for recording agents' tool calls from the start. */
+	public static final AString RECORD_TOOL_CALLS = Strings.intern("recordToolCalls");
 
 	// ========== MCP config keys ==========
 
@@ -420,7 +422,8 @@ public class Config {
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
 		"modules", "dynamicModules", "users", "store", "seed", "keystore", "storage", "etch",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
-		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
+		"allowPrivateNetwork", "securityHeaders", "enablePrivateJobs", "recordReadOnlyOperations",
+		"recordToolCalls", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig", "scheduler",
 		"shutdown", "logging", "tray");
 
@@ -510,6 +513,7 @@ public class Config {
 		validateTrustedProxies();
 		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
 		optionalBoolean(config, RECORD_READ_ONLY_OPERATIONS, "recordReadOnlyOperations", false);
+		optionalBoolean(config, RECORD_TOOL_CALLS, "recordToolCalls", false);
 		optionalBoolean(config, TRAY, "tray", true);
 
 		validateBaseUrl();
@@ -2281,6 +2285,16 @@ public class Config {
 	 */
 	public boolean isRecordReadOnlyOperations() {
 		ACell v = config.get(RECORD_READ_ONLY_OPERATIONS);
+		return (v != null) && RT.bool(v);
+	}
+
+	/**
+	 * Venue default for recording an agent's tool calls from the start, for
+	 * agents whose {@code config.recordToolCalls} is unset. Defaults to false:
+	 * a call is recorded only if it outlasts its time limit.
+	 */
+	public boolean isRecordToolCalls() {
+		ACell v = config.get(RECORD_TOOL_CALLS);
 		return (v != null) && RT.bool(v);
 	}
 

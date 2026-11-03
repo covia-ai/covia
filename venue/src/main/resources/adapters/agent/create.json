@@ -48,6 +48,10 @@
 									"type": "boolean",
 									"description": "Opt into the built-in default tool pack — deliberately minimal, read-only workspace access (covia read/list) — on top of the declared tools. Defaults to false: the agent sees only its own 'tools' list. Capability tools (writes, agents, assets, grid, schema) arrive via skills (skill_load) or explicit 'tools' entries."
 								},
+								"recordToolCalls": {
+									"type": "boolean",
+									"description": "Record every tool call as a job from the start. Defaults to the venue's recordToolCalls (false): a call is then recorded only if it outlasts toolCallTimeoutMs, when the agent is told the job it runs as."
+								},
 								"model": {
 									"type": "string",
 									"description": "Optional LLM model name; the selected provider's default applies when absent."

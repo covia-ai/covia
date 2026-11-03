@@ -28,6 +28,7 @@ import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -35,8 +36,11 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.venue.Config;
+import covia.venue.TestEngine;
 import covia.venue.TestHTTP;
 import covia.venue.server.VenueServer;
 
@@ -127,6 +131,40 @@ public class MCPToolCallWaitTest {
 		assertEquals("running", RT.getIn(result, "structuredContent", "status").toString());
 		assertNotNull(RT.getIn(result, "structuredContent", "id"), "the job to collect: " + r.body());
 		assertTrue(RT.getIn(result, "structuredContent", "message").toString().contains("grid_job_result"), r.body());
+	}
+
+	/** A tools/call request's structured result. */
+	private ACell callTool(int id, String tool, String arguments) throws Exception {
+		String call = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"tools/call\",\"params\":{\"name\":\""
+			+ tool + "\",\"arguments\":" + arguments + "}}";
+		String body = http.send(post(call, "application/json"), HttpResponse.BodyHandlers.ofString()).body();
+		ACell content = RT.getIn(result(body), "structuredContent");
+		assertNotNull(content, body);
+		return content;
+	}
+
+	@Test
+	public void anUnrecordedCallPastTheCeilingLeavesAJobToLookUp() throws Exception {
+		String gateName = "mcp-read-only-" + System.identityHashCode(this);
+		Job job;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			// A read-only call runs unrecorded; past the ceiling it is mirrored by a recorded job.
+			ACell ran = callTool(20, "test_holdread", "{\"gate\":\"" + gateName + "\",\"result\":\"read-late\"}");
+			assertEquals("running", RT.getIn(ran, "status").toString(), ran.toString());
+			String id = RT.getIn(ran, "id").toString();
+			job = server.getEngine().jobs().getJob(Blob.fromHex(id));
+			assertNotNull(job, "the job named is live");
+			assertTrue(job.isRecorded(), "and recorded");
+			ACell status = callTool(21, "grid_job_status", "{\"id\":\"" + id + "\"}");
+			assertEquals("STARTED", RT.getIn(status, "status").toString(),
+				"grid_job_status sees it while it runs: " + status);
+			gate.release();
+			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the call did not finish");
+		}
+		ACell status = callTool(22, "grid_job_status", "{\"id\":\"" + job.getID().toHexString() + "\"}");
+		assertEquals("COMPLETE", RT.getIn(status, "status").toString(), status.toString());
+		assertEquals("read-late", RT.getIn(status, "output").toString(),
+			"and its outcome once it has finished");
 	}
 
 	@Test

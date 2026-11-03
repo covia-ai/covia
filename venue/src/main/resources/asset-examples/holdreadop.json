@@ -1,0 +1,20 @@
+{
+	"name": "Read-only Hold Operation",
+	"description": "Test operation that holds until the test releases the named gate, then returns its result, or fails with its error when one is given. Declared read-only, so a result-oriented call to it runs unrecorded.",
+	"dateCreated": "2026-11-03T00:00:00Z",
+	"operation": {
+		"adapter": "test:hold",
+		"toolName": "test_holdread",
+		"readOnly": true,
+		"input": {
+			"type": "object",
+			"properties": {
+				"gate": { "type": "string" },
+				"result": {},
+				"error": { "type": "string" }
+			},
+			"required": ["gate"]
+		},
+		"output": {}
+	}
+}

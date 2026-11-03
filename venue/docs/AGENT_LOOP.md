@@ -190,7 +190,9 @@ The **pending** outbound-Job index holds job references for outstanding waits.
 HITL registers its request there until settlement, including after recovery;
 the Job owns the current status. HITL still delivers its answer through the
 session inbox, because its immediate receipt already completes the original
-tool exchange. No generic async-invoke tool is exposed yet (§3.4.2).
+tool exchange. A tool call still running past its time limit is tracked there
+too, with the session its outcome goes to (§3.4.2); a cycle is not shown such
+an entry as a job result. No generic async-invoke tool is exposed yet.
 
 ### 2.4 Timeline Entry
 
@@ -591,15 +593,22 @@ Job index and render resolved entries as `get_job_results`, but Covia does not
 currently expose a generic async-invoke harness tool.
 Ordinary operation tools remain synchronous and bounded by `toolCallTimeoutMs`.
 
-A sessioned agent's call still running at that limit is not cancelled. The
-model's tool result is an error saying the call did not complete within the
-limit and may still be running (`AbstractLLMAdapter.TOOL_STILL_RUNNING`), so
-it can carry on without calling it again. When the call ends, its outcome
-`{operation, status: COMPLETE | FAILED, result | error}` is appended to the
-asking session as a message from the venue, which wakes the agent. A task
-that yields meanwhile waits for that message (§4.6). The call is not recorded,
-so a restart loses its outcome. A call with no session to deliver to gets the
-plain timeout error.
+A call still running at that limit is not cancelled. It runs as a recorded
+job: the call's own when the agent sets `recordToolCalls` (or the venue
+default does), otherwise a mirror of the unrecorded call (JOBS.md § Mirrors).
+The model's tool result is an error naming that job, saying the call is still
+running and should not be repeated unless that is safe
+(`AbstractLLMAdapter.TOOL_STILL_RUNNING`), so it can carry on.
+
+In a session, the job is tracked in the agent's pending index with the
+session and the task whose cycle made the call. When the job ends, one
+transaction removes the entry and appends the outcome
+`{id, operation, status, result | error}` to the session as a message from
+the venue, which wakes the agent. A task that yields meanwhile waits for that
+message (§4.6). Shutdown leaves the entry, and the restart delivers the job's
+outcome instead (§6.1), so the session receives it exactly once. A call with
+no session is told only its job (`TOOL_STILL_RUNNING_UNTRACKED`); nothing
+follows, and `grid_job_status` gives the outcome.
 
 HITL is the deliberate long-lived exception (§6.3). A sessioned agent receives
 the durable request ID immediately and the job is tracked in its pending index;
@@ -1239,10 +1248,14 @@ already taken is not kept, since no cycle would take it again: shutdown
 cancels it, and after a crash it fails at boot.
 
 A parked task (§4.6) keeps waiting across a restart only while what it waits
-on survives one. A wake time and an open HITL ask are durable. A tool call past
-its time limit ran only in memory, so a parked task left with nothing durable
-to wait on fails at boot (`AgentAdapter.TASK_WAIT_LOST`). A task that was not
-parked but had been shown its input was interrupted mid-cycle, and the boot
+on survives one. A wake time, an open HITL ask and a tool call tracked in the
+pending index (§3.4.2) are durable; a parked task left with nothing to wait on
+fails at boot (`AgentAdapter.TASK_WAIT_LOST`). A tracked call whose job has
+ended has its outcome delivered to its session at boot. A mirror always has,
+since the restart fails it, so the waiting task runs again on that failure.
+A recorded call that its adapter kept live is delivered when it ends. A task
+that was not parked but had been shown its input was interrupted mid-cycle,
+and the boot
 wake runs it again.
 
 ### 6.2 Effects

@@ -2388,7 +2388,7 @@ public class LLMAgentAdapterTest {
 
 		// Mapped path: LLM tool name resolves through the persisted direct lookup.
 		ACell viaConfig = adapter.dispatchTool("my_echo", input,
-			Strings.create("v/test/ops/echo"), ctx, 5000);
+			Strings.create("v/test/ops/echo"), ctx, 5000, false);
 
 		// Grid-dispatch path: tool name IS the op reference.
 		ACell viaGrid = frameTools(ctx).dispatch("v/test/ops/echo", input);

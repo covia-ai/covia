@@ -1135,7 +1135,9 @@ within limits that keep waiting from tying the venue up:
   waits; `anonymousToolCallTimeout` (default two minutes) the most an
   unauthenticated one does. Past it the call ends as an error result whose
   `structuredContent` is `{status: "running", id, message}`: the job runs on,
-  and `grid_job_result` with that `id` collects its result.
+  and `grid_job_result` with that `id` collects its result. A read-only call,
+  which runs unrecorded, is then given a recorded mirror, and `id` names that
+  (`docs/JOBS.md` § Mirrors).
 - `maxConcurrentToolCalls` (default 16) is how many calls one caller may have
   in progress; every anonymous caller counts as one. A call over it is refused
   with a message saying so.
@@ -1911,6 +1913,13 @@ Operators can force read-only runs and internal calls to be recorded:
 This option is off by default. It does not change `/invoke`, which is always
 recorded.
 
+Agents' tool calls are internal calls, unrecorded unless the operation says
+otherwise. `recordToolCalls: true` records every agent's tool calls from the
+start, for agents that do not set their own `config.recordToolCalls`. It is
+off by default: a call is then recorded only if it outlasts the agent's
+`toolCallTimeoutMs` (see the agent-side bounds under
+[LLM providers](#llm-providers-langchain)).
+
 ## Scheduled job tracking
 
 A scheduled event (`scheduler:schedule`) fires as a transient Job by default —
@@ -2066,8 +2075,11 @@ provider library's own retries, or a refused key or missing model, suspends
 the agent with its queued work kept (`docs/AGENT_LOOP.md` §3.4). Each tool
 call is bounded by `toolCallTimeoutMs`
 (default 300s, minimum 1s). A tool call still running at its limit is not
-cancelled: the model is told it may still be running, and in a session its
-outcome arrives as a message when it ends (`docs/AGENT_LOOP.md` §3.4.2).
+cancelled: the model is told the recorded job it is running as, and in a
+session its outcome arrives as a message when it ends, after a restart too
+(`docs/AGENT_LOOP.md` §3.4.2). `recordToolCalls: true` in an agent's config
+records each of its tool calls from the start; unset, the venue's
+`recordToolCalls` applies.
 Provider responses also carry `finishReason` when reported. A `length` result
 is incomplete: both agent runtimes discard its partial content and tool calls,
 retry once with a concise-response diagnostic, and fail clearly if the retry

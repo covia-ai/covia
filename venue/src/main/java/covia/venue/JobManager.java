@@ -646,6 +646,16 @@ public class JobManager {
 	 */
 	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx,
 			Consumer<Job> watch) {
+		return invokeInternal(ref, input, ctx, watch, false);
+	}
+
+	/**
+	 * As {@link #invokeInternal(AString, ACell, RequestContext, Consumer)},
+	 * recording the Job from the start when {@code record} is true, as for an
+	 * operation declaring {@code internal:false}.
+	 */
+	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx,
+			Consumer<Job> watch, boolean record) {
 		if (ref == null) return CompletableFuture.failedFuture(operationRequired());
 
 		Asset asset;
@@ -658,7 +668,7 @@ public class JobManager {
 
 		Operation op = Operation.from(asset);
 		if (op == null) return CompletableFuture.failedFuture(notAnOperation(asset));
-		return invokeInternal(ref, op, input, ctx, watch);
+		return invokeInternal(ref, op, input, ctx, watch, record);
 	}
 
 	/**
@@ -668,22 +678,31 @@ public class JobManager {
 	 */
 	public CompletableFuture<ACell> invokeInternal(AString ref, Operation op, ACell input,
 			RequestContext ctx, Consumer<Job> watch) {
+		return invokeInternal(ref, op, input, ctx, watch, false);
+	}
+
+	/**
+	 * As {@link #invokeInternal(AString, Operation, ACell, RequestContext, Consumer)},
+	 * recording the Job from the start when {@code record} is true.
+	 */
+	public CompletableFuture<ACell> invokeInternal(AString ref, Operation op, ACell input,
+			RequestContext ctx, Consumer<Job> watch, boolean record) {
 		// Always local — see invokeOperation(AString,...): resolution
 		// returns definitions, never remote execution handles.
 		// Scope to the caller-supplied reference for resource-precise
 		// invoke-gating (#211) — this seam also covers the agent tool loop,
 		// which dispatches config.tools references through here.
-		return invokeInternal(op.meta(), input, ctx.withOp(ref), watch);
+		return invokeInternal(op.meta(), input, ctx.withOp(ref), watch, record);
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		return invokeInternal(meta, input, ctx, null);
+		return invokeInternal(meta, input, ctx, null, false);
 	}
 
 	private CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx,
-			Consumer<Job> watch) {
+			Consumer<Job> watch, boolean record) {
 		try {
-			boolean memoryOnly = allowsInternal(meta)
+			boolean memoryOnly = !record && allowsInternal(meta)
 				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
 			Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, Invocation.INTERNAL);
 			if (watch != null) watch.accept(prepared.job());
@@ -970,7 +989,18 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		VenueJob job;
+		VenueJob job = admit(jobID, status, meta, callerDID, memoryOnly, directRun, resultOriented);
+		if (memoryOnly) log.debug("Started transient job: {}", jobID);
+		else log.info("Submitted job: {}", jobID);
+		return job;
+	}
+
+	/**
+	 * Writes a job's row, unless it is memory-only, and publishes its live
+	 * handle, under the account monitor that fences deletion.
+	 */
+	private VenueJob admit(Blob jobID, AMap<AString, ACell> status, AMap<AString, ACell> meta,
+			AString callerDID, boolean memoryOnly, boolean directRun, boolean preserveFailureCause) {
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(callerDID);
 			// Create before publishing the runtime handle; updates only edit existing rows.
@@ -980,14 +1010,91 @@ public class JobManager {
 				record = account(callerDID).jobs().create(jobID, status);
 				if (record == null) throw new IllegalStateException(JOB_ID_EXISTS + jobID);
 			}
-			job = new VenueJob(record, status, meta, callerDID, this, !memoryOnly, directRun);
-			job.setPreserveFailureCause(resultOriented);
+			VenueJob job = new VenueJob(record, status, meta, callerDID, this, !memoryOnly, directRun);
+			job.setPreserveFailureCause(preserveFailureCause);
 			activeJobs.put(jobID, job);
+			return job;
 		}
+	}
 
-		if (memoryOnly) log.debug("Started transient job: {}", jobID);
-		else log.info("Submitted job: {}", jobID);
-		return job;
+	// ========== Mirrors ==========
+
+	/** On a mirror job, the id of the unrecorded job it follows ({@link #mirror}). */
+	public static final AString MIRROR_OF = Strings.intern("mirrorOf");
+
+	/** A mirror asked of a job this manager did not start as an internal or tool call. */
+	public static final String MIRROR_NEEDS_CALL = "Only an unrecorded internal or tool call can be mirrored";
+
+	/** What a mirror copies from its call when it is made. */
+	private static final AString[] MIRRORED_FIELDS = {
+		Fields.OP, Fields.INPUT, Fields.NAME, Fields.ADAPTER,
+		Fields.CALLER, Fields.ACTOR, Fields.PARENT, Fields.CREATED };
+
+	/** What a mirror copies from its call when the call ends. */
+	private static final AString[] OUTCOME_FIELDS = { Fields.OUTPUT, Fields.ERROR, Fields.ERROR_CODE };
+
+	/**
+	 * A recorded job for a call that has none, so a caller who stops waiting
+	 * can be pointed at a job to look up, one that outlasts a restart. The
+	 * mirror looks like the call: its operation, input (secrets hidden), name,
+	 * adapter, caller, actor, parent and creation time, and it names the call
+	 * in {@link #MIRROR_OF}. It stays STARTED until the call ends, then takes
+	 * the call's status, output and error; cancelling it cancels the call.
+	 * No adapter runs it: it holds no admission permit, takes no messages,
+	 * and a restart fails it and shutdown cancels it by the default path
+	 * ({@link AAdapter#defaultRecover}, {@link AAdapter#defaultSuspend}).
+	 *
+	 * @param call a Job this manager started, never a direct or private run
+	 * @return the call itself when it is recorded, else its new mirror
+	 * @throws ShuttingDownException once the venue has closed admission
+	 */
+	public Job mirror(Job call) {
+		if (call.isRecorded()) return call;
+		if (!(call instanceof VenueJob unrecorded) || unrecorded.isDirectRun()) {
+			throw new IllegalArgumentException(MIRROR_NEEDS_CALL);
+		}
+		requireAccepting(false);
+		AMap<AString, ACell> data = call.getData();
+		long ts = Utils.getCurrentTimestamp();
+		Blob jobID = generateJobID(ts);
+		AMap<AString, ACell> status = Maps.of(
+			Fields.ID, jobID,
+			Fields.STATUS, Status.STARTED,
+			Fields.CREATED, CVMLong.create(ts),
+			Fields.UPDATED, CVMLong.create(ts),
+			MIRROR_OF, Strings.create(call.getID().toHexString()));
+		for (AString field : MIRRORED_FIELDS) {
+			ACell value = data.get(field);
+			if (value != null) status = status.assoc(field, value);
+		}
+		VenueJob mirror = admit(jobID, status, unrecorded.meta(),
+			RT.ensureString(data.get(Fields.CALLER)), false, false, false);
+		mirror.setCancelHook(() -> {
+			AString reason = RT.ensureString(mirror.getData().get(Fields.ERROR));
+			call.cancel((reason != null) ? reason.toString() : null);
+		});
+		call.future().whenComplete((result, failure) -> {
+			AMap<AString, ACell> outcome = call.getData();
+			// Shutdown releases the waiters on a call it leaves running: that is no outcome
+			if (Job.isFinished(outcome)) mirror.update(current -> settled(current, outcome));
+		});
+		log.info("Mirrored job {} as {}", call.getID(), jobID);
+		return mirror;
+	}
+
+	/** A mirror's record carrying its call's outcome. */
+	private static AMap<AString, ACell> settled(AMap<AString, ACell> mirror, AMap<AString, ACell> outcome) {
+		AMap<AString, ACell> next = mirror.assoc(Fields.STATUS, outcome.get(Fields.STATUS));
+		for (AString field : OUTCOME_FIELDS) {
+			ACell value = outcome.get(field);
+			next = (value == null) ? next.dissoc(field) : next.assoc(field, value);
+		}
+		return next;
+	}
+
+	/** Whether a job is a mirror ({@link #mirror}), which no adapter runs. */
+	static boolean isMirror(Job job) {
+		return job.getData().get(MIRROR_OF) != null;
 	}
 
 	// ========== Job Queries ==========
@@ -1429,8 +1536,9 @@ public class JobManager {
 		}
 	}
 
-	/** The live adapter owning a Job's operation, or null when absent or disabled. */
+	/** The live adapter owning a Job's operation, or null when absent or disabled, or for a mirror. */
 	private AAdapter adapterFor(VenueJob job) {
+		if (isMirror(job)) return null;
 		// Live jobs and recovered delegations retain their resolved operation
 		// metadata (protected with the saved transport authority). Route by that
 		// owner so new remote-agent adapters do not need a protocol switch here.
@@ -1511,10 +1619,12 @@ public class JobManager {
 
 	/**
 	 * Resolves the adapter responsible for a job: the one its record says it
-	 * was dispatched to, else the one its operation names, else null.
+	 * was dispatched to, else the one its operation names, else null. A
+	 * mirror names its call's adapter, but no adapter runs it.
 	 * @throws UnavailableException if that adapter is not enabled here now
 	 */
 	private AAdapter resolveJobAdapter(Job job) {
+		if (isMirror(job)) return null;
 		AString recorded = RT.ensureString(job.getData().get(Fields.ADAPTER));
 		String adapterName;
 		if (recorded != null) {

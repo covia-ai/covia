@@ -69,8 +69,9 @@ import jakarta.servlet.http.HttpServletResponse;
  * <ul>
  *   <li>a ceiling, {@code mcp.toolCallTimeout} (ms, default an hour) for an
  *       authenticated caller and {@code mcp.anonymousToolCallTimeout} (default
- *       two minutes) for an anonymous one. Past it the call ends with the job's
- *       id, so the result can still be collected with {@code grid_job_result};
+ *       two minutes) for an anonymous one. Past it the call ends with the id of
+ *       a recorded job (the call's own, or a mirror of an unrecorded read-only
+ *       call), so the result can still be collected with {@code grid_job_result};
  *       the job itself runs on.</li>
  *   <li>at most {@code mcp.maxConcurrentToolCalls} (default 16) calls in
  *       progress per caller.</li>
@@ -704,7 +705,7 @@ public class MCP extends McpServer {
 		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(limitMs);
 		while (!result.isDone()) {
 			long left = deadline - System.nanoTime();
-			if (left <= 0) return stillRunning(run, "it has not finished within " + limitMs / 1000 + "s");
+			if (left <= 0) return stillRunning(recordedJob(run), "it has not finished within " + limitMs / 1000 + "s");
 			try {
 				resultOrClose.get(Math.min(left, TimeUnit.MILLISECONDS.toNanos(keepAliveMs)), TimeUnit.NANOSECONDS);
 			} catch (TimeoutException e) {
@@ -713,7 +714,9 @@ public class MCP extends McpServer {
 			} catch (ExecutionException | java.util.concurrent.CancellationException e) {
 				// the result failed or was cancelled: reported below
 			}
-			if (!result.isDone()) return stillRunning(run, "the venue is shutting down");
+			// Nothing new is written while the venue closes: an unrecorded call leaves no job
+			if (!result.isDone()) return stillRunning((run.job() != null && run.job().isRecorded()) ? run.job() : null,
+				"the venue is shutting down");
 		}
 		try {
 			// Scalar (non-map) results render as an MCP text result in the
@@ -732,9 +735,24 @@ public class MCP extends McpServer {
 		return (run.job() == null) ? null : Job.progressMessage(run.job().getData().get(Fields.PROGRESS));
 	}
 
+	/**
+	 * The recorded job a call that stopped waiting can be collected from: the
+	 * call's own, or a mirror of an unrecorded one ({@link JobManager#mirror});
+	 * null when there is none.
+	 */
+	private Job recordedJob(JobManager.Run run) {
+		if (run.job() == null) return null;
+		try {
+			return engine().jobs().mirror(run.job());
+		} catch (RuntimeException e) {
+			log.warn("No job recorded for a tool call still running: {}", e.toString());
+			return null;
+		}
+	}
+
 	/** A call that stopped waiting, with where its result will be. */
-	private static AMap<AString, ACell> stillRunning(JobManager.Run run, String why) {
-		String id = (run.job() == null) ? null : run.job().getID().toHexString();
+	private static AMap<AString, ACell> stillRunning(Job job, String why) {
+		String id = (job == null) ? null : job.getID().toHexString();
 		String message = "Still running: " + why + ". " + ((id == null)
 			? "It left no job to collect the result from."
 			: "Collect the result with grid_job_result {\"id\": \"" + id + "\"}, or see how it is going with grid_job_status.");

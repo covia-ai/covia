@@ -250,10 +250,11 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
   generation guards also prevent writes into a recreated account.
 - Transient Job wrappers used by result-oriented read-only runs, explicit
   private runs, and ordinary internal composition are never persisted:
-  memory-only, no recovery, gone when terminal or on restart. Public invoke
-  always persists. Explicit private runs require the operator's
-  `enablePrivateJobs` opt-in and omit only the Job record, not operation side
-  effects.
+  memory-only, no recovery, gone when terminal or on restart. A caller that
+  stops waiting on one is pointed at a recorded mirror instead
+  ([Mirrors](#mirrors)). Public invoke always persists. Explicit private runs
+  require the operator's `enablePrivateJobs` opt-in and omit only the Job
+  record, not operation side effects.
 - `VenueJob.completeWith` runs output-schema validation first; in strict
   mode a violation fails the job instead of completing it. This covers every
   completion path, including job-aware adapter overrides.
@@ -455,6 +456,28 @@ whether the Job is durable:
 `runOperation` uses a transient, non-persisted Job when the operation declares
 `operation.readOnly: true`, or when the caller explicitly requests a private
 run and the venue enables private jobs. `invokeInternal` is transient by
-default. `operation.internal: false` forces an ordinary result-oriented Job to
-be durable, as does `recordReadOnlyOperations: true` for classified reads; an
-explicit operator-enabled private run overrides those recording hints.
+default; its caller can ask for the Job to be recorded, as an agent with
+`recordToolCalls` does for its tool calls. `operation.internal: false` forces
+an ordinary result-oriented Job to be durable, as does
+`recordReadOnlyOperations: true` for classified reads; an explicit
+operator-enabled private run overrides those recording hints.
+
+## Mirrors
+
+A caller that stops waiting on a transient call (an agent's tool call past
+`toolCallTimeoutMs`, an MCP tool call past its ceiling) is given the id of a
+recorded **mirror** of it (`JobManager.mirror`): a job that `grid_job_status`
+and `grid_job_result` find, and that outlasts a restart. A call that is
+already recorded is its own job and needs none.
+
+- The mirror looks like the call. Its record copies `op`, `input` (secrets
+  hidden), `name`, `adapter`, `caller`, `actor`, `parent` and `created`, and
+  `mirrorOf` names the transient call.
+- It is `STARTED` until the call ends, then takes the call's `status`,
+  `output` and `error`. Cancelling the mirror cancels the call with the same
+  reason, and cancelling the call settles the mirror.
+- No adapter runs it. It holds no admission permit and takes no messages,
+  pause or resume. Shutdown cancels it, which cancels the call; a restart
+  fails it as interrupted (the default in the table above), since the call
+  ran only in memory.
+- Direct and private runs are never mirrored: their caller asked for no record.

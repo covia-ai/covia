@@ -353,6 +353,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
 			installTestAsset("hold",         BASE+"holdop.json");
+			installTestAsset("holdread",     BASE+"holdreadop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
 			installTestAsset("progress",     BASE+"progressop.json");
 			installTestAsset("error",        BASE+"failop.json");

@@ -102,6 +102,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
 	public static final AString K_MAX_TOOL_ITERATIONS  = Strings.intern("maxToolIterations");
 	public static final AString K_LLM_TIMEOUT_MS       = Strings.intern("llmTimeoutMs");
+	public static final AString K_RECORD_TOOL_CALLS    = Strings.intern("recordToolCalls");
 
 	/**
 	 * Per-tool-call timeout default. Bounds the wait on any single grid op
@@ -903,18 +904,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @param ctx request context for the tool dispatch — carries the agent's
 	 *        grant scope ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; a call that outruns it
-	 *        gives a result saying so (a sessioned call's outcome reaches the
-	 *        session when it ends), so the agent loop can continue
+	 *        gives a result saying so, naming the job it runs as (a sessioned
+	 *        call's outcome reaches the session when it ends), so the agent
+	 *        loop can continue
+	 * @param record whether the call's job is recorded from the start
+	 *        ({@link #resolveRecordToolCalls})
 	 * @return tool result (ACell)
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
-			AString operation, RequestContext ctx, long timeoutMs) {
+			AString operation, RequestContext ctx, long timeoutMs, boolean record) {
 		// Capability enforcement happens at the operation's own enforcement point
 		// under the agent's grant scope carried on ctx — no name-keyed gate here.
 		// The host's guards come first: a call they refuse never runs.
 		String refused = guard(toolName, operation, input, ctx, timeoutMs);
 		if (refused != null) return Strings.create("Error: " + refused);
-		return invokeOperation(operation, input, ctx, timeoutMs);
+		return invokeOperation(operation, null, input, ctx, timeoutMs, record);
 	}
 
 	/** A harness tool of this runtime, offered here, named through {@code invoke_tool}. */
@@ -932,7 +936,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @param surface what the frame can call and acquire
 	 */
 	protected ACell dispatchUnbound(String toolName, ACell input, RequestContext ctx,
-			HarnessTools.ToolSurface surface, long timeoutMs) {
+			HarnessTools.ToolSurface surface, long timeoutMs, boolean record) {
 		// This runtime runs its own harness tools by name where they are
 		// offered, so an offered one arriving here came through invoke_tool.
 		if (harnessToolNames().contains(toolName)) {
@@ -957,7 +961,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		if (op == null) return Strings.create("Error: " + HarnessTools.unboundTool(toolName, surface));
 		String refused = guard(toolName, named, input, ctx, timeoutMs);
 		if (refused != null) return Strings.create("Error: " + refused);
-		return invokeOperation(named, op, input, ctx, timeoutMs);
+		return invokeOperation(named, op, input, ctx, timeoutMs, record);
 	}
 
 	/** This runtime's own harness tool names, which its cycle intercepts. */
@@ -1021,21 +1025,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * stuck downstream op cannot hang the agent loop forever. Inside a cycle
 	 * with a live tap, the progress the operation publishes while it runs is
 	 * announced against the tool call that invoked it.
+	 *
+	 * @param resolved the operation already resolved from {@code operation}, or null
+	 * @param record whether the call's job is recorded from the start
 	 */
-	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
-		return invokeOperation(operation, null, input, ctx, timeoutMs);
-	}
-
-	/** As {@link #invokeOperation(AString, ACell, RequestContext, long)}, with
-	 *  the operation already resolved from {@code operation} when non-null. */
 	private ACell invokeOperation(AString operation, Operation resolved, ACell input,
-			RequestContext ctx, long timeoutMs) {
+			RequestContext ctx, long timeoutMs, boolean record) {
 		// Internal dispatch preserves types exactly — no coercion here. Tool
 		// arguments were already normalised once at the LLM wire boundary
 		// (parseToolArguments); a wrong-shaped input is the caller's error and
 		// surfaces from the op's own validation (#89).
 		ToolCycleEngine.ProgressRelay relay = ToolCycleEngine.relayForRunningCall();
-		CompletableFuture<ACell> call = null;
+		java.util.concurrent.atomic.AtomicReference<Job> started = new java.util.concurrent.atomic.AtomicReference<>();
 		try {
 			// HITL is naturally longer-lived than a model turn. Its operation
 			// already owns a durable Job, so a sessioned agent receives that handle
@@ -1053,14 +1054,17 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (title != null) receipt = receipt.assoc(Fields.TITLE, title);
 				return receipt;
 			}
-			java.util.function.Consumer<Job> watch = (relay != null) ? relay::watch : null;
-			call = (resolved != null)
-				? engine.jobs().invokeInternal(operation, resolved, input, ctx, watch)
-				: engine.jobs().invokeInternal(operation, input, ctx, watch);
+			java.util.function.Consumer<Job> watch = job -> {
+				started.set(job);
+				if (relay != null) relay.watch(job);
+			};
+			CompletableFuture<ACell> call = (resolved != null)
+				? engine.jobs().invokeInternal(operation, resolved, input, ctx, watch, record)
+				: engine.jobs().invokeInternal(operation, input, ctx, watch, record);
 			ACell result = call.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
-			return stillRunning(operation, call, ctx, timeoutMs);
+			return stillRunning(operation, started.get(), ctx, timeoutMs);
 		} catch (InterruptedException e) {
 			return toolInterrupted();
 		} catch (Exception e) {
@@ -1084,6 +1088,18 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			return (int) Math.min(l.longValue(), Integer.MAX_VALUE);
 		}
 		return engine.config().getMaxToolIterations();
+	}
+
+	/**
+	 * Whether an agent's tool calls are recorded from the start: its
+	 * {@code config.recordToolCalls} when a boolean, else the venue's
+	 * {@code recordToolCalls} (false unset). An unrecorded call is recorded
+	 * only if it outlasts its time limit ({@link covia.venue.JobManager#mirror}).
+	 */
+	public boolean resolveRecordToolCalls(AMap<AString, ACell> config) {
+		ACell v = (config != null) ? config.get(K_RECORD_TOOL_CALLS) : null;
+		if (v instanceof CVMBool b) return b.booleanValue();
+		return engine.config().isRecordToolCalls();
 	}
 
 	/**
@@ -1138,45 +1154,46 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/** The result of a sessioned tool call still running at its time limit (#607):
-	 *  the operation, then the limit in milliseconds. */
-	public static final String TOOL_STILL_RUNNING = "Error: %s did not complete within %dms and may still be running. "
-		+ "If it finishes, its result will arrive in this session as a message. "
+	 *  the operation, the limit in milliseconds, then the job it runs as. */
+	public static final String TOOL_STILL_RUNNING = "Error: %s did not complete within %dms and is still running as job %s. "
+		+ "Its outcome will arrive in this session as a message; grid_job_status with that id shows how it is going. "
+		+ "Do not call it again unless repeating it is safe.";
+
+	/** As {@link #TOOL_STILL_RUNNING}, for a call with no session to deliver its outcome to. */
+	public static final String TOOL_STILL_RUNNING_UNTRACKED = "Error: %s did not complete within %dms and is still running as job %s. "
+		+ "No message will follow; grid_job_status with that id gives its status and, once it has finished, its outcome. "
 		+ "Do not call it again unless repeating it is safe.";
 
 	/**
 	 * Answers a tool call still running at its time limit (#607). The call is
-	 * not cancelled: a sessioned agent is told it may still be running, and
-	 * when it ends its outcome reaches the asking session as a message from
-	 * the venue, which wakes the agent. Nothing is recorded, so a restart
-	 * loses the outcome. Without a session there is nowhere to deliver it,
-	 * and the plain timeout stands.
+	 * not cancelled, and the model is told the job it runs as: the call's own
+	 * when it is recorded, else a mirror ({@link covia.venue.JobManager#mirror}),
+	 * so the job can be looked up and outlasts a restart. A sessioned agent's
+	 * call is tracked in its pending index ({@link AgentAdapter#trackCall}):
+	 * its outcome reaches the asking session as a message, which wakes the
+	 * agent, and a task that yields meanwhile waits for it. When no job can be
+	 * named, the plain timeout stands.
+	 *
+	 * @param call the call's Job, or null if it never had one
 	 */
-	private AString stillRunning(AString operation, CompletableFuture<ACell> call,
-			RequestContext ctx, long timeoutMs) {
+	AString stillRunning(AString operation, Job call, RequestContext ctx, long timeoutMs) {
+		Job job;
+		try {
+			job = (call != null) ? engine.jobs().mirror(call) : null;
+		} catch (RuntimeException e) {
+			log.warn("No job recorded for {} still running past its limit: {}", operation, e.toString());
+			job = null;
+		}
+		if (job == null) return toolTimeout(timeoutMs);
+		String id = job.getID().toHexString();
 		AString agentId = ctx.getAgentId();
 		Blob sessionId = ctx.getSessionId();
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
-		if (agentId == null || sessionId == null || agents == null) return toolTimeout(timeoutMs);
-		AString owner = ctx.getUserDID();
-		// A task that yields while this runs waits for it rather than failing as idle.
-		Runnable release = agents.trackLateCall(owner, agentId, ctx.getTaskId());
-		call.whenComplete((result, failure) -> {
-			try {
-				// Shutdown cancels running calls; that is not their outcome.
-				if (engine.isClosing()) return;
-				AMap<AString, ACell> outcome = (failure == null)
-					? Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.COMPLETE, Fields.RESULT, result)
-					: Maps.of(Fields.OPERATION, operation, Fields.STATUS, Status.FAILED,
-						Fields.ERROR, Strings.create(toolFailure(failure, operation.toString())));
-				if (!agents.deliverSessionMessage(owner, agentId, sessionId, engine.getDIDString(), null, outcome)) {
-					log.info("Late outcome of {} not delivered: agent {} or its session is gone", operation, agentId);
-				}
-			} finally {
-				// Only after delivery: the message, not the count, now brings the task back.
-				release.run();
-			}
-		});
-		return Strings.create(String.format(TOOL_STILL_RUNNING, operation, timeoutMs));
+		if (agentId == null || sessionId == null || agents == null) {
+			return Strings.create(String.format(TOOL_STILL_RUNNING_UNTRACKED, operation, timeoutMs, id));
+		}
+		agents.trackCall(ctx.getUserDID(), agentId, sessionId, ctx.getTaskId(), job);
+		return Strings.create(String.format(TOOL_STILL_RUNNING, operation, timeoutMs, id));
 	}
 
 	/** The result of a tool call abandoned because its cycle was interrupted;

@@ -224,15 +224,6 @@ public class AgentAdapter extends AAdapter {
 	private final ConcurrentHashMap<AgentKey, CompletableFuture<ACell>> runningLoops
 		= new ConcurrentHashMap<>();
 
-	/**
-	 * Tool calls still running past their time limit, counted by the task
-	 * whose cycle made them (#607). A task that yields while one runs is
-	 * parked, and the call's outcome wakes it. Held in memory only, because
-	 * the calls are: startup fails the tasks that waited on them.
-	 */
-	private final ConcurrentHashMap<LateCallKey, Integer> lateCalls = new ConcurrentHashMap<>();
-	private record LateCallKey(AgentKey agent, Blob taskId) {}
-
 	/** Active transition job per agent — allows suspend to cancel running transitions */
 	private final ConcurrentHashMap<AgentKey, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
 
@@ -3789,24 +3780,90 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Records a tool call from a task's cycle that is still running past its
-	 * time limit. Returns the release to run once its outcome has been
-	 * delivered; releasing more than once has no further effect.
+	 * Tracks a tool call still running past its time limit (#607) in the
+	 * agent's pending index, so its outcome reaches the asking session exactly
+	 * once, after a restart too. The entry names the session and the task
+	 * whose cycle made the call, which keeps that task waiting for it. When
+	 * the job ends, {@link #deliverCallOutcome} moves its outcome from the
+	 * index to the session; while the venue is closing the entry stays, and
+	 * the restart delivers it instead ({@link #reconcileAgentAfterRestart}).
+	 *
+	 * @param job the call's recorded job: the call itself or its mirror
+	 * @param taskId the task whose cycle made the call, or null
 	 */
-	public Runnable trackLateCall(AString ownerDID, AString agentId, Blob taskId) {
-		if (taskId == null) return () -> {};
-		LateCallKey key = new LateCallKey(new AgentKey(ownerDID, agentId), taskId);
-		lateCalls.merge(key, 1, Integer::sum);
-		java.util.concurrent.atomic.AtomicBoolean released = new java.util.concurrent.atomic.AtomicBoolean();
-		return () -> {
-			if (released.compareAndSet(false, true)) {
-				lateCalls.computeIfPresent(key, (k, n) -> (n > 1) ? n - 1 : null);
-			}
-		};
+	public void trackCall(AString ownerDID, AString agentId, Blob sessionId, Blob taskId, Job job) {
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent == null) return;
+		AMap<AString, ACell> entry = Maps.of(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
+		if (taskId != null) entry = entry.assoc(Fields.TASK_ID, Strings.create(taskId.toHexString()));
+		agent.addPending(job.getID(), entry);
+		deliverWhenFinished(ownerDID, agentId, job);
 	}
 
-	private boolean hasLateCalls(AString ownerDID, AString agentId, Blob taskId) {
-		return lateCalls.containsKey(new LateCallKey(new AgentKey(ownerDID, agentId), taskId));
+	/** Whether a pending entry is a tracked call ({@link #trackCall}), whose outcome goes to its session. */
+	private static boolean isTrackedCall(ACell entry) {
+		return RT.getIn(entry, Fields.SESSION_ID) != null;
+	}
+
+	/** Delivers a tracked call's outcome once its job ends, unless the venue is closing then. */
+	private void deliverWhenFinished(AString ownerDID, AString agentId, Job job) {
+		job.future().whenComplete((result, failure) -> {
+			if (!job.isFinished() || engine.isClosing()) return;
+			try {
+				if (deliverCallOutcome(ownerDID, agentId, job.getID(), job.getData())) {
+					engine.flush();
+					wakeAgent(ownerDID, agentId, true);
+				}
+			} catch (RuntimeException e) {
+				log.warn("Outcome of job {} not delivered to agent {}: {}", job.getID(), agentId, e.toString());
+			}
+		});
+	}
+
+	/**
+	 * Moves a tracked call's outcome from the agent's pending index to the
+	 * session its entry names, in one transaction. Nothing happens when the
+	 * entry has gone, so the outcome is delivered once. The caller flushes and
+	 * wakes the agent.
+	 *
+	 * @param record the call's final record
+	 * @return whether the outcome reached the session
+	 */
+	private boolean deliverCallOutcome(AString ownerDID, AString agentId, Blob jobId, AMap<AString, ACell> record) {
+		var delivered = new java.util.concurrent.atomic.AtomicBoolean();
+		var tracked = new java.util.concurrent.atomic.AtomicBoolean();
+		engine.getVenueState().users().transact(draft -> {
+			delivered.set(false);
+			tracked.set(false);
+			User owner = draft.get(ownerDID);
+			AgentState agent = (owner == null) ? null : owner.agent(agentId);
+			if (agent == null || agent.getRecord() == null) return;
+			AString sid = RT.ensureString(RT.getIn(agent.getPending().get(jobId), Fields.SESSION_ID));
+			if (sid == null) return;
+			tracked.set(true);
+			agent.removePending(jobId);
+			delivered.set(appendSessionMessage(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
+				engine.getDIDString(), null, callOutcome(jobId, record)));
+		});
+		if (tracked.get() && !delivered.get()) {
+			log.info("Outcome of job {} not delivered: agent {} or its session is gone", jobId, agentId);
+		}
+		return delivered.get();
+	}
+
+	/**
+	 * A tracked call's outcome as its session receives it: the job, its
+	 * operation and status, then its result or why it did not complete.
+	 */
+	static AMap<AString, ACell> callOutcome(Blob jobId, AMap<AString, ACell> record) {
+		AString status = RT.ensureString(record.get(Fields.STATUS));
+		AMap<AString, ACell> outcome = Maps.of(
+			Fields.ID, Strings.create(jobId.toHexString()),
+			Fields.OPERATION, record.get(Fields.OP),
+			Fields.STATUS, status);
+		return Status.COMPLETE.equals(status)
+			? outcome.assoc(Fields.RESULT, record.get(Fields.OUTPUT))
+			: outcome.assoc(Fields.ERROR, record.get(Fields.ERROR));
 	}
 
 	/** Overload: non-forced wake (used by message delivery / resume auto-wake). */
@@ -4849,6 +4906,8 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Resolves pending Job IDs to a vector of maps with status and output.
+	 * A tracked call is left out: its outcome reaches its own session as a
+	 * message ({@link #trackCall}).
 	 */
 	private AVector<ACell> resolveJobIds(Index<Blob, ACell> ids, AString payloadField) {
 		if (ids == null || ids.count() == 0) return Vectors.empty();
@@ -4856,6 +4915,7 @@ public class AgentAdapter extends AAdapter {
 		for (var entry : ids.entrySet()) {
 			Blob jobId = entry.getKey();
 			ACell snapshot = entry.getValue();
+			if (isTrackedCall(snapshot)) continue;
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(jobId);
 			ACell payload = (jobData != null) ? jobData.get(payloadField) : snapshot;
 			AMap<AString, ACell> info = Maps.of(
@@ -4891,13 +4951,13 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Whether a task that yielded has something that will bring it back:
-	 * a wake time, an open HITL ask from its cycle, a call still running past
-	 * its time limit, or input or messages that arrived during the cycle.
+	 * a wake time, an open HITL ask or a call still running past its time
+	 * limit from its cycle, or input or messages that arrived during the cycle.
 	 */
 	private boolean yieldIsBacked(AgentState agent, AString ownerDID, AString agentId,
 			Blob taskId, ACell row) {
 		if (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong) return true;
-		if (agent.hasPendingFor(taskId) || hasLateCalls(ownerDID, agentId, taskId)) return true;
+		if (agent.hasPendingFor(taskId)) return true;
 		return agent.hasNewWorkFor(row, System.currentTimeMillis());
 	}
 
@@ -5121,8 +5181,10 @@ public class AgentAdapter extends AAdapter {
 	 * Removes agent-owned intake whose external Job was made terminal by the
 	 * generic Job recovery pass. Stable waiting Jobs and jobless lattice tasks
 	 * remain queued. A parked task survives only while what it waits on does:
-	 * a wake time or an open HITL ask is durable, but a call past its time
-	 * limit ran only in memory, so a task left waiting on one alone fails.
+	 * a wake time, an open HITL ask or a tracked call is durable, so a task
+	 * left waiting on nothing fails. A tracked call that has ended (a mirror
+	 * fails at restart) has its outcome delivered to its session now, and one
+	 * still running is delivered when it ends ({@link #trackCall}).
 	 * Session epochs are executor fences, so none survives process startup.
 	 */
 	@SuppressWarnings("unchecked")
@@ -5141,6 +5203,20 @@ public class AgentAdapter extends AAdapter {
 						&& !agent.hasNewWorkFor(entry.getValue(), System.currentTimeMillis())) {
 					failTask(ownerDID, agent.getAgentId(), taskId, TASK_WAIT_LOST);
 				}
+			}
+		}
+
+		for (var entry : agent.getPending().entrySet()) {
+			if (!isTrackedCall(entry.getValue())) continue;
+			Blob jobId = entry.getKey();
+			AMap<AString, ACell> record = user.jobs().getRecord(jobId);
+			if (record == null) {
+				agent.removePending(jobId); // deleted: nothing to deliver
+			} else if (Job.isFinished(record)) {
+				deliverCallOutcome(ownerDID, agent.getAgentId(), jobId, record);
+			} else {
+				Job live = engine.jobs().getJob(jobId);
+				if (live != null) deliverWhenFinished(ownerDID, agent.getAgentId(), live);
 			}
 		}
 
@@ -5421,6 +5497,7 @@ public class AgentAdapter extends AAdapter {
 		requireConfigType(config, K_MODEL, AString.class, "a string model name");
 		requireConfigType(config, K_API_KEY, AString.class, "a string secret reference");
 		requireConfigType(config, K_DEFAULT_TOOLS, CVMBool.class, "a boolean");
+		requireConfigType(config, AbstractLLMAdapter.K_RECORD_TOOL_CALLS, CVMBool.class, "a boolean");
 		requireConfigType(config, K_CAPS, AVector.class, "an array of capability objects");
 		// Admission is security configuration: a policy that would fail closed at
 		// runtime must fail loudly here instead (#447).
