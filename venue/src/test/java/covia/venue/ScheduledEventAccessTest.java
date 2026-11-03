@@ -115,7 +115,7 @@ public class ScheduledEventAccessTest {
 		ACell handle = schedule("v/test/ops/echo", Maps.of("echo", "owner"), ALICE);
 		try {
 			assertDenied(cancel(handle, agent("worker", invokeOnly())), Scheduler.EVENT_ACCESS_DENIED);
-			assertDenied(cancel(handle, BOB), ScheduleState.NOT_OWNER);
+			assertDenied(cancel(handle, BOB), Scheduler.NOT_OWNER);
 			assertTrue(listedHandles(ALICE).contains(handle));
 		} finally {
 			cancel(handle, ALICE);

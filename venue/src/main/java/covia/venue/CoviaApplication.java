@@ -87,10 +87,7 @@ public final class CoviaApplication
 		return venueContext;
 	}
 
-	/**
-	 * Replaces the shared policy. Venue components connected afterwards use
-	 * the new one; the engine installs its access check before connecting.
-	 */
+	/** Replaces the shared policy. Venue components connected afterwards use the new one. */
 	void setVenueContext(VenueContext context) {
 		this.venueContext = java.util.Objects.requireNonNull(context, "context");
 	}

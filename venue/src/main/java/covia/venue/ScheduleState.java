@@ -22,7 +22,6 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
-import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.lattice.Covia;
 
@@ -108,14 +107,13 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 
 	void remove(Blob key) { transact(draft -> draft.drop(key)); }
 
-	public boolean cancel(Blob handle, AString owner) {
+	/** Removes the event a handle names; false when it names none. */
+	public boolean cancel(Blob handle) {
 		boolean[] cancelled = {false};
 		transact(draft -> {
 			Entry entry = draft.find(handle);
 			cancelled[0] = entry != null;
-			if (entry == null) return;
-			requireOwner(entry.rec(), owner);
-			draft.drop(entry.key());
+			if (entry != null) draft.drop(entry.key());
 		});
 		return cancelled[0];
 	}
@@ -133,12 +131,6 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 		transact(draft -> {
 			for (Blob key : draft.scheduledBy(actor)) draft.drop(key);
 		});
-	}
-
-	public static final String NOT_OWNER = "Not the owner of this scheduled event";
-
-	static void requireOwner(AMap<AString, ACell> record, AString caller) {
-		if (caller == null || !caller.equals(record.get(K_OWNER))) throw new AuthException(NOT_OWNER);
 	}
 
 	/** Complete a fire's schedule changes; job preparation remains outside this component. */

@@ -579,8 +579,7 @@ public class CoviaAdapter extends AAdapter {
 		// One gate for every lattice op — read or mutation. requireLocalAccess is
 		// the shared local-access check (a/ governed exactly like w/): the caller's
 		// own namespace goes through the scope seam; another user's needs a proof
-		// (or public/venue-catalog policy), else a denial. Extension cursors also
-		// retain this authority check when accessing their adapter-provided view.
+		// (or public/venue-catalog policy), else a denial.
 		engine.requireLocalAccess(ctx, capResource(input), ability);
 	}
 

@@ -55,10 +55,11 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 		if (mutation && exposed == null) throw new AuthException(READ_ONLY);
 		// An absent route is still resolved: never fall through to a physical user x slot.
 		AForkableCursor<ACell> base = exposed == null ? Cursors.root(null) : exposed;
+		// Authority was checked above. The view itself keeps only what holds for any
+		// caller: its adapter is still the active one, and that adapter's write policy.
 		AForkableCursor<ACell> guarded = new ATransformCursor<ACell, ACell>(base) {
 			private void check() {
 				if (name != null && covia.engine.getAdapter(name) != adapter) throw new AuthException(UNAVAILABLE);
-				covia.engine.requireLocalAccess(ctx, resource, ability);
 				if (mutation) requireWritable(adapter, scoped, path);
 			}
 			@Override protected ACell view(ACell value) { check(); return value; }

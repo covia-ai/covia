@@ -331,7 +331,8 @@ present.
 
 **Operations define writability.** A component's domain operations are the
 only ways to change it. Each makes its own checks and then changes its cursor
-in one atomic update; cursors carry no write policy. `Workspace` is the
+in one atomic update; cursors carry no write policy, except that an `x/` view
+applies its adapter's on each change. `Workspace` is the
 component for a flexible data area reached by path. Its operations are
 `write`, `append`, `delete`, `update` (a function of the current value) and
 `createPath`, and only `createPath` creates a missing level. An area inside a
@@ -345,10 +346,16 @@ create the missing levels of their path and make their change in one
 transaction. Creating a key changes the map that holds it, so they ask for
 write authority at the nearest level that exists, inside the transaction.
 
-**Engine policy reaches components through `VenueContext`.** One instance is
-shared by the venue's components and passed down unchanged. It holds the write
-clock and the access check (`engine.requireLocalAccess`), which the engine
-installs when the venue starts; until then it refuses all access.
+**Components carry no authority.** A component trusts the code that calls it:
+Java code holding the component API is privileged venue code, tested, and
+access-controlled where it acts for a request. Authority belongs to the
+operation acting for a request. It checks the address it acts on
+(`engine.requireLocalAccess`) before the change, and runs any check that depends
+on current state inside the component's transaction, as `covia:write` does for
+the levels it creates. A component refuses only what its data does not allow,
+such as a change to a missing record or a deleted account; it never decides who
+may act. `VenueContext`, shared by the venue's components and passed down
+unchanged, holds the write clock and no access check.
 
 `ACoviaComponent` is shaped so that it could move onto the Convex component
 hierarchy.
@@ -685,7 +692,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `LatticeContext` | Application policy for clock, signing and owner verification, used by the root merge; installed once on `CoviaApplication`, which also signs the venue record with it |
-| `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) and the access check the engine installs |
+| `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) |
 | `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the keys below it (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |

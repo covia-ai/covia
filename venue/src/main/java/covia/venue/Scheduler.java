@@ -88,6 +88,8 @@ public class Scheduler {
 	public static final int MAX_DESCRIPTION_CHARS = ScheduleState.MAX_DESCRIPTION_CHARS;
 	public static final String DESCRIPTION_NOT_STRING = ScheduleState.DESCRIPTION_NOT_STRING;
 	public static final String DESCRIPTION_TOO_LONG = ScheduleState.DESCRIPTION_TOO_LONG;
+	/** Refusal for a user reaching another user's scheduled event. */
+	public static final String NOT_OWNER = "Not the owner of this scheduled event";
 	/** Refusal for a capability-scoped agent reaching an event it did not schedule. */
 	public static final String EVENT_ACCESS_DENIED =
 		"A capability-scoped agent manages only the scheduled events it created";
@@ -336,8 +338,9 @@ public class Scheduler {
 
 	private boolean doCancel(Blob handle, RequestContext ctx) {
 		Entry e = state().find(handle);
+		// An event keeps its owner and actor for life, so this check holds for the cancel.
 		if (e != null) requireAccess(e.rec(), ctx);
-		boolean cancelled = state().cancel(handle, ctx.getUserDID());
+		boolean cancelled = state().cancel(handle);
 		armNext();
 		return cancelled;
 	}
@@ -352,7 +355,8 @@ public class Scheduler {
 
 	/** Owner-only, and a capability-scoped agent only for an event it scheduled. */
 	private void requireAccess(AMap<AString, ACell> rec, RequestContext ctx) {
-		requireOwner(rec, ctx.getUserDID());
+		AString user = ctx.getUserDID();
+		if (user == null || !user.equals(rec.get(K_OWNER))) throw new AuthException(NOT_OWNER);
 		if (!engine.getAccessControl().canAccessEvent(ctx, rec)) {
 			throw new AuthException(EVENT_ACCESS_DENIED);
 		}
