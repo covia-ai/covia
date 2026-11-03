@@ -25,6 +25,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
 - A forced `agent:trigger` no longer presents a parked task.
+- An LLM agent's job results show an open HITL ask as still waiting, not as ended with no reason.
 - An agent is suspended only when it cannot continue: its model setup is wrong (an `llmOperation` or `systemPrompt` entry that does not resolve among it), its provider cannot be reached, or the venue fails. Other failures, `fail_task` among them, fail only the work (#652).
 - `agent:context` and `agent:step` fail with the reason when the agent's `llmOperation`, or its model's provider, does not resolve.
 - A suspended agent keeps its queued work; waiting jobs say it is suspended, and the work runs after `agent:resume`.

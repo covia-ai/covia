@@ -61,6 +61,7 @@ import covia.venue.SessionState;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
 import covia.venue.Engine;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
 import covia.venue.User;
@@ -130,6 +131,9 @@ public class AgentAdapter extends AAdapter {
 	/** Why a parked task failed at startup: what it waited on ran only in memory. */
 	public static final String TASK_WAIT_LOST = "The venue restarted while the task waited on a call that "
 		+ "had passed its time limit, so its result was lost; re-submit if appropriate";
+	/** Why a parked task failed: the outcome of the call it waited on had no session to go to. */
+	public static final String TASK_OUTCOME_UNDELIVERED = "The task waited on a call whose outcome could not "
+		+ "be delivered, because its session no longer exists; re-submit if appropriate";
 	public static final String SUSPENDED_REFUSAL = "Agent '%s' is suspended%s; %s";
 	public static final String SUSPENDED_RESUME_ADVICE = "fix the cause, then use agent:resume";
 	public static final String SUSPENDED_ASK_ADVICE = "ask whoever stopped the agent before using agent:resume";
@@ -3805,17 +3809,21 @@ public class AgentAdapter extends AAdapter {
 		return RT.getIn(entry, Fields.SESSION_ID) != null;
 	}
 
-	/** Delivers a tracked call's outcome once its job ends, unless the venue is closing then. */
+	/**
+	 * Delivers a tracked call's outcome once its job ends, unless the venue is
+	 * closing then. A delivery that fails is a venue bug: its entry stays, so
+	 * the next start delivers it.
+	 */
 	private void deliverWhenFinished(AString ownerDID, AString agentId, Job job) {
-		job.future().whenComplete((result, failure) -> {
-			if (!job.isFinished() || engine.isClosing()) return;
+		JobManager.whenFinished(job, () -> {
+			if (engine.isClosing()) return;
 			try {
 				if (deliverCallOutcome(ownerDID, agentId, job.getID(), job.getData())) {
 					engine.flush();
 					wakeAgent(ownerDID, agentId, true);
 				}
-			} catch (RuntimeException e) {
-				log.warn("Outcome of job {} not delivered to agent {}: {}", job.getID(), agentId, e.toString());
+			} catch (RuntimeException | Error e) {
+				log.error("Outcome of job {} not delivered to agent {}", job.getID(), agentId, e);
 			}
 		});
 	}
@@ -3823,8 +3831,10 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Moves a tracked call's outcome from the agent's pending index to the
 	 * session its entry names, in one transaction. Nothing happens when the
-	 * entry has gone, so the outcome is delivered once. The caller flushes and
-	 * wakes the agent.
+	 * entry has gone, so the outcome is delivered once. When the session has
+	 * gone, the entry goes with nothing delivered, and a task left parked on
+	 * it with nothing else to wait on fails. The caller flushes and wakes the
+	 * agent.
 	 *
 	 * @param record the call's final record
 	 * @return whether the outcome reached the session
@@ -3832,23 +3842,37 @@ public class AgentAdapter extends AAdapter {
 	private boolean deliverCallOutcome(AString ownerDID, AString agentId, Blob jobId, AMap<AString, ACell> record) {
 		var delivered = new java.util.concurrent.atomic.AtomicBoolean();
 		var tracked = new java.util.concurrent.atomic.AtomicBoolean();
+		var waitingTask = new java.util.concurrent.atomic.AtomicReference<AString>();
 		engine.getVenueState().users().transact(draft -> {
 			delivered.set(false);
 			tracked.set(false);
 			User owner = draft.get(ownerDID);
 			AgentState agent = (owner == null) ? null : owner.agent(agentId);
 			if (agent == null || agent.getRecord() == null) return;
-			AString sid = RT.ensureString(RT.getIn(agent.getPending().get(jobId), Fields.SESSION_ID));
+			ACell entry = agent.getPending().get(jobId);
+			AString sid = RT.ensureString(RT.getIn(entry, Fields.SESSION_ID));
 			if (sid == null) return;
 			tracked.set(true);
+			waitingTask.set(RT.ensureString(RT.getIn(entry, Fields.TASK_ID)));
 			agent.removePending(jobId);
 			delivered.set(appendSessionMessage(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
 				engine.getDIDString(), null, callOutcome(jobId, record)));
 		});
 		if (tracked.get() && !delivered.get()) {
-			log.info("Outcome of job {} not delivered: agent {} or its session is gone", jobId, agentId);
+			log.info("Outcome of job {} not delivered: agent {} has no such session", jobId, agentId);
+			if (waitingTask.get() != null) failIfStranded(ownerDID, agentId, Blob.fromHex(waitingTask.get().toString()));
 		}
 		return delivered.get();
+	}
+
+	/** Fails a parked task with nothing left to wait on or run on ({@link #yieldIsBacked}). */
+	private void failIfStranded(AString ownerDID, AString agentId, Blob taskId) {
+		AgentState agent = getAgent(ownerDID, agentId);
+		Index<Blob, ACell> tasks = (agent == null) ? null : agent.getTasks();
+		ACell row = (tasks == null) ? null : tasks.get(taskId);
+		if (AgentState.isParked(row) && !yieldIsBacked(agent, ownerDID, agentId, taskId, row)) {
+			failTask(ownerDID, agentId, taskId, TASK_OUTCOME_UNDELIVERED);
+		}
 	}
 
 	/**
@@ -5132,6 +5156,11 @@ public class AgentAdapter extends AAdapter {
 	 * executor state, not work and not a resume checkpoint. Called once after
 	 * {@code recoverJobs()} stabilises job records.
 	 *
+	 * <p>Every agent's tracked calls are recovered before any agent is woken
+	 * ({@link #recoverTrackedCalls}), so a delivered outcome is work this scan
+	 * sees, and no agent woken early in the scan can run beneath another's
+	 * recovery. Calls still running are watched only once the scan is over.</p>
+	 *
 	 * @return the number of agents woken
 	 */
 	public int wakeAgentsWithWork() {
@@ -5139,6 +5168,8 @@ public class AgentAdapter extends AAdapter {
 		int staleRuns = 0;
 		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
 		if (all == null) return 0;
+		record BootAgent(AString did, User user, AgentState agent) {}
+		List<BootAgent> idle = new ArrayList<>();
 		for (var userEntry : all.entrySet()) {
 			AString did = RT.ensureString(userEntry.getKey());
 			if (did == null) continue;
@@ -5151,26 +5182,36 @@ public class AgentAdapter extends AAdapter {
 				AgentState agent = getAgent(did, agentId);
 				if (agent == null) continue;   // terminated / missing
 				if (externalAgents().isExternal(agent)) { externalAgents().reconcile(agent); continue; }
-				AgentKey key = new AgentKey(did, agentId);
 				// This method is a startup hook, but keep it safe if an embedding
 				// invokes it after launch: never reconcile beneath a live executor.
-				if (isRunning(key)) continue;
-				// No executor survives venue startup. Clear the durable dirty
-				// marker before deciding whether remaining queued work merits a
-				// fresh attempt; recoverJobs has settled interrupted Jobs and kept
-				// queued request/chat Jobs for this wake to complete.
-				if (AgentState.RUNNING.equals(agent.getStatus())) {
-					agent.sleep();
-					staleRuns++;
-				}
-				reconcileAgentAfterRestart(did, user, agent);
-				if (hasWork(agent)) {
-					log.info("Waking agent {} — durable work found on boot", agentId);
-					wakeAgent(did, agentId, true);
-					woken++;
-				}
+				if (isRunning(new AgentKey(did, agentId))) continue;
+				idle.add(new BootAgent(did, user, agent));
 			}
 		}
+		List<Runnable> afterScan = new ArrayList<>();
+		for (BootAgent b : idle) recoverTrackedCalls(b.did(), b.user(), b.agent(), afterScan);
+		for (BootAgent b : idle) {
+			AString did = b.did();
+			AgentState agent = b.agent();
+			AString agentId = agent.getAgentId();
+			// An agent woken earlier in this scan may have started this one.
+			if (isRunning(new AgentKey(did, agentId))) continue;
+			// No executor survives venue startup. Clear the durable dirty
+			// marker before deciding whether remaining queued work merits a
+			// fresh attempt; recoverJobs has settled interrupted Jobs and kept
+			// queued request/chat Jobs for this wake to complete.
+			if (AgentState.RUNNING.equals(agent.getStatus())) {
+				agent.sleep();
+				staleRuns++;
+			}
+			reconcileAgentAfterRestart(did, b.user(), agent);
+			if (hasWork(agent)) {
+				log.info("Waking agent {} — durable work found on boot", agentId);
+				wakeAgent(did, agentId, true);
+				woken++;
+			}
+		}
+		afterScan.forEach(Runnable::run);
 		if (staleRuns > 0) {
 			log.info("Agent startup recovery: cleared {} stale RUNNING marker(s)", staleRuns);
 		}
@@ -5178,14 +5219,42 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
+	 * Recovers an agent's tracked calls ({@link #trackCall}) at boot. The live
+	 * handle is looked up before the record, so a job that ends between the
+	 * two reads is still seen. A call whose job is live is watched once the
+	 * boot scan is over ({@code afterScan}); one whose job has ended (a mirror
+	 * fails at restart) has its outcome delivered to its session now, which is
+	 * new work for a task waiting on it; one whose job is gone, or is not
+	 * running here, has nothing to deliver and stops backing its task.
+	 */
+	private void recoverTrackedCalls(AString ownerDID, User user, AgentState agent, List<Runnable> afterScan) {
+		AString agentId = agent.getAgentId();
+		for (var entry : agent.getPending().entrySet()) {
+			if (!isTrackedCall(entry.getValue())) continue;
+			Blob jobId = entry.getKey();
+			Job live = engine.jobs().getJob(jobId);
+			if (live != null) {
+				afterScan.add(() -> deliverWhenFinished(ownerDID, agentId, live));
+				continue;
+			}
+			AMap<AString, ACell> record = user.jobs().getRecord(jobId);
+			if (record != null && Job.isFinished(record)) {
+				deliverCallOutcome(ownerDID, agentId, jobId, record);
+			} else {
+				agent.removePending(jobId);
+			}
+		}
+	}
+
+	/**
 	 * Removes agent-owned intake whose external Job was made terminal by the
 	 * generic Job recovery pass. Stable waiting Jobs and jobless lattice tasks
-	 * remain queued. A parked task survives only while what it waits on does:
-	 * a wake time, an open HITL ask or a tracked call is durable, so a task
-	 * left waiting on nothing fails. A tracked call that has ended (a mirror
-	 * fails at restart) has its outcome delivered to its session now, and one
-	 * still running is delivered when it ends ({@link #trackCall}).
-	 * Session epochs are executor fences, so none survives process startup.
+	 * remain queued. Runs after {@link #recoverTrackedCalls}, so a parked task
+	 * survives only while it has something to wait on or run on: a wake time,
+	 * an open HITL ask, a tracked call still running, or a message (a tracked
+	 * call's delivered outcome among them). A task left with none fails,
+	 * rather than stay parked for ever. Session epochs are executor fences, so
+	 * none survives process startup.
 	 */
 	@SuppressWarnings("unchecked")
 	private void reconcileAgentAfterRestart(AString ownerDID, User user, AgentState agent) {
@@ -5203,20 +5272,6 @@ public class AgentAdapter extends AAdapter {
 						&& !agent.hasNewWorkFor(entry.getValue(), System.currentTimeMillis())) {
 					failTask(ownerDID, agent.getAgentId(), taskId, TASK_WAIT_LOST);
 				}
-			}
-		}
-
-		for (var entry : agent.getPending().entrySet()) {
-			if (!isTrackedCall(entry.getValue())) continue;
-			Blob jobId = entry.getKey();
-			AMap<AString, ACell> record = user.jobs().getRecord(jobId);
-			if (record == null) {
-				agent.removePending(jobId); // deleted: nothing to deliver
-			} else if (Job.isFinished(record)) {
-				deliverCallOutcome(ownerDID, agent.getAgentId(), jobId, record);
-			} else {
-				Job live = engine.jobs().getJob(jobId);
-				if (live != null) deliverWhenFinished(ownerDID, agent.getAgentId(), live);
 			}
 		}
 

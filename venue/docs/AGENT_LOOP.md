@@ -606,9 +606,17 @@ transaction removes the entry and appends the outcome
 `{id, operation, status, result | error}` to the session as a message from
 the venue, which wakes the agent. A task that yields meanwhile waits for that
 message (§4.6). Shutdown leaves the entry, and the restart delivers the job's
-outcome instead (§6.1), so the session receives it exactly once. A call with
-no session is told only its job (`TOOL_STILL_RUNNING_UNTRACKED`); nothing
-follows, and `grid_job_status` gives the outcome.
+outcome instead (§6.1), so the session receives it exactly once. If the
+session has gone by then, the entry goes with nothing delivered, and a task
+left parked on it with nothing else to wait on fails
+(`AgentAdapter.TASK_OUTCOME_UNDELIVERED`). A call with no session is told only
+its job (`TOOL_STILL_RUNNING_UNTRACKED`); nothing follows, and
+`grid_job_status` gives the outcome.
+
+Delivery follows the job's own status, not its result future, which a waiter
+can cancel before the job has finished. The job ends in one commit and the
+delivery is the next; between them the entry still backs a waiting task, and
+a restart in between delivers from the job's record.
 
 HITL is the deliberate long-lived exception (§6.3). A sessioned agent receives
 the durable request ID immediately and the job is tracked in its pending index;
@@ -1155,7 +1163,7 @@ without a transition error, has yielded it. The task is parked
 - a HITL ask from its cycle that is still open (the ask's entry in the agent's
   `pending` index names the task);
 - a tool call from its cycle still running past its time limit (§3.4.2),
-  tracked in memory;
+  tracked in the agent's `pending` index;
 - a `wakeTime` on the task;
 - input or session messages that arrived during the cycle.
 
@@ -1249,14 +1257,14 @@ cancels it, and after a crash it fails at boot.
 
 A parked task (§4.6) keeps waiting across a restart only while what it waits
 on survives one. A wake time, an open HITL ask and a tool call tracked in the
-pending index (§3.4.2) are durable; a parked task left with nothing to wait on
-fails at boot (`AgentAdapter.TASK_WAIT_LOST`). A tracked call whose job has
-ended has its outcome delivered to its session at boot. A mirror always has,
-since the restart fails it, so the waiting task runs again on that failure.
-A recorded call that its adapter kept live is delivered when it ends. A task
-that was not parked but had been shown its input was interrupted mid-cycle,
-and the boot
-wake runs it again.
+pending index (§3.4.2) are durable. Before any agent is woken, every agent's
+tracked calls are recovered: one whose job has ended has its outcome
+delivered to its session (a mirror always has, since the restart fails it, so
+the waiting task runs again on that failure); one whose job is live is
+delivered when it ends; one whose job is gone has nothing to deliver. A
+parked task then left with nothing to wait on fails at boot
+(`AgentAdapter.TASK_WAIT_LOST`). A task that was not parked but had been shown
+its input was interrupted mid-cycle, and the boot wake runs it again.
 
 ### 6.2 Effects
 

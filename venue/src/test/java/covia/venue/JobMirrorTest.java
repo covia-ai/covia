@@ -146,6 +146,24 @@ public class JobMirrorTest {
 	}
 
 	@Test
+	public void cancellingTheCallsResultSettlesTheMirror(TestInfo info) throws Exception {
+		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = "mirror-result-cancel-" + ctx.getUserDID();
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			AtomicReference<Job> call = new AtomicReference<>();
+			java.util.concurrent.CompletableFuture<ACell> result =
+				engine.jobs().invokeInternal(HOLD, Maps.of("gate", gateName), ctx, call::set);
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS));
+			Job mirror = engine.jobs().mirror(call.get());
+			// As an MCP caller's cancellation does: the waiter's future first, the job after
+			result.cancel(true);
+			awaitFinished(mirror);
+			assertEquals(Status.CANCELLED, call.get().getStatus());
+			assertEquals(Status.CANCELLED, mirror.getStatus(), "the mirror follows the call, not its result future");
+		}
+	}
+
+	@Test
 	public void aRecordedCallIsItsOwnJob(TestInfo info) throws Exception {
 		RequestContext ctx = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = "mirror-recorded-" + ctx.getUserDID();

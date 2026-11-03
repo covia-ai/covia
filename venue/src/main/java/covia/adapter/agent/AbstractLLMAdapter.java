@@ -1192,7 +1192,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		if (agentId == null || sessionId == null || agents == null) {
 			return Strings.create(String.format(TOOL_STILL_RUNNING_UNTRACKED, operation, timeoutMs, id));
 		}
-		agents.trackCall(ctx.getUserDID(), agentId, sessionId, ctx.getTaskId(), job);
+		try {
+			agents.trackCall(ctx.getUserDID(), agentId, sessionId, ctx.getTaskId(), job);
+		} catch (RuntimeException e) {
+			// Untracked, nothing will follow: say so rather than promise a message
+			log.error("Tool call job {} not tracked for agent {}", id, agentId, e);
+			return Strings.create(String.format(TOOL_STILL_RUNNING_UNTRACKED, operation, timeoutMs, id));
+		}
 		return Strings.create(String.format(TOOL_STILL_RUNNING, operation, timeoutMs, id));
 	}
 

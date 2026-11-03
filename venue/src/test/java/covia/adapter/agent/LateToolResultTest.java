@@ -188,58 +188,112 @@ public class LateToolResultTest {
 		assertEquals(0, unrecorded, "another agent's call is not");
 	}
 
-	@Test
-	public void aRestartDeliversALateCallsFailureToTheTaskWaitingOnIt() throws Exception {
-		AMap<AString, ACell> config = Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
+	private static final AMap<AString, ACell> RESTART_CONFIG = Maps.of(
+		Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+		Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
+	private static final AString RESTART_OWNER = Strings.create("did:key:zLateCallRestart");
+
+	/** A store as a crash leaves it: a task parked on a late call that is still running. */
+	private record Crashed(Root<Index<Keyword, ACell>> store, AKeyPair keyPair, Blob taskId, Blob mirrorId) {}
+
+	private Crashed crashWhileACallRuns(String agentId) throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
 		AKeyPair keyPair = AKeyPair.generate();
-		AString did = Strings.create("did:key:zLateCallRestart");
-		RequestContext owner = RequestContext.of(did);
-
-		Engine first = new Engine(config, CoviaApplication.connect(new LatticeHost<>(cursor, null)), keyPair).start();
+		RequestContext owner = RequestContext.of(RESTART_OWNER);
+		Engine first = new Engine(RESTART_CONFIG, CoviaApplication.connect(new LatticeHost<>(cursor, null)), keyPair).start();
 		Engine.addDemoAssets(first);
-		createAgent(first, owner, "late-restart", "v/test/ops/toolllm");
-		String gateName = "late-restart-" + System.identityHashCode(first);
-		Job job;
-		Blob mirrorId;
-		Root<Index<Keyword, ACell>> crashed;
+		createAgent(first, owner, agentId, "v/test/ops/toolllm");
+		String gateName = agentId + "-" + System.identityHashCode(first);
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
-				AgentWatch watch = AgentWatch.open(first, did, "late-restart")) {
-			job = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(
-				Fields.AGENT_ID, "late-restart",
+				AgentWatch watch = AgentWatch.open(first, RESTART_OWNER, agentId)) {
+			Job job = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(
+				Fields.AGENT_ID, agentId,
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
 			watch.awaitRest(1);
-			AgentState agent = first.getVenueState().users().get(did).agent("late-restart");
+			AgentState agent = first.getVenueState().users().get(RESTART_OWNER).agent(agentId);
 			assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())));
 			assertEquals(1, agent.getPending().count(), "the late call waits in the pending index");
-			mirrorId = agent.getPending().entryAt(0).getKey();
 			first.syncState();
-			// The store as a crash would leave it, with the call still running
-			crashed = Cursors.root(cursor.get());
+			Crashed crashed = new Crashed(Cursors.root(cursor.get()), keyPair, job.getID(),
+				agent.getPending().entryAt(0).getKey());
 			first.close();
+			return crashed;
 		}
+	}
 
-		Engine second = new Engine(config, CoviaApplication.connect(new LatticeHost<>(crashed, null)), keyPair).start();
+	private static Engine restart(Crashed crashed) throws Exception {
+		Engine e = new Engine(RESTART_CONFIG, CoviaApplication.connect(new LatticeHost<>(crashed.store(), null)),
+			crashed.keyPair()).start();
+		Engine.addDemoAssets(e);
+		return e;
+	}
+
+	@Test
+	public void aRestartDeliversALateCallsFailureToTheTaskWaitingOnIt() throws Exception {
+		Crashed crashed = crashWhileACallRuns("late-restart");
+		Engine second = restart(crashed);
 		try {
-			Engine.addDemoAssets(second);
-			AgentState agent = second.getVenueState().users().get(did).agent("late-restart");
-			try (AgentWatch watch = AgentWatch.open(second, did, "late-restart")) {
+			AgentState agent = second.getVenueState().users().get(RESTART_OWNER).agent("late-restart");
+			try (AgentWatch watch = AgentWatch.open(second, RESTART_OWNER, "late-restart")) {
 				second.jobs().recoverJobs();
 				((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
 				watch.awaitRest(1);
 			}
 			assertEquals(0, agent.getPending().count(), "the outcome left the pending index");
-			AMap<AString, ACell> task = second.jobs().getJobData(job.getID(), owner);
+			AMap<AString, ACell> task = second.jobs().getJobData(crashed.taskId(), RequestContext.of(RESTART_OWNER));
 			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, String.valueOf(task.get(Fields.ERROR)),
 				"the task ran again on the outcome rather than failing as lost");
 			String shown = String.valueOf(RT.getIn(agent.getTimeline().get(1), Fields.MESSAGES));
-			assertTrue(shown.contains(mirrorId.toHexString()) && shown.contains(AAdapter.RESTARTED_DURING_EXECUTION),
+			assertTrue(shown.contains(crashed.mirrorId().toHexString()) && shown.contains(AAdapter.RESTARTED_DURING_EXECUTION),
 				"the task's cycle was shown the call's failure: " + shown);
 		} finally {
 			second.close();
 		}
+	}
+
+	@Test
+	public void aTaskWaitingOnADeletedLateCallFailsAtRestart() throws Exception {
+		Crashed crashed = crashWhileACallRuns("late-deleted");
+		Engine second = restart(crashed);
+		try {
+			User user = second.getVenueState().users().get(RESTART_OWNER);
+			assertTrue(user.jobs().remove(crashed.mirrorId()), "the late call's job is deleted before the restart");
+			second.jobs().recoverJobs();
+			((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
+			AgentState agent = user.agent("late-deleted");
+			assertEquals(0, agent.getPending().count(), "a deleted job leaves nothing to deliver");
+			AMap<AString, ACell> task = second.jobs().getJobData(crashed.taskId(), RequestContext.of(RESTART_OWNER));
+			assertEquals(Status.FAILED, task.get(Fields.STATUS),
+				"with nothing left to wait on, the task fails rather than stay parked");
+			assertEquals(AgentAdapter.TASK_WAIT_LOST, String.valueOf(task.get(Fields.ERROR)));
+		} finally {
+			second.close();
+		}
+	}
+
+	@Test
+	public void aTaskWaitingOnACallWhoseSessionHasGoneFails(TestInfo info) throws Exception {
+		AString did = TestEngine.uniqueDID(info);
+		RequestContext owner = RequestContext.of(did);
+		createAgent(engine, owner, "late-orphan", "v/test/ops/toolllm");
+		AgentState agent = engine.getVenueState().users().get(did).agent("late-orphan");
+		String gateName = "late-orphan-" + did;
+		Job job;
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
+				AgentWatch watch = AgentWatch.open(engine, did, "late-orphan")) {
+			job = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(
+				Fields.AGENT_ID, "late-orphan",
+				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
+			watch.awaitRest(1);
+			ACell task = agent.getTasks().get(job.getID());
+			assertTrue(AgentState.isParked(task));
+			agent.removeSession(Blob.fromHex(RT.ensureString(RT.getIn(task, Fields.SESSION_ID)).toString()));
+			gate.release();
+			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the stranded task did not fail");
+		}
+		assertEquals(AgentAdapter.TASK_OUTCOME_UNDELIVERED, job.getErrorMessage(),
+			"a task whose call's outcome has nowhere to go fails rather than stay parked");
+		assertEquals(0, agent.getPending().count());
 	}
 
 	@Test

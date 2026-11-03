@@ -1073,13 +1073,36 @@ public class JobManager {
 			AString reason = RT.ensureString(mirror.getData().get(Fields.ERROR));
 			call.cancel((reason != null) ? reason.toString() : null);
 		});
-		call.future().whenComplete((result, failure) -> {
+		whenFinished(call, () -> {
 			AMap<AString, ACell> outcome = call.getData();
-			// Shutdown releases the waiters on a call it leaves running: that is no outcome
-			if (Job.isFinished(outcome)) mirror.update(current -> settled(current, outcome));
+			try {
+				mirror.update(current -> settled(current, outcome));
+			} catch (RuntimeException | Error e) {
+				// Nothing waits on this, so a failure would otherwise vanish
+				log.error("Mirror {} did not take the outcome of job {}", jobID, call.getID(), e);
+			}
 		});
 		log.info("Mirrored job {} as {}", call.getID(), jobID);
 		return mirror;
+	}
+
+	/**
+	 * Runs {@code action} once when {@code job} reaches a final status, or at
+	 * once if it already has. Driven by the job's own updates, not its result
+	 * future: a waiter may cancel that future before the job has finished,
+	 * and shutdown releases it without finishing the job.
+	 */
+	public static void whenFinished(Job job, Runnable action) {
+		AtomicBoolean ran = new AtomicBoolean();
+		Consumer<Job> listener = new Consumer<>() {
+			@Override public void accept(Job updated) {
+				if (!updated.isFinished() || !ran.compareAndSet(false, true)) return;
+				updated.unsubscribe(this);
+				action.run();
+			}
+		};
+		job.subscribe(listener);
+		listener.accept(job); // a job that finished before the listener was added
 	}
 
 	/** A mirror's record carrying its call's outcome. */
