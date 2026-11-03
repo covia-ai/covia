@@ -18,6 +18,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.cursor.Cursors;
+import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 
@@ -159,6 +160,20 @@ public class WorkspaceTest {
 		record.set(Maps.of("status", "STARTED"));
 		area.write(path("x"), 0, CVMLong.ONE);
 		assertEquals(Maps.of("status", "STARTED", AREA, Maps.of("x", CVMLong.ONE)), record.get());
+	}
+
+	@Test
+	public void testOnlyAWorkspaceIsChangedByPath() {
+		var cursor = Cursors.<ACell>root(Maps.of("list", Vectors.of(CVMLong.ONE, CVMLong.create(2))));
+		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
+		Position position = component.resolve(path("list/1"), 0);
+		assertSame(component, position.component());
+		assertEquals(CVMLong.create(2), position.read());
+		assertEquals(ACoviaComponent.READ_ONLY,
+			assertThrows(AuthException.class, position::workspace).getMessage());
+
+		Workspace area = new Workspace(cursor);
+		assertSame(area, area.resolve(path("list/1"), 0).workspace());
 	}
 
 	@Test

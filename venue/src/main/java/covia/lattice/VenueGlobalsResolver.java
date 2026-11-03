@@ -18,9 +18,9 @@ import covia.venue.RequestContext;
  * <p>This is the first <b>venue-scoped</b> virtual namespace — unlike
  * {@code n/} (caller's running agent) and {@code t/} (caller's running
  * job), which navigate within the caller's own user data, this resolver
- * navigates to a fixed user (the venue) regardless of the caller. The
- * resolved cursor is the venue user's cursor, retrieved via
- * {@link CoviaAdapter#ensureWorkspaceRoot(AString)}.</p>
+ * navigates to a fixed user (the venue) regardless of the caller: the path
+ * resolves in the venue user's record, retrieved via
+ * {@link CoviaAdapter#ensureUser(AString)}.</p>
  *
  * <p><b>Access policy.</b> Reads are universally allowed; writes require a
  * caller DID equal to the venue's own DID. The {@link #canWrite} override
@@ -44,20 +44,17 @@ public class VenueGlobalsResolver implements NamespaceResolver {
 	}
 
 	@Override
-	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
 		// keys[0] is "v" (the prefix). Rewrite to <venue-DID>/w/global/<rest>
-		// by returning the venue user's cursor with rewritten keys
-		// [w, global, ...rest].
+		// and resolve [w, global, ...rest] in the venue user's record.
 		AString venueDID = adapter.engine.getDIDString();
 		if (venueDID == null) return null;
-
-		WorkspaceRoot venueCursor = adapter.ensureWorkspaceRoot(venueDID);
 
 		ACell[] rewritten = new ACell[keys.length + 1];
 		rewritten[0] = K_W;
 		rewritten[1] = K_GLOBAL;
 		System.arraycopy(keys, 1, rewritten, 2, keys.length - 1);
-		return new ResolvedNamespace(venueCursor, rewritten);
+		return adapter.ensureUser(venueDID).resolve(rewritten, 0);
 	}
 
 	/**

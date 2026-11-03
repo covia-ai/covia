@@ -20,9 +20,12 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.lattice.Namespace;
-import covia.lattice.NamespaceResolver;
+import covia.lattice.Position;
+import covia.lattice.ValuePath;
+import covia.lattice.Workspace;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -2727,40 +2730,32 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testSessionResolverCarriesAtomicScope() {
-		// The resolver positions at the session record and rewrites c/ to the
-		// record's ordinary scratch child; the resolver guards that record.
+	public void testSessionScratchNeedsItsSession() {
 		AString agentId = Strings.create("test-agent");
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd44");
 		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACell[] keys = WorkspaceRoot.parseStringPath("c/draft");
-		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
-		assertNotNull(vns);
-		// The cursor sits at the session record; the keys name its scratch slot.
-		assertEquals("c", vns.remainingKeys()[0].toString());
-		assertEquals("draft", vns.remainingKeys()[1].toString());
-		assertEquals(2, vns.remainingKeys().length);
-		// Scoped scratch must never mint a phantom session.
-		assertTrue(vns.requireExistingRecord());
+		Position target = covia.resolveVirtual(ctx, ValuePath.parse("c/draft"));
+		assertNull(target.read());
+		var refused = assertThrows(InvalidInputException.class,
+			() -> target.workspace().write(target.keys(), target.from(), CVMLong.ONE));
+		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
+		assertNull(engine.getVenueState().users().get(ALICE_DID).agent(agentId).getSession(sessionId),
+			"scoped scratch must never mint a phantom session");
 	}
 
 	@Test
-	public void testAgentResolverUsesAgentRecordBoundary() {
+	public void testAgentResolverReachesTheAgentWorkspace() {
 		AString agentId = Strings.create("test-agent");
 		RequestContext ctx = ALICE.withAgentId(agentId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx,
-			WorkspaceRoot.parseStringPath("n/draft"));
+		Position target = covia.resolveVirtual(ctx, ValuePath.parse("n/draft"));
+		target.workspace().write(target.keys(), target.from(), Strings.create("note"));
 
-		assertNotNull(vns);
-		assertEquals(engine.getVenueState().users().get(ALICE.getUserDID())
-			.agent(agentId).getRecord(), vns.cursor().cursor().get());
-		assertArrayEquals(new ACell[] {Strings.intern("n"), Strings.intern("draft")},
-			vns.remainingKeys());
-		assertTrue(vns.requireExistingRecord());
+		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().get(ALICE_DID)
+			.agent(agentId).getRecord(), "n", "draft"));
 	}
 
 	@Test
@@ -2787,16 +2782,13 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACell[] keys = WorkspaceRoot.parseStringPath("t/draft");
-		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
-		assertNotNull(vns);
-		assertEquals("temp", vns.remainingKeys()[0].toString());
-		assertEquals("draft", vns.remainingKeys()[1].toString());
-		assertTrue(vns.requireExistingRecord());
+		Position target = covia.resolveVirtual(ctx, ValuePath.parse("t/draft"));
+		target.workspace().write(target.keys(), target.from(), Strings.create("task note"));
 
-		// The cursor must be the FOCUSED TASK's Job record, not the transition Job's.
-		assertEquals(user.jobs().getRecord(taskId), vns.cursor().cursor().get(),
+		// The scratch must be the FOCUSED TASK's Job record, not the transition Job's.
+		assertEquals(Strings.create("task note"), RT.getIn(user.jobs().getRecord(taskId), Fields.TEMP, "draft"),
 			"t/ must resolve to the focused task Job");
+		assertNull(user.jobs().get(ctx.getJobId()), "the transition Job is not created");
 	}
 
 	@Test
@@ -2808,13 +2800,10 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACell[] keys = WorkspaceRoot.parseStringPath("t/draft");
-		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
-		assertNotNull(vns);
-		assertEquals("temp", vns.remainingKeys()[0].toString());
-		assertTrue(vns.requireExistingRecord());
+		Position target = covia.resolveVirtual(ctx, ValuePath.parse("t/draft"));
+		target.workspace().write(target.keys(), target.from(), Strings.create("job note"));
 
-		assertEquals(user.jobs().getRecord(jobId), vns.cursor().cursor().get(),
+		assertEquals(Strings.create("job note"), RT.getIn(user.jobs().getRecord(jobId), Fields.TEMP, "draft"),
 			"t/ must resolve to the current Job record");
 	}
 

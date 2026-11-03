@@ -138,31 +138,4 @@ public class DataComponentTest {
 		assertEquals(Strings.create("SLEEPING"), scoped.read(path("status")));
 	}
 
-	@Test
-	public void testUnclaimedPositionsAreReadOnlyData() {
-		var cursor = Cursors.<ACell>root(Maps.of("list", Vectors.of(CVMLong.ONE, CVMLong.create(2))));
-		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		ACell[] keys = path("list/1");
-
-		assertSame(component, component.resolve(keys, keys.length));
-		ACoviaComponent<?> data = component.resolve(keys, 0);
-		assertEquals(CVMLong.create(2), data.read());
-		var e = assertThrows(AuthException.class,
-			() -> ((DataComponent) data).write(CALLER, CVMLong.ONE));
-		assertEquals(DataComponent.READ_ONLY, e.getMessage());
-	}
-
-	@Test
-	public void testResolvingBelowDataExtendsItsAddress() {
-		var user = Cursors.<ACell>root(Maps.empty());
-		List<AString> asked = new ArrayList<>();
-		var context = CLOCK.withAccess((ctx, resource, ability) -> asked.add(resource));
-		data(context, user, "w/a").write(CALLER, Maps.empty());
-		asked.clear();
-
-		var below = (DataComponent) data(context, user, "w/a").resolve(path("b/c"), 0);
-		below.write(CALLER, CVMLong.ONE);
-		assertEquals(List.of(Strings.create("w/a")), asked);
-		assertEquals(CVMLong.ONE, data(context, user, "w/a/b/c").read());
-	}
 }

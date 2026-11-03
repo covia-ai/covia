@@ -49,6 +49,8 @@ public class Fields {
 	public static final StringShort STATUS = Strings.intern("status");	
 	public static final StringShort CANCELLATION = Strings.intern("cancellation");
 	public static final StringShort OP = Strings.intern("op");
+	/** A job's scratch area, reached as {@code t/} by work under the job. */
+	public static final StringShort TEMP = Strings.intern("temp");
 
 	/** Token usage map {@code {input, output, total}} — reported by LLM ops on
 	 *  assistant messages, aggregated per cycle onto agent timeline entries,

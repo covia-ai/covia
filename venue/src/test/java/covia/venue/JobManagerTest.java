@@ -114,7 +114,7 @@ public class JobManagerTest {
 		assertEquals(after, storage.get(), "repeat edits remain idempotent");
 
 		storage.set(legacy);
-		user.recordCursor(covia.lattice.Namespace.J, id).path(temp, Strings.create("scratch")).set(CVMLong.ONE);
+		user.jobs().scratch(id).write(new ACell[] {Strings.create("scratch")}, 0, CVMLong.ONE);
 		assertNull(RT.getIn(storage.get(), prev), "scratch edits also discard the obsolete link");
 		assertEquals(payload.assoc(Strings.create("scratch"), CVMLong.ONE), RT.getIn(storage.get(), temp));
 	}

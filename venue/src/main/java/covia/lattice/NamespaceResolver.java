@@ -5,13 +5,12 @@ import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**
- * Resolves a virtual namespace prefix to a lattice cursor and remaining path keys.
+ * Resolves a virtual namespace prefix to the {@link Position} it stands for.
  *
  * <p>Virtual namespaces (e.g. {@code n/} for agent workspace, {@code t/} for
  * goal-scoped temp) are not backed by a dedicated top-level lattice namespace.
- * Instead, a NamespaceResolver navigates directly to the correct lattice
- * location based on the {@link RequestContext} and returns the remaining
- * physical path from that cursor.</p>
+ * Instead, a NamespaceResolver finds the component that holds the data, from
+ * the {@link RequestContext}, and the keys the path names within it.</p>
  *
  * <p>Resolvers are registered on {@link CoviaAdapter} by prefix. Path resolution
  * checks registered resolvers first (O(1) lookup by prefix), then falls through
@@ -30,10 +29,10 @@ public interface NamespaceResolver {
 	 *         as absence and a write surfaces as an error (distinct from an auth
 	 *         failure or a malformed path)
 	 */
-	ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
+	Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
 
 	/** Resolve for a particular CRUD ability; existing resolvers retain their policy. */
-	default ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys, convex.core.data.AString ability) {
+	default Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys, convex.core.data.AString ability) {
 		return resolve(ctx, adapter, keys);
 	}
 
@@ -50,23 +49,5 @@ public interface NamespaceResolver {
 	 */
 	default boolean canWrite(RequestContext ctx) {
 		return isWritable();
-	}
-
-	/**
-	 * Result of namespace resolution: a cursor positioned at the record that
-	 * holds the namespace, and the keys to navigate from there. Physical user
-	 * paths cross their namespace envelope; unwrapped virtual views navigate
-	 * their value directly. Extension views can expose any value, including a
-	 * vector or scalar root. Empty remaining keys address the exposed root.
-	 *
-	 * @param requireExistingRecord the record at {@code cursor} must already exist — a
-	 *        write never materialises it (a session's scratch must not mint a
-	 *        phantom session); reads of a missing record are simply absent
-	 */
-	record ResolvedNamespace(WorkspaceRoot cursor, ACell[] remainingKeys,
-			boolean requireExistingRecord) {
-		ResolvedNamespace(WorkspaceRoot cursor, ACell[] remainingKeys) {
-			this(cursor, remainingKeys, false);
-		}
 	}
 }

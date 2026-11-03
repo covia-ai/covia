@@ -2293,7 +2293,7 @@ public class Engine {
 		// nothing — none of which throw). Anything that throws is a real failure —
 		// an abnormal navigation error, or a lower-level store fault — and it
 		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return user.workspaceRoot().read(pathKeys);
+		return user.resolve(pathKeys, 0).read();
 	}
 
 	/**

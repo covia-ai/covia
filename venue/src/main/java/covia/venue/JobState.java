@@ -11,12 +11,12 @@ import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
-import convex.lattice.cursor.ProjectionCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.lattice.Covia;
-import covia.lattice.DataComponent;
+import covia.lattice.Position;
+import covia.lattice.Workspace;
 
 /** Primary record of an existing venue job. Updates never create a missing row.
  * Transactions compose data changes only; execution and notifications belong
@@ -43,14 +43,16 @@ public final class JobState extends ACoviaComponent<ACell>
 	/** The job as callers see it: its current state. */
 	@Override public ACell read() { return getRecord(); }
 
-	/** Data below the job is read in its current state, and only read. */
+	/** The job's scratch area ({@code temp}); a change to it needs the job. */
+	public Workspace workspace() {
+		return Workspace.inRecord(cursor(), Fields.TEMP);
+	}
+
+	/** {@code temp} is the job's workspace; the rest of the job is read in its current state. */
 	@Override
-	public ACoviaComponent<?> resolve(ACell[] keys, int from) {
-		if (from >= keys.length) return this;
-		AForkableCursor<ACell> current = ProjectionCursor.<ACell, ACell>create(cursor(),
-			value -> Job.currentState(RT.ensureMap(value)),
-			(value, record) -> { throw new UnsupportedOperationException(DataComponent.READ_ONLY); });
-		return new DataComponent(null, null, current, keys, from, null);
+	public Position resolve(ACell[] keys, int from) {
+		if (from < keys.length && Fields.TEMP.equals(keys[from])) return workspace().resolve(keys, from + 1);
+		return super.resolve(keys, from);
 	}
 
 	/** Pure record edit; null rejects the edit. Returns the committed record or

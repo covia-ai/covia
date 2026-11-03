@@ -15,6 +15,9 @@ import covia.grid.Job;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.lattice.Position;
+import covia.lattice.ValuePath;
+import covia.lattice.Workspace;
 
 /**
  * A user's jobs ({@code j/}): job records keyed by job id, each the
@@ -95,6 +98,17 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return (before == null || !before.containsKey(id)) ? state(id) : null;
 	}
 
+	/**
+	 * A job's scratch area ({@code temp}), which reads as absent and refuses
+	 * changes while the job does not exist.
+	 *
+	 * @param id Job id
+	 * @return The job's scratch area
+	 */
+	public Workspace scratch(Blob id) {
+		return state(id).workspace();
+	}
+
 	private JobState state(Blob id) {
 		return new JobState(context, LatticeComponent.resolve(cursor(), LATTICE, id));
 	}
@@ -119,13 +133,24 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return (jobs == null) ? null : Job.currentStates(jobs);
 	}
 
-	/** A key that names no job is read-only data, which reads as null. */
+	/** A key that names no job ends here, and reads as null. */
 	@Override
-	public ACoviaComponent<?> resolve(ACell[] keys, int from) {
+	public Position resolve(ACell[] keys, int from) {
 		Blob id = (from < keys.length) ? parseID(keys[from]) : null;
 		JobState job = (id == null) ? null : get(id);
 		if (job == null) return super.resolve(keys, from);
 		return job.resolve(keys, from + 1);
+	}
+
+	/** Below the jobs, only a key that names no job is read here, from the index as stored. */
+	@Override
+	public ACell read(ACell[] keys, int from) {
+		return (from < keys.length) ? ValuePath.get(cursor().get(), keys, from) : read();
+	}
+
+	@Override
+	public boolean contains(ACell[] keys, int from) {
+		return ValuePath.contains(cursor().get(), keys, from);
 	}
 
 	/** The stored key a caller's job key names, or null when it names none. */

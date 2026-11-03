@@ -181,7 +181,8 @@ class ExtensionRouteTest {
 		engine.disableAdapter(probe.getName());
 		assertNull(read(path("/label"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/label"), Strings.create("no"), alice));
-		assertThrows(AuthException.class, () -> retained.cursor().write(retained.remainingKeys(), Strings.create("late")));
+		assertThrows(AuthException.class,
+			() -> retained.workspace().write(retained.keys(), retained.from(), Strings.create("late")));
 		engine.enableAdapter(probe.getName());
 		assertEquals(Strings.create("alice"), read(path("/label"), alice));
 		engine.removeAdapter(probe.getName());
@@ -196,7 +197,7 @@ class ExtensionRouteTest {
 		assertEquals(Strings.create("projected"), read(path("/1"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/1"), Strings.create("no"), alice));
 		var view = covia.resolveVirtual(alice, WorkspaceRoot.parseStringPath(path("")));
-		assertThrows(AuthException.class, () -> view.cursor().cursor().set(Maps.empty()));
+		assertThrows(AuthException.class, () -> view.workspace().cursor().set(Maps.empty()));
 	}
 
 	@Test void arbitraryRootValuesAndConcurrentUpdatesUseTheVenueAtomicState() {
@@ -214,8 +215,8 @@ class ExtensionRouteTest {
 		assertEquals(CVMLong.create(99), read(path("/0"), alice));
 		var target = covia.resolveVirtual(alice, WorkspaceRoot.parseStringPath(path("/0")), Capability.CRUD_WRITE);
 		ACell before = engine.getVenueState().get();
-		assertThrows(IllegalArgumentException.class, () -> target.cursor().transact(draft -> {
-			draft.write(target.remainingKeys(), CVMLong.ZERO);
+		assertThrows(IllegalArgumentException.class, () -> target.workspace().transact(draft -> {
+			draft.write(target.keys(), target.from(), CVMLong.ZERO);
 			throw new IllegalArgumentException("test rollback");
 		}));
 		assertEquals(before, engine.getVenueState().get());
@@ -306,6 +307,7 @@ class ExtensionRouteTest {
 		engine.enableAdapter("test");
 		assertNull(read("x/test/scratch", alice));
 		assertEquals(Strings.create("bob scratch"), read("x/test/scratch", bob));
-		assertThrows(AuthException.class, () -> retained.cursor().write(retained.remainingKeys(), Strings.create("late")));
+		assertThrows(AuthException.class,
+			() -> retained.workspace().write(retained.keys(), retained.from(), Strings.create("late")));
 	}
 }

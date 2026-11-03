@@ -53,16 +53,6 @@ public final class Workspace extends ACoviaComponent<ACell>
 		return new Workspace(draft);
 	}
 
-	/** The value at {@code keys[from..]}, or null when absent. */
-	public ACell read(ACell[] keys, int from) {
-		return ValuePath.get(cursor().get(), keys, from);
-	}
-
-	/** Whether a value is at {@code keys[from..]}; a stored null counts. */
-	public boolean contains(ACell[] keys, int from) {
-		return ValuePath.contains(cursor().get(), keys, from);
-	}
-
 	/**
 	 * Puts {@code value} at {@code keys[from..]}.
 	 *

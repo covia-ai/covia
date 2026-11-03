@@ -93,17 +93,6 @@ public final class DataComponent extends ACoviaComponent<ACell> {
 	}
 
 	@Override
-	public ACoviaComponent<?> resolve(ACell[] more, int at) {
-		if (at >= more.length) return this;
-		ACell[] rest = Arrays.copyOfRange(more, at, more.length);
-		ACell[] joined = Arrays.copyOf(keys, keys.length + rest.length);
-		System.arraycopy(rest, 0, joined, keys.length, rest.length);
-		AString below = (address == null) ? null
-			: Strings.create(address + WorkspaceRoot.buildSubPath(rest));
-		return new DataComponent(context, below, cursor(), joined, from, edits);
-	}
-
-	@Override
 	public ACell read() {
 		return deepGet(cursor().get(), keys, from);
 	}

@@ -3,8 +3,6 @@ package covia.lattice;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
-import convex.core.data.Strings;
-import convex.lattice.cursor.AForkableCursor;
 import covia.adapter.CoviaAdapter;
 import covia.exception.WrongScopeException;
 import covia.venue.RequestContext;
@@ -21,20 +19,17 @@ import covia.venue.RequestContext;
  * of record. When a task is focused its id takes precedence over the run-loop's
  * own infrastructure Job id.</p>
  *
- * <p>{@code t/foo} resolves to the Job record cursor at {@code j/<jobId>} with
- * keys {@code ["temp", "foo"]}: the same shape as a physical path, navigated
- * by the adapter's ordinary deep read/write. The owning Job must already exist;
- * scoped scratch never creates it.</p>
+ * <p>{@code t/foo} resolves to the Job's scratch workspace at
+ * {@code j/<jobId>/temp} with the keys {@code foo}. The owning Job must
+ * already exist; scoped scratch never creates it.</p>
  *
  * <p>If neither scope is present the resolver throws helpfully rather than
  * silently returning the wrong location.</p>
  */
 public class TempNamespaceResolver implements NamespaceResolver {
 
-	static final AString K_TEMP = Strings.intern("temp");
-
 	@Override
-	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
 		Blob jobId = ctx.getJobId();
@@ -52,10 +47,7 @@ public class TempNamespaceResolver implements NamespaceResolver {
 				"Cannot use 't/' prefix outside job or task scope (requires agentId+taskId or jobId on RequestContext)");
 		}
 
-		AForkableCursor<ACell> jobCursor = adapter.ensureUser(ctx).recordCursor(Namespace.J, scopedJobId);
-		ACell[] rewritten = keys.clone();
-		rewritten[0] = K_TEMP;
-		return new ResolvedNamespace(new WorkspaceRoot(jobCursor, adapter.engine.getVenueState().getContext(), false), rewritten, true);
+		return new Position(adapter.ensureUser(ctx).jobs().scratch(scopedJobId), keys, 1);
 	}
 
 	@Override

@@ -1,6 +1,7 @@
 package covia.venue;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -16,14 +17,15 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import java.util.function.Consumer;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
+import covia.lattice.Workspace;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 
 /**
  * Materialises venue-owned bootstrap state as one native lattice transaction.
  *
- * <p>The {@link WorkspaceRoot} transaction supplies a private draft of the
+ * <p>The {@link Workspace} transaction supplies a private draft of the
  * venue-owned {@code w/global} workspace, retries conflicts and commits atomically.
  * Catalog and introspection writes are validated against that draft; an exception
  * discards the entire attempt. No operation dispatch or Job records are involved.</p>
@@ -38,7 +40,6 @@ final class VenueBootstrapMaterializer {
 
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VenueBootstrapMaterializer.class);
 
-	private static final AString K_W = Strings.intern("w");
 	private static final AString K_GLOBAL = Strings.intern("global");
 	private static final AString K_OPERATIONS = Strings.intern("operations");
 	private static final AString K_KERNEL = Strings.intern("kernel");
@@ -49,11 +50,11 @@ final class VenueBootstrapMaterializer {
 
 	private final Engine engine;
 	/** Live workspace or the callback-confined transaction draft. */
-	private final WorkspaceRoot workspace;
+	private final Workspace workspace;
 	private final List<String> adapterNames;
 	private final long startedAt;
 
-	private VenueBootstrapMaterializer(Engine engine, WorkspaceRoot draft, List<String> adapterNames, long startedAt) {
+	private VenueBootstrapMaterializer(Engine engine, Workspace draft, List<String> adapterNames, long startedAt) {
 		this.engine = engine;
 		this.workspace = draft;
 		this.adapterNames = adapterNames;
@@ -62,8 +63,7 @@ final class VenueBootstrapMaterializer {
 
 	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
 		var user = engine.getVenueState().users().ensure(engine.getDIDString());
-		var workspace = new WorkspaceRoot(user.workspaceRoot().child(K_W)
-			.withDefault(Maps.empty()).path(K_GLOBAL), engine.getVenueState().getContext(), false);
+		var workspace = new Workspace(user.workspace().cursor().withDefault(Maps.empty()).path(K_GLOBAL));
 		var names = engine.getAdapterNamesInRegistrationOrder();
 		long started = System.currentTimeMillis();
 		workspace.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
@@ -332,10 +332,11 @@ final class VenueBootstrapMaterializer {
 		return summary;
 	}
 
-	/** Writes to the draft, then verifies the staged view immediately. */
+	/** Writes to the draft, creating the levels above, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
 		ACell[] keys = toWorkspacePath(virtualPath);
-		workspace.write(keys, value);
+		workspace.createPath(Arrays.copyOf(keys, keys.length - 1), 0);
+		workspace.write(keys, 0, value);
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {
 			throw new IllegalStateException(
@@ -344,13 +345,13 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return workspace.read(toWorkspacePath(virtualPath));
+		return workspace.read(toWorkspacePath(virtualPath), 0);
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
 		ACell[] keys = toWorkspacePath(virtualPath);
-		workspace.delete(keys);
+		workspace.delete(keys, 0);
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
@@ -359,7 +360,7 @@ final class VenueBootstrapMaterializer {
 
 	/** Rewrites caller-visible v/x to x relative to the transactional w/global root. */
 	private static ACell[] toWorkspacePath(String virtualPath) {
-		ACell[] virtualKeys = WorkspaceRoot.parseStringPath(virtualPath);
+		ACell[] virtualKeys = ValuePath.parse(virtualPath);
 		if (virtualKeys.length < 2 || !"v".equals(virtualKeys[0].toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}

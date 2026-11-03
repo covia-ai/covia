@@ -23,16 +23,16 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 	public static final String READ_ONLY = "Extension path is unavailable or read-only";
 	public static final String UNAVAILABLE = "Extension adapter is no longer active";
 
-	@Override public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
+	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
 		return resolve(ctx, adapter, keys, Capability.CRUD_READ);
 	}
 
-	@Override public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys, AString ability) {
+	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys, AString ability) {
 		return resolveForUser(ctx, adapter, ctx == null ? null : ctx.getUserDID(), keys, ability);
 	}
 
 	/** Original authority is checked against the addressed owner; hooks receive that user's context. */
-	public static ResolvedNamespace resolveForUser(RequestContext ctx, CoviaAdapter covia,
+	public static Position resolveForUser(RequestContext ctx, CoviaAdapter covia,
 			AString owner, ACell[] keys, AString ability) {
 		if (ctx == null || ctx.getCallerDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
 		for (ACell key : keys) {
@@ -43,7 +43,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 				throw new InvalidInputException(INVALID_PATH);
 			}
 		}
-		AString resource = Strings.create(owner + WorkspaceRoot.buildSubPath(keys));
+		AString resource = Strings.create(owner + ValuePath.format(keys));
 		covia.engine.requireLocalAccess(ctx, resource, ability);
 		String name = keys.length < 2 ? null : keys[1].toString();
 		AAdapter adapter = name == null ? null : covia.engine.getAdapter(name);
@@ -68,7 +68,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 				return value;
 			}
 		};
-		return new ResolvedNamespace(new WorkspaceRoot(guarded, covia.engine.getVenueState().getContext(), false), path, false);
+		return new Position(new Workspace(guarded), path, 0);
 	}
 
 	private static void requireWritable(AAdapter adapter, RequestContext ctx, ACell[] path) {

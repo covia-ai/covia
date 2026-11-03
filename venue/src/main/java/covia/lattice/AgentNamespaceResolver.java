@@ -12,10 +12,9 @@ import covia.venue.RequestContext;
  * Resolves the {@code n/} virtual namespace to the running agent's private
  * workspace within its agent record.
  *
- * <p>{@code n/notes/foo} resolves to the agent-record cursor at
- * {@code g/<agentId>} with remaining keys {@code ["n", "notes", "foo"]}.
- * Positioning at the containing record gives every virtual namespace the same
- * resolver contract and lets the agent record lattice stamp the deep write.</p>
+ * <p>{@code n/notes/foo} resolves to the workspace at {@code g/<agentId>/n}
+ * with the keys {@code notes/foo}. The agent record stamps a change there, and
+ * a change is refused while the record does not exist.</p>
  */
 public class AgentNamespaceResolver implements NamespaceResolver {
 
@@ -23,7 +22,7 @@ public class AgentNamespaceResolver implements NamespaceResolver {
 	private static final AString K_N = Strings.intern("n");
 
 	@Override
-	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
 		AString agentId = ctx.getAgentId();
 		if (agentId == null) {
 			throw new WrongScopeException("Cannot use 'n/' prefix outside agent scope");
@@ -31,9 +30,7 @@ public class AgentNamespaceResolver implements NamespaceResolver {
 
 		AForkableCursor<ACell> agentCursor = adapter.ensureUser(ctx)
 			.recordCursor(Namespace.G, agentId);
-		ACell[] rewritten = keys.clone();
-		rewritten[0] = K_N;
-		return new ResolvedNamespace(new WorkspaceRoot(agentCursor, adapter.engine.getVenueState().getContext(), false), rewritten, true);
+		return new Position(Workspace.inRecord(agentCursor, K_N), keys, 1);
 	}
 
 	@Override

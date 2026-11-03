@@ -1,14 +1,21 @@
 package covia.venue;
 
+import java.util.Arrays;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.lattice.Position;
+import covia.lattice.ValuePath;
+import covia.lattice.Workspace;
 import covia.lattice.WorkspaceRoot;
 import convex.lattice.cursor.StampedCursor;
 
@@ -26,8 +33,8 @@ import convex.lattice.cursor.StampedCursor;
  *   <li>{@code "j"} — user's jobs ({@link Jobs})</li>
  *   <li>{@code "g"} — user's agents</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
- *   <li>{@code "w"} — user's workspace data ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
- *   <li>{@code "o"} — user's operations ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
+ *   <li>{@code "o"} — user's operations ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "h"} — HITL requests ({@link Inbox}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "a"} — content-addressed assets</li>
  * </ul>
@@ -50,19 +57,27 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	private final AString did;
 
-	/** Framework-internal navigation for trusted venue-owned workspace state. */
+	/** Framework-internal read of a path in this user's record. */
 	ACell readInternalPath(ACell[] keys) {
-		return workspaceRoot().read(keys);
+		return resolve(keys, 0).read();
 	}
 
-	/** Framework-internal atomic write; authority is possession of this user cursor. */
+	/**
+	 * Framework-internal atomic write to a workspace path, creating the levels
+	 * above it; authority is possession of this user cursor.
+	 */
 	void writeInternalPath(ACell[] keys, ACell value) {
-		workspaceRoot().write(keys, value);
+		Position target = resolve(keys, 0);
+		target.workspace().transact(draft -> {
+			draft.createPath(Arrays.copyOf(keys, keys.length - 1), target.from());
+			draft.write(keys, target.from(), value);
+		});
 	}
 
-	/** Framework-internal atomic delete; authority is possession of this user cursor. */
+	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
 	boolean deleteInternalPath(ACell[] keys) {
-		return workspaceRoot().delete(keys);
+		Position target = resolve(keys, 0);
+		return target.workspace().delete(keys, target.from());
 	}
 
 	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
@@ -77,16 +92,30 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return new WorkspaceRoot(cursor(), getContext(), true);
 	}
 
+	/** This user's workspace ({@code w}). */
+	public Workspace workspace() {
+		return new Workspace(wrapped(Namespace.W));
+	}
+
+	/** This user's operation definitions ({@code o}), held as a workspace. */
+	public Workspace operations() {
+		return new Workspace(wrapped(Namespace.O));
+	}
+
+	/** The data of a namespace held in an {@code {updated, data}} record, which a change stamps. */
+	private AForkableCursor<ACell> wrapped(AString namespace) {
+		return StampedCursor.create(cursor().withDefault(Maps.empty()).path(namespace),
+				context::currentTimestamp, Covia::stampUpdated)
+			.withDefault(Maps.empty()).path(Covia.WORKSPACE_DATA);
+	}
+
 	/**
-	 * Internal namespace-resolution bridge; domain callers use agent and job
-	 * methods. A job's record need not exist: task scratch requires it before
-	 * writing and reads null without it.
+	 * Internal namespace-resolution bridge to an agent's record, which need not
+	 * exist; domain callers use the agent methods.
 	 */
 	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
 		if (Namespace.G.equals(namespace)) return new AgentState(context, agentStorage(id), (AString) id).cursor();
-		if (Namespace.J.equals(namespace)) return new JobState(context,
-			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J, id)).cursor();
-		throw new IllegalArgumentException("Not an agent or job namespace: " + namespace);
+		throw new IllegalArgumentException("Not an agent namespace: " + namespace);
 	}
 
 	private AForkableCursor<ACell> agentStorage(ACell id) {
@@ -223,7 +252,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** This user's HITL inbox ({@code h/}). */
 	public Inbox inbox() {
-		return new Inbox(workspaceRoot().child(Namespace.H));
+		return new Inbox(wrapped(Namespace.H));
 	}
 
 	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
@@ -232,10 +261,35 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	}
 
 	@Override
-	public ACoviaComponent<?> resolve(ACell[] keys, int from) {
-		if (from < keys.length && Namespace.H.equals(keys[from])) return inbox().resolve(keys, from + 1);
-		if (from < keys.length && Namespace.J.equals(keys[from])) return jobs().resolve(keys, from + 1);
+	public Position resolve(ACell[] keys, int from) {
+		if (from < keys.length) {
+			ACell key = keys[from];
+			if (Namespace.W.equals(key)) return workspace().resolve(keys, from + 1);
+			if (Namespace.O.equals(key)) return operations().resolve(keys, from + 1);
+			if (Namespace.H.equals(key)) return inbox().resolve(keys, from + 1);
+			if (Namespace.J.equals(key)) return jobs().resolve(keys, from + 1);
+			if (Namespace.S.equals(key)) return secrets().resolve(keys, from + 1);
+		}
 		return super.resolve(keys, from);
+	}
+
+	/** The user's record, its jobs in their current state. */
+	@Override
+	public ACell read() {
+		AMap<AString, ACell> record = RT.ensureMap(cursor().get());
+		if (record == null || !record.containsKey(Namespace.J)) return record;
+		return record.assoc(Namespace.J, jobs().read());
+	}
+
+	/** Data no namespace component claims is read from the record as stored. */
+	@Override
+	public ACell read(ACell[] keys, int from) {
+		return (from < keys.length) ? ValuePath.get(cursor().get(), keys, from) : read();
+	}
+
+	@Override
+	public boolean contains(ACell[] keys, int from) {
+		return ValuePath.contains(cursor().get(), keys, from);
 	}
 
 }

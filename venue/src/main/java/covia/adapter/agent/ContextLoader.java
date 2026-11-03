@@ -378,8 +378,8 @@ public class ContextLoader {
 	}
 
 	/**
-	 * Reads a value from the user's lattice namespace using the internal
-	 * cursor-based path resolution (same as WorkspaceRoot.read).
+	 * Reads a value from the user's lattice namespace using the same path
+	 * resolution as {@code covia:read}.
 	 */
 	String resolveWorkspacePath(String path, RequestContext ctx) {
 		requireReadAccess(Strings.create(path), ctx);
