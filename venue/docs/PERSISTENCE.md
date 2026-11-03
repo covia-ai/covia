@@ -110,8 +110,8 @@ connect to their existing `LatticeHost`, or open an application over their store
 Restart tests use the same host model as production. The host API migration
 preserves record formats; the separate adapter storage migration is described below.
 
-`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `JobState`, `AuthState`, `ScheduleState`, `AdapterState`, `AssetStore`, `SecretStore` and
-`WorkspaceRoot` implement upstream `TransactionalComponent`. Ordinary domain
+`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `Jobs`, `JobState`, `AuthState`, `ScheduleState`, `AdapterState`, `AssetStore`, `SecretStore` and
+`Workspace` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
 writes, obtain its children from the supplied draft, and keep external I/O out
@@ -160,7 +160,7 @@ agent.transact(draft -> {
 venue.transact(draft -> {
     var user = draft.users().ensure(did);
     user.ensureAgent("assistant", config, null);
-    user.workspaceRoot().write(WorkspaceRoot.parseStringPath("w/ready"), CVMBool.TRUE);
+    user.workspace().write(ValuePath.parse("ready"), 0, CVMBool.TRUE);
 });
 ```
 
@@ -211,10 +211,11 @@ leader election. Live concurrent work uses atomic updates and retrying transacti
 not independent fork/publication policies. Incoming venue merges preserve remote
 stamps; local edits pass through `StampedCursor`.
 
-Workspace path operations live in `WorkspaceRoot`; adapters handle request
-routing and authority checks before calling this domain API. Raw cursor access
+Workspace path operations live in `Workspace`; operations such as
+`covia:write` handle request routing, authority checks and the creation of
+missing levels before calling this domain API. Raw cursor access
 remains an internal integration primitive, not an authorised public endpoint.
-Bootstrap catalog changes use `WorkspaceRoot.transact` over the narrow
+Bootstrap catalog changes use `Workspace.transact` over the narrow
 venue-owned workspace. The materialiser is ordinary code operating on that draft,
 with no component/storage/rebinding wrapper of its own. DLFS file writes are live component edits;
 publication still belongs to Engine's host sweep or flush.

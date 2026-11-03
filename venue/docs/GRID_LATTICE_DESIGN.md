@@ -310,36 +310,40 @@ paths stay with `Engine.resolvePath` and federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.
-`resolve(keys, from)` returns the component at that position. It sees no
-request, takes as many keys per step as the component's rules cover (as cursor
-paths do), and builds each child only from its own cursor, so a walk from a
-draft root stays in the draft. `read()` returns the value as callers see it:
-a job reads as its current state.
+`resolve(keys, from)` returns the `Position` there: the component that owns it
+and the keys below that component. It sees no request, takes as many keys per
+step as the component's rules cover (as cursor paths do), and builds each child
+only from its own cursor, so a walk from a draft root stays in the draft.
+`read()` returns the value as callers see it: a job reads as its current state.
 
 | Component | Routes |
 |-----------|--------|
-| `VenueState` | a user's DID to their `User`; `x/<adapter>` to the adapter component |
-| `User` | `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `WorkspaceRegion` |
+| `VenueState` | a user's DID to their `User`; `x/<adapter>` to the adapter's `Workspace` view |
+| `User` | `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `Workspace` |
 | `Jobs` | a job id, in hex, to its `JobState`; an id that names no job reads as null |
-| `AgentState` | `sessions/<id>` to `SessionState` |
+| `JobState` | `temp` to the job's `Workspace` |
+| `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>` to `SessionState` |
+| `SessionState` | `c` to the session's `Workspace` |
 
-`DataComponent` is the fallback for a position no other component claims,
-reading keys by value type: a map key, a vector index, an Index key. Because
-that navigation is on values, its position is the nearest container's cursor
-plus the keys below it.
+Keys below the last component a path reaches are read by value type
+(`ValuePath`): a map key, a vector index, an Index key. A stored null counts as
+present.
 
 **Operations define writability.** A component's domain operations are the
 only ways to change it. Each makes its own checks and then changes its cursor
-in one atomic update; cursors carry no write policy. `DataComponent`'s
-operations are `write`, `append`, `delete` and `update` (a function of the
-current value). The component above it supplies its edits, which apply a
-change to the container atomically, or none, leaving its data read-only:
-`WorkspaceRegion` for `w` and `o`, `AgentState` for `n`, `SessionState` for
-`c`, `JobState` for `temp`, whose edits also require the record to exist.
-`SecretStore` accepts only removal of a whole secret. Refusals are typed and
-carry a reason from a constant on the refusing component. Checks that depend on
-the stored value run inside the update: creating missing levels needs write
-authority at the nearest level that exists.
+in one atomic update; cursors carry no write policy. `Workspace` is the
+component for a flexible data area reached by path. Its operations are
+`write`, `append`, `delete`, `update` (a function of the current value) and
+`createPath`, and only `createPath` creates a missing level. An area inside a
+record (`n`, `c`, `temp`) refuses a change while the record does not exist. A
+position in any other component is read-only, except that `SecretStore`
+accepts removal of a whole secret. Refusals are typed and carry a reason from a
+constant on the refusing component.
+
+**Paths are created above the component.** `covia:write`, `append` and `copy`
+create the missing levels of their path and make their change in one
+transaction. Creating a key changes the map that holds it, so they ask for
+write authority at the nearest level that exists, inside the transaction.
 
 **Engine policy reaches components through `VenueContext`.** One instance is
 shared by the venue's components and passed down unchanged. It holds the write
@@ -522,11 +526,11 @@ The **interior** of `:value` (`:version`, `:assets`, `:storage`, `:did`,
 its own. Writes are stamped on the way up by a stamp-on-write boundary (Convex
 `StampedCursor`) whose time comes from the `VenueContext` write clock.
 
-The `w`, `o` and `h` namespaces are `WorkspaceRoot` regions: a
-`{updated, data}` container whose `data` is what callers see. Navigating
-`w/foo` crosses the container and reads or replaces `w.data.foo`; changed
-writes keep the container and ratchet `updated` from the write clock. Callers
-never address `data`.
+The `w`, `o` and `h` namespaces are `{updated, data}` containers whose `data`
+is what callers see; `User` presents each `data` through a stamp-on-write
+boundary on its container. Navigating `w/foo` crosses the container and reads
+or replaces `w.data.foo`; changed writes keep the container and ratchet
+`updated` from the write clock. Callers never address `data`.
 
 `:schedule` keeps its extensible `{updated, events, ...}` record shape. Writes
 under `events` go through a stamp-on-write boundary, so they keep sibling
@@ -680,18 +684,17 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
-| `WorkspaceRoot` (Covia) | View boundary — presents a `{updated, data}` container as its `data`, stamping `updated` on write; merge remains at the enclosing venue |
 | `LatticeContext` | Application policy for clock, signing and owner verification, used by the root merge; installed once on `CoviaApplication`, which also signs the venue record with it |
 | `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) and the access check the engine installs |
-| `ACoviaComponent`, `DataComponent` (Covia) | Base of addressable components (`resolve`, `read`); data no component claims, edited only through edits its parent supplies (§4.6) |
+| `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the keys below it (§4.6) |
+| `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |
 | `Jobs` (Covia) | A user's jobs at `j`, keyed by job id, each its `JobState`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions
 
-`covia.lattice.Covia` defines the hierarchy from standard convex-core types
-plus one Covia view for the workspace envelope:
+`covia.lattice.Covia` defines the hierarchy from standard convex-core types:
 
 | Definition | Type | Purpose |
 |------------|------|---------|
@@ -704,6 +707,6 @@ plus one Covia view for the workspace envelope:
 | `j` / each Job | `IndexLattice` → `StampedCursor` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
 | `g` / each agent | `MapLattice` → `StampedCursor` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
 | `s` / `a` | `JSONLattice` | Plain structural navigation |
-| `w` / `o` / `h` | `WorkspaceRoot` | Existing `{updated, data}` container presented as its `data` |
+| `w` / `o` / `h` | `StringKeyedLattice` (`Covia.WORKSPACE_RECORD`) | Existing `{updated, data}` container; `User` presents its `data` through a `StampedCursor` on the container |
 | `:grid → :meta` | `CASLattice` | Shared content-addressed metadata (multi-writer union) |
 | `:dlfs` | `OwnerLattice` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |

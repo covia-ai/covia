@@ -161,9 +161,6 @@ Trickiest; aligns with the existing P2 TODO. Propose design first.
 - [ ] Single-pass `resolveExternalPath(cursor, jsonKeys)` (walk lattice + value
   together); replace `readPath`'s O(n²) descending-prefix loop. Used by
   `read`/`slice`/`list`/`inspect`.
-- [ ] Collapse `deepGet`/`deepSet`/`deepDelete`/`deepAppend` into one
-  `deepUpdate(root, keys, from, leafOp)` reusing `navigateInto`'s type-dispatch;
-  hoist the `==2` split into one `applyWrite(...)`.
 - [ ] One `requireWritable(ctx, jsonKeys)` (collapse
   `isWritableNamespace`/`validateWritablePath` + the asymmetric `canWrite`
   check).
