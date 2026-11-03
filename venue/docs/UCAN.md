@@ -704,6 +704,7 @@ record is an entry no grant of theirs covers.
 | `dlfs:deleteDrive` | `{ with: "dlfs/<drive>", can: "crud/delete" }` |
 | `secret:list` | `{ with: "s/", can: "crud/read" }` (names only) |
 | `hitl:list` | `{ with: "h/", can: "crud/read" }` |
+| `GET /api/v1/jobs`, and the caller's job count in `/status` | `{ with: "j/", can: "crud/read" }`; `/status` leaves out the count without it |
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |

@@ -1243,22 +1243,36 @@ public class JobManager {
 		return new Job(record);
 	}
 
+	/** The collection the job listing reads: the caller's jobs. */
+	private static final AString JOB_RECORDS = Strings.intern("j/");
+
 	/**
 	 * Gets the jobs Index for the given request context.
-	 * Reads directly from the user's per-user lattice.
+	 * Reads directly from the user's per-user lattice. Listing the jobs reads
+	 * their collection, so the caller needs {@code crud/read} on {@code j/}.
+	 *
+	 * @throws AuthException when the caller may not read {@code j/}
 	 */
 	public Index<Blob, ACell> getJobs(RequestContext ctx) {
 		AString did = ctx.getUserDID();
 		if (did == null) return Index.none();
+		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return Index.none();
 		return user.jobs().getAll();
 	}
 
-	/** Caller-scoped count, without materialising a listing. */
+	/**
+	 * Caller-scoped count, without materialising a listing; read-checked as
+	 * {@link #getJobs}.
+	 *
+	 * @throws AuthException when the caller may not read {@code j/}
+	 */
 	public long countJobs(RequestContext ctx) {
 		AString did = ctx.getUserDID();
-		User user = did == null ? null : engine.getVenueState().users().get(did);
+		if (did == null) return 0;
+		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
+		User user = engine.getVenueState().users().get(did);
 		return user == null ? 0 : user.jobs().count();
 	}
 

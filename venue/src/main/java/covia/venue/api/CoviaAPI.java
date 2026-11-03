@@ -218,11 +218,16 @@ public class CoviaAPI extends ACoviaAPI {
 		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx, null, engine().config().getTrustedProxies())));
 
 		// Add the stats, plus the caller's own job count (#229) — anonymous
-		// callers see the shared public identity's count.
+		// callers see the shared public identity's count. A caller who may not
+		// read its jobs gets no count; the status itself is for anyone.
 		AMap<AString,ACell> stats = engine().getStats();
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		stats = stats.assoc(Strings.intern("userJobs"),
-			RT.cvm(engine().jobs().countJobs(rctx)));
+		try {
+			stats = stats.assoc(Strings.intern("userJobs"),
+				RT.cvm(engine().jobs().countJobs(rctx)));
+		} catch (AuthException e) {
+			// no count
+		}
 		result=result.assoc(STATS_FIELD,stats);
 
 		// Curated admission-policy fields (#255) — safe to state to any caller,

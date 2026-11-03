@@ -224,6 +224,22 @@ public class AccessControlTest {
 	}
 
 	@Test
+	public void testListingJobsNeedsReadOnTheJobs() {
+		RequestContext aliceCtx = RequestContext.of(alice);
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("message", "listed"), aliceCtx);
+		RequestContext invokeOnly = aliceCtx.withCaps(Vectors.of(
+			Capability.create(Strings.create(""), Strings.create("invoke"))));
+		assertThrows(AuthException.class, () -> engine.jobs().getJobs(invokeOnly),
+			"a caller who may not read its jobs may not list them");
+		assertThrows(AuthException.class, () -> engine.jobs().countJobs(invokeOnly));
+
+		RequestContext readsJobs = aliceCtx.withCaps(Vectors.of(
+			Capability.create(Strings.create("j/"), Capability.CRUD_READ)));
+		assertNotNull(engine.jobs().getJobs(readsJobs).get(job.getID()));
+		assertEquals(1, engine.jobs().countJobs(readsJobs));
+	}
+
+	@Test
 	public void testInternalSeesVenueJobs() {
 		// Internal requests see the venue's own DID jobs
 		Job venueJob = engine.jobs().invokeOperation(
