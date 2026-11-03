@@ -476,9 +476,8 @@ class AuthResultTest {
 
 	@Test
 	void providerEvidenceUsesVerifiedIssuerAndSubject() throws Exception {
-		// Swapping the auth adapter bumps the adapter registry version, which
-		// refuses verifications in flight on that engine (AuthMethods.CHANGED).
-		// This class's tests run concurrently, so this one swaps on its own engine.
+		// Swapping the auth adapter changes how every concurrent test on that
+		// engine authenticates, so this one swaps on its own engine.
 		Engine isolated = Engine.createTemp(Maps.of(Config.HOSTNAME, "auth-result.example"));
 		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
 		generator.initialize(2048);

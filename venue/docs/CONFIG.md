@@ -969,9 +969,9 @@ This setting does not change public/anonymous access, admission or capabilities.
 Invalid shapes, unknown adapters/selectors and ambiguous references fail startup.
 Host-installed adapters may be supplied in the pre-start hook. Disabling or
 removing an adapter immediately withdraws its verifiers; enabling it restores
-valid references. Verifications overlapping an adapter registry/configuration
-change are rejected and may be retried. Successful reconfiguration invalidates
-in-flight verification; rejected configuration leaves the old settings intact.
+valid references. A verification under way when an adapter changes completes as
+it began; later ones use the new configuration. Rejected configuration leaves
+the old settings intact.
 Bindings themselves are startup configuration, with no separate runtime registry.
 
 `VenueAuthenticator.verify(methodId, input)` accepts transient Convex values

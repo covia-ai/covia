@@ -91,7 +91,7 @@ from admission and capabilities. Challenge the following before extending them:
 | `Proof` contains only a timestamp and properties; the verifier takes only a method id and method-owned input. | Request binding/replay protection is currently a trusted-verifier obligation, not an enforced core mechanism. Before copying proof into execution contexts, demonstrate a concrete verifier binding it to its intended request/action. An age check alone does not prove that binding. Do not add guessed generic nonce/request fields. |
 | Policies accept arbitrary exact property names, while the target design promises validation of attainable evidence and central assurance caps. `AuthenticationMethods` declares verifier functions only. | Those promises are not implemented. Agree the meaning and trusted issuer of the first properties using a real method. Do not grow a declaration registry or assurance hierarchy merely to support speculative configuration validation. |
 | `RequestContext` already wraps authority and has explicit propagation into nested operations, jobs and agents. `CapabilityGate` already evaluates operation-based conditions on grants. | Trace the first protected action through these existing paths before adding another propagation/enforcement system. Capability caveats only constrain the grants carrying them, so they cannot automatically substitute for a venue-wide evidence requirement. Decide where the mandatory action condition belongs and which evidence survives each transition. |
-| The adapter revision check rejects verification across any adapter change, but returns no durable verifier/configuration provenance in the result. | This provides conservative in-flight invalidation only. It neither revokes returned results nor establishes session continuity across replacement. Keep that limit explicit; do not add per-method epochs or session migration machinery before a concrete consumer requires them. |
+| A verification uses the binding it resolved when it started, even if the adapter changes before it completes, and its result carries no durable verifier/configuration provenance. | A result is valid as of the verification's start, as if the request had arrived a moment earlier. Nothing revokes returned results or establishes session continuity across replacement. Keep that limit explicit; do not add per-method epochs or session migration machinery before a concrete consumer requires them. |
 | `toData()` gives results and requirements immutable Convex representations, including a projection of request proof. | Representation is not persistence policy or portable trust. Define authoritative ownership, allowed reads/writes, and what may be persisted for each actual record. Never restore request proof as fresh evidence from a stored projection. No new lattice region is needed for this review. |
 
 The `standard`/`strong`/`hard` profiles, `auth.policy` configuration and
@@ -386,7 +386,8 @@ and [OPERATIONS.md](OPERATIONS.md):
   duplicate names within that adapter fail validation. Reconfiguration
   validates the complete proposed bindings and contributions before publication;
   rejection leaves the previous configuration intact. Withdrawing a method takes effect
-  at the authentication boundary even for an in-flight ceremony completion.
+  for every verification that starts after it, including the completion of a
+  ceremony begun earlier.
   Policy declarations must be validated against available methods before
   serving requests; unknown methods and unattainable requirements fail closed.
 
@@ -402,10 +403,10 @@ is checked eagerly; `Engine.launch` resolves references after the host assembly
 hook and before recovery/workers/listeners. A manually assembled engine's host
 can call `VenueAuthenticator.validateMethods()` once installation is complete.
 Live replacement validates references before publishing the new adapter.
-Verification runs outside the engine monitor and rejects completion if the
-existing adapter revision changed, including disable/re-enable and successful
-reconfiguration. This conservative check also rejects a verification overlapping
-an unrelated adapter change; retry against the current configuration.
+Each verification resolves its binding under the engine monitor when it starts,
+then runs the verifier outside it. A verification under way when an adapter is
+disabled, replaced or reconfigured completes as it began; every later one uses
+the current configuration.
 
 The built-in `auth` adapter supplies `keyJwt`, `ucanBearer` and `providerToken`,
 delegating to the existing verifiers and Convex primitives. It is installed

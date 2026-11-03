@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -205,7 +204,7 @@ class AuthMethodsTest {
 		} finally { engine.close(); }
 	}
 
-	@Test void verificationDoesNotHoldLifecycleLockAndRejectsStaleCompletion() throws Exception {
+	@Test void verificationDoesNotHoldLifecycleLockAndCompletesAsItBegan() throws Exception {
 		for (String change : List.of("cycle", "configure", "replace", "remove")) {
 			Engine engine = Engine.createTemp(config(fixtureBindings()));
 			Fixture fixture = new Fixture(true);
@@ -225,9 +224,8 @@ class AuthMethodsTest {
 					}
 				}).get(5, TimeUnit.SECONDS);
 				fixture.release.countDown();
-				ExecutionException failure = assertThrows(ExecutionException.class, () -> pending.get(5, TimeUnit.SECONDS));
-				assertInstanceOf(AuthException.class, failure.getCause());
-				assertEquals(AuthMethods.CHANGED, failure.getCause().getMessage());
+				assertEquals(ALICE, pending.get(5, TimeUnit.SECONDS).userDID(),
+					"a verification under way when the adapter changes (" + change + ") completes as it began");
 			} finally { fixture.release.countDown(); engine.close(); }
 		}
 	}

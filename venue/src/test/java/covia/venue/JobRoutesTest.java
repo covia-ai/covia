@@ -73,7 +73,10 @@ public class JobRoutesTest {
 			assertTrue(!handle.isFinished());
 			release.countDown();
 			assertEquals(Strings.create("simple request"), TestServer.COVIA.awaitJobResult(handle.getID()).get(5, TimeUnit.SECONDS));
-		} finally { release.countDown(); }
+		} finally {
+			release.countDown();
+			TestServer.ENGINE.removeAdapter("blocking-submission-test");
+		}
 	}
 
 	private final String base = TestServer.BASE_URL;
