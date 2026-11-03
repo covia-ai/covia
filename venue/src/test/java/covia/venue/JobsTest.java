@@ -3,7 +3,11 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
 
@@ -14,10 +18,13 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
+import covia.lattice.Covia;
 import covia.lattice.Namespace;
 
 /** A user's jobs, on their own and reached by path through the user. */
@@ -29,7 +36,11 @@ public class JobsTest {
 	private static final AString PREV = Strings.intern("prev");
 
 	private static User user() {
-		return new User(VenueContext.create(() -> NOW), Cursors.<ACell>root(Maps.empty()),
+		return user(() -> NOW);
+	}
+
+	private static User user(Supplier<CVMLong> clock) {
+		return new User(VenueContext.create(clock), Cursors.<ACell>root(Maps.empty()),
 			Strings.create("did:key:jobs"));
 	}
 
@@ -50,6 +61,36 @@ public class JobsTest {
 		assertNull(jobs.get(ID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE)),
 			"an update to a removed job must not recreate it");
 		assertEquals(0, jobs.count());
+	}
+
+	@Test
+	public void testTransactionCommitsAdmissionsRemovalsAndEditsTogether() {
+		AtomicLong clock = new AtomicLong(NOW.longValue());
+		User user = user(() -> CVMLong.create(clock.get()));
+		Jobs jobs = user.jobs();
+		Blob other = Blob.fromHex("0ffe");
+		jobs.create(other, Maps.of(Fields.ID, other, Fields.STATUS, Status.STARTED));
+		ACell before = user.get();
+		clock.set(200);
+
+		assertThrows(IllegalStateException.class, () -> jobs.transact(draft -> {
+			draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
+			draft.remove(other);
+			throw new IllegalStateException("rollback");
+		}));
+		assertEquals(before, user.get(), "a failed transaction changes nothing");
+
+		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "first");
+		jobs.transact(draft -> {
+			assertTrue(draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING)));
+			assertTrue(draft.get(ID).appendHistory(message));
+			assertTrue(draft.remove(other));
+			assertNull(jobs.get(ID).getRecord(), "the draft is private until it commits");
+		});
+		assertEquals(Vectors.of(message), jobs.get(ID).getRecord().get(Fields.HISTORY));
+		assertNull(jobs.get(other).getRecord());
+		assertEquals(CVMLong.create(200), RT.getIn(user.get(), Covia.K_META, Fields.UPDATED),
+			"the commit stamps the user like any other write");
 	}
 
 	@Test
