@@ -151,8 +151,11 @@ public class JobMirrorTest {
 		String gateName = "mirror-recorded-" + ctx.getUserDID();
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
 			Job call = engine.jobs().invokeOperation(HOLD, Maps.of("gate", gateName), ctx);
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the call is running");
 			assertTrue(call.isRecorded());
 			assertSame(call, engine.jobs().mirror(call), "a recorded call needs no mirror");
+			gate.release();
+			awaitFinished(call);
 		}
 	}
 
