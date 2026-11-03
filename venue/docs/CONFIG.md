@@ -2076,8 +2076,9 @@ the agent with its queued work kept (`docs/AGENT_LOOP.md` §3.4). Each tool
 call is bounded by `toolCallTimeoutMs`
 (default 300s, minimum 1s). A tool call still running at its limit is not
 cancelled: the model is told the recorded job it is running as, and in a
-session its outcome arrives as a message when it ends, after a restart too
-(`docs/AGENT_LOOP.md` §3.4.2). `recordToolCalls: true` in an agent's config
+session its outcome arrives when it ends, after a restart too
+(`docs/AGENT_LOOP.md` §3.4.2): as a message, or as a tool result where the
+model's `lateToolResults` option says `"tool"` (`docs/OPERATIONS.md`). `recordToolCalls: true` in an agent's config
 records each of its tool calls from the start; unset, the venue's
 `recordToolCalls` applies.
 Provider responses also carry `finishReason` when reported. A `length` result

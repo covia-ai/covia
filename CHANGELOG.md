@@ -16,7 +16,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `ucan:issue` takes `prf` to pass on part of a grant made to the venue (#636).
 - `outbound/any`: the venue's standing to dial any outbound target, delegable by grant.
 - Venues prove their DID by address or challenge (`auth.venueProof`, `auth.requireVenueProof`).
-- An agent tool call past `toolCallTimeoutMs` names the recorded job it runs as, and its outcome reaches the agent when it ends, after a restart too (#607).
+- An agent tool call past `toolCallTimeoutMs` names the recorded job it runs as, and its outcome reaches the agent when it ends, citing the call, after a restart too (#607).
+- Model option `lateToolResults: "tool"`, also set in an agent's `modelProfile`, shows a late tool call's outcome as a `tool_call_outcome` tool result instead of a message.
 - `recordToolCalls`, per agent with a venue default, records an agent's tool calls as jobs from the start.
 - An MCP read-only tool call past its ceiling names a job that `grid_job_status` and `grid_job_result` can find.
 - Per-user preferences at `x/preferences`, edited with the `preferences` tool and pinned by the standard and chat-bot agent templates (`adapters.preferences.maxBytes`).

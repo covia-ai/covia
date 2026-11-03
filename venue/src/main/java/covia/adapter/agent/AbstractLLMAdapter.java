@@ -227,20 +227,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * What the model declares that assembly needs: its context budget in
-	 * bytes, its label dialect, whether it can call tools at all, and whether
-	 * its provider should receive a persistent cache prefix — with
-	 * tool calling off, no tool is presented (OPERATIONS.md, <i>The
-	 * {@code model} facet</i>).
+	 * bytes, its label dialect, whether it can call tools at all, whether
+	 * its provider should receive a persistent cache prefix, and how a late
+	 * tool call outcome is shown to it — with tool calling off, no tool is
+	 * presented (OPERATIONS.md, <i>The {@code model} facet</i>).
 	 */
 	public record ModelProfile(long budget, AString labels, boolean toolCalling,
-			boolean cachePrefix) {
+			boolean cachePrefix, AString lateToolResults) {
 		/** The profile a resolved facet map declares; defaults fill what it does not. */
 		public static ModelProfile of(AMap<AString, ACell> profile) {
 			return new ModelProfile(
 				AbstractLLMAdapter.budgetBytes(profile, ContextAssembler.DEFAULT_BUDGET),
 				AbstractLLMAdapter.labelDialect(profile),
 				AbstractLLMAdapter.toolCalling(profile),
-				AbstractLLMAdapter.cachePrefix(profile));
+				AbstractLLMAdapter.cachePrefix(profile),
+				AbstractLLMAdapter.lateToolResults(profile));
 		}
 	}
 
@@ -679,8 +680,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * model's {@code byModel} entry, then the agent's {@code config.modelProfile}
 	 * — each layered one key deep, stating only what it changes. An agent
 	 * override speaks to assembly ({@code options.toolCalling},
-	 * {@code options.labels}, {@code budget.bytes}); the provider edge reads the
-	 * operation's own facet.
+	 * {@code options.labels}, {@code options.lateToolResults},
+	 * {@code budget.bytes}); the provider edge reads the operation's own facet.
 	 */
 	public static AMap<AString, ACell> modelProfile(AMap<AString, ACell> meta, AString modelId,
 			AMap<AString, ACell> config) {
@@ -765,6 +766,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * <li>{@code labels}: {@code "bracket"} (default), {@code "xml"} or {@code "header"} — the
 	 *     dialect in which context elements are labelled, applied by the one
 	 *     label renderer (AGENT_CONTEXT.md §1.1). See {@link #labelDialect}.</li>
+	 * <li>{@code lateToolResults}: {@code "message"} (default) or {@code "tool"} —
+	 *     whether a tool call's outcome that arrives after its time limit is
+	 *     shown as a user message or as a {@code tool_call_outcome} tool
+	 *     exchange (AGENT_CONTEXT.md §5.7). See {@link #lateToolResults}.</li>
 	 * </ul>
 	 *
 	 * @param meta resolved operation metadata for the LLM operation
@@ -839,6 +844,23 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		if (LABELS_XML.equals(declared)) return LABELS_XML;
 		if (LABELS_HEADER.equals(declared)) return LABELS_HEADER;
 		return LABELS_BRACKET;
+	}
+
+	/** The {@code lateToolResults} option: how a tool call's late outcome is shown. */
+	public static final AString OPT_LATE_TOOL_RESULTS = Strings.intern("lateToolResults");
+	/** A user message from the venue — the default. */
+	public static final AString LATE_RESULTS_MESSAGE = Strings.intern("message");
+	/** A {@code tool_call_outcome} tool exchange — opt-in. */
+	public static final AString LATE_RESULTS_TOOL = Strings.intern("tool");
+
+	/**
+	 * How a resolved profile shows a tool call's late outcome:
+	 * {@link #LATE_RESULTS_TOOL} only when declared, else
+	 * {@link #LATE_RESULTS_MESSAGE} — a misspelt option keeps the default.
+	 */
+	public static AString lateToolResults(AMap<AString, ACell> profile) {
+		AString declared = RT.ensureString(RT.getIn(profile, K_OPTIONS, OPT_LATE_TOOL_RESULTS));
+		return LATE_RESULTS_TOOL.equals(declared) ? LATE_RESULTS_TOOL : LATE_RESULTS_MESSAGE;
 	}
 
 	/**
@@ -1156,7 +1178,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	/** The result of a sessioned tool call still running at its time limit (#607):
 	 *  the operation, the limit in milliseconds, then the job it runs as. */
 	public static final String TOOL_STILL_RUNNING = "Error: %s did not complete within %dms and is still running as job %s. "
-		+ "Its outcome will arrive in this session as a message; grid_job_status with that id shows how it is going. "
+		+ "Its outcome will arrive later in this session, naming this call and that job; grid_job_status with that id shows how it is going. "
 		+ "Do not call it again unless repeating it is safe.";
 
 	/** As {@link #TOOL_STILL_RUNNING}, for a call with no session to deliver its outcome to. */
@@ -1169,11 +1191,11 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * not cancelled, and the model is told the job it runs as: the call's own
 	 * when it is recorded, else a mirror ({@link covia.venue.JobManager#mirror}),
 	 * so the job can be looked up and outlasts a restart. A sessioned agent's
-	 * call is tracked in its pending index ({@link AgentAdapter#trackCall}):
-	 * its outcome reaches the task whose cycle made the call as its next
-	 * input, else the asking session as a message, which wakes the agent, and
-	 * a task that yields meanwhile waits for it. When no job can be
-	 * named, the plain timeout stands.
+	 * call is tracked in its pending index ({@link AgentAdapter#trackCall}),
+	 * with the id and tool name the model gave it: its outcome reaches the
+	 * task whose cycle made the call as its next input, else the asking
+	 * session, which wakes the agent, and a task that yields meanwhile waits
+	 * for it. When no job can be named, the plain timeout stands.
 	 *
 	 * @param call the call's Job, or null if it never had one
 	 */
@@ -1194,7 +1216,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			return Strings.create(String.format(TOOL_STILL_RUNNING_UNTRACKED, operation, timeoutMs, id));
 		}
 		try {
-			agents.trackCall(ctx.getUserDID(), agentId, sessionId, ctx.getTaskId(), job);
+			agents.trackCall(ctx.getUserDID(), agentId, sessionId, ctx.getTaskId(), job, ToolCycleEngine.runningCall());
 		} catch (RuntimeException e) {
 			// Untracked, nothing will follow: say so rather than promise a message
 			log.error("Tool call job {} not tracked for agent {}", id, agentId, e);

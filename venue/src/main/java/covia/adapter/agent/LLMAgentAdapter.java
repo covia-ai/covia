@@ -186,7 +186,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			previewFrames, in.pending(), null, hasInput, null, null,
 			fixed.unavailable(), null, null)
 			.withSourceConfig(sourceConfig)
-			.withCachePrefix(cachePrefix);
+			.withCachePrefix(cachePrefix)
+			.withLateToolResults(profile.lateToolResults());
 		FrameTools frameTools = frameTools(spec, tasks, configLoads, fixed,
 			new FrameStore.LocalFrameStore(previewFrames), true);
 
@@ -372,7 +373,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			fixedTools, null, null, sessionFrames, pending, null, hasInput, null, null,
 			fixed.unavailable(), null, null)
 			.withSourceConfig(recordConfig)
-			.withCachePrefix(cachePrefix);
+			.withCachePrefix(cachePrefix)
+			.withLateToolResults(profile.lateToolResults());
 		FrameTools frameTools = frameTools(spec, tasks, configLoads, fixed, store, false);
 
 		// ctx (uncapped) makes the provider call; the agent's authority flows

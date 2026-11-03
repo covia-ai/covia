@@ -338,7 +338,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			rootFrames, null, null, true, null, taskTools.message(), fixed.unavailable(), null, null)
 			.withLoads(loads, offered)
 			.withSourceConfig(sourceConfig)
-			.withCachePrefix(cachePrefix);
+			.withCachePrefix(cachePrefix)
+			.withLateToolResults(profile.lateToolResults());
 		AMap<AString, ACell> observedRoot = GoalTreeContext.applyObservations(
 			(AMap<AString, ACell>) rootFrames.get(0),
 			ContextAssembler.observations(spec, loads),
@@ -608,7 +609,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			null, null, null, null, null, null, true, null, null,
 			fixed.unavailable(), null, null)
 			.withSourceConfig(sourceConfig)
-			.withCachePrefix(cachePrefix);
+			.withCachePrefix(cachePrefix)
+			.withLateToolResults(profile.lateToolResults());
 
 		// Per-tool-call timeout — bounds any single grid op invoked as a tool
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared

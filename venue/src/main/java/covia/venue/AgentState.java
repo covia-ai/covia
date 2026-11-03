@@ -107,6 +107,10 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	public static final AString SOURCE_REQUEST    = Strings.intern("request");
 	public static final AString SOURCE_CHAT       = Strings.intern("chat");
 	public static final AString SOURCE_MESSAGE    = Strings.intern("message");
+	/** A tracked tool call's late outcome, delivered by the venue (#607). Only
+	 *  the venue marks an envelope so; the model profile's {@code lateToolResults}
+	 *  decides how the turn renders (AGENT_CONTEXT.md §5.7). */
+	public static final AString SOURCE_TOOL_OUTCOME = Strings.intern("toolOutcome");
 	/** Framework-recorded tool-failure diagnostic turn (#211). */
 	public static final AString SOURCE_TOOL       = Strings.intern("tool");
 
@@ -128,6 +132,10 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	public static final AString KEY_PENDING  = K_PENDING;
 	public static final AString KEY_TIMELINE = K_TIMELINE;
 	public static final AString KEY_ERROR    = K_ERROR;
+	/** Transition input: the provenance of the task input shown this cycle,
+	 *  as its turn records it — {@code {caller?, authentication?, source?}}
+	 *  ({@link covia.adapter.AgentAdapter#withRecordedProvenance}). */
+	public static final AString KEY_INPUT_SOURCE = Strings.intern("inputSource");
 	/** Session-record `frames` key — vector of frame maps. First entry is the
 	 *  root frame; subsequent entries are pushed by {@code subgoal}. See
 	 *  {@code venue/docs/GOAL_TREE.md}. */

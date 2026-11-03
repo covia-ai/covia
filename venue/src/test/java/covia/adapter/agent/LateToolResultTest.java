@@ -55,6 +55,9 @@ public class LateToolResultTest {
 	private static final String HOLD = "v/test/ops/hold";
 	private static final long LIMIT_MS = 1000;
 	private static final Pattern JOB_NAMED = Pattern.compile("running as job ([0-9a-f]+)\\.");
+	/** The call a test tracks by hand, as a model would have made it. */
+	private static final String PARKED_CALL_ID = "call-parked";
+	private static final String PARKED_TOOL = "slow_tool";
 
 	private final Engine engine = TestEngine.ENGINE;
 
@@ -88,7 +91,9 @@ public class LateToolResultTest {
 	public void aCallPastItsLimitDeliversItsOutcomeToTheSession(TestInfo info) {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
-		createAgent(engine, owner, "late-step", "v/test/ops/llm");
+		createAgent(engine, owner, "late-step", "v/test/ops/llm", AbstractLLMAdapter.K_MODEL_PROFILE,
+			Maps.of(AbstractLLMAdapter.K_OPTIONS, Maps.of(AbstractLLMAdapter.OPT_LATE_TOOL_RESULTS,
+				AbstractLLMAdapter.LATE_RESULTS_TOOL)));
 		User user = engine.getVenueState().users().get(did);
 		AgentState agent = user.agent("late-step");
 		Blob sid = Blob.fromHex("1a7e00001a7e00001a7e00001a7e0000");
@@ -134,7 +139,45 @@ public class LateToolResultTest {
 			"each outcome carries its status: " + c);
 		assertTrue(c.contains(HOLD), "each outcome names its operation: " + c);
 		assertTrue(c.contains(okJob) && c.contains(badJob), "each outcome names its job: " + c);
+		assertTrue(c.contains("c-ok") && c.contains("c-bad"), "each outcome cites the model's call: " + c);
 		assertEquals(0, agent.getPending().count(), "a delivered outcome leaves the pending index");
+
+		// The agent's profile asks for late outcomes as tool results: each is
+		// its own tool_call_outcome exchange, answering a call that names its job.
+		AVector<ACell> messages = RT.ensureVector(RT.getIn(engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "late-step", Fields.SESSION_ID, sid.toHexString()), owner).awaitResult(10_000),
+			Fields.MESSAGES));
+		java.util.Set<ACell> jobs = new java.util.HashSet<>();
+		for (long i = 0; i + 1 < messages.count(); i++) {
+			ACell call = RT.getIn(messages.get(i), Fields.TOOL_CALLS, CVMLong.ZERO);
+			if (!Strings.create(ContextAssembler.TOOL_CALL_OUTCOME_TOOL).equals(RT.getIn(call, Fields.NAME))) continue;
+			ACell result = messages.get(i + 1);
+			assertEquals(RT.getIn(call, Fields.ID), RT.getIn(result, Fields.ID), "the result answers its call");
+			assertEquals(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID), RT.getIn(result, Fields.STRUCTURED_CONTENT, Fields.JOB_ID));
+			jobs.add(RT.getIn(call, Fields.ARGUMENTS, Fields.JOB_ID));
+		}
+		assertEquals(java.util.Set.of(Strings.create(okJob), Strings.create(badJob)), jobs, "one exchange per outcome: " + messages);
+		for (long i = 0; i < messages.count(); i++) {
+			assertFalse(AgentState.ROLE_USER.equals(RT.getIn(messages.get(i), AgentState.K_ROLE))
+				&& String.valueOf(RT.getIn(messages.get(i), AgentState.K_CONTENT)).contains("finished-late"),
+				"an outcome is not also a message");
+		}
+	}
+
+	/** A cycle without a session builds its turns from its input: an outcome keeps the venue's provenance, not the requester's. */
+	@Test
+	public void aCycleWithNoSessionKeepsTheOutcomesOwnProvenance() {
+		AMap<AString, ACell> input = Maps.of(
+			Fields.NEW_INPUT, Maps.of(Fields.JOB_ID, "0a1b", Fields.STATUS, Status.COMPLETE),
+			Fields.TASKS, Vectors.of(Maps.of(Fields.CALLER, "did:key:z6MkRequester")),
+			AgentState.KEY_INPUT_SOURCE, Maps.of(Fields.CALLER, engine.getDIDString(),
+				AgentState.K_SOURCE, AgentState.SOURCE_TOOL_OUTCOME));
+		AVector<ACell> frames = FrameStore.appendCycleInputTurns(
+			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, input, 1L);
+		AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
+		ACell turn = turns.get(turns.count() - 1);
+		assertEquals(engine.getDIDString(), RT.getIn(turn, Fields.CALLER));
+		assertEquals(AgentState.SOURCE_TOOL_OUTCOME, RT.getIn(turn, AgentState.K_SOURCE));
 	}
 
 	@Test
@@ -352,7 +395,7 @@ public class LateToolResultTest {
 		assertTrue(cycle.awaitEntered(10, TimeUnit.SECONDS), "the task's cycle did not start");
 		Blob taskSession = sessionOf(RT.ensureMap(agent.getTasks().get(task.getID())));
 		((AgentAdapter) engine.getAdapter("agent")).trackCall(owner.getUserDID(), agent.getAgentId(),
-			taskSession, task.getID(), call);
+			taskSession, task.getID(), call, Maps.of(Fields.TOOL_CALL_ID, PARKED_CALL_ID, Fields.TOOL_NAME, PARKED_TOOL));
 		cycle.release();
 		watch.awaitRest(rest);
 		assertTrue(AgentState.isParked(agent.getTasks().get(task.getID())), "the task parks on its call");
@@ -408,6 +451,11 @@ public class LateToolResultTest {
 			}
 			assertNotNull(outcomeTurn, "the outcome is a turn in the session's conversation");
 			assertEquals(engine.getDIDString(), RT.getIn(outcomeTurn, Fields.CALLER));
+			assertEquals(AgentState.SOURCE_TOOL_OUTCOME, RT.getIn(outcomeTurn, AgentState.K_SOURCE),
+				"the venue marks it a tool call's outcome");
+			assertEquals(Strings.create(PARKED_CALL_ID), RT.getIn(outcomeTurn, AgentState.K_CONTENT, Fields.TOOL_CALL_ID),
+				"it cites the call as the model made it");
+			assertEquals(Strings.create(PARKED_TOOL), RT.getIn(outcomeTurn, AgentState.K_CONTENT, Fields.TOOL_NAME));
 
 			olderGate.release();
 			watch.awaitRest(4);

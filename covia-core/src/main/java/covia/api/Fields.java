@@ -142,6 +142,8 @@ public class Fields {
 	public static final StringShort ARGUMENTS = Strings.intern("arguments");
 	public static final StringShort REMOTE_TOOL_NAME = Strings.intern("remoteToolName");
 	public static final StringShort TOOL_NAME = Strings.intern("toolName");
+	/** The id a model gave one of its tool calls. */
+	public static final StringShort TOOL_CALL_ID = Strings.intern("toolCallId");
 	public static final StringShort TOOL = Strings.intern("tool");
 	public static final StringShort TOOLS = Strings.intern("tools");
 	public static final StringShort IS_ERROR = Strings.intern("isError");

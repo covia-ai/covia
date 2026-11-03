@@ -3793,6 +3793,16 @@ public class AgentAdapter extends AAdapter {
 	 */
 	public boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
 			Blob taskId, AString caller, AString messageId, ACell message) {
+		return deliverToWaiter(users, ownerDID, agentId, sessionId, taskId, caller, messageId, message, null);
+	}
+
+	/**
+	 * As {@link #deliverToWaiter(covia.venue.Users, AString, AString, Blob, Blob, AString, AString, ACell)},
+	 * the envelope marked with the source its turn records when one is given
+	 * ({@link AgentState#SOURCE_TOOL_OUTCOME}).
+	 */
+	private boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
+			Blob taskId, AString caller, AString messageId, ACell message, AString source) {
 		var owner = users.get(ownerDID);
 		AgentState agent = (owner == null) ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
@@ -3802,9 +3812,12 @@ public class AgentAdapter extends AAdapter {
 				Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
 				Fields.TASK_ID, Strings.create(taskId.toHexString()),
 				Fields.MESSAGE, message);
+			if (source != null) envelope = envelope.assoc(AgentState.K_SOURCE, source);
 			if (agent.appendTaskContinuation(taskId, sessionId, envelope, messageId)) return true;
 		}
-		return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
+		if (source == null) return appendSessionMessage(users, ownerDID, agentId, sessionId, caller, null, message);
+		return appendSessionEnvelope(agent, sessionId, caller,
+			sessionEnvelope(sessionId, caller, null, message).assoc(AgentState.K_SOURCE, source));
 	}
 
 	/** Append to a known local session using the supplied component, including a
@@ -3814,11 +3827,20 @@ public class AgentAdapter extends AAdapter {
 		var owner = users.get(ownerDID);
 		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
+		return appendSessionEnvelope(agent, sessionId, caller, sessionEnvelope(sessionId, caller, jobId, message));
+	}
+
+	/** The envelope a venue-delivered session message travels in. */
+	private static AMap<AString, ACell> sessionEnvelope(Blob sessionId, AString caller, AString jobId, ACell message) {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.CALLER, caller,
 			Fields.SESSION_ID, Strings.create(sessionId.toHexString()),
 			Fields.MESSAGE, message);
-		if (jobId != null) envelope = envelope.assoc(Fields.JOB_ID, jobId);
+		return (jobId != null) ? envelope.assoc(Fields.JOB_ID, jobId) : envelope;
+	}
+
+	private static boolean appendSessionEnvelope(AgentState agent, Blob sessionId, AString caller,
+			AMap<AString, ACell> envelope) {
 		AgentState.SessionIntake intake = agent.appendSessionPending(
 			sessionId, caller, null, envelope, false);
 		return intake == AgentState.SessionIntake.APPLIED;
@@ -3828,19 +3850,26 @@ public class AgentAdapter extends AAdapter {
 	 * Tracks a tool call still running past its time limit (#607) in the
 	 * agent's pending index, so its outcome is delivered exactly once, after a
 	 * restart too. The entry names the session and the task whose cycle made
-	 * the call, which keeps that task waiting for it. When the job ends,
+	 * the call, which keeps that task waiting for it, and the call as the
+	 * model made it, which its outcome cites. When the job ends,
 	 * {@link #deliverCallOutcome} moves its outcome from the index to that
 	 * task, else the session; while the venue is closing the entry stays, and
 	 * the restart delivers it instead ({@link #reconcileAgentAfterRestart}).
 	 *
 	 * @param job the call's recorded job: the call itself or its mirror
 	 * @param taskId the task whose cycle made the call, or null
+	 * @param call the model's call, {@code {toolCallId?, toolName?}}, or null
 	 */
-	public void trackCall(AString ownerDID, AString agentId, Blob sessionId, Blob taskId, Job job) {
+	public void trackCall(AString ownerDID, AString agentId, Blob sessionId, Blob taskId, Job job,
+			AMap<AString, ACell> call) {
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent == null) return;
 		AMap<AString, ACell> entry = Maps.of(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
 		if (taskId != null) entry = entry.assoc(Fields.TASK_ID, Strings.create(taskId.toHexString()));
+		for (AString key : List.of(Fields.TOOL_CALL_ID, Fields.TOOL_NAME)) {
+			ACell value = RT.getIn(call, key);
+			if (value != null) entry = entry.assoc(key, value);
+		}
 		agent.addPending(job.getID(), entry);
 		deliverWhenFinished(ownerDID, agentId, job);
 	}
@@ -3900,7 +3929,8 @@ public class AgentAdapter extends AAdapter {
 			agent.removePending(jobId);
 			delivered.set(deliverToWaiter(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
 				(taskHex != null) ? Blob.fromHex(taskHex.toString()) : null, engine.getDIDString(),
-				Strings.create(jobId.toHexString()), callOutcome(jobId, record)));
+				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
+				AgentState.SOURCE_TOOL_OUTCOME));
 		});
 		if (tracked.get() && !delivered.get()) {
 			log.info("Outcome of job {} not delivered: agent {} has no such session", jobId, agentId);
@@ -3920,15 +3950,21 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * A tracked call's outcome as its session receives it: the job, its
-	 * operation and status, then its result or why it did not complete.
+	 * A tracked call's outcome as its session receives it: the job, the call
+	 * as the model made it (its id and tool name, when the pending entry has
+	 * them), the operation and status, then its result or why it did not
+	 * complete.
+	 *
+	 * @param entry the call's pending entry ({@link #trackCall})
 	 */
-	static AMap<AString, ACell> callOutcome(Blob jobId, AMap<AString, ACell> record) {
+	static AMap<AString, ACell> callOutcome(Blob jobId, AMap<AString, ACell> record, ACell entry) {
 		AString status = RT.ensureString(record.get(Fields.STATUS));
-		AMap<AString, ACell> outcome = Maps.of(
-			Fields.ID, Strings.create(jobId.toHexString()),
-			Fields.OPERATION, record.get(Fields.OP),
-			Fields.STATUS, status);
+		AMap<AString, ACell> outcome = Maps.of(Fields.JOB_ID, Strings.create(jobId.toHexString()));
+		for (AString key : List.of(Fields.TOOL_CALL_ID, Fields.TOOL_NAME)) {
+			ACell value = RT.getIn(entry, key);
+			if (value != null) outcome = outcome.assoc(key, value);
+		}
+		outcome = outcome.assoc(Fields.OPERATION, record.get(Fields.OP)).assoc(Fields.STATUS, status);
 		return Status.COMPLETE.equals(status)
 			? outcome.assoc(Fields.RESULT, record.get(Fields.OUTPUT))
 			: outcome.assoc(Fields.ERROR, record.get(Fields.ERROR));
@@ -4169,7 +4205,9 @@ public class AgentAdapter extends AAdapter {
 					Fields.TASKS, formattedTasks,
 					Fields.PENDING, resolvedPending);
 				if (pickedTaskInput != null) {
-					transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput);
+					transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput)
+						.assoc(AgentState.KEY_INPUT_SOURCE, withRecordedProvenance(Maps.empty(),
+							AgentState.nextTaskInputSource(pickedTask.getValue())));
 					// The task is keyed by the delegating agent:request Job id; carry it
 					// so a frame-owning harness can tie the request turn back to the
 					// calling job, exactly as chat turns record their job id (#378).
@@ -4713,11 +4751,15 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Stamps a user turn with the provenance its envelope or task record carries
-	 * (COG-20 §4): the caller, and the authentication record when there is one.
+	 * (COG-20 §4): the caller, the authentication record when there is one, and
+	 * the venue's mark on a tracked call's outcome ({@link AgentState#SOURCE_TOOL_OUTCOME}).
 	 */
 	public static AMap<AString, ACell> withRecordedProvenance(AMap<AString, ACell> turn, ACell source) {
 		ACell caller = RT.getIn(source, Fields.CALLER);
 		if (caller != null) turn = turn.assoc(Fields.CALLER, caller);
+		if (AgentState.SOURCE_TOOL_OUTCOME.equals(RT.getIn(source, AgentState.K_SOURCE))) {
+			turn = turn.assoc(AgentState.K_SOURCE, AgentState.SOURCE_TOOL_OUTCOME);
+		}
 		ACell authentication = RT.getIn(source, Fields.AUTHENTICATION);
 		return (authentication == null) ? turn : turn.assoc(Fields.AUTHENTICATION, authentication);
 	}
@@ -4727,12 +4769,13 @@ public class AgentAdapter extends AAdapter {
 	 * then the task's input. Each records the job it came from ({@code jobId}:
 	 * a chat's, or the task's request, #378) and keeps the provenance its
 	 * envelope or task recorded: who asked, as the venue authenticated them
-	 * (COG-20 §4).
+	 * (COG-20 §4), and whether it is a tracked call's outcome.
 	 *
 	 * @param messages the presented message envelopes
 	 * @param taskInput the task's input shown this cycle, or null
 	 * @param taskJobId the task's request Job id, or null
-	 * @param task the task's row or formatted record, carrying its provenance
+	 * @param task the record carrying the task input's provenance: the task's
+	 *        row or the continuation shown ({@link AgentState#nextTaskInputSource})
 	 */
 	public static AVector<ACell> cycleInputTurns(AVector<ACell> messages, ACell taskInput,
 			ACell taskJobId, ACell task, long ts) {

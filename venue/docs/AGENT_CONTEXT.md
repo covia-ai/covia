@@ -639,7 +639,7 @@ duplicate.
 | 5 | Initial persistent skills and data | initial messages | `system`, then `user` / `assistant` / `tool` | Skill bodies and trusted loads, then at most one aggregate `pinned_context` and one `loaded_context` data result (§5.5) |
 | 6 | Frame conversation | append-only vector | `system` / `user` / `assistant` / `tool` | Canonical prior turns and rendered context, skill and tool-state events, in chronological order |
 | 7 | Pending results | working turn | `user`, `assistant`, `tool` | Job results that arrived for this cycle: one request — *Get job results.* — one `get_job_results()` call, one result listing each job once (§5.7) |
-| 8 | Current input | working turn | `user` | The inbox message(s) driving this cycle |
+| 8 | Current input | working turn | `user` | The inbox message(s) driving this cycle; a late tool outcome renders as `assistant` / `tool` where the model's `lateToolResults` asks (§5.7) |
 | 9 | Tool-loop messages | working turn | `assistant` / `tool` | Assistant/tool turns and context events accumulated within this cycle |
 | 10 | Changed watched context | append-only conversation | `system` or `assistant` / `tool` | A new observation for a `volatile` declaration, emitted only when its canonical rendered value differs (§5.5) |
 | 11 | Budget warning | inference tail | `system` | **Only** when the budget is under pressure (§3.4) |
@@ -1000,6 +1000,13 @@ Everything else is an append. Context state is obtained by folding its events in
 Job results for this cycle — the mechanism by which asynchronous work re-enters the conversation. A result is data, so it arrives as every result does (§5.5): one plain request — *Get job results.* — one `get_job_results()` call, and one tool result listing each job once: its id and status, then its output (strings verbatim, structured values bounded), for a job that did not complete its recorded `error`, or for one that has not finished, such as an open HITL ask, that it is still waiting with no result yet. One call rather than one per job — the ids would only be repeated, and a listing is the natural answer to the plural request; a failed job is data about that job, not a failed fetch, so the result is not a tool error. Placed before the current input so that the input, the thing to act on, is closest to the reply.
 
 The line this draws, once: **a result renders as a tool exchange; a request renders as a user turn.** Loaded context and job results are results. Tasks (§5.13) and inbox messages are requests from a principal — the user channel is theirs, with attribution.
+
+**Late tool outcomes.** A tool call still running at `toolCallTimeoutMs` was answered with the job it runs as (AGENT_LOOP.md §3.4.2). Its outcome arrives later as one input turn, stored once and marked by the venue as a tool call's outcome: `{jobId, toolCallId, toolName, operation, status, result | error}`, citing the call as the model made it. How it renders, on every inference, is the model profile's `lateToolResults` option (OPERATIONS.md), which an agent's `modelProfile` may set, so models that handle one form better than the other can each be given it:
+
+- `"message"`, the default — a user message, attributed to the venue (§1.2).
+- `"tool"` — a result, by the line above: one `tool_call_outcome` call whose arguments name the job and the original call, then its result, the outcome record unchanged and not a tool error, as for job results. There is no From element: these are the agent's own turns (§3.2.1). The exchange's id is derived from the job, never the original call's, which already has its result.
+
+Only the venue marks an outcome; a principal's message shaped like one stays theirs. Changing the option renders every outcome in the session the new way.
 
 ### 5.8 Current input
 The inbox message(s) driving this cycle; goaltree has none — its goal rides in the task slot (§5.13). When there is neither input nor pending results, the **empty-state signal** takes the slot: one `user` line saying so, so the agent can act on its role or report idle. It is content, not padding — its role as the message that keeps a system-only request legal (§3.2.1) is a consequence, not its purpose.

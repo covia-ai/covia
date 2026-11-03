@@ -84,14 +84,17 @@ interface FrameStore {
 	}
 
 	/** Appends a cycle's input turns ({@link AgentAdapter#cycleInputTurns})
-	 * to the root conversation of a local stack. */
+	 * to the root conversation of a local stack. The task input's provenance
+	 * is the run loop's {@code inputSource}, else the task's own. */
 	@SuppressWarnings("unchecked")
 	static AVector<ACell> appendCycleInputTurns(AVector<ACell> frames,
 			AVector<ACell> messages, ACell input, long ts) {
 		if (frames == null || frames.isEmpty()) return frames;
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+		ACell inputSource = RT.getIn(input, AgentState.KEY_INPUT_SOURCE);
+		if (inputSource == null) inputSource = RT.getIn(input, Fields.TASKS, CVMLong.ZERO);
 		AVector<ACell> turns = AgentAdapter.cycleInputTurns(messages, RT.getIn(input, Fields.NEW_INPUT),
-			RT.getIn(input, Fields.JOB_ID), RT.getIn(input, Fields.TASKS, CVMLong.ZERO), ts);
+			RT.getIn(input, Fields.JOB_ID), inputSource, ts);
 		for (long i = 0; i < turns.count(); i++) {
 			root = GoalTreeContext.appendTurn(root, turns.get(i));
 		}

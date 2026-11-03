@@ -602,12 +602,16 @@ running and should not be repeated unless that is safe
 (`AbstractLLMAdapter.TOOL_STILL_RUNNING`), so it can carry on.
 
 In a session, the job is tracked in the agent's pending index with the
-session and the task whose cycle made the call. When the job ends, one
-transaction removes the entry and delivers the outcome
-`{id, operation, status, result | error}` from the venue, which wakes the
-agent. It goes to the task as its next input, so it runs that task and no
-other in the session; when the call came from no task, or the task has
-finished, it goes to the session as a message. A task that yields meanwhile
+session, the task whose cycle made the call, and the call's id and tool name
+as the model made it. When the job ends, one transaction removes the entry
+and delivers the outcome
+`{jobId, toolCallId, toolName, operation, status, result | error}` from the
+venue, marked as a tool call's outcome, which wakes the agent. It goes to the
+task as its next input, so it runs that task and no other in the session;
+when the call came from no task, or the task has finished, it goes to the
+session. The model sees it as a message from the venue, or as a
+`tool_call_outcome` tool result when its profile's `lateToolResults` asks
+(AGENT_CONTEXT.md §5.7). A task that yields meanwhile
 waits for it (§4.6), and one that receives it during its own cycle cannot
 complete in that cycle (§3.4.1), so it runs again. Shutdown leaves the entry, and the restart delivers the job's outcome
 instead (§6.1), so it is delivered exactly once. If the session has gone by

@@ -18,6 +18,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.exception.InvalidInputException;
 import covia.venue.AgentEvents;
 
@@ -74,13 +75,14 @@ final class ToolCycleEngine {
 
 	/**
 	 * The tool call dispatching on this thread, with the live tap to report it
-	 * on — set by {@link #execute} around the handler, so an operation the
-	 * call invokes can relay what it publishes as it runs. Null outside a call,
-	 * and where the cycle has no tap.
+	 * on if the cycle has one — set by {@link #execute} around the handler, so
+	 * an operation the call invokes can relay what it publishes as it runs, and
+	 * a call still running at its limit can say which call it was. Null outside
+	 * a call.
 	 */
 	private static final ThreadLocal<Running> RUNNING = new ThreadLocal<>();
 
-	/** A running tool call and where its activity is announced. */
+	/** A running tool call and where its activity is announced, if anywhere. */
 	private record Running(AgentEvents.Cycle tap, AString id, String name, int depth) {}
 
 	/**
@@ -90,7 +92,18 @@ final class ToolCycleEngine {
 	 */
 	static ProgressRelay relayForRunningCall() {
 		Running call = RUNNING.get();
-		return (call != null) ? new ProgressRelay(call) : null;
+		return (call != null && call.tap() != null) ? new ProgressRelay(call) : null;
+	}
+
+	/**
+	 * The tool call dispatching on this thread as the model made it:
+	 * {@code {toolCallId, toolName}}, or null outside a call.
+	 */
+	static AMap<AString, ACell> runningCall() {
+		Running call = RUNNING.get();
+		if (call == null) return null;
+		AMap<AString, ACell> out = Maps.of(Fields.TOOL_NAME, Strings.create(call.name()));
+		return (call.id() != null) ? out.assoc(Fields.TOOL_CALL_ID, call.id()) : out;
 	}
 
 	/**
@@ -367,7 +380,7 @@ final class ToolCycleEngine {
 			// operation it invokes can report progress against it. A subgoal's
 			// calls run nested on this same thread; each restores the one it found.
 			Running outer = RUNNING.get();
-			RUNNING.set((tap != null) ? new Running(tap, call.id(), call.name(), depth) : null);
+			RUNNING.set(new Running(tap, call.id(), call.name(), depth));
 			try {
 				outcome = registry.dispatch(call, context);
 				if (outcome == null) {

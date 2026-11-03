@@ -26,6 +26,7 @@ import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -243,6 +244,7 @@ public final class ContextAssembler {
 	 * @param budget the model's context budget in bytes
 	 * @param labels the label dialect (§1.1)
 	 * @param cachePrefix whether the initial render is a durable cache projection
+	 * @param lateToolResults how a tool call's late outcome is shown (§5.7)
 	 * @param tools the palette, in order: harness, configured, loads-contributed
 	 * @param loadElements trusted loads and loaded skills (a {@link Loads.Snapshot}'s instruction
 	 *        elements) — system messages in the live surface
@@ -270,6 +272,7 @@ public final class ContextAssembler {
 			AString labels,
 			boolean toolCalling,
 			boolean cachePrefix,
+			AString lateToolResults,
 			AVector<ACell> tools,
 			AVector<ACell> loadElements,
 			AVector<ACell> loadExchanges,
@@ -289,6 +292,7 @@ public final class ContextAssembler {
 			if (capsCtx == null) capsCtx = ctx;
 			if (budget <= 0) budget = DEFAULT_BUDGET;
 			if (labels == null) labels = Labels.BRACKET;
+			if (lateToolResults == null) lateToolResults = AbstractLLMAdapter.LATE_RESULTS_MESSAGE;
 			// A model that cannot call tools is presented none: not the palette,
 			// not the capability notice, not the skills index it could not act on.
 			tools = toolCalling ? orEmpty(tools) : Vectors.empty();
@@ -314,7 +318,7 @@ public final class ContextAssembler {
 				AVector<ACell> toolLoop, ACell task, AVector<ACell> unavailable,
 				String notice, LocalDate now) {
 			this(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels,
-				toolCalling, true, tools, loadElements, loadExchanges,
+				toolCalling, true, null, tools, loadElements, loadExchanges,
 				effectiveLoads, frames, pending, input, hasInput, toolLoop, task,
 				unavailable, notice, now, config);
 		}
@@ -351,25 +355,25 @@ public final class ContextAssembler {
 		 * The resolver result owns both the rendered elements and the effective
 		 * declaration view, so rebuilt metadata cannot drift from its prompt. */
 		public Spec withLoads(Loads.Snapshot loads, AVector<ACell> tools) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loads.instructionElements(), loads.exchanges(), loads.effectiveLoads(),
 				frames, pending, input, hasInput, toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withToolLoop(AVector<ACell> toolLoop) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withTask(ACell task) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withFrames(AVector<ACell> frames) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
@@ -379,14 +383,14 @@ public final class ContextAssembler {
 		 * by the agent's summary must not be injected a second time. An unresolved
 		 * task remains live and is still rendered through {@code task}. */
 		public Spec afterCompaction(AVector<ACell> frames) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames,
 				Vectors.empty(), Vectors.empty(), true, Vectors.empty(), task,
 				unavailable, notice, now, sourceConfig);
 		}
 
 		public Spec withNotice(String notice) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
@@ -394,21 +398,28 @@ public final class ContextAssembler {
 		/** Uses a declarative config distinct from the materialised effective
 		 * config. Stable ambient resolutions therefore do not invalidate history. */
 		public Spec withSourceConfig(AMap<AString, ACell> sourceConfig) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		/** Selects persistent prefix materialisation for this invocation. */
 		public Spec withCachePrefix(boolean cachePrefix) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
+				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
+				toolLoop, task, unavailable, notice, now, sourceConfig);
+		}
+
+		/** Selects how a tool call's late outcome is shown ({@link AbstractLLMAdapter#lateToolResults}). */
+		public Spec withLateToolResults(AString lateToolResults) {
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
 
 		/** A frame's view: its own config and head notice. */
 		public Spec forFrame(AMap<AString, ACell> config, String headNotice) {
-			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix,
+			return new Spec(engine, ctx, capsCtx, config, sessionId, headNotice, budget, labels, toolCalling, cachePrefix, lateToolResults,
 				tools, loadElements, loadExchanges, effectiveLoads, frames, pending, input, hasInput,
 				toolLoop, task, unavailable, notice, now, sourceConfig);
 		}
@@ -1032,7 +1043,8 @@ public final class ContextAssembler {
 	 */
 	static AVector<ACell> conversation(Spec spec) {
 		AVector<ACell> out = Vectors.empty();
-		Attribution attribution = new Attribution(spec.engine(), spec.ctx(), spec.labels());
+		Attribution attribution = new Attribution(spec.engine(), spec.ctx(), spec.labels(),
+			AbstractLLMAdapter.LATE_RESULTS_TOOL.equals(spec.lateToolResults()));
 		AVector<ACell> frames = spec.frames();
 		if (frames.count() > 1) {
 			out = out.conj(GoalTreeContext.renderAncestors(frames, spec.labels()));
@@ -1103,6 +1115,35 @@ public final class ContextAssembler {
 		return Vectors.of(user(JOB_RESULTS_REQUEST), ask, result);
 	}
 
+	/** The tool a tracked call's late outcome is shown as answering. Not a callable tool. */
+	public static final String TOOL_CALL_OUTCOME_TOOL = "tool_call_outcome";
+	private static final String TOOL_CALL_OUTCOME_ID = "tool-call-outcome";
+
+	/**
+	 * A tracked call's late outcome ({@code AgentAdapter.callOutcome}) as a
+	 * result (§5.7): one {@code tool_call_outcome} call naming the job and the
+	 * model's original call, and its result, the outcome record unchanged. The
+	 * exchange's id is derived from the job, never the original call's id,
+	 * which already has its result; a failed job is data about that job, so the
+	 * result is not a tool error.
+	 */
+	static AVector<ACell> toolCallOutcome(ACell outcome) {
+		ACell job = RT.getIn(outcome, Fields.JOB_ID);
+		AMap<AString, ACell> arguments = Maps.empty();
+		for (AString key : List.of(Fields.JOB_ID, Fields.TOOL_CALL_ID)) {
+			ACell value = RT.getIn(outcome, key);
+			if (value != null) arguments = arguments.assoc(key, value);
+		}
+		AString id = ToolCallIds.synthetic(TOOL_CALL_OUTCOME_ID, (job != null) ? job : outcome);
+		AMap<AString, ACell> ask = Maps.of(
+			K_ROLE, AbstractLLMAdapter.ROLE_ASSISTANT,
+			AbstractLLMAdapter.K_TOOL_CALLS, Vectors.of(Maps.of(
+				AbstractLLMAdapter.K_ID, id,
+				AbstractLLMAdapter.K_NAME, Strings.create(TOOL_CALL_OUTCOME_TOOL),
+				AbstractLLMAdapter.K_ARGUMENTS, arguments)));
+		return Vectors.of(ask, AbstractLLMAdapter.toolResultMessage(id, TOOL_CALL_OUTCOME_TOOL, outcome));
+	}
+
 	/**
 	 * The tail's notices as one system message: the budget warning (only under
 	 * pressure), a runtime notice, the date, and the configured tools that did
@@ -1147,18 +1188,23 @@ public final class ContextAssembler {
 	 * The element names who asked without telling the model to trust, obey or
 	 * reject the content: authority remains a property of the configured
 	 * capabilities (#405). Nothing is ever written into the user's own text, so
-	 * there is nothing to forge.
+	 * there is nothing to forge. A tracked call's late outcome, which only the
+	 * venue marks, is shown as a {@code tool_call_outcome} exchange instead
+	 * when the model profile asks for that (§5.7): the agent's own turns,
+	 * which take no element.
 	 */
 	private static final class Attribution {
 		private final Engine engine;
 		private final RequestContext ctx;
 		private final AString dialect;
+		private final boolean outcomesAsTools;
 		private TurnProvenance.Key last;
 
-		Attribution(Engine engine, RequestContext ctx, AString dialect) {
+		Attribution(Engine engine, RequestContext ctx, AString dialect, boolean outcomesAsTools) {
 			this.engine = engine;
 			this.ctx = ctx;
 			this.dialect = dialect;
+			this.outcomesAsTools = outcomesAsTools;
 			this.last = TurnProvenance.self(ctx);
 		}
 
@@ -1167,6 +1213,10 @@ public final class ContextAssembler {
 			if (msg == null) return out;
 			if (ROLE_USER.equals(msg.get(K_ROLE)) && value instanceof AMap<?, ?> m) {
 				AMap<AString, ACell> turn = RT.ensureMap(m);
+				if (outcomesAsTools && AgentState.SOURCE_TOOL_OUTCOME.equals(turn.get(AgentState.K_SOURCE))
+						&& turn.get(K_CONTENT) != null) {
+					return (AVector<ACell>) out.concat(toolCallOutcome(turn.get(K_CONTENT)));
+				}
 				TurnProvenance.Key key = TurnProvenance.key(turn);
 				if (key != null && !key.equals(last)) {
 					out = out.conj(system(TurnProvenance.element(dialect, engine, ctx, turn)));
