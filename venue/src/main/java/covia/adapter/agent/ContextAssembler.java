@@ -24,6 +24,8 @@ import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
+import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -1057,16 +1059,18 @@ public final class ContextAssembler {
 	public static final String GET_JOB_RESULTS_TOOL = "get_job_results";
 	static final String JOB_RESULTS_REQUEST = "Get job results.";
 	private static final AString JOB_RESULTS_CALL_ID = Strings.intern("job-results");
+	/** Follows the status of a job that has not finished, such as an open HITL ask. */
+	static final String STILL_WAITING = " — still waiting, no result yet";
 
 	/**
-	 * Job results that completed for this cycle — how asynchronous work
-	 * re-enters the conversation. A result is data, so it arrives the way
-	 * every result does (§5.5): one plain request, one
-	 * {@code get_job_results()} call, and one tool result listing
-	 * each job once — its id, its status, then its output (strings verbatim,
-	 * structured values bounded) or, for a job that did not complete, its
-	 * recorded error. One call rather than one per job: the ids would only be
-	 * repeated, and the listing is the natural answer to the plural request.
+	 * Job results for this cycle — how asynchronous work re-enters the
+	 * conversation. A result is data, so it arrives the way every result does
+	 * (§5.5): one plain request, one {@code get_job_results()} call, and one
+	 * tool result listing each job once — its id, its status, then its output
+	 * (strings verbatim, structured values bounded), for a job that did not
+	 * complete its recorded error, or for one that has not finished that it
+	 * is still waiting. One call rather than one per job: the ids would only
+	 * be repeated, and the listing is the natural answer to the plural request.
 	 */
 	static AVector<ACell> pendingResults(Spec spec) {
 		ContextLoader loader = new ContextLoader(spec.engine());
@@ -1075,12 +1079,14 @@ public final class ContextAssembler {
 		for (long i = 0; i < spec.pending().count(); i++) {
 			ACell p = spec.pending().get(i);
 			AString jobId = RT.ensureString(RT.getIn(p, Fields.JOB_ID));
-			ACell status = RT.getIn(p, Fields.STATUS);
+			AString status = RT.ensureString(RT.getIn(p, Fields.STATUS));
 			if (sb.length() > 0) sb.append("\n\n");
 			sb.append("job ").append(jobId).append(' ').append((status != null) ? status : "COMPLETE");
-			if (status == null || Strings.create("COMPLETE").equals(status)) {
+			if (status == null || Status.COMPLETE.equals(status)) {
 				ACell output = RT.getIn(p, Fields.OUTPUT);
 				sb.append(":\n").append((output != null) ? loader.renderValue(output) : "(no output)");
+			} else if (!Job.isFinished(Maps.of(Fields.STATUS, status))) {
+				sb.append(STILL_WAITING);
 			} else {
 				AString error = RT.ensureString(RT.getIn(p, Fields.ERROR));
 				sb.append((error != null) ? ": " + error : " — no reason recorded");

@@ -869,6 +869,12 @@ public class ContextAssemblerTest {
 		assertEquals(5, q.messages().count(), "still one call, one result");
 		assertEquals("job def456 FAILED: upstream returned 503\n\njob ghi789 CANCELLED — no reason recorded",
 			content(q.messages().get(3)));
+
+		// A job that has not finished, such as an open HITL ask, is still waiting: it has no result and no reason.
+		AVector<ACell> open = Vectors.of((ACell) Maps.of(
+			Fields.JOB_ID, Strings.create("jkl012"), Fields.STATUS, Strings.create("INPUT_REQUIRED")));
+		Prompt r = ContextAssembler.assemble(spec(null, null, open, null, true));
+		assertEquals("job jkl012 INPUT_REQUIRED" + ContextAssembler.STILL_WAITING, content(r.messages().get(3)));
 	}
 
 	@Test
