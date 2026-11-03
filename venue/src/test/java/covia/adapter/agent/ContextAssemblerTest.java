@@ -1050,7 +1050,7 @@ public class ContextAssemblerTest {
 	/** A session conversation holding these envelopes' turns, as the cycle that took them writes them. */
 	private Spec takenBy(Spec spec, ACell... envelopes) {
 		AMap<AString, ACell> frame = GoalTreeContext.createFrame("");
-		AVector<ACell> turns = covia.adapter.AgentAdapter.cycleInputTurns(Vectors.of(envelopes), null, null, null, 1L);
+		AVector<ACell> turns = covia.adapter.AgentAdapter.cycleInputTurns(Vectors.of((Object[]) envelopes), null, null, null, 1L);
 		for (long i = 0; i < turns.count(); i++) frame = GoalTreeContext.appendTurn(frame, turns.get(i));
 		return spec.withFrames(Vectors.of(frame));
 	}
