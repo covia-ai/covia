@@ -208,7 +208,7 @@ public class EngineTest {
 				Covia.GRID, Covia.VENUES, engine.getAccountKey(), Keywords.VALUE,
 				Covia.USER_DATA, did),
 				"component writes must update the Engine's authoritative root immediately");
-			assertEquals(Status.STARTED, RT.getIn(user.jobs().get(jobId).getRecord(), Fields.STATUS),
+			assertEquals(Status.STARTED, RT.getIn(user.jobs().getRecord(jobId), Fields.STATUS),
 				"local write order, not wall-clock resolution, decides the current value");
 		} finally {
 			engine.close();

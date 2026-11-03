@@ -255,10 +255,10 @@ public class HITLAdapterTest {
 			e.registerAdapter(new AgentAdapter() {
 				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
 						AString caller, AString job, ACell message) {
-					assertEquals(Status.COMPLETE, draft.get(owner).jobs().get(Blob.fromHex(requestId.get().toString())).getRecord().get(Fields.STATUS),
+					assertEquals(Status.COMPLETE, draft.get(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS),
 						"the final Job result must be part of the same draft as the inbox and session");
 					if (failAppend.get()) {
-						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().get(owner).jobs().get(Blob.fromHex(requestId.get().toString())).getRecord().get(Fields.STATUS));
+						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().get(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS));
 						assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 						assertTrue(e.getVenueState().users().get(owner).agent("asker").getSessionPending(sid).isEmpty());
 					}

@@ -48,17 +48,21 @@ public class JobsTest {
 	public void testCreateAdmitsAJobOnce() {
 		Jobs jobs = user().jobs();
 		assertEquals(0, jobs.count());
-		assertNull(jobs.get(ID).getRecord());
+		assertNull(jobs.get(ID));
+		assertNull(jobs.getRecord(ID));
 
-		assertTrue(jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED)));
-		assertFalse(jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.FAILED)));
+		JobState job = jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
+		assertEquals(Status.STARTED, job.getRecord().get(Fields.STATUS));
+		assertNull(jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.FAILED)));
 		assertEquals(1, jobs.count());
-		assertEquals(Status.STARTED, jobs.get(ID).getRecord().get(Fields.STATUS));
+		assertEquals(Status.STARTED, jobs.getRecord(ID).get(Fields.STATUS));
+		assertEquals(job.getRecord(), jobs.get(ID).getRecord());
 
 		assertTrue(jobs.remove(ID));
 		assertFalse(jobs.remove(ID));
-		assertNull(jobs.get(ID).getRecord());
-		assertNull(jobs.get(ID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE)),
+		assertNull(jobs.get(ID));
+		assertNull(job.getRecord(), "a job removed while held reads as null");
+		assertNull(job.update(record -> record.assoc(Fields.STATUS, Status.COMPLETE)),
 			"an update to a removed job must not recreate it");
 		assertEquals(0, jobs.count());
 	}
@@ -82,13 +86,13 @@ public class JobsTest {
 
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "first");
 		jobs.transact(draft -> {
-			assertTrue(draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING)));
-			assertTrue(draft.get(ID).appendHistory(message));
+			JobState admitted = draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
+			assertTrue(admitted.appendHistory(message));
 			assertTrue(draft.remove(other));
-			assertNull(jobs.get(ID).getRecord(), "the draft is private until it commits");
+			assertNull(jobs.get(ID), "the draft is private until it commits");
 		});
-		assertEquals(Vectors.of(message), jobs.get(ID).getRecord().get(Fields.HISTORY));
-		assertNull(jobs.get(other).getRecord());
+		assertEquals(Vectors.of(message), jobs.getRecord(ID).get(Fields.HISTORY));
+		assertNull(jobs.get(other));
 		assertEquals(CVMLong.create(200), RT.getIn(user.get(), Covia.K_META, Fields.UPDATED),
 			"the commit stamps the user like any other write");
 	}
@@ -111,5 +115,7 @@ public class JobsTest {
 		assertEquals(output.get(PREV), user.resolve(new ACell[] {Namespace.J, HEX, Fields.OUTPUT, PREV}, 0).read());
 		assertNull(user.resolve(new ACell[] {Namespace.J, HEX, PREV}, 0).read());
 		assertNull(user.resolve(new ACell[] {Namespace.J, Strings.create("not-a-job")}, 0).read());
+		assertNull(user.resolve(new ACell[] {Namespace.J, Strings.create("0ffe"), Fields.STATUS}, 0).read(),
+			"an id that names no job reads as null");
 	}
 }

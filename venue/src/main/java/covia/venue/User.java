@@ -3,7 +3,6 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Blob;
 import convex.core.data.Strings;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
@@ -78,10 +77,15 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return new WorkspaceRoot(cursor(), getContext(), true);
 	}
 
-	/** Internal namespace-resolution bridge; domain callers use agent and job methods. */
+	/**
+	 * Internal namespace-resolution bridge; domain callers use agent and job
+	 * methods. A job's record need not exist: task scratch requires it before
+	 * writing and reads null without it.
+	 */
 	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
 		if (Namespace.G.equals(namespace)) return new AgentState(context, agentStorage(id), (AString) id).cursor();
-		if (Namespace.J.equals(namespace)) return jobs().get((Blob) id).cursor();
+		if (Namespace.J.equals(namespace)) return new JobState(context,
+			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J, id)).cursor();
 		throw new IllegalArgumentException("Not an agent or job namespace: " + namespace);
 	}
 

@@ -5131,7 +5131,7 @@ public class AgentAdapter extends AAdapter {
 		if (tasks != null) {
 			for (var entry : tasks.entrySet()) {
 				Blob taskId = entry.getKey();
-				ACell rawJob = user.jobs().get(taskId).getRecord();
+				ACell rawJob = user.jobs().getRecord(taskId);
 				if (rawJob instanceof AMap<?, ?> map
 						&& Job.isFinished((AMap<AString, ACell>) map)) {
 					agent.removeTask(taskId);
@@ -5155,7 +5155,7 @@ public class AgentAdapter extends AAdapter {
 				AString jobIdHex = RT.ensureString(RT.getIn(pending.get(i), Fields.JOB_ID));
 				Blob jobId = (jobIdHex != null) ? Blob.fromHex(jobIdHex.toString()) : null;
 				if (jobId == null) continue; // fire-and-forget message, not a chat Job
-				ACell rawJob = user.jobs().get(jobId).getRecord();
+				ACell rawJob = user.jobs().getRecord(jobId);
 				if (!(rawJob instanceof AMap<?, ?> map)
 						|| Job.isFinished((AMap<AString, ACell>) map)) {
 					agent.session(sid).removePendingJob(jobId);

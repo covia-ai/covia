@@ -2430,16 +2430,16 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE.getUserDID());
 		// No job operation sets a stale stamp, so write it into storage.
 		user.cursor().path(Namespace.J, jobId, Fields.UPDATED).set(CVMLong.ZERO);
-		assertEquals(CVMLong.ZERO, user.jobs().get(jobId).getRecord().get(Fields.UPDATED));
+		assertEquals(CVMLong.ZERO, user.jobs().getRecord(jobId).get(Fields.UPDATED));
 
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "t/stamp-probe", Fields.VALUE, Strings.create("written")),
 			ALICE.withJobId(jobId)).awaitResult(5000);
 
 		assertEquals(Strings.create("written"),
-			RT.getIn(user.jobs().get(jobId).getRecord(), "temp", "stamp-probe"),
+			RT.getIn(user.jobs().getRecord(jobId), "temp", "stamp-probe"),
 			"the stamped component must not add an envelope to the Job record");
-		CVMLong updated = (CVMLong) user.jobs().get(jobId).getRecord().get(Fields.UPDATED);
+		CVMLong updated = (CVMLong) user.jobs().getRecord(jobId).get(Fields.UPDATED);
 		assertTrue(updated.longValue() > 0,
 			"a deep t/ write should refresh the enclosing Job record's updated field");
 	}
@@ -2795,7 +2795,7 @@ public class CoviaAdapterTest {
 		assertTrue(vns.requireExistingRecord());
 
 		// The cursor must be the FOCUSED TASK's Job record, not the transition Job's.
-		assertEquals(user.jobs().get(taskId).getRecord(), vns.cursor().cursor().get(),
+		assertEquals(user.jobs().getRecord(taskId), vns.cursor().cursor().get(),
 			"t/ must resolve to the focused task Job");
 	}
 
@@ -2814,7 +2814,7 @@ public class CoviaAdapterTest {
 		assertEquals("temp", vns.remainingKeys()[0].toString());
 		assertTrue(vns.requireExistingRecord());
 
-		assertEquals(user.jobs().get(jobId).getRecord(), vns.cursor().cursor().get(),
+		assertEquals(user.jobs().getRecord(jobId), vns.cursor().cursor().get(),
 			"t/ must resolve to the current Job record");
 	}
 
@@ -2828,7 +2828,7 @@ public class CoviaAdapterTest {
 				Maps.of(Fields.PATH, "t/draft", Fields.VALUE, "no phantom"),
 				jobCtx).awaitResult(5000));
 
-		assertNull(engine.getVenueState().users().get(ALICE_DID).jobs().get(missing).getRecord());
+		assertNull(engine.getVenueState().users().get(ALICE_DID).jobs().get(missing));
 	}
 
 	// Regression: concurrent appends to the same vector path used to lose

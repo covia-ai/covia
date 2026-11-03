@@ -30,31 +30,24 @@ public class VenueJob extends Job {
 	/** Set only by public top-level result dispatch, never from operation metadata. */
 	private final boolean directRun;
 
-	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
+	/** An observable recorded Job over its existing record. */
+	VenueJob(JobState record, AMap<AString, ACell> data, AMap<AString, ACell> meta,
 			AString callerDID, JobManager manager) {
-		this(record, meta, callerDID, manager, false, true);
+		this(record, data, meta, callerDID, manager, true, false);
 	}
 
-	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
-			AString callerDID, JobManager manager, boolean memoryOnly) {
-		this(record, meta, callerDID, manager, memoryOnly, true);
-	}
-
-	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
-			AString callerDID, JobManager manager, boolean memoryOnly,
-			boolean observable) {
-		this(record, meta, callerDID, manager, memoryOnly, observable, false);
-	}
-
-	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
-			AString callerDID, JobManager manager, boolean memoryOnly,
-			boolean observable, boolean directRun) {
-		super(memoryOnly ? record : null, !memoryOnly);
+	/**
+	 * @param record The Job's record, or null for a memory-only Job
+	 * @param data The Job's data when the handle is made
+	 */
+	VenueJob(JobState record, AMap<AString, ACell> data, AMap<AString, ACell> meta,
+			AString callerDID, JobManager manager, boolean observable, boolean directRun) {
+		super((record == null) ? data : null, record != null);
 		this.manager = manager;
 		this.meta = meta;
 		this.account = manager.account(callerDID);
-		this.record = memoryOnly ? null : account.jobs().get(Job.parseID(record.get(Fields.ID)));
-		this.lastKnown = record;
+		this.record = record;
+		this.lastKnown = data;
 		this.observable = observable;
 		this.directRun = directRun;
 	}
@@ -145,8 +138,10 @@ public class VenueJob extends Job {
 		User owner = draft.get(account.getDID());
 		if (owner == null) return null;
 		Users.requireCurrent(owner.get(), convex.core.lang.RT.getIn(account.get(), Users.GENERATION));
+		JobState job = owner.jobs().get(getID());
+		if (job == null) return null;
 		var original = new AtomicReference<AMap<AString, ACell>>();
-		AMap<AString, ACell> updated = owner.jobs().get(getID()).update(current -> {
+		AMap<AString, ACell> updated = job.update(current -> {
 			if (Job.isFinished(current)) return null;
 			AMap<AString, ACell> next = updater.apply(current);
 			if (next == null) return null;

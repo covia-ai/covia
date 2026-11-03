@@ -123,7 +123,7 @@ class UserExportsTest {
 		Job job = engine.jobs().invokeOperation("v/ops/user/import", Maps.of(Fields.DID, target,
 			EXPORT, hex, Fields.SEED, seedRef(seal)), venue);
 		assertEquals(CVMBool.TRUE, RT.getIn(job.awaitResult(10_000), Fields.CREATED));
-		AMap<AString, ACell> record = engine.getVenueState().users().get(engine.getDIDString()).jobs().get(job.getID()).getRecord();
+		AMap<AString, ACell> record = engine.getVenueState().users().get(engine.getDIDString()).jobs().getRecord(job.getID());
 		assertEquals(Fields.HIDDEN, RT.getIn(record, Fields.INPUT, EXPORT), "the export never reaches a job record");
 
 		Users users = engine.getVenueState().users();
@@ -236,7 +236,7 @@ class UserExportsTest {
 			Fields.VERSION, 1, Fields.DID, source,
 			UserExports.K_USER, Maps.of(Namespace.J, Index.of(jobID, legacy))), true);
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
-		assertEquals(current, engine.getVenueState().users().get(target).jobs().get(jobID).getRecord());
+		assertEquals(current, engine.getVenueState().users().get(target).jobs().getRecord(jobID));
 	}
 
 	@Test

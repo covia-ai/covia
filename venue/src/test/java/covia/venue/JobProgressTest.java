@@ -52,6 +52,6 @@ public class JobProgressTest {
 	}
 
 	private AMap<AString, ACell> record(AString did, Job job) {
-		return engine.getVenueState().users().get(did).jobs().get(job.getID()).getRecord();
+		return engine.getVenueState().users().get(did).jobs().getRecord(job.getID());
 	}
 }

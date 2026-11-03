@@ -320,7 +320,7 @@ a job reads as its current state.
 |-----------|--------|
 | `VenueState` | a user's DID to their `User`; `x/<adapter>` to the adapter component |
 | `User` | `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `WorkspaceRegion` |
-| `Jobs` | a job id, in hex, to its `JobState` |
+| `Jobs` | a job id, in hex, to its `JobState`; an id that names no job reads as null |
 | `AgentState` | `sessions/<id>` to `SessionState` |
 
 `DataComponent` is the fallback for a position no other component claims,

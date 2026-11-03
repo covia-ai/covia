@@ -128,7 +128,7 @@ public class VenueBootstrapMaterializerTest {
 			adapter.allowCommit.countDown();
 			registration.get(5, TimeUnit.SECONDS);
 
-			assertNotNull(user.jobs().get(jobId).getRecord(),
+			assertNotNull(user.jobs().getRecord(jobId),
 				"the workspace transaction must not replace an unrelated user update");
 			assertEquals(Strings.create("keep"), engine.resolvePath(
 				Strings.create("v/concurrent"), engine.venueContext()),

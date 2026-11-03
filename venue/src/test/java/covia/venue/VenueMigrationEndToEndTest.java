@@ -145,8 +145,8 @@ class VenueMigrationEndToEndTest {
 			// A job reads as its current state, and its next write drops the chain.
 			assertEquals(job, engine.jobs().getJobData(JOB, ctx));
 			assertTrue(user.jobs().get(JOB).appendHistory(Maps.of(Fields.MESSAGE_ID, "after migration")));
-			assertFalse(user.jobs().get(JOB).getRecord().containsKey(PREV));
-			assertEquals(user.jobs().get(JOB).getRecord(), user.cursor().path(Namespace.J, JOB).get());
+			assertFalse(user.jobs().getRecord(JOB).containsKey(PREV));
+			assertEquals(user.jobs().getRecord(JOB), user.cursor().path(Namespace.J, JOB).get());
 
 			// A version 1 secret decrypts, and its next write takes the current key version.
 			SecretStore.Keys keys = SecretStore.keys(engine.getKeyPair());

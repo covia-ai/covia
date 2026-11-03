@@ -372,7 +372,7 @@ public class JobCancellationTest {
 		Thread canceller;
 		try {
 			synchronized (acceptance) {
-				assertTrue(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
+				assertNotNull(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
 					Fields.CALLER, ALICE_DID)));
 				canceller = Thread.ofPlatform().start(
 					() -> cancelled.complete(engine.jobs().cancelJob(id)));

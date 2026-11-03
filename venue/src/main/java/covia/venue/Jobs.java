@@ -6,6 +6,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
+import convex.core.lang.RT;
 import convex.lattice.ALattice;
 import convex.lattice.LatticeComponent;
 import convex.lattice.TransactionalComponent;
@@ -55,14 +56,27 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	}
 
 	/**
-	 * One job, which may not exist: its record is then null and its updates
-	 * change nothing.
+	 * One job. A job removed while a caller holds it reads as null, and its
+	 * updates change nothing.
 	 *
 	 * @param id Job id
-	 * @return The job, bound to this cursor or transaction draft
+	 * @return The job, bound to this cursor or transaction draft, or null if
+	 *         there is no such job
 	 */
 	public JobState get(Blob id) {
-		return new JobState(context, LatticeComponent.resolve(cursor(), LATTICE, id));
+		Index<Blob, ACell> jobs = cursor().get();
+		return (jobs != null && jobs.containsKey(id)) ? state(id) : null;
+	}
+
+	/**
+	 * One job's record in its current state.
+	 *
+	 * @param id Job id
+	 * @return The record, or null if there is no such job
+	 */
+	public AMap<AString, ACell> getRecord(Blob id) {
+		Index<Blob, ACell> jobs = cursor().get();
+		return (jobs == null) ? null : Job.currentState(RT.ensureMap(jobs.get(id)));
 	}
 
 	/**
@@ -70,15 +84,19 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 *
 	 * @param id Job id
 	 * @param record Job record
-	 * @return true if the record was created, false if the job already existed
+	 * @return The new job, or null if the job already existed
 	 */
-	boolean create(Blob id, AMap<AString, ACell> record) {
+	JobState create(Blob id, AMap<AString, ACell> record) {
 		AMap<AString, ACell> current = Job.currentState(record);
 		Index<Blob, ACell> before = cursor().getAndUpdate(jobs -> {
 			if (jobs == null) return Index.<Blob, ACell>none().assoc(id, current);
 			return jobs.containsKey(id) ? jobs : jobs.assoc(id, current);
 		});
-		return before == null || !before.containsKey(id);
+		return (before == null || !before.containsKey(id)) ? state(id) : null;
+	}
+
+	private JobState state(Blob id) {
+		return new JobState(context, LatticeComponent.resolve(cursor(), LATTICE, id));
 	}
 
 	/**
@@ -101,11 +119,13 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return (jobs == null) ? null : Job.currentStates(jobs);
 	}
 
+	/** A key that names no job is read-only data, which reads as null. */
 	@Override
 	public ACoviaComponent<?> resolve(ACell[] keys, int from) {
 		Blob id = (from < keys.length) ? parseID(keys[from]) : null;
-		if (id == null) return super.resolve(keys, from);
-		return get(id).resolve(keys, from + 1);
+		JobState job = (id == null) ? null : get(id);
+		if (job == null) return super.resolve(keys, from);
+		return job.resolve(keys, from + 1);
 	}
 
 	/** The stored key a caller's job key names, or null when it names none. */

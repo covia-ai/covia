@@ -190,7 +190,7 @@ public class VenueStartupTest {
 			assertEquals(0, adapter.calls.get());
 			assertEquals(1, engine.gridScheduler().list(engine.venueContext()).count());
 			assertEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
-				.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
+				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			// The reserved port prevents accidental early HTTP publication.
 			reserved.close();
 			release.complete(null);
@@ -202,7 +202,7 @@ public class VenueStartupTest {
 			assertEquals(1, adapter.calls.get());
 			assertEquals(0, engine.gridScheduler().list(engine.venueContext()).count());
 			assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
-				.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
+				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 		} finally {
 			if (server != null) server.close();
 			else if (launch != null) launch.cancel(true);
@@ -413,7 +413,7 @@ public class VenueStartupTest {
 				assertTrue(adapter.recovered);
 				assertEquals(Strings.create("embedded due"), adapter.fired.get(5, TimeUnit.SECONDS));
 				assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
-					.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
+					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			} finally {
 				engine.close();
 			}
@@ -482,7 +482,7 @@ public class VenueStartupTest {
 				assertEquals(0, adapter.closed.getCount());
 				assertTrue(engine.isClosing());
 				assertNotEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
-					.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
+					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			} finally {
 				engine.close();
 			}

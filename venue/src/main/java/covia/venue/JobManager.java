@@ -970,16 +970,18 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		VenueJob job = new VenueJob(status, meta, callerDID, this, memoryOnly,
-			!memoryOnly, directRun);
-		job.setPreserveFailureCause(resultOriented);
+		VenueJob job;
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(callerDID);
 			// Create before publishing the runtime handle; updates only edit existing rows.
 			// Readers can see the row first, so by-id lookups go through liveJob.
-			if (!memoryOnly && !job.account().jobs().create(jobID, status)) {
-				throw new IllegalStateException(JOB_ID_EXISTS + jobID);
+			JobState record = null;
+			if (!memoryOnly) {
+				record = account(callerDID).jobs().create(jobID, status);
+				if (record == null) throw new IllegalStateException(JOB_ID_EXISTS + jobID);
 			}
+			job = new VenueJob(record, status, meta, callerDID, this, !memoryOnly, directRun);
+			job.setPreserveFailureCause(resultOriented);
 			activeJobs.put(jobID, job);
 		}
 
@@ -1015,7 +1017,7 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		AMap<AString, ACell> record = user.jobs().get(jobID).getRecord();
+		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
 		if (record != null) requireReadable(ctx, jobID, record);
 		return record;
 	}
@@ -1105,7 +1107,7 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		AMap<AString, ACell> record = user.jobs().get(jobID).getRecord();
+		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
 		if (record == null) return null;
 		requireReadable(ctx, jobID, record);
 		return new Job(record);
@@ -1318,7 +1320,8 @@ public class JobManager {
 		Job live = activeJobs.get(jobID);
 		User user = live instanceof VenueJob job ? job.account()
 			: engine.getVenueState().users().get(ownerDID);
-		if (user != null && user.jobs().get(jobID).appendHistory(record) && live instanceof VenueJob job) {
+		JobState state = (user == null) ? null : user.jobs().get(jobID);
+		if (state != null && state.appendHistory(record) && live instanceof VenueJob job) {
 			job.historyUpdated();
 		}
 	}
@@ -1359,7 +1362,9 @@ public class JobManager {
 				AMap<AString, ACell> record = (AMap<AString, ACell>) value;
 				if (activeJobs.containsKey(jobID)) continue; // already live
 				if (Job.isFinished(record)) continue;
-				VenueJob job = restoreJob(jobID, Job.currentState(record), did);
+				JobState state = user.jobs().get(jobID);
+				if (state == null) continue;
+				VenueJob job = restoreJob(jobID, state, Job.currentState(record), did);
 				restored.add(job);
 			}
 		}
@@ -1396,7 +1401,7 @@ public class JobManager {
 	 * before any verb runs on it. The handle binds to the existing lattice row;
 	 * recovery never creates or copies a second mutable job record.
 	 */
-	private VenueJob restoreJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
+	private VenueJob restoreJob(Blob jobID, JobState state, AMap<AString, ACell> record, AString callerDID) {
 		AMap<AString, ACell> delegation = RT.ensureMap(record.get(RemoteJobs.DELEGATION));
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
@@ -1409,7 +1414,7 @@ public class JobManager {
 			try { meta = engine.remoteJobs().recoveryMetadata(delegation); }
 			catch (RuntimeException unavailable) { meta = null; }
 		}
-		VenueJob job = new VenueJob(record, meta, callerDID, this);
+		VenueJob job = new VenueJob(state, record, meta, callerDID, this);
 		activeJobs.put(jobID, job);
 		return job;
 	}

@@ -126,8 +126,10 @@ execution after the outer commit. A commit is not an exactly-once external effec
 crash-sensitive dispatch still needs its existing durable claim/recovery protocol.
 Do not introduce I/O or runtime service calls inside retryable callbacks.
 
-`user.jobs().get(id)` is the primary record of a recorded venue job. Admission creates
-it explicitly; updates only edit an existing row. `VenueJob` reads and mutates
+A recorded venue job's `JobState` (`user.jobs().get(id)`, null when there is no
+such job) is its primary record. Admission creates it explicitly; updates only
+edit an existing row, and a job removed while a caller holds its `JobState` reads
+as null. `VenueJob` reads and mutates
 that component directly, then runs runtime hooks after commit. History edits and
 late cancellation diagnostics share this record, including after runtime-cache
 eviction. There is no persistence callback copying an in-memory record back to

@@ -6288,11 +6288,11 @@ public class AgentAdapterTest {
 		// Job records belong to their callers and are NOT touched — the
 		// caller holds the IDs and may delete them via the jobs API (which
 		// deletes permanently), or use content-free job variants (#192).
-		assertNotNull(user.jobs().get(msg1.getID()).getRecord(), "job records survive a session delete");
-		assertNotNull(user.jobs().get(msg2.getID()).getRecord(), "job records survive a session delete");
+		assertNotNull(user.jobs().getRecord(msg1.getID()), "job records survive a session delete");
+		assertNotNull(user.jobs().getRecord(msg2.getID()), "job records survive a session delete");
 		assertTrue(engine.jobs().deleteJob(msg1.getID(), RequestContext.of(ALICE_DID)),
 			"caller can still delete their own job separately");
-		assertNull(user.jobs().get(msg1.getID()).getRecord());
+		assertNull(user.jobs().getRecord(msg1.getID()));
 	}
 
 	@Test

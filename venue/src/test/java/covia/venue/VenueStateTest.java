@@ -189,7 +189,7 @@ public class VenueStateTest {
 		user.jobs().create(jobID, record);
 
 		assertEquals(1, user.jobs().count());
-		AMap<AString, ACell> retrieved = user.jobs().get(jobID).getRecord();
+		AMap<AString, ACell> retrieved = user.jobs().getRecord(jobID);
 		assertNotNull(retrieved);
 		assertEquals(Status.PENDING, retrieved.get(Fields.STATUS));
 	}
@@ -205,12 +205,12 @@ public class VenueStateTest {
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
-		assertFalse(user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.FAILED)),
+		assertNull(user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.FAILED)),
 			"an existing job is not created again");
 		user.jobs().get(jobID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE));
 
 		assertEquals(1, user.jobs().count(), "Should still be one job");
-		assertEquals(Status.COMPLETE, user.jobs().get(jobID).getRecord().get(Fields.STATUS));
+		assertEquals(Status.COMPLETE, user.jobs().getRecord(jobID).get(Fields.STATUS));
 	}
 
 	@Test
@@ -219,12 +219,9 @@ public class VenueStateTest {
 		User user = vs.users().ensure("did:key:zConditionalJobUpdate");
 		Blob jobID = Blob.parse("0x0001");
 		AString marker = Strings.intern("marker");
-		JobState job = user.jobs().get(jobID);
+		assertNull(user.jobs().get(jobID), "there is no job before it is created");
 
-		assertNull(job.update(record -> record.assoc(marker, Strings.create("missing"))));
-		assertNull(job.getRecord(), "an update to an absent job must not create a row");
-
-		user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.PENDING));
+		JobState job = user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.PENDING));
 		assertNotNull(job.update(record -> record.assoc(marker, Strings.create("present"))));
 		assertEquals(Strings.create("present"), job.getRecord().get(marker));
 
@@ -238,6 +235,7 @@ public class VenueStateTest {
 			"delete and update must linearise without resurrection");
 		assertNull(job.update(record -> record.assoc(marker, Strings.create("late"))));
 		assertNull(job.getRecord());
+		assertNull(user.jobs().get(jobID), "an update to a removed job must not create a row");
 	}
 
 	@Test
@@ -246,7 +244,8 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zAlice");
 
-		assertNull(user.jobs().get(Blob.parse("0xFFFF")).getRecord());
+		assertNull(user.jobs().get(Blob.parse("0xFFFF")));
+		assertNull(user.jobs().getRecord(Blob.parse("0xFFFF")));
 	}
 
 	// ========== Child Cursor Accessors ==========
@@ -368,7 +367,7 @@ public class VenueStateTest {
 		User connectedAlice = connected.users().get("did:key:zAlice");
 		assertNotNull(connectedAlice,
 			"User should be visible through connected cursor after sync");
-		assertNotNull(connectedAlice.jobs().get(Blob.parse("0x0001")).getRecord(),
+		assertNotNull(connectedAlice.jobs().getRecord(Blob.parse("0x0001")),
 			"Job should be visible through connected cursor after sync");
 	}
 
@@ -457,8 +456,8 @@ public class VenueStateTest {
 		// Each sees only their own data
 		assertEquals(1, alice.jobs().count(), "Alice should see only her job");
 		assertEquals(1, bob.jobs().count(), "Bob should see only his job");
-		assertNotNull(alice.jobs().get(Blob.parse("0x0001")).getRecord());
-		assertNull(alice.jobs().get(Blob.parse("0x0002")).getRecord());
+		assertNotNull(alice.jobs().getRecord(Blob.parse("0x0001")));
+		assertNull(alice.jobs().getRecord(Blob.parse("0x0002")));
 	}
 
 	@Test

@@ -40,8 +40,8 @@ class DomainTransactionTest {
 		var venue = VenueState.create(AKeyPair.generate());
 		var user = venue.users().ensure(DID);
 		var id = Blob.fromHex("01");
-		assertTrue(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED)));
-		assertFalse(user.jobs().create(id, Maps.of(Fields.STATUS, covia.grid.Status.FAILED)));
+		assertNotNull(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED)));
+		assertNull(user.jobs().create(id, Maps.of(Fields.STATUS, covia.grid.Status.FAILED)));
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "one");
 		var retained = new AtomicReference<JobState>();
 		ACell before = venue.get();
@@ -58,7 +58,7 @@ class DomainTransactionTest {
 			assertTrue(draft.jobs().get(id).appendHistory(message));
 			draft.workspaceRoot().write(path("w/received"), CVMLong.ONE);
 		});
-		assertEquals(convex.core.data.Vectors.of(message), user.jobs().get(id).getRecord().get(Fields.HISTORY));
+		assertEquals(convex.core.data.Vectors.of(message), user.jobs().getRecord(id).get(Fields.HISTORY));
 		assertEquals(CVMLong.ONE, user.workspaceRoot().read(path("w/received")));
 		assertFalse(user.jobs().get(id).appendHistory(message));
 	}
@@ -84,7 +84,7 @@ class DomainTransactionTest {
 			pending.get(10, TimeUnit.SECONDS);
 		}
 		assertFalse(appended.get());
-		assertNull(user.jobs().get(id).getRecord());
+		assertNull(user.jobs().get(id));
 		assertTrue(user.jobs().getAll().isEmpty());
 	}
 
