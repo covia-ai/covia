@@ -71,6 +71,9 @@ public final class VenueContext {
 		return clock.get();
 	}
 
+	// TODO: reconsider approach. Nothing calls this since covia writes check
+	// authority themselves; settle how access checks reach components as the
+	// component refactor continues (#617).
 	/** Returns when the principal may use the ability on the resource, else throws its refusal. */
 	public void requireAccess(RequestContext ctx, AString resource, AString ability) {
 		access.require(ctx, resource, ability);
