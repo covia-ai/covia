@@ -1,5 +1,6 @@
 package covia.venue;
 
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
@@ -14,8 +15,7 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.AUpdateCursor;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
-import covia.lattice.DataComponent;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
 
 /**
  * Adapter-owned value beneath the running venue's :adapters region.
@@ -102,21 +102,24 @@ public final class AdapterState extends ACoviaComponent<ACell>
 
 	/** Optional type-aware path access for map/vector-shaped adapter values. */
 	public ACell read(String relative) {
-		return DataComponent.deepGet(get(), keys(relative, true), 0);
+		return ValuePath.get(get(), keys(relative, true), 0);
 	}
+	/** Writes {@code value} at the path, creating any missing levels above it. */
 	public void write(String relative, ACell value) {
 		Objects.requireNonNull(value, "Adapter state values must be non-null; use delete()");
 		ACell[] path = keys(relative, false);
-		update(current -> DataComponent.deepSet(current, path, 0, value));
+		ACell[] parent = Arrays.copyOf(path, path.length - 1);
+		update(current -> ValuePath.set(
+			ValuePath.createPath((current == null) ? Maps.empty() : current, parent, 0, new int[1]), path, 0, value));
 	}
 	public boolean delete(String relative) {
 		ACell[] path = keys(relative, false);
-		ACell previous = cursor().getAndUpdate(current -> DataComponent.deepDelete(current, path, 0));
-		return DataComponent.leafPresentIn(previous, path);
+		ACell previous = cursor().getAndUpdate(current -> ValuePath.remove(current, path, 0));
+		return ValuePath.contains(previous, path, 0);
 	}
 
 	private static ACell[] keys(String path, boolean allowEmpty) {
-		return WorkspaceRoot.parseStringPath(validateRelative(path, allowEmpty));
+		return ValuePath.parse(validateRelative(path, allowEmpty));
 	}
 	private static String validateRelative(String relative, boolean allowEmpty) {
 		if (relative == null) throw new IllegalArgumentException("Adapter state path is required");

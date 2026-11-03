@@ -25,15 +25,16 @@ import convex.core.data.prim.CVMLong;
 import convex.lattice.cursor.Cursors;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
+import covia.exception.InvalidInputException;
 import covia.api.Fields;
 import covia.lattice.Covia;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
 
 /** Domain transactions use the same child APIs, with one local commit boundary. */
 class DomainTransactionTest {
 
 	private static final AString DID = Strings.create("did:key:transaction-user");
-	private static ACell[] path(String path) { return WorkspaceRoot.parseStringPath(path); }
+	private static ACell[] path(String path) { return ValuePath.parse(path); }
 
 	@Test
 	void jobHistoryComposesWithWorkspaceAndRetainedDraftsStayIsolated() {
@@ -48,7 +49,7 @@ class DomainTransactionTest {
 		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
 			retained.set(draft.jobs().get(id));
 			assertTrue(draft.jobs().get(id).appendHistory(message));
-			draft.workspaceRoot().write(path("w/received"), CVMLong.ONE);
+			draft.workspace().write(path("w/received"), 1, CVMLong.ONE);
 			throw new IllegalStateException();
 		}));
 		assertEquals(before, venue.get());
@@ -56,10 +57,10 @@ class DomainTransactionTest {
 		assertEquals(before, venue.get());
 		user.transact(draft -> {
 			assertTrue(draft.jobs().get(id).appendHistory(message));
-			draft.workspaceRoot().write(path("w/received"), CVMLong.ONE);
+			draft.workspace().write(path("w/received"), 1, CVMLong.ONE);
 		});
 		assertEquals(convex.core.data.Vectors.of(message), user.jobs().getRecord(id).get(Fields.HISTORY));
-		assertEquals(CVMLong.ONE, user.workspaceRoot().read(path("w/received")));
+		assertEquals(CVMLong.ONE, user.workspace().read(path("w/received"), 1));
 		assertFalse(user.jobs().get(id).appendHistory(message));
 	}
 
@@ -384,7 +385,7 @@ class DomainTransactionTest {
 			var user = draft.users().ensure(DID);
 			user.ensureAgent("assistant", Maps.empty(), null);
 			user.secrets().store("token", "private", keys);
-			user.workspaceRoot().write(path("w/ready"), CVMLong.ONE);
+			user.workspace().write(path("w/ready"), 1, CVMLong.ONE);
 			draft.assets().store(Strings.create("{\"name\":\"private\"}"), null);
 			assertNull(venue.users().get(DID));
 			assertEquals(0, venue.assets().count());
@@ -396,12 +397,12 @@ class DomainTransactionTest {
 			var user = draft.users().ensure(DID);
 			user.ensureAgent("assistant", Maps.empty(), null);
 			user.secrets().store("token", "committed", keys);
-			user.workspaceRoot().write(path("w/ready"), CVMLong.ONE);
+			user.workspace().write(path("w/ready"), 1, CVMLong.ONE);
 		});
 		var user = venue.users().get(DID);
 		assertNotNull(user.agent("assistant"));
 		assertEquals(Strings.create("committed"), user.secrets().decrypt("token", keys));
-		assertEquals(CVMLong.ONE, user.workspaceRoot().read(path("w/ready")));
+		assertEquals(CVMLong.ONE, user.workspace().read(path("w/ready"), 1));
 	}
 
 	@Test
@@ -419,16 +420,16 @@ class DomainTransactionTest {
 				assertNull(user.agent("assistant"));
 			});
 			draft.secrets().transact(secrets -> secrets.store("token", "saved", keys));
-			draft.workspaceRoot().transact(workspace -> workspace.write(path("w/ready"), CVMLong.ONE));
+			draft.workspace().transact(workspace -> workspace.write(path("w/ready"), 1, CVMLong.ONE));
 			assertNull(user.secrets().decrypt("token", keys));
 		});
 		ACell committed = user.cursor().get();
 		assertEquals(Strings.create("PAUSED"), user.agent("assistant").getStatus());
 		assertEquals(Strings.create("saved"), user.secrets().decrypt("token", keys));
-		assertEquals(CVMLong.ONE, user.workspaceRoot().read(path("w/ready")));
+		assertEquals(CVMLong.ONE, user.workspace().read(path("w/ready"), 1));
 		retained.get().secrets().store("token", "too late", keys);
 		agentDraft.get().setStatus(Strings.create("COMPLETE"));
-		retained.get().workspaceRoot().write(path("w/late"), CVMLong.ONE);
+		retained.get().workspace().write(path("w/late"), 1, CVMLong.ONE);
 		assertEquals(committed, user.cursor().get());
 	}
 
@@ -441,7 +442,7 @@ class DomainTransactionTest {
 		var attempts = new AtomicInteger();
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 			var pending = executor.submit(() -> venue.transact(draft -> {
-				draft.users().get(DID).workspaceRoot().write(path("w/transaction"), CVMLong.ONE);
+				draft.users().get(DID).workspace().write(path("w/transaction"), 1, CVMLong.ONE);
 				if (attempts.incrementAndGet() == 1) {
 					entered.countDown();
 					await(resume);
@@ -449,13 +450,13 @@ class DomainTransactionTest {
 			}));
 			try {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
-				user.workspaceRoot().write(path("w/concurrent"), CVMLong.ONE);
+				user.workspace().write(path("w/concurrent"), 1, CVMLong.ONE);
 			} finally { resume.countDown(); }
 			pending.get(10, TimeUnit.SECONDS);
 		}
 		assertEquals(2, attempts.get());
-		assertEquals(CVMLong.ONE, user.workspaceRoot().read(path("w/concurrent")));
-		assertEquals(CVMLong.ONE, user.workspaceRoot().read(path("w/transaction")));
+		assertEquals(CVMLong.ONE, user.workspace().read(path("w/concurrent"), 1));
+		assertEquals(CVMLong.ONE, user.workspace().read(path("w/transaction"), 1));
 	}
 
 	@Test
@@ -466,7 +467,7 @@ class DomainTransactionTest {
 		var resume = new CountDownLatch(1);
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 			var pending = executor.submit(() -> user.transact(draft -> {
-				draft.workspaceRoot().write(path("w/stale"), CVMLong.ONE);
+				draft.workspace().write(path("w/stale"), 1, CVMLong.ONE);
 				entered.countDown();
 				await(resume);
 			}));
@@ -481,7 +482,7 @@ class DomainTransactionTest {
 			assertInstanceOf(AuthException.class, failure.getCause());
 			assertEquals(Users.ACCOUNT_DELETED, failure.getCause().getMessage());
 		}
-		assertNull(venue.users().get(DID).workspaceRoot().read(path("w/stale")));
+		assertNull(venue.users().get(DID).workspace().read(path("w/stale"), 1));
 	}
 
 	@Test
@@ -498,7 +499,7 @@ class DomainTransactionTest {
 		assertEquals(staged.get(), venue.get());
 		var user = venue.users().get(DID);
 		user.transact(draft -> {
-			draft.workspaceRoot().write(path("w/value"), CVMLong.ONE);
+			draft.workspace().write(path("w/value"), 1, CVMLong.ONE);
 			staged.set(draft.cursor().get());
 		});
 		assertEquals(staged.get(), user.cursor().get());
@@ -523,8 +524,8 @@ class DomainTransactionTest {
 		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), signer, VenueContext.SYSTEM);
 		venue.transact(draft -> {
 			var user = draft.users().ensure(DID);
-			user.workspaceRoot().write(path("w/a"), CVMLong.ONE);
-			user.workspaceRoot().write(path("w/b"), CVMLong.ONE);
+			user.workspace().write(path("w/a"), 1, CVMLong.ONE);
+			user.workspace().write(path("w/b"), 1, CVMLong.ONE);
 			assertEquals(0, signatures.get());
 		});
 		assertEquals(1, signatures.get());
@@ -533,11 +534,11 @@ class DomainTransactionTest {
 		ACell before = venue.get();
 		fail.set(true);
 		assertThrows(IllegalStateException.class, () -> venue.transact(draft ->
-			draft.users().get(DID).workspaceRoot().write(path("w/c"), CVMLong.ONE)));
+			draft.users().get(DID).workspace().write(path("w/c"), 1, CVMLong.ONE)));
 		assertEquals(before, venue.get());
 		fail.set(false);
-		venue.transact(draft -> draft.users().get(DID).workspaceRoot().write(path("w/c"), CVMLong.ONE));
-		assertEquals(CVMLong.ONE, venue.users().get(DID).workspaceRoot().read(path("w/c")));
+		venue.transact(draft -> draft.users().get(DID).workspace().write(path("w/c"), 1, CVMLong.ONE));
+		assertEquals(CVMLong.ONE, venue.users().get(DID).workspace().read(path("w/c"), 1));
 	}
 
 	@Test
@@ -561,9 +562,9 @@ class DomainTransactionTest {
 			draft.store(Strings.create("{\"name\":\"discarded\"}"), null);
 			throw new IllegalStateException();
 		}));
-		assertThrows(IllegalArgumentException.class, () -> user.workspaceRoot().transact(draft -> {
-			draft.write(path("w/first"), CVMLong.ONE);
-			draft.write(path("w/first/child"), CVMLong.ONE); // shape conflict aborts both writes
+		assertThrows(InvalidInputException.class, () -> user.workspace().transact(draft -> {
+			draft.write(path("w/first"), 1, CVMLong.ONE);
+			draft.write(path("w/first/child"), 1, CVMLong.ONE); // shape conflict aborts both writes
 		}));
 		assertEquals(before, venue.get());
 	}

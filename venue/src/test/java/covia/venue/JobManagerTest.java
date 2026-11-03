@@ -84,7 +84,7 @@ public class JobManagerTest {
 		assertEquals(payload, engine.jobs().getJob(id, ctx).awaitResult());
 		assertEquals(current, engine.resolvePath(Strings.create(path), ctx));
 		assertEquals(current, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
-		assertEquals(current, RT.getIn(user.workspaceRoot().read(), covia.lattice.Namespace.J, id));
+		assertEquals(current, RT.getIn(user.read(), covia.lattice.Namespace.J, id));
 		assertNull(engine.resolvePath(Strings.create(path + "/prev"), ctx));
 		var adapter = (covia.adapter.CoviaAdapter) engine.getAdapter("covia");
 		assertEquals(current, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));

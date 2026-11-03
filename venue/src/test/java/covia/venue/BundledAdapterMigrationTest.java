@@ -25,7 +25,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AuthAdapter;
 import covia.adapter.TestAdapter;
 import covia.lattice.Covia;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
 
 /**
  * State migration of the adapters bundled in covia.jar, through the real
@@ -84,7 +84,7 @@ class BundledAdapterMigrationTest {
 			seed.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, engine.getDIDString()));
 			for (var entry : STATES.entrySet()) {
 				seed.users().ensure(engine.getDIDString())
-					.writeInternalPath(WorkspaceRoot.parseStringPath("w/adapters/" + entry.getKey()), entry.getValue().get(0));
+					.writeInternalPath(ValuePath.parse("w/adapters/" + entry.getKey()), entry.getValue().get(0));
 			}
 
 			engine.prepareLaunch();
@@ -97,7 +97,7 @@ class BundledAdapterMigrationTest {
 				expected.put(adapter.getName(), adapter.stateVersion());
 				assertEquals(states.get(states.size() - 1), venue.adapterState(adapter.getName()).get(), adapter.getName());
 				assertNull(venue.users().get(engine.getDIDString())
-					.readInternalPath(WorkspaceRoot.parseStringPath("w/adapters/" + adapter.getName())));
+					.readInternalPath(ValuePath.parse("w/adapters/" + adapter.getName())));
 			}
 			assertEquals(expected, venue.adapterVersions(), "unversioned adapters record nothing");
 		} finally {
@@ -120,7 +120,7 @@ class BundledAdapterMigrationTest {
 		try {
 			VenueState seed = application.venue(key.getAccountKey());
 			seed.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, first.getDIDString()));
-			seed.users().ensure(first.getDIDString()).writeInternalPath(WorkspaceRoot.parseStringPath("w/adapters/test"), states.get(0));
+			seed.users().ensure(first.getDIDString()).writeInternalPath(ValuePath.parse("w/adapters/test"), states.get(0));
 			first.prepareLaunch();
 			assertEquals(supported, first.getVenueState().adapterVersion("test"));
 			assertEquals(migrated, first.getVenueState().adapterState("test").get());

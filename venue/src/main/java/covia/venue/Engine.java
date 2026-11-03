@@ -1,6 +1,6 @@
 package covia.venue;
 
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -1992,10 +1992,10 @@ public class Engine {
 				throw new InvalidInputException(INVALID_DID_URL + ref + " (" + e.getMessage() + ")", e);
 			}
 			ownerDID = Strings.create(didURL.getDID().toString());
-			pathKeys = WorkspaceRoot.parseStringPath(didURL.getPath());
+			pathKeys = ValuePath.parse(didURL.getPath());
 		} else {
 			ownerDID = ctx.getUserDID();
-			pathKeys = WorkspaceRoot.parseStringPath(stripLeadingSlash(ref).toString());
+			pathKeys = ValuePath.parse(stripLeadingSlash(ref).toString());
 		}
 
 		if (pathKeys.length == 0) {
@@ -2048,7 +2048,7 @@ public class Engine {
 		try {
 			checked = ref.startsWith(NS_DID)
 				? isLocalDIDResource(ref)
-				: isPhysicalUserNamespace(WorkspaceRoot.parseStringPath(resource.toString()));
+				: isPhysicalUserNamespace(ValuePath.parse(resource.toString()));
 		} catch (IllegalArgumentException malformed) {
 			return;   // navigation rejects the same path
 		}

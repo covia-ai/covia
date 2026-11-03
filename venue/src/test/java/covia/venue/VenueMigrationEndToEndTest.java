@@ -26,7 +26,7 @@ import covia.api.Fields;
 import covia.grid.Status;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
 
 /**
  * Venue migration end to end, in process: one venue built at version 0,
@@ -45,7 +45,7 @@ class VenueMigrationEndToEndTest {
 	private static final long SEEDED_THROUGH = 1;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
-	private static final ACell[] OLD_DELETIONS = WorkspaceRoot.parseStringPath("w/user-deletions");
+	private static final ACell[] OLD_DELETIONS = ValuePath.parse("w/user-deletions");
 	/** Keyed by an adapter that never registers, so start-up leaves the deletion pending. */
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 	private static final ACell UNLOADED = Maps.of("note", "an unversioned adapter's state");
@@ -59,7 +59,7 @@ class VenueMigrationEndToEndTest {
 	private static final AString HISTORY_VERSION = Strings.create("historyVersion");
 
 	private static ACell[] adapterPath(String name) {
-		return WorkspaceRoot.parseStringPath("w/adapters/" + name);
+		return ValuePath.parse("w/adapters/" + name);
 	}
 
 	private static AMap<AString, ACell> turn(String role, String content) {
@@ -95,8 +95,8 @@ class VenueMigrationEndToEndTest {
 			user.secrets().store(LEGACY_GRANT, "{\"provider\":\"e2e\",\"accessToken\":\"e2e-access\",\"expiresAt\":0,"
 				+ "\"obtained\":1,\"scope\":\"read\"}", SecretStore.keys(key));
 			// An agent session with a legacy root frame and session-level loads.
-			user.writeInternalPath(WorkspaceRoot.parseStringPath("w/notes"), Strings.create("session notes"));
-			user.writeInternalPath(WorkspaceRoot.parseStringPath("w/frame-notes"), Strings.create("frame notes"));
+			user.writeInternalPath(ValuePath.parse("w/notes"), Strings.create("session notes"));
+			user.writeInternalPath(ValuePath.parse("w/frame-notes"), Strings.create("frame notes"));
 			AVector<ACell> conversation = Vectors.of(
 				GoalTreeContext.createSegment("earlier", Vectors.of(turn("user", "old question"), turn("assistant", "old answer"))),
 				turn("user", "recent question"), turn("assistant", "recent answer"));

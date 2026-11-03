@@ -16,7 +16,6 @@ import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
-import covia.lattice.WorkspaceRoot;
 import convex.lattice.cursor.StampedCursor;
 
 /**
@@ -85,11 +84,6 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		this.context = context;
 		this.did = did;
 		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampUserMeta);
-	}
-
-	/** Caller-visible workspace namespaces with this user's write policy. */
-	public WorkspaceRoot workspaceRoot() {
-		return new WorkspaceRoot(cursor(), getContext(), true);
 	}
 
 	/** This user's workspace ({@code w}). */

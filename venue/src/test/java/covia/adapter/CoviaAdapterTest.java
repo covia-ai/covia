@@ -1,6 +1,5 @@
 package covia.adapter;
 
-import covia.lattice.WorkspaceRoot;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -1473,23 +1472,13 @@ public class CoviaAdapterTest {
 		assertEquals(Strings.create("agents"), RT.getIn(facts.get(1), "topic"));
 	}
 
-	// ========== Deep path helpers — unit tests ==========
-
-	@Test
-	public void testDeepSetCreatesIntermediateMaps() {
-		ACell[] keys = WorkspaceRoot.parseStringPath("w/a/b/c");
-		ACell result = covia.lattice.DataComponent.deepSet(null, keys, 2, Strings.create("leaf"));
-
-		// Should create {b: {c: "leaf"}}
-		assertNotNull(result);
-		assertEquals(Strings.create("leaf"), RT.getIn(RT.getIn(result, "b"), "c"));
-	}
+	// ========== Value path helpers — unit tests ==========
 
 	@Test
 	public void testDeepDeletePreservesSiblings() {
 		ACell root = Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2));
-		ACell[] keys = WorkspaceRoot.parseStringPath("w/entry/x");
-		ACell result = covia.lattice.DataComponent.deepDelete(root, keys, 2);
+		ACell[] keys = ValuePath.parse("w/entry/x");
+		ACell result = ValuePath.remove(root, keys, 2);
 
 		// y should remain, x should be gone
 		assertNotNull(result);
@@ -1500,9 +1489,9 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeleteMissingBranchIsExactNoOp() {
 		ACell root = Maps.of("present", Maps.of("value", CVMLong.ONE));
-		ACell[] keys = WorkspaceRoot.parseStringPath("w/missing/leaf");
+		ACell[] keys = ValuePath.parse("w/missing/leaf");
 
-		ACell result = covia.lattice.DataComponent.deepDelete(root, keys, 1);
+		ACell result = ValuePath.remove(root, keys, 1);
 
 		assertSame(root, result, "delete must not materialise a missing branch as null");
 	}
@@ -1969,7 +1958,7 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testParseStringPath() {
-		ACell[] keys = WorkspaceRoot.parseStringPath("g/my-agent/timeline/3");
+		ACell[] keys = ValuePath.parse("g/my-agent/timeline/3");
 		assertEquals(4, keys.length);
 		assertEquals(Strings.create("g"), keys[0]);
 		assertEquals(Strings.create("my-agent"), keys[1]);
@@ -1980,9 +1969,9 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testParseEmptyPath() {
-		assertEquals(0, WorkspaceRoot.parseStringPath("").length);
-		assertEquals(0, WorkspaceRoot.parseStringPath(null).length);
-		assertEquals(0, WorkspaceRoot.parseStringPath("/").length);
+		assertEquals(0, ValuePath.parse("").length);
+		assertEquals(0, ValuePath.parse(null).length);
+		assertEquals(0, ValuePath.parse("/").length);
 	}
 
 	// ========== Agent workspace (n/ prefix) ==========

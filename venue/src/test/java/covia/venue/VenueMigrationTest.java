@@ -21,12 +21,12 @@ import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.Covia;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
 
 class VenueMigrationTest {
 	private static final AString DID = Strings.create("did:test:migrations");
-	private static final ACell[] OLD_QUEUE = WorkspaceRoot.parseStringPath("w/user-deletions");
-	private static final ACell[] OLD_ADAPTER = WorkspaceRoot.parseStringPath("w/adapters/unloaded");
+	private static final ACell[] OLD_QUEUE = ValuePath.parse("w/user-deletions");
+	private static final ACell[] OLD_ADAPTER = ValuePath.parse("w/adapters/unloaded");
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 
 	private static VenueState legacy() {

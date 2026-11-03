@@ -15,14 +15,15 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
-import covia.lattice.WorkspaceRoot;
+import covia.lattice.ValuePath;
+import covia.lattice.Workspace;
 import covia.venue.VenueState;
 
 /** Venue step 0 → 1 as a function of the venue value. */
 class UserDeletionsRegionTest {
 	private static final AString DID = Strings.create("did:test:venue");
-	private static final ACell[] LEGACY = WorkspaceRoot.parseStringPath("w/user-deletions");
-	private static final ACell[] NOTES = WorkspaceRoot.parseStringPath("w/notes");
+	private static final ACell[] LEGACY = ValuePath.parse("w/user-deletions");
+	private static final ACell[] NOTES = ValuePath.parse("w/notes");
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 	private static final MigrationStep STEP = new UserDeletionsRegion();
 
@@ -30,8 +31,8 @@ class UserDeletionsRegionTest {
 	private static ACell legacy() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, DID));
-		venue.users().ensure(DID).workspaceRoot().write(LEGACY, PENDING);
-		venue.users().ensure(DID).workspaceRoot().write(NOTES, Strings.create("kept"));
+		venue.users().ensure(DID).workspace().write(LEGACY, 1, PENDING);
+		venue.users().ensure(DID).workspace().write(NOTES, 1, Strings.create("kept"));
 		return venue.get();
 	}
 
@@ -42,9 +43,9 @@ class UserDeletionsRegionTest {
 	@Test void theIndexMovesExactlyToItsRegion() {
 		ACell migrated = STEP.apply(legacy());
 		assertEquals(PENDING, RT.getIn(migrated, Covia.USER_DELETIONS));
-		WorkspaceRoot workspace = read(migrated).users().get(DID).workspaceRoot();
-		assertNull(workspace.read(LEGACY));
-		assertEquals(Strings.create("kept"), workspace.read(NOTES), "the rest of the workspace stays");
+		Workspace workspace = read(migrated).users().get(DID).workspace();
+		assertNull(workspace.read(LEGACY, 1));
+		assertEquals(Strings.create("kept"), workspace.read(NOTES, 1), "the rest of the workspace stays");
 		assertSame(migrated, STEP.apply(migrated), "migrating again changes nothing");
 	}
 
@@ -60,7 +61,7 @@ class UserDeletionsRegionTest {
 		ACell both = RT.assocIn(legacy(), PENDING, Covia.USER_DELETIONS);
 		ACell migrated = STEP.apply(both);
 		assertEquals(PENDING, RT.getIn(migrated, Covia.USER_DELETIONS));
-		assertNull(read(migrated).users().get(DID).workspaceRoot().read(LEGACY));
+		assertNull(read(migrated).users().get(DID).workspace().read(LEGACY, 1));
 	}
 
 	@Test void aDifferentCopyInTheRegionIsRefused() {
