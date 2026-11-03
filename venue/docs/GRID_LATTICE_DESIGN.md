@@ -319,7 +319,8 @@ a job reads as its current state.
 | Component | Routes |
 |-----------|--------|
 | `VenueState` | a user's DID to their `User`; `x/<adapter>` to the adapter component |
-| `User` | `g/<id>` to `AgentState`, `j/<id>` to `JobState`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `WorkspaceRegion` |
+| `User` | `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `WorkspaceRegion` |
+| `Jobs` | a job id, in hex, to its `JobState` |
 | `AgentState` | `sessions/<id>` to `SessionState` |
 
 `DataComponent` is the fallback for a position no other component claims,
@@ -684,6 +685,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) and the access check the engine installs |
 | `ACoviaComponent`, `DataComponent` (Covia) | Base of addressable components (`resolve`, `read`); data no component claims, edited only through edits its parent supplies (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |
+| `Jobs` (Covia) | A user's jobs at `j`, keyed by job id, each its `JobState`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions

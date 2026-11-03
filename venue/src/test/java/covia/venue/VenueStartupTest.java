@@ -172,7 +172,7 @@ public class VenueStartupTest {
 			try {
 				seed.registerAdapter(new StartupAdapter());
 				seed.materialiseBootstrapState();
-				seed.getVenueState().users().ensure(seed.getDIDString()).persistJob(RECOVERED_JOB,
+				seed.getVenueState().users().ensure(seed.getDIDString()).jobs().create(RECOVERED_JOB,
 					Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
 						Fields.CALLER, seed.getDIDString(), Fields.INPUT, Maps.empty()));
 				seed.gridScheduler().schedule(OP, Strings.create("due"), seed.venueContext(), 1L);
@@ -190,7 +190,7 @@ public class VenueStartupTest {
 			assertEquals(0, adapter.calls.get());
 			assertEquals(1, engine.gridScheduler().list(engine.venueContext()).count());
 			assertEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
-				.getJob(RECOVERED_JOB).get(Fields.STATUS));
+				.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
 			// The reserved port prevents accidental early HTTP publication.
 			reserved.close();
 			release.complete(null);
@@ -202,7 +202,7 @@ public class VenueStartupTest {
 			assertEquals(1, adapter.calls.get());
 			assertEquals(0, engine.gridScheduler().list(engine.venueContext()).count());
 			assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
-				.getJob(RECOVERED_JOB).get(Fields.STATUS));
+				.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
 		} finally {
 			if (server != null) server.close();
 			else if (launch != null) launch.cancel(true);
@@ -383,7 +383,7 @@ public class VenueStartupTest {
 			Engine seed = new Engine(config, application, key).prepare();
 			seed.registerAdapter(new StartupAdapter());
 			seed.materialiseBootstrapState();
-			seed.getVenueState().users().ensure(seed.getDIDString()).persistJob(RECOVERED_JOB,
+			seed.getVenueState().users().ensure(seed.getDIDString()).jobs().create(RECOVERED_JOB,
 				Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
 					Fields.CALLER, seed.getDIDString(), Fields.INPUT, Maps.empty()));
 			seed.gridScheduler().schedule(OP, Strings.create("embedded due"), seed.venueContext(), 1L);
@@ -413,7 +413,7 @@ public class VenueStartupTest {
 				assertTrue(adapter.recovered);
 				assertEquals(Strings.create("embedded due"), adapter.fired.get(5, TimeUnit.SECONDS));
 				assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
-					.getJob(RECOVERED_JOB).get(Fields.STATUS));
+					.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
 			} finally {
 				engine.close();
 			}
@@ -472,7 +472,7 @@ public class VenueStartupTest {
 				assertEquals(START_FAILURE, assertThrows(IllegalStateException.class,
 					() -> engine.launch(prepared -> {
 						prepared.registerAdapter(adapter);
-						prepared.getVenueState().users().ensure(prepared.getDIDString()).persistJob(RECOVERED_JOB,
+						prepared.getVenueState().users().ensure(prepared.getDIDString()).jobs().create(RECOVERED_JOB,
 							Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
 								Fields.CALLER, prepared.getDIDString(), Fields.INPUT, Maps.empty()));
 						return CompletableFuture.completedFuture(null);
@@ -482,7 +482,7 @@ public class VenueStartupTest {
 				assertEquals(0, adapter.closed.getCount());
 				assertTrue(engine.isClosing());
 				assertNotEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
-					.getJob(RECOVERED_JOB).get(Fields.STATUS));
+					.jobs().get(RECOVERED_JOB).getRecord().get(Fields.STATUS));
 			} finally {
 				engine.close();
 			}

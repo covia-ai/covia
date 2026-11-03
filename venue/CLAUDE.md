@@ -236,7 +236,7 @@ Hash id = engine.storeAsset(metadataString, contentBlob);
 
 // Per-user access (jobs, agents, secrets, workspace, h/ inbox)
 User user = engine.getVenueState().users().ensure(callerDID);
-Index<Blob, ACell> userJobs = user.getJobs();
+Index<Blob, ACell> userJobs = user.jobs().getAll();
 
 ```
 

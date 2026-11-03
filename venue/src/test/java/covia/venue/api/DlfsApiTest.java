@@ -64,7 +64,7 @@ public class DlfsApiTest {
 
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().get(Strings.create(callerDID));
-		return (u == null) ? 0 : u.getJobs().count();
+		return (u == null) ? 0 : u.jobs().count();
 	}
 
 	/** Creates a drive with one file, via the ordinary op form, and returns the drive name. */

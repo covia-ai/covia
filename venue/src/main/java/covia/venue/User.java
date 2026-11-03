@@ -1,12 +1,9 @@
 package covia.venue;
 
-import java.util.function.UnaryOperator;
-
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
-import convex.core.data.Index;
 import convex.core.data.Strings;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
@@ -15,7 +12,6 @@ import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.lattice.WorkspaceRoot;
 import convex.lattice.cursor.StampedCursor;
-import covia.grid.Job;
 
 /**
  * Per-user domain state, with atomic mutations and compound transactions.
@@ -28,7 +24,7 @@ import covia.grid.Job;
  * <p>The per-user lattice uses short AString-compatible keys from
  * {@link Namespace} for JSON compliance:</p>
  * <ul>
- *   <li>{@code "j"} — user's job references</li>
+ *   <li>{@code "j"} — user's jobs ({@link Jobs})</li>
  *   <li>{@code "g"} — user's agents</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
  *   <li>{@code "w"} — user's workspace data ({@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
@@ -85,7 +81,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	/** Internal namespace-resolution bridge; domain callers use agent and job methods. */
 	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
 		if (Namespace.G.equals(namespace)) return new AgentState(context, agentStorage(id), (AString) id).cursor();
-		if (Namespace.J.equals(namespace)) return job((Blob) id).cursor();
+		if (Namespace.J.equals(namespace)) return jobs().get((Blob) id).cursor();
 		throw new IllegalArgumentException("Not an agent or job namespace: " + namespace);
 	}
 
@@ -97,108 +93,6 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	public AString getDID() {
 		return did;
 	}
-
-	/**
-	 * Gets all of this user's jobs as an Index keyed by Job ID. Never null.
-	 *
-	 * @return Index of job records, empty if the user has no jobs
-	 */
-	@SuppressWarnings("unchecked")
-	public Index<Blob, ACell> getJobs() {
-		ACell value = cursor().path(Namespace.J).get();
-		return (value instanceof Index) ? Job.currentStates((Index<Blob, ACell>) value) : Index.none();
-	}
-
-	/** Counts entries without reading or normalising their records. */
-	public long countJobs() {
-		ACell value = cursor().path(Namespace.J).get();
-		return value instanceof Index<?, ?> index ? index.count() : 0;
-	}
-
-	/**
-	 * Gets a single job record from this user's job index.
-	 *
-	 * @param jobID Job ID
-	 * @return Job record map, or null if not found
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getJob(Blob jobID) {
-		return job(jobID).getRecord();
-	}
-
-	/** Existing job view, bound to this user or transaction draft. */
-	public JobState job(Blob jobID) {
-		return new JobState(context,
-			convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J, jobID));
-	}
-
-	/** Admission creates a record exactly once; subsequent updates use its component. */
-	boolean createJob(Blob jobID, AMap<AString, ACell> record) {
-		AMap<AString, ACell> current = Job.currentState(record);
-		ACell before = cursor().path(Namespace.J).getAndUpdate(value -> {
-			Index<Blob, ACell> jobs = value instanceof Index<?, ?> index
-				? (Index<Blob, ACell>) index : Index.none();
-			return jobs.containsKey(jobID) ? value : jobs.assoc(jobID, current);
-		});
-		return !(before instanceof Index<?, ?> index) || !index.containsKey(jobID);
-	}
-
-	/**
-	 * Removes a job record from this user's job index, if present. The
-	 * removal is durable: the venue merge is whole-value LWW, so the
-	 * post-delete snapshot wins and the record is not resurrected on sync.
-	 *
-	 * @param jobID Job ID
-	 * @return true if the row existed and was removed
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean removeJob(Blob jobID) {
-		ACell old = cursor().path(Namespace.J).getAndUpdate(jobs -> {
-			if (!(jobs instanceof Index)) return jobs;
-			return ((Index<Blob, ACell>) jobs).dissoc(jobID);
-		});
-		return old instanceof Index<?, ?> index && index.containsKey(jobID);
-	}
-
-	/**
-	 * Imports/replaces a job record (bootstrap and migration). Runtime transitions
-	 * use {@link #job(Blob)} instead. Preserves the {@code temp}
-	 * field from any existing record at the same ID (goal-scoped scratch).
-	 *
-	 * @param jobID Job ID (16-byte Blob: timestamp + counter + random)
-	 * @param record Job status record map
-	 */
-	@SuppressWarnings("unchecked")
-	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
-		final AMap<AString, ACell> rec = Job.currentState(record);
-		cursor().path(Namespace.J).updateAndGet(jobs -> {
-			Index<Blob, ACell> idx = (jobs instanceof Index)
-				? (Index<Blob, ACell>) jobs
-				: Index.none();
-			AMap<AString, ACell> merged = rec;
-			ACell existing = idx.get(jobID);
-			if (existing instanceof AMap<?,?> existingMap) {
-				AMap<AString, ACell> existingRecord = (AMap<AString, ACell>) existingMap;
-				if (existingRecord.containsKey(K_TEMP)) {
-					merged = merged.assoc(K_TEMP, existingRecord.get(K_TEMP));
-				}
-			}
-			return idx.assoc(jobID, merged);
-		});
-	}
-
-	/**
-	 * Atomically updates an existing job without ever recreating a deleted row.
-	 *
-	 * @return true when the job existed at the mutation point
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean updateJobIfPresent(Blob jobID,
-			UnaryOperator<AMap<AString, ACell>> updater) {
-		return job(jobID).update(updater) != null;
-	}
-
-	private static final AString K_TEMP = Strings.intern("temp");
 
 	/**
 	 * Gets the user's asset store (per-user content-addressed assets).
@@ -328,9 +222,15 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return new Inbox(workspaceRoot().child(Namespace.H));
 	}
 
+	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
+	public Jobs jobs() {
+		return new Jobs(context, convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J));
+	}
+
 	@Override
 	public ACoviaComponent<?> resolve(ACell[] keys, int from) {
 		if (from < keys.length && Namespace.H.equals(keys[from])) return inbox().resolve(keys, from + 1);
+		if (from < keys.length && Namespace.J.equals(keys[from])) return jobs().resolve(keys, from + 1);
 		return super.resolve(keys, from);
 	}
 

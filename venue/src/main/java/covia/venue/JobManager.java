@@ -977,7 +977,7 @@ public class JobManager {
 			engine.getVenueState().users().requireNotDeleted(callerDID);
 			// Create before publishing the runtime handle; updates only edit existing rows.
 			// Readers can see the row first, so by-id lookups go through liveJob.
-			if (!memoryOnly && !job.account().createJob(jobID, status)) {
+			if (!memoryOnly && !job.account().jobs().create(jobID, status)) {
 				throw new IllegalStateException(JOB_ID_EXISTS + jobID);
 			}
 			activeJobs.put(jobID, job);
@@ -1015,7 +1015,7 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		AMap<AString, ACell> record = user.getJob(jobID);
+		AMap<AString, ACell> record = user.jobs().get(jobID).getRecord();
 		if (record != null) requireReadable(ctx, jobID, record);
 		return record;
 	}
@@ -1105,7 +1105,7 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		AMap<AString, ACell> record = user.getJob(jobID);
+		AMap<AString, ACell> record = user.jobs().get(jobID).getRecord();
 		if (record == null) return null;
 		requireReadable(ctx, jobID, record);
 		return new Job(record);
@@ -1120,14 +1120,14 @@ public class JobManager {
 		if (did == null) return Index.none();
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return Index.none();
-		return user.getJobs();
+		return user.jobs().getAll();
 	}
 
 	/** Caller-scoped count, without materialising a listing. */
 	public long countJobs(RequestContext ctx) {
 		AString did = ctx.getUserDID();
 		User user = did == null ? null : engine.getVenueState().users().get(did);
-		return user == null ? 0 : user.countJobs();
+		return user == null ? 0 : user.jobs().count();
 	}
 
 	// ========== Job Lifecycle Control ==========
@@ -1218,7 +1218,7 @@ public class JobManager {
 		boolean removed = false;
 		if (ownerDID != null) {
 			User user = engine.getVenueState().users().get(ownerDID);
-			if (user != null) removed = user.removeJob(id);
+			if (user != null) removed = user.jobs().remove(id);
 		}
 		// Remove from active cache if present (may already be evicted for terminal jobs)
 		deleteJob(id);
@@ -1318,7 +1318,7 @@ public class JobManager {
 		Job live = activeJobs.get(jobID);
 		User user = live instanceof VenueJob job ? job.account()
 			: engine.getVenueState().users().get(ownerDID);
-		if (user != null && user.job(jobID).appendHistory(record) && live instanceof VenueJob job) {
+		if (user != null && user.jobs().get(jobID).appendHistory(record) && live instanceof VenueJob job) {
 			job.historyUpdated();
 		}
 	}

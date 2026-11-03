@@ -180,16 +180,16 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zAlice");
 
-		assertEquals(0, user.getJobs().count());
+		assertEquals(0, user.jobs().count());
 
 		Blob jobID = Blob.parse("0x0001");
 		AMap<AString, ACell> record = Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L));
-		user.persistJob(jobID, record);
+		user.jobs().create(jobID, record);
 
-		assertEquals(1, user.getJobs().count());
-		AMap<AString, ACell> retrieved = user.getJob(jobID);
+		assertEquals(1, user.jobs().count());
+		AMap<AString, ACell> retrieved = user.jobs().get(jobID).getRecord();
 		assertNotNull(retrieved);
 		assertEquals(Status.PENDING, retrieved.get(Fields.STATUS));
 	}
@@ -201,63 +201,43 @@ public class VenueStateTest {
 		User user = vs.users().ensure("did:key:zAlice");
 
 		Blob jobID = Blob.parse("0x0001");
-		user.persistJob(jobID, Maps.of(
+		user.jobs().create(jobID, Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
-		user.persistJob(jobID, Maps.of(
-			Fields.STATUS, Status.COMPLETE,
-			Fields.UPDATED, CVMLong.create(2000L)));
+		assertFalse(user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.FAILED)),
+			"an existing job is not created again");
+		user.jobs().get(jobID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE));
 
-		assertEquals(1, user.getJobs().count(), "Should still be one job");
-		assertEquals(Status.COMPLETE, user.getJob(jobID).get(Fields.STATUS));
+		assertEquals(1, user.jobs().count(), "Should still be one job");
+		assertEquals(Status.COMPLETE, user.jobs().get(jobID).getRecord().get(Fields.STATUS));
 	}
 
 	@Test
-	public void testUserJobUpdatePreservesExplicitNullTemp() {
-		VenueState vs = VenueState.create(AKeyPair.generate());
-		User user = vs.users().ensure("did:key:zNullTemp");
-		Blob jobID = Blob.parse("0x0001");
-		AString temp = Strings.intern("temp");
-		user.persistJob(jobID, Maps.of(
-			Fields.STATUS, Status.PENDING,
-			temp, null));
-
-		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.COMPLETE));
-
-		AMap<AString, ACell> record = user.getJob(jobID);
-		assertTrue(record.containsKey(temp));
-		assertNull(record.get(temp));
-	}
-
-	@Test
-	public void testUpdateJobIfPresentNeverCreatesOrResurrectsARow() throws Exception {
+	public void testJobUpdateNeverCreatesOrResurrectsARow() throws Exception {
 		VenueState vs = VenueState.create(AKeyPair.generate());
 		User user = vs.users().ensure("did:key:zConditionalJobUpdate");
 		Blob jobID = Blob.parse("0x0001");
 		AString marker = Strings.intern("marker");
+		JobState job = user.jobs().get(jobID);
 
-		assertFalse(user.updateJobIfPresent(jobID,
-			record -> record.assoc(marker, Strings.create("missing"))));
-		assertNull(user.getJob(jobID), "an absent conditional update must not create a row");
+		assertNull(job.update(record -> record.assoc(marker, Strings.create("missing"))));
+		assertNull(job.getRecord(), "an update to an absent job must not create a row");
 
-		user.persistJob(jobID, Maps.of(Fields.STATUS, Status.PENDING));
-		assertTrue(user.updateJobIfPresent(jobID,
-			record -> record.assoc(marker, Strings.create("present"))));
-		assertEquals(Strings.create("present"), user.getJob(jobID).get(marker));
+		user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.PENDING));
+		assertNotNull(job.update(record -> record.assoc(marker, Strings.create("present"))));
+		assertEquals(Strings.create("present"), job.getRecord().get(marker));
 
 		// either linearisation order is valid for the update; the delete must win
 		java.util.List<Boolean> raced = covia.test.Rendezvous.all(
-			() -> user.updateJobIfPresent(jobID,
-				record -> record.assoc(marker, Strings.create("raced"))),
-			() -> user.removeJob(jobID));
+			() -> job.update(record -> record.assoc(marker, Strings.create("raced"))) != null,
+			() -> user.jobs().remove(jobID));
 		assertTrue(raced.get(1));
 
-		assertNull(user.getJob(jobID),
-			"delete and conditional update must linearise without resurrection");
-		assertFalse(user.updateJobIfPresent(jobID,
-			record -> record.assoc(marker, Strings.create("late"))));
-		assertNull(user.getJob(jobID));
+		assertNull(job.getRecord(),
+			"delete and update must linearise without resurrection");
+		assertNull(job.update(record -> record.assoc(marker, Strings.create("late"))));
+		assertNull(job.getRecord());
 	}
 
 	@Test
@@ -266,7 +246,7 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zAlice");
 
-		assertNull(user.getJob(Blob.parse("0xFFFF")));
+		assertNull(user.jobs().get(Blob.parse("0xFFFF")).getRecord());
 	}
 
 	// ========== Child Cursor Accessors ==========
@@ -375,7 +355,7 @@ public class VenueStateTest {
 		Hash assetId = forked.assets().store(
 			Strings.create("{\"name\":\"Synced Asset\"}"), null);
 		User forkedAlice = forked.users().ensure("did:key:zAlice");
-		forkedAlice.persistJob(Blob.parse("0x0001"), Maps.of(
+		forkedAlice.jobs().create(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
@@ -388,7 +368,7 @@ public class VenueStateTest {
 		User connectedAlice = connected.users().get("did:key:zAlice");
 		assertNotNull(connectedAlice,
 			"User should be visible through connected cursor after sync");
-		assertNotNull(connectedAlice.getJob(Blob.parse("0x0001")),
+		assertNotNull(connectedAlice.jobs().get(Blob.parse("0x0001")).getRecord(),
 			"Job should be visible through connected cursor after sync");
 	}
 
@@ -409,10 +389,10 @@ public class VenueStateTest {
 
 		// Multiple job writes to a user
 		User forkedAlice = forked.users().ensure("did:key:zAlice");
-		forkedAlice.persistJob(Blob.parse("0x0001"), Maps.of(
+		forkedAlice.jobs().create(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
-		forkedAlice.persistJob(Blob.parse("0x0002"), Maps.of(
+		forkedAlice.jobs().create(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
@@ -422,7 +402,7 @@ public class VenueStateTest {
 		assertEquals(3, connected.assets().count(),
 			"All 3 assets should be visible after single sync");
 		User connectedAlice = connected.users().get("did:key:zAlice");
-		assertEquals(2, connectedAlice.getJobs().count(),
+		assertEquals(2, connectedAlice.jobs().count(),
 			"All 2 jobs should be visible after single sync");
 	}
 
@@ -465,20 +445,20 @@ public class VenueStateTest {
 		User bob = vs.users().ensure(bobDID);
 
 		// Alice writes a job reference
-		alice.persistJob(Blob.parse("0x0001"), Maps.of(
+		alice.jobs().create(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
 		// Bob writes a job reference
-		bob.persistJob(Blob.parse("0x0002"), Maps.of(
+		bob.jobs().create(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
 		// Each sees only their own data
-		assertEquals(1, alice.getJobs().count(), "Alice should see only her job");
-		assertEquals(1, bob.getJobs().count(), "Bob should see only his job");
-		assertNotNull(alice.getJob(Blob.parse("0x0001")));
-		assertNull(alice.getJob(Blob.parse("0x0002")));
+		assertEquals(1, alice.jobs().count(), "Alice should see only her job");
+		assertEquals(1, bob.jobs().count(), "Bob should see only his job");
+		assertNotNull(alice.jobs().get(Blob.parse("0x0001")).getRecord());
+		assertNull(alice.jobs().get(Blob.parse("0x0002")).getRecord());
 	}
 
 	@Test
@@ -547,7 +527,7 @@ public class VenueStateTest {
 					start.await();
 					User u = vs.users().ensure(did);
 					Blob jobID = Blob.parse(String.format("0x%04x", idx + 1));
-					u.persistJob(jobID, Maps.of(
+					u.jobs().create(jobID, Maps.of(
 						Fields.STATUS, Status.PENDING,
 						Fields.UPDATED, CVMLong.create(1000L + idx)));
 				} catch (Throwable t) {
@@ -564,7 +544,7 @@ public class VenueStateTest {
 
 		User finalUser = vs.users().get(did);
 		assertNotNull(finalUser, "user should exist after concurrent ensure");
-		assertEquals(writers, finalUser.getJobs().count(),
+		assertEquals(writers, finalUser.jobs().count(),
 			"all jobs from concurrent ensure() callers must survive");
 	}
 

@@ -75,7 +75,7 @@ class UserExportsTest {
 		user.assets().store(Strings.create("{\"name\":\"note\"}"), Strings.create("asset content"));
 		user.secrets().store("API_KEY", SECRET, KEYS);
 		Blob jobID = Blob.fromHex("0a".repeat(16));
-		user.persistJob(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
+		user.jobs().create(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
 		AgentState agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
 		agent.ensureSession(Blob.fromHex("aa"), did);
 		return user;
@@ -123,7 +123,7 @@ class UserExportsTest {
 		Job job = engine.jobs().invokeOperation("v/ops/user/import", Maps.of(Fields.DID, target,
 			EXPORT, hex, Fields.SEED, seedRef(seal)), venue);
 		assertEquals(CVMBool.TRUE, RT.getIn(job.awaitResult(10_000), Fields.CREATED));
-		AMap<AString, ACell> record = engine.getVenueState().users().get(engine.getDIDString()).getJob(job.getID());
+		AMap<AString, ACell> record = engine.getVenueState().users().get(engine.getDIDString()).jobs().get(job.getID()).getRecord();
 		assertEquals(Fields.HIDDEN, RT.getIn(record, Fields.INPUT, EXPORT), "the export never reaches a job record");
 
 		Users users = engine.getVenueState().users();
@@ -236,7 +236,7 @@ class UserExportsTest {
 			Fields.VERSION, 1, Fields.DID, source,
 			UserExports.K_USER, Maps.of(Namespace.J, Index.of(jobID, legacy))), true);
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
-		assertEquals(current, engine.getVenueState().users().get(target).getJob(jobID));
+		assertEquals(current, engine.getVenueState().users().get(target).jobs().get(jobID).getRecord());
 	}
 
 	@Test
@@ -255,13 +255,13 @@ class UserExportsTest {
 	void refusesUnfinishedWork() {
 		User user = fill(source);
 		Blob running = Blob.fromHex("0b".repeat(16));
-		user.persistJob(running, Maps.of(Fields.ID, running, Fields.STATUS, Status.STARTED));
+		user.jobs().create(running, Maps.of(Fields.ID, running, Fields.STATUS, Status.STARTED));
 		try {
 			assertEquals(UserExports.BUSY, failure(start("export", Maps.of(Fields.DID, source, SECRETS, CVMBool.FALSE), venue)));
 			assertEquals(UserExports.BUSY, failure(start("clone", Maps.of(Fields.FROM, source, Fields.TO, target), venue)));
 			assertNull(engine.getVenueState().users().get(target));
 		} finally {
-			user.persistJob(running, Maps.of(Fields.ID, running, Fields.STATUS, Status.CANCELLED));
+			user.jobs().get(running).update(job -> job.assoc(Fields.STATUS, Status.CANCELLED));
 		}
 		// An outstanding agent task is unfinished work, wherever its job is recorded.
 		assertEquals(UserExports.BUSY, UserExports.unfinishedWork(Maps.of(Namespace.G,

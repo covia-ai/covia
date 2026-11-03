@@ -100,12 +100,12 @@ class UserDeletionTest {
 		engine.jobs().invokeInternal("v/ops/user/create", Maps.of(Fields.DID, did), engine.venueContext()).get(5, TimeUnit.SECONDS);
 		User fresh = engine.getVenueState().users().get(did);
 		assertNotNull(fresh);
-		assertTrue(fresh.getJobs().isEmpty());
+		assertTrue(fresh.jobs().getAll().isEmpty());
 		assertTrue(fresh.secrets().list().isEmpty());
 		assertNull(fresh.getAgents());
 		assertThrows(AuthException.class, () -> retained.cursor().path(Strings.create("w")).set(Maps.of("late", true)));
 		pending.updateData(pending.getData().assoc(Fields.OUTPUT, Strings.create("late-output")));
-		assertTrue(fresh.getJobs().isEmpty());
+		assertTrue(fresh.jobs().getAll().isEmpty());
 		assertNull(fresh.cursor().path(Strings.create("w")).get());
 	}
 
@@ -151,7 +151,7 @@ class UserDeletionTest {
 			engine.getVenueState().users().create(did);
 			gate.release();
 			assertNull(engine.getVenueState().users().get(did).getAgents());
-			assertTrue(engine.getVenueState().users().get(did).getJobs().isEmpty());
+			assertTrue(engine.getVenueState().users().get(did).jobs().getAll().isEmpty());
 		}
 	}
 

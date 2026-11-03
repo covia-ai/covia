@@ -38,7 +38,7 @@ public final class SnapshotCompatibilityProbe {
                 equal(args[1], user.secrets().decrypt("rehearsal", secrets).toString());
                 equal(args[1], Files.readString(drive.getPath("/marker.txt")));
                 equal(args[1], RT.getIn(user.agent("rehearsal").getRecord(), "config", "marker").toString());
-                if (user.getJobs().isEmpty()) throw new AssertionError("Persisted jobs missing");
+                if (engine.jobs().getJobs(ctx).isEmpty()) throw new AssertionError("Persisted jobs missing");
             }
             run(engine, ctx, "covia/write", Maps.of("path", "w/rehearsal", "value", args[2]));
             user.secrets().store("rehearsal", args[2], secrets);

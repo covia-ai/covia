@@ -39,7 +39,7 @@ composes child edits with tasks, status and timeline through upstream transactio
 Record formats remain unchanged. Tests cover failed-completion rollback, retained
 draft isolation, concurrent deletion and summary admission after a concurrent stop.
 
-Recorded jobs now use `user.job(id)` (`JobState`) as their primary record.
+Recorded jobs now use `user.jobs().get(id)` (`JobState`) as their primary record.
 `VenueJob` has no independently updated live record and no persistence callback;
 its hooks run after the lattice update. Admission creates the row explicitly,
 and updates cannot recreate it. History appends share one path for active and

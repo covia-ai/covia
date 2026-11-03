@@ -53,7 +53,7 @@ public class VenueJob extends Job {
 		this.manager = manager;
 		this.meta = meta;
 		this.account = manager.account(callerDID);
-		this.record = memoryOnly ? null : account.job(Job.parseID(record.get(Fields.ID)));
+		this.record = memoryOnly ? null : account.jobs().get(Job.parseID(record.get(Fields.ID)));
 		this.lastKnown = record;
 		this.observable = observable;
 		this.directRun = directRun;
@@ -146,7 +146,7 @@ public class VenueJob extends Job {
 		if (owner == null) return null;
 		Users.requireCurrent(owner.get(), convex.core.lang.RT.getIn(account.get(), Users.GENERATION));
 		var original = new AtomicReference<AMap<AString, ACell>>();
-		AMap<AString, ACell> updated = owner.job(getID()).update(current -> {
+		AMap<AString, ACell> updated = owner.jobs().get(getID()).update(current -> {
 			if (Job.isFinished(current)) return null;
 			AMap<AString, ACell> next = updater.apply(current);
 			if (next == null) return null;

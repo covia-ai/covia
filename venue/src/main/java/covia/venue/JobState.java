@@ -11,10 +11,12 @@ import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.ProjectionCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.lattice.Covia;
+import covia.lattice.DataComponent;
 
 /** Primary record of an existing venue job. Updates never create a missing row.
  * Transactions compose data changes only; execution and notifications belong
@@ -40,6 +42,16 @@ public final class JobState extends ACoviaComponent<ACell>
 
 	/** The job as callers see it: its current state. */
 	@Override public ACell read() { return getRecord(); }
+
+	/** Data below the job is read in its current state, and only read. */
+	@Override
+	public ACoviaComponent<?> resolve(ACell[] keys, int from) {
+		if (from >= keys.length) return this;
+		AForkableCursor<ACell> current = ProjectionCursor.<ACell, ACell>create(cursor(),
+			value -> Job.currentState(RT.ensureMap(value)),
+			(value, record) -> { throw new UnsupportedOperationException(DataComponent.READ_ONLY); });
+		return new DataComponent(null, null, current, keys, from, null);
+	}
 
 	/** Pure record edit; null rejects the edit. Returns the committed record or
 	 * null for a rejected/missing row, resetting acceptance on every retry. */

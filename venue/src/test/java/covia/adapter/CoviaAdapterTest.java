@@ -21,6 +21,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.lattice.Namespace;
 import covia.lattice.NamespaceResolver;
 import covia.venue.AgentState;
 import covia.venue.Engine;
@@ -2427,17 +2428,18 @@ public class CoviaAdapterTest {
 	public void testTempWriteRefreshesJobTimestamp() {
 		Blob jobId = newJob();
 		User user = engine.getVenueState().users().get(ALICE.getUserDID());
-		user.persistJob(jobId, user.getJob(jobId).assoc(Fields.UPDATED, CVMLong.ZERO));
-		assertEquals(CVMLong.ZERO, user.getJob(jobId).get(Fields.UPDATED));
+		// No job operation sets a stale stamp, so write it into storage.
+		user.cursor().path(Namespace.J, jobId, Fields.UPDATED).set(CVMLong.ZERO);
+		assertEquals(CVMLong.ZERO, user.jobs().get(jobId).getRecord().get(Fields.UPDATED));
 
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "t/stamp-probe", Fields.VALUE, Strings.create("written")),
 			ALICE.withJobId(jobId)).awaitResult(5000);
 
 		assertEquals(Strings.create("written"),
-			RT.getIn(user.getJob(jobId), "temp", "stamp-probe"),
+			RT.getIn(user.jobs().get(jobId).getRecord(), "temp", "stamp-probe"),
 			"the stamped component must not add an envelope to the Job record");
-		CVMLong updated = (CVMLong) user.getJob(jobId).get(Fields.UPDATED);
+		CVMLong updated = (CVMLong) user.jobs().get(jobId).getRecord().get(Fields.UPDATED);
 		assertTrue(updated.longValue() > 0,
 			"a deep t/ write should refresh the enclosing Job record's updated field");
 	}
@@ -2779,11 +2781,10 @@ public class CoviaAdapterTest {
 		// taskId is the caller-facing Job ID. When the run loop also carries its
 		// own infrastructure jobId, t/ must use the task Job's temp field.
 		AString agentId = Strings.create("test-agent");
-		Blob taskId = Blob.fromHex("01020304");
+		Blob taskId = newJob();
 		RequestContext ctx = ALICE.withAgentId(agentId).withTaskId(taskId)
 			.withJobId(Blob.fromHex("ffeeddcc"));
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
-		user.persistJob(taskId, Maps.of(Fields.ID, taskId));
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		ACell[] keys = WorkspaceRoot.parseStringPath("t/draft");
@@ -2794,7 +2795,7 @@ public class CoviaAdapterTest {
 		assertTrue(vns.requireExistingRecord());
 
 		// The cursor must be the FOCUSED TASK's Job record, not the transition Job's.
-		assertEquals(user.getJob(taskId), vns.cursor().cursor().get(),
+		assertEquals(user.jobs().get(taskId).getRecord(), vns.cursor().cursor().get(),
 			"t/ must resolve to the focused task Job");
 	}
 
@@ -2802,10 +2803,9 @@ public class CoviaAdapterTest {
 	public void testTempResolverFallsBackToJobScope() {
 		// jobId set but no agentId/taskId — ordinary job scope: the resolver
 		// targets that Job record and rewrites the t/ prefix to its temp slot.
-		Blob jobId = Blob.fromHex("ffeeddcc");
+		Blob jobId = newJob();
 		RequestContext ctx = ALICE.withJobId(jobId);
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
-		user.persistJob(jobId, Maps.of(Fields.ID, jobId));
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		ACell[] keys = WorkspaceRoot.parseStringPath("t/draft");
@@ -2814,7 +2814,7 @@ public class CoviaAdapterTest {
 		assertEquals("temp", vns.remainingKeys()[0].toString());
 		assertTrue(vns.requireExistingRecord());
 
-		assertEquals(user.getJob(jobId), vns.cursor().cursor().get(),
+		assertEquals(user.jobs().get(jobId).getRecord(), vns.cursor().cursor().get(),
 			"t/ must resolve to the current Job record");
 	}
 
@@ -2828,7 +2828,7 @@ public class CoviaAdapterTest {
 				Maps.of(Fields.PATH, "t/draft", Fields.VALUE, "no phantom"),
 				jobCtx).awaitResult(5000));
 
-		assertNull(engine.getVenueState().users().get(ALICE_DID).getJob(missing));
+		assertNull(engine.getVenueState().users().get(ALICE_DID).jobs().get(missing).getRecord());
 	}
 
 	// Regression: concurrent appends to the same vector path used to lose

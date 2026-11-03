@@ -372,7 +372,7 @@ public class JobCancellationTest {
 		Thread canceller;
 		try {
 			synchronized (acceptance) {
-				assertTrue(user.createJob(id, Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
+				assertTrue(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
 					Fields.CALLER, ALICE_DID)));
 				canceller = Thread.ofPlatform().start(
 					() -> cancelled.complete(engine.jobs().cancelJob(id)));
@@ -384,7 +384,7 @@ public class JobCancellationTest {
 			// No handle was ever registered here, so there is nothing live to cancel.
 			assertNull(cancelled.join());
 		} finally {
-			user.removeJob(id);
+			user.jobs().remove(id);
 		}
 	}
 

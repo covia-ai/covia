@@ -178,7 +178,7 @@ public class ValuesApiTest {
 
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().get(callerDID);
-		return (u == null) ? 0 : u.getJobs().count();
+		return (u == null) ? 0 : u.jobs().count();
 	}
 
 	// ===================== functional =====================

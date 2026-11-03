@@ -26,7 +26,7 @@ boolean isPaused();                        // paused family?
 
 `Job` is concrete and serves as the remote/read-only handle (constructed
 from a record snapshot). `VenueJob` is the execution handle for a recorded venue
-job; its data comes directly from `user.job(id)`, a `JobState` lattice component.
+job; its data comes directly from `user.jobs().get(id)`, a `JobState` lattice component.
 `JobManager` owns execution, recovery and admission. Transient handles and remote
 client snapshots retain local backing records. Acceptance writes a recorded job's
 row before it registers the live handle, both under the account monitor; a lookup

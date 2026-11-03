@@ -77,7 +77,7 @@ public class JobManagerTest {
 		var storage = user.cursor().path(covia.lattice.Namespace.J, id);
 		ACell before = user.get();
 		String path = "j/" + id.toHexString();
-		assertEquals(current, user.job(id).getRecord());
+		assertEquals(current, user.jobs().get(id).getRecord());
 		assertEquals(current, engine.jobs().getJobData(id, ctx));
 		assertEquals(current, engine.jobs().getJobs(ctx).get(id));
 		assertEquals(1, engine.jobs().countJobs(ctx));
@@ -97,29 +97,26 @@ public class JobManagerTest {
 
 		// A failed transaction must not migrate the record either.
 		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
-			draft.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
+			draft.jobs().get(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
 			throw new IllegalStateException("rollback");
 		}));
 		assertEquals(legacy, storage.get());
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "new");
-		assertTrue(user.job(id).appendHistory(message));
-		AMap<AString, ACell> migrated = user.getJob(id);
+		assertTrue(user.jobs().get(id).appendHistory(message));
+		AMap<AString, ACell> migrated = user.jobs().get(id).getRecord();
 		assertEquals(migrated, storage.get(), "the next edit physically removes the legacy link");
 		assertFalse(migrated.containsKey(prev));
 		assertEquals(current.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY),
 			migrated.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY));
 		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), migrated.get(Fields.HISTORY));
 		ACell after = storage.get();
-		assertFalse(user.job(id).appendHistory(message));
+		assertFalse(user.jobs().get(id).appendHistory(message));
 		assertEquals(after, storage.get(), "repeat edits remain idempotent");
 
 		storage.set(legacy);
 		user.recordCursor(covia.lattice.Namespace.J, id).path(temp, Strings.create("scratch")).set(CVMLong.ONE);
 		assertNull(RT.getIn(storage.get(), prev), "scratch edits also discard the obsolete link");
 		assertEquals(payload.assoc(Strings.create("scratch"), CVMLong.ONE), RT.getIn(storage.get(), temp));
-		user.persistJob(id, legacy);
-		assertNull(RT.getIn(storage.get(), prev), "imports cannot reintroduce chains");
-		assertEquals(CVMLong.ONE, RT.getIn(storage.get(), temp, "scratch"));
 	}
 
 	/**
@@ -740,10 +737,10 @@ public class JobManagerTest {
 		job.awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(did);
-		assertNotNull(user.getJob(job.getID()), "completed job record should be persisted");
+		assertNotNull(user.jobs().get(job.getID()).getRecord(), "completed job record should be persisted");
 
 		assertTrue(engine.jobs().deleteJob(job.getID(), ctx));
-		assertNull(user.getJob(job.getID()), "durable record should be removed");
+		assertNull(user.jobs().get(job.getID()).getRecord(), "durable record should be removed");
 		assertNull(engine.jobs().getJobData(job.getID(), ctx),
 			"deleted job must not reappear via the lattice fallback");
 		assertFalse(engine.jobs().deleteJob(job.getID(), ctx),
@@ -756,10 +753,10 @@ public class JobManagerTest {
 		User user = engine.getVenueState().users().get(did);
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "component-edit");
 		user.transact(draft -> {
-			draft.job(job.getID()).appendHistory(message);
-			draft.job(job.getID()).update(data -> data.assoc(Strings.intern("temp"), Maps.of("kept", true)));
+			draft.jobs().get(job.getID()).appendHistory(message);
+			draft.jobs().get(job.getID()).update(data -> data.assoc(Strings.intern("temp"), Maps.of("kept", true)));
 		});
-		assertEquals(user.getJob(job.getID()), job.getData());
+		assertEquals(user.jobs().get(job.getID()).getRecord(), job.getData());
 		job.setStatus(Status.INPUT_REQUIRED);
 		assertEquals(Vectors.of(message), job.getData().get(Fields.HISTORY));
 		assertEquals(Maps.of("kept", true), job.getData().get(Strings.intern("temp")));
@@ -777,7 +774,7 @@ public class JobManagerTest {
 		Job job = engine.jobs().invokeOperation(meta, input, ctx);
 		assertEquals(input, job.awaitResult(5000));
 		assertEquals(input, job.getOutput());
-		AMap<AString, ACell> primary = engine.getVenueState().users().get(did).job(job.getID()).getRecord();
+		AMap<AString, ACell> primary = engine.getVenueState().users().get(did).jobs().get(job.getID()).getRecord();
 		assertEquals(primary, job.getData());
 		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.INPUT, token));
 		assertEquals(Fields.HIDDEN, RT.getIn(primary, Fields.OUTPUT, token));
@@ -807,7 +804,7 @@ public class JobManagerTest {
 		users.transact(draft -> notification.set(job.updateIn(draft,
 			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output))));
 		assertEquals(Status.COMPLETE, job.getStatus());
-		assertEquals(Fields.HIDDEN, RT.getIn(users.get(did).getJob(job.getID()), Fields.OUTPUT, token));
+		assertEquals(Fields.HIDDEN, RT.getIn(users.get(did).jobs().get(job.getID()).getRecord(), Fields.OUTPUT, token));
 		assertFalse(future.isDone(), "draft edits cannot notify live waiters");
 		notification.get().run();
 		notification.get().run();
@@ -860,7 +857,7 @@ public class JobManagerTest {
 			},
 			() -> engine.jobs().deleteJob(job.getID(), ctx));
 		assertTrue(raced.get(1));
-		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+		assertNull(engine.getVenueState().users().get(did).jobs().get(job.getID()).getRecord(),
 			"the durable-history path must update-if-present, never recreate after delete");
 	}
 
@@ -880,7 +877,7 @@ public class JobManagerTest {
 		}
 		updater.join(TimeUnit.SECONDS.toMillis(5));
 		assertFalse(updater.isAlive());
-		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()),
+		assertNull(engine.getVenueState().users().get(did).jobs().get(job.getID()).getRecord(),
 			"an update committed before deletion must not persist after deletion");
 		job.cancel("test cleanup");
 	}
@@ -891,7 +888,7 @@ public class JobManagerTest {
 		Callable<Boolean> delete = () -> engine.jobs().deleteJob(job.getID(), ctx);
 		assertEquals(1, Rendezvous.all(delete, delete).stream()
 			.filter(Boolean::booleanValue).count());
-		assertNull(engine.getVenueState().users().get(did).getJob(job.getID()));
+		assertNull(engine.getVenueState().users().get(did).jobs().get(job.getID()).getRecord());
 		job.cancel("test cleanup");
 	}
 

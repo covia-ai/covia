@@ -200,16 +200,15 @@ public class EngineTest {
 		try {
 			engine.start();
 			User user = engine.getVenueState().users().ensure(did);
-			user.persistJob(jobId, Maps.of(
+			user.jobs().create(jobId, Maps.of(
 				Fields.STATUS, Status.PENDING, Fields.UPDATED, CVMLong.create(1_000L)));
-			user.persistJob(jobId, Maps.of(
-				Fields.STATUS, Status.STARTED, Fields.UPDATED, CVMLong.create(1_000L)));
+			user.jobs().get(jobId).update(job -> job.assoc(Fields.STATUS, Status.STARTED));
 
 			assertNotNull(RT.getIn(cursor.get(),
 				Covia.GRID, Covia.VENUES, engine.getAccountKey(), Keywords.VALUE,
 				Covia.USER_DATA, did),
 				"component writes must update the Engine's authoritative root immediately");
-			assertEquals(Status.STARTED, RT.getIn(user.getJob(jobId), Fields.STATUS),
+			assertEquals(Status.STARTED, RT.getIn(user.jobs().get(jobId).getRecord(), Fields.STATUS),
 				"local write order, not wall-clock resolution, decides the current value");
 		} finally {
 			engine.close();

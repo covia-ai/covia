@@ -233,7 +233,7 @@ public class EnginePersistenceTest {
 			assertEquals(current, engine.jobs().getJobData(id, RequestContext.of(ALICE_DID)));
 			assertEquals(current, engine.resolvePath(Strings.create("j/" + id.toHexString()), RequestContext.of(ALICE_DID)));
 			assertEquals(legacy, storage.get(), "reading the reopened record is pure");
-			user.job(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "after-reopen"));
+			user.jobs().get(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "after-reopen"));
 			assertNull(RT.getIn(storage.get(), prev));
 		} finally { server.close(); }
 

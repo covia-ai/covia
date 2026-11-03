@@ -317,7 +317,7 @@ public class JobRoutesTest {
 		awaitHttpStatus(id, "COMPLETE");
 		var jobId = Job.parseID(id);
 		var user = TestServer.ENGINE.getVenueState().users().get(TestServer.ENGINE.getDIDString() + ":public");
-		var current = user.getJob(jobId);
+		var current = user.jobs().get(jobId).getRecord();
 		var storage = user.cursor().path(covia.lattice.Namespace.J, jobId);
 		var legacy = current.assoc(Strings.intern("prev"), Maps.of(Fields.STATUS, "STARTED"));
 		storage.set(legacy);

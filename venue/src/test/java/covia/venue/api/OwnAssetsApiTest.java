@@ -75,7 +75,7 @@ public class OwnAssetsApiTest {
 
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().get(Strings.create(callerDID));
-		return (u == null) ? 0 : u.getJobs().count();
+		return (u == null) ? 0 : u.jobs().count();
 	}
 
 	private static boolean listHasName(ACell body, String name) {
