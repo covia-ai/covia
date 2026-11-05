@@ -1003,7 +1003,7 @@ The line this draws, once: **a result renders as a tool exchange; a request rend
 
 **Late tool outcomes.** A tool call still running at `toolCallTimeoutMs` was answered with the job it runs as (AGENT_LOOP.md §3.4.2). Its outcome arrives later as one input turn, stored once and marked by the venue as a tool call's outcome: `{jobId, toolCallId, toolName, operation, status, result | error}`, citing the call as the model made it. How it renders, on every inference, is the model profile's `lateToolResults` option (OPERATIONS.md), which an agent's `modelProfile` may set, so models that handle one form better than the other can each be given it:
 
-- `"message"`, the default — a user message, attributed to the venue (§1.2).
+- `"message"`, the default — a user message, attributed to the principal that made the call, normally the agent itself (§1.2).
 - `"tool"` — a result, by the line above: one `tool_call_outcome` call whose arguments name the job and the original call, then its result, the outcome record unchanged and not a tool error, as for job results. There is no From element: these are the agent's own turns (§3.2.1). The exchange's id is derived from the job, never the original call's, which already has its result.
 
 Only the venue marks an outcome; a principal's message shaped like one stays theirs. Changing the option renders every outcome in the session the new way.

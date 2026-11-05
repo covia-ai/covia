@@ -3905,7 +3905,8 @@ public class AgentAdapter extends AAdapter {
 	 * when the entry has gone, so the outcome is delivered once. When the
 	 * session has gone, the entry goes with nothing delivered, and a task left
 	 * parked on it with nothing else to wait on fails. The caller flushes and
-	 * wakes the agent.
+	 * wakes the agent. The outcome is attributed to whoever made the call
+	 * ({@link #callMadeBy}), normally the agent itself.
 	 *
 	 * @param record the call's final record
 	 * @return whether the outcome reached the task or the session
@@ -3928,7 +3929,7 @@ public class AgentAdapter extends AAdapter {
 			waitingTask.set(taskHex);
 			agent.removePending(jobId);
 			delivered.set(deliverToWaiter(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
-				(taskHex != null) ? Blob.fromHex(taskHex.toString()) : null, engine.getDIDString(),
+				(taskHex != null) ? Blob.fromHex(taskHex.toString()) : null, callMadeBy(record),
 				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
 				AgentState.SOURCE_TOOL_OUTCOME));
 		});
@@ -3947,6 +3948,15 @@ public class AgentAdapter extends AAdapter {
 		if (AgentState.isParked(row) && !yieldIsBacked(agent, ownerDID, agentId, taskId, row)) {
 			failTask(ownerDID, agentId, taskId, TASK_OUTCOME_UNDELIVERED);
 		}
+	}
+
+	/**
+	 * The principal that made a tracked call, as its job records it: the
+	 * acting agent, else the caller it acted for.
+	 */
+	static AString callMadeBy(AMap<AString, ACell> record) {
+		AString actor = RT.ensureString(record.get(Fields.ACTOR));
+		return (actor != null) ? actor : RT.ensureString(record.get(Fields.CALLER));
 	}
 
 	/**

@@ -848,7 +848,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/** The {@code lateToolResults} option: how a tool call's late outcome is shown. */
 	public static final AString OPT_LATE_TOOL_RESULTS = Strings.intern("lateToolResults");
-	/** A user message from the venue — the default. */
+	/** A user message from the principal that made the call — the default. */
 	public static final AString LATE_RESULTS_MESSAGE = Strings.intern("message");
 	/** A {@code tool_call_outcome} tool exchange — opt-in. */
 	public static final AString LATE_RESULTS_TOOL = Strings.intern("tool");

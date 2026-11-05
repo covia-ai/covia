@@ -1055,9 +1055,15 @@ public class ContextAssemblerTest {
 		return spec.withFrames(Vectors.of(frame));
 	}
 
+	/** The outcome of a call the agent made, as the venue delivers it. */
 	private AMap<AString, ACell> outcomeEnvelope() {
-		return Maps.of(Fields.CALLER, engine.getDIDString(), Fields.MESSAGE, lateOutcome(),
+		return Maps.of(Fields.CALLER, ctx.getCallerDID(), Fields.MESSAGE, lateOutcome(),
 			AgentState.K_SOURCE, AgentState.SOURCE_TOOL_OUTCOME);
+	}
+
+	/** A request from another principal, which the agent's call answered. */
+	private static AMap<AString, ACell> bobAsks() {
+		return Maps.of(Fields.CALLER, "did:key:z6MkBob", Fields.MESSAGE, "Please look this up");
 	}
 
 	/** The tool_call_outcome calls in an assembled prompt. */
@@ -1071,8 +1077,8 @@ public class ContextAssemblerTest {
 	}
 
 	@Test
-	public void testALateOutcomeIsTheVenuesMessageByDefault() {
-		AVector<ACell> messages = ContextAssembler.assemble(takenBy(spec(null), outcomeEnvelope())).messages();
+	public void testALateOutcomeIsTheAgentsOwnMessageByDefault() {
+		AVector<ACell> messages = ContextAssembler.assemble(takenBy(spec(null), bobAsks(), outcomeEnvelope())).messages();
 		assertTrue(outcomeCalls(messages).isEmpty());
 		int shown = 0;
 		for (long i = 0; i < messages.count(); i++) {
@@ -1080,13 +1086,13 @@ public class ContextAssemblerTest {
 		}
 		assertEquals(1, shown, "one user message citing the call: " + messages);
 		var elements = fromElements(messages);
-		assertEquals(1, elements.size());
-		assertTrue(elements.get(0).startsWith("[From: " + TurnProvenance.Relationship.VENUE.words), elements.get(0));
+		assertEquals(2, elements.size(), "the request's sender, then the agent: " + elements);
+		assertTrue(elements.get(1).startsWith("[From: " + TurnProvenance.Relationship.SELF.words + " "), elements.get(1));
 	}
 
 	@Test
 	public void testALateOutcomeIsAToolExchangeWhenTheProfileAsks() {
-		Spec spec = takenBy(spec(null), outcomeEnvelope()).withLateToolResults(AbstractLLMAdapter.LATE_RESULTS_TOOL);
+		Spec spec = takenBy(spec(null), bobAsks(), outcomeEnvelope()).withLateToolResults(AbstractLLMAdapter.LATE_RESULTS_TOOL);
 		AVector<ACell> messages = ContextAssembler.assemble(spec).messages();
 		java.util.List<ACell> calls = outcomeCalls(messages);
 		assertEquals(1, calls.size(), "one exchange: " + messages);
@@ -1102,7 +1108,7 @@ public class ContextAssemblerTest {
 		assertNotNull(result, "its result answers it");
 		assertEquals(lateOutcome(), RT.getIn(result, Fields.STRUCTURED_CONTENT), "the outcome is the result, unchanged");
 		assertNull(RT.getIn(result, Fields.IS_ERROR), "a failed job is data about that job, not a failed call");
-		assertTrue(fromElements(messages).isEmpty(), "the agent's own turns take no From element");
+		assertEquals(1, fromElements(messages).size(), "the request's sender only: the agent's own turns take no From element");
 		for (long i = 0; i < messages.count(); i++) {
 			assertFalse("user".equals(role(messages.get(i))) && content(messages.get(i)).contains(LATE_CALL.toString()),
 				"not also a message");

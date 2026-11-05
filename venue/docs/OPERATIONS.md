@@ -740,7 +740,7 @@ declares what *differs*.
 | `toolCalling` | `false` declares a model that cannot call tools. The assembler honours it — no tool is presented, no capability notice, no skills index — and `agent:create` warns when an agent declares tools or skills against it. Absent means tool calling is available. |
 | `toolCallingByModel` | Tool support varies per model rather than per provider, so it cannot be assumed from the provider alone — where a probe exists (Ollama advertises model capabilities), `agent:create` asks it. |
 | `labels` | `"bracket"` (default), `"xml"` or `"header"`: the dialect in which context elements are labelled — `[Label …]` lines, XML-style elements with explicit closing tags, or markdown headings. One renderer applies it; see [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.2. |
-| `lateToolResults` | `"message"` (default) or `"tool"`: how the outcome of a tool call that outlasted `toolCallTimeoutMs` is shown when it arrives — a user message from the venue, or a `tool_call_outcome` tool result. Anything else is the default. See [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §5.7. |
+| `lateToolResults` | `"message"` (default) or `"tool"`: how the outcome of a tool call that outlasted `toolCallTimeoutMs` is shown when it arrives — a user message from the agent that made the call, or a `tool_call_outcome` tool result. Anything else is the default. See [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §5.7. |
 
 ### `budget` — context size
 

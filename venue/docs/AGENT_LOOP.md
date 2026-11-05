@@ -605,11 +605,12 @@ In a session, the job is tracked in the agent's pending index with the
 session, the task whose cycle made the call, and the call's id and tool name
 as the model made it. When the job ends, one transaction removes the entry
 and delivers the outcome
-`{jobId, toolCallId, toolName, operation, status, result | error}` from the
-venue, marked as a tool call's outcome, which wakes the agent. It goes to the
-task as its next input, so it runs that task and no other in the session;
-when the call came from no task, or the task has finished, it goes to the
-session. The model sees it as a message from the venue, or as a
+`{jobId, toolCallId, toolName, operation, status, result | error}`, marked
+by the venue as a tool call's outcome and attributed to the principal that
+made the call (the job's `actor`, normally the agent itself), which wakes the
+agent. It goes to the task as its next input, so it runs that task and no
+other in the session; when the call came from no task, or the task has
+finished, it goes to the session. The model sees it as a message, or as a
 `tool_call_outcome` tool result when its profile's `lateToolResults` asks
 (AGENT_CONTEXT.md §5.7). A task that yields meanwhile
 waits for it (§4.6), and one that receives it during its own cycle cannot

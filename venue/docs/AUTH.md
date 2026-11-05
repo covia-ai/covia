@@ -832,7 +832,9 @@ history keeps the turn (COG-20 §4). A task's turn takes the record of the
 input it shows: the task's for its original input, its continuation's for each
 later one, so a follow-up is attributed to its sender rather than the
 requester; a cycle without a session is handed that record by the run loop
-(`inputSource`). A tracked tool call's late outcome is recorded as the venue's.
+(`inputSource`). A tracked tool call's late outcome is recorded as from the
+principal that made the call: its job's `actor`, normally the agent itself,
+else its `caller`.
 
 **Rendered from the record.** `ContextAssembler` renders a `From` label element
 (`Labels.Kind.FROM`, AGENT_CONTEXT.md §1.2) in the agent's dialect:

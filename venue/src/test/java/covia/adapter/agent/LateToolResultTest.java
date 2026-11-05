@@ -32,6 +32,7 @@ import covia.adapter.AgentAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.AgentWatch;
@@ -141,6 +142,16 @@ public class LateToolResultTest {
 		assertTrue(c.contains(okJob) && c.contains(badJob), "each outcome names its job: " + c);
 		assertTrue(c.contains("c-ok") && c.contains("c-bad"), "each outcome cites the model's call: " + c);
 		assertEquals(0, agent.getPending().count(), "a delivered outcome leaves the pending index");
+		AVector<ACell> stored = GoalTreeContext.activeConversation(RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
+		int outcomes = 0;
+		for (long i = 0; i < stored.count(); i++) {
+			if (!AgentState.SOURCE_TOOL_OUTCOME.equals(RT.getIn(stored.get(i), AgentState.K_SOURCE))) continue;
+			assertEquals(Principals.agentDID(did, Strings.create("late-step")), RT.getIn(stored.get(i), Fields.CALLER),
+				"an outcome comes from the agent that made the call");
+			outcomes++;
+		}
+		assertEquals(2, outcomes);
 
 		// The agent's profile asks for late outcomes as tool results: each is
 		// its own tool_call_outcome exchange, answering a call that names its job.
@@ -164,19 +175,20 @@ public class LateToolResultTest {
 		}
 	}
 
-	/** A cycle without a session builds its turns from its input: an outcome keeps the venue's provenance, not the requester's. */
+	/** A cycle without a session builds its turns from its input: an outcome keeps its own provenance, not the requester's. */
 	@Test
 	public void aCycleWithNoSessionKeepsTheOutcomesOwnProvenance() {
+		AString agentDID = Strings.create("did:key:z6MkOwner:g:worker");
 		AMap<AString, ACell> input = Maps.of(
 			Fields.NEW_INPUT, Maps.of(Fields.JOB_ID, "0a1b", Fields.STATUS, Status.COMPLETE),
 			Fields.TASKS, Vectors.of(Maps.of(Fields.CALLER, "did:key:z6MkRequester")),
-			AgentState.KEY_INPUT_SOURCE, Maps.of(Fields.CALLER, engine.getDIDString(),
+			AgentState.KEY_INPUT_SOURCE, Maps.of(Fields.CALLER, agentDID,
 				AgentState.K_SOURCE, AgentState.SOURCE_TOOL_OUTCOME));
 		AVector<ACell> frames = FrameStore.appendCycleInputTurns(
 			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, input, 1L);
 		AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell turn = turns.get(turns.count() - 1);
-		assertEquals(engine.getDIDString(), RT.getIn(turn, Fields.CALLER));
+		assertEquals(agentDID, RT.getIn(turn, Fields.CALLER));
 		assertEquals(AgentState.SOURCE_TOOL_OUTCOME, RT.getIn(turn, AgentState.K_SOURCE));
 	}
 
@@ -438,7 +450,7 @@ public class LateToolResultTest {
 			String shown = String.valueOf(RT.getIn(agent.getTimeline().get(2), Fields.RESULT));
 			assertTrue(shown.contains("newer-outcome"), "the newer task's cycle was shown its outcome: " + shown);
 
-			// Shown in the conversation as the venue's, not as its requester's
+			// Shown in the conversation as from whoever made the call: here the owner, by hand
 			AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(
 				RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
 			ACell outcomeTurn = null;
@@ -450,7 +462,7 @@ public class LateToolResultTest {
 				}
 			}
 			assertNotNull(outcomeTurn, "the outcome is a turn in the session's conversation");
-			assertEquals(engine.getDIDString(), RT.getIn(outcomeTurn, Fields.CALLER));
+			assertEquals(did, RT.getIn(outcomeTurn, Fields.CALLER));
 			assertEquals(AgentState.SOURCE_TOOL_OUTCOME, RT.getIn(outcomeTurn, AgentState.K_SOURCE),
 				"the venue marks it a tool call's outcome");
 			assertEquals(Strings.create(PARKED_CALL_ID), RT.getIn(outcomeTurn, AgentState.K_CONTENT, Fields.TOOL_CALL_ID),
