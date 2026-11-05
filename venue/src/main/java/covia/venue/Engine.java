@@ -4113,10 +4113,14 @@ public class Engine {
 	/**
 	 * The context {@code principal} acts under now for {@code owner}, whose
 	 * record (a binding, say) names it: the owner itself; one of the owner's
-	 * agents, as itself in the owner's namespace, bounded by its current
-	 * {@code config.caps} (none once it is gone); or the public principal, which
+	 * agents, as itself in the owner's namespace; or the public principal, which
 	 * acts only as itself. The owner comes from the record, never from the
 	 * principal's name.
+	 *
+	 * <p>An agent's context carries the agent, not a copy of its caps: each
+	 * point of action reads its {@code config.caps} as they stand then
+	 * ({@link #agentScope}), so narrowing or deleting an agent bounds work it
+	 * already has running.</p>
 	 *
 	 * @throws AuthException for any other principal, or for the public principal
 	 *         while public access is off
@@ -4127,11 +4131,17 @@ public class Engine {
 		}
 		AString agentId = agentIdIn(owner, principal);
 		if (agentId == null) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal, owner));
+		return RequestContext.ofAgent(owner, agentId).readingScope(() -> agentScope(owner, agentId));
+	}
+
+	/**
+	 * Agent {@code agentId}'s capability scope as it stands now: its
+	 * {@code config.caps}, unrestricted without them, and none once the agent
+	 * is gone or terminated.
+	 */
+	AVector<ACell> agentScope(AString owner, AString agentId) {
 		AgentState agent = getAgent(owner, agentId);
-		AVector<ACell> caps = (agent == null) ? Vectors.empty()
-			: RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS));
-		RequestContext ctx = RequestContext.ofAgent(owner, agentId);
-		return (caps == null) ? ctx : ctx.withCaps(caps);
+		return (agent == null) ? Vectors.empty() : RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS));
 	}
 
 	/**
@@ -4170,7 +4180,7 @@ public class Engine {
 			throw new AuthException(NOT_AGENTS_STEP.formatted(caller, agentId));
 		}
 		if (getAgent(owner, agentId) == null) throw new AuthException(NO_SUCH_AGENT.formatted(agentDID));
-		return ctx.actingAs(context(owner, agentDID).getAuthority()).withAgentId(agentId);
+		return ctx.actingAs(context(owner, agentDID)).withAgentId(agentId);
 	}
 
 	/**
@@ -4262,12 +4272,14 @@ public class Engine {
 		// separately by the adapter (which calls crossUserAllows directly), never by
 		// this fast path — so returning here is correct AND skips the string
 		// building, clock read and proof walk that crossUserAllows would do.
-		if (ctx.getCaps() == null) return true;
+		// An agent's scope is read as it stands now, once for this check.
+		AVector<ACell> scope = ctx.getCaps();
+		if (scope == null) return true;
 		// Restricted (agent) scope. Grants are additive: a presented cross-user
 		// proof (or the public read grant) authorises independently of the caller's
 		// scope; otherwise a grant in the scope must cover the resource.
 		if (crossUserAllows(ctx, resource, ability, destination)) return true;
-		return ctx.grantsDenial(resource, ability, destination) == null;
+		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
 
 	/**

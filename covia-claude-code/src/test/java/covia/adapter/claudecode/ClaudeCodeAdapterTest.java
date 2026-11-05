@@ -694,6 +694,23 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(Status.FAILED, job.getStatus(), "an agent that lost the project cannot resume in it");
 	}
 
+	/** A live session's next turn acts as its agent stands then: narrowed out of the project, the turn is refused and the session waits. */
+	@Test
+	public void testLiveSessionTurnActsUnderTheAgentsCurrentCaps() throws Exception {
+		AVector<ACell> caps = alphaSessionCaps();
+		RequestContext agent = agentWith("session-narrowed", caps);
+		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), agent);
+		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+
+		run(OWNER_CTX, "v/ops/agent/update", Maps.of(Fields.AGENT_ID, "session-narrowed",
+			Fields.CONFIG, Maps.of(Config.CAPS, Vectors.of(caps.get(0)))));
+		assertThrows(Exception.class, () -> engine.jobs().deliverMessage(job.getID(), Maps.of("content", "count"), OWNER_CTX));
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), "the session waits for a turn it may take");
+
+		engine.jobs().deliverMessage(job.getID(), Maps.of("end", true), OWNER_CTX);
+		await(job::isFinished, 10_000);
+	}
+
 	// ------------------------------------------------------------------ helpers
 
 	@Test

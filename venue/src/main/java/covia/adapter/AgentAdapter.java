@@ -2814,7 +2814,9 @@ public class AgentAdapter extends AAdapter {
 			throw new InvalidInputException(ExternalAgents.IMMUTABLE_DEFINITION);
 		// Config changes apply to future transitions: a transition already
 		// running keeps the snapshot it fired with (transitionInput.config) and
-		// the next cycle re-reads the record. State is merged by the run loop as
+		// the next cycle re-reads the record. Caps are the exception: every
+		// point of action reads them as they stand (Engine.context), so new
+		// caps bound work already running. State is merged by the run loop as
 		// the transition's change against its fire-time snapshot
 		// (AgentState.applyStateChange), so an update landing mid-transition
 		// survives on every key the transition does not touch. Nothing here
@@ -2872,13 +2874,6 @@ public class AgentAdapter extends AAdapter {
 		AVector<ACell> warnings = Vectors.empty();
 		if (newConfig != null) {
 			warnings = collectConfigWarnings(newConfig, ctx);
-		}
-		if (running && newConfig != null && newConfig.containsKey(K_CAPS)) {
-			// Honest about authority: the transition in flight keeps the caps it
-			// fired with until it ends.
-			warnings = warnings.conj(Strings.create(
-				"A transition is running under the caps it fired with; the new caps apply"
-				+ " from the next transition. Use agent:suspend to halt it now."));
 		}
 		if (!warnings.isEmpty()) {
 			result = result.assoc(Fields.WARNINGS, warnings);

@@ -86,13 +86,12 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `ts` | long | Ratcheted timestamp of the last write to the agent record. Metadata, not a merge discriminator. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `agent` | map? | Optional external implementation selector; absent for the native Covia runtime. See §2.2.1. |
-| `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
+| `config` | map | Framework-level configuration. Includes `operation` (default transition op) and `caps`, the agent's capability scope ([UCAN.md §5.4](./UCAN.md): Model A, user-scoped). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains `frames` (the goal-tree frame stack — `frames[0].conversation` is the canonical transcript), pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md and GOAL_TREE.md. |
 | `timeline` | vector | Append-only log of cycle records (§2.4), one per cycle whose transition ran — the complete record of each cycle's exchange with the model. |
-| `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
 | `suspension` | map? | Deliberate stop: `{by: <actual caller DID>, reason?: <up to 512 characters>, ts: <epoch millis>}`. Set by `agent:suspend`, separate from faults; cleared on resume. |
 
@@ -154,8 +153,8 @@ Supported definitions:
 
 `agent:chat` and `agent:request` preserve their existing result envelopes.
 The common dispatcher checks normal agent admission and executes as the resident
-agent with its `config.caps`. Requester credentials do not become the agent's
-authority. Provider-specific project, secret and destination checks still apply.
+agent under its `config.caps` as they stand at each check. Requester credentials
+do not become the agent's authority. Provider-specific project, secret and destination checks still apply.
 See [AGENT_SESSIONS.md §2.2](./AGENT_SESSIONS.md#22-external-agent-sessions)
 for conversation mapping, turn execution, messages and recovery.
 
@@ -735,8 +734,9 @@ they are not repeated in every provider-facing tool schema.
 
 #### Capability enforcement
 
-The operation a tool call runs checks the agent's `caps` itself; the runtime
-has no name-keyed gate. A denied call returns an error listing the agent's
+The operation a tool call runs checks the agent's `config.caps` itself, as they
+stand when it checks, so new caps bound a cycle already running and a call past
+its timeout; the runtime has no name-keyed gate. A denied call returns an error listing the agent's
 actual capabilities. The system prompt
 includes a caps section so the LLM knows its boundaries upfront.
 

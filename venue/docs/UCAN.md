@@ -478,9 +478,9 @@ are forwarded in their distinct channels, filtered to the selected principal,
 and only to a venue whose DID is proven. Grant presence never selects a mode.
 See §5.6.
 
-**Agent tool calls**: The agent framework (level 2) attaches the user's
-proofs automatically when invoking tools on behalf of the user. Agents
-inherit the capabilities of the user who triggered them.
+**Agent tool calls**: an agent's tool calls run as the agent, in its owner's
+namespace, under its own `config.caps` as they stand at each check (§5.4).
+The requester's proofs and credentials are never handed to the agent.
 
 #### Caching (future)
 
@@ -842,7 +842,9 @@ holds `auth.public.caps`, an agent-shaped DID holds nothing, and anyone else is
 unrestricted there. `context(owner, principal)` is a principal a record of
 `owner`'s names (a messaging binding, say): the owner, one of its agents under
 the agent's current `config.caps`, or the public principal; the owner comes
-from the record, never from the principal's name. `context(owner, principal,
+from the record, never from the principal's name. An agent's context carries
+the agent, not a copy of its caps: every point of action reads `config.caps`
+as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
 proofs)` adds proofs it presented, and takes any other principal as a delegate
 of the owner, under the same `user/sudo` check as a live request; a scheduled
 event fires through it. Every inbound request starts from `context(caller)`
@@ -885,8 +887,8 @@ Delegation at creation:
   prf: []                               ; root grant from resource owner
 ```
 
-When Carol's tool calls execute, the framework wraps her RequestContext
-with only this token. Carol can write to `w/decisions/` but not
+When Carol's tool calls execute, they run as Carol under exactly these
+capabilities, read from her `config.caps` at each check. Carol can write to `w/decisions/` but not
 `w/vendor-records/`. She can read enrichments but not secrets.
 
 **Identity:** `did:key:zAlice...:g:Carol` (a sub-principal of Alice)
@@ -925,12 +927,15 @@ operates within one user's namespace with restricted permissions.
 
 **How it works at runtime:**
 
-1. `agent:create` with `caps` field declares the agent's attenuations
-2. Venue issues a UCAN: issuer = user DID, audience = agent DID
-3. Token stored in agent record (alongside config, state, etc.)
-4. On each run, level 2 creates a restricted RequestContext with only the agent's token
-5. Tool calls go through CoviaAdapter which verifies the token against the requested path/ability
-6. Writes outside the allowed scope are denied
+1. `agent:create` with `config.caps` declares the agent's scope; no token is
+   minted, since the venue holds the relationship.
+2. Every context the agent acts under (`Engine.context(owner, agentDID)`,
+   `Engine.stepContext`) carries the agent, not a copy of its caps.
+3. Each point of action (`Engine.requireAuthority`) reads `config.caps` as they
+   stand then. Narrowing the agent with `agent:update` bounds work it already
+   has running (orchestration steps, tool calls past their timeout, live
+   Claude Code sessions, the rest of a cycle), and a deleted agent holds none.
+4. Operations outside the scope are denied.
 
 **Reading an agent's live caps.** An agent's scope lives at `config.caps`,
 so read it via the config: `agent:info` (returns the record, whose `config.caps`
@@ -1054,9 +1059,9 @@ a RequestContext for the tool invocation. The context determines enforcement:
 
 | Agent Model | RequestContext | Enforcement |
 |-------------|---------------|-------------|
-| No caps (current default) | Caller's identity, no restrictions | Full access to own namespace |
-| Model A (attenuated) | Caller's identity + agent's scoped UCAN | CoviaAdapter checks UCAN before writes |
-| Model B (independent) | Agent's own DID + presented proof chain | Full UCAN verification on every operation |
+| No caps (current default) | The agent's DID in its owner's namespace, no scope | Full access to the owner's namespace |
+| Model A (attenuated) | The agent's DID in its owner's namespace, scoped by its `config.caps` | Every point of action checks the caps as they stand then |
+| Model B (independent, not implemented) | Agent's own DID + presented proof chain | Full UCAN verification on every operation |
 
 Two complementary checks apply, both built on the same `Capability.covers`
 matcher over canonical owner-scoped resources (§3.1):
@@ -1070,10 +1075,10 @@ matcher over canonical owner-scoped resources (§3.1):
 The difference between agent models is which identity and caps the
 RequestContext carries; the matcher is shared.
 
-For Model A, the key change is that the agent's tool calls go through a
-**restricted RequestContext** instead of inheriting the user's full access.
-The venue becomes the enforcement mechanism — it issued the scoped token
-and it verifies it on every tool call.
+For Model A, the agent's tool calls go through a **restricted
+RequestContext** instead of inheriting the user's full access. The venue is
+the enforcement mechanism: it holds the agent's scope and checks it, as it
+stands, on every tool call.
 
 #### The `invoke` ability under a scope (#211)
 

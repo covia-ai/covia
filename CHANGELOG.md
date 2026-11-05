@@ -31,6 +31,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A chat bot an agent created names it `caller`, not `principal`.
 - A Claude Code session restored after a restart acts as the principal that started it, with the grants it presented, and every turn checks project access again.
 - An agent's `outputPath` write acts as its requester stands at write time, after a restart too; the task keeps no copy of the requester's caps.
+- An agent's running work (orchestration steps, tool calls past their timeout, live Claude Code sessions, the rest of a cycle) acts under its caps as they stand at each check, and under none once it is deleted; `agent:update` no longer warns that a running transition keeps its old caps.
 - The venue migrates to version 2, renaming those fields in stored records once.
 - User exports are at version 2; `user:import` converts older ones, and `user:import` and `user:clone` leave out the user's jobs.
 - A `covia` path given as an array takes strings only, none containing `/`, a list position written in digits as in a string path; any other element is refused (#617).
