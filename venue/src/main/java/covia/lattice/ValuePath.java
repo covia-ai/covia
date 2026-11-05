@@ -67,21 +67,6 @@ public final class ValuePath {
 		return containsKey(get(root, path.parent()), path.get(path.length() - 1));
 	}
 
-	/**
-	 * How many levels of {@code path} are absent from {@code root}: none when
-	 * the last segment has an entry, otherwise the levels from the first missing
-	 * segment down to the last. A write there, with its levels created, makes
-	 * exactly these.
-	 */
-	public static int missingLevels(ACell root, CoviaPath path) {
-		ACell node = root;
-		for (int i = 0; i < path.length(); i++) {
-			if (!containsKey(node, path.get(i))) return path.length() - i;
-			node = child(node, path.get(i));
-		}
-		return 0;
-	}
-
 	/** One level down: a map key, a list position or an Index key, or null when absent. */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public static ACell child(ACell value, AString segment) {
@@ -206,18 +191,9 @@ public final class ValuePath {
 
 	// ========== Changes ==========
 
-	/** {@code root} with {@code value} at {@code path}; every level above it must exist. */
+	/** {@code root} with {@code value} at {@code path}; every level above it must exist, and a list position must be in range. */
 	public static ACell set(ACell root, CoviaPath path, ACell value) {
-		return update(root, path, previous -> value);
-	}
-
-	/**
-	 * {@code root} with the value at {@code path} replaced by {@code change}
-	 * applied to it (null when absent). Every level above it must exist; a list
-	 * position must be in range.
-	 */
-	public static ACell update(ACell root, CoviaPath path, UnaryOperator<ACell> change) {
-		return update(root, path, 0, change);
+		return update(root, path, 0, previous -> value);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -236,11 +212,6 @@ public final class ValuePath {
 		AMap<AString, ACell> map = (AMap<AString, ACell>) root;
 		AString key = path.get(i);
 		return map.assoc(key, update(map.get(key), path, i + 1, change));
-	}
-
-	/** {@code root} with {@code element} added to the list at {@code path}, which is created when absent. */
-	public static ACell append(ACell root, CoviaPath path, ACell element) {
-		return update(root, path, current -> appendTo(current, element));
 	}
 
 	/**

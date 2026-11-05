@@ -57,7 +57,7 @@ import covia.venue.storage.LatticeStorage;
  * venue.transact(draft -> {
  *     var user = draft.users().ensure(did);
  *     user.ensureAgent("assistant", config, null);
- *     user.workspace().write(keys, 0, value);
+ *     user.workspace().write(CoviaPath.parse("assistant/ready"), value);
  * });
  * }</pre>
  *

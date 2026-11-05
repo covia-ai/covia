@@ -362,7 +362,7 @@ every level above the entry to exist, each still the kind of value its key was
 resolved against; otherwise it is refused and nothing is written. Only
 `createLevels` creates missing levels, and an absent workspace root counts as
 an empty map. The workspace's own operations, for its owner's code, take a
-path and read its segments by value each time; only `createPath` among them
+path and act through the entry it resolves to; only `createPath` among them
 creates a level. An area inside a
 record (`n`, `c`, `temp`) refuses a change while the record does not exist. An
 area can hold another (`Workspace.area`), changed through the outer area's

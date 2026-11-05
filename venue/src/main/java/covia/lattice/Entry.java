@@ -160,12 +160,22 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 * @return How many levels were created
 	 */
 	public int createLevels() {
+		return createLevels(keys.length - 1);
+	}
+
+	/**
+	 * Creates a map at each of the first {@code count} levels of the path that
+	 * holds nothing, in one atomic update of the workspace.
+	 *
+	 * @return How many levels were created
+	 */
+	int createLevels(int count) {
 		refuseUnreachable();
-		if (keys.length < 2) return 0;
+		if (count < 1) return 0;
 		int[] created = {0};
 		area.cursor().updateAndGet(root -> {
 			created[0] = 0;
-			return createBelow(root == null ? Maps.empty() : root, 0, created);
+			return createBelow(root == null ? Maps.empty() : root, 0, count, created);
 		});
 		return created[0];
 	}
@@ -199,15 +209,15 @@ public final class Entry extends ACoviaComponent<ACell> {
 		});
 	}
 
-	/** {@code node}, the value at level {@code i}, with the levels below it down to the one above this entry. */
-	private ACell createBelow(ACell node, int i, int[] created) {
-		if (i >= last()) return node;
+	/** {@code node}, the value at level {@code i}, with the levels below it created down to level {@code count}. */
+	private ACell createBelow(ACell node, int i, int count, int[] created) {
+		if (i >= count) return node;
 		ACell child = valueIn(node, i);
 		if (child == null) {
 			child = Maps.empty();
 			created[0]++;
 		}
-		return put(node, i, createBelow(child, i + 1, created));
+		return put(node, i, createBelow(child, i + 1, count, created));
 	}
 
 	/** Whether {@code container} holds key {@code i} as the kind of value it was resolved against. */
