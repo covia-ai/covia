@@ -970,23 +970,10 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AString location = RT.ensureString(saved.get(K_LOCATION));
 		if (location == null) return null;
 		String ref = secretRef(saved);
-		String value = resolveSecretRef(ref, recordedContext(job), destination);
+		// The job's caller as it acts now, rebuilt from the record, which keeps no grants for it
+		String value = resolveSecretRef(ref, engine.jobs().callerContext(job), destination);
 		if (convex.core.data.prim.CVMBool.TRUE.equals(saved.get(K_BEARER))) return RequestAuth.bearer(value, ref);
 		return new RequestAuth(location.toString(), RT.ensureString(saved.get(Fields.NAME)).toString(), value, ref, false);
-	}
-
-	/**
-	 * The context the job's caller acts under now, rebuilt from its record
-	 * ({@link Engine#context(AString, AString, AVector)}), which keeps no
-	 * grants. The record's principal fields are read here and nowhere else:
-	 * {@code caller} names the namespace, and {@code actor} the principal that
-	 * acted when it is not the namespace's own.
-	 */
-	private RequestContext recordedContext(Job job) {
-		AMap<AString, ACell> record = job.getData();
-		AString owner = RT.ensureString(record.get(Fields.CALLER));
-		AString actor = RT.ensureString(record.get(Fields.ACTOR));
-		return engine.context(owner, actor != null ? actor : owner, null);
 	}
 
 	@Override public void suspendJob(Job job) {

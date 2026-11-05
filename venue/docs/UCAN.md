@@ -868,16 +868,16 @@ by its name.
 #### Model A: User-Scoped Agent (Attenuated Delegation)
 
 The agent has **no key of its own**. It acts as its own sub-principal DID
-within the user's namespace, bounded by attenuated capabilities; the venue
-signs on the owner's behalf. The user creates the agent and declares what it
-can do.
+within the user's namespace, bounded by attenuated capabilities. The user
+creates the agent and declares what it can do; no token is issued. The scope
+in its `config.caps` has the shape of the delegation below.
 
 ```
 User DID: did:key:zAlice...
 Agent ID: Carol
 Agent DID: did:key:zAlice...:g:Carol
 
-Delegation at creation:
+Scope, as the delegation it amounts to:
   iss: did:key:zAlice
   aud: did:key:zAlice...:g:Carol        ; the agent sub-principal
   att: [
@@ -892,7 +892,7 @@ capabilities, read from her `config.caps` at each check. Carol can write to `w/d
 `w/vendor-records/`. She can read enrichments but not secrets.
 
 **Identity:** `did:key:zAlice...:g:Carol` (a sub-principal of Alice)
-**Keys:** None — the venue signs on Alice's behalf
+**Keys:** None — the venue holds the relationship, and nothing is signed
 **Granting:** none, and **the gate is identity, not scope**. Both granting
 surfaces refuse an agent context outright (COG-17): `ucan:issue` directly, and
 `hitl:respond` because answering an ask mints a grant under the *inbox owner's*

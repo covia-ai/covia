@@ -413,10 +413,10 @@ secret's value. A hop that signed in with a credential only its request
 presented (`authenticateAs: "caller"`, or an A2A `bearerToken`) is therefore
 not resumed: its recovered job fails, naming the remote job and its venue
 (`RemoteJobs.NOT_FOLLOWED`). A recovered A2A job reads its bearer again from
-its caller's secrets, under the context `Engine.context` rebuilds from the job
-record, so a rotated secret is sent as it now stands. The record keeps no
-grants, so a secret the caller can use only through a grant leaves the job
-waiting for authority. Recovery does not resolve a changed catalog binding or
+its caller's secrets, under the context `JobManager.callerContext` rebuilds
+from the job record, so a rotated secret is sent as it now stands. An A2A
+job keeps no grants (Kept proofs), so a secret the caller can use only through
+a grant leaves the job waiting for authority. Recovery does not resolve a changed catalog binding or
 silently elevate the original authority. Missing authority or an unavailable
 adapter leave the remote outcome unresolved. The saved record is removed on
 local termination; encrypted orphan records left by a process crash require
