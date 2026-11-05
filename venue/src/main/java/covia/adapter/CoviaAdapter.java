@@ -606,12 +606,12 @@ public class CoviaAdapter extends AAdapter {
 			Consumer<Workspace> change) {
 		ACell[] keys = target.keys();
 		int from = target.from();
-		ACell[] parent = Arrays.copyOf(keys, Math.max(from, keys.length - 1));
+		int to = target.to();
 		boolean[] created = {false};
 		target.workspace().transact(draft -> {
-			int missing = ValuePath.missingLevels(draft.read(), keys, from);
+			int missing = ValuePath.missingLevels(draft.read(), keys, from, to);
 			if (missing > 0) engine.requireLocalAccess(ctx, ancestor(address, missing), Capability.CRUD_WRITE);
-			created[0] = draft.createPath(parent, from) > 0;
+			created[0] = draft.createPath(keys, from, Math.max(from, to - 1)) > 0;
 			change.accept(draft);
 		});
 		return created[0];
@@ -666,7 +666,7 @@ public class CoviaAdapter extends AAdapter {
 		Position target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		boolean[] existed = {false};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target,
-			draft -> existed[0] = draft.write(target.keys(), target.from(), value));
+			draft -> existed[0] = draft.write(target.keys(), target.from(), target.to(), value));
 		return withPathCreated(Maps.of(Fields.EXISTED, CVMBool.of(existed[0])), created);
 	}
 
@@ -683,7 +683,7 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		Position target = resolvePathTarget(ctx, path, Capability.CRUD_WRITE);
 		changeCreatingLevels(ctx, capResource(input), target,
-			draft -> draft.update(target.keys(), target.from(), change));
+			draft -> draft.update(target.keys(), target.from(), target.to(), change));
 	}
 
 	/**
@@ -757,7 +757,7 @@ public class CoviaAdapter extends AAdapter {
 		Position target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
 		if (target == null) return Maps.of(Fields.DELETED, CVMBool.FALSE);
 		ACell[] keys = target.keys();
-		if (target.component() instanceof SecretStore secrets && keys.length - target.from() == 1) {
+		if (target.component() instanceof SecretStore secrets && target.to() - target.from() == 1) {
 			AString name = RT.ensureString(keys[target.from()]);
 			boolean deleted = name != null && secrets.deleteIfPresent(name);
 			if (deleted) {
@@ -767,7 +767,7 @@ public class CoviaAdapter extends AAdapter {
 			}
 			return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 		}
-		boolean deleted = target.workspace().delete(keys, target.from());
+		boolean deleted = target.workspace().delete(keys, target.from(), target.to());
 		return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 	}
 
@@ -791,8 +791,8 @@ public class CoviaAdapter extends AAdapter {
 		boolean[] existed = {false};
 		long[] size = {0};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target, draft -> {
-			existed[0] = draft.contains(target.keys(), target.from());
-			size[0] = draft.append(target.keys(), target.from(), element);
+			existed[0] = draft.contains(target.keys(), target.from(), target.to());
+			size[0] = draft.append(target.keys(), target.from(), target.to(), element);
 		});
 		return withPathCreated(Maps.of(
 			Fields.EXISTED, CVMBool.of(existed[0]),

@@ -1,6 +1,5 @@
 package covia.lattice;
 
-import java.util.Arrays;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ABlob;
@@ -28,7 +27,8 @@ import covia.exception.NotFoundException;
  * <p>Changes are pure functions of a value, so they can run inside one atomic
  * update. They never create a missing level: {@link #createPath} creates levels,
  * and only when a caller asks. Refusals name the path as the caller wrote it,
- * so callers pass their whole key array and the index where the value starts.</p>
+ * so callers pass their whole key array and the range of it that names the
+ * value, {@code keys[from, to)}; a form without {@code to} runs to the end.</p>
  */
 public final class ValuePath {
 
@@ -57,8 +57,13 @@ public final class ValuePath {
 
 	/** The value at {@code keys[from..]} below {@code root}, or null when absent. */
 	public static ACell get(ACell root, ACell[] keys, int from) {
+		return get(root, keys, from, keys.length);
+	}
+
+	/** The value at {@code keys[from, to)} below {@code root}, or null when absent. */
+	public static ACell get(ACell root, ACell[] keys, int from, int to) {
 		ACell current = root;
-		for (int i = from; i < keys.length && current != null; i++) {
+		for (int i = from; i < to && current != null; i++) {
 			current = child(current, keys[i]);
 		}
 		return current;
@@ -66,20 +71,29 @@ public final class ValuePath {
 
 	/** Whether {@code keys[from..]} names a value present in {@code root}; with no keys, whether root exists. */
 	public static boolean contains(ACell root, ACell[] keys, int from) {
-		if (from >= keys.length) return root != null;
-		ACell parent = get(root, Arrays.copyOf(keys, keys.length - 1), from);
-		return containsKey(parent, keys[keys.length - 1]);
+		return contains(root, keys, from, keys.length);
+	}
+
+	/** Whether {@code keys[from, to)} names a value present in {@code root}; with no keys, whether root exists. */
+	public static boolean contains(ACell root, ACell[] keys, int from, int to) {
+		if (from >= to) return root != null;
+		return containsKey(get(root, keys, from, to - 1), keys[to - 1]);
+	}
+
+	/** {@link #missingLevels(ACell, ACell[], int, int)} to the end of {@code keys}. */
+	public static int missingLevels(ACell root, ACell[] keys, int from) {
+		return missingLevels(root, keys, from, keys.length);
 	}
 
 	/**
-	 * How many levels of {@code keys[from..]} are absent from {@code root}: none
+	 * How many levels of {@code keys[from, to)} are absent from {@code root}: none
 	 * when the last key has an entry, otherwise the levels from the first missing
 	 * key down to the last. A write there, with its levels created, makes exactly these.
 	 */
-	public static int missingLevels(ACell root, ACell[] keys, int from) {
+	public static int missingLevels(ACell root, ACell[] keys, int from, int to) {
 		ACell node = root;
-		for (int i = from; i < keys.length; i++) {
-			if (!containsKey(node, keys[i])) return keys.length - i;
+		for (int i = from; i < to; i++) {
+			if (!containsKey(node, keys[i])) return to - i;
 			node = child(node, keys[i]);
 		}
 		return 0;
@@ -158,52 +172,72 @@ public final class ValuePath {
 
 	// ========== Changes ==========
 
-	/** {@code root} with {@code value} at {@code keys[from..]}; every level above it must exist. */
+	/** {@link #set(ACell, ACell[], int, int, ACell)} to the end of {@code keys}. */
 	public static ACell set(ACell root, ACell[] keys, int from, ACell value) {
-		return update(root, keys, from, previous -> value);
+		return set(root, keys, from, keys.length, value);
+	}
+
+	/** {@code root} with {@code value} at {@code keys[from, to)}; every level above it must exist. */
+	public static ACell set(ACell root, ACell[] keys, int from, int to, ACell value) {
+		return update(root, keys, from, to, previous -> value);
+	}
+
+	/** {@link #update(ACell, ACell[], int, int, UnaryOperator)} to the end of {@code keys}. */
+	public static ACell update(ACell root, ACell[] keys, int from, UnaryOperator<ACell> change) {
+		return update(root, keys, from, keys.length, change);
 	}
 
 	/**
-	 * {@code root} with the value at {@code keys[from..]} replaced by {@code change}
+	 * {@code root} with the value at {@code keys[from, to)} replaced by {@code change}
 	 * applied to it (null when absent). Every level above it must exist; a list
 	 * position must be in range.
 	 */
 	@SuppressWarnings("unchecked")
-	public static ACell update(ACell root, ACell[] keys, int from, UnaryOperator<ACell> change) {
-		if (from >= keys.length) return change.apply(root);
+	public static ACell update(ACell root, ACell[] keys, int from, int to, UnaryOperator<ACell> change) {
+		if (from >= to) return change.apply(root);
 		ACell key = keys[from];
 		if (root == null) throw new NotFoundException(String.format(NO_LEVEL, at(keys, from)), at(keys, from));
 		if (root instanceof AVector<?>) {
 			AVector<ACell> vec = (AVector<ACell>) root;
 			long idx = position(vec, keys, from);
-			return vec.assoc(idx, update(vec.get(idx), keys, from + 1, change));
+			return vec.assoc(idx, update(vec.get(idx), keys, from + 1, to, change));
 		}
 		if (!(root instanceof AMap)) throw notAMap(keys, from);
 		AMap<AString, ACell> map = (AMap<AString, ACell>) root;
 		AString mapKey = RT.ensureString(key);
-		return map.assoc(mapKey, update(map.get(mapKey), keys, from + 1, change));
+		return map.assoc(mapKey, update(map.get(mapKey), keys, from + 1, to, change));
 	}
 
-	/** {@code root} with {@code element} added to the list at {@code keys[from..]}, which is created when absent. */
+	/** {@link #append(ACell, ACell[], int, int, ACell)} to the end of {@code keys}. */
 	public static ACell append(ACell root, ACell[] keys, int from, ACell element) {
-		return update(root, keys, from, current -> appendTo(current, element));
+		return append(root, keys, from, keys.length, element);
+	}
+
+	/** {@code root} with {@code element} added to the list at {@code keys[from, to)}, which is created when absent. */
+	public static ACell append(ACell root, ACell[] keys, int from, int to, ACell element) {
+		return update(root, keys, from, to, current -> appendTo(current, element));
+	}
+
+	/** {@link #remove(ACell, ACell[], int, int)} to the end of {@code keys}. */
+	public static ACell remove(ACell root, ACell[] keys, int from) {
+		return remove(root, keys, from, keys.length);
 	}
 
 	/**
-	 * {@code root} without the value at {@code keys[from..]}. An absent value is
+	 * {@code root} without the value at {@code keys[from, to)}. An absent value is
 	 * left alone; a list element becomes null so later positions keep theirs.
 	 */
 	@SuppressWarnings("unchecked")
-	public static ACell remove(ACell root, ACell[] keys, int from) {
-		if (from >= keys.length) return null;
+	public static ACell remove(ACell root, ACell[] keys, int from, int to) {
+		if (from >= to) return null;
 		if (root == null) return null;
 		ACell key = keys[from];
-		boolean leaf = (from == keys.length - 1);
+		boolean leaf = (from == to - 1);
 		if (root instanceof AVector<?>) {
 			AVector<ACell> vec = (AVector<ACell>) root;
 			long idx = parseIndex(key);
 			if (idx < 0 || idx >= vec.count()) return root;
-			return leaf ? vec.assoc(idx, null) : vec.assoc(idx, remove(vec.get(idx), keys, from + 1));
+			return leaf ? vec.assoc(idx, null) : vec.assoc(idx, remove(vec.get(idx), keys, from + 1, to));
 		}
 		if (!(root instanceof AMap)) return root;
 		AMap<AString, ACell> map = (AMap<AString, ACell>) root;
@@ -211,29 +245,34 @@ public final class ValuePath {
 		if (leaf) return map.dissoc(mapKey);
 		if (!map.containsKey(mapKey)) return root;
 		ACell child = map.get(mapKey);
-		ACell replacement = remove(child, keys, from + 1);
+		ACell replacement = remove(child, keys, from + 1, to);
 		return Utils.equals(child, replacement) ? root : map.assoc(mapKey, replacement);
 	}
 
+	/** {@link #createPath(ACell, ACell[], int, int, int[])} to the end of {@code keys}. */
+	public static ACell createPath(ACell root, ACell[] keys, int from, int[] created) {
+		return createPath(root, keys, from, keys.length, created);
+	}
+
 	/**
-	 * {@code root} with a map at every level of {@code keys[from..]} that holds
+	 * {@code root} with a map at every level of {@code keys[from, to)} that holds
 	 * nothing, or null. Existing maps and lists are kept; a list position must be
 	 * in range, and a level holding any other value is refused.
 	 *
 	 * @param created Receives one count per level created
 	 */
 	@SuppressWarnings("unchecked")
-	public static ACell createPath(ACell root, ACell[] keys, int from, int[] created) {
-		if (from >= keys.length) return root;
+	public static ACell createPath(ACell root, ACell[] keys, int from, int to, int[] created) {
+		if (from >= to) return root;
 		if (root instanceof AVector<?>) {
 			AVector<ACell> vec = (AVector<ACell>) root;
 			long idx = position(vec, keys, from);
-			return vec.assoc(idx, createPath(level(vec.get(idx), created), keys, from + 1, created));
+			return vec.assoc(idx, createPath(level(vec.get(idx), created), keys, from + 1, to, created));
 		}
 		if (!(root instanceof AMap)) throw notAMap(keys, from);
 		AMap<AString, ACell> map = (AMap<AString, ACell>) root;
 		AString mapKey = RT.ensureString(keys[from]);
-		return map.assoc(mapKey, createPath(level(map.get(mapKey), created), keys, from + 1, created));
+		return map.assoc(mapKey, createPath(level(map.get(mapKey), created), keys, from + 1, to, created));
 	}
 
 	private static ACell level(ACell existing, int[] created) {
@@ -271,7 +310,7 @@ public final class ValuePath {
 
 	/** The path to the level at {@code keys[from]}, as the caller wrote it. */
 	private static String at(ACell[] keys, int from) {
-		return format(Arrays.copyOfRange(keys, 0, from));
+		return format(keys, 0, from);
 	}
 
 	/** Splits a slash-separated path into string keys, keeping each as written. */
@@ -291,10 +330,15 @@ public final class ValuePath {
 
 	/** Joins keys into a path with a leading slash, such as {@code /w/notes}; {@code /} for none. */
 	public static String format(ACell[] keys) {
-		if (keys.length == 0) return "/";
+		return format(keys, 0, keys.length);
+	}
+
+	/** Joins {@code keys[from, to)} into a path with a leading slash; {@code /} for none. */
+	public static String format(ACell[] keys, int from, int to) {
+		if (from >= to) return "/";
 		StringBuilder sb = new StringBuilder();
-		for (ACell key : keys) {
-			sb.append('/').append(key);
+		for (int i = from; i < to; i++) {
+			sb.append('/').append(keys[i]);
 		}
 		return sb.toString();
 	}

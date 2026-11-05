@@ -310,8 +310,10 @@ paths stay with `Engine.resolvePath` and federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.
-`resolve(keys, from)` returns the `Position` there: the component that owns it
-and the keys below that component. It sees no request, takes as many keys per
+`resolve(keys, from, to)` returns the `Position` where `keys[from, to)` ends:
+the component that owns it and the range of the keys that component reads, so
+a path and any part of it are named without copying keys; a form without `to`
+runs to the end. It sees no request, takes as many keys per
 step as the component's rules cover (as cursor paths do), and builds each child
 only from its own cursor, so a walk from a draft root stays in the draft.
 `read()` returns the value as callers see it: a job reads as its current state.
@@ -694,7 +696,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `LatticeContext` | Application policy for clock, signing and owner verification, used by the root merge; installed once on `CoviaApplication`, which also signs the venue record with it |
 | `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) |
-| `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the keys below it (§4.6) |
+| `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the range of keys it reads (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |
 | `Jobs` (Covia) | A user's jobs at `j`, keyed by job id, each its `JobState`; only the venue admits a job |

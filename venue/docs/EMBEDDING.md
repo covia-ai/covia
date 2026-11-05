@@ -89,7 +89,8 @@ so the application decides who reaches them.
 - **Workspace.** `user.workspace()` is the user's workspace (`w`). Its
   `read`, `write`, `append`, `update` and `delete` take keys inside the
   workspace, from `ValuePath.parse("app/record")`, and the position in them
-  where the path starts, usually 0. A change creates no missing level:
+  where the path starts, usually 0; each also takes an end position, for a
+  path that is the first part of the keys. A change creates no missing level:
   `createPath` makes them, and a write below a missing level is refused
   (`NotFoundException`). When several changes must land together, wrap them
   in a transaction, which applies all or nothing and is retried on a

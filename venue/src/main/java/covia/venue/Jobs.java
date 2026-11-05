@@ -134,21 +134,21 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 
 	/** A key that names no job ends here, and reads as null. */
 	@Override
-	public Position resolve(ACell[] keys, int from) {
-		Blob id = (from < keys.length) ? ValuePath.blobKey(keys[from]) : null;
+	public Position resolve(ACell[] keys, int from, int to) {
+		Blob id = (from < to) ? ValuePath.blobKey(keys[from]) : null;
 		JobState job = (id == null) ? null : get(id);
-		if (job == null) return super.resolve(keys, from);
-		return job.resolve(keys, from + 1);
+		if (job == null) return super.resolve(keys, from, to);
+		return job.resolve(keys, from + 1, to);
 	}
 
 	/** Below the jobs, only a key that names no job is read here, from the index as stored. */
 	@Override
-	public ACell read(ACell[] keys, int from) {
-		return (from < keys.length) ? ValuePath.get(cursor().get(), keys, from) : read();
+	public ACell read(ACell[] keys, int from, int to) {
+		return (from < to) ? ValuePath.get(cursor().get(), keys, from, to) : read();
 	}
 
 	@Override
-	public boolean contains(ACell[] keys, int from) {
-		return ValuePath.contains(cursor().get(), keys, from);
+	public boolean contains(ACell[] keys, int from, int to) {
+		return ValuePath.contains(cursor().get(), keys, from, to);
 	}
 }

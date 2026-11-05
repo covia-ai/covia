@@ -332,16 +332,16 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * session, is read as stored.
 	 */
 	@Override
-	public Position resolve(ACell[] keys, int from) {
-		if (from < keys.length) {
+	public Position resolve(ACell[] keys, int from, int to) {
+		if (from < to) {
 			ACell key = keys[from];
-			if (K_N.equals(key)) return workspace().resolve(keys, from + 1);
-			if (K_SESSIONS.equals(key) && from + 1 < keys.length) {
+			if (K_N.equals(key)) return workspace().resolve(keys, from + 1, to);
+			if (K_SESSIONS.equals(key) && from + 1 < to) {
 				Blob sid = ValuePath.blobKey(keys[from + 1]);
-				if (sid != null && getSession(sid) != null) return session(sid).resolve(keys, from + 2);
+				if (sid != null && getSession(sid) != null) return session(sid).resolve(keys, from + 2, to);
 			}
 		}
-		return super.resolve(keys, from);
+		return super.resolve(keys, from, to);
 	}
 
 	/**

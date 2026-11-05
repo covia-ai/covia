@@ -53,7 +53,24 @@ public class AgentPathTest {
 	/** Writes through the workspace a path resolves to. */
 	private void write(String path, ACell value) {
 		Position target = resolve(path);
-		target.workspace().write(target.keys(), target.from(), value);
+		target.workspace().write(target.keys(), target.from(), target.to(), value);
+	}
+
+	@Test
+	public void testAPrefixOfAPathEndsWhereThePrefixEnds() {
+		String notes = "g/" + AGENT + "/n/notes";
+		write(notes, CVMLong.ONE);
+		ACell[] keys = ValuePath.parse(notes);
+
+		Position record = user.resolve(keys, 0, 2);
+		assertEquals(agent.getRecord(), record.read());
+		assertEquals(ACoviaComponent.READ_ONLY,
+			assertThrows(AuthException.class, record::workspace).getMessage());
+
+		Position area = user.resolve(keys, 0, 3);
+		assertEquals(Maps.of("notes", CVMLong.ONE), area.read());
+		assertTrue(area.workspace().write(keys, area.to(), CVMLong.create(2)), "the area is the agent's workspace");
+		assertEquals(CVMLong.create(2), resolve(notes).read());
 	}
 
 	@Test

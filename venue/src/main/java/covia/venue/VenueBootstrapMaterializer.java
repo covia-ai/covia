@@ -1,7 +1,6 @@
 package covia.venue;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -335,7 +334,7 @@ final class VenueBootstrapMaterializer {
 	/** Writes to the draft, creating the levels above, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
 		ACell[] keys = toWorkspacePath(virtualPath);
-		workspace.createPath(Arrays.copyOf(keys, keys.length - 1), 0);
+		workspace.createPath(keys, 0, keys.length - 1);
 		workspace.write(keys, 0, value);
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {

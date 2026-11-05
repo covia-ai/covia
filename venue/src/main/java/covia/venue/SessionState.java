@@ -53,9 +53,9 @@ public final class SessionState extends ACoviaComponent<ACell>
 
 	/** {@code c} is the session's workspace; the rest of the session is read as stored. */
 	@Override
-	public Position resolve(ACell[] keys, int from) {
-		if (from < keys.length && K_C.equals(keys[from])) return workspace().resolve(keys, from + 1);
-		return super.resolve(keys, from);
+	public Position resolve(ACell[] keys, int from, int to) {
+		if (from < to && K_C.equals(keys[from])) return workspace().resolve(keys, from + 1, to);
+		return super.resolve(keys, from, to);
 	}
 
 	/** Null from the operation means rejection; unchanged records still count as accepted.

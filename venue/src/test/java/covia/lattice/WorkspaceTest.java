@@ -177,6 +177,49 @@ public class WorkspaceTest {
 	}
 
 	@Test
+	public void testOnlyTheRangeOfTheKeysIsUsed() {
+		ACell[] keys = path("x/a/b/c");   // the area's own keys are a/b; x and c lie outside the range
+		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("a", Maps.empty())));
+
+		assertFalse(area.write(keys, 1, 3, CVMLong.ONE));
+		assertEquals(Maps.of("a", Maps.of("b", CVMLong.ONE)), area.read(path(""), 0));
+		assertEquals(CVMLong.ONE, area.read(keys, 1, 3));
+		assertTrue(area.contains(keys, 1, 3));
+		assertFalse(area.contains(keys, 1, 4));
+		assertEquals(1, ValuePath.missingLevels(area.read(), keys, 1, 4));
+		assertEquals("/a/b", ValuePath.format(keys, 1, 3));
+
+		assertEquals(1, area.createPath(path("x/a/d/e"), 1, 3), "only levels inside the range are created");
+		assertEquals(Maps.of("b", CVMLong.ONE, "d", Maps.empty()), area.read(path("a"), 0));
+
+		assertTrue(area.delete(keys, 1, 3));
+		assertEquals(Maps.of("d", Maps.empty()), area.read(path("a"), 0));
+	}
+
+	@Test
+	public void testARefusalInARangeNamesThePathAsWritten() {
+		Workspace area = new Workspace(Cursors.<ACell>root(Maps.empty()));
+		assertEquals(String.format(ValuePath.NO_LEVEL, "/x/a"), assertThrows(NotFoundException.class,
+			() -> area.write(path("x/a/b/c"), 1, 3, CVMLong.ONE)).getMessage());
+	}
+
+	@Test
+	public void testAPositionCoversItsRange() {
+		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE)));
+		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
+		ACell[] keys = path("a/b");
+
+		Position whole = component.resolve(keys, 0);
+		assertEquals(keys.length, whole.to());
+		assertEquals(CVMLong.ONE, whole.read());
+
+		Position parent = component.resolve(keys, 0, 1);
+		assertEquals(Maps.of("b", CVMLong.ONE), parent.read());
+		assertTrue(parent.contains());
+		assertThrows(IndexOutOfBoundsException.class, () -> new Position(component, keys, 1, 3));
+	}
+
+	@Test
 	public void testATransactionCreatesLevelsAndWritesTogether() {
 		var root = Cursors.<ACell>root(Maps.empty());
 		Workspace area = new Workspace(root);

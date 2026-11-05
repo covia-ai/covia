@@ -1,7 +1,5 @@
 package covia.venue;
 
-import java.util.Arrays;
-
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -68,15 +66,15 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	void writeInternalPath(ACell[] keys, ACell value) {
 		Position target = resolve(keys, 0);
 		target.workspace().transact(draft -> {
-			draft.createPath(Arrays.copyOf(keys, keys.length - 1), target.from());
-			draft.write(keys, target.from(), value);
+			draft.createPath(keys, target.from(), Math.max(target.from(), target.to() - 1));
+			draft.write(keys, target.from(), target.to(), value);
 		});
 	}
 
 	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
 	boolean deleteInternalPath(ACell[] keys) {
 		Position target = resolve(keys, 0);
-		return target.workspace().delete(keys, target.from());
+		return target.workspace().delete(keys, target.from(), target.to());
 	}
 
 	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
@@ -256,20 +254,20 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	}
 
 	@Override
-	public Position resolve(ACell[] keys, int from) {
-		if (from < keys.length) {
+	public Position resolve(ACell[] keys, int from, int to) {
+		if (from < to) {
 			ACell key = keys[from];
-			if (Namespace.W.equals(key)) return workspace().resolve(keys, from + 1);
-			if (Namespace.O.equals(key)) return operations().resolve(keys, from + 1);
-			if (Namespace.H.equals(key)) return inbox().resolve(keys, from + 1);
-			if (Namespace.J.equals(key)) return jobs().resolve(keys, from + 1);
-			if (Namespace.S.equals(key)) return secrets().resolve(keys, from + 1);
-			if (Namespace.G.equals(key) && from + 1 < keys.length && keys[from + 1] instanceof AString id) {
+			if (Namespace.W.equals(key)) return workspace().resolve(keys, from + 1, to);
+			if (Namespace.O.equals(key)) return operations().resolve(keys, from + 1, to);
+			if (Namespace.H.equals(key)) return inbox().resolve(keys, from + 1, to);
+			if (Namespace.J.equals(key)) return jobs().resolve(keys, from + 1, to);
+			if (Namespace.S.equals(key)) return secrets().resolve(keys, from + 1, to);
+			if (Namespace.G.equals(key) && from + 1 < to && keys[from + 1] instanceof AString id) {
 				AgentState agent = agent(id);
-				if (agent != null) return agent.resolve(keys, from + 2);
+				if (agent != null) return agent.resolve(keys, from + 2, to);
 			}
 		}
-		return super.resolve(keys, from);
+		return super.resolve(keys, from, to);
 	}
 
 	/** The user's record, its jobs in their current state. */
@@ -282,13 +280,13 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Data no namespace component claims is read from the record as stored. */
 	@Override
-	public ACell read(ACell[] keys, int from) {
-		return (from < keys.length) ? ValuePath.get(cursor().get(), keys, from) : read();
+	public ACell read(ACell[] keys, int from, int to) {
+		return (from < to) ? ValuePath.get(cursor().get(), keys, from, to) : read();
 	}
 
 	@Override
-	public boolean contains(ACell[] keys, int from) {
-		return ValuePath.contains(cursor().get(), keys, from);
+	public boolean contains(ACell[] keys, int from, int to) {
+		return ValuePath.contains(cursor().get(), keys, from, to);
 	}
 
 }

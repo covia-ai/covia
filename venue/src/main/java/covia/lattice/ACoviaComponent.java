@@ -26,17 +26,23 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 		super(cursor);
 	}
 
+	/** {@link #resolve(ACell[], int, int)} to the end of {@code keys}. */
+	public final Position resolve(ACell[] keys, int from) {
+		return resolve(keys, from, keys.length);
+	}
+
 	/**
-	 * The component that owns the position {@code keys[from..]} names below this
-	 * one. A component may take as many keys as its rules cover in one step. By
-	 * default a component owns every position below it.
+	 * The component that owns the position {@code keys[from, to)} names below
+	 * this one. A component may take as many keys as its rules cover in one
+	 * step. By default a component owns every position below it.
 	 *
 	 * @param keys Path keys
 	 * @param from Index of the first key below this component
+	 * @param to Index after the last key of the path
 	 * @return Where the path ends, never null
 	 */
-	public Position resolve(ACell[] keys, int from) {
-		return new Position(this, keys, from);
+	public Position resolve(ACell[] keys, int from, int to) {
+		return new Position(this, keys, from, to);
 	}
 
 	/** This component's value as callers see it. */
@@ -44,13 +50,23 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 		return cursor().get();
 	}
 
-	/** The value at {@code keys[from..]} below this component, as callers see it, or null when absent. */
-	public ACell read(ACell[] keys, int from) {
-		return ValuePath.get(read(), keys, from);
+	/** {@link #read(ACell[], int, int)} to the end of {@code keys}. */
+	public final ACell read(ACell[] keys, int from) {
+		return read(keys, from, keys.length);
 	}
 
-	/** Whether a value is at {@code keys[from..]} below this component; a stored null counts. */
-	public boolean contains(ACell[] keys, int from) {
-		return ValuePath.contains(read(), keys, from);
+	/** The value at {@code keys[from, to)} below this component, as callers see it, or null when absent. */
+	public ACell read(ACell[] keys, int from, int to) {
+		return ValuePath.get(read(), keys, from, to);
+	}
+
+	/** {@link #contains(ACell[], int, int)} to the end of {@code keys}. */
+	public final boolean contains(ACell[] keys, int from) {
+		return contains(keys, from, keys.length);
+	}
+
+	/** Whether a value is at {@code keys[from, to)} below this component; a stored null counts. */
+	public boolean contains(ACell[] keys, int from, int to) {
+		return ValuePath.contains(read(), keys, from, to);
 	}
 }
