@@ -13,6 +13,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.adapter.messaging.ConversationSessions;
+import covia.api.Fields;
 import covia.lattice.CoviaPath;
 import covia.lattice.Workspace;
 import covia.venue.CoviaApplication;
@@ -29,10 +30,21 @@ class SlackMigrationTest {
 	static final AString OWNER = Strings.create("did:key:z6MkSlackMigrationOwner");
 	static final AMap<AString, ACell> SETTINGS = Maps.of("token", "s/SLACK_BOT_TOKEN", "operation", "v/test/ops/echo");
 
-	/** Slack's state at every version, oldest first: the one layout 0.9.11 wrote. */
+	/** A bot one of the owner's agents created, and that agent. */
+	static final AMap<AString, ACell> HELPER = SETTINGS.assoc(Strings.create("operation"), Strings.create("v/test/ops/random"));
+	static final AString AGENT = Strings.create(OWNER + ":g:helper");
+
+	/** Slack's state at every version, oldest first. Version 0 is the layout 0.9.11
+	 *  wrote, with a bot an agent created naming it {@code principal} as later releases
+	 *  wrote it; version 1 names it {@code caller}. */
 	static final List<ACell> STATES = List.of(Maps.of(
 		"users", Maps.of(OWNER, Maps.of(
-			"bots", Maps.of("support", SETTINGS),
+			"bots", Maps.of("support", SETTINGS, "helper", HELPER.assoc(Strings.create("principal"), AGENT)),
+			"sessions", Maps.of("support", Maps.of("identity", Maps.of("version", Maps.of("C0123", "session-a")))))),
+		"config", Maps.of("operator", Maps.of("sessions", Maps.of("identity", Maps.of("version", Maps.of("C0456", "session-b")))))),
+		Maps.of(
+		"users", Maps.of(OWNER, Maps.of(
+			"bots", Maps.of("support", SETTINGS, "helper", HELPER.assoc(Fields.CALLER, AGENT)),
 			"sessions", Maps.of("support", Maps.of("identity", Maps.of("version", Maps.of("C0123", "session-a")))))),
 		"config", Maps.of("operator", Maps.of("sessions", Maps.of("identity", Maps.of("version", Maps.of("C0456", "session-b")))))));
 

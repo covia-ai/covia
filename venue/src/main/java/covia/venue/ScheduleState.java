@@ -22,6 +22,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
+import covia.grid.Attribution;
 import covia.exception.InvalidInputException;
 import covia.lattice.Covia;
 
@@ -56,45 +57,51 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 			update.apply(value instanceof Index<?, ?> ? (Index<Blob, ACell>) value : Index.none()));
 	}
 
-	/** The keys of the events {@code actor} scheduled, from the reverse index. */
+	/** The keys of the events {@code caller} made for another namespace, from the reverse index. */
 	@SuppressWarnings("unchecked")
-	public ASet<Blob> scheduledBy(AString actor) {
-		ACell keys = RT.getIn(cursor().path(K_BY_ACTOR).get(), actor);
+	public ASet<Blob> scheduledBy(AString caller) {
+		ACell keys = RT.getIn(cursor().path(K_BY_ACTOR).get(), caller);
 		return (keys instanceof ASet<?> s) ? (ASet<Blob>) s : Sets.empty();
 	}
 
 	@SuppressWarnings("unchecked")
-	private void updateActor(AString actor, UnaryOperator<ASet<Blob>> update) {
+	private void updateCaller(AString caller, UnaryOperator<ASet<Blob>> update) {
 		cursor().withDefault(Maps.empty()).path(K_BY_ACTOR).updateAndGet(value -> {
-			AMap<AString, ACell> byActor = (value instanceof AMap<?, ?>) ? asMap(value) : Maps.empty();
-			ACell held = byActor.get(actor);
+			AMap<AString, ACell> byCaller = (value instanceof AMap<?, ?>) ? asMap(value) : Maps.empty();
+			ACell held = byCaller.get(caller);
 			ASet<Blob> keys = update.apply((held instanceof ASet<?> s) ? (ASet<Blob>) s : Sets.empty());
-			return keys.isEmpty() ? byActor.dissoc(actor) : byActor.assoc(actor, keys);
+			return keys.isEmpty() ? byCaller.dissoc(caller) : byCaller.assoc(caller, keys);
 		});
 	}
 
-	/** Stores {@code rec} at {@code key} and indexes it under its actor. The caller commits. */
-	private void put(Blob key, AMap<AString, ACell> rec) {
-		updateEvents(events -> events.assoc(key, rec));
-		AString actor = RT.ensureString(rec.get(K_ACTOR));
-		if (actor != null) updateActor(actor, keys -> keys.include(key));
+	/** The caller an event is indexed under: its caller when it made the event for another namespace. */
+	private static AString indexedCaller(ACell rec) {
+		if (!(rec instanceof AMap<?, ?>)) return null;
+		AMap<AString, ACell> event = asMap(rec);
+		return event.containsKey(Fields.OWNER) ? Attribution.caller(event) : null;
 	}
 
-	/** Removes the event at {@code key} and its actor's index entry. The caller commits. */
+	/** Stores {@code rec} at {@code key} and indexes it under its caller. The caller commits. */
+	private void put(Blob key, AMap<AString, ACell> rec) {
+		updateEvents(events -> events.assoc(key, rec));
+		AString caller = indexedCaller(rec);
+		if (caller != null) updateCaller(caller, keys -> keys.include(key));
+	}
+
+	/** Removes the event at {@code key} and its caller's index entry. The caller commits. */
 	private void drop(Blob key) {
 		ACell rec = events().get(key);
 		updateEvents(events -> events.dissoc(key));
-		AString actor = (rec instanceof AMap<?, ?>) ? RT.ensureString(asMap(rec).get(K_ACTOR)) : null;
-		if (actor != null) updateActor(actor, keys -> keys.exclude(key));
+		AString caller = indexedCaller(rec);
+		if (caller != null) updateCaller(caller, keys -> keys.exclude(key));
 	}
 
-	public Blob schedule(AString op, ACell input, AString owner, AString actor, AString by,
+	public Blob schedule(AString op, ACell input, AString owner, AString caller,
 			AVector<ACell> proofs, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description, long created) {
 		Blob key = mintKey(wakeTime);
-		AMap<AString, ACell> rec = Maps.of(K_OP, op, K_OWNER, owner, K_BY, by,
-			K_TIME, CVMLong.create(wakeTime), K_CREATED, CVMLong.create(created));
-		if (actor != null) rec = rec.assoc(K_ACTOR, actor);
+		AMap<AString, ACell> rec = Attribution.attribute(Maps.of(K_OP, op,
+			K_TIME, CVMLong.create(wakeTime), K_CREATED, CVMLong.create(created)), caller, owner);
 		if (description != null) rec = rec.assoc(K_DESCRIPTION, validateDescription(description));
 		if (input != null) rec = rec.assoc(K_INPUT, input);
 		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
@@ -121,15 +128,17 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 	void cancelUser(AString owner) {
 		transact(draft -> {
 			for (var entry : draft.events().entrySet()) {
-				if (owner.equals(RT.getIn(entry.getValue(), K_OWNER))) draft.drop(entry.getKey());
+				if (entry.getValue() instanceof AMap<?, ?> rec && owner.equals(Attribution.owner(asMap(rec)))) {
+					draft.drop(entry.getKey());
+				}
 			}
 		});
 	}
 
-	/** Removes every event {@code actor} scheduled, through the reverse index. */
-	void cancelActor(AString actor) {
+	/** Removes every event {@code caller} made for another namespace, through the reverse index. */
+	void cancelCaller(AString caller) {
 		transact(draft -> {
-			for (Blob key : draft.scheduledBy(actor)) draft.drop(key);
+			for (Blob key : draft.scheduledBy(caller)) draft.drop(key);
 		});
 	}
 
@@ -158,7 +167,7 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 	Blob replaceAgentWake(AString owner, AString agentId, Blob oldHandle, long earliest) {
 		if (oldHandle != null) {
 			var old = find(oldHandle);
-			if (old != null && owner.equals(old.rec().get(K_OWNER))
+			if (old != null && owner.equals(Attribution.owner(old.rec()))
 					&& AgentState.TRIGGER_OP.equals(old.rec().get(K_OP))
 					&& agentId.equals(RT.getIn(old.rec(), K_INPUT, Fields.AGENT_ID))) {
 				drop(old.key());
@@ -166,7 +175,7 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 		}
 		return earliest <= 0 ? null : schedule(AgentState.TRIGGER_OP,
 			Maps.of(Fields.AGENT_ID, agentId, Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE),
-			owner, null, owner, null, earliest, null, false, null,
+			owner, owner, null, earliest, null, false, null,
 			context.currentTimestamp().longValue());
 	}
 
@@ -174,20 +183,14 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 	static final AString K_OP = Strings.intern("op");
 	/** Event record field: the input cell passed to the operation. */
 	static final AString K_INPUT = Strings.intern("input");
-	/** Event record field: the owning user DID. Ownership key for
-	 *  list/cancel/trigger, and the namespace the fired operation runs in. */
-	static final AString K_OWNER = Strings.intern("owner");
-	/** Event record field: the agent sub-principal that scheduled this event,
-	 *  when not the owner itself. Mirrors {@code Fields.ACTOR} on job records —
-	 *  the event fires as this identity, but the OWNER still administers it, so
-	 *  a user keeps sight of what their agents have queued. */
-	static final AString K_ACTOR = Strings.intern("actor");
-	/** Event record field: the DID of the caller that scheduled this event,
-	 *  always set — the owner's own DID when the user scheduled it directly.
-	 *  Attribution for {@link Scheduler#list} only; it repeats {@link #K_ACTOR} for an
-	 *  agent, and firing never reads it. Absent on events stored before it was
-	 *  recorded. */
-	static final AString K_BY = Strings.intern("by");
+	/** Event record field: the principal that scheduled the event (an owner, one
+	 *  of its agents or a delegate), which the event fires as. Its {@code owner}
+	 *  ({@link Fields#OWNER}), present when that differs, is the namespace it
+	 *  belongs to and runs in, so a user keeps sight of what their agents have
+	 *  queued. Both are written and read with {@link Attribution}. */
+	static final AString K_CALLER = Fields.CALLER;
+	/** Event record field: the namespace the event belongs to, when it differs from its caller. */
+	static final AString K_OWNER = Fields.OWNER;
 	/** Event record field: caller-written display text saying what the event is
 	 *  for (AString, at most {@link #MAX_DESCRIPTION_CHARS}). Never interpreted. */
 	static final AString K_DESCRIPTION = Fields.DESCRIPTION;
@@ -195,7 +198,7 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 	 *  (CVMLong). Absent on events stored before it was recorded. */
 	static final AString K_CREATED = Fields.CREATED;
 	/** Event record field: the UCAN proofs (AVector) the scheduler presented, presented again at fire time. */
-	static final AString K_PROOFS = Strings.intern("proofs");
+	static final AString K_PROOFS = Fields.PROOFS;
 	/** Event record field: absolute wake time in millis (CVMLong). */
 	static final AString K_TIME = Strings.intern("time");
 	/** Event record field: recurrence spec (AMap, see {@link #validateRepeat});
@@ -215,8 +218,9 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 	static final AString K_LAST_JOB = Strings.intern("lastJob");
 	/** Scheduler-record field holding the time-ordered events {@link Index}. */
 	static final AString K_EVENTS = Strings.intern("events");
-	/** Scheduler-record field: the reverse index from each {@link #K_ACTOR} to the
-	 *  keys of the events it scheduled, so an agent's events go with it. */
+	/** Scheduler-record field: the reverse index from each caller that made an
+	 *  event for another namespace (one of the owner's agents or a delegate) to
+	 *  the keys of those events, so an agent's events go with it. */
 	static final AString K_BY_ACTOR = Strings.intern("byActor");
 	/** List-result field: the event handle (its index key). */
 	static final AString K_HANDLE = Strings.intern("handle");

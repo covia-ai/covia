@@ -893,12 +893,12 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			job.fail("Claude Code project " + projectName + " no longer exists on this venue");
 			return null;
 		}
-		AString caller = job.getCaller();
-		if (caller == null) {
+		AString owner = job.getOwner();
+		if (owner == null) {
 			job.fail("Claude Code session job has no recorded caller");
 			return null;
 		}
-		RequestContext ctx = RequestContext.of(caller);
+		RequestContext ctx = RequestContext.of(owner);
 		try {
 			requireProjectAccess(ctx, project);
 		} catch (RuntimeException e) {

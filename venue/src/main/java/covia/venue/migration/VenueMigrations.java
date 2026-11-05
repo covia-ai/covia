@@ -12,5 +12,6 @@ public final class VenueMigrations {
 	private VenueMigrations() {}
 
 	public static final List<MigrationStep> STEPS = List.of(
-		new UserDeletionsRegion());	// 0 → 1
+		new UserDeletionsRegion(),	// 0 → 1
+		new CallerAndOwner());		// 1 → 2
 }

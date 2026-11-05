@@ -333,7 +333,8 @@ public class SchedulerTest {
 		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
 		long after = System.currentTimeMillis();
 		AMap<AString, ACell> rec = only(sched.list(ctx));
-		assertEquals(did, rec.get(ScheduleState.K_BY), "a user's own event names the user");
+		assertEquals(did, rec.get(ScheduleState.K_CALLER), "a user's own event names the user");
+		assertFalse(rec.containsKey(ScheduleState.K_OWNER), "and no other owner");
 		long created = ((CVMLong) rec.get(ScheduleState.K_CREATED)).longValue();
 		assertTrue(created >= before && created <= after, "created is the scheduling time");
 		assertTrue(sched.cancel(mine, ctx));
@@ -342,8 +343,8 @@ public class SchedulerTest {
 		RequestContext agent = RequestContext.ofAgent(did, s("helper"));
 		Blob queued = sched.schedule(s("v/test/ops/echo"), s("theirs"), agent, future());
 		rec = only(sched.list(ctx));
-		assertEquals(agent.getCallerDID(), rec.get(ScheduleState.K_BY), "an agent's event names the agent");
-		assertNotEquals(did, rec.get(ScheduleState.K_BY));
+		assertEquals(agent.getCallerDID(), rec.get(ScheduleState.K_CALLER), "an agent's event names the agent");
+		assertEquals(did, rec.get(ScheduleState.K_OWNER), "and the owner it belongs to");
 		assertEquals(did, stored(queued).get(ScheduleState.K_OWNER), "the owner still owns it");
 		assertTrue(sched.cancel(queued, ctx));
 	}
@@ -417,7 +418,7 @@ public class SchedulerTest {
 		assertTrue(sched.list(ctx).isEmpty(), "a refused event is not scheduled");
 	}
 
-	/** An event stored before by, description and created were recorded still lists, without them. */
+	/** An event stored before description and created were recorded still lists, without them. */
 	@Test
 	public void testLegacyEventListsWithoutNewFields() {
 		long time = future();
@@ -427,7 +428,7 @@ public class SchedulerTest {
 		Blob key = Blob.wrap(bs);
 		AMap<AString, ACell> legacy = Maps.of(
 			ScheduleState.K_OP, s("v/test/ops/echo"),
-			ScheduleState.K_OWNER, did,
+			ScheduleState.K_CALLER, did,
 			ScheduleState.K_TIME, CVMLong.create(time),
 			ScheduleState.K_INPUT, s("legacy"));
 		engine.getVenueState().schedule().cursor().path(ScheduleState.K_EVENTS).updateAndGet(cur -> {
@@ -439,7 +440,6 @@ public class SchedulerTest {
 		AMap<AString, ACell> rec = only(sched.list(ctx));
 		assertEquals(key, rec.get(ScheduleState.K_HANDLE));
 		assertEquals(s("legacy"), rec.get(ScheduleState.K_INPUT));
-		assertFalse(rec.containsKey(ScheduleState.K_BY), "by: " + rec);
 		assertFalse(rec.containsKey(ScheduleState.K_DESCRIPTION), "description: " + rec);
 		assertFalse(rec.containsKey(ScheduleState.K_CREATED), "created: " + rec);
 		assertTrue(sched.cancel(key, ctx));
@@ -575,7 +575,7 @@ public class SchedulerTest {
 		assertEquals(everyHour(), rec.get(ScheduleState.K_REPEAT));
 		assertNotEquals(handle, rec.get(ScheduleState.K_HANDLE), "the index key moves with the time prefix");
 		assertTrue(((CVMLong) rec.get(ScheduleState.K_LAST_FIRED)).longValue() >= start);
-		assertEquals(did, rec.get(ScheduleState.K_BY), "attribution moves with the event");
+		assertEquals(did, rec.get(ScheduleState.K_CALLER), "attribution moves with the event");
 		assertEquals(s("hourly tick"), rec.get(ScheduleState.K_DESCRIPTION));
 		assertInstanceOf(CVMLong.class, rec.get(ScheduleState.K_CREATED), "created moves with the event");
 

@@ -66,7 +66,7 @@ public class CapabilityGateTest {
 			.conj(Maps.of("with", Strings.create("v/test/ops"), "can", Strings.create("invoke")));
 
 		String denial = CapabilityChecker.allows(caps,
-			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID,
+			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID, ALICE_DID,
 			Strings.create("v/test/ops/echo"), null, countingGate);
 
 		assertNull(denial, "the ungated grant must authorise outright");
@@ -77,7 +77,7 @@ public class CapabilityGateTest {
 	public void testGatePassAuthorises() {
 		String denial = CapabilityChecker.allows(
 			gatedCaps("v/test/ops", "invoke", "v/test/ops/allowgate"),
-			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID,
+			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID, ALICE_DID,
 			Strings.create("v/test/ops/echo"), null,
 			(g, op, in, c) -> null);
 		assertNull(denial, "a passing gate authorises the gated grant");
@@ -87,7 +87,7 @@ public class CapabilityGateTest {
 	public void testGateFailDenies() {
 		String denial = CapabilityChecker.allows(
 			gatedCaps("v/test/ops", "invoke", "v/test/ops/denygate"),
-			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID,
+			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID, ALICE_DID,
 			Strings.create("v/test/ops/echo"), null,
 			(g, op, in, c) -> "gate " + g + ": computer says no");
 		assertNotNull(denial);
@@ -99,7 +99,7 @@ public class CapabilityGateTest {
 	public void testGatedGrantWithoutEvaluatorFailsClosed() {
 		String denial = CapabilityChecker.allows(
 			gatedCaps("v/test/ops", "invoke", "v/test/ops/allowgate"),
-			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID,
+			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID, ALICE_DID,
 			null, null, null);
 		assertNotNull(denial, "a gated grant must not authorise where gates cannot be evaluated");
 		assertTrue(denial.contains("cannot be evaluated"), denial);
@@ -110,7 +110,7 @@ public class CapabilityGateTest {
 		AtomicInteger evaluations = new AtomicInteger();
 		String denial = CapabilityChecker.allows(
 			gatedCaps("v/other/ops", "invoke", "v/test/ops/allowgate"),
-			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID,
+			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID, ALICE_DID,
 			Strings.create("v/test/ops/echo"), null,
 			(g, op, in, c) -> { evaluations.incrementAndGet(); return null; });
 		assertNotNull(denial, "a grant that does not cover structurally grants nothing");
@@ -122,7 +122,7 @@ public class CapabilityGateTest {
 		AVector<ACell> caps = gatedCaps("v/test/ops", "invoke", "gate-a")
 			.concat(gatedCaps("v/test/ops", "invoke", "gate-b"));
 		String denial = CapabilityChecker.allows(caps,
-			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID,
+			Strings.create("v/test/ops/echo"), Strings.create("invoke"), ALICE_DID, ALICE_DID,
 			Strings.create("v/test/ops/echo"), null,
 			(g, op, in, c) -> "gate-a".equals(g.toString()) ? "a refuses" : null);
 		assertNull(denial, "any passing gate among covering gated grants authorises");
@@ -268,9 +268,9 @@ public class CapabilityGateTest {
 			Capability.NB, Strings.create("not-a-map")));
 
 		assertNotNull(CapabilityChecker.allows(unknownLocal, resource,
-			Capability.CRUD_READ, null, null, null, (g, o, i, c) -> null));
+			Capability.CRUD_READ, null, null, null, null, (g, o, i, c) -> null));
 		assertNotNull(CapabilityChecker.allows(malformedLocal, resource,
-			Capability.CRUD_READ, null, null, null, (g, o, i, c) -> null));
+			Capability.CRUD_READ, null, null, null, null, (g, o, i, c) -> null));
 
 		AKeyPair owner = AKeyPair.generate();
 		AKeyPair caller = AKeyPair.generate();

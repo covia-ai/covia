@@ -23,6 +23,8 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
+import covia.grid.Principals;
+import covia.grid.hitl.Hitl;
 import covia.grid.Status;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
@@ -42,7 +44,7 @@ class VenueMigrationEndToEndTest {
 	 * The venue version this test seeds shapes for. A new venue version needs
 	 * the shapes its step converts seeded here, and fails until it has them.
 	 */
-	private static final long SEEDED_THROUGH = 1;
+	private static final long SEEDED_THROUGH = 2;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
 	private static final CoviaPath OLD_DELETIONS = CoviaPath.parse("w/user-deletions");
@@ -57,6 +59,12 @@ class VenueMigrationEndToEndTest {
 	private static final String AGENT = "migration-e2e-agent";
 	private static final Blob SESSION = Blob.fromHex("e2e1e2e1e2e1e2e1e2e1e2e1e2e1e2e1");
 	private static final AString HISTORY_VERSION = Strings.create("historyVersion");
+	/** Records of calls as version 1 named their caller and owner. */
+	private static final Blob AGENT_JOB = Blob.fromHex("e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2");
+	private static final Blob EVENT = Blob.fromHex("7fffffffffffffffe2e3e2e3e2e3e2e3");
+	private static final AString REQUEST = Strings.create("e2e-request");
+	private static final String PARKED = "migration-e2e-parked";
+	private static final Blob PARKED_TASK = Blob.fromHex("e2e4e2e4e2e4e2e4e2e4e2e4e2e4e2e4");
 
 	private static CoviaPath adapterPath(String name) {
 		return CoviaPath.parse("w/adapters/" + name);
@@ -108,6 +116,24 @@ class VenueMigrationEndToEndTest {
 				.assoc(Fields.FRAMES, Vectors.of(root)).assoc(Fields.LOADS, Maps.of("w/notes", Maps.empty()));
 			agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(SESSION, session)));
 
+			// Records of calls as version 1 named them: a job one of the user's
+			// agents made, its scheduled event, a HITL request it asked from
+			// before the requester's namespace was recorded, and a task's output
+			// snapshot on a suspended agent, which does not run.
+			AString agentDID = Principals.agentDID(USER, Strings.create(AGENT));
+			AMap<AString, ACell> agentJob = Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, Status.COMPLETE,
+				Fields.CALLER, USER, Strings.create("actor"), agentDID);
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(AGENT_JOB, agentJob));
+			user.inbox().put(REQUEST, Maps.of(Hitl.ID, REQUEST, Strings.create("from"), agentDID,
+				Hitl.STATUS, Hitl.OPEN));
+			AgentState parked = user.ensureAgent(PARKED, Maps.empty(), null);
+			parked.putRecord(parked.getRecord().assoc(AgentState.KEY_STATUS, AgentState.SUSPENDED)
+				.assoc(AgentState.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
+					Maps.of(Strings.create("outputContext"), Maps.of(Fields.CALLER, USER, Strings.create("user"), USER)))));
+			seed.cursor().updateAndGet(value -> RT.assocIn(value, Maps.of(Strings.create("events"), Index.of(EVENT,
+				Maps.of(Fields.OP, "v/test/ops/echo", Fields.OWNER, USER, Strings.create("actor"), agentDID,
+					Strings.create("by"), agentDID, Strings.create("time"), Long.MAX_VALUE))), Covia.SCHEDULE));
+
 			// Before a start: the read-only check finds version 0 and writes nothing.
 			application.host().sync();
 			ACell seeded = application.hostStore().getRootData();
@@ -129,6 +155,15 @@ class VenueMigrationEndToEndTest {
 				assertNull(venue.users().get(venueDID).readInternalPath(adapterPath(entry.getKey())), entry.getKey());
 			}
 			assertEquals(versions, venue.adapterVersions());
+			User migrated = venue.users().get(USER);
+			assertEquals(Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, Status.COMPLETE, Fields.CALLER, agentDID, Fields.OWNER, USER),
+				migrated.jobs().getRecord(AGENT_JOB).dissoc(Fields.UPDATED));
+			assertEquals(Maps.of(Hitl.ID, REQUEST, Hitl.CALLER, agentDID, Hitl.OWNER, USER, Hitl.STATUS, Hitl.OPEN),
+				migrated.inbox().get(REQUEST));
+			assertEquals(Maps.of(Fields.CALLER, USER), RT.getIn(migrated.agent(PARKED).getTasks().get(PARKED_TASK),
+				Strings.create("outputContext")));
+			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
+				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
 			assertEquals(legacyJob, venue.users().get(USER).cursor().path(Namespace.J, JOB).get());

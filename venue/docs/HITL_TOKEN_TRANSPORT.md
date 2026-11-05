@@ -73,7 +73,7 @@ A new HITL ask type, alongside `text`/`approval`/`choice`/`checkboxes`.
   "token": {
     "caps":     [ { "with": "did:web:b.example/w/invoices/", "can": "crud/read" } ],
     "exp":      3600,                       // optional, seconds; UI may lower
-    "audience": "<requester DID>",          // optional; default = the request's `from`
+    "audience": "<requester DID>",          // optional; default = the request's `caller`
     "venue":    "did:web:b.example"         // optional, informational — UI shows/links it
   }
 }
@@ -86,10 +86,10 @@ them whole, so the loss is in the client request builder / a JSON round-trip.
 Making `token`/`caps`/`audience`/`venue` validated fields fixes it definitively
 rather than relying on passthrough.)
 
-`audience` defaults to the request's `from` — the requesting agent — so the
+`audience` defaults to the request's `caller` — the requesting agent — so the
 token is bound to exactly the principal that asked (see the crux below). The
 whole HITL spine is reused: record, `h/` inbox, job parking (`INPUT_REQUIRED`),
-expiry, the `agent`/`from` provenance stamps.
+expiry, the `agent`/`caller` provenance stamps.
 
 ### Response
 
@@ -196,7 +196,7 @@ record; let an agent answer (already blocked).
 1. **Ask-type name.** `token` vs `access-token` vs `grant-request`. `token`
    reads cleanly against the existing types; the answer being a token, not a
    choice, is the differentiator.
-2. **Audience default and enforcement.** Default `aud` = the request's `from`
+2. **Audience default and enforcement.** Default `aud` = the request's `caller`
    (recommended). Enforce `aud` == requester on the returned token, or accept a
    caller-chosen `aud` (e.g. an ephemeral key) with only a presence check?
    Recommendation: require `aud` to be *present and non-empty*, and if the

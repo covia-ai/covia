@@ -21,7 +21,6 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
-import covia.grid.Principals;
 import covia.exception.JobFailedException;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -94,14 +93,6 @@ public class AgentOutputPathFederationTest {
 		assertNull(restored.getProofs());
 		assertThrows(covia.exception.AuthException.class,
 			() -> restored.requireCapability("w/output", "crud/write"));
-
-		// Old snapshots retain their caller-relative interpretation without a scan
-		// or rewrite. A malformed explicit owner cannot use that fallback.
-		RequestContext legacy = agents().restoreOutputContext(Maps.of(
-			Fields.CALLER, caller, Fields.AGENT_ID, agent));
-		assertEquals(caller, legacy.getExecutionScope().ownerDID());
-		assertEquals(agent, legacy.getAgentId());
-		assertNull(agents().restoreOutputContext(Maps.of(Fields.CALLER, caller, "user", null)));
 	}
 
 	@Test
@@ -120,20 +111,6 @@ public class AgentOutputPathFederationTest {
 			RequestContext.of(subject).withCaps(Vectors.empty())));
 		assertEquals(subject, external.getUserDID());
 		assertEquals(Vectors.empty(), external.getCaps());
-
-		// Snapshots from before 0.10.0 name only the caller: an agent of this venue
-		// that exists is restored in its owner's namespace, any other agent-shaped
-		// name in its own.
-		AString legacyOwner = TestEngine.uniqueDID("LegacySnapshotOwner");
-		TwoVenueTestServer.ENGINE_A.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, "worker", Fields.CONFIG, Maps.empty()),
-			RequestContext.of(legacyOwner)).awaitResult(10_000);
-		AString worker = Principals.agentDID(legacyOwner, Strings.create("worker"));
-		RequestContext legacy = agents().restoreOutputContext(Maps.of(Fields.CALLER, worker, "caps", caps));
-		assertEquals(legacyOwner, legacy.getUserDID());
-		assertEquals(caps, legacy.getCaps());
-		AString ghost = Principals.agentDID(legacyOwner, Strings.create("ghost"));
-		assertEquals(ghost, agents().restoreOutputContext(Maps.of(Fields.CALLER, ghost)).getUserDID());
 	}
 
 	private static AgentAdapter agents() {

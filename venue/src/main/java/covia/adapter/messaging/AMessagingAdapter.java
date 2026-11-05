@@ -33,6 +33,7 @@ import covia.grid.Principals;
 import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.migration.MigrationStep;
 
 /**
  * Shared registration, ownership and lifecycle for messaging adapters.
@@ -46,7 +47,9 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	protected static final AString K_BOTS = Strings.intern("bots");
 	private static final AString K_USER = Strings.intern("user");
 	/** On a created bot's record: the principal that created it, when not its user (an agent of that user). */
-	private static final AString K_PRINCIPAL = Strings.intern("principal");
+	private static final AString K_CALLER = Fields.CALLER;
+	/** The steps of the state every messaging adapter keeps ({@link BotCaller}). */
+	private static final List<MigrationStep> STATE_STEPS = List.of(new BotCaller());
 	private static final AString K_TOKEN = Strings.intern("token");
 	private static final AString K_DELETED = Strings.intern("deleted");
 
@@ -78,6 +81,12 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public volatile long retryMillis = 30_000;
 
 	protected abstract S parseBot(String name, ACell settings, boolean strict);
+
+	/** Every messaging adapter's state migrates alike: its steps are those of the shared bot registry. */
+	@Override
+	public List<MigrationStep> stateSteps() {
+		return STATE_STEPS;
+	}
 	protected abstract R newBot(S spec, Managed managed);
 	/** Whether this runner still uses the current provider-level configuration. */
 	protected abstract boolean configurationMatches(R runner);
@@ -183,11 +192,11 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 			try {
 				AMap<AString, ACell> stored = RT.castMap(entry.getValue());
 				if (stored == null) throw new IllegalArgumentException(SETTINGS_REQUIRED);
-				AString principal = RT.ensureString(stored.get(K_PRINCIPAL));
+				AString principal = RT.ensureString(stored.get(K_CALLER));
 				if (principal != null && !owner.equals(Principals.userOf(principal))) {
 					throw new IllegalArgumentException(FOREIGN_PRINCIPAL.formatted(principal));
 				}
-				AMap<AString, ACell> settings = stored.dissoc(K_PRINCIPAL);
+				AMap<AString, ACell> settings = stored.dissoc(K_CALLER);
 				S spec = parseBot(name, settings.assoc(K_USER, owner), true);
 				if (migrate) state(owner).write(userStatePath(owner, "bots/" + name), stored);
 				if (principal != null) principals.put(key, principal);
@@ -328,7 +337,7 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		boolean own = owner.equals(principal);
 		if (own) principals.remove(key); else principals.put(key, principal);
 		R runner = newBot(spec, Managed.RUNTIME);
-		state(owner).write(userStatePath(owner, "bots/" + name), own ? settings : settings.assoc(K_PRINCIPAL, principal));
+		state(owner).write(userStatePath(owner, "bots/" + name), own ? settings : settings.assoc(K_CALLER, principal));
 		runners.put(key, runner);
 		runner.start();
 		return runner.status();

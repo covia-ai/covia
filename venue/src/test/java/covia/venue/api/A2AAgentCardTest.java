@@ -474,7 +474,7 @@ public class A2AAgentCardTest {
 			AMap<AString, ACell> record = TestServer.ENGINE.jobs().getJobData(Blob.fromHex(held.id()),
 				RequestContext.of(publicDid));
 			assertEquals(publicDid, record.get(Fields.CALLER));
-			assertNull(record.get(Fields.ACTOR));
+			assertNull(record.get(Fields.OWNER));
 
 			// The owner addresses its own tasks for this agent here, and every job
 			// of theirs on the front door. A stranger's task is the stranger's job,

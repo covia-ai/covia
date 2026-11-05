@@ -32,6 +32,7 @@ import covia.exception.AuthException;
 import covia.exception.NotFoundException;
 import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
+import covia.grid.Attribution;
 import covia.venue.ScheduleState.Entry;
 import static covia.venue.ScheduleState.*;
 
@@ -73,9 +74,9 @@ import static covia.venue.ScheduleState.*;
  * the adapter start, off-thread. Job preparation and schedule claim are two
  * ordered record updates because they have different lattice owners.</p>
  *
- * <p><b>No escalation.</b> An event records its owner, its actor and the proofs
- * presented at schedule time. A fire runs as that actor would invoke the
- * operation now ({@link Engine#context(AString, AString, AVector)}), presenting
+ * <p><b>No escalation.</b> An event records its caller, its owner when that
+ * differs, and the proofs presented at schedule time. A fire runs as that
+ * caller would invoke the operation now ({@link Engine#context(AString, AString, AVector)}), presenting
  * those proofs again, via {@link JobManager#invokeInternal} /
  * {@link JobManager#prepareTracked} (§5 of the design), which enforce that scope
  * on dispatch. The scheduler never invents or keeps authority.</p>
@@ -199,10 +200,9 @@ public class Scheduler {
 		AString desc = validateDescription(description);
 		// Owned by the user, fired as whoever scheduled it — so an agent's queued
 		// work stays visible to (and cancellable by) the account it runs in.
-		AString actor = ctx.isSubPrincipal() ? ctx.getCallerDID() : null;
-		AString by = ctx.getCallerDID();
+		AString caller = ctx.getCallerDID();
 		AVector<ACell> proofs = ctx.getProofs();
-		return onTimer(() -> doSchedule(opRef, input, owner, actor, by, proofs, wakeTime, rep, track, desc));
+		return onTimer(() -> doSchedule(opRef, input, owner, caller, proofs, wakeTime, rep, track, desc));
 	}
 
 	/**
@@ -223,9 +223,9 @@ public class Scheduler {
 	}
 
 	/** Remove the events a deleted agent scheduled, found through the reverse index. */
-	public void cancelActor(AString agentDID) {
+	public void cancelCaller(AString agentDID) {
 		onTimer(() -> {
-			state().cancelActor(agentDID);
+			state().cancelCaller(agentDID);
 			armNext();
 			return null;
 		});
@@ -235,7 +235,7 @@ public class Scheduler {
 	 * Fire a scheduled event now, ahead of its time. Owner-only; a
 	 * capability-scoped agent triggers only events it scheduled. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
-	 * due time. Returns the invocation's result future (run as the event's actor
+	 * due time. Returns the invocation's result future (run as the event's caller
 	 * would invoke it now). The deterministic test hook as well as a real "run it
 	 * now".
 	 */
@@ -255,8 +255,9 @@ public class Scheduler {
 
 	/**
 	 * The calling user's pending events, time-ordered — including those queued
-	 * by their agents; a capability-scoped agent sees only its own. Each is {@code {handle, op, time, track}} plus, when
-	 * present, {@code by}, {@code input}, {@code description}, {@code created},
+	 * by their agents; a capability-scoped agent sees only its own. Each is
+	 * {@code {handle, op, caller, time, track}} plus, when present,
+	 * {@code owner}, {@code input}, {@code description}, {@code created},
 	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
 	 * the effective tracking that the next fire will use; {@code input} is
 	 * shown as the owner's job history would show it ({@link #listedInput}).
@@ -282,7 +283,7 @@ public class Scheduler {
 			ACell input = listedInput(rec);
 			if (input != null) item = item.assoc(K_INPUT, input);
 			out = out.conj(copyIfPresent(rec, item,
-				K_BY, K_DESCRIPTION, K_CREATED, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
+				K_CALLER, K_OWNER, K_DESCRIPTION, K_CREATED, K_REPEAT, K_LAST_FIRED, K_LAST_JOB));
 		}
 		return out;
 	}
@@ -300,7 +301,7 @@ public class Scheduler {
 		ACell input = rec.get(K_INPUT);
 		if (input == null) return null;
 		Asset op = engine.jobs().resolveRecordedOp(RT.ensureString(rec.get(K_OP)),
-			RT.ensureString(rec.get(K_OWNER)));
+			Attribution.owner(rec));
 		return (op == null) ? null : JobManager.redactSecrets(input, op.meta());
 	}
 
@@ -326,11 +327,11 @@ public class Scheduler {
 
 	// ------------------------------------------------------- timer-thread bodies
 
-	private Blob doSchedule(AString opRef, ACell input, AString owner, AString actor, AString by,
+	private Blob doSchedule(AString opRef, ACell input, AString owner, AString caller,
 			AVector<ACell> proofs, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description) {
 		engine.getVenueState().users().requireNotDeleted(owner);
-		Blob key = state().schedule(opRef, input, owner, actor, by, proofs, wakeTime,
+		Blob key = state().schedule(opRef, input, owner, caller, proofs, wakeTime,
 			repeat, track, description, clock.getAsLong());
 		armNext();
 		return key;
@@ -338,7 +339,7 @@ public class Scheduler {
 
 	private boolean doCancel(Blob handle, RequestContext ctx) {
 		Entry e = state().find(handle);
-		// An event keeps its owner and actor for life, so this check holds for the cancel.
+		// An event keeps its caller and owner for life, so this check holds for the cancel.
 		if (e != null) requireAccess(e.rec(), ctx);
 		boolean cancelled = state().cancel(handle);
 		armNext();
@@ -356,7 +357,7 @@ public class Scheduler {
 	/** Owner-only, and a capability-scoped agent only for an event it scheduled. */
 	private void requireAccess(AMap<AString, ACell> rec, RequestContext ctx) {
 		AString user = ctx.getUserDID();
-		if (user == null || !user.equals(rec.get(K_OWNER))) throw new AuthException(NOT_OWNER);
+		if (user == null || !user.equals(Attribution.owner(rec))) throw new AuthException(NOT_OWNER);
 		if (!engine.getAccessControl().canAccessEvent(ctx, rec)) {
 			throw new AuthException(EVENT_ACCESS_DENIED);
 		}
@@ -395,7 +396,7 @@ public class Scheduler {
 		RuntimeException error = null;
 		boolean tracked = isTracked(rec);
 		try {
-			engine.getVenueState().users().requireNotDeleted(RT.ensureString(rec.get(K_OWNER)));
+			engine.getVenueState().users().requireNotDeleted(Attribution.owner(rec));
 			job = tracked ? engine.jobs().prepareTracked(
 				RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec))
 				: engine.jobs().prepareUntracked(RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
@@ -459,8 +460,8 @@ public class Scheduler {
 	 * Run a claimed fire. Tracked: start the Job prepared at claim time (its
 	 * ID is already on the record). Untracked: a transient Job via
 	 * {@code invokeInternal} (design §7). Either way the dispatch runs as its
-	 * actor would invoke it now ({@link #fireContext}), which JobManager
-	 * enforces — so a fire never has authority its actor has since lost.
+	 * caller would invoke it now ({@link #fireContext}), which JobManager
+	 * enforces — so a fire never has authority its caller has since lost.
 	 */
 	private CompletableFuture<ACell> fire(Claimed c) {
 		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
@@ -477,27 +478,25 @@ public class Scheduler {
 	/**
 	 * The agent that scheduled {@code rec} when it is one of the owner's agents
 	 * and no longer exists, else null. Deleting an agent removes its events
-	 * ({@link #cancelActor}); this catches any that outlived it, such as those
+	 * ({@link #cancelCaller}); this catches any that outlived it, such as those
 	 * scheduled before the reverse index recorded them.
 	 */
 	private AString goneAgent(AMap<AString, ACell> rec) {
-		AString actor = RT.ensureString(rec.get(K_ACTOR));
-		AString owner = RT.ensureString(rec.get(K_OWNER));
-		AString agentId = Engine.agentIdIn(owner, actor);
-		return (agentId != null && engine.getAgent(owner, agentId) == null) ? actor : null;
+		AString caller = Attribution.caller(rec);
+		AString owner = Attribution.owner(rec);
+		AString agentId = Engine.agentIdIn(owner, caller);
+		return (agentId != null && engine.getAgent(owner, agentId) == null) ? caller : null;
 	}
 
 	/**
-	 * The context a fire runs under (design §5): its actor (the scheduling agent
-	 * or delegate, else the owner) as it would invoke the operation now, in the
+	 * The context a fire runs under (design §5): its caller (the owner, one of
+	 * its agents or a delegate) as it would invoke the operation now, in the
 	 * owner's namespace, presenting again the proofs it presented when scheduling.
 	 *
-	 * @throws AuthException when the actor could not invoke it now
+	 * @throws AuthException when the caller could not invoke it now
 	 */
 	RequestContext fireContext(AMap<AString, ACell> rec) {
-		AString owner = RT.ensureString(rec.get(K_OWNER));
-		AString actor = RT.ensureString(rec.get(K_ACTOR));
-		return engine.context(owner, (actor != null) ? actor : owner, asVector(rec.get(K_PROOFS)));
+		return engine.context(Attribution.owner(rec), Attribution.caller(rec), asVector(rec.get(K_PROOFS)));
 	}
 
 	/**

@@ -33,9 +33,13 @@
                 "type": "boolean",
                 "description": "Whether the next fire runs as a durable Job, after venue policy"
               },
-              "by": {
+              "caller": {
                 "type": "string",
-                "description": "DID of the caller that scheduled the event: the user's own, or that of the agent or delegate acting for them. Absent on events scheduled before it was recorded."
+                "description": "DID of the principal that scheduled the event, which it fires as: the user's own, or that of the agent or delegate acting for them"
+              },
+              "owner": {
+                "type": "string",
+                "description": "DID of the user the event belongs to, when that is not its caller"
               },
               "input": {
                 "description": "Input passed to the operation when it fires, with the operation's declared secret fields hidden as on job records. Absent when there is no input or the operation no longer resolves."
@@ -64,6 +68,7 @@
             "required": [
               "handle",
               "op",
+              "caller",
               "time",
               "track"
             ]

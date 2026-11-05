@@ -25,6 +25,7 @@ import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.venue.migration.CallerAndOwner;
 
 /**
  * A user's whole stored state as one value: export, import and clone.
@@ -42,13 +43,18 @@ import covia.lattice.Namespace;
  * {@code user} is the state without secrets. Secrets, encrypted on the venue
  * under its own key, are decrypted and sealed together to a caller-supplied
  * Ed25519 key with Convex ECIES; they are never exported in the clear or under
- * the venue's key. Covia's migrations of its stored shapes run on import:
- * jobs are brought to their current shape and secrets are re-encrypted under
- * the current key version; other records migrate on read, as they do on a
- * stored venue.</p>
+ * the venue's key. Covia's migrations of its stored shapes run on import: an
+ * older export's records of calls take the current {@code caller} and
+ * {@code owner} ({@link CallerAndOwner}) and secrets are re-encrypted under the
+ * current key version; other records migrate on read, as they do on a stored
+ * venue.</p>
  *
- * <p>Only quiet state is copied: a job not yet finished or an agent task still
- * outstanding would be live in two places at once.</p>
+ * <p>An export keeps the user's jobs ({@code j/}) as an archive of the calls
+ * it made. An import or a clone leaves them out: the account it fills has made
+ * no calls here.</p>
+ *
+ * <p>Only quiet state is copied: an agent task still outstanding, or for an
+ * export a job not yet finished, would be live in two places at once.</p>
  *
  * <p>These methods do no authority checks; the {@code user} adapter's
  * operations apply them. Embedders may call them directly.</p>
@@ -64,7 +70,10 @@ public final class UserExports {
 	 * older build cannot read, as the venue {@code :version} does, so an older
 	 * venue refuses the export with {@link #NEWER_VERSION}.
 	 */
-	public static final long VERSION = 1;
+	public static final long VERSION = 2;
+
+	/** The first export version whose records of calls name {@code caller} and {@code owner}. */
+	static final long CALLER_AND_OWNER = 2;
 
 	public static final String PROTECTED = "The venue and public principals cannot be exported, imported or cloned";
 	public static final String BUSY = "The user has unfinished work: a job not yet finished or an agent task outstanding. Retry once it has finished";
@@ -147,7 +156,7 @@ public final class UserExports {
 		AMap<AString, ACell> value = decode(export);
 		// Secrets arrive only sealed: stored records were encrypted under the source venue's key.
 		AMap<AString, ACell> state = RT.ensureMap(value.get(K_USER));
-		state = migrate(state.dissoc(Namespace.S));
+		state = migrate(state.dissoc(Namespace.S).dissoc(Namespace.J), RT.ensureLong(value.get(Fields.VERSION)).longValue());
 		String busy = unfinishedWork(state);
 		if (busy != null) throw new NotSupportedException(busy);
 
@@ -189,6 +198,7 @@ public final class UserExports {
 		if (from.equals(to)) throw new InvalidInputException(SAME_USER);
 		AMap<AString, ACell> state = engine.getVenueState().users().content(from);
 		if (state == null) throw new NotFoundException(VenueState.UNKNOWN_USER, from.toString());
+		state = state.dissoc(Namespace.J);
 		String busy = unfinishedWork(state);
 		if (busy != null) throw new UnavailableException(busy);
 		return restore(to, state);
@@ -237,13 +247,17 @@ public final class UserExports {
 		return value;
 	}
 
-	/** Brings stored shapes written by an older Covia to their current form. */
+	/**
+	 * Brings the shapes an export at {@code version} holds to their current
+	 * form. A record that names only its caller takes the namespace it would
+	 * have on this venue.
+	 */
 	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> migrate(AMap<AString, ACell> state) {
-		ACell jobs = state.get(Namespace.J);
-		if (jobs == null) return state;
-		if (!(jobs instanceof Index<?, ?> index)) throw new InvalidInputException(NOT_AN_EXPORT);
-		return state.assoc(Namespace.J, Job.currentStates((Index<Blob, ACell>) index));
+	private AMap<AString, ACell> migrate(AMap<AString, ACell> state, long version) {
+		if (version >= CALLER_AND_OWNER) return state;
+		ACell venue = engine.getVenueState().get();
+		return (AMap<AString, ACell>) CallerAndOwner.userState(state,
+			caller -> CallerAndOwner.legacyNamespace(venue, caller));
 	}
 
 	/** Null when the state is quiet; otherwise why it cannot be copied. */

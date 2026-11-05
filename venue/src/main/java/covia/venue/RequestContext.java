@@ -597,7 +597,7 @@ public class RequestContext {
 		AVector<ACell> grants = authority.getGrants();
 		if (grants == null) grants = Vectors.empty();
 		String denial = CapabilityChecker.allows(grants, resource, ability,
-			authority.getUserDID(), op, invocationInput, gate);
+			authority.getUserDID(), authority.getDID(), op, invocationInput, gate);
 		if (denial != null) throw new AuthException(denial);
 	}
 
@@ -634,7 +634,8 @@ public class RequestContext {
 	 *  and the use's {@code destination}; null when the scope covers it. */
 	String denialUnder(AVector<ACell> scope, AString resource, AString ability, AString ownerDID,
 			AString destination) {
-		return CapabilityChecker.allows(scope, resource, ability, ownerDID, op, invocationInput, gate, destination);
+		return CapabilityChecker.allows(scope, resource, ability, ownerDID, authority.getDID(),
+			op, invocationInput, gate, destination);
 	}
 
 	/**

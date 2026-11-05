@@ -154,8 +154,8 @@ public class HitlFederationTest {
 		AMap<AString, ACell> record = TwoVenueTestServer.ENGINE_B.getVenueState()
 			.users().ensure(aliceDID).inbox().get(Strings.create(bare(remoteId)));
 		assertNotNull(record, "delivery must land in Alice's inbox on venue B");
-		assertEquals(bobDID, record.get(Hitl.FROM),
-			"from is the requester's verified cross-venue identity");
+		assertEquals(bobDID, record.get(Hitl.CALLER),
+			"caller is the requester's verified cross-venue identity");
 		assertEquals(Hitl.OPEN, record.get(Hitl.STATUS));
 
 		// Alice answers ON VENUE B, approving and echoing the offered grant.

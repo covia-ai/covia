@@ -43,6 +43,7 @@ import covia.exception.AuthException;
 import covia.exception.CoviaException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.AgentState;
@@ -466,7 +467,7 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, reason(e));
 			return;
 		}
-		engine().jobs().appendToHistory(taskId, RT.ensureString(taskData.get(Fields.CALLER)), record);
+		engine().jobs().appendToHistory(taskId, Attribution.owner(taskData), record);
 
 		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : taskData));

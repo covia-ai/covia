@@ -271,8 +271,8 @@ public class AgentApiTest {
 			RT.getIn(created.getData(), Fields.OUTPUT, Fields.ADDRESS));
 		assertEquals(delegate, RT.getIn(created.getData(), Fields.CALLER),
 			"the explicit sudo wrapper remains the authenticated delegate's job");
-		assertNull(RT.getIn(created.getData(), Fields.ACTOR),
-			"authentication is unchanged; the wrapper caller and actor are the delegate");
+		assertNull(RT.getIn(created.getData(), Fields.OWNER),
+			"authentication is unchanged; the wrapper belongs to the delegate that made it");
 		assertNotNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("delegated-agent"));
 		User delegateUser = TestServer.ENGINE.getVenueState().users().get(delegate);
 		assertTrue(delegateUser == null || delegateUser.agent("delegated-agent") == null,

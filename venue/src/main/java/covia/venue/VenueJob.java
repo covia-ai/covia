@@ -32,8 +32,8 @@ public class VenueJob extends Job {
 
 	/** An observable recorded Job over its existing record. */
 	VenueJob(JobState record, AMap<AString, ACell> data, AMap<AString, ACell> meta,
-			AString callerDID, JobManager manager) {
-		this(record, data, meta, callerDID, manager, true, false);
+			AString ownerDID, JobManager manager) {
+		this(record, data, meta, ownerDID, manager, true, false);
 	}
 
 	/**
@@ -41,11 +41,11 @@ public class VenueJob extends Job {
 	 * @param data The Job's data when the handle is made
 	 */
 	VenueJob(JobState record, AMap<AString, ACell> data, AMap<AString, ACell> meta,
-			AString callerDID, JobManager manager, boolean observable, boolean directRun) {
+			AString ownerDID, JobManager manager, boolean observable, boolean directRun) {
 		super((record == null) ? data : null, record != null);
 		this.manager = manager;
 		this.meta = meta;
-		this.account = manager.account(callerDID);
+		this.account = manager.account(ownerDID);
 		this.record = record;
 		this.lastKnown = data;
 		this.observable = observable;

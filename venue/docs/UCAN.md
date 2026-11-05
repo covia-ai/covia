@@ -797,7 +797,7 @@ Two questions must not be conflated, and the context answers them separately:
 
 | Question | Accessor | Used for |
 |---|---|---|
-| **Who acted?** | `ctx.getCallerDID()` | attribution (`actor` on job records), delegation audience, granting authority |
+| **Who acted?** | `ctx.getCallerDID()` | attribution (`caller` on records of calls), delegation audience, granting authority |
 | **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
 
 For every ordinary principal the two are equal, so this is a no-op outside
@@ -813,10 +813,12 @@ The namespace is never parsed from a name: `Authority.of(did)` makes every DID
 its own namespace, agent-shaped or not. Only the venue puts a principal in
 another namespace, from a relationship it holds — running its own agent
 (`Authority.ofAgent`) or acting on a delegation (`onBehalfOf`, as `user/sudo`
-does). Whatever persists a context records the namespace beside the caller:
-a job's `caller` is its namespace and its `actor` who acted, a scheduled
-event's `owner` and `actor` likewise, and `RequestContext.of(caller, user, caps)`
-rebuilds a stored triple as it ran.
+does). Whatever records a call records the namespace beside the caller, as
+COG-8 names them: `caller` is the principal that made the call, and `owner`
+the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
+scheduled events, HITL requests and agent output snapshots all do, and the
+policy-gate input is `{operation, input, caller, owner?}` on both the held
+grant and the proof path.
 
 What a principal may do *now* is decided in one place, `Engine.context`.
 `context(principal)` is a principal in its own namespace: the public principal

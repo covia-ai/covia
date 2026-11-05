@@ -24,6 +24,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
+- Scheduled events name `caller` and `owner`; `scheduler:list` shows them in place of `by`.
+- HITL requests name the asker as `caller`, not `from`, and a delegate's or agent's namespace as `owner`; `hitl:list` shows `caller`.
+- A capability gate is told `{operation, input, caller, owner?}`, where `caller` is the principal that acted, also for a held grant.
+- A chat bot an agent created names it `caller`, not `principal`.
+- The venue migrates to version 2, renaming those fields in stored records once.
+- User exports are at version 2; `user:import` converts older ones, and `user:import` and `user:clone` leave out the user's jobs.
 - A `covia` path given as an array takes strings only, none containing `/`, a list position written in digits as in a string path; any other element is refused (#617).
 - A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
 - A forced `agent:trigger` no longer presents a parked task.
@@ -47,7 +54,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `RequestContext.of(did, proofs)` removed; use `of(did).withProofs(proofs)`.
 - Discovery routes stay anonymous while public access is off.
 - Deleting an agent removes the events it scheduled.
-- Scheduled events fire with their actor's authority at fire time; caps are no longer stored.
+- Scheduled events fire with their caller's authority at fire time; caps are no longer stored.
 - `llmagent:chat` and `goaltree:chat` run as their agent under its current caps.
 - Records that name only their caller act for an owner only through an existing agent.
 - A venue shutting down answers 503.

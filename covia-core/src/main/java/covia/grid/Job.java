@@ -554,11 +554,21 @@ public class Job {
 	}
 
 	/**
-	 * Gets the caller DID associated with this job, if identified.
-	 * @return Caller DID string, or null if anonymous
+	 * The principal that made this job's call: a user, one of a user's agents
+	 * or a {@code user/sudo} delegate.
+	 * @return the caller's DID, or null when the job records none
 	 */
 	public AString getCaller() {
-		return RT.ensureString(getData().get(Fields.CALLER));
+		return Attribution.caller(getData());
+	}
+
+	/**
+	 * The namespace this job belongs to, which its ownership, access and quota
+	 * key on: its recorded owner, else its caller's own.
+	 * @return the owner's DID, or null when the job records no caller
+	 */
+	public AString getOwner() {
+		return Attribution.owner(getData());
 	}
 
 	/**

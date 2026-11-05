@@ -25,6 +25,8 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.auth.did.DIDVerifier;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
@@ -40,6 +42,7 @@ import covia.venue.AgentWatch;
 import covia.venue.TestEngine;
 import covia.venue.TestLogs;
 import covia.venue.User;
+import covia.venue.server.AuthMiddleware;
 
 /**
  * HITL end-to-end (COG-16), driven through the {@link Hitl} builders — the
@@ -112,6 +115,30 @@ public class HITLAdapterTest {
 
 	// ========== The clean drive: request → respond → completion ==========
 
+	/** A delegate asking for the user it acts for is the request's caller, in that user's namespace. */
+	@Test
+	public void testADelegatesRequestNamesItsOwner() {
+		AKeyPair ownerKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		engine.getVenueState().users().ensure(owner);
+		AString grant = UCAN.create(ownerKey, BOB_KP.getAccountKey(), System.currentTimeMillis() / 1000 + HOUR,
+			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(Strings.create(owner + "/v/ops/hitl/request"), Strings.create("invoke"))),
+			Vectors.empty()).toJWT(ownerKey);
+		RequestContext delegate = engine.sudoContext(AuthMiddleware.withTransportGrants(
+			BOB, Vectors.of(grant), DIDVerifier.CONVEX), owner);
+
+		Job job = request(delegate, Hitl.request("For the owner").ask(Hitl.approval("ok", "OK?").required()).build());
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());
+		AMap<AString, ACell> record = engine.getVenueState().users().get(owner).inbox()
+			.get(Strings.create(job.getID().toHexString()));
+		assertEquals(BOB_DID, record.get(Hitl.CALLER));
+		assertEquals(owner, record.get(Hitl.OWNER), "the delegate asked in the owner's namespace");
+		assertEquals(BOB_DID, job.getCaller());
+		assertEquals(owner, job.getOwner(), "and the request's job is the owner's");
+		job.cancel();
+	}
+
 	@Test
 	public void testAnswerLifecycle() {
 		// 1. Request — the Job parks awaiting the human.
@@ -126,8 +153,9 @@ public class HITLAdapterTest {
 		AMap<AString, ACell> record = readRecord(ALICE, id);
 		assertNotNull(record, "the record must land in the target's h/ inbox");
 		assertEquals(Hitl.OPEN, record.get(Hitl.STATUS));
-		assertEquals(ALICE_DID, record.get(Hitl.FROM),
-			"from is the VERIFIED caller identity, venue-set");
+		assertEquals(ALICE_DID, record.get(Hitl.CALLER),
+			"caller is the VERIFIED caller identity, venue-set");
+		assertNull(record.get(Hitl.OWNER), "a user asking in its own namespace names no other owner");
 
 		// The inbox listing shows the open ask.
 		ACell list = engine.jobs().invokeOperation("v/ops/hitl/list",
@@ -202,35 +230,6 @@ public class HITLAdapterTest {
 			RT.getIn(owner.agent("hitl-agent").getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
 		assertTrue(conversation.contains(id.toString()) && conversation.contains("left"),
 			"the human answer must arrive in the asking session: " + conversation);
-	}
-
-	/** A record naming only its sender answers into an agent's session only when the sender is that existing agent's. */
-	@Test
-	public void testALegacyRecordAnswersOnlyAnAgentThatExists() {
-		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
-			Fields.AGENT_ID, "legacy-agent", Fields.CONFIG, Maps.empty()), ALICE).awaitResult(5000);
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("legacy-agent");
-		Blob sid = Blob.fromHex("1e9ac7001e9ac7001e9ac7001e9ac700");
-		agent.ensureSession(sid, ALICE_DID);
-
-		String asked = plantLegacyRecord("1e9ac701", Principals.agentDID(ALICE_DID, Strings.create("legacy-agent")), sid);
-		String forged = plantLegacyRecord("1e9ac702", Principals.agentDID(ALICE_DID, Strings.create("ghost")), sid);
-		respond(ALICE, Hitl.answer(asked).answer("ok", true).build());
-		respond(ALICE, Hitl.answer(forged).answer("ok", true).build());
-
-		String pending = agent.getSessionPending(sid).toString();
-		assertTrue(pending.contains(asked), "the asking agent receives its answer: " + pending);
-		assertFalse(pending.contains(forged), "a name alone reaches no agent's session: " + pending);
-	}
-
-	/** An open request as stored before the requester's namespace was recorded. */
-	private String plantLegacyRecord(String id, AString from, Blob sid) {
-		AMap<AString, ACell> request = Hitl.request("Legacy").ask(Hitl.approval("ok", "OK?").required()).build();
-		engine.getVenueState().users().ensure(ALICE_DID).inbox().put(Strings.create(id), Maps.of(
-			Hitl.ID, id, Hitl.FROM, from, Hitl.TITLE, "Legacy", Hitl.ASKS, request.get(Hitl.ASKS),
-			Hitl.STATUS, Hitl.OPEN, Hitl.CREATED, CVMLong.create(System.currentTimeMillis()),
-			Hitl.AGENT, "legacy-agent", Fields.SESSION_ID, sid.toHexString()));
-		return id;
 	}
 
 	@Test
@@ -704,8 +703,8 @@ public class HITLAdapterTest {
 		String id = job.getID().toHexString();
 
 		AMap<AString, ACell> record = readRecord(ALICE, id);
-		assertEquals(BOB_DID, record.get(Hitl.FROM),
-			"from is Bob — the verified requester, not the inbox owner");
+		assertEquals(BOB_DID, record.get(Hitl.CALLER),
+			"caller is Bob — the verified requester, not the inbox owner");
 
 		// ADVERSARIAL: the requester cannot respond — the record is not in HIS inbox.
 		assertThrows(Exception.class, () -> respond(BOB,

@@ -21,6 +21,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.util.JSON;
 import covia.grid.Asset;
+import covia.grid.Attribution;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
@@ -206,7 +207,6 @@ public class AgentAdapter extends AAdapter {
 	 * RequestContext held in {@link #outputContexts}; raw bearer UCANs are never
 	 * written into agent state. */
 	private static final AString K_OUTPUT_CONTEXT   = Strings.intern("outputContext");
-	private static final AString K_CONTEXT_USER     = Strings.intern("user");
 	private static final AString K_CONTEXT_CAPS     = Strings.intern("caps");
 	private static final AString K_CONTEXT_AGENT_ID = Strings.intern("agentId");
 	private static final AString K_CONTEXT_JOB_ID   = Strings.intern("jobId");
@@ -2735,7 +2735,7 @@ public class AgentAdapter extends AAdapter {
 		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
 		// Nothing the agent scheduled outlives it.
 		Scheduler scheduler = engine.gridScheduler();
-		if (scheduler != null) scheduler.cancelActor(Principals.agentDID(target.ownerDID(), agentId));
+		if (scheduler != null) scheduler.cancelCaller(Principals.agentDID(target.ownerDID(), agentId));
 		if (remove) {
 			user.removeAgent(agentId);
 			return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
@@ -3426,7 +3426,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** Captures identity, cap ceiling and execution scopes without bearer UCANs. */
 	static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
-		AMap<AString, ACell> snapshot = Maps.of(Fields.CALLER, ctx.getCallerDID(), K_CONTEXT_USER, ctx.getUserDID());
+		AMap<AString, ACell> snapshot = Attribution.attribute(Maps.empty(), ctx.getCallerDID(), ctx.getUserDID());
 		if (ctx.getCaps() != null) snapshot = snapshot.assoc(K_CONTEXT_CAPS, ctx.getCaps());
 		if (ctx.getAgentId() != null) snapshot = snapshot.assoc(K_CONTEXT_AGENT_ID, ctx.getAgentId());
 		if (ctx.getJobId() != null) snapshot = snapshot.assoc(K_CONTEXT_JOB_ID, ctx.getJobId());
@@ -3444,22 +3444,16 @@ public class AgentAdapter extends AAdapter {
 	RequestContext restoreOutputContext(ACell snapshotCell) {
 		if (!(snapshotCell instanceof AMap<?, ?> raw)) return null;
 		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
-		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
+		AString caller = Attribution.caller(snapshot);
 		if (caller == null) return null;
 		AVector<ACell> caps = null;
 		if (snapshot.containsKey(K_CONTEXT_CAPS)) {
 			caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
 			if (caps == null) return null;
 		}
-		// Snapshots record the namespace; those from before 0.10.0 name only the
-		// caller. Bearer credentials are deliberately not restored: a delegate's
+		// Bearer credentials are deliberately not restored: a delegate's
 		// recorded empty scope leaves it proof-bounded.
-		AString owner = engine.legacyNamespace(caller);
-		if (snapshot.containsKey(K_CONTEXT_USER)) {
-			owner = RT.ensureString(snapshot.get(K_CONTEXT_USER));
-			if (owner == null) return null;
-		}
-		RequestContext ctx = RequestContext.of(caller, owner, caps);
+		RequestContext ctx = RequestContext.of(caller, Attribution.owner(snapshot), caps);
 		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
 		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
 		ACell jobId = snapshot.get(K_CONTEXT_JOB_ID);
@@ -3950,13 +3944,9 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	/**
-	 * The principal that made a tracked call, as its job records it: the
-	 * acting agent, else the caller it acted for.
-	 */
+	/** The principal that made a tracked call: its job's {@code caller}. */
 	static AString callMadeBy(AMap<AString, ACell> record) {
-		AString actor = RT.ensureString(record.get(Fields.ACTOR));
-		return (actor != null) ? actor : RT.ensureString(record.get(Fields.CALLER));
+		return Attribution.caller(record);
 	}
 
 	/**

@@ -90,20 +90,20 @@ public class SecretUseTest {
 			"with", Strings.create("s/FOO"), "can", use,
 			"nb", Maps.of("url", Strings.create("https://safe.com/api"))));
 
-		assertNull(CapabilityChecker.allows(caps, resource, use, alice, null, null, null,
+		assertNull(CapabilityChecker.allows(caps, resource, use, alice, alice, null, null, null,
 			Strings.create("https://safe.com/api/v1")));
-		String denied = CapabilityChecker.allows(caps, resource, use, alice, null, null, null,
+		String denied = CapabilityChecker.allows(caps, resource, use, alice, alice, null, null, null,
 			Strings.create("https://evil.com/api"));
 		assertNotNull(denied);
 		assertTrue(denied.contains("url caveat"), denied);
-		assertNotNull(CapabilityChecker.allows(caps, resource, use, alice, null, null, null, null),
+		assertNotNull(CapabilityChecker.allows(caps, resource, use, alice, alice, null, null, null, null),
 			"a use with no destination never satisfies a url caveat");
 
 		// An unknown caveat fails closed.
 		AVector<ACell> unknown = Vectors.of(Maps.of(
 			"with", Strings.create("s/FOO"), "can", use,
 			"nb", Maps.of("host", Strings.create("safe.com"))));
-		assertNotNull(CapabilityChecker.allows(unknown, resource, use, alice, null, null, null,
+		assertNotNull(CapabilityChecker.allows(unknown, resource, use, alice, alice, null, null, null,
 			Strings.create("https://safe.com/api")));
 
 		// A gate and a url together must both hold.
@@ -114,9 +114,9 @@ public class SecretUseTest {
 		CapabilityGate deny = (g, op, in, c) -> "no";
 		CapabilityGate allow = (g, op, in, c) -> null;
 		AString covered = Strings.create("https://safe.com/api");
-		assertNotNull(CapabilityChecker.allows(both, resource, use, alice, null, null, deny, covered));
-		assertNull(CapabilityChecker.allows(both, resource, use, alice, null, null, allow, covered));
-		assertNotNull(CapabilityChecker.allows(both, resource, use, alice, null, null, allow,
+		assertNotNull(CapabilityChecker.allows(both, resource, use, alice, alice, null, null, deny, covered));
+		assertNull(CapabilityChecker.allows(both, resource, use, alice, alice, null, null, allow, covered));
+		assertNotNull(CapabilityChecker.allows(both, resource, use, alice, alice, null, null, allow,
 			Strings.create("https://evil.com/api")));
 	}
 

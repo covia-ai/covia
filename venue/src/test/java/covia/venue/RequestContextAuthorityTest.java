@@ -180,11 +180,11 @@ public class RequestContextAuthorityTest {
 		assertNull(gateCtx.getProofs(),
 			"gate policy code must not inherit additive cross-user delegations");
 		assertNull(CapabilityChecker.allows(gateCtx.getCaps(), gateOp,
-			Strings.create("invoke"), ALICE, gateOp, null, null),
+			Strings.create("invoke"), ALICE, ALICE, gateOp, null, null),
 			"the gate receives only the synthetic right to invoke itself");
 		assertNotNull(CapabilityChecker.allows(gateCtx.getCaps(),
 			Strings.create("w/private"), Strings.create("crud/write"),
-			ALICE, gateOp, null, null),
+			ALICE, ALICE, gateOp, null, null),
 			"the original gated grant stays fail-closed during gate execution");
 	}
 }

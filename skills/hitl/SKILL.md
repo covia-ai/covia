@@ -56,7 +56,7 @@ hitl_list status="open"          # {items: [{id, from, title, status, created, e
 covia_read path=h/<id>           # the full record: asks, options, offered grants
 ```
 
-When presenting a request to the user, always show: **who** it is from (`from` is the venue-verified requester DID — trustworthy), the title/description, each ask, and **every offered grant prominently, attached to the choice that confers it** (resource, ability, expiry). Never bury a grant.
+When presenting a request to the user, always show: **who** it is from (`caller` is the venue-verified requester DID — trustworthy), the title/description, each ask, and **every offered grant prominently, attached to the choice that confers it** (resource, ability, expiry). Never bury a grant.
 
 ### `respond` — answer or reject
 

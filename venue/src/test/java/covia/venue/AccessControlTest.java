@@ -140,12 +140,12 @@ public class AccessControlTest {
 		AMap<AString, ACell> launched = Maps.of(
 			Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"),
 			Fields.STATUS, Status.PENDING,
-			Fields.CALLER, ALICE_LITERAL,
-			Fields.ACTOR, dispatch.getCallerDID(),
+			Fields.CALLER, dispatch.getCallerDID(),
+			Fields.OWNER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
-		assertTrue(ac.canAccessJob(dispatch, launched), "reaches the job it launched (actor match)");
+		assertTrue(ac.canAccessJob(dispatch, launched), "reaches the job it launched (caller match)");
 		assertTrue(ac.canAccessJob(dispatch, launched, Capability.CRUD_WRITE));
-		AMap<AString, ACell> alicesOwn = launched.dissoc(Fields.ACTOR);
+		AMap<AString, ACell> alicesOwn = launched.dissoc(Fields.OWNER).assoc(Fields.CALLER, ALICE_LITERAL);
 		assertFalse(ac.canAccessJob(dispatch, alicesOwn),
 			"sharing Alice's namespace is proximity, not permission");
 		assertFalse(ac.canAccessJob(dispatch, alicesOwn, Capability.CRUD_WRITE));

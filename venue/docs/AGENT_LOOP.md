@@ -607,7 +607,7 @@ as the model made it. When the job ends, one transaction removes the entry
 and delivers the outcome
 `{jobId, toolCallId, toolName, operation, status, result | error}`, marked
 by the venue as a tool call's outcome and attributed to the principal that
-made the call (the job's `actor`, normally the agent itself), which wakes the
+made the call (the job's `caller`, normally the agent itself), which wakes the
 agent. It goes to the task as its next input, so it runs that task and no
 other in the session; when the call came from no task, or the task has
 finished, it goes to the session. The model sees it as a message, or as a

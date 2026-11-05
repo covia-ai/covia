@@ -35,8 +35,10 @@ import convex.core.lang.RT;
 import covia.adapter.UserAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.hitl.Hitl;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.lattice.CoviaPath;
@@ -81,6 +83,10 @@ class UserExportsTest {
 		return user;
 	}
 
+	private static Users users() {
+		return engine.getVenueState().users();
+	}
+
 	private CompletableFuture<ACell> start(String op, ACell input, RequestContext ctx) {
 		return engine.jobs().runOperation("v/ops/user/" + op, input, ctx);
 	}
@@ -116,6 +122,9 @@ class UserExportsTest {
 		assertNull(JsonSchema.validate(RT.getIn(published, Fields.OPERATION, Fields.OUTPUT), exported));
 		assertEquals(CVMLong.create(UserExports.VERSION), RT.getIn(exported, Fields.VERSION));
 		AString hex = RT.getIn(exported, EXPORT);
+		assertEquals(users().content(source).get(Namespace.J),
+			RT.getIn(UserExports.decode(Blobs.parse(hex)), UserExports.K_USER, Namespace.J),
+			"an export keeps the calls the user made");
 		String plaintextHex = Blob.wrap(SECRET.getBytes(StandardCharsets.UTF_8)).toHexString();
 		assertFalse(hex.toString().contains(plaintextHex), "secrets travel sealed");
 
@@ -127,7 +136,8 @@ class UserExportsTest {
 		assertEquals(Fields.HIDDEN, RT.getIn(record, Fields.INPUT, EXPORT), "the export never reaches a job record");
 
 		Users users = engine.getVenueState().users();
-		assertEquals(users.content(source).dissoc(Namespace.S), users.content(target).dissoc(Namespace.S));
+		assertEquals(users.content(source).dissoc(Namespace.S).dissoc(Namespace.J), users.content(target).dissoc(Namespace.S),
+			"an import holds everything but the calls, which the account it fills has not made");
 		User imported = users.get(target);
 		assertEquals(SECRET, imported.secrets().decrypt("API_KEY", KEYS).toString());
 		assertNotNull(RT.getIn(imported.get(), Covia.K_META, Covia.K_CREATED), "the import is the account's first activity");
@@ -143,7 +153,7 @@ class UserExportsTest {
 		User old = users.get(target);
 		engine.deleteUser(venue, target);
 		assertEquals(CVMBool.TRUE, RT.getIn(run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue), Fields.CREATED));
-		assertEquals(users.content(source).dissoc(Namespace.S), users.content(target));
+		assertEquals(users.content(source).dissoc(Namespace.S).dissoc(Namespace.J), users.content(target));
 		assertThrows(AuthException.class, old::get, "a cursor from the deleted lifecycle stays fenced off");
 	}
 
@@ -228,15 +238,28 @@ class UserExportsTest {
 
 	@Test
 	void importBringsOlderShapesToTheirCurrentForm() {
-		// A job record as Covia wrote it before #611: its earlier states chained under prev.
+		// A version 1 export: its HITL requests name the asker as from, with
+		// requesterUser for an agent's ask, and it holds the user's jobs.
 		Blob jobID = Blob.fromHex("0c".repeat(16));
-		AMap<AString, ACell> current = Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done");
-		AMap<AString, ACell> legacy = current.assoc(Strings.create("prev"), Maps.of(Fields.ID, jobID, Fields.STATUS, Status.STARTED));
+		AString asker = Strings.create(source + ":g:" + HELPER);
+		AString stranger = TestEngine.uniqueDID("import-stranger");
+		AMap<AString, ACell> fromAgent = Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN,
+			Strings.create("from"), asker, Strings.create("requesterUser"), source);
+		AMap<AString, ACell> fromUser = Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN,
+			Strings.create("from"), stranger);
 		ABlob older = Format.encodeMultiCell(Maps.of(UserExports.K_FORMAT, UserExports.FORMAT,
 			Fields.VERSION, 1, Fields.DID, source,
-			UserExports.K_USER, Maps.of(Namespace.J, Index.of(jobID, legacy))), true);
+			UserExports.K_USER, Maps.of(
+				Namespace.J, Index.of(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE)),
+				Namespace.H, Maps.of(Covia.WORKSPACE_DATA, Maps.of("req-agent", fromAgent, "req-user", fromUser)))), true);
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
-		assertEquals(current, engine.getVenueState().users().get(target).jobs().getRecord(jobID));
+
+		User imported = users().get(target);
+		assertEquals(Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker, Hitl.OWNER, source),
+			imported.inbox().get(Strings.create("req-agent")));
+		assertEquals(Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
+			imported.inbox().get(Strings.create("req-user")));
+		assertNull(imported.jobs().getRecord(jobID), "an import leaves out the calls");
 	}
 
 	@Test
@@ -258,8 +281,9 @@ class UserExportsTest {
 		user.jobs().create(running, Maps.of(Fields.ID, running, Fields.STATUS, Status.STARTED));
 		try {
 			assertEquals(UserExports.BUSY, failure(start("export", Maps.of(Fields.DID, source, SECRETS, CVMBool.FALSE), venue)));
-			assertEquals(UserExports.BUSY, failure(start("clone", Maps.of(Fields.FROM, source, Fields.TO, target), venue)));
-			assertNull(engine.getVenueState().users().get(target));
+			// A clone leaves the calls behind, so an unfinished one is live in one place only.
+			assertEquals(CVMBool.TRUE, RT.getIn(run("clone", Maps.of(Fields.FROM, source, Fields.TO, target), venue), Fields.CREATED));
+			assertNull(users().content(target).get(Namespace.J));
 		} finally {
 			user.jobs().get(running).update(job -> job.assoc(Fields.STATUS, Status.CANCELLED));
 		}
@@ -284,7 +308,8 @@ class UserExportsTest {
 		Users users = engine.getVenueState().users();
 		AMap<AString, ACell> original = users.content(source);
 		AMap<AString, ACell> copy = users.content(target);
-		assertEquals(original.dissoc(Namespace.G), copy.dissoc(Namespace.G));
+		assertEquals(original.dissoc(Namespace.G).dissoc(Namespace.J), copy.dissoc(Namespace.G),
+			"a clone holds everything but the calls, which the account it fills has not made");
 		User clone = users.get(target);
 		assertEquals(SECRET, clone.secrets().decrypt("API_KEY", KEYS).toString());
 		AgentState agent = clone.agent(HELPER);
@@ -294,7 +319,7 @@ class UserExportsTest {
 		assertNotNull(cloneWake);
 		assertNotEquals(sourceWake, cloneWake);
 		ScheduleState schedule = engine.getVenueState().schedule();
-		assertEquals(target, schedule.find(cloneWake).rec().get(ScheduleState.K_OWNER));
+		assertEquals(target, Attribution.owner(schedule.find(cloneWake).rec()));
 		assertNotNull(schedule.find(sourceWake), "the source keeps its own wake");
 
 		assertEquals(UserExports.SAME_USER, failure(start("clone", Maps.of(Fields.FROM, source, Fields.TO, source), venue)));

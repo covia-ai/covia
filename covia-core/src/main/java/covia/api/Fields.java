@@ -300,13 +300,19 @@ public class Fields {
 	public static final StringShort FRAMES = Strings.intern("frames");
 
 	// Identity / authorization
+	/** On a record of a call (a job, a scheduled event, a HITL request): the
+	 *  principal that made the call — a user, one of a user's agents
+	 *  ({@code <owner>:g:<id>}) or a {@code user/sudo} delegate. Written with
+	 *  {@link covia.grid.Attribution}. */
 	public static final StringShort CALLER = Strings.intern("caller");
-	/** The principal that actually performed an invocation, when that is not the
-	 *  owning {@link #CALLER} — an agent sub-principal ({@code <owner>:g:<id>}).
-	 *  Absent means the owner acted directly, so ordinary job records are
-	 *  unchanged and no migration is implied. Attribution only: ownership,
-	 *  access control and quota all key on {@code caller}. */
-	public static final StringShort ACTOR = Strings.intern("actor");
+	/** On a record of a call: the namespace it belongs to, present only when that
+	 *  differs from {@link #CALLER}. Ownership, access control and quota key on
+	 *  it. Read and written with {@link covia.grid.Attribution}. */
+	public static final StringShort OWNER = Strings.intern("owner");
+	/** On a record whose work continues after the request that made it: the
+	 *  verified UCAN proofs the caller presented, presented again when the work
+	 *  continues. Dropped when the work ends and never shown to a caller. */
+	public static final StringShort PROOFS = Strings.intern("proofs");
 	/** Beside a request or message an agent receives, and on its history turn:
 	 *  how the venue authenticated the caller through a channel binding (COG-3
 	 *  §7), written by the agent's ingress from the request context. Attribution

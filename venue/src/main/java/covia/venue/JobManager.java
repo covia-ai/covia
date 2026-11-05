@@ -38,6 +38,7 @@ import covia.exception.RateLimitException;
 import covia.exception.ShuttingDownException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
@@ -771,8 +772,9 @@ public class JobManager {
 
 	/**
 	 * Evaluates a capability gate (#216): invokes the grant's {@code nb.gate}
-	 * operation with {@code {operation, input, caller}} describing the
-	 * invocation being authorised. The capability applies iff the gate op
+	 * operation with {@code {operation, input, caller, owner?}} describing the
+	 * invocation being authorised: {@code caller} is the principal that acted
+	 * and {@code owner} the namespace it acted in, present when that differs. The capability applies iff the gate op
 	 * succeeds; any failure — the op fails, doesn't resolve, or times out —
 	 * denies with the reason (fail-closed, never fail-open).
 	 *
@@ -791,10 +793,9 @@ public class JobManager {
 	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
 			RequestContext authorityCtx) {
 		try {
-			AMap<AString, ACell> gateInput = Maps.of(
+			AMap<AString, ACell> gateInput = Attribution.attribute(Maps.of(
 				Fields.OPERATION, opRef,
-				Fields.INPUT, input,
-				Fields.CALLER, caller);
+				Fields.INPUT, input), caller, authorityCtx.getUserDID());
 			RequestContext gateCtx = authorityCtx.forGateEvaluation(gateOp);
 			Asset gate = engine.resolveAssetUnchecked(gateOp, gateCtx);
 			if (gate == null) return "gate " + gateOp + ": cannot resolve operation";
@@ -941,20 +942,20 @@ public class JobManager {
 	/**
 	 * Submit a Job for an operation.
 	 *
-	 * @param callerDID the owning user — the namespace the job is persisted into,
-	 *        and what ownership, access control and quota key on
-	 * @param actorDID the principal that actually invoked. Recorded as
-	 *        {@link Fields#ACTOR} only when it differs from {@code callerDID},
-	 *        i.e. when an agent sub-principal acted on the owner's behalf, so a
-	 *        job record answers "who did this" and not merely "whose account".
+	 * @param ownerDID the namespace the job is persisted into, and what
+	 *        ownership, access control and quota key on
+	 * @param callerDID the principal that made the call: the owner itself, one
+	 *        of its agents or a delegate. The record names both
+	 *        ({@link Attribution}), so it answers "who did this" as well as
+	 *        "whose account".
 	 * @param parentID nearest recorded enclosing job, or null for a top-level
 	 *        job. Stamped on transient wrappers too (in memory only) so a
 	 *        recorded grandchild dispatched through a transient layer still
 	 *        links to its nearest recorded ancestor.
 	 */
-	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID,
-			AString actorDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun) {
-		if (callerDID == null) throw new AuthException("Authentication required");
+	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
+			AString callerDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun) {
+		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
 		long ts = Utils.getCurrentTimestamp();
 		Blob jobID = generateJobID(ts);
@@ -965,13 +966,8 @@ public class JobManager {
 				Fields.STATUS, Status.PENDING,
 				Fields.UPDATED, CVMLong.create(ts),
 				Fields.CREATED, CVMLong.create(ts),
-				Fields.INPUT, redactSecrets(input, meta),
-				Fields.CALLER, callerDID);
-
-		// Attribution: name the acting agent when it is not the owner itself.
-		if (actorDID != null && !actorDID.equals(callerDID)) {
-			status = status.assoc(Fields.ACTOR, actorDID);
-		}
+				Fields.INPUT, redactSecrets(input, meta));
+		status = Attribution.attribute(status, callerDID, ownerDID);
 		if (parentID != null) {
 			status = status.assoc(Fields.PARENT, parentID);
 		}
@@ -989,7 +985,7 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		VenueJob job = admit(jobID, status, meta, callerDID, memoryOnly, directRun, resultOriented);
+		VenueJob job = admit(jobID, status, meta, ownerDID, memoryOnly, directRun, resultOriented);
 		if (memoryOnly) log.debug("Started transient job: {}", jobID);
 		else log.info("Submitted job: {}", jobID);
 		return job;
@@ -1000,17 +996,17 @@ public class JobManager {
 	 * handle, under the account monitor that fences deletion.
 	 */
 	private VenueJob admit(Blob jobID, AMap<AString, ACell> status, AMap<AString, ACell> meta,
-			AString callerDID, boolean memoryOnly, boolean directRun, boolean preserveFailureCause) {
+			AString ownerDID, boolean memoryOnly, boolean directRun, boolean preserveFailureCause) {
 		synchronized (engine.getAuth()) {
-			engine.getVenueState().users().requireNotDeleted(callerDID);
+			engine.getVenueState().users().requireNotDeleted(ownerDID);
 			// Create before publishing the runtime handle; updates only edit existing rows.
 			// Readers can see the row first, so by-id lookups go through liveJob.
 			JobState record = null;
 			if (!memoryOnly) {
-				record = account(callerDID).jobs().create(jobID, status);
+				record = account(ownerDID).jobs().create(jobID, status);
 				if (record == null) throw new IllegalStateException(JOB_ID_EXISTS + jobID);
 			}
-			VenueJob job = new VenueJob(record, status, meta, callerDID, this, !memoryOnly, directRun);
+			VenueJob job = new VenueJob(record, status, meta, ownerDID, this, !memoryOnly, directRun);
 			job.setPreserveFailureCause(preserveFailureCause);
 			activeJobs.put(jobID, job);
 			return job;
@@ -1028,7 +1024,7 @@ public class JobManager {
 	/** What a mirror copies from its call when it is made. */
 	private static final AString[] MIRRORED_FIELDS = {
 		Fields.OP, Fields.INPUT, Fields.NAME, Fields.ADAPTER,
-		Fields.CALLER, Fields.ACTOR, Fields.PARENT, Fields.CREATED };
+		Fields.CALLER, Fields.OWNER, Fields.PARENT, Fields.CREATED };
 
 	/** What a mirror copies from its call when the call ends. */
 	private static final AString[] OUTCOME_FIELDS = { Fields.OUTPUT, Fields.ERROR, Fields.ERROR_CODE };
@@ -1037,7 +1033,7 @@ public class JobManager {
 	 * A recorded job for a call that has none, so a caller who stops waiting
 	 * can be pointed at a job to look up, one that outlasts a restart. The
 	 * mirror looks like the call: its operation, input (secrets hidden), name,
-	 * adapter, caller, actor, parent and creation time, and it names the call
+	 * adapter, caller, owner, parent and creation time, and it names the call
 	 * in {@link #MIRROR_OF}. It stays STARTED until the call ends, then takes
 	 * the call's status, output and error; cancelling it cancels the call.
 	 * No adapter runs it: it holds no admission permit, takes no messages,
@@ -1068,7 +1064,7 @@ public class JobManager {
 			if (value != null) status = status.assoc(field, value);
 		}
 		VenueJob mirror = admit(jobID, status, unrecorded.meta(),
-			RT.ensureString(data.get(Fields.CALLER)), false, false, false);
+			Attribution.owner(data), false, false, false);
 		mirror.setCancelHook(() -> {
 			AString reason = RT.ensureString(mirror.getData().get(Fields.ERROR));
 			call.cancel((reason != null) ? reason.toString() : null);
@@ -1169,7 +1165,7 @@ public class JobManager {
 	 */
 	private boolean canReadJob(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
 		if (engine.getAccessControl().canAccessJob(ctx, data, Capability.CRUD_READ)) return true; // owner
-		AString owner = RT.ensureString(data.get(Fields.CALLER));
+		AString owner = Attribution.owner(data);
 		if (owner == null) return false; // venue-internal job — owner/internal only
 		AString resource = owner.append("/j/" + jobID.toHexString());
 		return engine.crossUserAllows(ctx, resource, Capability.CRUD_READ);
@@ -1360,7 +1356,7 @@ public class JobManager {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return false;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
-		AString ownerDID = RT.ensureString(data.get(Fields.CALLER));
+		AString ownerDID = Attribution.owner(data);
 		boolean removed = false;
 		if (ownerDID != null) {
 			User user = engine.getVenueState().users().get(ownerDID);
@@ -1531,7 +1527,7 @@ public class JobManager {
 			if (job.isFinished()) {
 				stabilised++;
 			} else {
-				reserveRecoveredPermit(jobID, RT.ensureString(job.getData().get(Fields.CALLER)));
+				reserveRecoveredPermit(jobID, job.getOwner());
 				kept++;
 			}
 		}
@@ -1545,12 +1541,12 @@ public class JobManager {
 	 * before any verb runs on it. The handle binds to the existing lattice row;
 	 * recovery never creates or copies a second mutable job record.
 	 */
-	private VenueJob restoreJob(Blob jobID, JobState state, AMap<AString, ACell> record, AString callerDID) {
+	private VenueJob restoreJob(Blob jobID, JobState state, AMap<AString, ACell> record, AString ownerDID) {
 		AMap<AString, ACell> delegation = RT.ensureMap(record.get(RemoteJobs.DELEGATION));
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
 		if (opRef != null && delegation == null) {
-			Asset asset = resolveRecordedOp(opRef, callerDID);
+			Asset asset = resolveRecordedOp(opRef, ownerDID);
 			op = (asset != null) ? Operation.from(asset) : null;
 		}
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
@@ -1558,18 +1554,18 @@ public class JobManager {
 			try { meta = engine.remoteJobs().recoveryMetadata(delegation); }
 			catch (RuntimeException unavailable) { meta = null; }
 		}
-		VenueJob job = new VenueJob(state, record, meta, callerDID, this);
+		VenueJob job = new VenueJob(state, record, meta, ownerDID, this);
 		activeJobs.put(jobID, job);
 		return job;
 	}
 
-	/** A restored non-terminal Job re-occupies its caller's concurrency permit. */
-	private void reserveRecoveredPermit(Blob jobID, AString callerDID) {
-		if (jobCapEnabled && callerDID != null) {
-			JobSemaphore sem = jobPermits.computeIfAbsent(callerDID,
+	/** A restored non-terminal Job re-occupies its owner's concurrency permit. */
+	private void reserveRecoveredPermit(Blob jobID, AString ownerDID) {
+		if (jobCapEnabled && ownerDID != null) {
+			JobSemaphore sem = jobPermits.computeIfAbsent(ownerDID,
 				k -> new JobSemaphore(maxConcurrentJobs));
 			sem.reserveRecovered();
-			permitHolders.put(jobID, callerDID);
+			permitHolders.put(jobID, ownerDID);
 		}
 	}
 
@@ -1601,7 +1597,7 @@ public class JobManager {
 	/** Cancel all accepted work owned by a now-deleted account, including transient jobs. */
 	void cancelUserJobs(AString did, Job deletion) {
 		for (Job job : activeJobs.values()) {
-			if (job != deletion && did.equals(job.getData().get(Fields.CALLER))) job.cancel();
+			if (job != deletion && did.equals(job.getOwner())) job.cancel();
 		}
 	}
 
@@ -1626,8 +1622,7 @@ public class JobManager {
 	private AMap<AString, ACell> resolveJobMeta(Job job) {
 		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
 		if (opStr == null) return null;
-		AString caller = RT.ensureString(job.getData().get(Fields.CALLER));
-		Asset asset = resolveRecordedOp(opStr, caller);
+		Asset asset = resolveRecordedOp(opStr, job.getOwner());
 		return (asset != null) ? asset.meta() : null;
 	}
 
@@ -1635,17 +1630,17 @@ public class JobManager {
 	 * Resolves a job record's {@code op}. A record carries the reference that
 	 * was invoked (#499): venue paths and bare hashes resolve under the venue
 	 * context exactly as before, while a caller-relative reference ({@code o/…},
-	 * {@code w/…}) resolves in the namespace the job was accepted in, which the
-	 * record holds as {@code caller}. Never throws — an
+	 * {@code w/…}) resolves in the namespace the job was accepted in, the
+	 * record's owner. Never throws — an
 	 * unresolvable reference (renamed catalog entry, unreachable remote) leaves
 	 * the job without metadata rather than aborting recovery.
 	 */
-	Asset resolveRecordedOp(AString opRef, AString callerDID) {
+	Asset resolveRecordedOp(AString opRef, AString ownerDID) {
 		try {
 			Asset asset = engine.resolveAsset(opRef);
-			if (asset == null && callerDID != null) {
+			if (asset == null && ownerDID != null) {
 				// Recovery of a job already accepted: the read was checked at submission.
-				asset = engine.resolveAssetUnchecked(opRef, RequestContext.of(callerDID));
+				asset = engine.resolveAssetUnchecked(opRef, RequestContext.of(ownerDID));
 			}
 			return asset;
 		} catch (RuntimeException e) {

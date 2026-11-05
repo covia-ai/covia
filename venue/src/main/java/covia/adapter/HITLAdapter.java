@@ -32,8 +32,9 @@ import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.grid.Attribution;
 import covia.grid.Job;
-import covia.grid.Principals;
+import covia.venue.Engine;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
@@ -87,7 +88,6 @@ public class HITLAdapter extends AAdapter {
 
 	/** Optional adapter-config ceiling. Absent/null means no venue maximum. */
 	static final AString CONFIG_MAX_GRANT_LIFETIME_SECS = Strings.intern("maxGrantLifetimeSecs");
-	private static final AString K_REQUESTER_USER = Strings.intern("requesterUser");
 
 	/** Expiry timers — daemon; lost on restart and re-armed by {@link #rearmExpiries()}. */
 	private static final ScheduledExecutorService EXPIRY = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -178,7 +178,7 @@ public class HITLAdapter extends AAdapter {
 
 		requireDeliverable(ctx, caller, target);
 
-		// Build and deliver the record (venue-mediated: `from` is the verified
+		// Build and deliver the record (venue-mediated: `caller` is the verified
 		// caller, and h/ is not writable via covia:write), then park the Job.
 		long nowMs = System.currentTimeMillis();
 		AString id = Strings.create(job.getID().toHexString());
@@ -208,10 +208,9 @@ public class HITLAdapter extends AAdapter {
 	 * no task and keeps the entry already recorded.
 	 */
 	private void trackPending(Job job, Blob taskId) {
-		AMap<AString, ACell> data = job.getData();
-		AString agentId = Principals.agentIdOf(RT.ensureString(data.get(Fields.ACTOR)));
+		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
 		if (agentId == null) return;
-		User owner = engine.getVenueState().users().get(RT.ensureString(data.get(Fields.CALLER)));
+		User owner = engine.getVenueState().users().get(job.getOwner());
 		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return;
 		if (taskId != null) {
@@ -237,7 +236,7 @@ public class HITLAdapter extends AAdapter {
 		if (job.isFinished()) return;
 		AMap<AString, ACell> data = job.getData();
 		AString target = RT.ensureString(RT.getIn(data, Fields.INPUT, Hitl.USER));
-		if (target == null) target = RT.ensureString(data.get(Fields.CALLER));
+		if (target == null) target = job.getOwner();
 		AString targetDID = target;
 		AString id = Strings.create(job.getID().toHexString());
 		User user = engine.getVenueState().users().get(target);
@@ -274,20 +273,18 @@ public class HITLAdapter extends AAdapter {
 		engine.requireLocalAccess(ctx, resource, ABILITY_HITL_REQUEST);
 	}
 
-	private static AMap<AString, ACell> buildRecord(AString id, AString from,
-			AString requesterUser, AString agentId, Blob sessionId, AString title,
+	private static AMap<AString, ACell> buildRecord(AString id, AString caller,
+			AString owner, AString agentId, Blob sessionId, AString title,
 			AString description, AVector<ACell> asks, long nowMs, Long timeoutSecs) {
-		AMap<AString, ACell> record = Maps.of(
+		AMap<AString, ACell> record = Attribution.attribute(Maps.of(
 			Hitl.ID, id,
-			Hitl.FROM, from,
 			Hitl.TITLE, title,
 			Hitl.ASKS, asks,
 			Hitl.STATUS, Hitl.OPEN,
-			Hitl.CREATED, CVMLong.create(nowMs));
+			Hitl.CREATED, CVMLong.create(nowMs)), caller, owner);
 		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
 		if (agentId != null) {
 			record = record.assoc(Hitl.AGENT, agentId);
-			if (requesterUser != null) record = record.assoc(K_REQUESTER_USER, requesterUser);
 			if (sessionId != null) {
 				record = record.assoc(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
 			}
@@ -388,7 +385,7 @@ public class HITLAdapter extends AAdapter {
 		AVector<ACell> triggered = HitlValidation.validateAnswers(asks, answers);
 		AVector<ACell> approved = HitlValidation.intersectEchoedGrants(RT.getIn(input, Hitl.GRANTS), triggered);
 		AString token = (approved.count() > 0)
-			? issueGrants(user.getDID(), RT.ensureString(record.get(Hitl.FROM)), approved)
+			? issueGrants(user.getDID(), Attribution.caller(record), approved)
 			: null;
 
 		// Transported self-sovereign tokens (COG-19): a token ask's answer is a
@@ -397,7 +394,7 @@ public class HITLAdapter extends AAdapter {
 		// requester — never mint, never re-sign. The signed token is a secret, so
 		// it is REDACTED from the durable inbox record and delivered only on the
 		// requester's job output.
-		AString requester = RT.ensureString(record.get(Hitl.FROM));
+		AString requester = Attribution.caller(record);
 		AMap<AString, ACell> transported = Maps.empty();
 		AMap<AString, ACell> recordedAnswers = answers;
 		long tnow = System.currentTimeMillis() / 1000;
@@ -622,7 +619,7 @@ public class HITLAdapter extends AAdapter {
 			if (filter != null && !filter.equals(rec.get(Hitl.STATUS))) continue;
 			AMap<AString, ACell> summary = Maps.of(
 				Hitl.ID, rec.get(Hitl.ID),
-				Hitl.FROM, rec.get(Hitl.FROM),
+				Hitl.CALLER, rec.get(Hitl.CALLER),
 				Hitl.TITLE, rec.get(Hitl.TITLE),
 				Hitl.STATUS, rec.get(Hitl.STATUS),
 				Hitl.CREATED, rec.get(Hitl.CREATED));
@@ -663,8 +660,8 @@ public class HITLAdapter extends AAdapter {
 		var unavailable = new java.util.concurrent.atomic.AtomicBoolean();
 		var wake = new java.util.concurrent.atomic.AtomicReference<SessionWake>();
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
-		AString requester = job == null ? null : RT.ensureString(job.getData().get(Fields.CALLER));
-		AString requestingAgent = job == null ? null : Principals.agentIdOf(RT.ensureString(job.getData().get(Fields.ACTOR)));
+		AString requester = job == null ? null : job.getOwner();
+		AString requestingAgent = job == null ? null : Engine.agentIdIn(requester, job.getCaller());
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().get(requester);
 		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
 		engine.getVenueState().users().transact(draft -> {
@@ -703,8 +700,7 @@ public class HITLAdapter extends AAdapter {
 			AString sidHex = RT.ensureString(record.get(Fields.SESSION_ID));
 			if (agentId == null || sidHex == null) return; // Human/API requester.
 			Blob sid = Blob.fromHex(sidHex.toString());
-			AString owner = RT.ensureString(record.get(K_REQUESTER_USER));
-			if (owner == null) owner = engine.legacyNamespace(RT.ensureString(record.get(Hitl.FROM)));
+			AString owner = Attribution.owner(record);
 			// The result carries the request ID. This is an independent message,
 			// not a chat waiter tied to the now-terminal HITL Job; it goes to the
 			// task whose cycle asked, when there is one, else to the session.

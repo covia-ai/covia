@@ -7,8 +7,10 @@ import convex.core.data.AString;
  * Evaluates a capability gate (#216): a grant may carry {@code nb: {gate:
  * "v/ops/…"}} — a reference to an operation that decides, per invocation,
  * whether the capability applies. The gate op receives {@code {operation,
- * input, caller}} describing the invocation being authorised; the capability
- * is valid iff the gate op succeeds. Arbitrary policy logic without a policy
+ * input, caller, owner?}} describing the invocation being authorised:
+ * {@code caller} is the principal that acted, and {@code owner} the namespace
+ * it acted in, present when that differs. The capability is valid iff the gate
+ * op succeeds. Arbitrary policy logic without a policy
  * language: a gate can be a three-line checker, an orchestration, or a
  * lattice lookup — always an auditable, content-addressed operation.
  *
@@ -28,7 +30,8 @@ public interface CapabilityGate {
 	 * @param opRef    the operation reference being invoked, as the caller
 	 *                 supplied it (may be null for metadata-direct dispatch)
 	 * @param input    the invocation input the gate rules on
-	 * @param caller   the caller's DID
+	 * @param caller   the principal that acted, whether its grant or a proof it
+	 *                 presented is being checked
 	 * @return {@code null} when the gate passes; otherwise a denial detail
 	 *         suitable for inclusion in the capability-denied message
 	 */

@@ -118,7 +118,7 @@ public class AgentRunLoopIdentityTest {
 		//
 		// Note this covers TOP-LEVEL jobs only. An agent's own transitions and
 		// tool calls dispatch through invokeInternal, which deliberately creates
-		// no job (#85), so `actor` appears when an agent causes a job — an
+		// no job (#85), so an agent is the `caller` when it causes a job — an
 		// agent:request to another agent, say — not on every thing an agent does.
 		AString agentId = Strings.create("attrib");
 		RequestContext agentCtx = RequestContext.ofAgent(ALICE_DID, agentId);
@@ -128,24 +128,24 @@ public class AgentRunLoopIdentityTest {
 		AMap<AString, ACell> data = engine.jobs()
 			.getJobData(jobId, RequestContext.of(ALICE_DID));
 		assertNotNull(data, "the owner must be able to read a job their agent caused");
-		assertEquals(ALICE_DID, data.get(Fields.CALLER),
+		assertEquals(ALICE_DID, data.get(Fields.OWNER),
 			"ownership stays with the user — listing and access control key on it");
-		assertEquals(Principals.agentDID(ALICE_DID, agentId), data.get(Fields.ACTOR),
+		assertEquals(Principals.agentDID(ALICE_DID, agentId), data.get(Fields.CALLER),
 			"the acting agent must be named on the record");
 	}
 
 	@Test
-	public void testDirectUserJobsCarryNoActor() {
-		// Absent actor means "the owner acted": ordinary records are untouched,
-		// so nothing needs migrating and `actor` stays meaningful.
+	public void testDirectUserJobsCarryNoOwner() {
+		// The owner is written only when it differs from the caller, so a job
+		// the user made itself names only its caller.
 		engine.jobs().invokeOperation("v/test/ops/echo", Maps.of(),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		for (var e : engine.jobs().getJobs(RequestContext.of(ALICE_DID)).entrySet()) {
 			AMap<AString, ACell> data = (AMap<AString, ACell>) e.getValue();
 			if (ALICE_DID.equals(data.get(Fields.CALLER))
-					&& data.get(Fields.ACTOR) == null) return;
+					&& data.get(Fields.OWNER) == null) return;
 		}
-		fail("a job invoked directly by the user must carry no actor");
+		fail("a job invoked directly by the user must carry no owner");
 	}
 
 	/**

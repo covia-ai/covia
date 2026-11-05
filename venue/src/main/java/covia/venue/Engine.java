@@ -4174,19 +4174,12 @@ public class Engine {
 	}
 
 	/**
-	 * The namespace of a record that names only its caller, as records from
-	 * before 0.10.0 do: its owner's when the caller is one of this venue's agents
-	 * that still exists, else the caller's own. A name alone never puts a
-	 * principal in another namespace.
+	 * The id of {@code principal} as one of {@code owner}'s agents, or null when
+	 * it is not one. The owner comes from a record or a context, never from the
+	 * principal's name: an agent-shaped DID names an agent of {@code owner} only
+	 * when it is exactly {@code <owner>:g:<id>}.
 	 */
-	public AString legacyNamespace(AString caller) {
-		AString owner = covia.grid.Principals.userOf(caller);
-		AString agentId = agentIdIn(owner, caller);
-		return (agentId != null && getAgent(owner, agentId) != null) ? owner : caller;
-	}
-
-	/** The id of {@code principal} as one of {@code owner}'s agents, or null when it is not one. */
-	static AString agentIdIn(AString owner, AString principal) {
+	public static AString agentIdIn(AString owner, AString principal) {
 		if (owner == null || principal == null) return null;
 		AString agentId = covia.grid.Principals.agentIdOf(principal);
 		return (agentId != null && principal.equals(covia.grid.Principals.agentDID(owner, agentId)))

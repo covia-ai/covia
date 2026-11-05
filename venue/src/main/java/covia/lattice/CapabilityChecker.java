@@ -385,7 +385,7 @@ public class CapabilityChecker {
 	 * @return {@code null} if allowed, else an actionable denial message
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID) {
-		return allows(caps, resource, ability, ownerDID, null, null, null);
+		return allows(caps, resource, ability, ownerDID, ownerDID, null, null, null);
 	}
 
 	/**
@@ -398,6 +398,8 @@ public class CapabilityChecker {
 	 * Fail-closed: with no {@code gate} evaluator in scope, gated grants
 	 * cannot authorise anything.
 	 *
+	 * @param callerDID the principal that acted, for the gate's {@code caller}
+	 *              field; {@code ownerDID} is the namespace it acted in
 	 * @param opRef the operation reference being invoked (for the gate's
 	 *              {@code operation} field; may be null)
 	 * @param invocationInput the invocation input the gate rules on
@@ -405,8 +407,8 @@ public class CapabilityChecker {
 	 *              in this context
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
-			AString opRef, ACell invocationInput, CapabilityGate gate) {
-		return allows(caps, resource, ability, ownerDID, opRef, invocationInput, gate, null);
+			AString callerDID, AString opRef, ACell invocationInput, CapabilityGate gate) {
+		return allows(caps, resource, ability, ownerDID, callerDID, opRef, invocationInput, gate, null);
 	}
 
 	/**
@@ -415,7 +417,7 @@ public class CapabilityChecker {
 	 * grant authorises only when every caveat it carries is satisfied.
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
-			AString opRef, ACell invocationInput, CapabilityGate gate, AString destination) {
+			AString callerDID, AString opRef, ACell invocationInput, CapabilityGate gate, AString destination) {
 		if (caps == null) return null;              // no scope = unrestricted (no bounding grants)
 		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
 		if (canonResource == null) canonResource = "";
@@ -443,7 +445,7 @@ public class CapabilityChecker {
 				AString gateOp = bindGate(caveats.gate(), ownerDID);
 				detail = (gate == null)
 					? "gate " + gateOp + " cannot be evaluated in this context"
-					: gate.evaluate(gateOp, opRef, invocationInput, ownerDID);
+					: gate.evaluate(gateOp, opRef, invocationInput, callerDID);
 			}
 			if (detail == null) return null;                    // every caveat holds — authorised
 			if (denials == null) denials = new StringBuilder();

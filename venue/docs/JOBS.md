@@ -90,15 +90,24 @@ failures and must not guess from the message. Codes do not change status,
 authorise retries, or automatically propagate through wrapper jobs; recovery
 remains the application's choice.
 
-## Record fields: `op`, `adapter` and `parent`
+## Record fields: `caller`, `owner`, `op`, `adapter` and `parent`
 
+- **`caller`** is the principal that made the call: a user, one of a user's
+  agents (`<owner>:g:<agent>`) or a `user/sudo` delegate (COG-8).
+- **`owner`** is the namespace the job belongs to, written only when it
+  differs from `caller`: an agent's owner, or the user a delegate acts for.
+  The job is stored in that user's `j/`, and ownership, access control and the
+  admission quota key on it (`Job.getOwner`, `owner` else `caller`). The owner
+  is never derived from a DID; `covia.grid.Attribution` writes and reads both
+  fields. A scoped context reaches a job it made as a principal other than the
+  owner; otherwise its scope decides (`AccessControl.canAccessJob`).
 - **`op`** is the reference that was invoked, verbatim: `v/ops/json/merge`,
   `o/my-tool`, a DID URL, or a bare hash when the caller pinned a definition
   explicitly (#499). Only an inline definition has no reference, in which
   case the metadata's own hash stands in. Records written before 0.9.9
   always carry the resolved hash; readers must accept both forms. A path is
   a mutable binding, so on recovery the venue re-resolves it (venue context
-  first, then the owning caller's namespace for `o/`, `w/` forms) and a job
+  first, then the owner's namespace for `o/`, `w/` forms) and a job
   whose reference no longer resolves is restored without metadata rather
   than aborting recovery. Invoke by hash when the record must pin the exact
   definition that ran.
@@ -229,7 +238,7 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 
 ## Persistence, redaction, validation
 
-- Admission creates the caller's job record once (`:user-data/<DID>/j/<id>`).
+- Admission creates the job record once, in its owner's jobs (`:user-data/<owner>/j/<id>`).
   Runtime mutations use the existing component and apply `redactJobSecrets`
   inside its atomic update, before storage. Both `input` and `output` are
   redacted per `secretFields`.
@@ -471,7 +480,7 @@ and `grid_job_result` find, and that outlasts a restart. A call that is
 already recorded is its own job and needs none.
 
 - The mirror looks like the call. Its record copies `op`, `input` (secrets
-  hidden), `name`, `adapter`, `caller`, `actor`, `parent` and `created`, and
+  hidden), `name`, `adapter`, `caller`, `owner`, `parent` and `created`, and
   `mirrorOf` names the transient call.
 - It is `STARTED` until the call ends, then takes the call's `status`,
   `output` and `error`. Cancelling the mirror cancels the call with the same

@@ -50,6 +50,10 @@ Each part of the schema has one owner, which defines its migrations.
   takes version `i` to `i + 1`, so a version is the number of steps. A schema
   change adds a step at the end, and a released step never changes.
   `VenueState` only runs them.
+- **A full scan is a versioned step.** Converting every stored record of a
+  kind visits the whole store, so it happens once, in a venue or adapter step,
+  never on a routine start-up. Readers keep no fallback for a shape a step has
+  converted.
 - **Start-up is one transaction.** `VenueState.initialise(did, adapters)` runs
   the venue's steps, then those of the built-in and configured module
   adapters, before any other write. A refusal or a failing step discards the
@@ -63,9 +67,12 @@ Each part of the schema has one owner, which defines its migrations.
   convert it when the part is next used, instead of at start-up. The reader
   normalises it, so code beyond the reader sees only the current shape. A
   build that stops reading such a shape first converts every part still in it.
-- **Import migrates.** `user:import` brings jobs to their current shape and
-  re-encrypts secrets under the current key; other shapes convert on use. It
-  refuses an export newer than `UserExports.VERSION`.
+- **Import migrates.** `user:import` applies the venue steps' conversions of a
+  user's records to an export older than `UserExports.VERSION` (version 2
+  names callers and owners as step 1 → 2 does) and re-encrypts secrets under
+  the current key; other shapes convert on use. It leaves out the export's
+  jobs, which the account it fills has not made, and refuses an export newer
+  than `UserExports.VERSION`.
 
 Open questions for #624:
 
@@ -75,13 +82,14 @@ Open questions for #624:
 
 ## Migrations in this build
 
-The venue is at version 1.
+The venue is at version 2.
 
 ### Venue steps
 
 | Step | Change | Code |
 |------|--------|------|
 | 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `UserDeletionsRegion` |
+| 1 → 2 | Records of calls name `caller` and `owner` (COG-8): a job's `actor` becomes its `caller` and its old `caller` its `owner`; a scheduled event's `actor` (else `owner`) becomes its `caller` and `by` goes; a HITL request's `from` and `requesterUser` become `caller` and `owner`; an agent output snapshot's `user` becomes `owner`. A HITL request or snapshot naming only its caller takes its owner's namespace when the caller is an existing agent of this venue, else its own | `CallerAndOwner` |
 
 ### Adapter steps
 
@@ -89,6 +97,7 @@ The venue is at version 1.
 |---------|------|--------|------|
 | `test` | 0 → 1 | None: version 1 has version 0's shape | `TestAdapter.STATE_STEPS` |
 | `test` | 1 → 2, 2 → 3 | Synthetic, for tests: each appends the version it reaches to `migrations` | `TestAdapter.LogStep` |
+| `telegram`, `discord`, `whatsapp`, `slack` | 0 → 1 | A bot one of its user's agents created names that agent `caller`, not `principal` | `BotCaller` |
 
 ### Shapes converted on use
 
@@ -100,7 +109,6 @@ The venue is at version 1.
 | Session `loads` → the root frame's `loads` | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |
 | Secret at key version 1 | Covia | Read with the version 1 key; re-encrypted under the current key on its next write | `SecretStore` |
 | Public agent with `a2a.caps` | Covia | Read as `accepts: "anyone"`; the stored config is unchanged | `Admission.policy` |
-| Created chat bot with no `principal` | Messaging adapters | Read as created by its user; the stored record is unchanged | `AMessagingAdapter.principalOf` |
 | OAuth grant as a user secret `oauth/<provider>` → `:adapters/oauth` connection | OAuth adapter | On the user's next use of their connections | `OAuthAdapter.moveLegacyGrants` |
 | Telegram session mapping at `w/telegram/sessions/<bot>/<chat>` | Telegram adapter | When the chat's mapping is first read | `ConversationSessions`, `BotRunner.legacySession` |
 | Telegram bot registry at `w/telegram/bots` | Telegram adapter | At adapter start, for each bot with no current binding | `TelegramAdapter.rearmLegacyBots` |
