@@ -342,17 +342,28 @@ from its own cursor, so a walk from a draft root stays in the draft.
 
 Segments below the last component a path reaches are read by the value they
 meet (`ValuePath`): a map key, a vector index written in digits, an Index key
-as the string itself or, in hex, as a Blob. A stored null counts as present. A
-segment that names no agent, session or job ends the path at the component
-above it, where it reads as null.
+as the string itself or, in hex, as a Blob. In a `Workspace` the path ends at
+an `Entry`, whose keys are fixed when it is resolved (`ValuePath.keys`); a
+level that does not exist yet takes the segment, the key of the map created
+there. A stored null counts as present. A segment that names no agent, session
+or job ends the path at the component above it, where it reads as null.
 
 **Operations define writability.** A component's domain operations are the
 only ways to change it. Each makes its own checks and then changes its cursor
 in one atomic update; cursors carry no write policy, except that an `x/` view
 applies its adapter's on each change. `Workspace` is the
-component for a flexible data area reached by path. Its operations are
-`write`, `append`, `delete`, `update` (a function of the current value) and
-`createPath`, and only `createPath` creates a missing level. An area inside a
+component for a flexible data area reached by path, and an `Entry` is a value
+in one: a path cursor at the entry's keys under the workspace's cursor, so its
+changes land in the workspace's data. Its operations are `write`, `append`,
+`delete`, `update` (a function of the current value) and `createLevels`. Each
+changes the entry's key in the level above it in one atomic update, so a
+stored null counts as present and a deletion removes the key. A change needs
+every level above the entry to exist, each still the kind of value its key was
+resolved against; otherwise it is refused and nothing is written. Only
+`createLevels` creates missing levels, and an absent workspace root counts as
+an empty map. The workspace's own operations, for its owner's code, take a
+path and read its segments by value each time; only `createPath` among them
+creates a level. An area inside a
 record (`n`, `c`, `temp`) refuses a change while the record does not exist. An
 area can hold another (`Workspace.area`), changed through the outer area's
 cursor: the venue's shared definitions, which `v/` names, are
@@ -363,8 +374,9 @@ constant on the refusing component.
 
 **Paths are created above the component.** `covia:write`, `append` and `copy`
 create the missing levels of their path and make their change in one
-transaction. Creating a key changes the map that holds it, so they ask for
-write authority at the nearest level that exists, inside the transaction.
+transaction over the workspace (`Entry.transact`). Creating a key changes the
+map that holds it, so they ask for write authority at the nearest level that
+exists, inside the transaction.
 
 **Components carry no authority.** A component trusts the code that calls it:
 Java code holding the component API is privileged venue code, tested, and
@@ -713,8 +725,9 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `LatticeContext` | Application policy for clock, signing and owner verification, used by the root merge; installed once on `CoviaApplication`, which also signs the venue record with it |
 | `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) |
-| `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the range of keys it reads (§4.6) |
+| `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the stretch of it that the component reads (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
+| `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |
 | `Jobs` (Covia) | A user's jobs at `j`, keyed by job id, each its `JobState`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |

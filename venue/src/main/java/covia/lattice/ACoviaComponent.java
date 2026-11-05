@@ -16,8 +16,9 @@ import convex.lattice.cursor.AForkableCursor;
  * <p>Resolution is pure: it sees no request, makes no checks and writes
  * nothing. Children are built from this component's own cursor, so a walk from
  * a transaction draft stays in that draft. Any component can be read below its
- * position. Changing data by path is a {@link Workspace}'s operation; elsewhere
- * the component's own operations are the only way to change it.</p>
+ * position. A path into a {@link Workspace} ends at an {@link Entry}, whose
+ * operations change it; elsewhere the component's own operations are the only
+ * way to change it.</p>
  *
  * @param <V> Value type of this component's cursor
  */

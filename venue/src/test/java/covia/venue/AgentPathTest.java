@@ -50,10 +50,9 @@ public class AgentPathTest {
 		return user.resolve(CoviaPath.parse(path));
 	}
 
-	/** Writes through the workspace a path resolves to. */
+	/** Writes at the entry a path resolves to. */
 	private void write(String path, ACell value) {
-		Position target = resolve(path);
-		target.workspace().write(target.path(), value);
+		resolve(path).entry().write(value);
 	}
 
 	@Test
@@ -65,11 +64,11 @@ public class AgentPathTest {
 		Position record = user.resolve(path.prefix(2));
 		assertEquals(agent.getRecord(), record.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, record::workspace).getMessage());
+			assertThrows(AuthException.class, record::entry).getMessage());
 
 		Position area = user.resolve(path.prefix(3));
 		assertEquals(Maps.of("notes", CVMLong.ONE), area.read());
-		assertTrue(area.workspace().write(path.rest(3), CVMLong.create(2)), "the area is the agent's workspace");
+		assertTrue(area.entry().write(Maps.of("notes", CVMLong.create(2))), "the area is the agent's workspace");
 		assertEquals(CVMLong.create(2), resolve(notes).read());
 	}
 
@@ -104,12 +103,12 @@ public class AgentPathTest {
 		Position status = resolve("g/" + AGENT + "/status");
 		assertEquals(AgentState.SLEEPING, status.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, status::workspace).getMessage());
+			assertThrows(AuthException.class, status::entry).getMessage());
 
 		Position meta = resolve(session + "/meta");
 		assertEquals(RT.getIn(agent.getSession(sid), "meta"), meta.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, meta::workspace).getMessage());
+			assertThrows(AuthException.class, meta::entry).getMessage());
 	}
 
 	@Test
@@ -121,7 +120,7 @@ public class AgentPathTest {
 			assertNull(position.read(), path);
 			assertFalse(position.contains(), path);
 			assertEquals(ACoviaComponent.READ_ONLY,
-				assertThrows(AuthException.class, position::workspace, path).getMessage());
+				assertThrows(AuthException.class, position::entry, path).getMessage());
 		}
 		assertNull(user.agent("nobody"), "resolving a path creates no agent");
 		assertNull(agent.getSession(Blob.fromHex("ff")), "resolving a path creates no session");

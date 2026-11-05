@@ -65,17 +65,15 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * above it; authority is possession of this user cursor.
 	 */
 	void writeInternalPath(CoviaPath path, ACell value) {
-		Position target = resolve(path);
-		target.workspace().transact(draft -> {
-			draft.createPath(target.path().parent());
-			draft.write(target.path(), value);
+		resolve(path).entry().transact(draft -> {
+			draft.createLevels();
+			draft.write(value);
 		});
 	}
 
 	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
 	boolean deleteInternalPath(CoviaPath path) {
-		Position target = resolve(path);
-		return target.workspace().delete(target.path());
+		return resolve(path).entry().delete();
 	}
 
 	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {

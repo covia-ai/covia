@@ -180,10 +180,11 @@ public class WorkspaceTest {
 		assertSame(component, position.component());
 		assertEquals(CVMLong.create(2), position.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, position::workspace).getMessage());
+			assertThrows(AuthException.class, position::entry).getMessage());
 
 		Workspace area = new Workspace(cursor);
-		assertSame(area, area.resolve(path("list/1")).workspace());
+		assertTrue(area.resolve(path("list/1")).entry().write(CVMLong.create(3)));
+		assertEquals(CVMLong.create(3), area.read(path("list/1")));
 	}
 
 	@Test
