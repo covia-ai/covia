@@ -36,7 +36,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 		if (ctx == null || ctx.getCallerDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
 		for (AString segment : fullPath) {
 			String s = segment.toString();
-			if (s.isEmpty() || s.contains("/") || s.contains("\\") || s.equals(".") || s.equals("..")
+			if (s.isEmpty() || s.contains("\\") || s.equals(".") || s.equals("..")
 					|| s.chars().anyMatch(Character::isISOControl)) {
 				throw new InvalidInputException(INVALID_PATH);
 			}
@@ -72,7 +72,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 	}
 
 	private static void requireWritable(AAdapter adapter, RequestContext ctx, AString[] path) {
-		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(ctx, path.clone());
+		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(ctx, path);
 		if (denial != null) throw new AuthException(denial);
 	}
 

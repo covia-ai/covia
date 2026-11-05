@@ -57,7 +57,7 @@ class ExtensionRouteTest {
 			return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
 				.path(Strings.create("accounts")).withDefault(Maps.empty()).path(ctx.getUserDID());
 		}
-		@Override public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+		@Override public String latticeWriteDenial(RequestContext ctx, AString[] path) {
 			return writable && !projection && (path.length == 0 || !Strings.create("fixed").equals(path[0])) ? null : LATTICE_READ_ONLY;
 		}
 	}

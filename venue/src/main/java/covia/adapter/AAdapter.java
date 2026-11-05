@@ -48,14 +48,15 @@ public abstract class AAdapter {
 	}
 
 	/**
-	 * Additional write/delete policy for a path relative to this adapter's view.
-	 * Ordinary CRUD capabilities are enforced by the router as well. Keep this
-	 * pure: it can run again during an atomic update. Writable views must commit
-	 * to their authoritative lattice state, not to a disposable snapshot.
-	 * Return null to allow, or a refusal reason that reaches the caller unchanged.
-	 * The adapter also owns value validation in its cursor write transformation.
+	 * Additional write/delete policy for a path relative to this adapter's view,
+	 * given as its segments. Ordinary CRUD capabilities are enforced by the router
+	 * as well. Keep this pure: it can run again during an atomic update. Writable
+	 * views must commit to their authoritative lattice state, not to a disposable
+	 * snapshot. Return null to allow, or a refusal reason that reaches the caller
+	 * unchanged. The adapter also owns value validation in its cursor write
+	 * transformation.
 	 */
-	public String latticeWriteDenial(RequestContext ctx, ACell[] path) {
+	public String latticeWriteDenial(RequestContext ctx, AString[] path) {
 		return LATTICE_READ_ONLY;
 	}
 

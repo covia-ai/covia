@@ -1930,16 +1930,7 @@ public class Engine {
 	 * A physical path in a user's local namespace. Relative paths belong to the
 	 * caller; DID URL paths name their owner explicitly.
 	 */
-	public record UserPathTarget(AString ownerDID, User user, AString[] path, AString resource) {
-		public UserPathTarget {
-			path = path.clone();
-		}
-
-		@Override
-		public AString[] path() {
-			return path.clone();
-		}
-	}
+	public record UserPathTarget(AString ownerDID, User user, AString[] path, AString resource) {}
 
 	private record ParsedUserPath(AString ownerDID, AString[] path, AString resource) {}
 

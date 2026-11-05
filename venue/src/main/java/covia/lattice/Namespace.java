@@ -27,7 +27,7 @@ public final class Namespace {
 	/** Secrets namespace — user's encrypted credentials (/s/) */
 	public static final AString S = Strings.intern("s");
 
-	/** Assets namespace — user-created assets (/a/) — future */
+	/** Assets namespace — user-created assets (/a/) */
 	public static final AString A = Strings.intern("a");
 
 	/** Workspace namespace — general-purpose user data (/w/) */
@@ -36,8 +36,11 @@ public final class Namespace {
 	/** Operations namespace — user's named operations (/o/) */
 	public static final AString O = Strings.intern("o");
 
-	/** HITL namespace — human-in-the-loop requests (/h/) — Phase D */
+	/** HITL namespace — human-in-the-loop requests (/h/) */
 	public static final AString H = Strings.intern("h");
+
+	/** Adapter views — {@code x/<adapter>}, each adapter's view of the user's data, held in adapter state */
+	public static final AString X = Strings.intern("x");
 
 	private Namespace() {}
 }

@@ -83,11 +83,6 @@ public final class ValuePath {
 		return containsKey(get(root, path, from, to - 1), path[to - 1]);
 	}
 
-	/** {@link #missingLevels(ACell, AString[], int, int)} to the end of {@code path}. */
-	public static int missingLevels(ACell root, AString[] path, int from) {
-		return missingLevels(root, path, from, path.length);
-	}
-
 	/**
 	 * How many levels of {@code path[from, to)} are absent from {@code root}: none
 	 * when the last segment has an entry, otherwise the levels from the first
@@ -172,11 +167,6 @@ public final class ValuePath {
 		return update(root, path, from, to, previous -> value);
 	}
 
-	/** {@link #update(ACell, AString[], int, int, UnaryOperator)} to the end of {@code path}. */
-	public static ACell update(ACell root, AString[] path, int from, UnaryOperator<ACell> change) {
-		return update(root, path, from, path.length, change);
-	}
-
 	/**
 	 * {@code root} with the value at {@code path[from, to)} replaced by {@code change}
 	 * applied to it (null when absent). Every level above it must exist; a list
@@ -194,11 +184,6 @@ public final class ValuePath {
 		if (!(root instanceof AMap)) throw notAMap(path, from);
 		AMap<AString, ACell> map = (AMap<AString, ACell>) root;
 		return map.assoc(path[from], update(map.get(path[from]), path, from + 1, to, change));
-	}
-
-	/** {@link #append(ACell, AString[], int, int, ACell)} to the end of {@code path}. */
-	public static ACell append(ACell root, AString[] path, int from, ACell element) {
-		return append(root, path, from, path.length, element);
 	}
 
 	/** {@code root} with {@code element} added to the list at {@code path[from, to)}, which is created when absent. */
@@ -234,11 +219,6 @@ public final class ValuePath {
 		ACell child = map.get(segment);
 		ACell replacement = remove(child, path, from + 1, to);
 		return Utils.equals(child, replacement) ? root : map.assoc(segment, replacement);
-	}
-
-	/** {@link #createPath(ACell, AString[], int, int, int[])} to the end of {@code path}. */
-	public static ACell createPath(ACell root, AString[] path, int from, int[] created) {
-		return createPath(root, path, from, path.length, created);
 	}
 
 	/**

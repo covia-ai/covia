@@ -28,7 +28,6 @@ import covia.venue.RequestContext;
  */
 public class VenueGlobalsResolver implements NamespaceResolver {
 
-	private static final AString K_W = Strings.intern("w");
 	private static final AString K_GLOBAL = Strings.intern("global");
 
 	/**
@@ -50,7 +49,7 @@ public class VenueGlobalsResolver implements NamespaceResolver {
 		if (venueDID == null) return null;
 
 		AString[] rewritten = new AString[path.length + 1];
-		rewritten[0] = K_W;
+		rewritten[0] = Namespace.W;
 		rewritten[1] = K_GLOBAL;
 		System.arraycopy(path, 1, rewritten, 2, path.length - 1);
 		return adapter.ensureUser(venueDID).resolve(rewritten, 0);

@@ -34,6 +34,7 @@ import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.Covia;
+import covia.lattice.Namespace;
 import covia.lattice.NamespaceResolver;
 import covia.lattice.ExtensionNamespaceResolver;
 import covia.lattice.Position;
@@ -136,6 +137,7 @@ import covia.venue.User;
  */
 public class CoviaAdapter extends AAdapter {
 
+	private static final AString SLASH     = Strings.intern("/");
 	private static final AString K_KEYS    = Strings.intern("keys");
 	private static final AString K_COUNT = Strings.intern("count");
 	private static final AString K_TYPE    = Strings.intern("type");
@@ -588,7 +590,7 @@ public class CoviaAdapter extends AAdapter {
 		ACell path = RT.getIn(input, Fields.PATH);
 		AString resource = RT.ensureString(path);
 		if (path instanceof AVector<?>) resource = Strings.create(ValuePath.format(ValuePath.of(path)));
-		if (resource != null && resource.startsWith(Strings.create("/"))) resource = resource.slice(1);
+		if (resource != null && resource.startsWith(SLASH)) resource = resource.slice(1);
 		return resource;
 	}
 
@@ -1229,7 +1231,7 @@ public class CoviaAdapter extends AAdapter {
 		boolean write = Capability.CRUD_WRITE.equals(ability);
 		boolean delete = Capability.CRUD_DELETE.equals(ability);
 		AString raw = RT.ensureString(path);
-		if (raw != null && raw.startsWith(Strings.create("/"))) raw = raw.slice(1);
+		if (raw != null && raw.startsWith(SLASH)) raw = raw.slice(1);
 		var didTarget = raw != null && raw.toString().startsWith("did:")
 			? engine.resolveUserPath(ctx, raw, false) : null;
 		AString[] segments = didTarget == null ? ValuePath.of(path) : didTarget.path();
@@ -1314,7 +1316,7 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	public static boolean isExtensionPath(AString[] path) {
-		return path.length > 0 && Strings.intern("x").equals(path[0]);
+		return path.length > 0 && Namespace.X.equals(path[0]);
 	}
 
 	/** DID-qualified extension reads share the same view and authority checks as bare x paths. */
