@@ -22,6 +22,9 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.lattice.Covia;
+import covia.lattice.Position;
+import covia.lattice.ValuePath;
+import covia.lattice.Workspace;
 import covia.api.Fields;
 
 /**
@@ -64,6 +67,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
+	/** The agent's own workspace, which it reaches as {@code n/}. */
+	private static final AString K_N        = Strings.intern("n");
 	/** Handle of this agent's single pending {@code agent:trigger} wake event in the
 	 *  venue grid scheduler, or absent when no wake is armed. */
 	private static final AString K_WAKE_HANDLE = Strings.intern("wakeHandle");
@@ -315,6 +320,30 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	public SessionState session(Blob sid) {
 		return new SessionState(getContext(), cursor().path(K_SESSIONS, sid), sid);
 	}
+
+	/** The agent's own workspace ({@code n}); a change to it needs the agent. */
+	public Workspace workspace() {
+		return Workspace.inRecord(cursor(), K_N);
+	}
+
+	/**
+	 * {@code n} is the agent's workspace and {@code sessions/<id>} a session,
+	 * named by its id in hex. The rest of the record, and a key that names no
+	 * session, is read as stored.
+	 */
+	@Override
+	public Position resolve(ACell[] keys, int from) {
+		if (from < keys.length) {
+			ACell key = keys[from];
+			if (K_N.equals(key)) return workspace().resolve(keys, from + 1);
+			if (K_SESSIONS.equals(key) && from + 1 < keys.length) {
+				Blob sid = ValuePath.blobKey(keys[from + 1]);
+				if (sid != null && getSession(sid) != null) return session(sid).resolve(keys, from + 2);
+			}
+		}
+		return super.resolve(keys, from);
+	}
+
 	/**
 	 * Saves a result under its exact instruction, even if the conversation has
 	 * advanced during generation. The stored turn count describes the snapshot

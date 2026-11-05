@@ -1,6 +1,5 @@
 package covia.venue;
 
-import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -136,7 +135,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	/** A key that names no job ends here, and reads as null. */
 	@Override
 	public Position resolve(ACell[] keys, int from) {
-		Blob id = (from < keys.length) ? parseID(keys[from]) : null;
+		Blob id = (from < keys.length) ? ValuePath.blobKey(keys[from]) : null;
 		JobState job = (id == null) ? null : get(id);
 		if (job == null) return super.resolve(keys, from);
 		return job.resolve(keys, from + 1);
@@ -151,11 +150,5 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	@Override
 	public boolean contains(ACell[] keys, int from) {
 		return ValuePath.contains(cursor().get(), keys, from);
-	}
-
-	/** The stored key a caller's job key names, or null when it names none. */
-	private static Blob parseID(ACell key) {
-		if (key instanceof AString s) return Blob.parse(s.toString());
-		return (key instanceof ABlob b) ? b.toFlatBlob() : null;
 	}
 }

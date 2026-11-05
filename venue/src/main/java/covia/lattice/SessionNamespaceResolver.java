@@ -3,15 +3,14 @@ package covia.lattice;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
-import convex.core.data.Strings;
-import convex.lattice.cursor.AForkableCursor;
 import covia.adapter.CoviaAdapter;
 import covia.exception.WrongScopeException;
 import covia.venue.RequestContext;
 
 /**
  * Resolves the {@code c/} virtual namespace to the current session's
- * conversation-scoped slot within the running agent's record.
+ * workspace ({@link covia.venue.SessionState#workspace()}) within the running
+ * agent's record.
  *
  * <p>{@code c/draft/notes} resolves to the workspace at
  * {@code g/<agent>/sessions/<sid>/c} with the keys {@code draft/notes}.
@@ -27,9 +26,6 @@ import covia.venue.RequestContext;
  */
 public class SessionNamespaceResolver implements NamespaceResolver {
 
-	private static final AString K_SESSIONS = Strings.intern("sessions");
-	private static final AString K_C = Strings.intern("c");
-
 	@Override
 	public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
 		AString agentId = ctx.getAgentId();
@@ -38,10 +34,7 @@ public class SessionNamespaceResolver implements NamespaceResolver {
 			throw new WrongScopeException(
 				"Cannot use 'c/' prefix outside session scope (requires agentId and sessionId on RequestContext)");
 		}
-
-		AForkableCursor<ACell> sessionCursor = adapter.ensureUser(ctx)
-			.recordCursor(Namespace.G, agentId).path(K_SESSIONS, sessionId);
-		return new Position(Workspace.inRecord(sessionCursor, K_C), keys, 1);
+		return adapter.ensureUser(ctx).agentAt(agentId).session(sessionId).workspace().resolve(keys, 1);
 	}
 
 	@Override

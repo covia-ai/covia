@@ -2031,6 +2031,25 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testAgentWorkspaceIsNotChangedViaFullPath() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "n/kept", Fields.VALUE, Strings.create("agent private")),
+			agentCtx).awaitResult(5000);
+
+		Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "g/test-agent/n/kept", Fields.VALUE, Strings.create("changed")), ALICE);
+		assertThrows(Exception.class, () -> write.awaitResult(5000));
+		Job delete = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "g/test-agent/n/kept"), ALICE);
+		assertThrows(Exception.class, () -> delete.awaitResult(5000));
+
+		ACell kept = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "n/kept"), agentCtx).awaitResult(5000);
+		assertEquals(Strings.create("agent private"), RT.getIn(kept, Fields.VALUE));
+	}
+
+	@Test
 	public void testAgentWorkspaceWriteRefreshesAgentTimestamp() {
 		User user = engine.getVenueState().users().get(ALICE.getUserDID());
 		AString agentId = Strings.create("test-agent");

@@ -3,6 +3,7 @@ package covia.lattice;
 import java.util.Arrays;
 import java.util.function.UnaryOperator;
 
+import convex.core.data.ABlob;
 import convex.core.data.ABlobLike;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -134,6 +135,12 @@ public final class ValuePath {
 			return sk != null && ((AMap<ACell, ACell>) map).containsKey(sk);
 		}
 		return false;
+	}
+
+	/** The Blob id a key names, such as a job's or a session's, given as a Blob or in hex; null when it names none. */
+	public static Blob blobKey(ACell key) {
+		if (key instanceof AString s) return Blob.parse(s.toString());
+		return (key instanceof ABlob b) ? b.toFlatBlob() : null;
 	}
 
 	/** A key as a non-negative list position, from a number or a string of digits; -1 when it is not one. */

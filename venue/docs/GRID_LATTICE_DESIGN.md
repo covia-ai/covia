@@ -320,14 +320,15 @@ only from its own cursor, so a walk from a draft root stays in the draft.
 |-----------|--------|
 | `VenueState` | a user's DID to their `User`; `x/<adapter>` to the adapter's `Workspace` view |
 | `User` | `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `Workspace` |
-| `Jobs` | a job id, in hex, to its `JobState`; an id that names no job reads as null |
+| `Jobs` | a job id, in hex, to its `JobState` |
 | `JobState` | `temp` to the job's `Workspace` |
-| `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>` to `SessionState` |
+| `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState` |
 | `SessionState` | `c` to the session's `Workspace` |
 
 Keys below the last component a path reaches are read by value type
 (`ValuePath`): a map key, a vector index, an Index key. A stored null counts as
-present.
+present. A key that names no agent, session or job ends the path at the
+component above it, where it reads as null.
 
 **Operations define writability.** A component's domain operations are the
 only ways to change it. Each makes its own checks and then changes its cursor

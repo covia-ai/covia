@@ -18,6 +18,8 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.adapter.agent.GoalTreeContext;
+import covia.lattice.Position;
+import covia.lattice.Workspace;
 import static covia.venue.AgentState.*;
 
 /**
@@ -43,6 +45,18 @@ public final class SessionState extends ACoviaComponent<ACell>
 
 	public Blob getID() { return id; }
 	public AMap<AString, ACell> getRecord() { return RT.ensureMap(cursor().get()); }
+
+	/** The session's workspace ({@code c}); a change to it needs the session. */
+	public Workspace workspace() {
+		return Workspace.inRecord(cursor(), K_C);
+	}
+
+	/** {@code c} is the session's workspace; the rest of the session is read as stored. */
+	@Override
+	public Position resolve(ACell[] keys, int from) {
+		if (from < keys.length && K_C.equals(keys[from])) return workspace().resolve(keys, from + 1);
+		return super.resolve(keys, from);
+	}
 
 	/** Null from the operation means rejection; unchanged records still count as accepted.
 	 * Reset the result on every retry, including a concurrently removed session. */

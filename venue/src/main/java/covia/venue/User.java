@@ -30,7 +30,7 @@ import convex.lattice.cursor.StampedCursor;
  * {@link Namespace} for JSON compliance:</p>
  * <ul>
  *   <li>{@code "j"} — user's jobs ({@link Jobs})</li>
- *   <li>{@code "g"} — user's agents</li>
+ *   <li>{@code "g"} — user's agents ({@link AgentState})</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
  *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "o"} — user's operations ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
@@ -104,12 +104,13 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	}
 
 	/**
-	 * Internal namespace-resolution bridge to an agent's record, which need not
-	 * exist; domain callers use the agent methods.
+	 * The agent at {@code agentId}, whether or not its record exists, for a
+	 * request that names its own agent ({@code n/}, {@code c/}): a missing agent
+	 * reads as absent, and its workspaces refuse changes. Domain callers use
+	 * {@link #agent}, which is null for a missing agent.
 	 */
-	public AForkableCursor<ACell> recordCursor(ACell namespace, ACell id) {
-		if (Namespace.G.equals(namespace)) return new AgentState(context, agentStorage(id), (AString) id).cursor();
-		throw new IllegalArgumentException("Not an agent namespace: " + namespace);
+	public AgentState agentAt(AString agentId) {
+		return new AgentState(context, agentStorage(agentId), agentId);
 	}
 
 	private AForkableCursor<ACell> agentStorage(ACell id) {
@@ -263,6 +264,10 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 			if (Namespace.H.equals(key)) return inbox().resolve(keys, from + 1);
 			if (Namespace.J.equals(key)) return jobs().resolve(keys, from + 1);
 			if (Namespace.S.equals(key)) return secrets().resolve(keys, from + 1);
+			if (Namespace.G.equals(key) && from + 1 < keys.length && keys[from + 1] instanceof AString id) {
+				AgentState agent = agent(id);
+				if (agent != null) return agent.resolve(keys, from + 2);
+			}
 		}
 		return super.resolve(keys, from);
 	}
