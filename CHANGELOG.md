@@ -29,6 +29,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - HITL requests name the asker as `caller`, not `from`, and a delegate's or agent's namespace as `owner`; `hitl:list` shows `caller`.
 - A capability gate is told `{operation, input, caller, owner?}`, where `caller` is the principal that acted, also for a held grant.
 - A chat bot an agent created names it `caller`, not `principal`.
+- A Claude Code session restored after a restart acts as the principal that started it, with the grants it presented, and every turn checks project access again.
+- An agent's `outputPath` write acts as its requester stands at write time, after a restart too; the task keeps no copy of the requester's caps.
 - The venue migrates to version 2, renaming those fields in stored records once.
 - User exports are at version 2; `user:import` converts older ones, and `user:import` and `user:clone` leave out the user's jobs.
 - A `covia` path given as an array takes strings only, none containing `/`, a list position written in digits as in a string path; any other element is refused (#617).

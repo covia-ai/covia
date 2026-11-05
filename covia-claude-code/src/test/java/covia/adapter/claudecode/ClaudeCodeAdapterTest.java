@@ -22,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -37,6 +38,7 @@ import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -657,6 +659,39 @@ public class ClaudeCodeAdapterTest {
 		assertEquals(session, str(output(job), "session"), "same conversation");
 		engine.jobs().deliverMessage(job.getID(), Maps.of("end", true), OWNER_CTX);
 		await(job::isFinished, 10_000);
+	}
+
+	/** Caps an agent needs to open a session in the alpha project. */
+	private static AVector<ACell> alphaSessionCaps() {
+		return Vectors.of(
+			Capability.create(Strings.create("v/ops/claudecode/session"), Strings.create("invoke")),
+			Capability.create(Strings.create("claudecode/alpha"), ClaudeCodeAdapter.ABILITY_RUN));
+	}
+
+	/** An agent of the owner, made with {@code caps}, as it acts now. */
+	private static RequestContext agentWith(String agentId, AVector<ACell> caps) {
+		run(OWNER_CTX, "v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(Config.CAPS, caps)));
+		return engine.context(OWNER, Principals.agentDID(OWNER, Strings.create(agentId)));
+	}
+
+	@Test
+	public void testRestoredSessionActsAsTheAgentThatStartedIt() throws Exception {
+		AVector<ACell> caps = alphaSessionCaps();
+		RequestContext agent = agentWith("session-restorer", caps);
+		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "alpha", "prompt", "count"), agent);
+		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+		assertEquals(agent.getCallerDID(), job.getCaller());
+		assertEquals(OWNER, job.getOwner());
+		String session = str(output(job), "session");
+
+		// After a restart the session resumes as the agent stands then, not as its owner.
+		adapter.forgetSessionJobForTest(job.getID());
+		run(OWNER_CTX, "v/ops/claudecode/stop", Maps.of("session", session));
+		run(OWNER_CTX, "v/ops/agent/update", Maps.of(Fields.AGENT_ID, "session-restorer",
+			Fields.CONFIG, Maps.of(Config.CAPS, Vectors.of(caps.get(0)))));
+		assertThrows(Exception.class, () -> engine.jobs().deliverMessage(job.getID(), Maps.of("content", "count"), OWNER_CTX));
+		await(job::isFinished, 10_000);
+		assertEquals(Status.FAILED, job.getStatus(), "an agent that lost the project cannot resume in it");
 	}
 
 	// ------------------------------------------------------------------ helpers

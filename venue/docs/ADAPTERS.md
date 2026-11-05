@@ -684,8 +684,9 @@ Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
 submission intent, protected transport authority and reattachment to an
 accepted task. Observation failure cannot manufacture execution failure or
 authorize replay. Claude may reconstruct an idle conversation through
-`restoreInteraction`; resuming a transcript does not recover an interrupted
-turn. There is no default resubmission, polling loop or lifetime timeout in
+`restoreInteraction`, as the job's caller with the proofs the job kept
+(`JobManager.callerContext`); resuming a transcript does not recover an
+interrupted turn. There is no default resubmission, polling loop or lifetime timeout in
 the base. Cancellation is a request, not proof of remote cessation.
 
 `VenueRemoteAgent` is a Java proxy over any authenticated `Venue`, including

@@ -694,6 +694,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			if (plan.resumeId() != null) d = d.assoc(K_SESSION, Strings.create(plan.resumeId()));
 			return d;
 		});
+		// A session resumes after a restart as its caller, presenting these again.
+		if (multiTurn) engine.jobs().keepProofs(job, ctx);
 		if (job.isFinished()) return;
 		if (plan.prompt() == null) {
 			// A session opened without a first prompt waits for input. It claims
@@ -795,7 +797,19 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			if (RT.bool(RT.getIn(body, K_END))) { end(); return; }
 			String prompt = messageText(body);
 			if (prompt == null) throw new InvalidInputException(MESSAGE_REQUIRED);
+			requireTurnAccess();
 			message(prompt);
+		}
+
+		/**
+		 * Every turn acts in the project as the session's caller may now, so its
+		 * access is checked again for each one; a turn it may no longer take is
+		 * refused and the session waits.
+		 */
+		private void requireTurnAccess() {
+			ProjectSpec project = project(plan.project().name());
+			if (project == null) throw new NotFoundException("Project '" + plan.project().name() + "' no longer exists", plan.project().name());
+			requireProjectAccess(ctx, project);
 		}
 
 		/** Sit in INPUT_REQUIRED with {@code output} as the visible reply. */
@@ -893,13 +907,11 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			job.fail("Claude Code project " + projectName + " no longer exists on this venue");
 			return null;
 		}
-		AString owner = job.getOwner();
-		if (owner == null) {
-			job.fail("Claude Code session job has no recorded caller");
-			return null;
-		}
-		RequestContext ctx = RequestContext.of(owner);
+		// The session resumes as its caller would act now, presenting the proofs
+		// the job keeps, and only while that caller may still use the project.
+		RequestContext ctx;
 		try {
+			ctx = engine.jobs().callerContext(job);
 			requireProjectAccess(ctx, project);
 		} catch (RuntimeException e) {
 			job.fail(e.getMessage());

@@ -1013,6 +1013,41 @@ public class JobManager {
 		}
 	}
 
+	// ========== Authority kept for work that continues ==========
+
+	/**
+	 * Keeps the verified UCAN proofs {@code ctx} presents with {@code job}, for
+	 * work that continues after this request, such as a session that resumes
+	 * after a restart ({@link #callerContext}). They are kept in the form checked
+	 * on arrival, dropped when the job ends, and never shown to a caller
+	 * ({@link JobState#view}). A job that is not recorded does not outlive the
+	 * request, so it keeps none.
+	 */
+	public void keepProofs(Job job, RequestContext ctx) {
+		AVector<ACell> proofs = ctx.getProofs();
+		if (proofs == null || proofs.isEmpty() || !job.isRecorded()) return;
+		job.update(data -> data.assoc(Fields.PROOFS, proofs));
+	}
+
+	/**
+	 * The context a recorded job's caller acts under now, in the job's
+	 * namespace, presenting again the proofs the job keeps
+	 * ({@link Engine#context(AString, AString, AVector)}): what a live request of
+	 * the caller's would hold on arrival. This is how work that continues after
+	 * a restart regains its authority.
+	 *
+	 * @throws AuthException when the job names no caller, or its caller could not act now
+	 */
+	public RequestContext callerContext(Job job) {
+		AString caller = job.getCaller();
+		if (caller == null) throw new AuthException(NO_CALLER + job.getID().toHexString());
+		AVector<ACell> proofs = (job instanceof VenueJob recorded) ? recorded.keptProofs() : null;
+		return engine.context(job.getOwner(), caller, proofs);
+	}
+
+	/** Why a job's work cannot regain authority: its record names no caller. */
+	public static final String NO_CALLER = "The job records no caller to act as: ";
+
 	// ========== Mirrors ==========
 
 	/** On a mirror job, the id of the unrecorded job it follows ({@link #mirror}). */
@@ -1504,7 +1539,7 @@ public class JobManager {
 				if (Job.isFinished(record)) continue;
 				JobState state = user.jobs().get(jobID);
 				if (state == null) continue;
-				VenueJob job = restoreJob(jobID, state, Job.currentState(record), did);
+				VenueJob job = restoreJob(jobID, state, JobState.view(record), did);
 				restored.add(job);
 			}
 		}

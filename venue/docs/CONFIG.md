@@ -2941,7 +2941,11 @@ Operations:
   `INPUT_REQUIRED` with the latest reply as its output; each message posted
   to the job (`{content}` / `{prompt}`) is the next turn, `{end: true}`
   finishes it. Restored after a restart, it resumes from the session id on
-  its job record.
+  its job record, as the principal that started it with the authority that
+  principal holds then: the grants it presented are kept on the job until
+  the job ends. Every turn checks again that the caller may run in the
+  project; a turn it may not is refused to the sender, and the session
+  waits.
 - `v/ops/claudecode/sessions {project?}` — the sessions this venue knows in
   projects the caller may use (live and recently stopped; all resumable).
 - `v/ops/claudecode/stop {session}` — stop a session's live process (the

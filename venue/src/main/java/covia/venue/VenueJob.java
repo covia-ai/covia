@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.prim.CVMLong;
 import java.util.function.UnaryOperator;
 import java.util.concurrent.atomic.AtomicReference;
@@ -79,6 +80,17 @@ public class VenueJob extends Job {
 		if (previous instanceof CVMLong old
 				&& old.longValue() > timestamp.longValue()) timestamp = old;
 		return newData.assoc(Fields.UPDATED, timestamp);
+	}
+
+	/**
+	 * The proofs this job keeps while its work can continue after the request
+	 * ({@link JobState#proofs}); null for a memory-only job or one that keeps
+	 * none.
+	 */
+	public AVector<ACell> keptProofs() {
+		if (record == null) return null;
+		try { return record.proofs(); }
+		catch (AuthException erased) { return null; }
 	}
 
 	/** Read the primary row, never a separately updated in-memory copy. */

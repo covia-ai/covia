@@ -39,10 +39,33 @@ public final class JobState extends ACoviaComponent<ACell>
 		return new JobState(context, draft);
 	}
 
-	public AMap<AString, ACell> getRecord() { return Job.currentState(RT.ensureMap(cursor().get())); }
+	/** The job as callers see it ({@link #view}). */
+	public AMap<AString, ACell> getRecord() { return view(RT.ensureMap(cursor().get())); }
 
 	/** The job as callers see it: its current state. */
 	@Override public ACell read() { return getRecord(); }
+
+	/**
+	 * A job record as callers see it: its current state, without the proofs it
+	 * keeps for work that continues after the request ({@link #proofs}). Every
+	 * read of a job goes through this, so stored proofs reach no output.
+	 */
+	public static AMap<AString, ACell> view(AMap<AString, ACell> record) {
+		AMap<AString, ACell> current = Job.currentState(record);
+		return (current == null) ? null : current.dissoc(Fields.PROOFS);
+	}
+
+	/**
+	 * The verified UCAN proofs the job's caller presented, which the job keeps
+	 * while its work can continue after the request, as a session that resumes
+	 * after a restart does. Dropped when the job ends, and never shown to a
+	 * caller.
+	 *
+	 * @return the proofs, or null when the job keeps none
+	 */
+	public AVector<ACell> proofs() {
+		return RT.ensureVector(RT.getIn(cursor().get(), Fields.PROOFS));
+	}
 
 	/** The job's scratch area ({@code temp}); a change to it needs the job. */
 	public Workspace workspace() {
@@ -56,17 +79,25 @@ public final class JobState extends ACoviaComponent<ACell>
 		return super.resolve(path);
 	}
 
-	/** Pure record edit; null rejects the edit. Returns the committed record or
-	 * null for a rejected/missing row, resetting acceptance on every retry. */
+	/** Pure record edit; null rejects the edit. The action sees the stored
+	 * record, kept proofs included, and an edit that leaves them out keeps them
+	 * (it may have started from a record as callers see it); the edit that ends
+	 * the job drops them. Returns the committed record as callers see it
+	 * ({@link #view}), or null for a rejected/missing row, resetting acceptance
+	 * on every retry. */
 	AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> action) {
 		boolean[] accepted = {false};
 		ACell committed = cursor().updateAndGet(value -> {
 			AMap<AString, ACell> current = Job.currentState(RT.ensureMap(value));
 			AMap<AString, ACell> next = current == null ? null : action.apply(current);
 			accepted[0] = next != null;
-			return next == null ? value : Job.currentState(next);
+			if (next == null) return value;
+			next = Job.currentState(next);
+			if (Job.isFinished(next)) return next.dissoc(Fields.PROOFS);
+			ACell kept = current.get(Fields.PROOFS);
+			return (kept == null || next.containsKey(Fields.PROOFS)) ? next : next.assoc(Fields.PROOFS, kept);
 		});
-		return accepted[0] ? RT.ensureMap(committed) : null;
+		return accepted[0] ? view(RT.ensureMap(committed)) : null;
 	}
 
 	/** History remains appendable after terminal completion. Repeated message IDs

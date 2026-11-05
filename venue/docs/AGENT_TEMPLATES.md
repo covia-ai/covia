@@ -389,8 +389,10 @@ A `manager` agent decides the pipeline at runtime by calling `agent_request` on 
 (`w/`, `t/`, `c/`, `n/`) resolve in the requesting manager's captured context;
 authorised owner-scoped DID URLs use the same cross-user checks as `covia:write`;
 and foreign `did:web` paths dispatch the write to the destination venue. Both
-venues enforce the requester's authority at write time. Failed or cancelled tasks
-write nothing.
+venues enforce the requester's authority at write time, as the requester
+stands then: an agent under its current `config.caps`, a delegate through the
+grant it presented, which the task keeps until the write, across a restart
+too. Failed or cancelled tasks write nothing.
 
 ### Capabilities for handoff
 
@@ -411,7 +413,7 @@ So for a pipeline of *capped* workers, provision the handoff area explicitly:
 
 Every stage can read the shared `w/pipeline/` area. With structural handoff the
 **manager** needs `crud/write` on each `outputPath`, because the framework writes
-under the requester's captured capability scope; each consumer needs `crud/read` on its
+as the requester; each consumer needs `crud/read` on its
 input path. The producing worker does not need write authority merely to return
 its result. Uncapped agents need none of these explicit grants — but capping is
 the least-privilege posture for untrusted or externally-facing work, and there

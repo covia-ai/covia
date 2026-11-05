@@ -123,8 +123,8 @@ class CallerAndOwnerTest {
 
 	@Test void outputSnapshotsNameTheirOwner() {
 		AgentState worker = read(STEP.apply(legacy())).users().get(ALICE).agent("worker");
-		assertEquals(Maps.of(Fields.CALLER, WORKER, Fields.OWNER, ALICE, CAPS, Maps.empty()),
-			RT.getIn(worker.getTasks().get(TASK), OUTPUT_CONTEXT));
+		assertEquals(Maps.of(Fields.CALLER, WORKER, Fields.OWNER, ALICE),
+			RT.getIn(worker.getTasks().get(TASK), OUTPUT_CONTEXT), "and keeps no copy of its caller's caps");
 		assertEquals(Maps.of(Fields.CALLER, WORKER, Fields.OWNER, ALICE),
 			RT.getIn(worker.getTasks().get(OLD_TASK), OUTPUT_CONTEXT), "one from before 0.10.0 takes the legacy namespace");
 		assertEquals(Maps.of(Fields.CALLER, BOB), RT.getIn(worker.getTasks().get(OWN_TASK), OUTPUT_CONTEXT));

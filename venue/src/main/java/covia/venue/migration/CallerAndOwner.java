@@ -33,8 +33,10 @@ import covia.venue.AgentState;
  *       {@code caller := from} and {@code owner := requesterUser}, else the
  *       namespace a record naming only its caller had ({@link #legacyNamespace}).</li>
  *   <li><b>Agent output snapshot</b> ({@code outputContext} on an agent's
- *       task): {@code user} becomes {@code owner}. One from before 0.10.0 names
- *       only its caller, and takes the same legacy namespace.</li>
+ *       task): {@code user} becomes {@code owner}, and its copy of the
+ *       caller's {@code caps} goes: the write restores the caller as it acts
+ *       then. One from before 0.10.0 names only its caller, and takes the same
+ *       legacy namespace.</li>
  * </ul>
  *
  * <p>{@link #userState} converts one user's state, so {@code user:import} brings
@@ -49,7 +51,8 @@ public final class CallerAndOwner implements MigrationStep {
 	static final AString USER = Strings.intern("user");
 	static final AString EVENTS = Strings.intern("events");
 	static final AString TASKS = AgentState.KEY_TASKS;
-	static final AString OUTPUT_CONTEXT = Strings.intern("outputContext");
+	static final AString OUTPUT_CONTEXT = AgentState.KEY_OUTPUT_CONTEXT;
+	static final AString CAPS = Strings.intern("caps");
 
 	@Override
 	public ACell apply(ACell venue) {
@@ -141,17 +144,20 @@ public final class CallerAndOwner implements MigrationStep {
 	}
 
 	/**
-	 * An output snapshot: {@code user} present means it names its namespace that
-	 * way; neither {@code user} nor {@code owner} means it is from before 0.10.0
-	 * and names only its caller.
+	 * An output snapshot: {@code caps} present means it keeps a copy of its
+	 * caller's caps, which goes; {@code user} present means it names its
+	 * namespace that way; neither {@code user} nor {@code owner} means it is
+	 * from before 0.10.0 and names only its caller.
 	 */
 	static ACell outputContext(ACell cell, UnaryOperator<AString> legacy) {
 		AMap<AString, ACell> snapshot = stringMap(cell);
-		if (snapshot == null || snapshot.containsKey(Fields.OWNER)) return cell;
-		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
-		if (caller == null) return cell;
-		AString owner = snapshot.containsKey(USER) ? RT.ensureString(snapshot.get(USER)) : legacy.apply(caller);
-		AMap<AString, ACell> current = Attribution.attribute(snapshot.dissoc(USER).dissoc(Fields.CALLER), caller, owner);
+		if (snapshot == null) return cell;
+		AMap<AString, ACell> current = snapshot.dissoc(CAPS);
+		AString caller = RT.ensureString(current.get(Fields.CALLER));
+		if (caller != null && !current.containsKey(Fields.OWNER)) {
+			AString owner = current.containsKey(USER) ? RT.ensureString(current.get(USER)) : legacy.apply(caller);
+			current = Attribution.attribute(current.dissoc(USER).dissoc(Fields.CALLER), caller, owner);
+		}
 		return current.equals(snapshot) ? cell : current;
 	}
 

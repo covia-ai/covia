@@ -125,6 +125,20 @@ remains the application's choice.
   job it holds. Links are venue- and user-local: a job run on another venue
   through the grid adapter carries none.
 
+## Kept proofs
+
+A job whose work can continue after a restart keeps the grant proofs its
+caller presented, so that it acts again with the authority it started with
+and no more. The adapter asks for it (`JobManager.keepProofs`); a Claude Code
+session does. The record holds them as `proofs`, in the form checked on
+arrival, and `JobManager.callerContext` rebuilds the caller from it with
+`Engine.context(owner, caller, proofs)`, checking what a live request would:
+the principal still exists, a delegate still holds its `user/sudo` grant, an
+agent acts under its current `config.caps`. No read shows them
+(`JobState.view`: job reads, listings and `covia:read j/…`), and the update
+that finishes the job drops them, so a finished job, and therefore an export,
+holds none (UCAN.md §4.3).
+
 ## The update path — CAS-committed, terminal-sticky
 
 Lifecycle mutations funnel through `Job.commitUpdate` and its atomic backing-record

@@ -271,23 +271,43 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return super.resolve(path);
 	}
 
-	/** The user's record, its jobs in their current state. */
+	/** The user's record, its jobs and agents as callers see them. */
 	@Override
 	public ACell read() {
 		AMap<AString, ACell> record = RT.ensureMap(cursor().get());
-		if (record == null || !record.containsKey(Namespace.J)) return record;
-		return record.assoc(Namespace.J, jobs().read());
+		if (record == null) return null;
+		if (record.containsKey(Namespace.J)) record = record.assoc(Namespace.J, jobs().read());
+		if (record.containsKey(Namespace.G)) record = record.assoc(Namespace.G, agentsView(record.get(Namespace.G)));
+		return record;
 	}
 
-	/** Data no namespace component claims is read from the record as stored. */
+	/** Data no namespace component claims is read from the record as stored, its agents as callers see them. */
 	@Override
 	public ACell read(CoviaPath path) {
-		return path.isEmpty() ? read() : ValuePath.get(cursor().get(), path);
+		if (path.isEmpty()) return read();
+		if (Namespace.G.equals(path.first())) return ValuePath.get(agentsView(RT.getIn(cursor().get(), Namespace.G)), path.rest());
+		return ValuePath.get(cursor().get(), path);
 	}
 
 	@Override
 	public boolean contains(CoviaPath path) {
+		if (!path.isEmpty() && Namespace.G.equals(path.first())) {
+			return ValuePath.contains(agentsView(RT.getIn(cursor().get(), Namespace.G)), path.rest());
+		}
 		return ValuePath.contains(cursor().get(), path);
+	}
+
+	/** The {@code g} map with each agent as callers see it ({@link AgentState#view}). */
+	@SuppressWarnings("unchecked")
+	private static ACell agentsView(ACell agents) {
+		if (!(agents instanceof AMap<?, ?> byId)) return agents;
+		AMap<ACell, ACell> shown = (AMap<ACell, ACell>) byId;
+		for (var entry : ((AMap<ACell, ACell>) byId).entrySet()) {
+			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
+			AMap<AString, ACell> view = AgentState.view(record);
+			if (view != record) shown = shown.assoc(entry.getKey(), view);
+		}
+		return shown;
 	}
 
 }

@@ -206,8 +206,7 @@ public class AgentAdapter extends AAdapter {
 	 * handoff after a venue restart. Live requests use the complete immutable
 	 * RequestContext held in {@link #outputContexts}; raw bearer UCANs are never
 	 * written into agent state. */
-	private static final AString K_OUTPUT_CONTEXT   = Strings.intern("outputContext");
-	private static final AString K_CONTEXT_CAPS     = Strings.intern("caps");
+	private static final AString K_OUTPUT_CONTEXT   = AgentState.KEY_OUTPUT_CONTEXT;
 	private static final AString K_CONTEXT_AGENT_ID = Strings.intern("agentId");
 	private static final AString K_CONTEXT_JOB_ID   = Strings.intern("jobId");
 	private static final AString K_CONTEXT_SESSION_ID = Strings.intern("sessionId");
@@ -3386,7 +3385,12 @@ public class AgentAdapter extends AAdapter {
 
 				RequestContext outputCtx = outputContexts.remove(taskId);
 				if (outputCtx == null) {
-					outputCtx = restoreOutputContext(envelope.get(K_OUTPUT_CONTEXT));
+					try {
+						outputCtx = restoreOutputContext(envelope.get(K_OUTPUT_CONTEXT));
+					} catch (covia.exception.AuthException unavailable) {
+						pendingJob.fail("Output handoff failed for '" + outputPath + "': " + unavailable.getMessage());
+						continue;
+					}
 				}
 				if (outputCtx == null) {
 					pendingJob.fail("Output handoff failed for '" + outputPath
@@ -3424,10 +3428,16 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	/** Captures identity, cap ceiling and execution scopes without bearer UCANs. */
+	/**
+	 * The requester's context for a pending output write, kept with the task
+	 * until the write: who called, in whose namespace, the verified proofs it
+	 * presented ({@link Fields#PROOFS}, shown to no caller) and its execution
+	 * scopes. Never a copy of its caps, nor bearer credentials.
+	 */
 	static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
 		AMap<AString, ACell> snapshot = Attribution.attribute(Maps.empty(), ctx.getCallerDID(), ctx.getUserDID());
-		if (ctx.getCaps() != null) snapshot = snapshot.assoc(K_CONTEXT_CAPS, ctx.getCaps());
+		AVector<ACell> proofs = ctx.getProofs();
+		if (proofs != null && !proofs.isEmpty()) snapshot = snapshot.assoc(Fields.PROOFS, proofs);
 		if (ctx.getAgentId() != null) snapshot = snapshot.assoc(K_CONTEXT_AGENT_ID, ctx.getAgentId());
 		if (ctx.getJobId() != null) snapshot = snapshot.assoc(K_CONTEXT_JOB_ID, ctx.getJobId());
 		if (ctx.getSessionId() != null) snapshot = snapshot.assoc(K_CONTEXT_SESSION_ID, ctx.getSessionId());
@@ -3436,9 +3446,14 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Restores the non-secret portion of a captured context after restart.
-	 * Proof-backed cross-user/federated authority deliberately cannot be
-	 * reconstructed: raw bearer credentials are never persisted.
+	 * The requester's context for a pending output write after a restart: its
+	 * caller as it would act now in its namespace, presenting again the proofs
+	 * it presented ({@link covia.venue.Engine#context(AString, AString, AVector)}),
+	 * with the snapshot's execution scopes. Bearer credentials were never kept,
+	 * so nothing signs in as the caller elsewhere.
+	 *
+	 * @return the context, or null for a snapshot that names no caller
+	 * @throws covia.exception.AuthException when the caller could not act now
 	 */
 	@SuppressWarnings("unchecked")
 	RequestContext restoreOutputContext(ACell snapshotCell) {
@@ -3446,14 +3461,8 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
 		AString caller = Attribution.caller(snapshot);
 		if (caller == null) return null;
-		AVector<ACell> caps = null;
-		if (snapshot.containsKey(K_CONTEXT_CAPS)) {
-			caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
-			if (caps == null) return null;
-		}
-		// Bearer credentials are deliberately not restored: a delegate's
-		// recorded empty scope leaves it proof-bounded.
-		RequestContext ctx = RequestContext.of(caller, Attribution.owner(snapshot), caps);
+		RequestContext ctx = engine.context(Attribution.owner(snapshot), caller,
+			RT.ensureVector(snapshot.get(Fields.PROOFS)));
 		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
 		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
 		ACell jobId = snapshot.get(K_CONTEXT_JOB_ID);

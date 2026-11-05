@@ -8,7 +8,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
+import convex.core.data.AMap;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -21,8 +25,14 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Principals;
+import covia.api.Abilities;
+import covia.exception.AuthException;
 import covia.exception.JobFailedException;
+import covia.venue.Config;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.server.AuthMiddleware;
 import covia.venue.TestEngine;
 import covia.venue.TwoVenueTestServer;
 
@@ -79,31 +89,59 @@ public class AgentOutputPathFederationTest {
 			"A missing caller credential must not fall back to an anonymous remote write");
 	}
 
+	/** A delegate's pending write acts for the owner again only through the grant it presented. */
 	@Test
-	public void outputContextRecoveryKeepsTheNamespaceAndExecutionOwner() {
-		AString caller = Strings.create("did:key:zCaller");
-		AString owner = Strings.create("did:key:zOwner");
-		AString agent = Strings.create("worker");
-		RequestContext context = RequestContext.of(caller).onBehalfOf(owner)
-			.withAgentId(agent).withSessionId(Blob.fromHex("1234"));
-		RequestContext restored = agents().restoreOutputContext(AgentAdapter.snapshotOutputContext(context));
-		assertEquals(caller, restored.getCallerDID());
+	public void outputContextRecoveryActsAsADelegateOnlyThroughItsGrant() {
+		Engine engine = TwoVenueTestServer.ENGINE_A;
+		AKeyPair ownerKey = AKeyPair.generate();
+		AKeyPair delegateKey = AKeyPair.generate();
+		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
+		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
+		engine.getVenueState().users().create(owner);
+		engine.getVenueState().users().create(delegate);
+		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(), System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
+				Capability.create(Strings.create(owner + "/w/output"), Capability.CRUD_WRITE)),
+			Vectors.empty()).toJWT(ownerKey);
+		RequestContext context = engine.sudoContext(AuthMiddleware.withTransportGrants(
+				RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX), owner)
+			.withAgentId(Strings.create("worker")).withSessionId(Blob.fromHex("1234"));
+
+		AMap<AString, ACell> snapshot = AgentAdapter.snapshotOutputContext(context);
+		assertEquals(context.getProofs(), snapshot.get(Fields.PROOFS), "kept for the write");
+		RequestContext restored = agents().restoreOutputContext(snapshot);
+		assertEquals(delegate, restored.getCallerDID());
 		assertEquals(owner, restored.getUserDID());
 		assertEquals(context.getExecutionScope(), restored.getExecutionScope());
-		assertNull(restored.getProofs());
-		assertThrows(covia.exception.AuthException.class,
-			() -> restored.requireCapability("w/output", "crud/write"));
+		assertTrue(engine.authorityCovers(restored, Strings.create("w/output"), Capability.CRUD_WRITE));
+		assertFalse(engine.authorityCovers(restored, Strings.create("w/other"), Capability.CRUD_WRITE),
+			"bounded by the grant, as it was");
+		assertThrows(AuthException.class, () -> agents().restoreOutputContext(snapshot.dissoc(Fields.PROOFS)),
+			"without its grant a delegate cannot act for the owner again");
 	}
 
+	/** An agent's pending write acts as the agent stands then, never under a copy of its caps. */
 	@Test
-	public void outputContextRecoveryKeepsAnAgentsScopeAndASubjectsOwnNamespace() {
-		AString owner = Strings.create("did:key:zOwner");
+	public void outputContextRecoveryActsAsAnAgentUnderItsCurrentCaps() {
+		Engine engine = TwoVenueTestServer.ENGINE_A;
+		AString owner = TestEngine.uniqueDID("OutputContextAgentOwner");
+		RequestContext ownerCtx = RequestContext.of(owner);
 		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, Strings.create("invoke")));
-		RequestContext agent = RequestContext.ofAgent(owner, Strings.create("worker")).withCaps(caps);
-		RequestContext restored = agents().restoreOutputContext(AgentAdapter.snapshotOutputContext(agent));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, caps)), ownerCtx).awaitResult(10_000);
+		RequestContext agent = engine.context(owner, Principals.agentDID(owner, Strings.create("worker")));
+
+		AMap<AString, ACell> snapshot = AgentAdapter.snapshotOutputContext(agent);
+		assertFalse(snapshot.containsKey(Config.CAPS), "the snapshot keeps no copy of the agent's caps");
+		RequestContext restored = agents().restoreOutputContext(snapshot);
 		assertEquals(agent.getCallerDID(), restored.getCallerDID());
 		assertEquals(owner, restored.getUserDID());
 		assertEquals(caps, restored.getCaps());
+
+		AVector<ACell> narrower = Vectors.of(Maps.of(Capability.CAN, Strings.create("crud/read")));
+		engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ownerCtx).awaitResult(10_000);
+		assertEquals(narrower, agents().restoreOutputContext(snapshot).getCaps(), "narrowing the agent narrows the write");
 
 		// An authenticated agent-shaped subject stays in its own namespace.
 		AString subject = Strings.create(owner + ":u:alice:g:worker");
