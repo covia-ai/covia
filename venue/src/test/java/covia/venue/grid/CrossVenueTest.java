@@ -30,6 +30,8 @@ import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.UcanTokens;
 import covia.grid.client.VenueHTTP;
+import covia.venue.Engine;
+import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 import covia.venue.TwoVenueTestServer;
 
@@ -348,6 +350,33 @@ public class CrossVenueTest {
 			Fields.INPUT, Maps.of(Fields.PATH, aliceDID + "/w/hop/doc")));
 		assertNotEquals(Status.COMPLETE, anon.getStatus(),
 			"without an identity token the hop is anonymous and must be denied");
+	}
+
+	/**
+	 * A scheduled hop has no caller credential to sign in with: only a request
+	 * presents one, and the venue keeps none. It fails saying to schedule the
+	 * work at the target venue, though the caller presented a credential when
+	 * scheduling it.
+	 */
+	@Test
+	public void scheduledHopCannotSignInAsItsCaller() throws Exception {
+		AKeyPair aliceKP = AKeyPair.generate();
+		RequestContext alice = RequestContext.of(UCAN.toDIDKey(aliceKP.getAccountKey()));
+		RequestContext scheduling = alice.withRawUcans(
+			Vectors.of(Strings.create(identityToken(aliceKP, TwoVenueTestServer.DID_B))));
+		Engine engine = TwoVenueTestServer.ENGINE_A;
+		ACell scheduled = engine.jobs().invokeOperation("v/ops/scheduler/schedule", Maps.of(
+			"operation", OP_GRID_RUN,
+			"input", Maps.of(
+				Fields.OPERATION, "v/ops/auth/whoami",
+				Fields.VENUE, TwoVenueTestServer.BASE_URL_B,
+				"authenticateAs", "caller",
+				Fields.INPUT, Maps.empty()),
+			"after", 3_600_000L), scheduling).awaitResult(10_000);
+		Job fired = engine.jobs().invokeOperation("v/ops/scheduler/trigger",
+			Maps.of("handle", RT.getIn(scheduled, "handle")), alice);
+		assertThrows(Exception.class, () -> fired.awaitResult(10_000));
+		assertEquals(VenueConnection.NO_CALLER_CREDENTIAL + TwoVenueTestServer.DID_B, fired.getErrorMessage());
 	}
 
 	/**

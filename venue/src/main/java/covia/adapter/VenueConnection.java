@@ -20,9 +20,14 @@ import covia.grid.auth.VenueDID;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
-/** Shared native venue connection policy. Saved authority is for protected storage only. */
+/**
+ * Shared native venue connection policy. {@code credentials} is what recovery
+ * needs to connect again, for protected storage only, and never holds a
+ * sign-in credential: a hop that signed in as its caller is not resumed.
+ */
 public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	private static final AString AUTHENTICATE_AS = Strings.intern("authenticateAs");
+	private static final AString CALLER = Strings.intern("caller");
 	/** Saved when the caller could have the venue dial anywhere, so recovery reconnects alike. */
 	private static final AString OUTBOUND_ANY = Strings.intern("outboundAny");
 
@@ -43,11 +48,22 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		"No credential is sent to a venue whose DID is not proven where it is reached (auth.venueProof). Unproven: ";
 
 	/**
-	 * Refusal to re-send a saved credential when the job saved no DID for its
-	 * target, so the target cannot be proven again.
+	 * Refusal to sign in again when the job saved no DID for its target, so
+	 * the target cannot be proven again.
 	 */
 	public static final String NO_SAVED_DID =
 		"No credential is re-sent to a venue whose DID the job did not save: ";
+
+	/**
+	 * Refusal of {@code authenticateAs=caller} without the caller's identity
+	 * credential for the target, which only a request presents. The venue
+	 * keeps none, so work it runs later cannot sign in as its caller. The
+	 * target venue's DID follows.
+	 */
+	public static final String NO_CALLER_CREDENTIAL =
+		"authenticateAs=caller needs an identity credential presented with the request: an in-date UCAN with no "
+		+ "capabilities, issued by the caller to the target venue. This venue keeps none, so a scheduled hop cannot "
+		+ "sign in as its caller; schedule it at the target venue instead. Target venue: ";
 
 	public static VenueConnection connect(Engine engine, RequestContext ctx, AString venueSpec, ACell input) {
 		AString venueDID = engine.getDIDString();
@@ -70,13 +86,8 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 				targetDID = targetVenueDID(engine, venueSpec, unrestricted);
 				String credential = GridAdapter.identityCredential(ctx, tokens, ctx.getCallerDID(),
 					Strings.create(targetDID));
-				if (credential == null) {
-					throw new AuthException("authenticateAs=caller requires an in-date, empty-att "
-						+ "identity credential issued by the caller to " + targetDID);
-				}
+				if (credential == null) throw new AuthException(NO_CALLER_CREDENTIAL + targetDID);
 				auth = VenueAuth.bearer(credential);
-				saved = saved.assoc(Fields.BEARER_TOKEN, Strings.create(credential))
-					.assoc(Fields.VENUE, Strings.create(targetDID));
 				principal = ctx.getCallerDID();
 			}
 			case "venue" -> {
@@ -93,16 +104,29 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		Venue venue = engine.connectVenue(venueSpec.toString(), targetDID, auth, unrestricted);
 		List<String> grants = GridAdapter.admissibleGrants(ctx, tokens, principal);
 		venue.setUcans(grants);
-		if (grants != null) saved = saved.assoc(Fields.UCANS, convex.core.data.Vectors.create(grants.stream().map(Strings::create).toList()));
+		// A hop that signed in as its caller is never resumed, so it keeps no grants either
+		if (grants != null && !"caller".equals(mode)) {
+			saved = saved.assoc(Fields.UCANS, convex.core.data.Vectors.create(grants.stream().map(Strings::create).toList()));
+		}
 		return new VenueConnection(venue, saved);
+	}
+
+	/**
+	 * Whether a job can reach its remote job again after a restart over the
+	 * connection {@code saved} describes. Not when it signed in as its caller:
+	 * only the request presented that credential, and the venue keeps none.
+	 */
+	public static boolean resumable(AMap<AString, ACell> saved) {
+		return !CALLER.equals(saved.get(AUTHENTICATE_AS));
 	}
 
 	/**
 	 * Rebuilds observation of a job {@link #connect} already authorised; grants
 	 * nothing new. The target passes the outbound guard again, as it stands now,
-	 * unless the original caller could have the venue dial anywhere, and a
-	 * saved credential is re-sent only once the target is proven again to hold
-	 * the DID saved with it.
+	 * unless the original caller could have the venue dial anywhere, and the
+	 * venue signs in as itself again only once the target is proven again to
+	 * hold the DID saved with it. A connection that signed in as its caller is
+	 * not {@link #resumable}.
 	 *
 	 * @throws AuthException if the target is not proven to hold the saved DID
 	 */
@@ -117,7 +141,6 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 		}
 		VenueAuth auth = switch (mode) {
 			case "anonymous" -> VenueAuth.none();
-			case "caller" -> VenueAuth.bearer(RT.ensureString(saved.get(Fields.BEARER_TOKEN)).toString());
 			case "venue" -> VenueAuth.namedKeyPair(engine.getKeyPair(), engine.getDIDString().toString());
 			default -> throw new IllegalArgumentException("Invalid saved remote authentication mode");
 		};

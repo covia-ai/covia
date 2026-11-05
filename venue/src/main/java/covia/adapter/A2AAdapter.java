@@ -91,6 +91,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	private static final AString K_API_KEY_SCHEME = Strings.intern("apiKeySecurityScheme");
 	private static final AString K_HTTP_AUTH_SCHEME = Strings.intern("httpAuthSecurityScheme");
 	private static final AString K_LOCATION = Strings.intern("location");
+	/** In a saved authentication: whether its value is a Bearer token. */
+	private static final AString K_BEARER = Strings.intern("bearer");
 	private static final AString K_AGENT_ASSET = Strings.intern("a2aAgentAsset");
 	private static final AString TYPE_A2A_AGENT = Strings.intern("a2a-agent");
 
@@ -215,11 +217,22 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 	// ==================== Imported A2A agent assets ====================
 
-	/** Resolved transport authentication. Imported assets carry references;
-	 * durable delegations save this authority encrypted for recovery. */
-	private record RequestAuth(String location, String name, String value) {
-		static RequestAuth bearer(String value) {
-			return value == null ? null : new RequestAuth("header", "Authorization", "Bearer " + value);
+	/**
+	 * Resolved transport authentication, with the SecretStore reference its
+	 * value was read from, or null for a literal token. Imported assets carry
+	 * references; a durable delegation keeps the reference, never the value,
+	 * and reads it again after a restart ({@link #saved}).
+	 */
+	private record RequestAuth(String location, String name, String value, String secret, boolean bearer) {
+		static RequestAuth bearer(String token, String secret) {
+			return token == null ? null : new RequestAuth("header", "Authorization", "Bearer " + token, secret, true);
+		}
+
+		/** Where this authentication goes and the secret it came from: what recovery reads again. */
+		AMap<AString, ACell> saved() {
+			AMap<AString, ACell> saved = Maps.of(K_LOCATION, Strings.create(location), Fields.NAME, Strings.create(name),
+				K_BEARER, convex.core.data.prim.CVMBool.create(bearer));
+			return secret == null ? saved : saved.assoc(K_SECRET, Strings.create(secret));
 		}
 
 		URI applyTo(URI uri) {
@@ -437,14 +450,15 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (url == null) throw new InvalidInputException("'agent' is required (or 'url' on a raw A2A operation)");
 		String rpcUrl = normaliseRpcUrl(url.toString());
 		engine.requireSafeUrl(ctx, rpcUrl);
-		return new AgentTarget(rpcUrl, null, RequestAuth.bearer(resolveBearer(input, ctx, rpcUrl)), null);
+		return new AgentTarget(rpcUrl, null, bearerAuth(input, ctx, rpcUrl), null);
 	}
 
 	private RequestAuth directBearerAuth(AMap<AString, ACell> auth, RequestContext ctx, String destination) {
 		if (auth == null) return null;
 		AString kind = RT.ensureString(auth.get(K_KIND));
 		if (kind == null || !"bearer".equalsIgnoreCase(kind.toString())) return null;
-		return RequestAuth.bearer(resolveSecretRef(auth, ctx, destination));
+		String ref = secretRef(auth);
+		return RequestAuth.bearer(resolveSecretRef(ref, ctx, destination), ref);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -461,7 +475,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			throw new InvalidInputException("Agent Card does not declare security scheme '" + schemeName + "'");
 		}
 		AMap<AString, ACell> scheme = (AMap<AString, ACell>) schemeCell;
-		String secret = resolveSecretRef(auth, ctx, destination);
+		String ref = secretRef(auth);
+		String secret = resolveSecretRef(ref, ctx, destination);
 
 		AMap<AString, ACell> apiKey = RT.ensureMap(scheme.get(K_API_KEY_SCHEME));
 		if (apiKey != null) {
@@ -473,21 +488,26 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				throw new InvalidInputException("API-key scheme '" + schemeName
 					+ "' must declare location header, query, or cookie and a name");
 			}
-			return new RequestAuth(location.toString(), name.toString(), secret);
+			return new RequestAuth(location.toString(), name.toString(), secret, ref, false);
 		}
 
 		AMap<AString, ACell> http = RT.ensureMap(scheme.get(K_HTTP_AUTH_SCHEME));
 		AString httpScheme = http != null ? RT.ensureString(http.get(K_SCHEME)) : null;
 		if (httpScheme != null && "bearer".equalsIgnoreCase(httpScheme.toString())) {
-			return RequestAuth.bearer(secret);
+			return RequestAuth.bearer(secret, ref);
 		}
 		throw new NotSupportedException("Unsupported Agent Card security scheme '" + schemeName
 			+ "'; supported: API key and HTTP Bearer");
 	}
 
-	private String resolveSecretRef(AMap<AString, ACell> auth, RequestContext ctx, String destination) {
+	/** The SecretStore reference an auth binding names, or null. */
+	private static String secretRef(AMap<AString, ACell> auth) {
 		AString ref = RT.ensureString(auth.get(K_SECRET));
-		String value = ref != null ? engine.resolveSecret(ref.toString(), ctx, destination) : null;
+		return ref == null ? null : ref.toString();
+	}
+
+	private String resolveSecretRef(String ref, RequestContext ctx, String destination) {
+		String value = ref != null ? engine.resolveSecret(ref, ctx, destination) : null;
 		if (value == null) throw new NotFoundException(
 			"Cannot resolve A2A auth secret '" + ref + "' from the caller's SecretStore", String.valueOf(ref));
 		return value;
@@ -527,7 +547,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				"'url' is required (remote A2A base or RPC URL)"));
 		}
 		try {
-			return fetchAgentCardUrl(ctx, urlCell.toString(), RequestAuth.bearer(resolveBearer(input, ctx, urlCell.toString())));
+			return fetchAgentCardUrl(ctx, urlCell.toString(), bearerAuth(input, ctx, urlCell.toString()));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -706,9 +726,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 
 		HttpRequest req = postEnvelope(rpcUrl, envelope, auth);
-		AMap<AString, ACell> credentials = auth == null ? Maps.empty() : Maps.of(
-			"location", auth.location(), "name", auth.name(), "value", auth.value());
-		engine.remoteJobs().prepare(job, "a2a", rpcUrl, credentials);
+		engine.remoteJobs().prepare(job, "a2a", rpcUrl, auth == null ? Maps.empty() : auth.saved());
 		if (job.isFinished()) return;
 		httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
 				.whenComplete((resp, err) -> {
@@ -932,13 +950,43 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		try {
 			String target = RT.ensureString(record.get(RemoteJobs.TARGET)).toString();
 			AMap<AString, ACell> saved = engine.remoteJobs().credentials(job);
-			RequestAuth auth = saved.get(Strings.intern("location")) == null ? null : new RequestAuth(
-				RT.ensureString(saved.get(Strings.intern("location"))).toString(),
-				RT.ensureString(saved.get(Fields.NAME)).toString(),
-				RT.ensureString(saved.get(Fields.VALUE)).toString());
+			// A literal token only the request presented; it was not kept
+			if (saved.get(K_LOCATION) != null && secretRef(saved) == null) {
+				engine.remoteJobs().notFollowed(job);
+				return;
+			}
+			RequestAuth auth = restoreAuth(job, saved, target);
 			bind(job, target, id.toString(), auth);
 			startPoller(job, target, id.toString(), auth);
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
+	}
+
+	/**
+	 * Reads a saved authentication's secret again, under the authority the
+	 * job's caller holds now: a rotated secret is sent as it now stands, and
+	 * one the caller can no longer use is refused.
+	 */
+	private RequestAuth restoreAuth(Job job, AMap<AString, ACell> saved, String destination) {
+		AString location = RT.ensureString(saved.get(K_LOCATION));
+		if (location == null) return null;
+		String ref = secretRef(saved);
+		String value = resolveSecretRef(ref, recordedContext(job), destination);
+		if (convex.core.data.prim.CVMBool.TRUE.equals(saved.get(K_BEARER))) return RequestAuth.bearer(value, ref);
+		return new RequestAuth(location.toString(), RT.ensureString(saved.get(Fields.NAME)).toString(), value, ref, false);
+	}
+
+	/**
+	 * The context the job's caller acts under now, rebuilt from its record
+	 * ({@link Engine#context(AString, AString, AVector)}), which keeps no
+	 * grants. The record's principal fields are read here and nowhere else:
+	 * {@code caller} names the namespace, and {@code actor} the principal that
+	 * acted when it is not the namespace's own.
+	 */
+	private RequestContext recordedContext(Job job) {
+		AMap<AString, ACell> record = job.getData();
+		AString owner = RT.ensureString(record.get(Fields.CALLER));
+		AString actor = RT.ensureString(record.get(Fields.ACTOR));
+		return engine.context(owner, actor != null ? actor : owner, null);
 	}
 
 	@Override public void suspendJob(Job job) {
@@ -1055,7 +1103,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 
 	static HttpRequest postEnvelope(String rpcUrl, Map<String, Object> envelope, String bearer) {
-		return postEnvelope(rpcUrl, envelope, RequestAuth.bearer(bearer));
+		return postEnvelope(rpcUrl, envelope, RequestAuth.bearer(bearer, null));
 	}
 
 	private static HttpRequest postEnvelope(String rpcUrl, Map<String, Object> envelope, RequestAuth auth) {
@@ -1104,6 +1152,12 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				+ "'; store it with secret:set or pass an existing s/<name> reference", ref);
 		}
 		return token;
+	}
+
+	/** {@link #resolveBearer} as a request's authentication, keeping the reference a secret was read from. */
+	private RequestAuth bearerAuth(ACell input, RequestContext ctx, String destination) {
+		AString secret = RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
+		return RequestAuth.bearer(resolveBearer(input, ctx, destination), secret == null ? null : secret.toString());
 	}
 
 	@SuppressWarnings("unused")

@@ -42,6 +42,14 @@ public final class RemoteJobs implements AutoCloseable {
 	public static final String SENDS_CLOSED = "Venue is shutting down; nothing new is sent to remote venues";
 	public static final String INVALID_CANCELLATION_STATUS = "Invalid remote cancellation status";
 	public static final String CANCELLATION_ID_MISMATCH = "Remote cancellation job ID mismatch";
+	/**
+	 * Why a recovered job that signed in to its remote venue as its caller
+	 * ended: the venue keeps no sign-in credential, so it cannot follow the
+	 * remote job after a restart. Formatted with the remote job's ID and its
+	 * venue, where the caller can follow it.
+	 */
+	public static final String NOT_FOLLOWED =
+		"This venue restarted and keeps no sign-in credential, so it no longer follows remote job %s; follow it at %s";
 	public static final AString DELEGATION = Strings.intern("delegation");
 	public static final AString PROTOCOL = Strings.intern("protocol");
 	public static final AString TARGET = Strings.intern("target");
@@ -104,7 +112,13 @@ public final class RemoteJobs implements AutoCloseable {
 		return RT.ensureMap(job.getData().get(DELEGATION));
 	}
 
-	/** Checkpoint intent and protected transport credentials before submitting once. */
+	/**
+	 * Checkpoint intent before submitting once. {@code credentials} is what
+	 * recovery needs to reach the remote job again, kept encrypted with the
+	 * resolved operation metadata until the job ends: the connection's mode,
+	 * a secret's reference and the grants that let it be read, never a
+	 * sign-in credential or a secret's value.
+	 */
 	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials) {
 		prepare(job, protocol, target, credentials, true);
 	}
@@ -149,9 +163,27 @@ public final class RemoteJobs implements AutoCloseable {
 		}
 	}
 
-	/** Restore exactly the saved transport authority; never substitute venue authority. */
+	/** What {@link #prepare} kept for recovery; never venue authority in its place. */
 	public AMap<AString, ACell> credentials(Job job) {
 		return credentials(descriptor(job));
+	}
+
+	/**
+	 * Ends a recovered job that signed in to its remote venue as its caller:
+	 * nothing is sent there, and the reason names the remote job and its venue
+	 * so the caller can follow it there ({@link #NOT_FOLLOWED}).
+	 */
+	public void notFollowed(Job job) {
+		AMap<AString, ACell> record = descriptor(job);
+		end(job, NOT_FOLLOWED.formatted(record.get(REMOTE_ID), record.get(TARGET)));
+	}
+
+	/** Fails a recovered job that will not be observed, and removes what was kept for its recovery. */
+	public void end(Job job, String reason) {
+		AMap<AString, ACell> record = descriptor(job);
+		AString ref = record == null ? null : RT.ensureString(record.get(AUTH_REF));
+		if (ref != null && !closed) cleanUpOnFinish(job, ref);
+		job.fail(reason);
 	}
 
 	private AMap<AString, ACell> credentials(AMap<AString, ACell> record) {
@@ -322,7 +354,7 @@ public final class RemoteJobs implements AutoCloseable {
 		submissionUnknown(job, cause);
 	}
 
-	/** Recovery may lack usable credentials without implying remote execution failed. */
+	/** Recovery may lack usable authority without implying remote execution failed. */
 	public void unavailable(Job job, Throwable error) {
 		health(job, Strings.intern("auth-required"), error);
 	}

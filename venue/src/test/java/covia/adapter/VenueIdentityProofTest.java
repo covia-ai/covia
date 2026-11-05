@@ -44,8 +44,10 @@ import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.auth.UcanTokens;
 import covia.grid.auth.VenueChallenge;
 import covia.grid.auth.VenueDID;
 import covia.grid.client.VenueHTTP;
@@ -261,7 +263,7 @@ public class VenueIdentityProofTest {
 			AuthException refused = assertThrows(AuthException.class,
 				() -> VenueConnection.restore(ENGINE, Strings.create(peer.url()), saved));
 			assertTrue(refused.getMessage().contains(VenueConnection.VENUE_UNPROVEN), refused.getMessage());
-			AMap<AString, ACell> unnamed = Maps.of("authenticateAs", "caller", Fields.BEARER_TOKEN, "a.b.c");
+			AMap<AString, ACell> unnamed = Maps.of("authenticateAs", "venue", "outboundAny", CVMBool.TRUE);
 			refused = assertThrows(AuthException.class,
 				() -> VenueConnection.restore(ENGINE, Strings.create(peer.url()), unnamed));
 			assertTrue(refused.getMessage().startsWith(VenueConnection.NO_SAVED_DID), refused.getMessage());
@@ -301,6 +303,45 @@ public class VenueIdentityProofTest {
 					RemoteJobs.descriptor(recovered).get(RemoteJobs.ERROR_TYPE));
 				assertEquals(Status.STARTED, recovered.getStatus());
 				assertEquals(credentialed, peer.credentialed.get(), "no credential is re-sent");
+			} finally { second.close(); }
+		}
+	}
+
+	@Test
+	void aRecoveredJobThatSignedInAsItsCallerEndsNamingTheRemoteJob() throws Exception {
+		try (Peer peer = Peer.withKey()) {
+			peer.acceptsJobs = true;
+			// Its status request goes unanswered until the first venue has closed, so
+			// that venue has nothing left to send when the requests are counted
+			peer.holdStatus = new CountDownLatch(1);
+			Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
+			AKeyPair key = AKeyPair.generate();
+			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine.addDemoAssets(first);
+			Job job;
+			try {
+				String credential = UcanTokens.identityToken(key, peer.claims, 300);
+				RequestContext caller = first.venueContext().withRawUcans(Vectors.of(Strings.create(credential)));
+				job = first.jobs().invokeOperation(GRID_RUN, input(peer.url(), "caller"), caller);
+				assertTrue(peer.statusAsked.await(5, TimeUnit.SECONDS), "the venue observes the job it handed over");
+				assertTrue(peer.authenticated.get() > 0, "the job signed in as its caller");
+				assertFalse(JSON.toString(first.remoteJobs().credentials(job)).contains(credential),
+					"the sign-in credential is not kept for recovery");
+			} finally { first.close(); }
+			peer.holdStatus.countDown();
+			int requests = peer.discoveries.get() + peer.challenges.get() + peer.calls.get();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			try {
+				Engine.addDemoAssets(second);
+				second.jobs().recoverJobs();
+				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());
+				assertEquals(Status.FAILED, recovered.getStatus());
+				assertEquals(RemoteJobs.NOT_FOLLOWED.formatted(REMOTE_ID, peer.url()), recovered.getErrorMessage());
+				assertThrows(UnavailableException.class, () -> second.remoteJobs().credentials(recovered),
+					"what was kept for recovery is removed once the job ends");
+				assertEquals(requests, peer.discoveries.get() + peer.challenges.get() + peer.calls.get(),
+					"nothing is sent to the remote venue");
 			} finally { second.close(); }
 		}
 	}
