@@ -18,8 +18,8 @@ import convex.core.util.JSON;
 import java.util.function.Consumer;
 import covia.lattice.CoviaPath;
 import covia.lattice.Entry;
-import covia.lattice.VenueGlobalsResolver;
 import covia.adapter.AAdapter;
+import covia.adapter.CoviaAdapter;
 import covia.api.Fields;
 
 /**
@@ -27,7 +27,7 @@ import covia.api.Fields;
  *
  * <p>A transaction over the venue user supplies a private draft, retries
  * conflicts and commits atomically. Each {@code v/} path is reached as the
- * venue user's path it stands for ({@link VenueGlobalsResolver#target}).
+ * venue user's path it stands for ({@link CoviaAdapter#venueGlobals}).
  * Catalog and introspection writes are validated against that draft; an exception
  * discards the entire attempt. No operation dispatch or Job records are involved.</p>
  *
@@ -367,7 +367,7 @@ final class VenueBootstrapMaterializer {
 		if (path.length() < 2 || !"v".equals(path.first().toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}
-		return VenueGlobalsResolver.target(path);
+		return CoviaAdapter.venueGlobals(path);
 	}
 
 }

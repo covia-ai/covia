@@ -279,8 +279,8 @@ For isolation between steps, use `grid:run`, which creates a job with its own
 | `n/` | Persona, learned patterns, long-term memory | The agent's life |
 | `w/` | Outputs and anything other agents or users should see | Permanent |
 
-Each context-dependent namespace is currently a `NamespaceResolver` registered
-on `CoviaAdapter` by prefix; §4.6 replaces them.
+A context-dependent path is resolved by the component its context names
+(§4.6).
 
 ### 4.6 Path Resolution (design, covia#617)
 
@@ -303,21 +303,30 @@ segments. Each refuses a segment that is not a string or that contains `/`
 (`CoviaPath.SEGMENT_NOT_STRING`, `SEGMENT_HAS_SLASH`), so a path names the same
 place as its segments joined with `/`, the address its authority is checked on.
 
-**One entry point.** `engine.paths().resolve(ctx, path, ability)` is the only
-request-aware step. It:
+**Resolution starts at a component.** A path is resolved by the component it
+starts at, and the request decides only which component that is:
 
-1. parses the path; a leading DID names the owner, otherwise the request's user
-   does;
-2. resolves context-dependent namespaces (§4.5) to the paths they stand for,
-   accepting them bare or with the caller's own DID, never another's;
-3. checks authority on the resolved path (`engine.requireLocalAccess`), so a
-   piece of data has one address and a grant covers every route to it;
-4. walks the components from the venue root to the position;
-5. returns the component there, or throws if the principal may not act.
+| Path | Starts at |
+|------|-----------|
+| a leading DID | the venue (`VenueState`), which passes the rest to that user |
+| `n/x` | the request's agent |
+| `c/x` | the request's session |
+| `t/x` | the scratch of the request's task or job, which resolves `x` |
+| `v/x` | the venue's user, at `w/global/x` |
+| `x/<adapter>/…` | the adapter's view for the request's user |
+| any other | the request's user |
 
-Reads, writes, deletes, the job-free read API, context loading and lattice
-paths in operation references all use it. Content hashes and other venues'
-paths stay with `Engine.resolvePath` and federation.
+`CoviaAdapter.resolve(ctx, path)` makes that choice and then hands the path to
+the component, so resolution itself never sees the request; it checks no
+authority and changes nothing. An `x/` view is the exception while adapters are
+not components: the view depends on the request, so `AdapterView` checks the
+caller's authority itself. The operation acting for the request checks the
+caller's authority and applies its own write rules (*Components carry no
+authority*, below). Authority is checked on the address of the data (`n/x` as
+`<owner>/g/<agent>/n/x`), so a grant covers every route to it. Reads, writes,
+deletes, the job-free read API, context loading and lattice paths in operation
+references start their paths this way. Content hashes and other venues' paths
+stay with `Engine.resolvePath` and federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.

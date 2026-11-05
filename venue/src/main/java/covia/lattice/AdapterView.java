@@ -13,23 +13,29 @@ import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.venue.RequestContext;
 
-/** Routes x/adapterName through the active adapter's explicit, user-scoped view. */
-public final class ExtensionNamespaceResolver implements NamespaceResolver {
+/**
+ * An {@code x/<adapter>} path: the active adapter's view for one user, built
+ * from the adapter's {@code latticeView} and kept to its write policy. Unlike a
+ * lattice component's resolution, the view depends on the request, so it checks
+ * the caller's authority itself.
+ */
+public final class AdapterView {
 	public static final String AUTHENTICATION_REQUIRED = "Extension paths require an authenticated user";
 	public static final String INVALID_PATH = "Invalid extension path segment";
 	public static final String READ_ONLY = "Extension path is unavailable or read-only";
 	public static final String UNAVAILABLE = "Extension adapter is no longer active";
 
-	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
-		return resolve(ctx, adapter, path, Capability.CRUD_READ);
-	}
+	private AdapterView() {}
 
-	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path, AString ability) {
-		return resolveForUser(ctx, adapter, ctx == null ? null : ctx.getUserDID(), path, ability);
-	}
-
-	/** Original authority is checked against the addressed owner; hooks receive that user's context. */
-	public static Position resolveForUser(RequestContext ctx, CoviaAdapter covia,
+	/**
+	 * Where an {@code x/} path ends in {@code owner}'s view. Authority is checked
+	 * on the addressed owner's path; the adapter's view and write policy receive
+	 * that user's context.
+	 *
+	 * @param fullPath The path from {@code x} on
+	 * @param ability The ability the caller will use, read or a change
+	 */
+	public static Position resolve(RequestContext ctx, CoviaAdapter covia,
 			AString owner, CoviaPath fullPath, AString ability) {
 		if (ctx == null || ctx.getCallerDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
 		for (int i = 0; i < fullPath.length(); i++) {
@@ -73,7 +79,4 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(ctx, path);
 		if (denial != null) throw new AuthException(denial);
 	}
-
-	/** Individual adapters decide which paths accept mutations during resolution. */
-	@Override public boolean isWritable() { return true; }
 }

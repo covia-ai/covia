@@ -516,7 +516,7 @@ public class OperationResolutionTest {
 			"resolveAsset should give the same metadata as resolvePath for inline ops");
 	}
 
-	// ========== /v/ namespace — venue globals via VenueGlobalsResolver ==========
+	// ========== /v/ namespace — venue globals ==========
 	//
 	// Per OPERATIONS.md §3, /v/ is an alias: v/<rest> is the venue user's path
 	// w/global/<rest>. Reads are universally allowed; writes

@@ -2152,7 +2152,7 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testAgentNamespaceResolverThrowsWithoutScope() {
+	public void testAgentNamespaceThrowsWithoutScope() {
 		// n/ outside agent scope should throw
 		assertThrows(RuntimeException.class, () ->
 			engine.jobs().invokeOperation("v/ops/covia/write",
@@ -2745,7 +2745,7 @@ public class CoviaAdapterTest {
 		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("c/draft"));
+		Position target = covia.resolve(ctx, Strings.create("c/draft"));
 		assertNull(target.read());
 		var refused = assertThrows(InvalidInputException.class,
 			() -> target.entry().write(CVMLong.ONE));
@@ -2760,11 +2760,24 @@ public class CoviaAdapterTest {
 		RequestContext ctx = ALICE.withAgentId(agentId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("n/draft"));
+		Position target = covia.resolve(ctx, Strings.create("n/draft"));
 		target.entry().write(Strings.create("note"));
 
 		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().get(ALICE_DID)
 			.agent(agentId).getRecord(), "n", "draft"));
+	}
+
+	@Test
+	public void testResolutionChecksNoAuthority() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/private", Fields.VALUE, "alice only"), ALICE).awaitResult(5000);
+		AString path = Strings.create(ALICE_DID + "/w/private");
+
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		assertEquals(Strings.create("alice only"), covia.resolve(BOB, path).read(),
+			"resolution finds the place whoever asks");
+		assertThrows(RuntimeException.class, () -> engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, path), BOB).awaitResult(5000), "the operation checks the caller's authority");
 	}
 
 	@Test
@@ -2791,7 +2804,7 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("t/draft"));
+		Position target = covia.resolve(ctx, Strings.create("t/draft"));
 		target.entry().write(Strings.create("task note"));
 
 		// The scratch must be the FOCUSED TASK's Job record, not the transition Job's.
@@ -2809,7 +2822,7 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("t/draft"));
+		Position target = covia.resolve(ctx, Strings.create("t/draft"));
 		target.entry().write(Strings.create("job note"));
 
 		assertEquals(Strings.create("job note"), RT.getIn(user.jobs().getRecord(jobId), Fields.TEMP, "draft"),

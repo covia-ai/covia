@@ -67,9 +67,9 @@ User-owned, mutable, per-user. Each user has their own `/o/` lattice region unde
 
 Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already specified in `GRID_LATTICE_DESIGN.md` §4.3 and §4.4. **This document does not change `/o/`.**
 
-### `/v/` — venue globals (new virtual namespace)
+### `/v/` — venue globals
 
-`/v/` is a **virtual namespace prefix**, registered alongside the existing `n/` and `t/` resolvers (GRID_LATTICE_DESIGN §4.5). It is not a new top-level lattice region; it is convenience syntax over an existing storage location.
+`/v/` is a **context-dependent namespace prefix**, like `n/` and `t/` (GRID_LATTICE_DESIGN §4.5). It is not a top-level lattice region; it is convenience syntax over an existing storage location.
 
 **Resolution.** `/v/<rest>` resolves to the venue user's workspace at `w/global/<rest>`. Concretely: `v/ops/json/merge` is the same lattice cell as the venue user's workspace path `w/global/ops/json/merge`. The venue is treated as a user — it has its own DID (already used for JWT signing, UCAN issuance, and DID document publication) and therefore has a user record with a `/w/` workspace. Its `/w/global/` sub-tree is the place it publishes public data.
 
@@ -100,23 +100,13 @@ Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already s
 
 A single `covia:slice v/info` round trip gives an agent or tool a complete venue introspection view.
 
-### `/v/` is a venue-scoped resolver — a new pattern
+### `/v/` names the venue's own data
 
-The existing virtual namespaces (`n/` and `t/`) are **caller-scoped**: they navigate to a sub-region inside the *caller's own* user data based on `RequestContext` (`agentId` for `n/`, `jobId` for `t/`). Both implementations call `adapter.ensureUserCursor(ctx)` to get the caller's cursor, then rewrite or navigate within it.
-
-`/v/` is **venue-scoped**: it navigates to a *fixed user* — the venue user — regardless of who is calling. `v/ops/json/merge` always resolves to `<venue-DID>/w/global/ops/json/merge`, whether read by Alice, Bob, or an anonymous client.
-
-This is a new pattern in the resolver framework. To support it, two small interface extensions are required:
-
-1. **`CoviaAdapter.ensureUserCursor(AString did)`** — a parallel to the existing `ensureUserCursor(ctx)`, returning the cursor for a *named* user rather than the calling user. Used by the `/v/` resolver to get the venue user's cursor.
-
-2. **`NamespaceResolver.canWrite(RequestContext ctx)`** — a per-call write check. Existing resolvers have `boolean isWritable()` which is a static yes/no, fine for caller-scoped namespaces (the caller writes to their own data; if they're authorised at all, they're authorised). Venue-scoped `/v/` needs to check the calling identity at write time. Existing resolvers get a default implementation that defers to `isWritable()`, so no behavioural change for `n/` and `t/`.
-
-The existing access pattern for `n/` and `t/` is implicit ("the cursor IS your own data, so writes are inherently authorised"). The new pattern for `/v/` is explicit ("the cursor is someone else's data, so the resolver checks authorisation against the caller's identity"). Both patterns coexist; `/v/` is the first member of the new family.
+`n/`, `c/` and `t/` name places in the caller's own data, picked by the request's agent, session or job. `/v/` names a fixed user, the venue's, whoever is calling: `v/ops/json/merge` is `<venue-DID>/w/global/ops/json/merge` whether Alice, Bob or an anonymous client reads it. A `/v/` path is resolved from the venue's user (GRID_LATTICE_DESIGN §4.6).
 
 ### Access control
 
-`/v/` access is **enforced by the namespace resolver**, not by stored UCAN proofs:
+`/v/` access is **enforced by the covia operations**, not by stored UCAN proofs:
 
 | Operation | Caller | Result |
 |-----------|--------|--------|
@@ -125,7 +115,7 @@ The existing access pattern for `n/` and `t/` is implicit ("the cursor IS your o
 | Write `/v/...` | JWT signed by venue keypair (operator) | Allowed |
 | Write `/v/...` | Anyone else | Rejected with permission error |
 
-The `/v/` resolver short-circuits the standard user-workspace access check for reads, and verifies the caller is the venue identity for writes via the new `canWrite(ctx)` method. There is **no UCAN issued at startup** for public reads; the policy is intrinsic to the namespace. This is a more explicit version of the implicit access policy that the existing `n/` and `t/` resolvers rely on (where the caller's identity is the cursor's owner by construction).
+A write through `/v/` is refused unless the caller is the venue identity. There is **no UCAN issued at startup** for public reads; the policy is intrinsic to the namespace.
 
 User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
@@ -145,7 +135,7 @@ Any operation argument that accepts a lattice address — `path`, `from`, `ref`,
 | Explicit `/a/<hash>` | `/a/abc123...` | CAS lookup |
 | User namespace path | `o/merge`, `w/notes`, `g/alice/state` | Caller's own lattice region |
 | DID-qualified user path | `did:key:zAlice…/w/notes`, `did:key:zAlice…/g/Manager` | The named local user's physical lattice region, subject to capability checks |
-| Virtual prefix | `n/notes`, `t/draft`, `v/ops/json/merge`, `x/<adapter>/...` | Resolved by registered `NamespaceResolver`; extension views are provided by the active adapter for this user |
+| Context-dependent prefix | `n/notes`, `t/draft`, `v/ops/json/merge`, `x/<adapter>/...` | Resolved from the component the request names (GRID_LATTICE_DESIGN §4.6); extension views are provided by the active adapter for this user |
 | DID URL (hash) | `did:key:z6Mk…/a/<hash>`, `did:web:venue.host/a/<hash>` | Asset as published by a principal — self-verifying. Read-side: local copies only. Invocation-side: a local copy if held, else a hash-verified metadata fetch from the publishing venue (`did:web` only) |
 | DID URL (named) | `did:web:venue.host/v/ops/json/merge` | Catalog binding maintained by the publishing venue — mutable, trusted at fetch time. Invocation-side only: name → id resolved at the publisher, then the same hash-verified definition fetch. The job record carries the resolved hash |
 
