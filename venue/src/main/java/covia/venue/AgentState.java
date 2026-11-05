@@ -22,6 +22,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
@@ -332,16 +333,16 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * no session, is read as stored.
 	 */
 	@Override
-	public Position resolve(AString[] path, int from, int to) {
-		if (from < to) {
-			AString segment = path[from];
-			if (K_N.equals(segment)) return workspace().resolve(path, from + 1, to);
-			if (K_SESSIONS.equals(segment) && from + 1 < to) {
-				Blob sid = ValuePath.blobKey(path[from + 1]);
-				if (sid != null && getSession(sid) != null) return session(sid).resolve(path, from + 2, to);
+	public Position resolve(CoviaPath path) {
+		if (!path.isEmpty()) {
+			AString segment = path.first();
+			if (K_N.equals(segment)) return workspace().resolve(path.rest());
+			if (K_SESSIONS.equals(segment) && path.length() > 1) {
+				Blob sid = ValuePath.blobKey(path.get(1));
+				if (sid != null && getSession(sid) != null) return session(sid).resolve(path.rest(2));
 			}
 		}
-		return super.resolve(path, from, to);
+		return super.resolve(path);
 	}
 
 	/**

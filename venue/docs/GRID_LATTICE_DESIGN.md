@@ -296,12 +296,12 @@ the design that replaces them.
 writes (`w/list/0` is `"w"`, `"list"`, `"0"`), and it never holds a lattice
 key. The component a segment reaches maps it to a key: `Jobs` reads hex as a
 job's Blob id, `User` reads a namespace letter as a record field, and below the
-last component a segment means what the value it meets needs. A path is made
-only by `ValuePath`: `parse` splits a string on `/`, and `of` takes a caller's
-string or array, refusing an array element that is not a string or that
-contains `/` (`ValuePath.SEGMENT_NOT_STRING`, `SEGMENT_HAS_SLASH`). No segment
-contains `/`, so a path names the same place as its segments joined with `/`,
-the address its authority is checked on.
+last component a segment means what the value it meets needs. A path is a
+`CoviaPath`, made only by its own factories: `parse` splits a string on `/`,
+`of` takes a caller's string or array, and `segments` builds one from known
+segments. Each refuses a segment that is not a string or that contains `/`
+(`CoviaPath.SEGMENT_NOT_STRING`, `SEGMENT_HAS_SLASH`), so a path names the same
+place as its segments joined with `/`, the address its authority is checked on.
 
 **One entry point.** `engine.paths().resolve(ctx, path, ability)` is the only
 request-aware step. It:
@@ -321,12 +321,14 @@ paths stay with `Engine.resolvePath` and federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.
-`resolve(path, from, to)` returns the `Position` where `path[from, to)` ends:
-the component that owns it and the range of the segments that component reads,
-so a path and any part of it are named without copying segments; a form
-without `to` runs to the end. It sees no request, takes as many segments per
-step as the component's rules cover (as cursor paths do), and builds each child
-only from its own cursor, so a walk from a draft root stays in the draft.
+`resolve(path)` takes the stretch of the caller's path below the component and
+returns the `Position` where it ends: the component that owns that place and
+the stretch of the path it reads. A stretch is the segments `[start, end)` of a
+whole path, sharing them without copying; it formats as the whole address up to
+its end, so refusals name the path as the caller wrote it. `resolve` sees no
+request, takes as many segments per step as the component's rules cover (as
+cursor paths do) and passes the rest to the child, and builds each child only
+from its own cursor, so a walk from a draft root stays in the draft.
 `read()` returns the value as callers see it: a job reads as its current state.
 
 | Component | Routes |

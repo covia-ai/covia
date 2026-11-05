@@ -15,6 +15,7 @@ import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.lattice.Position;
 import covia.lattice.Workspace;
 
@@ -50,9 +51,9 @@ public final class JobState extends ACoviaComponent<ACell>
 
 	/** {@code temp} is the job's workspace; the rest of the job is read in its current state. */
 	@Override
-	public Position resolve(AString[] path, int from, int to) {
-		if (from < to && Fields.TEMP.equals(path[from])) return workspace().resolve(path, from + 1, to);
-		return super.resolve(path, from, to);
+	public Position resolve(CoviaPath path) {
+		if (!path.isEmpty() && Fields.TEMP.equals(path.first())) return workspace().resolve(path.rest());
+		return super.resolve(path);
 	}
 
 	/** Pure record edit; null rejects the edit. Returns the committed record or

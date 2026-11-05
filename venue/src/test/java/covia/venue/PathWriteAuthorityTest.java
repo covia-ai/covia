@@ -19,7 +19,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 
 /**
  * Writes to another user's paths under a delegated grant. Creating a key
@@ -64,7 +64,7 @@ public class PathWriteAuthorityTest {
 	}
 
 	private ACell aliceRead(String path) {
-		return engine.getVenueState().users().get(alice).resolve(ValuePath.parse(path), 0).read();
+		return engine.getVenueState().users().get(alice).resolve(CoviaPath.parse(path)).read();
 	}
 
 	@Test

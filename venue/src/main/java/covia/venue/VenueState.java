@@ -354,7 +354,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 
 	private ACell legacyState(String path) {
 		User host = venueUser();
-		return host == null ? null : host.readInternalPath(covia.lattice.ValuePath.parse(path));
+		return host == null ? null : host.readInternalPath(covia.lattice.CoviaPath.parse(path));
 	}
 
 	public static final String LEGACY_STATE_CONFLICT = "Conflicting legacy venue state at ";
@@ -379,7 +379,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 				throw new IllegalStateException(LEGACY_STATE_CONFLICT + path);
 			}
 			if (!present) draft.cursor().path(Covia.ADAPTERS).withDefault(Maps.empty()).path(key).set(legacy);
-			draft.venueUser().deleteInternalPath(covia.lattice.ValuePath.parse(path));
+			draft.venueUser().deleteInternalPath(covia.lattice.CoviaPath.parse(path));
 		});
 	}
 

@@ -334,11 +334,11 @@ public class AgentAdapter extends AAdapter {
 		AString path = (value.startsWith("did:") || value.startsWith("g/") || value.startsWith("/g/"))
 			? ref : Strings.create("g/" + value);
 		Engine.UserPathTarget resolved = engine.requireUserPath(ctx, path, ability, createOwner);
-		AString[] agentPath = resolved.path();
-		if (agentPath.length != 2 || !covia.lattice.Namespace.G.equals(agentPath[0])) {
+		covia.lattice.CoviaPath agentPath = resolved.path();
+		if (agentPath.length() != 2 || !covia.lattice.Namespace.G.equals(agentPath.first())) {
 			throw new InvalidInputException("Agent reference must resolve to g/<agentId>: " + ref);
 		}
-		AString agentId = agentPath[1];
+		AString agentId = agentPath.get(1);
 		if (agentId.isEmpty() || agentId.toString().contains(":")) {
 			throw new InvalidInputException("agentId must be a non-empty path segment without ':'");
 		}

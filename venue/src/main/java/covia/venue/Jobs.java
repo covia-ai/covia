@@ -13,6 +13,7 @@ import convex.lattice.cursor.AForkableCursor;
 import covia.grid.Job;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
@@ -134,21 +135,21 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 
 	/** A job is named by its id in hex; a segment that names no job ends here, and reads as null. */
 	@Override
-	public Position resolve(AString[] path, int from, int to) {
-		Blob id = (from < to) ? ValuePath.blobKey(path[from]) : null;
+	public Position resolve(CoviaPath path) {
+		Blob id = path.isEmpty() ? null : ValuePath.blobKey(path.first());
 		JobState job = (id == null) ? null : get(id);
-		if (job == null) return super.resolve(path, from, to);
-		return job.resolve(path, from + 1, to);
+		if (job == null) return super.resolve(path);
+		return job.resolve(path.rest());
 	}
 
 	/** Below the jobs, only a segment that names no job is read here, from the index as stored. */
 	@Override
-	public ACell read(AString[] path, int from, int to) {
-		return (from < to) ? ValuePath.get(cursor().get(), path, from, to) : read();
+	public ACell read(CoviaPath path) {
+		return path.isEmpty() ? read() : ValuePath.get(cursor().get(), path);
 	}
 
 	@Override
-	public boolean contains(AString[] path, int from, int to) {
-		return ValuePath.contains(cursor().get(), path, from, to);
+	public boolean contains(CoviaPath path) {
+		return ValuePath.contains(cursor().get(), path);
 	}
 }

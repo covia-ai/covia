@@ -10,6 +10,7 @@ import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
@@ -55,26 +56,26 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	private final AString did;
 
 	/** Framework-internal read of a path in this user's record. */
-	ACell readInternalPath(AString[] path) {
-		return resolve(path, 0).read();
+	ACell readInternalPath(CoviaPath path) {
+		return resolve(path).read();
 	}
 
 	/**
 	 * Framework-internal atomic write to a workspace path, creating the levels
 	 * above it; authority is possession of this user cursor.
 	 */
-	void writeInternalPath(AString[] path, ACell value) {
-		Position target = resolve(path, 0);
+	void writeInternalPath(CoviaPath path, ACell value) {
+		Position target = resolve(path);
 		target.workspace().transact(draft -> {
-			draft.createPath(path, target.from(), Math.max(target.from(), target.to() - 1));
-			draft.write(path, target.from(), target.to(), value);
+			draft.createPath(target.path().parent());
+			draft.write(target.path(), value);
 		});
 	}
 
 	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
-	boolean deleteInternalPath(AString[] path) {
-		Position target = resolve(path, 0);
-		return target.workspace().delete(path, target.from(), target.to());
+	boolean deleteInternalPath(CoviaPath path) {
+		Position target = resolve(path);
+		return target.workspace().delete(target.path());
 	}
 
 	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
@@ -254,20 +255,20 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	}
 
 	@Override
-	public Position resolve(AString[] path, int from, int to) {
-		if (from < to) {
-			AString segment = path[from];
-			if (Namespace.W.equals(segment)) return workspace().resolve(path, from + 1, to);
-			if (Namespace.O.equals(segment)) return operations().resolve(path, from + 1, to);
-			if (Namespace.H.equals(segment)) return inbox().resolve(path, from + 1, to);
-			if (Namespace.J.equals(segment)) return jobs().resolve(path, from + 1, to);
-			if (Namespace.S.equals(segment)) return secrets().resolve(path, from + 1, to);
-			if (Namespace.G.equals(segment) && from + 1 < to) {
-				AgentState agent = agent(path[from + 1]);
-				if (agent != null) return agent.resolve(path, from + 2, to);
+	public Position resolve(CoviaPath path) {
+		if (!path.isEmpty()) {
+			AString segment = path.first();
+			if (Namespace.W.equals(segment)) return workspace().resolve(path.rest());
+			if (Namespace.O.equals(segment)) return operations().resolve(path.rest());
+			if (Namespace.H.equals(segment)) return inbox().resolve(path.rest());
+			if (Namespace.J.equals(segment)) return jobs().resolve(path.rest());
+			if (Namespace.S.equals(segment)) return secrets().resolve(path.rest());
+			if (Namespace.G.equals(segment) && path.length() > 1) {
+				AgentState agent = agent(path.get(1));
+				if (agent != null) return agent.resolve(path.rest(2));
 			}
 		}
-		return super.resolve(path, from, to);
+		return super.resolve(path);
 	}
 
 	/** The user's record, its jobs in their current state. */
@@ -280,13 +281,13 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Data no namespace component claims is read from the record as stored. */
 	@Override
-	public ACell read(AString[] path, int from, int to) {
-		return (from < to) ? ValuePath.get(cursor().get(), path, from, to) : read();
+	public ACell read(CoviaPath path) {
+		return path.isEmpty() ? read() : ValuePath.get(cursor().get(), path);
 	}
 
 	@Override
-	public boolean contains(AString[] path, int from, int to) {
-		return ValuePath.contains(cursor().get(), path, from, to);
+	public boolean contains(CoviaPath path) {
+		return ValuePath.contains(cursor().get(), path);
 	}
 
 }

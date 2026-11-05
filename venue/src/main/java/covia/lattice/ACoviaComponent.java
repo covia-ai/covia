@@ -1,7 +1,6 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
-import convex.core.data.AString;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.AForkableCursor;
 
@@ -10,7 +9,7 @@ import convex.lattice.cursor.AForkableCursor;
  * defines what the path's segments below it mean, routing them to the component
  * that owns them; a path ends at the last component that claims it.
  *
- * <p>A path is the caller's: string segments, as written. Mapping a segment to
+ * <p>A path is the caller's: a {@link CoviaPath} of string segments, as written. Mapping a segment to
  * a lattice key, such as a job id in hex to its Blob, is the business of the
  * component that meets it, and lattice keys never appear in a path.</p>
  *
@@ -31,23 +30,17 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 		super(cursor);
 	}
 
-	/** {@link #resolve(AString[], int, int)} to the end of {@code path}. */
-	public final Position resolve(AString[] path, int from) {
-		return resolve(path, from, path.length);
-	}
-
 	/**
-	 * The component that owns the position {@code path[from, to)} names below
-	 * this one. A component may take as many segments as its rules cover in one
-	 * step. By default a component owns every position below it.
+	 * The component that owns the position {@code path} names below this one. A
+	 * component may take as many segments as its rules cover in one step, and
+	 * passes the rest of the path to the child that owns them. By default a
+	 * component owns every position below it.
 	 *
-	 * @param path The caller's path
-	 * @param from Index of the first segment below this component
-	 * @param to Index after the last segment
+	 * @param path The stretch of the caller's path below this component
 	 * @return Where the path ends, never null
 	 */
-	public Position resolve(AString[] path, int from, int to) {
-		return new Position(this, path, from, to);
+	public Position resolve(CoviaPath path) {
+		return new Position(this, path);
 	}
 
 	/** This component's value as callers see it. */
@@ -55,23 +48,13 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 		return cursor().get();
 	}
 
-	/** {@link #read(AString[], int, int)} to the end of {@code path}. */
-	public final ACell read(AString[] path, int from) {
-		return read(path, from, path.length);
+	/** The value at {@code path} below this component, as callers see it, or null when absent. */
+	public ACell read(CoviaPath path) {
+		return ValuePath.get(read(), path);
 	}
 
-	/** The value at {@code path[from, to)} below this component, as callers see it, or null when absent. */
-	public ACell read(AString[] path, int from, int to) {
-		return ValuePath.get(read(), path, from, to);
-	}
-
-	/** {@link #contains(AString[], int, int)} to the end of {@code path}. */
-	public final boolean contains(AString[] path, int from) {
-		return contains(path, from, path.length);
-	}
-
-	/** Whether a value is at {@code path[from, to)} below this component; a stored null counts. */
-	public boolean contains(AString[] path, int from, int to) {
-		return ValuePath.contains(read(), path, from, to);
+	/** Whether a value is at {@code path} below this component; a stored null counts. */
+	public boolean contains(CoviaPath path) {
+		return ValuePath.contains(read(), path);
 	}
 }

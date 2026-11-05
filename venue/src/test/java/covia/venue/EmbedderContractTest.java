@@ -21,7 +21,7 @@ import convex.core.lang.RT;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
 import covia.adapter.agent.GoalTreeContext;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 import covia.lattice.Workspace;
 import covia.test.DurabilityTest;
 import covia.venue.server.VenueServer;
@@ -38,8 +38,8 @@ class EmbedderContractTest {
 	static final AString BOB = Strings.create("did:key:z6MkEmbedderContractBob");
 	static final String SEED = "7a".repeat(32);
 	static final String ADAPTER = "embedder";
-	static final AString[] AREA = ValuePath.parse("embedder");
-	static final AString[] RECORD_PATH = ValuePath.parse("embedder/record");
+	static final CoviaPath AREA = CoviaPath.parse("embedder");
+	static final CoviaPath RECORD_PATH = CoviaPath.parse("embedder/record");
 	static final ACell RECORD = Maps.of("name", "embedded", "count", 3);
 
 	/** An embedder's own adapter, keeping per-user state as GetMine's and Brightside's do. */
@@ -84,11 +84,11 @@ class EmbedderContractTest {
 			User alice = engine.getVenueState().users().ensure(ALICE);
 			alice.transact(draft -> {
 				Workspace workspace = draft.workspace();
-				workspace.createPath(AREA, 0);
-				workspace.write(RECORD_PATH, 0, RECORD);
-				workspace.write(ValuePath.parse("embedder/stamp"), 0, CVMLong.ONE);
+				workspace.createPath(AREA);
+				workspace.write(RECORD_PATH, RECORD);
+				workspace.write(CoviaPath.parse("embedder/stamp"), CVMLong.ONE);
 			});
-			assertEquals(RECORD, alice.workspace().read(RECORD_PATH, 0));
+			assertEquals(RECORD, alice.workspace().read(RECORD_PATH));
 
 			// Secrets under the venue's current keys.
 			SecretStore.Keys keys = SecretStore.keys(engine.getKeyPair());
@@ -138,7 +138,7 @@ class EmbedderContractTest {
 		try {
 			Engine engine = again.getEngine();
 			assertEquals(venueKey, engine.getAccountKey());
-			assertEquals(RECORD, engine.getVenueState().users().get(ALICE).workspace().read(RECORD_PATH, 0));
+			assertEquals(RECORD, engine.getVenueState().users().get(ALICE).workspace().read(RECORD_PATH));
 			assertTrue(engine.getVenueState().users().isDeleted(BOB));
 		} finally {
 			again.close();
@@ -152,8 +152,8 @@ class EmbedderContractTest {
 			var host = application.host();
 			Engine engine = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
 			Workspace workspace = engine.getVenueState().users().ensure(ALICE).workspace();
-			workspace.createPath(AREA, 0);
-			workspace.write(RECORD_PATH, 0, RECORD);
+			workspace.createPath(AREA);
+			workspace.write(RECORD_PATH, RECORD);
 			engine.close(); // its final flush is the engine's last save
 
 			host.checkpoint(); // still open: whoever opened the host closes it

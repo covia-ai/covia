@@ -20,9 +20,9 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.AuthException;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
-import covia.lattice.ValuePath;
 
 /** A path into an agent's record reaches the agent, its workspace and its sessions' workspaces. */
 public class AgentPathTest {
@@ -47,29 +47,29 @@ public class AgentPathTest {
 	}
 
 	private Position resolve(String path) {
-		return user.resolve(ValuePath.parse(path), 0);
+		return user.resolve(CoviaPath.parse(path));
 	}
 
 	/** Writes through the workspace a path resolves to. */
 	private void write(String path, ACell value) {
 		Position target = resolve(path);
-		target.workspace().write(target.path(), target.from(), target.to(), value);
+		target.workspace().write(target.path(), value);
 	}
 
 	@Test
 	public void testAPrefixOfAPathEndsWhereThePrefixEnds() {
 		String notes = "g/" + AGENT + "/n/notes";
 		write(notes, CVMLong.ONE);
-		AString[] path = ValuePath.parse(notes);
+		CoviaPath path = CoviaPath.parse(notes);
 
-		Position record = user.resolve(path, 0, 2);
+		Position record = user.resolve(path.prefix(2));
 		assertEquals(agent.getRecord(), record.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, record::workspace).getMessage());
 
-		Position area = user.resolve(path, 0, 3);
+		Position area = user.resolve(path.prefix(3));
 		assertEquals(Maps.of("notes", CVMLong.ONE), area.read());
-		assertTrue(area.workspace().write(path, area.to(), CVMLong.create(2)), "the area is the agent's workspace");
+		assertTrue(area.workspace().write(path.rest(3), CVMLong.create(2)), "the area is the agent's workspace");
 		assertEquals(CVMLong.create(2), resolve(notes).read());
 	}
 
@@ -77,7 +77,7 @@ public class AgentPathTest {
 	public void testTheAgentsWorkspaceIsItsN() {
 		write("g/" + AGENT + "/n/notes", CVMLong.ONE);
 		assertEquals(Maps.of("notes", CVMLong.ONE), agent.getRecord().get(N));
-		assertEquals(CVMLong.ONE, agent.workspace().read(ValuePath.parse("notes"), 0));
+		assertEquals(CVMLong.ONE, agent.workspace().read(CoviaPath.parse("notes")));
 		assertEquals(CVMLong.ONE, resolve("g/" + AGENT + "/n/notes").read());
 	}
 
@@ -95,7 +95,7 @@ public class AgentPathTest {
 	public void testASessionsWorkspaceIsItsC() {
 		write(session + "/c/draft", CVMLong.ONE);
 		assertEquals(Maps.of("draft", CVMLong.ONE), agent.session(sid).getRecord().get(C));
-		assertEquals(CVMLong.ONE, agent.session(sid).workspace().read(ValuePath.parse("draft"), 0));
+		assertEquals(CVMLong.ONE, agent.session(sid).workspace().read(CoviaPath.parse("draft")));
 		assertEquals(CVMLong.ONE, resolve(session + "/c/draft").read());
 	}
 

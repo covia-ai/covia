@@ -29,10 +29,10 @@ public interface NamespaceResolver {
 	 *         as absence and a write surfaces as an error (distinct from an auth
 	 *         failure or a malformed path)
 	 */
-	Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path);
+	Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path);
 
 	/** Resolve for a particular CRUD ability; existing resolvers retain their policy. */
-	default Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path, AString ability) {
+	default Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path, AString ability) {
 		return resolve(ctx, adapter, path);
 	}
 

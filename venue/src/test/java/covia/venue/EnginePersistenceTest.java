@@ -88,7 +88,7 @@ public class EnginePersistenceTest {
 	public void legacyAdapterStateMovesLazilyAndDoesNotReturnAfterReopen() throws Exception {
 		File file = newTempEtch();
 		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(612).getSeed().toHexString());
-		var oldPath = covia.lattice.ValuePath.parse("w/adapters/unloaded-test");
+		var oldPath = covia.lattice.CoviaPath.parse("w/adapters/unloaded-test");
 		ACell value = convex.core.data.Vectors.of("adapter-defined", Maps.of("nested", 42L));
 		VenueServer server = VenueServer.launch(config);
 		try {
@@ -127,8 +127,8 @@ public class EnginePersistenceTest {
 	public void legacyDeletionQueueRecoversThroughAdapterOwnedCleanup() throws Exception {
 		File file = newTempEtch();
 		var config = testConfig(file.getAbsolutePath().replace('\\', '/'), AKeyPair.createSeeded(613).getSeed().toHexString());
-		var oldState = covia.lattice.ValuePath.parse("w/adapters/cleanup-test");
-		var oldQueue = covia.lattice.ValuePath.parse("w/user-deletions");
+		var oldState = covia.lattice.CoviaPath.parse("w/adapters/cleanup-test");
+		var oldQueue = covia.lattice.CoviaPath.parse("w/user-deletions");
 		ACell value = Maps.of("custom", Maps.of(ALICE_DID, "old association"));
 		VenueServer server = VenueServer.launch(config);
 		try {

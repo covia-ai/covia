@@ -22,7 +22,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.AuthException;
 import covia.lattice.Covia;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 
 class AdapterStateTest {
 	private static final AString HOST = Strings.create("did:test:venue");
@@ -35,11 +35,11 @@ class AdapterStateTest {
 	}
 
 	private static void legacy(VenueState venue, String name, ACell value) {
-		venue.users().ensure(HOST).writeInternalPath(ValuePath.parse("w/adapters/" + name), value);
+		venue.users().ensure(HOST).writeInternalPath(CoviaPath.parse("w/adapters/" + name), value);
 	}
 	private static ACell legacy(VenueState venue, String name) {
 		User host = venue.users().get(HOST);
-		return host == null ? null : host.readInternalPath(ValuePath.parse("w/adapters/" + name));
+		return host == null ? null : host.readInternalPath(CoviaPath.parse("w/adapters/" + name));
 	}
 
 	@Test void adapterValuesHaveNoWorkspaceEnvelopeOrUserActivitySideEffects() {

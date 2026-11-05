@@ -25,6 +25,7 @@ import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 
 /** A user's jobs, on their own and reached by path through the user. */
@@ -108,13 +109,13 @@ public class JobsTest {
 			.assoc(ID, current.assoc(PREV, Maps.of(Fields.STATUS, Status.STARTED))));
 
 		assertEquals(current, user.jobs().getAll().get(ID));
-		assertEquals(user.jobs().getAll(), user.resolve(new AString[] {Namespace.J}, 0).read());
-		assertEquals(current, user.resolve(new AString[] {Namespace.J, HEX}, 0).read());
-		assertEquals(output, user.resolve(new AString[] {Namespace.J, HEX, Fields.OUTPUT}, 0).read());
-		assertEquals(output.get(PREV), user.resolve(new AString[] {Namespace.J, HEX, Fields.OUTPUT, PREV}, 0).read());
-		assertNull(user.resolve(new AString[] {Namespace.J, HEX, PREV}, 0).read());
-		assertNull(user.resolve(new AString[] {Namespace.J, Strings.create("not-a-job")}, 0).read());
-		assertNull(user.resolve(new AString[] {Namespace.J, Strings.create("0ffe"), Fields.STATUS}, 0).read(),
+		assertEquals(user.jobs().getAll(), user.resolve(CoviaPath.segments(Namespace.J)).read());
+		assertEquals(current, user.resolve(CoviaPath.segments(Namespace.J, HEX)).read());
+		assertEquals(output, user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT)).read());
+		assertEquals(output.get(PREV), user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT, PREV)).read());
+		assertNull(user.resolve(CoviaPath.segments(Namespace.J, HEX, PREV)).read());
+		assertNull(user.resolve(CoviaPath.segments(Namespace.J, Strings.create("not-a-job"))).read());
+		assertNull(user.resolve(CoviaPath.segments(Namespace.J, Strings.create("0ffe"), Fields.STATUS)).read(),
 			"an id that names no job reads as null");
 	}
 }

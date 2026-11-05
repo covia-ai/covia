@@ -42,17 +42,19 @@ public class VenueGlobalsResolver implements NamespaceResolver {
 	}
 
 	@Override
-	public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
-		// path[0] is "v" (the prefix). Rewrite to <venue-DID>/w/global/<rest>
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
+		// The first segment is "v" (the prefix). Rewrite to <venue-DID>/w/global/<rest>
 		// and resolve [w, global, ...rest] in the venue user's record.
 		AString venueDID = adapter.engine.getDIDString();
 		if (venueDID == null) return null;
 
-		AString[] rewritten = new AString[path.length + 1];
+		AString[] rewritten = new AString[path.length() + 1];
 		rewritten[0] = Namespace.W;
 		rewritten[1] = K_GLOBAL;
-		System.arraycopy(path, 1, rewritten, 2, path.length - 1);
-		return adapter.ensureUser(venueDID).resolve(rewritten, 0);
+		for (int i = 1; i < path.length(); i++) {
+			rewritten[i + 1] = path.get(i);
+		}
+		return adapter.ensureUser(venueDID).resolve(CoviaPath.segments(rewritten));
 	}
 
 	/**

@@ -34,6 +34,7 @@ import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.NamespaceResolver;
 import covia.lattice.ExtensionNamespaceResolver;
@@ -58,7 +59,7 @@ import covia.venue.User;
  *
  * <p>A path is string segments: {@code "g"}, {@code "my-agent"}, a hex job
  * ID, a list position in digits, made from the caller's input by
- * {@link ValuePath#of}. The component a segment reaches maps it to a
+ * {@link CoviaPath#of}. The component a segment reaches maps it to a
  * lattice key, and below the last component {@link ValuePath} reads it by the
  * value it meets: a map key, an Index key as the string or as a hex Blob, or a
  * vector index.</p>
@@ -293,7 +294,7 @@ public class CoviaAdapter extends AAdapter {
 	public ACell readContextValue(RequestContext ctx, AString path) {
 		if (path == null) return null;
 		engine.requireResourceAccess(ctx, path, Capability.CRUD_READ);
-		Position virtual = resolveVirtual(ctx, ValuePath.parse(path.toString()));
+		Position virtual = resolveVirtual(ctx, CoviaPath.parse(path.toString()));
 		if (virtual != null) return virtual.read();
 
 		// Physical namespaces and universal asset/op references.
@@ -589,7 +590,7 @@ public class CoviaAdapter extends AAdapter {
 	private static AString capResource(ACell input) {
 		ACell path = RT.getIn(input, Fields.PATH);
 		AString resource = RT.ensureString(path);
-		if (path instanceof AVector<?>) resource = Strings.create(ValuePath.format(ValuePath.of(path)));
+		if (path instanceof AVector<?>) resource = Strings.create(CoviaPath.of(path).toString());
 		if (resource != null && resource.startsWith(SLASH)) resource = resource.slice(1);
 		return resource;
 	}
@@ -606,14 +607,12 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private boolean changeCreatingLevels(RequestContext ctx, AString address, Position target,
 			Consumer<Workspace> change) {
-		AString[] path = target.path();
-		int from = target.from();
-		int to = target.to();
+		CoviaPath path = target.path();
 		boolean[] created = {false};
 		target.workspace().transact(draft -> {
-			int missing = ValuePath.missingLevels(draft.read(), path, from, to);
+			int missing = ValuePath.missingLevels(draft.read(), path);
 			if (missing > 0) engine.requireLocalAccess(ctx, ancestor(address, missing), Capability.CRUD_WRITE);
-			created[0] = draft.createPath(path, from, Math.max(from, to - 1)) > 0;
+			created[0] = draft.createPath(path.parent()) > 0;
 			change.accept(draft);
 		});
 		return created[0];
@@ -668,7 +667,7 @@ public class CoviaAdapter extends AAdapter {
 		Position target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		boolean[] existed = {false};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target,
-			draft -> existed[0] = draft.write(target.path(), target.from(), target.to(), value));
+			draft -> existed[0] = draft.write(target.path(), value));
 		return withPathCreated(Maps.of(Fields.EXISTED, CVMBool.of(existed[0])), created);
 	}
 
@@ -685,7 +684,7 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		Position target = resolvePathTarget(ctx, path, Capability.CRUD_WRITE);
 		changeCreatingLevels(ctx, capResource(input), target,
-			draft -> draft.update(target.path(), target.from(), target.to(), change));
+			draft -> draft.update(target.path(), change));
 	}
 
 	/**
@@ -758,9 +757,9 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
 		Position target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
 		if (target == null) return Maps.of(Fields.DELETED, CVMBool.FALSE);
-		AString[] path = target.path();
-		if (target.component() instanceof SecretStore secrets && target.to() - target.from() == 1) {
-			AString name = path[target.from()];
+		CoviaPath path = target.path();
+		if (target.component() instanceof SecretStore secrets && path.length() == 1) {
+			AString name = path.first();
 			boolean deleted = secrets.deleteIfPresent(name);
 			if (deleted) {
 				// The name only, never the value — the same trail as secret:set.
@@ -769,7 +768,7 @@ public class CoviaAdapter extends AAdapter {
 			}
 			return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 		}
-		boolean deleted = target.workspace().delete(path, target.from(), target.to());
+		boolean deleted = target.workspace().delete(path);
 		return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 	}
 
@@ -793,8 +792,8 @@ public class CoviaAdapter extends AAdapter {
 		boolean[] existed = {false};
 		long[] size = {0};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target, draft -> {
-			existed[0] = draft.contains(target.path(), target.from(), target.to());
-			size[0] = draft.append(target.path(), target.from(), target.to(), element);
+			existed[0] = draft.contains(target.path());
+			size[0] = draft.append(target.path(), element);
 		});
 		return withPathCreated(Maps.of(
 			Fields.EXISTED, CVMBool.of(existed[0]),
@@ -810,12 +809,12 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws InvalidInputException if the path is too short
 	 * @throws NotSupportedException if the path targets a non-writable namespace
 	 */
-	private static void validateWritablePath(AString[] path) {
-		if (path.length < 2) {
+	private static void validateWritablePath(CoviaPath path) {
+		if (path.length() < 2) {
 			throw new InvalidInputException(
 				"Path must include namespace and key, e.g. 'w/my-key'");
 		}
-		String namespace = path[0].toString();
+		String namespace = path.first().toString();
 		if (!WRITABLE_NAMESPACES.contains(namespace)) {
 			throw new NotSupportedException(
 				"Namespace '" + namespace + "' is not writable (framework-managed). "
@@ -837,12 +836,12 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * @throws RuntimeException if the caller lacks write access
 	 */
-	private void requireWriteAccess(RequestContext ctx, AString[] path) {
-		if (path.length > 0) {
-			NamespaceResolver resolver = resolvers.get(path[0].toString());
+	private void requireWriteAccess(RequestContext ctx, CoviaPath path) {
+		if (!path.isEmpty()) {
+			NamespaceResolver resolver = resolvers.get(path.first().toString());
 			if (resolver != null) {
 				if (!resolver.canWrite(ctx)) {
-					throw new AuthException("Write permission denied for namespace: " + path[0]);
+					throw new AuthException("Write permission denied for namespace: " + path.first());
 				}
 				return;
 			}
@@ -866,10 +865,10 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * @throws RuntimeException if the caller lacks delete access
 	 */
-	private void requireDeleteAccess(RequestContext ctx, AString[] path) {
-		if (path.length > 0 && NS_SECRETS.equals(path[0].toString())
+	private void requireDeleteAccess(RequestContext ctx, CoviaPath path) {
+		if (!path.isEmpty() && NS_SECRETS.equals(path.first().toString())
 				&& resolvers.get(NS_SECRETS) == null) {
-			if (path.length != 2) {
+			if (path.length() != 2) {
 				throw new InvalidInputException(
 					"Secret deletion must address a whole record, e.g. 's/MY_KEY'");
 			}
@@ -961,12 +960,12 @@ public class CoviaAdapter extends AAdapter {
 
 	/** One projected field = a read at the child's subpath, single-read semantics. */
 	private static ACell projectField(ACell child, AString field, ACell input) {
-		AString[] fieldPath = ValuePath.parse(field.toString());
-		ACell fv = (fieldPath.length == 0) ? child : ValuePath.get(child, fieldPath, 0);
+		CoviaPath fieldPath = CoviaPath.parse(field.toString());
+		ACell fv = ValuePath.get(child, fieldPath);
 		if (fv == null) {
 			// A stored null is present; an absent subpath is exists:false —
 			// decided by key presence, exactly as covia:read decides it.
-			boolean present = (fieldPath.length == 0) || ValuePath.contains(child, fieldPath, 0);
+			boolean present = fieldPath.isEmpty() || ValuePath.contains(child, fieldPath);
 			return result(null, present);
 		}
 		return sizeGuardedResult(fv, input);
@@ -1079,10 +1078,10 @@ public class CoviaAdapter extends AAdapter {
 
 		// Partition by the named field (which may be a relative path resolved by
 		// get into each entry). Σ(group counts) == count by construction.
-		AString[] fieldPath = ValuePath.parse(groupBy.toString());
+		CoviaPath fieldPath = CoviaPath.parse(groupBy.toString());
 		AMap<AString, ACell> groups = Maps.empty();
 		for (ACell entry : level) {
-			ACell fieldVal = (fieldPath.length == 0) ? entry : ValuePath.get(entry, fieldPath, 0);
+			ACell fieldVal = ValuePath.get(entry, fieldPath);
 			AString key = groupKey(fieldVal);
 			ACell existing = groups.get(key);
 			long g = (existing == null) ? 0 : ((CVMLong) RT.getIn(existing, K_COUNT)).longValue();
@@ -1234,7 +1233,7 @@ public class CoviaAdapter extends AAdapter {
 		if (raw != null && raw.startsWith(SLASH)) raw = raw.slice(1);
 		var didTarget = raw != null && raw.toString().startsWith("did:")
 			? engine.resolveUserPath(ctx, raw, false) : null;
-		AString[] segments = didTarget == null ? ValuePath.of(path) : didTarget.path();
+		CoviaPath segments = didTarget == null ? CoviaPath.of(path) : didTarget.path();
 		if (didTarget != null && isExtensionPath(segments)) {
 			return ExtensionNamespaceResolver.resolveForUser(ctx, this, didTarget.ownerDID(), segments, ability);
 		}
@@ -1249,7 +1248,7 @@ public class CoviaAdapter extends AAdapter {
 			// (RequestContext.grantsDenial), or an agent would be granted w/foo in one
 			// namespace and read it from another.
 			User user = write ? ensureUser(ctx) : engine.getVenueState().users().get(ctx.getUserDID());
-			return (user == null) ? null : user.resolve(segments, 0);
+			return (user == null) ? null : user.resolve(segments);
 		}
 		if (write && didTarget.user() == null) {
 			// Another user's record is an entry of the venue's users, which no grant
@@ -1261,7 +1260,7 @@ public class CoviaAdapter extends AAdapter {
 			didTarget = engine.resolveUserPath(ctx, raw, true);
 		}
 		User user = didTarget.user();
-		return (user == null) ? null : user.resolve(segments, 0);
+		return (user == null) ? null : user.resolve(segments);
 	}
 
 
@@ -1271,13 +1270,13 @@ public class CoviaAdapter extends AAdapter {
 	 * @return For virtual namespaces: where the path ends.
 	 *         For physical namespaces: null (caller uses standard user flow).
 	 */
-	public Position resolveVirtual(RequestContext ctx, AString[] path) {
+	public Position resolveVirtual(RequestContext ctx, CoviaPath path) {
 		return resolveVirtual(ctx, path, Capability.CRUD_READ);
 	}
 
-	public Position resolveVirtual(RequestContext ctx, AString[] path, AString ability) {
-		if (path.length > 0) {
-			NamespaceResolver resolver = resolvers.get(path[0].toString());
+	public Position resolveVirtual(RequestContext ctx, CoviaPath path, AString ability) {
+		if (!path.isEmpty()) {
+			NamespaceResolver resolver = resolvers.get(path.first().toString());
 			if (resolver != null) {
 				return resolver.resolve(ctx, this, path, ability);
 			}
@@ -1296,8 +1295,8 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	public ACell readVirtualNamespace(RequestContext ctx, AString path) {
 		if (path == null) return null;
-		AString[] segments = ValuePath.parse(path.toString());
-		if (segments.length == 0) return null;
+		CoviaPath segments = CoviaPath.parse(path.toString());
+		if (segments.isEmpty()) return null;
 
 		Position virtual = resolveVirtual(ctx, segments);
 		return (virtual == null) ? null : virtual.read();
@@ -1307,20 +1306,20 @@ public class CoviaAdapter extends AAdapter {
 	 * Checks whether a parsed path targets a writable namespace — either a
 	 * physical writable namespace or a writable virtual namespace resolver.
 	 */
-	boolean isWritableNamespace(AString[] path) {
-		if (path.length < 2) return false;
-		String ns = path[0].toString();
+	boolean isWritableNamespace(CoviaPath path) {
+		if (path.length() < 2) return false;
+		String ns = path.first().toString();
 		if (WRITABLE_NAMESPACES.contains(ns)) return true;
 		NamespaceResolver resolver = resolvers.get(ns);
 		return resolver != null && resolver.isWritable();
 	}
 
-	public static boolean isExtensionPath(AString[] path) {
-		return path.length > 0 && Namespace.X.equals(path[0]);
+	public static boolean isExtensionPath(CoviaPath path) {
+		return !path.isEmpty() && Namespace.X.equals(path.first());
 	}
 
 	/** DID-qualified extension reads share the same view and authority checks as bare x paths. */
-	public ACell readExtensionNamespace(RequestContext ctx, AString owner, AString[] path) {
+	public ACell readExtensionNamespace(RequestContext ctx, AString owner, CoviaPath path) {
 		return ExtensionNamespaceResolver.resolveForUser(ctx, this, owner, path, Capability.CRUD_READ).read();
 	}
 

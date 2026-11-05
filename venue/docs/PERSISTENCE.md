@@ -160,7 +160,7 @@ agent.transact(draft -> {
 venue.transact(draft -> {
     var user = draft.users().ensure(did);
     user.ensureAgent("assistant", config, null);
-    user.workspace().write(ValuePath.parse("ready"), 0, CVMBool.TRUE);
+    user.workspace().write(CoviaPath.parse("ready"), CVMBool.TRUE);
 });
 ```
 
@@ -372,7 +372,6 @@ This has structural problems on at least four axes:
 
 | Component | Replaces | Mutations |
 |---|---|---|
-| `UserWorkspace` (returned by `User.workspace()`) | `CoviaAdapter` direct cursor writes for `w/` and `o/` namespaces | `write(path, value)`, `delete(path)`, `append(path, element)`, `slice(path, from, to)` |
 | `UserDLFS` (returned by `User.dlfs()`) | `DLFSAdapter` direct `driveCursor.set(null)` and ad-hoc cursor navigation | `createDrive`, `deleteDrive`, `listDrives`; file ops delegate to `DLFSLocal` |
 
 `JobTemp` is no longer needed: the `t/` namespace resolves to the Job record's

@@ -16,12 +16,12 @@ import covia.venue.RequestContext;
 public class AgentNamespaceResolver implements NamespaceResolver {
 
 	@Override
-	public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
 		AString agentId = ctx.getAgentId();
 		if (agentId == null) {
 			throw new WrongScopeException("Cannot use 'n/' prefix outside agent scope");
 		}
-		return adapter.ensureUser(ctx).agentAt(agentId).workspace().resolve(path, 1);
+		return adapter.ensureUser(ctx).agentAt(agentId).workspace().resolve(path.rest());
 	}
 
 	@Override

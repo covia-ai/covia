@@ -13,7 +13,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.adapter.messaging.ConversationSessions;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 import covia.lattice.Workspace;
 import covia.venue.CoviaApplication;
 import covia.venue.Engine;
@@ -47,15 +47,15 @@ class WhatsAppMigrationTest {
 			// 0.9.11 kept adapter state in the venue user's workspace.
 			User host = engine.getVenueState().users().get(engine.getDIDString());
 			Workspace workspace = host.workspace();
-			AString[] legacy = ValuePath.parse("adapters/whatsapp");
-			workspace.createPath(ValuePath.parse("adapters"), 0);
-			workspace.write(legacy, 0, STATES.get(0));
+			CoviaPath legacy = CoviaPath.parse("adapters/whatsapp");
+			workspace.createPath(legacy.parent());
+			workspace.write(legacy, STATES.get(0));
 			engine.getVenueState().users().ensure(OWNER);
 
 			WhatsAppAdapter adapter = new WhatsAppAdapter();
 			engine.registerAdapter(adapter);
 			assertEquals(STATES.get(STATES.size() - 1), adapter.state().get(), "moved exactly, and current");
-			assertNull(workspace.read(legacy, 0));
+			assertNull(workspace.read(legacy));
 
 			// Read back through the adapter's own paths.
 			assertEquals(SETTINGS, adapter.state().read(adapter.userStatePath(OWNER, "bots/support")));

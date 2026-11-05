@@ -28,7 +28,7 @@ import covia.venue.RequestContext;
 public class TempNamespaceResolver implements NamespaceResolver {
 
 	@Override
-	public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
 		Blob jobId = ctx.getJobId();
@@ -46,7 +46,7 @@ public class TempNamespaceResolver implements NamespaceResolver {
 				"Cannot use 't/' prefix outside job or task scope (requires agentId+taskId or jobId on RequestContext)");
 		}
 
-		return adapter.ensureUser(ctx).jobs().scratch(scopedJobId).resolve(path, 1);
+		return adapter.ensureUser(ctx).jobs().scratch(scopedJobId).resolve(path.rest());
 	}
 
 	@Override

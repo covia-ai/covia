@@ -26,14 +26,14 @@ import covia.venue.RequestContext;
 public class SessionNamespaceResolver implements NamespaceResolver {
 
 	@Override
-	public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
 		AString agentId = ctx.getAgentId();
 		Blob sessionId = ctx.getSessionId();
 		if (agentId == null || sessionId == null) {
 			throw new WrongScopeException(
 				"Cannot use 'c/' prefix outside session scope (requires agentId and sessionId on RequestContext)");
 		}
-		return adapter.ensureUser(ctx).agentAt(agentId).session(sessionId).workspace().resolve(path, 1);
+		return adapter.ensureUser(ctx).agentAt(agentId).session(sessionId).workspace().resolve(path.rest());
 	}
 
 	@Override

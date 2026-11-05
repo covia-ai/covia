@@ -27,8 +27,8 @@ public class WorkspaceTest {
 
 	private static final AString AREA = Strings.intern("temp");
 
-	private static AString[] path(String path) {
-		return ValuePath.parse(path);
+	private static CoviaPath path(String path) {
+		return CoviaPath.parse(path);
 	}
 
 	private static Workspace empty() {
@@ -38,88 +38,88 @@ public class WorkspaceTest {
 	@Test
 	public void testWriteCreatesTheRootThenReplaces() {
 		Workspace area = empty();
-		assertFalse(area.write(path("a"), 0, CVMLong.ONE), "the first write creates the absent root");
-		assertEquals(Maps.of("a", CVMLong.ONE), area.read(path(""), 0));
-		assertTrue(area.write(path("a"), 0, CVMLong.create(2)));
-		assertEquals(CVMLong.create(2), area.read(path("a"), 0));
+		assertFalse(area.write(path("a"), CVMLong.ONE), "the first write creates the absent root");
+		assertEquals(Maps.of("a", CVMLong.ONE), area.read(CoviaPath.EMPTY));
+		assertTrue(area.write(path("a"), CVMLong.create(2)));
+		assertEquals(CVMLong.create(2), area.read(path("a")));
 	}
 
 	@Test
 	public void testChangesBelowAMissingLevelAreRefused() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.empty()));
-		ACell before = area.read(path(""), 0);
+		ACell before = area.read();
 		String missing = String.format(ValuePath.NO_LEVEL, "/a");
 
 		assertEquals(missing, assertThrows(NotFoundException.class,
-			() -> area.write(path("a/b"), 0, CVMLong.ONE)).getMessage());
+			() -> area.write(path("a/b"), CVMLong.ONE)).getMessage());
 		assertEquals(missing, assertThrows(NotFoundException.class,
-			() -> area.append(path("a/b"), 0, CVMLong.ONE)).getMessage());
+			() -> area.append(path("a/b"), CVMLong.ONE)).getMessage());
 		assertEquals(missing, assertThrows(NotFoundException.class,
-			() -> area.update(path("a/b"), 0, value -> CVMLong.ONE)).getMessage());
-		assertSame(before, area.read(path(""), 0), "a refused change writes nothing");
+			() -> area.update(path("a/b"), value -> CVMLong.ONE)).getMessage());
+		assertSame(before, area.read(), "a refused change writes nothing");
 	}
 
 	@Test
 	public void testCreatePathMakesOnlyTheMissingLevels() {
 		Workspace area = empty();
-		assertEquals(2, area.createPath(path("a/b"), 0));
-		assertEquals(Maps.of("a", Maps.of("b", Maps.empty())), area.read(path(""), 0));
-		area.write(path("a/b/c"), 0, CVMLong.ONE);
+		assertEquals(2, area.createPath(path("a/b")));
+		assertEquals(Maps.of("a", Maps.of("b", Maps.empty())), area.read());
+		area.write(path("a/b/c"), CVMLong.ONE);
 
-		assertEquals(1, area.createPath(path("a/x"), 0));
-		assertEquals(0, area.createPath(path("a/b"), 0));
-		assertEquals(CVMLong.ONE, area.read(path("a/b/c"), 0), "existing levels keep their values");
+		assertEquals(1, area.createPath(path("a/x")));
+		assertEquals(0, area.createPath(path("a/b")));
+		assertEquals(CVMLong.ONE, area.read(path("a/b/c")), "existing levels keep their values");
 	}
 
 	@Test
 	public void testCreatePathRefusesALevelThatIsNotAContainer() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("n", CVMLong.ONE,
 			"list", Vectors.of(CVMLong.ONE))));
-		ACell before = area.read(path(""), 0);
+		ACell before = area.read();
 
 		assertEquals(String.format(ValuePath.NOT_A_MAP, "x", "/n"), assertThrows(InvalidInputException.class,
-			() -> area.createPath(path("n/x"), 0)).getMessage());
+			() -> area.createPath(path("n/x"))).getMessage());
 		assertEquals(String.format(ValuePath.INDEX_OUT_OF_RANGE, "/list", 3L, 1L),
-			assertThrows(InvalidInputException.class, () -> area.createPath(path("list/3"), 0)).getMessage());
+			assertThrows(InvalidInputException.class, () -> area.createPath(path("list/3"))).getMessage());
 		assertEquals(String.format(ValuePath.NOT_AN_INDEX, "/list", 1L, "x"),
-			assertThrows(InvalidInputException.class, () -> area.createPath(path("list/x"), 0)).getMessage());
-		assertSame(before, area.read(path(""), 0));
+			assertThrows(InvalidInputException.class, () -> area.createPath(path("list/x"))).getMessage());
+		assertSame(before, area.read());
 	}
 
 	@Test
 	public void testListsAreAppendedAndIndexed() {
 		Workspace area = empty();
-		assertEquals(1, area.append(path("list"), 0, CVMLong.ONE));
-		assertEquals(2, area.append(path("list"), 0, CVMLong.create(2)));
-		assertTrue(area.write(path("list/0"), 0, CVMLong.create(10)));
-		assertEquals(Vectors.of(CVMLong.create(10), CVMLong.create(2)), area.read(path("list"), 0));
+		assertEquals(1, area.append(path("list"), CVMLong.ONE));
+		assertEquals(2, area.append(path("list"), CVMLong.create(2)));
+		assertTrue(area.write(path("list/0"), CVMLong.create(10)));
+		assertEquals(Vectors.of(CVMLong.create(10), CVMLong.create(2)), area.read(path("list")));
 
-		assertThrows(InvalidInputException.class, () -> area.write(path("list/2"), 0, CVMLong.ONE));
-		area.write(path("n"), 0, CVMLong.ONE);
+		assertThrows(InvalidInputException.class, () -> area.write(path("list/2"), CVMLong.ONE));
+		area.write(path("n"), CVMLong.ONE);
 		assertEquals(String.format(ValuePath.NOT_A_LIST, CVMLong.ONE.getType()),
-			assertThrows(InvalidInputException.class, () -> area.append(path("n"), 0, CVMLong.ONE)).getMessage());
+			assertThrows(InvalidInputException.class, () -> area.append(path("n"), CVMLong.ONE)).getMessage());
 	}
 
 	@Test
 	public void testAStoredNullIsPresentUntilDeleted() {
 		Workspace area = empty();
-		area.write(path("a"), 0, null);
-		assertTrue(area.contains(path("a"), 0));
-		assertNull(area.read(path("a"), 0));
+		area.write(path("a"), null);
+		assertTrue(area.contains(path("a")));
+		assertNull(area.read(path("a")));
 
-		assertTrue(area.delete(path("a"), 0));
-		assertFalse(area.contains(path("a"), 0));
-		ACell before = area.read(path(""), 0);
-		assertFalse(area.delete(path("a"), 0));
-		assertSame(before, area.read(path(""), 0), "deleting an absent value writes nothing");
+		assertTrue(area.delete(path("a")));
+		assertFalse(area.contains(path("a")));
+		ACell before = area.read();
+		assertFalse(area.delete(path("a")));
+		assertSame(before, area.read(), "deleting an absent value writes nothing");
 	}
 
 	@Test
 	public void testUpdateAppliesItsChangeAtThePath() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("count", CVMLong.ONE)));
-		assertEquals(CVMLong.create(2), area.update(path("count"), 0,
+		assertEquals(CVMLong.create(2), area.update(path("count"),
 			value -> CVMLong.create(((CVMLong) value).longValue() + 1)));
-		assertEquals(CVMLong.create(2), area.read(path("count"), 0));
+		assertEquals(CVMLong.create(2), area.read(path("count")));
 	}
 
 	@Test
@@ -128,19 +128,19 @@ public class WorkspaceTest {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of(
 			"list", Vectors.of(CVMLong.ONE, CVMLong.create(2)),
 			"index", Index.of(id, Strings.create("found")))));
-		assertEquals(CVMLong.create(2), area.read(path("list/1"), 0));
-		assertEquals(Strings.create("found"), area.read(path("index/0a0b"), 0));
-		assertNull(area.read(path("list/9"), 0));
+		assertEquals(CVMLong.create(2), area.read(path("list/1")));
+		assertEquals(Strings.create("found"), area.read(path("index/0a0b")));
+		assertNull(area.read(path("list/9")));
 	}
 
 	@Test
-	public void testKeysBeforeFromNameTheAreaInRefusals() {
+	public void testTheSegmentsAboveTheAreaNameItInRefusals() {
 		Workspace area = empty();
 		String missing = String.format(ValuePath.NO_LEVEL, "/w/a");
 		assertEquals(missing, assertThrows(NotFoundException.class,
-			() -> area.write(path("w/a/b"), 1, CVMLong.ONE)).getMessage());
-		area.write(path("w/a"), 1, CVMLong.ONE);
-		assertEquals(Maps.of("a", CVMLong.ONE), area.read(path("w"), 1));
+			() -> area.write(path("w/a/b").rest(), CVMLong.ONE)).getMessage());
+		area.write(path("w/a").rest(), CVMLong.ONE);
+		assertEquals(Maps.of("a", CVMLong.ONE), area.read(path("w").rest()));
 	}
 
 	@Test
@@ -149,15 +149,15 @@ public class WorkspaceTest {
 		Workspace area = Workspace.inRecord(record, AREA);
 		String missing = String.format(Workspace.NO_RECORD, AREA);
 
-		assertNull(area.read(path("x"), 0));
+		assertNull(area.read(path("x")));
 		assertEquals(missing, assertThrows(InvalidInputException.class,
-			() -> area.write(path("x"), 0, CVMLong.ONE)).getMessage());
+			() -> area.write(path("x"), CVMLong.ONE)).getMessage());
 		assertEquals(missing, assertThrows(InvalidInputException.class,
-			() -> area.transact(draft -> draft.write(path("x"), 0, CVMLong.ONE))).getMessage());
+			() -> area.transact(draft -> draft.write(path("x"), CVMLong.ONE))).getMessage());
 		assertNull(record.get(), "a refused change never creates the record");
 
 		record.set(Maps.of("status", "STARTED"));
-		area.write(path("x"), 0, CVMLong.ONE);
+		area.write(path("x"), CVMLong.ONE);
 		assertEquals(Maps.of("status", "STARTED", AREA, Maps.of("x", CVMLong.ONE)), record.get());
 	}
 
@@ -165,57 +165,58 @@ public class WorkspaceTest {
 	public void testOnlyAWorkspaceIsChangedByPath() {
 		var cursor = Cursors.<ACell>root(Maps.of("list", Vectors.of(CVMLong.ONE, CVMLong.create(2))));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		Position position = component.resolve(path("list/1"), 0);
+		Position position = component.resolve(path("list/1"));
 		assertSame(component, position.component());
 		assertEquals(CVMLong.create(2), position.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, position::workspace).getMessage());
 
 		Workspace area = new Workspace(cursor);
-		assertSame(area, area.resolve(path("list/1"), 0).workspace());
+		assertSame(area, area.resolve(path("list/1")).workspace());
 	}
 
 	@Test
-	public void testOnlyTheRangeOfTheKeysIsUsed() {
-		AString[] keys = path("x/a/b/c");   // the area's own segments are a/b; x and c lie outside the range
+	public void testOnlyTheStretchOfThePathIsUsed() {
+		// The area's own segments are a/b; x and c lie outside the stretch
+		CoviaPath whole = path("x/a/b/c");
+		CoviaPath own = whole.rest().prefix(2);
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("a", Maps.empty())));
 
-		assertFalse(area.write(keys, 1, 3, CVMLong.ONE));
-		assertEquals(Maps.of("a", Maps.of("b", CVMLong.ONE)), area.read(path(""), 0));
-		assertEquals(CVMLong.ONE, area.read(keys, 1, 3));
-		assertTrue(area.contains(keys, 1, 3));
-		assertFalse(area.contains(keys, 1, 4));
-		assertEquals(1, ValuePath.missingLevels(area.read(), keys, 1, 4));
-		assertEquals("/a/b", ValuePath.format(keys, 1, 3));
+		assertFalse(area.write(own, CVMLong.ONE));
+		assertEquals(Maps.of("a", Maps.of("b", CVMLong.ONE)), area.read());
+		assertEquals(CVMLong.ONE, area.read(own));
+		assertTrue(area.contains(own));
+		assertFalse(area.contains(whole.rest()));
+		assertEquals(1, ValuePath.missingLevels(area.read(), whole.rest()));
 
-		assertEquals(1, area.createPath(path("x/a/d/e"), 1, 3), "only levels inside the range are created");
-		assertEquals(Maps.of("b", CVMLong.ONE, "d", Maps.empty()), area.read(path("a"), 0));
+		assertEquals(1, area.createPath(path("x/a/d/e").rest().prefix(2)), "only levels inside the stretch are created");
+		assertEquals(Maps.of("b", CVMLong.ONE, "d", Maps.empty()), area.read(path("a")));
 
-		assertTrue(area.delete(keys, 1, 3));
-		assertEquals(Maps.of("d", Maps.empty()), area.read(path("a"), 0));
+		assertTrue(area.delete(own));
+		assertEquals(Maps.of("d", Maps.empty()), area.read(path("a")));
 	}
 
 	@Test
-	public void testARefusalInARangeNamesThePathAsWritten() {
+	public void testARefusalInAStretchNamesThePathAsWritten() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.empty()));
 		assertEquals(String.format(ValuePath.NO_LEVEL, "/x/a"), assertThrows(NotFoundException.class,
-			() -> area.write(path("x/a/b/c"), 1, 3, CVMLong.ONE)).getMessage());
+			() -> area.write(path("x/a/b/c").rest().prefix(2), CVMLong.ONE)).getMessage());
 	}
 
 	@Test
-	public void testAPositionCoversItsRange() {
+	public void testAPositionIsWhereItsStretchEnds() {
 		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE)));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		AString[] keys = path("a/b");
+		CoviaPath path = path("a/b");
 
-		Position whole = component.resolve(keys, 0);
-		assertEquals(keys.length, whole.to());
+		Position whole = component.resolve(path);
+		assertEquals(path, whole.path());
 		assertEquals(CVMLong.ONE, whole.read());
 
-		Position parent = component.resolve(keys, 0, 1);
+		Position parent = component.resolve(path.parent());
 		assertEquals(Maps.of("b", CVMLong.ONE), parent.read());
 		assertTrue(parent.contains());
-		assertThrows(IndexOutOfBoundsException.class, () -> new Position(component, keys, 1, 3));
+		assertEquals("/a", parent.path().toString());
 	}
 
 	@Test
@@ -225,16 +226,16 @@ public class WorkspaceTest {
 		ACell before = root.get();
 
 		assertThrows(IllegalStateException.class, () -> area.transact(draft -> {
-			draft.createPath(path("a/b"), 0);
-			draft.write(path("a/b/c"), 0, CVMLong.ONE);
+			draft.createPath(path("a/b"));
+			draft.write(path("a/b/c"), CVMLong.ONE);
 			throw new IllegalStateException("rollback");
 		}));
 		assertSame(before, root.get(), "a failed transaction changes nothing");
 
 		area.transact(draft -> {
-			assertEquals(2, draft.createPath(path("a/b"), 0));
-			draft.write(path("a/b/c"), 0, CVMLong.ONE);
+			assertEquals(2, draft.createPath(path("a/b")));
+			draft.write(path("a/b/c"), CVMLong.ONE);
 		});
-		assertEquals(CVMLong.ONE, area.read(path("a/b/c"), 0));
+		assertEquals(CVMLong.ONE, area.read(path("a/b/c")));
 	}
 }

@@ -29,7 +29,7 @@ import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
 import covia.adapter.agent.GoalTreeContext;
 import covia.lattice.Covia;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 
 /**
  * The upgrade path in process: every release-written store in
@@ -97,7 +97,7 @@ class VenueUpgradeIT {
 
 				// The release's private test adapter value moved, exactly, in the start-up transaction.
 				User host = venue.users().get(engine.getDIDString());
-				assertNull(host.readInternalPath(ValuePath.parse("w/adapters/test")));
+				assertNull(host.readInternalPath(CoviaPath.parse("w/adapters/test")));
 				AVector<ACell> users = RT.ensureVector(manifest.get(Strings.create("users")));
 				String alice = text(users.get(0), "did");
 				assertEquals(Maps.of("origin", text(manifest, "coviaVersion")),
@@ -127,7 +127,7 @@ class VenueUpgradeIT {
 		AString did = Strings.create(text(entry, "did"));
 		RequestContext ctx = RequestContext.of(did);
 		User user = engine.getVenueState().users().get(did);
-		assertEquals(Strings.create(name), RT.getIn(user.readInternalPath(ValuePath.parse("w/profile")), "name"));
+		assertEquals(Strings.create(name), RT.getIn(user.readInternalPath(CoviaPath.parse("w/profile")), "name"));
 
 		// A job written with its prev chain reads as its current state.
 		AMap<AString, ACell> job = engine.jobs().getJobData(Blob.fromHex(text(entry, "jobId")), ctx);

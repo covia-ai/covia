@@ -39,7 +39,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 
 /** Export, import and clone of a user's whole stored state, through the user operations. */
 class UserExportsTest {
@@ -69,8 +69,8 @@ class UserExportsTest {
 		Users users = engine.getVenueState().users();
 		users.create(did);
 		User user = users.ensure(did);
-		user.writeInternalPath(ValuePath.parse("w/notes/today"), Strings.create("buy milk"));
-		user.writeInternalPath(ValuePath.parse("o/greet"), Maps.of("adapter", "test:echo"));
+		user.writeInternalPath(CoviaPath.parse("w/notes/today"), Strings.create("buy milk"));
+		user.writeInternalPath(CoviaPath.parse("o/greet"), Maps.of("adapter", "test:echo"));
 		user.inbox().put(Strings.create("req-1"), Maps.of(Fields.STATUS, "OPEN"));
 		user.assets().store(Strings.create("{\"name\":\"note\"}"), Strings.create("asset content"));
 		user.secrets().store("API_KEY", SECRET, KEYS);
@@ -139,7 +139,7 @@ class UserExportsTest {
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
 		Users users = engine.getVenueState().users();
 		users.create(target);
-		users.ensure(target).writeInternalPath(ValuePath.parse("w/old"), Strings.create("gone"));
+		users.ensure(target).writeInternalPath(CoviaPath.parse("w/old"), Strings.create("gone"));
 		User old = users.get(target);
 		engine.deleteUser(venue, target);
 		assertEquals(CVMBool.TRUE, RT.getIn(run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue), Fields.CREATED));
@@ -196,7 +196,7 @@ class UserExportsTest {
 		fill(source);
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
 		Users users = engine.getVenueState().users();
-		users.ensure(target).writeInternalPath(ValuePath.parse("w/x"), Strings.create("y"));
+		users.ensure(target).writeInternalPath(CoviaPath.parse("w/x"), Strings.create("y"));
 		assertEquals(Users.NOT_EMPTY, failure(start("import", Maps.of(Fields.DID, target, EXPORT, blob), venue)));
 
 		AString registered = Strings.create(source + "-registered");

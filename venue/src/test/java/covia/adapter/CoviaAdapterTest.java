@@ -23,6 +23,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
+import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
@@ -132,8 +133,8 @@ public class CoviaAdapterTest {
 		// array path names the place its segments joined with '/' name.
 		Map<AVector<ACell>, String> refused = Map.of(
 			Vectors.of("w", "items", CVMLong.ONE),
-				String.format(ValuePath.SEGMENT_NOT_STRING, 2, CVMLong.ONE.getType()),
-			Vectors.of("w", "items/0"), String.format(ValuePath.SEGMENT_HAS_SLASH, 1));
+				String.format(CoviaPath.SEGMENT_NOT_STRING, 2, CVMLong.ONE.getType()),
+			Vectors.of("w", "items/0"), String.format(CoviaPath.SEGMENT_HAS_SLASH, 1));
 		refused.forEach((path, refusal) -> {
 			for (String op : new String[] {"read", "write"}) {
 				Job job = engine.jobs().invokeOperation("v/ops/covia/" + op,
@@ -142,11 +143,8 @@ public class CoviaAdapterTest {
 				assertEquals(refusal, job.getErrorMessage(), op);
 			}
 		});
-		assertNull(engine.getVenueState().users().get(ALICE_DID).workspace().read(ValuePath.parse("items"), 0),
+		assertNull(engine.getVenueState().users().get(ALICE_DID).workspace().read(CoviaPath.parse("items")),
 			"a refused path writes nothing");
-
-		AString[] path = ValuePath.of(Vectors.of("g", "my-agent", "", "timeline", "3"));
-		assertArrayEquals(path, ValuePath.parse(ValuePath.format(path)));
 	}
 
 	@Test
@@ -1503,8 +1501,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeletePreservesSiblings() {
 		ACell root = Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2));
-		AString[] keys = ValuePath.parse("w/entry/x");
-		ACell result = ValuePath.remove(root, keys, 2);
+		ACell result = ValuePath.remove(root, CoviaPath.parse("w/entry/x").rest(2));
 
 		// y should remain, x should be gone
 		assertNotNull(result);
@@ -1515,9 +1512,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeleteMissingBranchIsExactNoOp() {
 		ACell root = Maps.of("present", Maps.of("value", CVMLong.ONE));
-		AString[] keys = ValuePath.parse("w/missing/leaf");
-
-		ACell result = ValuePath.remove(root, keys, 1);
+		ACell result = ValuePath.remove(root, CoviaPath.parse("w/missing/leaf").rest());
 
 		assertSame(root, result, "delete must not materialise a missing branch as null");
 	}
@@ -1978,26 +1973,6 @@ public class CoviaAdapterTest {
 		Job sliceJob = engine.jobs().invokeOperation("v/ops/covia/slice",
 			Maps.of(Fields.PATH, "w/num"), ALICE);
 		assertThrows(Exception.class, () -> sliceJob.awaitResult(5000));
-	}
-
-	// ========== Path parsing ==========
-
-	@Test
-	public void testParseStringPath() {
-		AString[] path = ValuePath.parse("g/my-agent/timeline/3");
-		assertEquals(4, path.length);
-		assertEquals(Strings.create("g"), path[0]);
-		assertEquals(Strings.create("my-agent"), path[1]);
-		assertEquals(Strings.create("timeline"), path[2]);
-		// Every segment is a string; the component it reaches decides what it means
-		assertEquals(Strings.create("3"), path[3]);
-	}
-
-	@Test
-	public void testParseEmptyPath() {
-		assertEquals(0, ValuePath.parse("").length);
-		assertEquals(0, ValuePath.parse(null).length);
-		assertEquals(0, ValuePath.parse("/").length);
 	}
 
 	// ========== Agent workspace (n/ prefix) ==========
@@ -2770,10 +2745,10 @@ public class CoviaAdapterTest {
 		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, ValuePath.parse("c/draft"));
+		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("c/draft"));
 		assertNull(target.read());
 		var refused = assertThrows(InvalidInputException.class,
-			() -> target.workspace().write(target.path(), target.from(), CVMLong.ONE));
+			() -> target.workspace().write(target.path(), CVMLong.ONE));
 		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
 		assertNull(engine.getVenueState().users().get(ALICE_DID).agent(agentId).getSession(sessionId),
 			"scoped scratch must never mint a phantom session");
@@ -2785,8 +2760,8 @@ public class CoviaAdapterTest {
 		RequestContext ctx = ALICE.withAgentId(agentId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, ValuePath.parse("n/draft"));
-		target.workspace().write(target.path(), target.from(), Strings.create("note"));
+		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("n/draft"));
+		target.workspace().write(target.path(), Strings.create("note"));
 
 		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().get(ALICE_DID)
 			.agent(agentId).getRecord(), "n", "draft"));
@@ -2816,8 +2791,8 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, ValuePath.parse("t/draft"));
-		target.workspace().write(target.path(), target.from(), Strings.create("task note"));
+		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("t/draft"));
+		target.workspace().write(target.path(), Strings.create("task note"));
 
 		// The scratch must be the FOCUSED TASK's Job record, not the transition Job's.
 		assertEquals(Strings.create("task note"), RT.getIn(user.jobs().getRecord(taskId), Fields.TEMP, "draft"),
@@ -2834,8 +2809,8 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		Position target = covia.resolveVirtual(ctx, ValuePath.parse("t/draft"));
-		target.workspace().write(target.path(), target.from(), Strings.create("job note"));
+		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("t/draft"));
+		target.workspace().write(target.path(), Strings.create("job note"));
 
 		assertEquals(Strings.create("job note"), RT.getIn(user.jobs().getRecord(jobId), Fields.TEMP, "draft"),
 			"t/ must resolve to the current Job record");

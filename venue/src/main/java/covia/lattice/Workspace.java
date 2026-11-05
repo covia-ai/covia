@@ -17,11 +17,11 @@ import covia.exception.InvalidInputException;
  * {@code temp}. Its owner binds the cursor at the area's root, with the owner's
  * stamping, and decides whether the root may be created.
  *
- * <p>Operations take the caller's path and the range of it that is the area's
- * own, {@code path[from, to)}, read each segment by the value it meets
- * ({@link ValuePath}), and change the area in one atomic update. An absent root
- * counts as empty. No operation but {@link #createPath} creates a level: a
- * change below a level that does not exist is refused.</p>
+ * <p>Operations take the stretch of the caller's path that is the area's own,
+ * read each segment by the value it meets ({@link ValuePath}), and change the
+ * area in one atomic update. An absent root counts as empty. No operation but
+ * {@link #createPath} creates a level: a change below a level that does not
+ * exist is refused.</p>
  */
 public final class Workspace extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, Workspace> {
@@ -53,103 +53,77 @@ public final class Workspace extends ACoviaComponent<ACell>
 		return new Workspace(draft);
 	}
 
-	/** {@link #write(AString[], int, int, ACell)} to the end of {@code path}. */
-	public boolean write(AString[] path, int from, ACell value) {
-		return write(path, from, path.length, value);
-	}
-
 	/**
-	 * Puts {@code value} at {@code path[from, to)}.
+	 * Puts {@code value} at {@code path}.
 	 *
 	 * @return Whether a value was there already
 	 */
-	public boolean write(AString[] path, int from, int to, ACell value) {
+	public boolean write(CoviaPath path, ACell value) {
 		boolean[] existed = {false};
 		cursor().updateAndGet(area -> {
-			existed[0] = ValuePath.contains(area, path, from, to);
-			return ValuePath.set(base(area, from, to), path, from, to, value);
+			existed[0] = ValuePath.contains(area, path);
+			return ValuePath.set(base(area, path), path, value);
 		});
 		return existed[0];
 	}
 
-	/** {@link #append(AString[], int, int, ACell)} to the end of {@code path}. */
-	public long append(AString[] path, int from, ACell element) {
-		return append(path, from, path.length, element);
-	}
-
 	/**
-	 * Adds {@code element} to the list at {@code path[from, to)}, starting one
-	 * when nothing is there.
+	 * Adds {@code element} to the list at {@code path}, starting one when
+	 * nothing is there.
 	 *
 	 * @return The list's size afterwards
 	 */
-	public long append(AString[] path, int from, int to, ACell element) {
+	public long append(CoviaPath path, ACell element) {
 		ACell area = cursor().updateAndGet(current ->
-			ValuePath.append(base(current, from, to), path, from, to, element));
-		return ((AVector<?>) ValuePath.get(area, path, from, to)).count();
-	}
-
-	/** {@link #delete(AString[], int, int)} to the end of {@code path}. */
-	public boolean delete(AString[] path, int from) {
-		return delete(path, from, path.length);
+			ValuePath.append(base(current, path), path, element));
+		return ((AVector<?>) ValuePath.get(area, path)).count();
 	}
 
 	/**
-	 * Removes the value at {@code path[from, to)}. Nothing is written when it is
-	 * absent, and the levels above a removed value stay.
+	 * Removes the value at {@code path}. Nothing is written when it is absent,
+	 * and the levels above a removed value stay.
 	 *
 	 * @return Whether a value was removed
 	 */
-	public boolean delete(AString[] path, int from, int to) {
+	public boolean delete(CoviaPath path) {
 		boolean[] removed = {false};
 		cursor().updateAndGet(area -> {
-			removed[0] = ValuePath.contains(area, path, from, to);
-			return removed[0] ? ValuePath.remove(area, path, from, to) : area;
+			removed[0] = ValuePath.contains(area, path);
+			return removed[0] ? ValuePath.remove(area, path) : area;
 		});
 		return removed[0];
 	}
 
-	/** {@link #update(AString[], int, int, UnaryOperator)} to the end of {@code path}. */
-	public ACell update(AString[] path, int from, UnaryOperator<ACell> change) {
-		return update(path, from, path.length, change);
-	}
-
 	/**
-	 * Replaces the value at {@code path[from, to)} with {@code change} applied to
-	 * it, null when absent. {@code change} may run again on a retry, so it must
-	 * be pure.
+	 * Replaces the value at {@code path} with {@code change} applied to it, null
+	 * when absent. {@code change} may run again on a retry, so it must be pure.
 	 *
 	 * @return The new value
 	 */
-	public ACell update(AString[] path, int from, int to, UnaryOperator<ACell> change) {
+	public ACell update(CoviaPath path, UnaryOperator<ACell> change) {
 		ACell area = cursor().updateAndGet(current ->
-			ValuePath.update(base(current, from, to), path, from, to, change));
-		return ValuePath.get(area, path, from, to);
-	}
-
-	/** {@link #createPath(AString[], int, int)} to the end of {@code path}. */
-	public int createPath(AString[] path, int from) {
-		return createPath(path, from, path.length);
+			ValuePath.update(base(current, path), path, change));
+		return ValuePath.get(area, path);
 	}
 
 	/**
-	 * Creates a map at every level of {@code path[from, to)} that holds nothing,
-	 * so that a change below them can follow. Existing levels are kept.
+	 * Creates a map at every level of {@code path} that holds nothing, so that a
+	 * change below them can follow. Existing levels are kept.
 	 *
 	 * @return How many levels were created
 	 */
-	public int createPath(AString[] path, int from, int to) {
+	public int createPath(CoviaPath path) {
 		int[] created = {0};
 		cursor().updateAndGet(area -> {
 			created[0] = 0;
-			return ValuePath.createPath(base(area, from, to), path, from, to, created);
+			return ValuePath.createPath(base(area, path), path, created);
 		});
 		return created[0];
 	}
 
 	/** The area to change below: an absent root counts as an empty map. */
-	private static ACell base(ACell area, int from, int to) {
-		return (area == null && from < to) ? Maps.empty() : area;
+	private static ACell base(ACell area, CoviaPath path) {
+		return (area == null && !path.isEmpty()) ? Maps.empty() : area;
 	}
 
 	/** The area at a key in a record; a change needs the record. */

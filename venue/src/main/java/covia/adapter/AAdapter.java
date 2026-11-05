@@ -27,6 +27,7 @@ import covia.api.Fields;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.AdapterState;
 import covia.venue.RequestContext;
@@ -48,15 +49,15 @@ public abstract class AAdapter {
 	}
 
 	/**
-	 * Additional write/delete policy for a path relative to this adapter's view,
-	 * given as its segments. Ordinary CRUD capabilities are enforced by the router
-	 * as well. Keep this pure: it can run again during an atomic update. Writable
-	 * views must commit to their authoritative lattice state, not to a disposable
-	 * snapshot. Return null to allow, or a refusal reason that reaches the caller
-	 * unchanged. The adapter also owns value validation in its cursor write
-	 * transformation.
+	 * Additional write/delete policy for a path relative to this adapter's view:
+	 * {@code path} is the stretch of the caller's path below the view root.
+	 * Ordinary CRUD capabilities are enforced by the router as well. Keep this
+	 * pure: it can run again during an atomic update. Writable views must commit
+	 * to their authoritative lattice state, not to a disposable snapshot. Return
+	 * null to allow, or a refusal reason that reaches the caller unchanged. The
+	 * adapter also owns value validation in its cursor write transformation.
 	 */
-	public String latticeWriteDenial(RequestContext ctx, AString[] path) {
+	public String latticeWriteDenial(RequestContext ctx, CoviaPath path) {
 		return LATTICE_READ_ONLY;
 	}
 

@@ -87,21 +87,18 @@ These components check no authority: they act for whatever code calls them,
 so the application decides who reaches them.
 
 - **Workspace.** `user.workspace()` is the user's workspace (`w`). Its
-  `read`, `write`, `append`, `update` and `delete` take a path inside the
-  workspace, as string segments from `ValuePath.parse("app/record")`, and the
-  position in it where the path starts, usually 0; each also takes an end
-  position, for a path that is the first part of the segments. A change
-  creates no missing level:
-  `createPath` makes them, and a write below a missing level is refused
-  (`NotFoundException`). When several changes must land together, wrap them
-  in a transaction, which applies all or nothing and is retried on a
+  `read`, `write`, `append`, `update` and `delete` take a `CoviaPath` inside
+  the workspace, such as `CoviaPath.parse("app/record")`. A change creates no
+  missing level: `createPath` makes them, and a write below a missing level is
+  refused (`NotFoundException`). When several changes must land together, wrap
+  them in a transaction, which applies all or nothing and is retried on a
   conflict:
   ```java
   user.transact(draft -> {
       Workspace workspace = draft.workspace();
-      workspace.createPath(ValuePath.parse("app"), 0);
-      workspace.write(ValuePath.parse("app/record"), 0, record);
-      workspace.write(ValuePath.parse("app/stamp"), 0, stamp);
+      workspace.createPath(CoviaPath.parse("app"));
+      workspace.write(CoviaPath.parse("app/record"), record);
+      workspace.write(CoviaPath.parse("app/stamp"), stamp);
   });
   ```
   Keep I/O out of the body: it may run more than once.
@@ -123,7 +120,7 @@ caller can mint a token for itself with `auth:identity-token`. See AUTH.md,
 
 | 0.10.0 | Current |
 |--------|---------|
-| `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `ValuePath.parse` (see User data) |
+| `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `CoviaPath.parse` (see User data) |
 | `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
 
 ## Upgrading from 0.9.x

@@ -27,7 +27,7 @@ import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.adapter.agent.ContextLoader;
 import covia.exception.AuthException;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 import covia.lattice.Workspace;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -57,8 +57,8 @@ class ExtensionRouteTest {
 			return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
 				.path(Strings.create("accounts")).withDefault(Maps.empty()).path(ctx.getUserDID());
 		}
-		@Override public String latticeWriteDenial(RequestContext ctx, AString[] path) {
-			return writable && !projection && (path.length == 0 || !Strings.create("fixed").equals(path[0])) ? null : LATTICE_READ_ONLY;
+		@Override public String latticeWriteDenial(RequestContext ctx, CoviaPath path) {
+			return writable && !projection && (path.isEmpty() || !Strings.create("fixed").equals(path.first())) ? null : LATTICE_READ_ONLY;
 		}
 	}
 
@@ -102,7 +102,7 @@ class ExtensionRouteTest {
 		assertEquals(Strings.create("alice"), engine.resolvePath(Strings.create("/" + path("/label")), alice));
 		assertEquals(Strings.create("alice"), read(aliceDID + "/" + path("/label"), alice));
 		assertEquals("alice", new ContextLoader(engine).resolveValue(Strings.create(path("/label")), alice).content());
-		assertNull(engine.getVenueState().users().get(aliceDID).resolve(ValuePath.parse(path("")), 0).read());
+		assertNull(engine.getVenueState().users().get(aliceDID).resolve(CoviaPath.parse(path(""))).read());
 		assertEquals(before, engine.getVenueState().get(), "reading a view does not materialise user storage");
 	}
 
@@ -168,24 +168,24 @@ class ExtensionRouteTest {
 		// Exercise the resolver directly: authority checks are separate, and even
 		// an authorised caller must not resolve these IDs under the other user.
 		assertThrows(covia.exception.WrongScopeException.class, () -> covia.resolveVirtual(
-			delegated, ValuePath.parse("n/note"), Capability.CRUD_WRITE));
+			delegated, CoviaPath.parse("n/note"), Capability.CRUD_WRITE));
 		assertThrows(covia.exception.WrongScopeException.class, () -> covia.resolveVirtual(
-			delegated, ValuePath.parse("c/note"), Capability.CRUD_WRITE));
+			delegated, CoviaPath.parse("c/note"), Capability.CRUD_WRITE));
 		assertThrows(RuntimeException.class, () -> covia.resolveVirtual(
-			delegated, ValuePath.parse("t/note"), Capability.CRUD_WRITE));
+			delegated, CoviaPath.parse("t/note"), Capability.CRUD_WRITE));
 	}
 
 	@Test void absentDisabledAndUnloadedRoutesNeverFallThroughToUserStorage() {
-		AString[] shadow = ValuePath.parse(path("/label"));
+		CoviaPath shadow = CoviaPath.parse(path("/label"));
 		Workspace record = new Workspace(engine.getVenueState().users().get(aliceDID).cursor());
-		record.createPath(shadow, 0, shadow.length - 1);
-		record.write(shadow, 0, Strings.create("shadow"));
-		var retained = covia.resolveVirtual(alice, ValuePath.parse(path("/label")), Capability.CRUD_WRITE);
+		record.createPath(shadow.parent());
+		record.write(shadow, Strings.create("shadow"));
+		var retained = covia.resolveVirtual(alice, CoviaPath.parse(path("/label")), Capability.CRUD_WRITE);
 		engine.disableAdapter(probe.getName());
 		assertNull(read(path("/label"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/label"), Strings.create("no"), alice));
 		assertThrows(AuthException.class,
-			() -> retained.workspace().write(retained.path(), retained.from(), Strings.create("late")));
+			() -> retained.workspace().write(retained.path(), Strings.create("late")));
 		engine.enableAdapter(probe.getName());
 		assertEquals(Strings.create("alice"), read(path("/label"), alice));
 		engine.removeAdapter(probe.getName());
@@ -199,7 +199,7 @@ class ExtensionRouteTest {
 		assertEquals(Vectors.of(aliceDID, "projected"), read(path(""), alice));
 		assertEquals(Strings.create("projected"), read(path("/1"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/1"), Strings.create("no"), alice));
-		var view = covia.resolveVirtual(alice, ValuePath.parse(path("")));
+		var view = covia.resolveVirtual(alice, CoviaPath.parse(path("")));
 		assertThrows(AuthException.class, () -> view.workspace().cursor().set(Maps.empty()));
 	}
 
@@ -216,10 +216,10 @@ class ExtensionRouteTest {
 		assertEquals(20, result.count());
 		write(path("/0"), CVMLong.create(99), alice);
 		assertEquals(CVMLong.create(99), read(path("/0"), alice));
-		var target = covia.resolveVirtual(alice, ValuePath.parse(path("/0")), Capability.CRUD_WRITE);
+		var target = covia.resolveVirtual(alice, CoviaPath.parse(path("/0")), Capability.CRUD_WRITE);
 		ACell before = engine.getVenueState().get();
 		assertThrows(IllegalArgumentException.class, () -> target.workspace().transact(draft -> {
-			draft.write(target.path(), target.from(), CVMLong.ZERO);
+			draft.write(target.path(), CVMLong.ZERO);
 			throw new IllegalArgumentException("test rollback");
 		}));
 		assertEquals(before, engine.getVenueState().get());
@@ -302,7 +302,7 @@ class ExtensionRouteTest {
 		assertEquals(delegated.getSessionId(), RT.getIn(RT.getIn(context, "execution"), Fields.SESSION_ID));
 		write(resource + "/scratch", Strings.create("alice scratch"), delegated);
 		write("x/test/scratch", Strings.create("bob scratch"), bob);
-		var retained = covia.resolveVirtual(alice, ValuePath.parse("x/test/scratch"), Capability.CRUD_WRITE);
+		var retained = covia.resolveVirtual(alice, CoviaPath.parse("x/test/scratch"), Capability.CRUD_WRITE);
 		engine.disableAdapter("test");
 		engine.deleteUser(engine.venueContext(), aliceDID);
 		assertNull(engine.adapterState("test").read("users/" + aliceDID));
@@ -311,6 +311,6 @@ class ExtensionRouteTest {
 		assertNull(read("x/test/scratch", alice));
 		assertEquals(Strings.create("bob scratch"), read("x/test/scratch", bob));
 		assertThrows(AuthException.class,
-			() -> retained.workspace().write(retained.path(), retained.from(), Strings.create("late")));
+			() -> retained.workspace().write(retained.path(), Strings.create("late")));
 	}
 }

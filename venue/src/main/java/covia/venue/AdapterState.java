@@ -14,6 +14,7 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.AUpdateCursor;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.lattice.ValuePath;
 
 /**
@@ -101,24 +102,24 @@ public final class AdapterState extends ACoviaComponent<ACell>
 
 	/** Optional type-aware path access for map/vector-shaped adapter values. */
 	public ACell read(String relative) {
-		return ValuePath.get(get(), path(relative, true), 0);
+		return ValuePath.get(get(), path(relative, true));
 	}
 	/** Writes {@code value} at the path, creating any missing levels above it. */
 	public void write(String relative, ACell value) {
 		Objects.requireNonNull(value, "Adapter state values must be non-null; use delete()");
-		AString[] path = path(relative, false);
+		CoviaPath path = path(relative, false);
 		update(current -> ValuePath.set(
-			ValuePath.createPath((current == null) ? Maps.empty() : current, path, 0, path.length - 1, new int[1]),
-			path, 0, value));
+			ValuePath.createPath((current == null) ? Maps.empty() : current, path.parent(), new int[1]),
+			path, value));
 	}
 	public boolean delete(String relative) {
-		AString[] path = path(relative, false);
-		ACell previous = cursor().getAndUpdate(current -> ValuePath.remove(current, path, 0));
-		return ValuePath.contains(previous, path, 0);
+		CoviaPath path = path(relative, false);
+		ACell previous = cursor().getAndUpdate(current -> ValuePath.remove(current, path));
+		return ValuePath.contains(previous, path);
 	}
 
-	private static AString[] path(String path, boolean allowEmpty) {
-		return ValuePath.parse(validateRelative(path, allowEmpty));
+	private static CoviaPath path(String path, boolean allowEmpty) {
+		return CoviaPath.parse(validateRelative(path, allowEmpty));
 	}
 	private static String validateRelative(String relative, boolean allowEmpty) {
 		if (relative == null) throw new IllegalArgumentException("Adapter state path is required");

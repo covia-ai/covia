@@ -14,6 +14,7 @@ import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.hitl.Hitl;
+import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 
 /** A user's HITL inbox, on its own and reached by path through the user. */
@@ -46,7 +47,7 @@ public class InboxTest {
 		User user = user();
 		user.inbox().put(ID, Maps.of(Hitl.STATUS, Hitl.OPEN));
 
-		assertEquals(user.inbox().getAll(), user.resolve(new AString[] {Namespace.H}, 0).read());
-		assertEquals(Hitl.OPEN, RT.getIn(user.resolve(new AString[] {Namespace.H, ID}, 0).read(), Hitl.STATUS));
+		assertEquals(user.inbox().getAll(), user.resolve(CoviaPath.segments(Namespace.H)).read());
+		assertEquals(Hitl.OPEN, RT.getIn(user.resolve(CoviaPath.segments(Namespace.H, ID)).read(), Hitl.STATUS));
 	}
 }

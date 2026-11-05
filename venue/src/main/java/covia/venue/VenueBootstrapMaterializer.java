@@ -16,7 +16,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import java.util.function.Consumer;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 import covia.lattice.Workspace;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
@@ -333,9 +333,9 @@ final class VenueBootstrapMaterializer {
 
 	/** Writes to the draft, creating the levels above, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
-		AString[] path = venuePath(virtualPath);
-		workspace.createPath(path, 1, path.length - 1);
-		workspace.write(path, 1, value);
+		CoviaPath path = venuePath(virtualPath);
+		workspace.createPath(path.parent());
+		workspace.write(path, value);
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {
 			throw new IllegalStateException(
@@ -344,12 +344,12 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return workspace.read(venuePath(virtualPath), 1);
+		return workspace.read(venuePath(virtualPath));
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
-		workspace.delete(venuePath(virtualPath), 1);
+		workspace.delete(venuePath(virtualPath));
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
@@ -357,15 +357,16 @@ final class VenueBootstrapMaterializer {
 	}
 
 	/**
-	 * The caller-visible path {@code v/x}; the transactional workspace is the
-	 * {@code w/global} root, so its own segments start after {@code v}.
+	 * The workspace's own stretch of the caller-visible path {@code v/x}: the
+	 * transactional workspace is the {@code w/global} root, so its segments
+	 * start after {@code v}.
 	 */
-	private static AString[] venuePath(String virtualPath) {
-		AString[] path = ValuePath.parse(virtualPath);
-		if (path.length < 2 || !"v".equals(path[0].toString())) {
+	private static CoviaPath venuePath(String virtualPath) {
+		CoviaPath path = CoviaPath.parse(virtualPath);
+		if (path.length() < 2 || !"v".equals(path.first().toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}
-		return path;
+		return path.rest();
 	}
 
 }

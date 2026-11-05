@@ -1,7 +1,5 @@
 package covia.lattice;
 
-import java.util.Arrays;
-
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
@@ -22,32 +20,32 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 	public static final String READ_ONLY = "Extension path is unavailable or read-only";
 	public static final String UNAVAILABLE = "Extension adapter is no longer active";
 
-	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
+	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
 		return resolve(ctx, adapter, path, Capability.CRUD_READ);
 	}
 
-	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path, AString ability) {
+	@Override public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path, AString ability) {
 		return resolveForUser(ctx, adapter, ctx == null ? null : ctx.getUserDID(), path, ability);
 	}
 
 	/** Original authority is checked against the addressed owner; hooks receive that user's context. */
 	public static Position resolveForUser(RequestContext ctx, CoviaAdapter covia,
-			AString owner, AString[] fullPath, AString ability) {
+			AString owner, CoviaPath fullPath, AString ability) {
 		if (ctx == null || ctx.getCallerDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
-		for (AString segment : fullPath) {
-			String s = segment.toString();
+		for (int i = 0; i < fullPath.length(); i++) {
+			String s = fullPath.get(i).toString();
 			if (s.isEmpty() || s.contains("\\") || s.equals(".") || s.equals("..")
 					|| s.chars().anyMatch(Character::isISOControl)) {
 				throw new InvalidInputException(INVALID_PATH);
 			}
 		}
-		AString resource = Strings.create(owner + ValuePath.format(fullPath));
+		AString resource = Strings.create(owner + fullPath.toString());
 		covia.engine.requireLocalAccess(ctx, resource, ability);
-		String name = fullPath.length < 2 ? null : fullPath[1].toString();
+		String name = fullPath.length() < 2 ? null : fullPath.get(1).toString();
 		AAdapter adapter = name == null ? null : covia.engine.getAdapter(name);
 		RequestContext scoped = owner.equals(ctx.getUserDID()) ? ctx : ctx.onBehalfOf(owner);
 		// The adapter's write policy takes the path inside its view, without x/<adapter>
-		AString[] path = fullPath.length < 2 ? new AString[0] : Arrays.copyOfRange(fullPath, 2, fullPath.length);
+		CoviaPath path = fullPath.rest(Math.min(2, fullPath.length()));
 		boolean mutation = Capability.CRUD_WRITE.equals(ability) || Capability.CRUD_DELETE.equals(ability);
 		if (mutation) requireWritable(adapter, scoped, path);
 		AForkableCursor<ACell> exposed = adapter == null ? null : adapter.latticeView(scoped);
@@ -68,10 +66,10 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 				return value;
 			}
 		};
-		return new Position(new Workspace(guarded), path, 0);
+		return new Position(new Workspace(guarded), path);
 	}
 
-	private static void requireWritable(AAdapter adapter, RequestContext ctx, AString[] path) {
+	private static void requireWritable(AAdapter adapter, RequestContext ctx, CoviaPath path) {
 		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(ctx, path);
 		if (denial != null) throw new AuthException(denial);
 	}

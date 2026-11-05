@@ -24,7 +24,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.lattice.Covia;
-import covia.lattice.ValuePath;
+import covia.lattice.CoviaPath;
 import covia.venue.migration.MigrationStep;
 
 /** Adapters migrate their own state schema when they register (#621). */
@@ -100,7 +100,7 @@ class AdapterStateMigrationTest {
 		Engine engine = prepared(Maps.empty());
 		try {
 			VenueState venue = engine.getVenueState();
-			AString[] legacyPath = ValuePath.parse("w/adapters/" + NAME);
+			CoviaPath legacyPath = CoviaPath.parse("w/adapters/" + NAME);
 			venue.users().get(engine.getDIDString()).writeInternalPath(legacyPath, Vectors.of("a", "b"));
 
 			Versioned adapter = new Versioned(NAME, 2);

@@ -14,6 +14,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.CoviaPath;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -53,9 +54,9 @@ public final class SessionState extends ACoviaComponent<ACell>
 
 	/** {@code c} is the session's workspace; the rest of the session is read as stored. */
 	@Override
-	public Position resolve(AString[] path, int from, int to) {
-		if (from < to && K_C.equals(path[from])) return workspace().resolve(path, from + 1, to);
-		return super.resolve(path, from, to);
+	public Position resolve(CoviaPath path) {
+		if (!path.isEmpty() && K_C.equals(path.first())) return workspace().resolve(path.rest());
+		return super.resolve(path);
 	}
 
 	/** Null from the operation means rejection; unchanged records still count as accepted.
