@@ -87,10 +87,11 @@ These components check no authority: they act for whatever code calls them,
 so the application decides who reaches them.
 
 - **Workspace.** `user.workspace()` is the user's workspace (`w`). Its
-  `read`, `write`, `append`, `update` and `delete` take keys inside the
-  workspace, from `ValuePath.parse("app/record")`, and the position in them
-  where the path starts, usually 0; each also takes an end position, for a
-  path that is the first part of the keys. A change creates no missing level:
+  `read`, `write`, `append`, `update` and `delete` take a path inside the
+  workspace, as string segments from `ValuePath.parse("app/record")`, and the
+  position in it where the path starts, usually 0; each also takes an end
+  position, for a path that is the first part of the segments. A change
+  creates no missing level:
   `createPath` makes them, and a write below a missing level is refused
   (`NotFoundException`). When several changes must land together, wrap them
   in a transaction, which applies all or nothing and is retried on a
@@ -122,7 +123,7 @@ caller can mint a token for itself with `auth:identity-token`. See AUTH.md,
 
 | 0.10.0 | Current |
 |--------|---------|
-| `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with keys inside `w` from `ValuePath.parse` (see User data) |
+| `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `ValuePath.parse` (see User data) |
 | `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
 
 ## Upgrading from 0.9.x

@@ -108,14 +108,13 @@ public class JobsTest {
 			.assoc(ID, current.assoc(PREV, Maps.of(Fields.STATUS, Status.STARTED))));
 
 		assertEquals(current, user.jobs().getAll().get(ID));
-		assertEquals(user.jobs().getAll(), user.resolve(new ACell[] {Namespace.J}, 0).read());
-		assertEquals(current, user.resolve(new ACell[] {Namespace.J, HEX}, 0).read());
-		assertEquals(current, user.resolve(new ACell[] {Namespace.J, ID}, 0).read());
-		assertEquals(output, user.resolve(new ACell[] {Namespace.J, HEX, Fields.OUTPUT}, 0).read());
-		assertEquals(output.get(PREV), user.resolve(new ACell[] {Namespace.J, HEX, Fields.OUTPUT, PREV}, 0).read());
-		assertNull(user.resolve(new ACell[] {Namespace.J, HEX, PREV}, 0).read());
-		assertNull(user.resolve(new ACell[] {Namespace.J, Strings.create("not-a-job")}, 0).read());
-		assertNull(user.resolve(new ACell[] {Namespace.J, Strings.create("0ffe"), Fields.STATUS}, 0).read(),
+		assertEquals(user.jobs().getAll(), user.resolve(new AString[] {Namespace.J}, 0).read());
+		assertEquals(current, user.resolve(new AString[] {Namespace.J, HEX}, 0).read());
+		assertEquals(output, user.resolve(new AString[] {Namespace.J, HEX, Fields.OUTPUT}, 0).read());
+		assertEquals(output.get(PREV), user.resolve(new AString[] {Namespace.J, HEX, Fields.OUTPUT, PREV}, 0).read());
+		assertNull(user.resolve(new AString[] {Namespace.J, HEX, PREV}, 0).read());
+		assertNull(user.resolve(new AString[] {Namespace.J, Strings.create("not-a-job")}, 0).read());
+		assertNull(user.resolve(new AString[] {Namespace.J, Strings.create("0ffe"), Fields.STATUS}, 0).read(),
 			"an id that names no job reads as null");
 	}
 }

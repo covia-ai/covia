@@ -1,6 +1,5 @@
 package covia.lattice;
 
-import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import covia.adapter.CoviaAdapter;
@@ -13,7 +12,7 @@ import covia.venue.RequestContext;
  * agent's record.
  *
  * <p>{@code c/draft/notes} resolves to the workspace at
- * {@code g/<agent>/sessions/<sid>/c} with the keys {@code draft/notes}.
+ * {@code g/<agent>/sessions/<sid>/c} with the segments {@code draft/notes}.
  * The session's {@code c} field is a free-form map for state that the agent
  * (and collaborating parties) can accumulate across turns within a single
  * conversation. Framework lifecycle APIs create session records; scoped
@@ -27,14 +26,14 @@ import covia.venue.RequestContext;
 public class SessionNamespaceResolver implements NamespaceResolver {
 
 	@Override
-	public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
 		AString agentId = ctx.getAgentId();
 		Blob sessionId = ctx.getSessionId();
 		if (agentId == null || sessionId == null) {
 			throw new WrongScopeException(
 				"Cannot use 'c/' prefix outside session scope (requires agentId and sessionId on RequestContext)");
 		}
-		return adapter.ensureUser(ctx).agentAt(agentId).session(sessionId).workspace().resolve(keys, 1);
+		return adapter.ensureUser(ctx).agentAt(agentId).session(sessionId).workspace().resolve(path, 1);
 	}
 
 	@Override

@@ -1,6 +1,5 @@
 package covia.lattice;
 
-import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import covia.adapter.CoviaAdapter;
@@ -44,16 +43,16 @@ public class VenueGlobalsResolver implements NamespaceResolver {
 	}
 
 	@Override
-	public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
-		// keys[0] is "v" (the prefix). Rewrite to <venue-DID>/w/global/<rest>
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
+		// path[0] is "v" (the prefix). Rewrite to <venue-DID>/w/global/<rest>
 		// and resolve [w, global, ...rest] in the venue user's record.
 		AString venueDID = adapter.engine.getDIDString();
 		if (venueDID == null) return null;
 
-		ACell[] rewritten = new ACell[keys.length + 1];
+		AString[] rewritten = new AString[path.length + 1];
 		rewritten[0] = K_W;
 		rewritten[1] = K_GLOBAL;
-		System.arraycopy(keys, 1, rewritten, 2, keys.length - 1);
+		System.arraycopy(path, 1, rewritten, 2, path.length - 1);
 		return adapter.ensureUser(venueDID).resolve(rewritten, 0);
 	}
 

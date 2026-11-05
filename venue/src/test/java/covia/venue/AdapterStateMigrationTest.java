@@ -100,7 +100,7 @@ class AdapterStateMigrationTest {
 		Engine engine = prepared(Maps.empty());
 		try {
 			VenueState venue = engine.getVenueState();
-			ACell[] legacyPath = ValuePath.parse("w/adapters/" + NAME);
+			AString[] legacyPath = ValuePath.parse("w/adapters/" + NAME);
 			venue.users().get(engine.getDIDString()).writeInternalPath(legacyPath, Vectors.of("a", "b"));
 
 			Versioned adapter = new Versioned(NAME, 2);

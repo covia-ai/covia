@@ -38,8 +38,8 @@ class EmbedderContractTest {
 	static final AString BOB = Strings.create("did:key:z6MkEmbedderContractBob");
 	static final String SEED = "7a".repeat(32);
 	static final String ADAPTER = "embedder";
-	static final ACell[] AREA = ValuePath.parse("embedder");
-	static final ACell[] RECORD_PATH = ValuePath.parse("embedder/record");
+	static final AString[] AREA = ValuePath.parse("embedder");
+	static final AString[] RECORD_PATH = ValuePath.parse("embedder/record");
 	static final ACell RECORD = Maps.of("name", "embedded", "count", 3);
 
 	/** An embedder's own adapter, keeping per-user state as GetMine's and Brightside's do. */

@@ -1,6 +1,5 @@
 package covia.lattice;
 
-import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import covia.adapter.CoviaAdapter;
@@ -20,7 +19,7 @@ import covia.venue.RequestContext;
  * own infrastructure Job id.</p>
  *
  * <p>{@code t/foo} resolves to the Job's scratch workspace at
- * {@code j/<jobId>/temp} with the keys {@code foo}. The owning Job must
+ * {@code j/<jobId>/temp} with the segments {@code foo}. The owning Job must
  * already exist; scoped scratch never creates it.</p>
  *
  * <p>If neither scope is present the resolver throws helpfully rather than
@@ -29,7 +28,7 @@ import covia.venue.RequestContext;
 public class TempNamespaceResolver implements NamespaceResolver {
 
 	@Override
-	public Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
+	public Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path) {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
 		Blob jobId = ctx.getJobId();
@@ -47,7 +46,7 @@ public class TempNamespaceResolver implements NamespaceResolver {
 				"Cannot use 't/' prefix outside job or task scope (requires agentId+taskId or jobId on RequestContext)");
 		}
 
-		return new Position(adapter.ensureUser(ctx).jobs().scratch(scopedJobId), keys, 1);
+		return adapter.ensureUser(ctx).jobs().scratch(scopedJobId).resolve(path, 1);
 	}
 
 	@Override

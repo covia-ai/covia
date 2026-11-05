@@ -48,7 +48,7 @@ class TelegramMigrationTest {
 			// 0.9.11 kept adapter state in the venue user's workspace.
 			User host = engine.getVenueState().users().get(engine.getDIDString());
 			Workspace workspace = host.workspace();
-			ACell[] legacy = ValuePath.parse("adapters/telegram");
+			AString[] legacy = ValuePath.parse("adapters/telegram");
 			workspace.createPath(ValuePath.parse("adapters"), 0);
 			workspace.write(legacy, 0, STATES.get(0));
 			engine.getVenueState().users().ensure(OWNER);

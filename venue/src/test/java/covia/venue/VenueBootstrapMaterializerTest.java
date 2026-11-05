@@ -21,6 +21,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
+import covia.lattice.ValuePath;
 
 /** Tests native, Job-free publication of venue-owned bootstrap state. */
 public class VenueBootstrapMaterializerTest {
@@ -122,7 +123,7 @@ public class VenueBootstrapMaterializerTest {
 			User user = engine.getVenueState().users().ensure(did);
 			user.jobs().create(jobId, Maps.of(Fields.STATUS, covia.grid.Status.PENDING));
 			engine.getVenueState().users().get(engine.getDIDString()).writeInternalPath(
-				new ACell[] {Strings.intern("w"), Strings.intern("global"), Strings.intern("concurrent")},
+				ValuePath.parse("w/global/concurrent"),
 				Strings.create("keep"));
 
 			adapter.allowCommit.countDown();

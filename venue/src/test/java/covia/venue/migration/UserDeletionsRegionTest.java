@@ -22,8 +22,8 @@ import covia.venue.VenueState;
 /** Venue step 0 → 1 as a function of the venue value. */
 class UserDeletionsRegionTest {
 	private static final AString DID = Strings.create("did:test:venue");
-	private static final ACell[] LEGACY = ValuePath.parse("w/user-deletions");
-	private static final ACell[] NOTES = ValuePath.parse("w/notes");
+	private static final AString[] LEGACY = ValuePath.parse("w/user-deletions");
+	private static final AString[] NOTES = ValuePath.parse("w/notes");
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 	private static final MigrationStep STEP = new UserDeletionsRegion();
 

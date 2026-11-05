@@ -132,23 +132,23 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return (jobs == null) ? null : Job.currentStates(jobs);
 	}
 
-	/** A key that names no job ends here, and reads as null. */
+	/** A job is named by its id in hex; a segment that names no job ends here, and reads as null. */
 	@Override
-	public Position resolve(ACell[] keys, int from, int to) {
-		Blob id = (from < to) ? ValuePath.blobKey(keys[from]) : null;
+	public Position resolve(AString[] path, int from, int to) {
+		Blob id = (from < to) ? ValuePath.blobKey(path[from]) : null;
 		JobState job = (id == null) ? null : get(id);
-		if (job == null) return super.resolve(keys, from, to);
-		return job.resolve(keys, from + 1, to);
+		if (job == null) return super.resolve(path, from, to);
+		return job.resolve(path, from + 1, to);
 	}
 
-	/** Below the jobs, only a key that names no job is read here, from the index as stored. */
+	/** Below the jobs, only a segment that names no job is read here, from the index as stored. */
 	@Override
-	public ACell read(ACell[] keys, int from, int to) {
-		return (from < to) ? ValuePath.get(cursor().get(), keys, from, to) : read();
+	public ACell read(AString[] path, int from, int to) {
+		return (from < to) ? ValuePath.get(cursor().get(), path, from, to) : read();
 	}
 
 	@Override
-	public boolean contains(ACell[] keys, int from, int to) {
-		return ValuePath.contains(cursor().get(), keys, from, to);
+	public boolean contains(AString[] path, int from, int to) {
+		return ValuePath.contains(cursor().get(), path, from, to);
 	}
 }

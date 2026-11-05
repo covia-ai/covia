@@ -50,9 +50,9 @@ public final class JobState extends ACoviaComponent<ACell>
 
 	/** {@code temp} is the job's workspace; the rest of the job is read in its current state. */
 	@Override
-	public Position resolve(ACell[] keys, int from, int to) {
-		if (from < to && Fields.TEMP.equals(keys[from])) return workspace().resolve(keys, from + 1, to);
-		return super.resolve(keys, from, to);
+	public Position resolve(AString[] path, int from, int to) {
+		if (from < to && Fields.TEMP.equals(path[from])) return workspace().resolve(path, from + 1, to);
+		return super.resolve(path, from, to);
 	}
 
 	/** Pure record edit; null rejects the edit. Returns the committed record or

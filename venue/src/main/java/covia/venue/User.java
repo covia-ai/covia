@@ -55,26 +55,26 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	private final AString did;
 
 	/** Framework-internal read of a path in this user's record. */
-	ACell readInternalPath(ACell[] keys) {
-		return resolve(keys, 0).read();
+	ACell readInternalPath(AString[] path) {
+		return resolve(path, 0).read();
 	}
 
 	/**
 	 * Framework-internal atomic write to a workspace path, creating the levels
 	 * above it; authority is possession of this user cursor.
 	 */
-	void writeInternalPath(ACell[] keys, ACell value) {
-		Position target = resolve(keys, 0);
+	void writeInternalPath(AString[] path, ACell value) {
+		Position target = resolve(path, 0);
 		target.workspace().transact(draft -> {
-			draft.createPath(keys, target.from(), Math.max(target.from(), target.to() - 1));
-			draft.write(keys, target.from(), target.to(), value);
+			draft.createPath(path, target.from(), Math.max(target.from(), target.to() - 1));
+			draft.write(path, target.from(), target.to(), value);
 		});
 	}
 
 	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
-	boolean deleteInternalPath(ACell[] keys) {
-		Position target = resolve(keys, 0);
-		return target.workspace().delete(keys, target.from(), target.to());
+	boolean deleteInternalPath(AString[] path) {
+		Position target = resolve(path, 0);
+		return target.workspace().delete(path, target.from(), target.to());
 	}
 
 	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
@@ -254,20 +254,20 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	}
 
 	@Override
-	public Position resolve(ACell[] keys, int from, int to) {
+	public Position resolve(AString[] path, int from, int to) {
 		if (from < to) {
-			ACell key = keys[from];
-			if (Namespace.W.equals(key)) return workspace().resolve(keys, from + 1, to);
-			if (Namespace.O.equals(key)) return operations().resolve(keys, from + 1, to);
-			if (Namespace.H.equals(key)) return inbox().resolve(keys, from + 1, to);
-			if (Namespace.J.equals(key)) return jobs().resolve(keys, from + 1, to);
-			if (Namespace.S.equals(key)) return secrets().resolve(keys, from + 1, to);
-			if (Namespace.G.equals(key) && from + 1 < to && keys[from + 1] instanceof AString id) {
-				AgentState agent = agent(id);
-				if (agent != null) return agent.resolve(keys, from + 2, to);
+			AString segment = path[from];
+			if (Namespace.W.equals(segment)) return workspace().resolve(path, from + 1, to);
+			if (Namespace.O.equals(segment)) return operations().resolve(path, from + 1, to);
+			if (Namespace.H.equals(segment)) return inbox().resolve(path, from + 1, to);
+			if (Namespace.J.equals(segment)) return jobs().resolve(path, from + 1, to);
+			if (Namespace.S.equals(segment)) return secrets().resolve(path, from + 1, to);
+			if (Namespace.G.equals(segment) && from + 1 < to) {
+				AgentState agent = agent(path[from + 1]);
+				if (agent != null) return agent.resolve(path, from + 2, to);
 			}
 		}
-		return super.resolve(keys, from, to);
+		return super.resolve(path, from, to);
 	}
 
 	/** The user's record, its jobs in their current state. */
@@ -280,13 +280,13 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Data no namespace component claims is read from the record as stored. */
 	@Override
-	public ACell read(ACell[] keys, int from, int to) {
-		return (from < to) ? ValuePath.get(cursor().get(), keys, from, to) : read();
+	public ACell read(AString[] path, int from, int to) {
+		return (from < to) ? ValuePath.get(cursor().get(), path, from, to) : read();
 	}
 
 	@Override
-	public boolean contains(ACell[] keys, int from, int to) {
-		return ValuePath.contains(cursor().get(), keys, from, to);
+	public boolean contains(AString[] path, int from, int to) {
+		return ValuePath.contains(cursor().get(), path, from, to);
 	}
 
 }

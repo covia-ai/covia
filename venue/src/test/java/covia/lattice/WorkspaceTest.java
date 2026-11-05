@@ -27,7 +27,7 @@ public class WorkspaceTest {
 
 	private static final AString AREA = Strings.intern("temp");
 
-	private static ACell[] path(String path) {
+	private static AString[] path(String path) {
 		return ValuePath.parse(path);
 	}
 
@@ -123,13 +123,12 @@ public class WorkspaceTest {
 	}
 
 	@Test
-	public void testKeysAreReadByTheValueTheyMeet() {
+	public void testSegmentsAreReadByTheValueTheyMeet() {
 		Blob id = Blob.fromHex("0a0b");
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of(
 			"list", Vectors.of(CVMLong.ONE, CVMLong.create(2)),
 			"index", Index.of(id, Strings.create("found")))));
 		assertEquals(CVMLong.create(2), area.read(path("list/1"), 0));
-		assertEquals(CVMLong.create(2), area.read(new ACell[] {Strings.create("list"), CVMLong.ONE}, 0));
 		assertEquals(Strings.create("found"), area.read(path("index/0a0b"), 0));
 		assertNull(area.read(path("list/9"), 0));
 	}
@@ -178,7 +177,7 @@ public class WorkspaceTest {
 
 	@Test
 	public void testOnlyTheRangeOfTheKeysIsUsed() {
-		ACell[] keys = path("x/a/b/c");   // the area's own keys are a/b; x and c lie outside the range
+		AString[] keys = path("x/a/b/c");   // the area's own segments are a/b; x and c lie outside the range
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("a", Maps.empty())));
 
 		assertFalse(area.write(keys, 1, 3, CVMLong.ONE));
@@ -207,7 +206,7 @@ public class WorkspaceTest {
 	public void testAPositionCoversItsRange() {
 		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE)));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		ACell[] keys = path("a/b");
+		AString[] keys = path("a/b");
 
 		Position whole = component.resolve(keys, 0);
 		assertEquals(keys.length, whole.to());

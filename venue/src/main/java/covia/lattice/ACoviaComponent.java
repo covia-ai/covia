@@ -1,13 +1,18 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.AForkableCursor;
 
 /**
- * A lattice component that callers can address by path. Each component defines
- * what the keys below it mean, routing them to the component that owns them;
- * a path ends at the last component that claims it.
+ * A lattice component that callers can address by a Covia path. Each component
+ * defines what the path's segments below it mean, routing them to the component
+ * that owns them; a path ends at the last component that claims it.
+ *
+ * <p>A path is the caller's: string segments, as written. Mapping a segment to
+ * a lattice key, such as a job id in hex to its Blob, is the business of the
+ * component that meets it, and lattice keys never appear in a path.</p>
  *
  * <p>Resolution is pure: it sees no request, makes no checks and writes
  * nothing. Children are built from this component's own cursor, so a walk from
@@ -26,23 +31,23 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 		super(cursor);
 	}
 
-	/** {@link #resolve(ACell[], int, int)} to the end of {@code keys}. */
-	public final Position resolve(ACell[] keys, int from) {
-		return resolve(keys, from, keys.length);
+	/** {@link #resolve(AString[], int, int)} to the end of {@code path}. */
+	public final Position resolve(AString[] path, int from) {
+		return resolve(path, from, path.length);
 	}
 
 	/**
-	 * The component that owns the position {@code keys[from, to)} names below
-	 * this one. A component may take as many keys as its rules cover in one
+	 * The component that owns the position {@code path[from, to)} names below
+	 * this one. A component may take as many segments as its rules cover in one
 	 * step. By default a component owns every position below it.
 	 *
-	 * @param keys Path keys
-	 * @param from Index of the first key below this component
-	 * @param to Index after the last key of the path
+	 * @param path The caller's path
+	 * @param from Index of the first segment below this component
+	 * @param to Index after the last segment
 	 * @return Where the path ends, never null
 	 */
-	public Position resolve(ACell[] keys, int from, int to) {
-		return new Position(this, keys, from, to);
+	public Position resolve(AString[] path, int from, int to) {
+		return new Position(this, path, from, to);
 	}
 
 	/** This component's value as callers see it. */
@@ -50,23 +55,23 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 		return cursor().get();
 	}
 
-	/** {@link #read(ACell[], int, int)} to the end of {@code keys}. */
-	public final ACell read(ACell[] keys, int from) {
-		return read(keys, from, keys.length);
+	/** {@link #read(AString[], int, int)} to the end of {@code path}. */
+	public final ACell read(AString[] path, int from) {
+		return read(path, from, path.length);
 	}
 
-	/** The value at {@code keys[from, to)} below this component, as callers see it, or null when absent. */
-	public ACell read(ACell[] keys, int from, int to) {
-		return ValuePath.get(read(), keys, from, to);
+	/** The value at {@code path[from, to)} below this component, as callers see it, or null when absent. */
+	public ACell read(AString[] path, int from, int to) {
+		return ValuePath.get(read(), path, from, to);
 	}
 
-	/** {@link #contains(ACell[], int, int)} to the end of {@code keys}. */
-	public final boolean contains(ACell[] keys, int from) {
-		return contains(keys, from, keys.length);
+	/** {@link #contains(AString[], int, int)} to the end of {@code path}. */
+	public final boolean contains(AString[] path, int from) {
+		return contains(path, from, path.length);
 	}
 
-	/** Whether a value is at {@code keys[from, to)} below this component; a stored null counts. */
-	public boolean contains(ACell[] keys, int from, int to) {
-		return ValuePath.contains(read(), keys, from, to);
+	/** Whether a value is at {@code path[from, to)} below this component; a stored null counts. */
+	public boolean contains(AString[] path, int from, int to) {
+		return ValuePath.contains(read(), path, from, to);
 	}
 }

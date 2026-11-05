@@ -53,12 +53,14 @@ import covia.venue.User;
  * namespace. Callers supply a JSON-friendly path (e.g. {@code "g/my-agent/state"})
  * and this adapter navigates the lattice to read or list values.</p>
  *
- * <h3>Key resolution</h3>
+ * <h3>Paths</h3>
  *
- * <p>Callers name keys in JSON form: {@code "g"}, {@code "my-agent"}, a hex
- * job ID, a list position. Navigation interprets each key by the value it
- * meets ({@link ValuePath}): a map key, an Index key as a
- * blob or hex string, or a vector index.</p>
+ * <p>A path is string segments: {@code "g"}, {@code "my-agent"}, a hex job
+ * ID, a list position in digits. A path given as an array holds strings only
+ * ({@link #SEGMENT_NOT_STRING}). The component a segment reaches maps it to a
+ * lattice key, and below the last component {@link ValuePath} reads it by the
+ * value it meets: a map key, an Index key as the string or as a hex Blob, or a
+ * vector index.</p>
  *
  * <p>For the reverse direction (listing keys back to the caller),
  * {@link ALattice#toJSONKey(ACell)} converts CVM keys to JSON-friendly
@@ -230,11 +232,10 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * Reads the value at a path in the user's lattice.
 	 *
-	 * <p>The path is parsed into JSON-level keys, then resolved to canonical
-	 * CVM keys by walking the lattice hierarchy. Each lattice level translates
-	 * the key appropriate to its type (e.g. {@code "g"} → {@code :g} in a
-	 * KeyedLattice). The resolved keys are then used to navigate the cursor
-	 * and read the value.</p>
+	 * <p>The path's string segments are resolved through the components they
+	 * reach, each mapping a segment to its lattice key
+	 * ({@link covia.lattice.ACoviaComponent#resolve}), and the value where they
+	 * end is read.</p>
 	 *
 	 * <p>Response always includes {@code exists} (boolean) and {@code value}:</p>
 	 * <ul>
@@ -290,8 +291,7 @@ public class CoviaAdapter extends AAdapter {
 	public ACell readContextValue(RequestContext ctx, AString path) {
 		if (path == null) return null;
 		engine.requireResourceAccess(ctx, path, Capability.CRUD_READ);
-		ACell[] pathKeys = ValuePath.parse(path.toString());
-		Position virtual = resolveVirtual(ctx, pathKeys);
+		Position virtual = resolveVirtual(ctx, ValuePath.parse(path.toString()));
 		if (virtual != null) return virtual.read();
 
 		// Physical namespaces and universal asset/op references.
@@ -604,14 +604,14 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private boolean changeCreatingLevels(RequestContext ctx, AString address, Position target,
 			Consumer<Workspace> change) {
-		ACell[] keys = target.keys();
+		AString[] path = target.path();
 		int from = target.from();
 		int to = target.to();
 		boolean[] created = {false};
 		target.workspace().transact(draft -> {
-			int missing = ValuePath.missingLevels(draft.read(), keys, from, to);
+			int missing = ValuePath.missingLevels(draft.read(), path, from, to);
 			if (missing > 0) engine.requireLocalAccess(ctx, ancestor(address, missing), Capability.CRUD_WRITE);
-			created[0] = draft.createPath(keys, from, Math.max(from, to - 1)) > 0;
+			created[0] = draft.createPath(path, from, Math.max(from, to - 1)) > 0;
 			change.accept(draft);
 		});
 		return created[0];
@@ -666,7 +666,7 @@ public class CoviaAdapter extends AAdapter {
 		Position target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		boolean[] existed = {false};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target,
-			draft -> existed[0] = draft.write(target.keys(), target.from(), target.to(), value));
+			draft -> existed[0] = draft.write(target.path(), target.from(), target.to(), value));
 		return withPathCreated(Maps.of(Fields.EXISTED, CVMBool.of(existed[0])), created);
 	}
 
@@ -683,7 +683,7 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		Position target = resolvePathTarget(ctx, path, Capability.CRUD_WRITE);
 		changeCreatingLevels(ctx, capResource(input), target,
-			draft -> draft.update(target.keys(), target.from(), target.to(), change));
+			draft -> draft.update(target.path(), target.from(), target.to(), change));
 	}
 
 	/**
@@ -756,10 +756,10 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
 		Position target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
 		if (target == null) return Maps.of(Fields.DELETED, CVMBool.FALSE);
-		ACell[] keys = target.keys();
+		AString[] path = target.path();
 		if (target.component() instanceof SecretStore secrets && target.to() - target.from() == 1) {
-			AString name = RT.ensureString(keys[target.from()]);
-			boolean deleted = name != null && secrets.deleteIfPresent(name);
+			AString name = path[target.from()];
+			boolean deleted = secrets.deleteIfPresent(name);
 			if (deleted) {
 				// The name only, never the value — the same trail as secret:set.
 				engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
@@ -767,7 +767,7 @@ public class CoviaAdapter extends AAdapter {
 			}
 			return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 		}
-		boolean deleted = target.workspace().delete(keys, target.from(), target.to());
+		boolean deleted = target.workspace().delete(path, target.from(), target.to());
 		return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 	}
 
@@ -791,8 +791,8 @@ public class CoviaAdapter extends AAdapter {
 		boolean[] existed = {false};
 		long[] size = {0};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target, draft -> {
-			existed[0] = draft.contains(target.keys(), target.from(), target.to());
-			size[0] = draft.append(target.keys(), target.from(), target.to(), element);
+			existed[0] = draft.contains(target.path(), target.from(), target.to());
+			size[0] = draft.append(target.path(), target.from(), target.to(), element);
 		});
 		return withPathCreated(Maps.of(
 			Fields.EXISTED, CVMBool.of(existed[0]),
@@ -808,12 +808,12 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws InvalidInputException if the path is too short
 	 * @throws NotSupportedException if the path targets a non-writable namespace
 	 */
-	private static void validateWritablePath(ACell[] jsonKeys) {
-		if (jsonKeys.length < 2) {
+	private static void validateWritablePath(AString[] path) {
+		if (path.length < 2) {
 			throw new InvalidInputException(
 				"Path must include namespace and key, e.g. 'w/my-key'");
 		}
-		String namespace = jsonKeys[0].toString();
+		String namespace = path[0].toString();
 		if (!WRITABLE_NAMESPACES.contains(namespace)) {
 			throw new NotSupportedException(
 				"Namespace '" + namespace + "' is not writable (framework-managed). "
@@ -824,7 +824,7 @@ public class CoviaAdapter extends AAdapter {
 
 	/**
 	 * Checks that the caller has write access to the namespace addressed by
-	 * {@code jsonKeys}. Virtual namespaces with a registered {@link NamespaceResolver}
+	 * {@code path}. Virtual namespaces with a registered {@link NamespaceResolver}
 	 * (e.g. {@code v/}, {@code n/}, {@code t/}) delegate auth to
 	 * {@link NamespaceResolver#canWrite(RequestContext)}; plain namespaces fall
 	 * back to the {@link #WRITABLE_NAMESPACES} allowlist ({@code w/}, {@code o/}).
@@ -835,17 +835,17 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * @throws RuntimeException if the caller lacks write access
 	 */
-	private void requireWriteAccess(RequestContext ctx, ACell[] jsonKeys) {
-		if (jsonKeys.length > 0) {
-			NamespaceResolver resolver = resolvers.get(jsonKeys[0].toString());
+	private void requireWriteAccess(RequestContext ctx, AString[] path) {
+		if (path.length > 0) {
+			NamespaceResolver resolver = resolvers.get(path[0].toString());
 			if (resolver != null) {
 				if (!resolver.canWrite(ctx)) {
-					throw new AuthException("Write permission denied for namespace: " + jsonKeys[0]);
+					throw new AuthException("Write permission denied for namespace: " + path[0]);
 				}
 				return;
 			}
 		}
-		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
+		if (!isWritableNamespace(path)) validateWritablePath(path);
 	}
 
 	/** The secrets namespace prefix — delete-only via covia:delete (#166). */
@@ -864,16 +864,16 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * @throws RuntimeException if the caller lacks delete access
 	 */
-	private void requireDeleteAccess(RequestContext ctx, ACell[] jsonKeys) {
-		if (jsonKeys.length > 0 && NS_SECRETS.equals(jsonKeys[0].toString())
+	private void requireDeleteAccess(RequestContext ctx, AString[] path) {
+		if (path.length > 0 && NS_SECRETS.equals(path[0].toString())
 				&& resolvers.get(NS_SECRETS) == null) {
-			if (jsonKeys.length != 2) {
+			if (path.length != 2) {
 				throw new InvalidInputException(
 					"Secret deletion must address a whole record, e.g. 's/MY_KEY'");
 			}
 			return;
 		}
-		requireWriteAccess(ctx, jsonKeys);
+		requireWriteAccess(ctx, path);
 	}
 
 	/**
@@ -959,12 +959,12 @@ public class CoviaAdapter extends AAdapter {
 
 	/** One projected field = a read at the child's subpath, single-read semantics. */
 	private static ACell projectField(ACell child, AString field, ACell input) {
-		ACell[] fieldKeys = ValuePath.parse(field.toString());
-		ACell fv = (fieldKeys.length == 0) ? child : ValuePath.get(child, fieldKeys, 0);
+		AString[] fieldPath = ValuePath.parse(field.toString());
+		ACell fv = (fieldPath.length == 0) ? child : ValuePath.get(child, fieldPath, 0);
 		if (fv == null) {
 			// A stored null is present; an absent subpath is exists:false —
 			// decided by key presence, exactly as covia:read decides it.
-			boolean present = (fieldKeys.length == 0) || ValuePath.contains(child, fieldKeys, 0);
+			boolean present = (fieldPath.length == 0) || ValuePath.contains(child, fieldPath, 0);
 			return result(null, present);
 		}
 		return sizeGuardedResult(fv, input);
@@ -1077,10 +1077,10 @@ public class CoviaAdapter extends AAdapter {
 
 		// Partition by the named field (which may be a relative path resolved by
 		// get into each entry). Σ(group counts) == count by construction.
-		ACell[] fieldKeys = ValuePath.parse(groupBy.toString());
+		AString[] fieldPath = ValuePath.parse(groupBy.toString());
 		AMap<AString, ACell> groups = Maps.empty();
 		for (ACell entry : level) {
-			ACell fieldVal = (fieldKeys.length == 0) ? entry : ValuePath.get(entry, fieldKeys, 0);
+			ACell fieldVal = (fieldPath.length == 0) ? entry : ValuePath.get(entry, fieldPath, 0);
 			AString key = groupKey(fieldVal);
 			ACell existing = groups.get(key);
 			long g = (existing == null) ? 0 : ((CVMLong) RT.getIn(existing, K_COUNT)).longValue();
@@ -1197,36 +1197,35 @@ public class CoviaAdapter extends AAdapter {
 
 	// ========== Path parsing ==========
 
-	/**
-	 * Parses a path input into an array of JSON-level keys for lattice resolution.
-	 *
-	 * <p>Accepts two forms:</p>
-	 * <ul>
-	 *   <li><b>String:</b> {@code "g/my-agent/timeline/3"} — split on {@code /},
-	 *       all segments become AString; navigation interprets each by the value
-	 *       it meets</li>
-	 *   <li><b>Vector:</b> {@code ["g", "my-agent", "timeline", 3]} — elements
-	 *       used directly, allowing callers to pass pre-typed keys (e.g. integers
-	 *       for vector indexing)</li>
-	 * </ul>
-	 *
-	 * <p>These are <em>JSON-level</em> keys, not canonical CVM keys.</p>
-	 */
-	static ACell[] parsePath(ACell pathCell) {
-		if (pathCell == null) return new ACell[0];
+	/** Refusal for a path array with an element that is not a string; names its position and type. */
+	public static final String SEGMENT_NOT_STRING = "Path segment %d must be a string, not %s";
 
-		// Vector path: elements used as-is (caller controls types)
+	/**
+	 * Parses a path input into its segments, which are strings. A string is split
+	 * on {@code /} ({@code "g/my-agent/timeline/3"}); an array gives the segments
+	 * themselves ({@code ["g", "my-agent", "timeline", "3"]}). What a segment
+	 * means, such as a list position, is decided by the component it reaches.
+	 *
+	 * @throws InvalidInputException if an array element is not a string
+	 */
+	static AString[] parsePath(ACell pathCell) {
+		if (pathCell == null) return new AString[0];
+
 		if (pathCell instanceof AVector<?> vec) {
-			ACell[] keys = new ACell[Math.toIntExact(vec.count())];
-			for (int i = 0; i < keys.length; i++) {
-				keys[i] = vec.get(i);
+			AString[] path = new AString[Math.toIntExact(vec.count())];
+			for (int i = 0; i < path.length; i++) {
+				ACell element = vec.get(i);
+				if (!(element instanceof AString segment)) {
+					throw new InvalidInputException(String.format(SEGMENT_NOT_STRING, i,
+						(element == null) ? "null" : element.getType()));
+				}
+				path[i] = segment;
 			}
-			return keys;
+			return path;
 		}
 
-		// String path: split on "/" into AString segments
 		AString pathStr = RT.ensureString(pathCell);
-		if (pathStr == null) return new ACell[0];
+		if (pathStr == null) return new AString[0];
 		return ValuePath.parse(pathStr.toString());
 	}
 
@@ -1267,14 +1266,14 @@ public class CoviaAdapter extends AAdapter {
 		if (raw != null && raw.startsWith(Strings.create("/"))) raw = raw.slice(1);
 		var didTarget = raw != null && raw.toString().startsWith("did:")
 			? engine.resolveUserPath(ctx, raw, false) : null;
-		ACell[] keys = didTarget == null ? parsePath(path) : didTarget.pathKeys();
-		if (didTarget != null && isExtensionPath(keys)) {
-			return ExtensionNamespaceResolver.resolveForUser(ctx, this, didTarget.ownerDID(), keys, ability);
+		AString[] segments = didTarget == null ? parsePath(path) : didTarget.path();
+		if (didTarget != null && isExtensionPath(segments)) {
+			return ExtensionNamespaceResolver.resolveForUser(ctx, this, didTarget.ownerDID(), segments, ability);
 		}
-		if (write) requireWriteAccess(ctx, keys);
-		if (delete) requireDeleteAccess(ctx, keys);
+		if (write) requireWriteAccess(ctx, segments);
+		if (delete) requireDeleteAccess(ctx, segments);
 		if (didTarget == null) {
-			Position virtual = resolveVirtual(ctx, keys, ability);
+			Position virtual = resolveVirtual(ctx, segments, ability);
 			if (virtual != null) return virtual;
 			// The USER's record, not the acting principal's: an agent sub-principal
 			// works inside its owner's namespace and has no lattice record of its own.
@@ -1282,7 +1281,7 @@ public class CoviaAdapter extends AAdapter {
 			// (RequestContext.grantsDenial), or an agent would be granted w/foo in one
 			// namespace and read it from another.
 			User user = write ? ensureUser(ctx) : engine.getVenueState().users().get(ctx.getUserDID());
-			return (user == null) ? null : user.resolve(keys, 0);
+			return (user == null) ? null : user.resolve(segments, 0);
 		}
 		if (write && didTarget.user() == null) {
 			// Another user's record is an entry of the venue's users, which no grant
@@ -1294,7 +1293,7 @@ public class CoviaAdapter extends AAdapter {
 			didTarget = engine.resolveUserPath(ctx, raw, true);
 		}
 		User user = didTarget.user();
-		return (user == null) ? null : user.resolve(keys, 0);
+		return (user == null) ? null : user.resolve(segments, 0);
 	}
 
 
@@ -1304,16 +1303,15 @@ public class CoviaAdapter extends AAdapter {
 	 * @return For virtual namespaces: where the path ends.
 	 *         For physical namespaces: null (caller uses standard user flow).
 	 */
-	public Position resolveVirtual(RequestContext ctx, ACell[] pathKeys) {
-		return resolveVirtual(ctx, pathKeys, Capability.CRUD_READ);
+	public Position resolveVirtual(RequestContext ctx, AString[] path) {
+		return resolveVirtual(ctx, path, Capability.CRUD_READ);
 	}
 
-	public Position resolveVirtual(RequestContext ctx, ACell[] pathKeys, AString ability) {
-		if (pathKeys.length > 0) {
-			String prefix = pathKeys[0].toString();
-			NamespaceResolver resolver = resolvers.get(prefix);
+	public Position resolveVirtual(RequestContext ctx, AString[] path, AString ability) {
+		if (path.length > 0) {
+			NamespaceResolver resolver = resolvers.get(path[0].toString());
 			if (resolver != null) {
-				return resolver.resolve(ctx, this, pathKeys, ability);
+				return resolver.resolve(ctx, this, path, ability);
 			}
 		}
 		return null;
@@ -1330,10 +1328,10 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	public ACell readVirtualNamespace(RequestContext ctx, AString path) {
 		if (path == null) return null;
-		ACell[] pathKeys = ValuePath.parse(path.toString());
-		if (pathKeys.length == 0) return null;
+		AString[] segments = ValuePath.parse(path.toString());
+		if (segments.length == 0) return null;
 
-		Position virtual = resolveVirtual(ctx, pathKeys);
+		Position virtual = resolveVirtual(ctx, segments);
 		return (virtual == null) ? null : virtual.read();
 	}
 
@@ -1341,21 +1339,21 @@ public class CoviaAdapter extends AAdapter {
 	 * Checks whether a parsed path targets a writable namespace — either a
 	 * physical writable namespace or a writable virtual namespace resolver.
 	 */
-	boolean isWritableNamespace(ACell[] pathKeys) {
-		if (pathKeys.length < 2) return false;
-		String ns = pathKeys[0].toString();
+	boolean isWritableNamespace(AString[] path) {
+		if (path.length < 2) return false;
+		String ns = path[0].toString();
 		if (WRITABLE_NAMESPACES.contains(ns)) return true;
 		NamespaceResolver resolver = resolvers.get(ns);
 		return resolver != null && resolver.isWritable();
 	}
 
-	public static boolean isExtensionPath(ACell[] keys) {
-		return keys.length > 0 && Strings.intern("x").equals(keys[0]);
+	public static boolean isExtensionPath(AString[] path) {
+		return path.length > 0 && Strings.intern("x").equals(path[0]);
 	}
 
 	/** DID-qualified extension reads share the same view and authority checks as bare x paths. */
-	public ACell readExtensionNamespace(RequestContext ctx, AString owner, ACell[] keys) {
-		return ExtensionNamespaceResolver.resolveForUser(ctx, this, owner, keys, Capability.CRUD_READ).read();
+	public ACell readExtensionNamespace(RequestContext ctx, AString owner, AString[] path) {
+		return ExtensionNamespaceResolver.resolveForUser(ctx, this, owner, path, Capability.CRUD_READ).read();
 	}
 
 }

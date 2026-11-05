@@ -25,8 +25,8 @@ import covia.lattice.ValuePath;
 
 class VenueMigrationTest {
 	private static final AString DID = Strings.create("did:test:migrations");
-	private static final ACell[] OLD_QUEUE = ValuePath.parse("w/user-deletions");
-	private static final ACell[] OLD_ADAPTER = ValuePath.parse("w/adapters/unloaded");
+	private static final AString[] OLD_QUEUE = ValuePath.parse("w/user-deletions");
+	private static final AString[] OLD_ADAPTER = ValuePath.parse("w/adapters/unloaded");
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 
 	private static VenueState legacy() {

@@ -46,7 +46,7 @@ public class InboxTest {
 		User user = user();
 		user.inbox().put(ID, Maps.of(Hitl.STATUS, Hitl.OPEN));
 
-		assertEquals(user.inbox().getAll(), user.resolve(new ACell[] {Namespace.H}, 0).read());
-		assertEquals(Hitl.OPEN, RT.getIn(user.resolve(new ACell[] {Namespace.H, ID}, 0).read(), Hitl.STATUS));
+		assertEquals(user.inbox().getAll(), user.resolve(new AString[] {Namespace.H}, 0).read());
+		assertEquals(Hitl.OPEN, RT.getIn(user.resolve(new AString[] {Namespace.H, ID}, 0).read(), Hitl.STATUS));
 	}
 }

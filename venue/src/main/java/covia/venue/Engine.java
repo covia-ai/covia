@@ -1930,18 +1930,18 @@ public class Engine {
 	 * A physical path in a user's local namespace. Relative paths belong to the
 	 * caller; DID URL paths name their owner explicitly.
 	 */
-	public record UserPathTarget(AString ownerDID, User user, ACell[] pathKeys, AString resource) {
+	public record UserPathTarget(AString ownerDID, User user, AString[] path, AString resource) {
 		public UserPathTarget {
-			pathKeys = pathKeys.clone();
+			path = path.clone();
 		}
 
 		@Override
-		public ACell[] pathKeys() {
-			return pathKeys.clone();
+		public AString[] path() {
+			return path.clone();
 		}
 	}
 
-	private record ParsedUserPath(AString ownerDID, ACell[] pathKeys, AString resource) {}
+	private record ParsedUserPath(AString ownerDID, AString[] path, AString resource) {}
 
 	/**
 	 * Resolves a physical user path without applying an access policy. This is
@@ -1981,7 +1981,7 @@ public class Engine {
 		}
 
 		AString ownerDID;
-		ACell[] pathKeys;
+		AString[] path;
 		if (ref.startsWith(NS_DID)) {
 			DIDURL didURL;
 			try {
@@ -1990,27 +1990,22 @@ public class Engine {
 				throw new InvalidInputException(INVALID_DID_URL + ref + " (" + e.getMessage() + ")", e);
 			}
 			ownerDID = Strings.create(didURL.getDID().toString());
-			pathKeys = ValuePath.parse(didURL.getPath());
+			path = ValuePath.parse(didURL.getPath());
 		} else {
 			ownerDID = ctx.getUserDID();
-			pathKeys = ValuePath.parse(stripLeadingSlash(ref).toString());
+			path = ValuePath.parse(stripLeadingSlash(ref).toString());
 		}
 
-		if (pathKeys.length == 0) {
+		if (path.length == 0) {
 			throw new InvalidInputException(USER_PATH_NO_NAMESPACE);
 		}
-
-		StringBuilder resource = new StringBuilder(ownerDID.toString());
-		for (ACell key : pathKeys) {
-			resource.append('/').append(key);
-		}
-		return new ParsedUserPath(ownerDID, pathKeys, Strings.create(resource.toString()));
+		return new ParsedUserPath(ownerDID, path, Strings.create(ownerDID + ValuePath.format(path)));
 	}
 
 	private UserPathTarget locateUserPath(ParsedUserPath parsed, boolean create) {
 		Users users = venueState.users();
 		User user = create ? users.ensure(parsed.ownerDID()) : users.get(parsed.ownerDID());
-		return new UserPathTarget(parsed.ownerDID(), user, parsed.pathKeys(), parsed.resource());
+		return new UserPathTarget(parsed.ownerDID(), user, parsed.path(), parsed.resource());
 	}
 
 	/** Opening of every refusal to read a referenced path the caller may not read. */
@@ -2120,11 +2115,11 @@ public class Engine {
 			} catch (AuthException | InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
-			if (covia.adapter.CoviaAdapter.isExtensionPath(target.pathKeys())) {
+			if (covia.adapter.CoviaAdapter.isExtensionPath(target.path())) {
 				var adapter = (covia.adapter.CoviaAdapter) getAdapter("covia");
-				return adapter == null ? null : adapter.readExtensionNamespace(ctx, target.ownerDID(), target.pathKeys());
+				return adapter == null ? null : adapter.readExtensionNamespace(ctx, target.ownerDID(), target.path());
 			}
-			if (!isPhysicalUserNamespace(target.pathKeys())) return null;
+			if (!isPhysicalUserNamespace(target.path())) return null;
 			return readUserPathValue(target);
 		}
 
@@ -2274,9 +2269,9 @@ public class Engine {
 		return readUserPathValue(resolveUserPath(ctx, ref, false));
 	}
 
-	private static boolean isPhysicalUserNamespace(ACell[] pathKeys) {
-		if (pathKeys.length == 0) return false;
-		return switch (pathKeys[0].toString()) {
+	private static boolean isPhysicalUserNamespace(AString[] path) {
+		if (path.length == 0) return false;
+		return switch (path[0].toString()) {
 			case "w", "g", "o", "j", "s", "h" -> true;
 			default -> false;
 		};
@@ -2285,13 +2280,11 @@ public class Engine {
 	private ACell readUserPathValue(UserPathTarget target) {
 		User user = target.user();
 		if (user == null) return null;
-		ACell[] pathKeys = target.pathKeys();
-
 		// Absence is a null return (no user, empty path, or readPath finding
 		// nothing — none of which throw). Anything that throws is a real failure —
 		// an abnormal navigation error, or a lower-level store fault — and it
 		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return user.resolve(pathKeys, 0).read();
+		return user.resolve(target.path(), 0).read();
 	}
 
 	/**

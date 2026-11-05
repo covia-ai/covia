@@ -1,6 +1,6 @@
 package covia.lattice;
 
-import convex.core.data.ACell;
+import convex.core.data.AString;
 import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
@@ -10,7 +10,7 @@ import covia.venue.RequestContext;
  * <p>Virtual namespaces (e.g. {@code n/} for agent workspace, {@code t/} for
  * goal-scoped temp) are not backed by a dedicated top-level lattice namespace.
  * Instead, a NamespaceResolver finds the component that holds the data, from
- * the {@link RequestContext}, and the keys the path names within it.</p>
+ * the {@link RequestContext}, and the segments the path names within it.</p>
  *
  * <p>Resolvers are registered on {@link CoviaAdapter} by prefix. Path resolution
  * checks registered resolvers first (O(1) lookup by prefix), then falls through
@@ -19,21 +19,21 @@ import covia.venue.RequestContext;
 public interface NamespaceResolver {
 
 	/**
-	 * Resolves the virtual namespace to a target cursor and remaining path keys.
+	 * Resolves the virtual namespace to where its path ends.
 	 *
 	 * @param ctx    request context (provides callerDID, agentId, jobId)
-	 * @param keys   full parsed path keys (first element is the prefix, e.g. "n" or "t")
+	 * @param path   the whole parsed path (its first segment is the prefix, e.g. "n" or "t")
 	 * @return resolved target, or null if the context lacks the required scope
 	 * @throws covia.exception.WrongScopeException if the prefix is used outside its
 	 *         required agent/session scope — a context mismatch that a read treats
 	 *         as absence and a write surfaces as an error (distinct from an auth
 	 *         failure or a malformed path)
 	 */
-	Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
+	Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path);
 
 	/** Resolve for a particular CRUD ability; existing resolvers retain their policy. */
-	default Position resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys, convex.core.data.AString ability) {
-		return resolve(ctx, adapter, keys);
+	default Position resolve(RequestContext ctx, CoviaAdapter adapter, AString[] path, AString ability) {
+		return resolve(ctx, adapter, path);
 	}
 
 	/** Whether this namespace accepts writes (static, applies to all callers). */

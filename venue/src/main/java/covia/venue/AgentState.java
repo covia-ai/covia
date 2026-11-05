@@ -328,20 +328,20 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/**
 	 * {@code n} is the agent's workspace and {@code sessions/<id>} a session,
-	 * named by its id in hex. The rest of the record, and a key that names no
-	 * session, is read as stored.
+	 * named by its id in hex. The rest of the record, and a segment that names
+	 * no session, is read as stored.
 	 */
 	@Override
-	public Position resolve(ACell[] keys, int from, int to) {
+	public Position resolve(AString[] path, int from, int to) {
 		if (from < to) {
-			ACell key = keys[from];
-			if (K_N.equals(key)) return workspace().resolve(keys, from + 1, to);
-			if (K_SESSIONS.equals(key) && from + 1 < to) {
-				Blob sid = ValuePath.blobKey(keys[from + 1]);
-				if (sid != null && getSession(sid) != null) return session(sid).resolve(keys, from + 2, to);
+			AString segment = path[from];
+			if (K_N.equals(segment)) return workspace().resolve(path, from + 1, to);
+			if (K_SESSIONS.equals(segment) && from + 1 < to) {
+				Blob sid = ValuePath.blobKey(path[from + 1]);
+				if (sid != null && getSession(sid) != null) return session(sid).resolve(path, from + 2, to);
 			}
 		}
-		return super.resolve(keys, from, to);
+		return super.resolve(path, from, to);
 	}
 
 	/**

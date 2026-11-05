@@ -124,6 +124,20 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testVectorPathSegmentsMustBeStrings() {
+		// A list position is written as digits, never a number: the component a
+		// segment reaches decides what it means.
+		AVector<ACell> path = Vectors.of("w", "items", CVMLong.ONE);
+		String refusal = String.format(CoviaAdapter.SEGMENT_NOT_STRING, 2, CVMLong.ONE.getType());
+		for (String op : new String[] {"read", "write"}) {
+			Job job = engine.jobs().invokeOperation("v/ops/covia/" + op,
+				Maps.of(Fields.PATH, path, Fields.VALUE, CVMLong.ONE), ALICE);
+			assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000), op);
+			assertEquals(refusal, job.getErrorMessage(), op);
+		}
+	}
+
+	@Test
 	public void testReadEmptyPath() {
 		// Empty path returns entire user root
 		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -1477,7 +1491,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeletePreservesSiblings() {
 		ACell root = Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2));
-		ACell[] keys = ValuePath.parse("w/entry/x");
+		AString[] keys = ValuePath.parse("w/entry/x");
 		ACell result = ValuePath.remove(root, keys, 2);
 
 		// y should remain, x should be gone
@@ -1489,7 +1503,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeleteMissingBranchIsExactNoOp() {
 		ACell root = Maps.of("present", Maps.of("value", CVMLong.ONE));
-		ACell[] keys = ValuePath.parse("w/missing/leaf");
+		AString[] keys = ValuePath.parse("w/missing/leaf");
 
 		ACell result = ValuePath.remove(root, keys, 1);
 
@@ -1958,13 +1972,13 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testParseStringPath() {
-		ACell[] keys = ValuePath.parse("g/my-agent/timeline/3");
-		assertEquals(4, keys.length);
-		assertEquals(Strings.create("g"), keys[0]);
-		assertEquals(Strings.create("my-agent"), keys[1]);
-		assertEquals(Strings.create("timeline"), keys[2]);
-		// All segments are AString — lattice resolveKey handles type translation
-		assertEquals(Strings.create("3"), keys[3]);
+		AString[] path = ValuePath.parse("g/my-agent/timeline/3");
+		assertEquals(4, path.length);
+		assertEquals(Strings.create("g"), path[0]);
+		assertEquals(Strings.create("my-agent"), path[1]);
+		assertEquals(Strings.create("timeline"), path[2]);
+		// Every segment is a string; the component it reaches decides what it means
+		assertEquals(Strings.create("3"), path[3]);
 	}
 
 	@Test
@@ -2747,7 +2761,7 @@ public class CoviaAdapterTest {
 		Position target = covia.resolveVirtual(ctx, ValuePath.parse("c/draft"));
 		assertNull(target.read());
 		var refused = assertThrows(InvalidInputException.class,
-			() -> target.workspace().write(target.keys(), target.from(), CVMLong.ONE));
+			() -> target.workspace().write(target.path(), target.from(), CVMLong.ONE));
 		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
 		assertNull(engine.getVenueState().users().get(ALICE_DID).agent(agentId).getSession(sessionId),
 			"scoped scratch must never mint a phantom session");
@@ -2760,7 +2774,7 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		Position target = covia.resolveVirtual(ctx, ValuePath.parse("n/draft"));
-		target.workspace().write(target.keys(), target.from(), Strings.create("note"));
+		target.workspace().write(target.path(), target.from(), Strings.create("note"));
 
 		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().get(ALICE_DID)
 			.agent(agentId).getRecord(), "n", "draft"));
@@ -2791,7 +2805,7 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		Position target = covia.resolveVirtual(ctx, ValuePath.parse("t/draft"));
-		target.workspace().write(target.keys(), target.from(), Strings.create("task note"));
+		target.workspace().write(target.path(), target.from(), Strings.create("task note"));
 
 		// The scratch must be the FOCUSED TASK's Job record, not the transition Job's.
 		assertEquals(Strings.create("task note"), RT.getIn(user.jobs().getRecord(taskId), Fields.TEMP, "draft"),
@@ -2809,7 +2823,7 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		Position target = covia.resolveVirtual(ctx, ValuePath.parse("t/draft"));
-		target.workspace().write(target.keys(), target.from(), Strings.create("job note"));
+		target.workspace().write(target.path(), target.from(), Strings.create("job note"));
 
 		assertEquals(Strings.create("job note"), RT.getIn(user.jobs().getRecord(jobId), Fields.TEMP, "draft"),
 			"t/ must resolve to the current Job record");

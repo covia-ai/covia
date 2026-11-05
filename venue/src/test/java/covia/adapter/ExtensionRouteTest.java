@@ -2,7 +2,6 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -107,12 +106,12 @@ class ExtensionRouteTest {
 		assertEquals(before, engine.getVenueState().get(), "reading a view does not materialise user storage");
 	}
 
-	@Test void normalAccessorsUseTheConnectedViewAndTypedPaths() {
+	@Test void normalAccessorsUseTheConnectedViewAndPathArrays() {
 		write(path("/note"), Strings.create("hello"), alice);
 		run("append", Maps.of(Fields.PATH, path("/items"), Fields.VALUE, 3L), alice);
 		assertEquals(CVMLong.create(3), read(path("/items/2"), alice));
 		assertEquals(CVMLong.create(3), RT.getIn(run("read", Maps.of(Fields.PATH,
-			Vectors.of("x", "extension-test", "items", 2L)), alice), Fields.VALUE));
+			Vectors.of("x", "extension-test", "items", "2")), alice), Fields.VALUE));
 		assertEquals(CVMLong.create(4), RT.getIn(run("list", Maps.of(Fields.PATH, path("")), alice), "count"));
 		assertNotNull(run("slice", Maps.of(Fields.PATH, path("/items"), "limit", 2L), alice));
 		assertNotNull(run("inspect", Maps.of("paths", Vectors.of(path("/note"))), alice));
@@ -177,16 +176,16 @@ class ExtensionRouteTest {
 	}
 
 	@Test void absentDisabledAndUnloadedRoutesNeverFallThroughToUserStorage() {
-		ACell[] shadow = ValuePath.parse(path("/label"));
+		AString[] shadow = ValuePath.parse(path("/label"));
 		Workspace record = new Workspace(engine.getVenueState().users().get(aliceDID).cursor());
-		record.createPath(Arrays.copyOf(shadow, shadow.length - 1), 0);
+		record.createPath(shadow, 0, shadow.length - 1);
 		record.write(shadow, 0, Strings.create("shadow"));
 		var retained = covia.resolveVirtual(alice, ValuePath.parse(path("/label")), Capability.CRUD_WRITE);
 		engine.disableAdapter(probe.getName());
 		assertNull(read(path("/label"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/label"), Strings.create("no"), alice));
 		assertThrows(AuthException.class,
-			() -> retained.workspace().write(retained.keys(), retained.from(), Strings.create("late")));
+			() -> retained.workspace().write(retained.path(), retained.from(), Strings.create("late")));
 		engine.enableAdapter(probe.getName());
 		assertEquals(Strings.create("alice"), read(path("/label"), alice));
 		engine.removeAdapter(probe.getName());
@@ -220,7 +219,7 @@ class ExtensionRouteTest {
 		var target = covia.resolveVirtual(alice, ValuePath.parse(path("/0")), Capability.CRUD_WRITE);
 		ACell before = engine.getVenueState().get();
 		assertThrows(IllegalArgumentException.class, () -> target.workspace().transact(draft -> {
-			draft.write(target.keys(), target.from(), CVMLong.ZERO);
+			draft.write(target.path(), target.from(), CVMLong.ZERO);
 			throw new IllegalArgumentException("test rollback");
 		}));
 		assertEquals(before, engine.getVenueState().get());
@@ -312,6 +311,6 @@ class ExtensionRouteTest {
 		assertNull(read("x/test/scratch", alice));
 		assertEquals(Strings.create("bob scratch"), read("x/test/scratch", bob));
 		assertThrows(AuthException.class,
-			() -> retained.workspace().write(retained.keys(), retained.from(), Strings.create("late")));
+			() -> retained.workspace().write(retained.path(), retained.from(), Strings.create("late")));
 	}
 }

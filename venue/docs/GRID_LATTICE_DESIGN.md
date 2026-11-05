@@ -292,6 +292,14 @@ the other. Today it is done in several places, each with its own list of
 namespaces, and write policy is an allowlist in `CoviaAdapter`. This section is
 the design that replaces them.
 
+**A path is strings.** A Covia path is the sequence of string segments a caller
+writes (`w/list/0` is `"w"`, `"list"`, `"0"`), and it never holds a lattice
+key. The component a segment reaches maps it to a key: `Jobs` reads hex as a
+job's Blob id, `User` reads a namespace letter as a record field, and below the
+last component a segment means what the value it meets needs. A path given as
+an array holds strings only; any other element is refused
+(`CoviaAdapter.SEGMENT_NOT_STRING`).
+
 **One entry point.** `engine.paths().resolve(ctx, path, ability)` is the only
 request-aware step. It:
 
@@ -310,10 +318,10 @@ paths stay with `Engine.resolvePath` and federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.
-`resolve(keys, from, to)` returns the `Position` where `keys[from, to)` ends:
-the component that owns it and the range of the keys that component reads, so
-a path and any part of it are named without copying keys; a form without `to`
-runs to the end. It sees no request, takes as many keys per
+`resolve(path, from, to)` returns the `Position` where `path[from, to)` ends:
+the component that owns it and the range of the segments that component reads,
+so a path and any part of it are named without copying segments; a form
+without `to` runs to the end. It sees no request, takes as many segments per
 step as the component's rules cover (as cursor paths do), and builds each child
 only from its own cursor, so a walk from a draft root stays in the draft.
 `read()` returns the value as callers see it: a job reads as its current state.
@@ -327,10 +335,11 @@ only from its own cursor, so a walk from a draft root stays in the draft.
 | `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState` |
 | `SessionState` | `c` to the session's `Workspace` |
 
-Keys below the last component a path reaches are read by value type
-(`ValuePath`): a map key, a vector index, an Index key. A stored null counts as
-present. A key that names no agent, session or job ends the path at the
-component above it, where it reads as null.
+Segments below the last component a path reaches are read by the value they
+meet (`ValuePath`): a map key, a vector index written in digits, an Index key
+as the string itself or, in hex, as a Blob. A stored null counts as present. A
+segment that names no agent, session or job ends the path at the component
+above it, where it reads as null.
 
 **Operations define writability.** A component's domain operations are the
 only ways to change it. Each makes its own checks and then changes its cursor

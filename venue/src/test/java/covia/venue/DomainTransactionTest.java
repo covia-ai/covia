@@ -36,7 +36,7 @@ import covia.lattice.ValuePath;
 class DomainTransactionTest {
 
 	private static final AString DID = Strings.create("did:key:transaction-user");
-	private static ACell[] path(String path) { return ValuePath.parse(path); }
+	private static AString[] path(String path) { return ValuePath.parse(path); }
 
 	@Test
 	void jobHistoryComposesWithWorkspaceAndRetainedDraftsStayIsolated() {

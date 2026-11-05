@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.Strings;
 import covia.adapter.CoviaAdapter;
 import covia.exception.WrongScopeException;
@@ -44,14 +44,14 @@ public class PathResolutionErrorTest {
 		// A resolver whose navigation throws an ORDINARY internal error (the class
 		// of bug #175 was masking as absence).
 		covia.registerResolver("zz", new NamespaceResolver() {
-			@Override public Position resolve(RequestContext c, CoviaAdapter a, ACell[] keys) {
+			@Override public Position resolve(RequestContext c, CoviaAdapter a, AString[] path) {
 				throw new RuntimeException("simulated internal navigation failure");
 			}
 			@Override public boolean isWritable() { return false; }
 		});
 		// A resolver that reports a wrong-scope condition — a genuine absence for reads.
 		covia.registerResolver("wz", new NamespaceResolver() {
-			@Override public Position resolve(RequestContext c, CoviaAdapter a, ACell[] keys) {
+			@Override public Position resolve(RequestContext c, CoviaAdapter a, AString[] path) {
 				throw new WrongScopeException("simulated wrong scope");
 			}
 			@Override public boolean isWritable() { return false; }

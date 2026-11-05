@@ -38,6 +38,7 @@ import covia.exception.UnavailableException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.ValuePath;
 import covia.test.Rendezvous;
 
 /**
@@ -114,7 +115,7 @@ public class JobManagerTest {
 		assertEquals(after, storage.get(), "repeat edits remain idempotent");
 
 		storage.set(legacy);
-		user.jobs().scratch(id).write(new ACell[] {Strings.create("scratch")}, 0, CVMLong.ONE);
+		user.jobs().scratch(id).write(ValuePath.parse("scratch"), 0, CVMLong.ONE);
 		assertNull(RT.getIn(storage.get(), prev), "scratch edits also discard the obsolete link");
 		assertEquals(payload.assoc(Strings.create("scratch"), CVMLong.ONE), RT.getIn(storage.get(), temp));
 	}

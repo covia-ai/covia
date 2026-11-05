@@ -334,12 +334,12 @@ public class AgentAdapter extends AAdapter {
 		AString path = (value.startsWith("did:") || value.startsWith("g/") || value.startsWith("/g/"))
 			? ref : Strings.create("g/" + value);
 		Engine.UserPathTarget resolved = engine.requireUserPath(ctx, path, ability, createOwner);
-		ACell[] keys = resolved.pathKeys();
-		if (keys.length != 2 || !"g".equals(keys[0].toString())) {
+		AString[] agentPath = resolved.path();
+		if (agentPath.length != 2 || !"g".equals(agentPath[0].toString())) {
 			throw new InvalidInputException("Agent reference must resolve to g/<agentId>: " + ref);
 		}
-		AString agentId = RT.ensureString(keys[1]);
-		if (agentId == null || agentId.isEmpty() || agentId.toString().contains(":")) {
+		AString agentId = agentPath[1];
+		if (agentId.isEmpty() || agentId.toString().contains(":")) {
 			throw new InvalidInputException("agentId must be a non-empty path segment without ':'");
 		}
 		return new AgentTarget(resolved.ownerDID(), resolved.user(), agentId, resolved.resource());

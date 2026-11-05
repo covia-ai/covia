@@ -21,7 +21,7 @@ import convex.core.data.prim.CVMLong;
  * (the sessions Index is inside the agent record's JSON leaf, so typed lattice
  * navigation stops there; {@code deepGet}/{@code navigateInto} does the walk).
  *
- * <p>An {@code AString} key is tried as a blob-like key first (AString is itself
+ * <p>A path segment is tried as a blob-like key first (AString is itself
  * {@code ABlobLike}, covering a string-keyed index) and then parsed as hex into a
  * {@link Blob} (covering the common Blob-keyed case), with or without a {@code 0x}
  * prefix.</p>
@@ -44,11 +44,11 @@ public class CoviaReadIndexNavTest {
 		String hex = sid.toHexString();   // bare hex, no 0x
 
 		// sessions/<hex>/wakeTime
-		ACell wt = ValuePath.get(root, new ACell[]{ s("sessions"), s(hex), s("wakeTime") }, 0);
+		ACell wt = ValuePath.get(root, new AString[]{ s("sessions"), s(hex), s("wakeTime") }, 0);
 		assertEquals(CVMLong.create(1790000000000L), wt, "hex segment must resolve the Blob key");
 
 		// sessions/<hex> → whole session record
-		ACell rec = ValuePath.get(root, new ACell[]{ s("sessions"), s(hex) }, 0);
+		ACell rec = ValuePath.get(root, new AString[]{ s("sessions"), s(hex) }, 0);
 		assertEquals(s("wakeTime"), ((AMap<?, ?>) rec).getKeys().get(0), "whole record resolves too");
 	}
 
@@ -58,7 +58,7 @@ public class CoviaReadIndexNavTest {
 		ACell root = fixture(sid);
 		// keys render outward as "0x…" via ALattice.toJSONKey — accept that form
 		ACell wt = ValuePath.get(root,
-			new ACell[]{ s("sessions"), s("0x" + sid.toHexString()), s("wakeTime") }, 0);
+			new AString[]{ s("sessions"), s("0x" + sid.toHexString()), s("wakeTime") }, 0);
 		assertEquals(CVMLong.create(1790000000000L), wt, "0x-prefixed hex must resolve too");
 	}
 
@@ -67,7 +67,7 @@ public class CoviaReadIndexNavTest {
 		Blob sid = Blob.fromHex("0000019e921a468d0000000000000000");
 		ACell root = fixture(sid);
 		ACell miss = ValuePath.get(root,
-			new ACell[]{ s("sessions"), s("ffffffffffffffffffffffffffffffff"), s("wakeTime") }, 0);
+			new AString[]{ s("sessions"), s("ffffffffffffffffffffffffffffffff"), s("wakeTime") }, 0);
 		assertNull(miss, "a hex key not present in the index resolves to null, not a throw");
 	}
 }

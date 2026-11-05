@@ -45,7 +45,7 @@ class VenueMigrationEndToEndTest {
 	private static final long SEEDED_THROUGH = 1;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
-	private static final ACell[] OLD_DELETIONS = ValuePath.parse("w/user-deletions");
+	private static final AString[] OLD_DELETIONS = ValuePath.parse("w/user-deletions");
 	/** Keyed by an adapter that never registers, so start-up leaves the deletion pending. */
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 	private static final ACell UNLOADED = Maps.of("note", "an unversioned adapter's state");
@@ -58,7 +58,7 @@ class VenueMigrationEndToEndTest {
 	private static final Blob SESSION = Blob.fromHex("e2e1e2e1e2e1e2e1e2e1e2e1e2e1e2e1");
 	private static final AString HISTORY_VERSION = Strings.create("historyVersion");
 
-	private static ACell[] adapterPath(String name) {
+	private static AString[] adapterPath(String name) {
 		return ValuePath.parse("w/adapters/" + name);
 	}
 
