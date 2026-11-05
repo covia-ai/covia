@@ -199,7 +199,7 @@ public class WorkspaceTest {
 		assertEquals(CVMLong.ONE, area.read(own));
 		assertTrue(area.contains(own));
 		assertFalse(area.contains(whole.rest()));
-		assertEquals(1, ValuePath.missingLevels(area.read(), whole.rest()));
+		assertEquals(1, area.entry(whole.rest()).missingLevels());
 
 		assertEquals(1, area.createPath(path("x/a/d/e").rest().prefix(2)), "only levels inside the stretch are created");
 		assertEquals(Maps.of("b", CVMLong.ONE, "d", Maps.empty()), area.read(path("a")));

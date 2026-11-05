@@ -4,7 +4,6 @@ import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -17,12 +16,12 @@ import covia.exception.InvalidInputException;
  * {@code temp}. Its owner binds the cursor at the area's root, with the owner's
  * stamping, and decides whether the root may be created.
  *
- * <p>A caller's path resolves to the {@link Entry} it names, whose keys are
- * fixed then. The area's own operations, for its owner's code, take the
- * stretch of a path that is the area's own, read each segment by the value it
- * meets ({@link ValuePath}), and change the area in one atomic update. An
- * absent root counts as empty. No operation but {@link #createPath} creates a
- * level: a change below a level that does not exist is refused.</p>
+ * <p>A path resolves to the {@link Entry} it names, whose keys are fixed then,
+ * and every change is an entry's. The area's own operations, for its owner's
+ * code, take the stretch of a path that is the area's own and act through the
+ * entry it resolves to. An absent root counts as empty. No operation but
+ * {@link #createPath} creates a level: a change below a level that does not
+ * exist is refused.</p>
  */
 public final class Workspace extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, Workspace> {
@@ -78,56 +77,43 @@ public final class Workspace extends ACoviaComponent<ACell>
 	}
 
 	/**
-	 * Puts {@code value} at {@code path}.
+	 * Puts {@code value} at {@code path}, as {@link Entry#write}.
 	 *
 	 * @return Whether a value was there already
 	 */
 	public boolean write(CoviaPath path, ACell value) {
-		boolean[] existed = {false};
-		cursor().updateAndGet(area -> {
-			existed[0] = ValuePath.contains(area, path);
-			return ValuePath.set(base(area, path), path, value);
-		});
-		return existed[0];
+		return entry(path).write(value);
 	}
 
 	/**
 	 * Adds {@code element} to the list at {@code path}, starting one when
-	 * nothing is there.
+	 * nothing is there, as {@link Entry#append}.
 	 *
 	 * @return The list's size afterwards
 	 */
 	public long append(CoviaPath path, ACell element) {
-		ACell area = cursor().updateAndGet(current ->
-			ValuePath.append(base(current, path), path, element));
-		return ((AVector<?>) ValuePath.get(area, path)).count();
+		return entry(path).append(element);
 	}
 
 	/**
-	 * Removes the value at {@code path}. Nothing is written when it is absent,
-	 * and the levels above a removed value stay.
+	 * Removes the value at {@code path}, as {@link Entry#delete}. Nothing is
+	 * written when it is absent, and the levels above a removed value stay.
 	 *
 	 * @return Whether a value was removed
 	 */
 	public boolean delete(CoviaPath path) {
-		boolean[] removed = {false};
-		cursor().updateAndGet(area -> {
-			removed[0] = ValuePath.contains(area, path);
-			return removed[0] ? ValuePath.remove(area, path) : area;
-		});
-		return removed[0];
+		return entry(path).delete();
 	}
 
 	/**
 	 * Replaces the value at {@code path} with {@code change} applied to it, null
-	 * when absent. {@code change} may run again on a retry, so it must be pure.
+	 * when absent, as {@link Entry#update}. {@code change} may run again on a
+	 * retry, so it must be pure.
 	 *
 	 * @return The new value
 	 */
 	public ACell update(CoviaPath path, UnaryOperator<ACell> change) {
-		ACell area = cursor().updateAndGet(current ->
-			ValuePath.update(base(current, path), path, change));
-		return ValuePath.get(area, path);
+		return entry(path).update(change);
 	}
 
 	/**
@@ -137,17 +123,7 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 * @return How many levels were created
 	 */
 	public int createPath(CoviaPath path) {
-		int[] created = {0};
-		cursor().updateAndGet(area -> {
-			created[0] = 0;
-			return ValuePath.createPath(base(area, path), path, created);
-		});
-		return created[0];
-	}
-
-	/** The area to change below: an absent root counts as an empty map. */
-	private static ACell base(ACell area, CoviaPath path) {
-		return (area == null && !path.isEmpty()) ? Maps.empty() : area;
+		return entry(path).createLevels(path.length());
 	}
 
 	/** The area at a key in a record; a change needs the record. */
