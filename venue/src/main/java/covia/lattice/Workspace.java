@@ -4,7 +4,6 @@ import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
-import convex.core.data.Maps;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.PathCursor;
@@ -51,18 +50,6 @@ public final class Workspace extends ACoviaComponent<ACell>
 	@Override
 	public Workspace withCursor(AForkableCursor<ACell> draft) {
 		return new Workspace(draft);
-	}
-
-	/**
-	 * The area at {@code key} inside this one, reached through this area's
-	 * cursor so its owner's stamping applies. It reads as absent until a change
-	 * below it creates it.
-	 *
-	 * @param key The area's key in this one
-	 * @return The area
-	 */
-	public Workspace area(AString key) {
-		return new Workspace(cursor().withDefault(Maps.empty()).path(key));
 	}
 
 	/** Where {@code path} ends in this area: the {@link Entry} there. */

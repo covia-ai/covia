@@ -45,17 +45,6 @@ public class WorkspaceTest {
 	}
 
 	@Test
-	public void testAreaIsAKeyInsideItsOwner() {
-		Workspace owner = empty();
-		Workspace inner = owner.area(AREA);
-		assertNull(inner.read(), "the area reads as absent until a change below it");
-		assertNull(owner.read(), "reading the area creates nothing");
-		inner.write(path("a"), CVMLong.ONE);
-		assertEquals(Maps.of(AREA, Maps.of("a", CVMLong.ONE)), owner.read());
-		assertEquals(CVMLong.ONE, inner.read(path("a")));
-	}
-
-	@Test
 	public void testChangesBelowAMissingLevelAreRefused() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.empty()));
 		ACell before = area.read();

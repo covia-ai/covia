@@ -158,6 +158,17 @@ public final class CoviaPath {
 		return isEmpty() ? this : prefix(length() - 1);
 	}
 
+	/**
+	 * A whole path of this stretch's segments followed by {@code other}'s, such
+	 * as the path an alias stands for. Both were checked when they were made.
+	 */
+	public CoviaPath append(CoviaPath other) {
+		AString[] joined = new AString[length() + other.length()];
+		System.arraycopy(segments, start, joined, 0, length());
+		System.arraycopy(other.segments, other.start, joined, length(), other.length());
+		return whole(joined);
+	}
+
 	// ========== Values ==========
 
 	/**

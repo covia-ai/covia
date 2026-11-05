@@ -518,9 +518,8 @@ public class OperationResolutionTest {
 
 	// ========== /v/ namespace — venue globals via VenueGlobalsResolver ==========
 	//
-	// Per OPERATIONS.md §3, /v/ is a virtual prefix for the venue's shared
-	// definitions, VenueState.globals(): the global area of the venue user's
-	// workspace. Reads are universally allowed; writes
+	// Per OPERATIONS.md §3, /v/ is an alias: v/<rest> is the venue user's path
+	// w/global/<rest>. Reads are universally allowed; writes
 	// require the venue identity (engine.venueContext() or the venue's own
 	// DID). The venue user record exists at engine startup so /v/ paths
 	// always have a backing namespace to navigate.
@@ -607,19 +606,19 @@ public class OperationResolutionTest {
 	}
 
 	@Test
-	public void testVenueGlobalsAreTheVenueStateGlobals() {
+	public void testVenueGlobalsAreAnAliasOfTheVenueUsersPath() {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/test-scalar", Fields.VALUE, Strings.create("leaf")),
 			engine.venueContext()).awaitResult(5000);
-		assertEquals(Strings.create("leaf"),
-			engine.getVenueState().globals().read(CoviaPath.parse("test-scalar")));
+		User venue = engine.getVenueState().users().get(engine.getDIDString());
+		assertEquals(Strings.create("leaf"), venue.resolve(CoviaPath.parse("w/global/test-scalar")).read());
 
-		// A refusal names the path the caller wrote, not where v/ is kept.
+		// A refusal names the path the alias stands for.
 		Job below = engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/test-scalar/below", Fields.VALUE, Strings.create("x")),
 			engine.venueContext());
 		assertThrows(JobFailedException.class, () -> below.awaitResult(5000));
-		assertEquals(String.format(ValuePath.NOT_A_MAP, "below", "/v/test-scalar"), below.getErrorMessage());
+		assertEquals(String.format(ValuePath.NOT_A_MAP, "below", "/w/global/test-scalar"), below.getErrorMessage());
 	}
 
 	@Test

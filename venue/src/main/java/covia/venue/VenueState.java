@@ -36,7 +36,6 @@ import convex.lattice.cursor.SignedCursor;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
-import covia.lattice.Workspace;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
@@ -351,20 +350,6 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	private User venueUser() {
 		AString did = RT.ensureString(RT.getIn(get(), Covia.DID));
 		return did == null ? null : users().get(did);
-	}
-
-	/** Key of the venue's shared definitions in its own user's workspace. */
-	private static final AString GLOBAL = Strings.intern("global");
-
-	/**
-	 * The venue's shared definitions, which {@code v/} names: the
-	 * {@code global} area of the venue user's workspace.
-	 *
-	 * @return The area, or null before the venue user exists
-	 */
-	public Workspace globals() {
-		User venue = venueUser();
-		return venue == null ? null : venue.workspace().area(GLOBAL);
 	}
 
 	private ACell legacyState(String path) {

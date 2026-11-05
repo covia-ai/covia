@@ -17,16 +17,17 @@ import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import java.util.function.Consumer;
 import covia.lattice.CoviaPath;
-import covia.lattice.Workspace;
+import covia.lattice.Entry;
+import covia.lattice.VenueGlobalsResolver;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 
 /**
  * Materialises venue-owned bootstrap state as one native lattice transaction.
  *
- * <p>The {@link Workspace} transaction supplies a private draft of the venue's
- * shared definitions ({@link VenueState#globals()}, which {@code v/} names),
- * retries conflicts and commits atomically.
+ * <p>A transaction over the venue user supplies a private draft, retries
+ * conflicts and commits atomically. Each {@code v/} path is reached as the
+ * venue user's path it stands for ({@link VenueGlobalsResolver#target}).
  * Catalog and introspection writes are validated against that draft; an exception
  * discards the entire attempt. No operation dispatch or Job records are involved.</p>
  *
@@ -51,24 +52,25 @@ final class VenueBootstrapMaterializer {
 	private static final AString K_SHA256 = Strings.intern("sha256");
 
 	private final Engine engine;
-	/** Live workspace or the callback-confined transaction draft. */
-	private final Workspace workspace;
+	/** The venue user's callback-confined transaction draft. */
+	private final User venue;
 	private final List<String> adapterNames;
 	private final long startedAt;
 
-	private VenueBootstrapMaterializer(Engine engine, Workspace draft, List<String> adapterNames, long startedAt) {
+	private VenueBootstrapMaterializer(Engine engine, User draft, List<String> adapterNames, long startedAt) {
 		this.engine = engine;
-		this.workspace = draft;
+		this.venue = draft;
 		this.adapterNames = adapterNames;
 		this.startedAt = startedAt;
 	}
 
 	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
-		Workspace workspace = engine.getVenueState().globals();
-		if (workspace == null) throw new IllegalStateException(NO_VENUE_USER);
+		AString did = engine.getDIDString();
+		User venue = did == null ? null : engine.getVenueState().users().get(did);
+		if (venue == null) throw new IllegalStateException(NO_VENUE_USER);
 		var names = engine.getAdapterNamesInRegistrationOrder();
 		long started = System.currentTimeMillis();
-		workspace.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
+		venue.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
 	}
 
 	/** Materialises catalog and venue information, then commits them together. */
@@ -336,9 +338,9 @@ final class VenueBootstrapMaterializer {
 
 	/** Writes to the draft, creating the levels above, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
-		CoviaPath path = venuePath(virtualPath);
-		workspace.createPath(path.parent());
-		workspace.write(path, value);
+		Entry entry = venue.resolve(venuePath(virtualPath)).entry();
+		entry.createLevels();
+		entry.write(value);
 		ACell actual = readVenuePath(virtualPath);
 		if (!Objects.equals(value, actual)) {
 			throw new IllegalStateException(
@@ -347,29 +349,25 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return workspace.read(venuePath(virtualPath));
+		return venue.resolve(venuePath(virtualPath)).read();
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
-		workspace.delete(venuePath(virtualPath));
+		venue.resolve(venuePath(virtualPath)).entry().delete();
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
 		}
 	}
 
-	/**
-	 * The workspace's own stretch of the caller-visible path {@code v/x}: the
-	 * transactional workspace is the {@code w/global} root, so its segments
-	 * start after {@code v}.
-	 */
+	/** The venue user's path that the caller-visible path {@code v/x} stands for. */
 	private static CoviaPath venuePath(String virtualPath) {
 		CoviaPath path = CoviaPath.parse(virtualPath);
 		if (path.length() < 2 || !"v".equals(path.first().toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}
-		return path.rest();
+		return VenueGlobalsResolver.target(path);
 	}
 
 }

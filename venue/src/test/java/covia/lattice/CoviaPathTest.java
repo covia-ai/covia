@@ -93,6 +93,18 @@ public class CoviaPathTest {
 	}
 
 	@Test
+	public void testAppendingStretchesMakesAWholePath() {
+		CoviaPath alias = CoviaPath.parse("v/ops/echo");
+		CoviaPath joined = CoviaPath.parse("w/global").append(alias.rest());
+		assertEquals(CoviaPath.parse("w/global/ops/echo"), joined);
+		assertEquals("/w/global/ops/echo", joined.toString(), "the joined path is whole, not a stretch of either");
+		assertEquals("/w/global", joined.prefix(2).toString());
+
+		assertEquals(alias, alias.append(CoviaPath.EMPTY));
+		assertEquals("/ops/echo", CoviaPath.EMPTY.append(alias.rest()).toString());
+	}
+
+	@Test
 	public void testPathsAreEqualWhenTheyNameTheSamePlaceTheSameWay() {
 		CoviaPath path = CoviaPath.of(Vectors.of("g", "my-agent", "", "timeline", "3"));
 		assertEquals(path, CoviaPath.parse(path.toString()));

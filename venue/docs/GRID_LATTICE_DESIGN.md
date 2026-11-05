@@ -363,12 +363,9 @@ resolved against; otherwise it is refused and nothing is written. Only
 `createLevels` creates missing levels, and an absent workspace root counts as
 an empty map. The workspace's own operations, for its owner's code, take a
 path and act through the entry it resolves to; only `createPath` among them
-creates a level. An area inside a
-record (`n`, `c`, `temp`) refuses a change while the record does not exist. An
-area can hold another (`Workspace.area`), changed through the outer area's
-cursor: the venue's shared definitions, which `v/` names, are
-`VenueState.globals()`, the `global` area of the venue user's `w`. A
-position in any other component is read-only, except that `SecretStore`
+creates a level. A workspace inside a record (`n`, `c`, `temp`) refuses a
+change while the record does not exist. A position in any other component is
+read-only, except that `SecretStore`
 accepts removal of a whole secret. Refusals are typed and carry a reason from a
 constant on the refusing component.
 

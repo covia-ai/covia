@@ -3,20 +3,18 @@ package covia.lattice;
 import convex.core.data.AString;
 import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
+import covia.venue.User;
 
 /**
- * Resolves the {@code v/} virtual namespace to the venue's shared
- * definitions, {@link covia.venue.VenueState#globals()}.
+ * Resolves the {@code v/} virtual namespace, an alias: {@code v/<rest>} is the
+ * venue user's path {@code w/global/<rest>}, that is
+ * {@code <venue-DID>/w/global/<rest>}.
  *
  * <p>Per OPERATIONS.md §3, {@code /v/} is the venue's public bulletin
- * board: {@code v/<rest>} is {@code <venue-DID>/w/global/<rest>}. The venue
- * is treated as a user (it has its own DID and keypair), and the
- * {@code global} area of its workspace holds venue-provided data.</p>
- *
- * <p>This is a <b>venue-scoped</b> virtual namespace — unlike {@code n/}
- * (caller's running agent) and {@code t/} (caller's running job), which
- * navigate within the caller's own user data, it reaches the same area
- * whoever the caller is.</p>
+ * board. The venue is treated as a user (it has its own DID and keypair), and
+ * {@code w/global} in its workspace holds venue-provided data. The alias
+ * resolves by the ordinary walk from the venue user, whoever the caller is,
+ * so a refusal names the path it stands for.</p>
  *
  * <p><b>Access policy.</b> Reads are universally allowed; writes require a
  * caller DID equal to the venue's own DID. The {@link #canWrite} override
@@ -24,6 +22,19 @@ import covia.venue.RequestContext;
  * check.</p>
  */
 public class VenueGlobalsResolver implements NamespaceResolver {
+
+	/** The venue user's path that {@code v/} stands for. */
+	public static final CoviaPath TARGET = CoviaPath.parse("w/global");
+
+	/**
+	 * The venue user's path a {@code v/} path stands for.
+	 *
+	 * @param path A path whose first segment is {@code v}
+	 * @return {@code w/global} followed by the rest of the path
+	 */
+	public static CoviaPath target(CoviaPath path) {
+		return TARGET.append(path.rest());
+	}
 
 	/**
 	 * Reference to the adapter, kept so {@link #canWrite(RequestContext)}
@@ -38,8 +49,9 @@ public class VenueGlobalsResolver implements NamespaceResolver {
 
 	@Override
 	public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
-		Workspace globals = adapter.engine.getVenueState().globals();
-		return globals == null ? null : globals.resolve(path.rest());
+		AString venueDID = adapter.engine.getDIDString();
+		User venue = venueDID == null ? null : adapter.engine.getVenueState().users().get(venueDID);
+		return venue == null ? null : venue.resolve(target(path));
 	}
 
 	/**
