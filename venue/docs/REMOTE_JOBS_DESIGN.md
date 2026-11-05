@@ -5,7 +5,7 @@ The implemented contract is in [JOBS.md](JOBS.md#remote-delegation). This docume
 also describes planned extensions; it does not claim they have all shipped.
 
 The first delivery implements unkeyed submit-once, durable handle recovery,
-protected saved authority and operation metadata, shared bounded observation,
+a protected recovery record with operation metadata, shared bounded observation,
 and conservative acceptance uncertainty. Synchronous adapters and simple
 requests remain valid without keys or delegation machinery. Transient/private
 jobs retain their existing recording policy. Optional submission keys,
@@ -93,7 +93,7 @@ delegation:
   lastObservationError           bounded, redacted diagnostic
   nextAction, nextAttemptAt       durable description of the next step
   generation                     rejects superseded callbacks
-  authRef                        reference to protected credentials, never tokens
+  authRef                        reference to the protected recovery record, never tokens
 ```
 
 These are orthogonal facts, not new terminal Job statuses. `STARTED` means the
@@ -249,8 +249,9 @@ bundles later. Do not persist a raw RequestContext or bearer in Job history.
 Pin the selected remote principal, target identity, and authority references.
 Renew credentials only through the originally authorised strategy; never fall
 back from caller to venue authority, or to another venue after a timeout.
-Ephemeral caller proofs can expire: report observation auth-required and allow
-an authorised owner to restore credentials. Recovery must not widen capabilities.
+A caller's sign-in credential proves presence and is never stored, so a hop
+that signed in as its caller is not resumed: its recovered job ends, naming
+the remote job and its venue (JOBS.md). Recovery must not widen capabilities.
 Anonymous submissions cannot promise durable cross-restart ownership and safe
 deduplication without an explicit server-issued scoped receipt or equivalent
 ownership contract. Do not silently authenticate anonymous work as the venue.
