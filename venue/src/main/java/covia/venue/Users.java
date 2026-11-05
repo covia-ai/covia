@@ -6,6 +6,8 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.CoviaPath;
+import covia.lattice.Position;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
@@ -188,6 +190,35 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 			AMap<AString, ACell> record = RT.ensureMap(current);
 			return record != null ? record.dissoc(DELETING) : current;
 		});
+	}
+
+	/**
+	 * A path's first segment names a user by DID, and the rest is resolved by
+	 * that user. A DID with no live record, never registered or deleted, ends
+	 * the path here, where it reads as absent.
+	 */
+	@Override
+	public Position resolve(CoviaPath path) {
+		if (!path.isEmpty()) {
+			User user = get(path.first());
+			if (user != null) return user.resolve(path.rest());
+		}
+		return super.resolve(path);
+	}
+
+	/** The value at {@code path} in a live user's data, or null; a deleted account's record is never read. */
+	@Override
+	public ACell read(CoviaPath path) {
+		if (path.isEmpty()) return read();
+		User user = get(path.first());
+		return user == null ? null : user.resolve(path.rest()).read();
+	}
+
+	@Override
+	public boolean contains(CoviaPath path) {
+		if (path.isEmpty()) return super.contains(path);
+		User user = get(path.first());
+		return user != null && user.resolve(path.rest()).contains();
 	}
 
 	/**

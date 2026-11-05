@@ -333,7 +333,8 @@ from its own cursor, so a walk from a draft root stays in the draft.
 
 | Component | Routes |
 |-----------|--------|
-| `VenueState` | a user's DID to their `User`; `x/<adapter>` to the adapter's `Workspace` view |
+| `VenueState` | a path's first segment, its owner's DID, to `Users`; `x/<adapter>` to the adapter's `Workspace` view |
+| `Users` | a user's DID to their `User` |
 | `User` | `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `Workspace` |
 | `Jobs` | a job id, in hex, to its `JobState` |
 | `JobState` | `temp` to the job's `Workspace` |
@@ -345,8 +346,9 @@ meet (`ValuePath`): a map key, a vector index written in digits, an Index key
 as the string itself or, in hex, as a Blob. In a `Workspace` the path ends at
 an `Entry`, whose keys are fixed when it is resolved (`ValuePath.keys`); a
 level that does not exist yet takes the segment, the key of the map created
-there. A stored null counts as present. A segment that names no agent, session
-or job ends the path at the component above it, where it reads as null.
+there. A stored null counts as present. A segment that names no live user,
+agent, session or job ends the path at the component above it, where it reads
+as null; a deleted account's record is never read.
 
 **Operations define writability.** A component's domain operations are the
 only ways to change it. Each makes its own checks and then changes its cursor

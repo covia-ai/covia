@@ -2269,13 +2269,11 @@ public class Engine {
 	}
 
 	private ACell readUserPathValue(UserPathTarget target) {
-		User user = target.user();
-		if (user == null) return null;
 		// Absence is a null return (no user, empty path, or readPath finding
 		// nothing — none of which throw). Anything that throws is a real failure —
 		// an abnormal navigation error, or a lower-level store fault — and it
 		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return user.resolve(target.path()).read();
+		return venueState.resolve(CoviaPath.segments(target.ownerDID()).append(target.path())).read();
 	}
 
 	/**

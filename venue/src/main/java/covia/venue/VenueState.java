@@ -36,6 +36,8 @@ import convex.lattice.cursor.SignedCursor;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
+import covia.lattice.Position;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
@@ -240,6 +242,15 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 */
 	public Users users() {
 		return new Users(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.USER_DATA));
+	}
+
+	/**
+	 * A path from the venue starts with its owner's DID, as an address does
+	 * ({@code <DID>/<namespace>/<path>}), and {@link Users} resolves it.
+	 */
+	@Override
+	public Position resolve(CoviaPath path) {
+		return path.isEmpty() ? super.resolve(path) : users().resolve(path);
 	}
 
 	/** Atomically provisions account state and its login directory row. */
