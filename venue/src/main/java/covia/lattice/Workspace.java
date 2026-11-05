@@ -54,6 +54,18 @@ public final class Workspace extends ACoviaComponent<ACell>
 	}
 
 	/**
+	 * The area at {@code key} inside this one, reached through this area's
+	 * cursor so its owner's stamping applies. It reads as absent until a change
+	 * below it creates it.
+	 *
+	 * @param key The area's key in this one
+	 * @return The area
+	 */
+	public Workspace area(AString key) {
+		return new Workspace(cursor().withDefault(Maps.empty()).path(key));
+	}
+
+	/**
 	 * Puts {@code value} at {@code path}.
 	 *
 	 * @return Whether a value was there already

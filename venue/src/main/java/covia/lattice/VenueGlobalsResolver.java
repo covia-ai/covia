@@ -1,25 +1,22 @@
 package covia.lattice;
 
 import convex.core.data.AString;
-import convex.core.data.Strings;
 import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**
- * Resolves the {@code v/} virtual namespace to the venue user's
- * {@code w/global/} sub-tree.
+ * Resolves the {@code v/} virtual namespace to the venue's shared
+ * definitions, {@link covia.venue.VenueState#globals()}.
  *
  * <p>Per OPERATIONS.md §3, {@code /v/} is the venue's public bulletin
- * board: {@code v/<rest>} resolves to {@code <venue-DID>/w/global/<rest>}.
- * The venue is treated as a user (it has its own DID and keypair) so its
- * {@code /w/global/} sub-tree is the host for venue-provided data.</p>
+ * board: {@code v/<rest>} is {@code <venue-DID>/w/global/<rest>}. The venue
+ * is treated as a user (it has its own DID and keypair), and the
+ * {@code global} area of its workspace holds venue-provided data.</p>
  *
- * <p>This is the first <b>venue-scoped</b> virtual namespace — unlike
- * {@code n/} (caller's running agent) and {@code t/} (caller's running
- * job), which navigate within the caller's own user data, this resolver
- * navigates to a fixed user (the venue) regardless of the caller: the path
- * resolves in the venue user's record, retrieved via
- * {@link CoviaAdapter#ensureUser(AString)}.</p>
+ * <p>This is a <b>venue-scoped</b> virtual namespace — unlike {@code n/}
+ * (caller's running agent) and {@code t/} (caller's running job), which
+ * navigate within the caller's own user data, it reaches the same area
+ * whoever the caller is.</p>
  *
  * <p><b>Access policy.</b> Reads are universally allowed; writes require a
  * caller DID equal to the venue's own DID. The {@link #canWrite} override
@@ -27,8 +24,6 @@ import covia.venue.RequestContext;
  * check.</p>
  */
 public class VenueGlobalsResolver implements NamespaceResolver {
-
-	private static final AString K_GLOBAL = Strings.intern("global");
 
 	/**
 	 * Reference to the adapter, kept so {@link #canWrite(RequestContext)}
@@ -43,18 +38,8 @@ public class VenueGlobalsResolver implements NamespaceResolver {
 
 	@Override
 	public Position resolve(RequestContext ctx, CoviaAdapter adapter, CoviaPath path) {
-		// The first segment is "v" (the prefix). Rewrite to <venue-DID>/w/global/<rest>
-		// and resolve [w, global, ...rest] in the venue user's record.
-		AString venueDID = adapter.engine.getDIDString();
-		if (venueDID == null) return null;
-
-		AString[] rewritten = new AString[path.length() + 1];
-		rewritten[0] = Namespace.W;
-		rewritten[1] = K_GLOBAL;
-		for (int i = 1; i < path.length(); i++) {
-			rewritten[i + 1] = path.get(i);
-		}
-		return adapter.ensureUser(venueDID).resolve(CoviaPath.segments(rewritten));
+		Workspace globals = adapter.engine.getVenueState().globals();
+		return globals == null ? null : globals.resolve(path.rest());
 	}
 
 	/**

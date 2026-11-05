@@ -591,21 +591,22 @@ Engine startup:
          # installAsset stores immutable meta in /a/<hash> and records the
          # catalog declaration for publication after every adapter is present.
 
-  2. Build the venue-owned bootstrap snapshot on a child w/global workspace fork
+  2. Build the venue-owned bootstrap snapshot in one transaction over v/
      for each catalog declaration:
-       write and read-validate its full v/... path on the child fork
+       write and read-validate its full v/... path in the transaction's draft
      write and read-validate v/info/name, did, version, started, protocols
      replace v/info/adapters with summaries of the registered adapters
 
-  3. Publish with one childFork.sync()
+  3. Commit the transaction
      # This is the only visibility point. A build or validation failure
-     # discards the child fork and leaves the live venue state unchanged.
+     # discards the draft and leaves the live venue state unchanged; a
+     # concurrent change to v/ rebuilds the snapshot on the new state.
 
   4. Connect config-declared MCP servers
      # External connection side effects happen after lattice publication.
 ```
 
-The materialisation step is **re-run on every startup** and is idempotent (modulo `started`, which legitimately reflects the current boot time): same adapters and same config produce the same paths. It uses direct lattice cursor writes, not operation invocation, so bootstrap creates no Jobs. There is no parallel catalog representation: the child lattice fork is both the build target and the value being validated.
+The materialisation step is **re-run on every startup** and is idempotent (modulo `started`, which legitimately reflects the current boot time): same adapters and same config produce the same paths. It uses direct lattice cursor writes, not operation invocation, so bootstrap creates no Jobs. There is no parallel catalog representation: the transaction's draft is both the build target and the value being validated.
 
 ### `installAsset` API
 
@@ -653,7 +654,7 @@ A separate `installTestAsset(catalogPath, resourcePath)` method writes to `/v/te
 | Operation | Mechanism |
 |-----------|-----------|
 | Read `/v/...` | Resolver returns the value unconditionally. No UCAN required. |
-| Write `/v/...` (startup) | Engine owns the venue-user cursor and writes to a narrow `w/global` workspace fork before one `sync()`; no external authorization surface or Job is involved. |
+| Write `/v/...` (startup) | The engine writes `v/` directly, in one transaction; no external authorization surface or Job is involved. |
 | Write `/v/...` (operator) | JWT signed by the venue keypair. The auth middleware identifies the caller as the venue's own DID; the resolver allows the write. |
 | Write `/v/...` (anyone else) | Resolver rejects with a permission error. |
 

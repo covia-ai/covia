@@ -353,7 +353,10 @@ applies its adapter's on each change. `Workspace` is the
 component for a flexible data area reached by path. Its operations are
 `write`, `append`, `delete`, `update` (a function of the current value) and
 `createPath`, and only `createPath` creates a missing level. An area inside a
-record (`n`, `c`, `temp`) refuses a change while the record does not exist. A
+record (`n`, `c`, `temp`) refuses a change while the record does not exist. An
+area can hold another (`Workspace.area`), changed through the outer area's
+cursor: the venue's shared definitions, which `v/` names, are
+`VenueState.globals()`, the `global` area of the venue user's `w`. A
 position in any other component is read-only, except that `SecretStore`
 accepts removal of a whole secret. Refusals are typed and carry a reason from a
 constant on the refusing component.

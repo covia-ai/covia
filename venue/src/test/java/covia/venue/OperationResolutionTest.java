@@ -18,8 +18,11 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.JobFailedException;
 import covia.grid.Asset;
 import covia.grid.Job;
+import covia.lattice.CoviaPath;
+import covia.lattice.ValuePath;
 
 /**
  * Tests for operation resolution: /a/ hash paths, /o/ user-scoped names,
@@ -515,8 +518,9 @@ public class OperationResolutionTest {
 
 	// ========== /v/ namespace — venue globals via VenueGlobalsResolver ==========
 	//
-	// Per OPERATIONS.md §3, /v/ is a virtual prefix that resolves to the
-	// venue user's /w/global/ sub-tree. Reads are universally allowed; writes
+	// Per OPERATIONS.md §3, /v/ is a virtual prefix for the venue's shared
+	// definitions, VenueState.globals(): the global area of the venue user's
+	// workspace. Reads are universally allowed; writes
 	// require the venue identity (engine.venueContext() or the venue's own
 	// DID). The venue user record exists at engine startup so /v/ paths
 	// always have a backing namespace to navigate.
@@ -600,6 +604,22 @@ public class OperationResolutionTest {
 		// And it's resolvable as an Asset because it has an operation field
 		Asset asset = engine.resolveAsset(Strings.create("v/test-ops/structured"), alice);
 		assertNotNull(asset, "v/ops entry with operation field should resolve as Asset");
+	}
+
+	@Test
+	public void testVenueGlobalsAreTheVenueStateGlobals() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "v/test-scalar", Fields.VALUE, Strings.create("leaf")),
+			engine.venueContext()).awaitResult(5000);
+		assertEquals(Strings.create("leaf"),
+			engine.getVenueState().globals().read(CoviaPath.parse("test-scalar")));
+
+		// A refusal names the path the caller wrote, not where v/ is kept.
+		Job below = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "v/test-scalar/below", Fields.VALUE, Strings.create("x")),
+			engine.venueContext());
+		assertThrows(JobFailedException.class, () -> below.awaitResult(5000));
+		assertEquals(String.format(ValuePath.NOT_A_MAP, "below", "/v/test-scalar"), below.getErrorMessage());
 	}
 
 	@Test

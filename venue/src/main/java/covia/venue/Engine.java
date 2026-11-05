@@ -1207,8 +1207,8 @@ public class Engine {
 
 	/**
 	 * Materialises the adapter catalog and {@code /v/info/} snapshot together.
-	 * The complete snapshot is built and validated on a child fork, then
-	 * committed to the Engine's connected state with one atomic update. A
+	 * The complete snapshot is built and validated in a transaction's draft,
+	 * then committed to the Engine's connected state with one atomic update. A
 	 * failure before that point leaves the live state unchanged and creates no
 	 * Jobs.
 	 */

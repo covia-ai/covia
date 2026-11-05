@@ -1204,20 +1204,7 @@ public class CoviaAdapter extends AAdapter {
 	 * first-time user.
 	 */
 	public User ensureUser(RequestContext ctx) {
-		return ensureUser(ctx.getUserDID());
-	}
-
-	/**
-	 * Gets the user a DID names, creating the user namespace if it does not yet
-	 * exist. Used by venue-scoped virtual namespace resolvers (e.g.
-	 * {@code VenueGlobalsResolver} for {@code /v/}) that navigate to a fixed
-	 * user's data regardless of the caller.
-	 *
-	 * @param did the DID of the user
-	 * @return the user
-	 */
-	public User ensureUser(AString did) {
-		return engine.getVenueState().users().ensure(did);
+		return engine.getVenueState().users().ensure(ctx.getUserDID());
 	}
 
 	/** All standard accessors share this physical/virtual/DID target resolution. */

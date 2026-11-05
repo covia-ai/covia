@@ -24,8 +24,9 @@ import covia.api.Fields;
 /**
  * Materialises venue-owned bootstrap state as one native lattice transaction.
  *
- * <p>The {@link Workspace} transaction supplies a private draft of the
- * venue-owned {@code w/global} workspace, retries conflicts and commits atomically.
+ * <p>The {@link Workspace} transaction supplies a private draft of the venue's
+ * shared definitions ({@link VenueState#globals()}, which {@code v/} names),
+ * retries conflicts and commits atomically.
  * Catalog and introspection writes are validated against that draft; an exception
  * discards the entire attempt. No operation dispatch or Job records are involved.</p>
  *
@@ -39,7 +40,9 @@ final class VenueBootstrapMaterializer {
 
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(VenueBootstrapMaterializer.class);
 
-	private static final AString K_GLOBAL = Strings.intern("global");
+	/** A prepared engine always has its venue user, so this is a venue bug. */
+	private static final String NO_VENUE_USER = "Venue user does not exist: the engine is not prepared";
+
 	private static final AString K_OPERATIONS = Strings.intern("operations");
 	private static final AString K_KERNEL = Strings.intern("kernel");
 	private static final AString K_MODULE = Strings.intern("module");
@@ -61,8 +64,8 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
-		var user = engine.getVenueState().users().ensure(engine.getDIDString());
-		var workspace = new Workspace(user.workspace().cursor().withDefault(Maps.empty()).path(K_GLOBAL));
+		Workspace workspace = engine.getVenueState().globals();
+		if (workspace == null) throw new IllegalStateException(NO_VENUE_USER);
 		var names = engine.getAdapterNamesInRegistrationOrder();
 		long started = System.currentTimeMillis();
 		workspace.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
