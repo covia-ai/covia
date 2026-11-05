@@ -681,8 +681,8 @@ the Job's record as its current state (JOBS.md, Progress). Provider-native
 results, message parts and session/task identifiers are preserved.
 
 Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
-submission intent, protected transport authority and reattachment to an
-accepted task. Observation failure cannot manufacture execution failure or
+submission intent, what is needed to reach the task again (never a sign-in
+credential or a secret's value; JOBS.md) and reattachment to an accepted task. Observation failure cannot manufacture execution failure or
 authorize replay. Claude may reconstruct an idle conversation through
 `restoreInteraction`, as the job's caller with the proofs the job kept
 (`JobManager.callerContext`); resuming a transcript does not recover an
@@ -704,8 +704,10 @@ default, explicit target-bound caller identity, or an explicitly delegated
 venue relay. Omitting `venue` carries the complete current RequestContext to
 the local agent. A local proxy cannot reconstruct that attenuated context from
 a caller DID after restart, so its recovery fails explicitly and leaves the
-original task ID for inspection; it never substitutes venue authority. Remote
-proxies recover their saved transport authority and observe the same task.
+original task ID for inspection; it never substitutes venue authority. A remote
+proxy reconnects as it first connected and observes the same task, except one
+that signed in as its caller: the venue keeps no such credential, so its
+recovery fails, naming the remote task and its venue.
 
 ### Agent dispatch hooks
 

@@ -211,9 +211,9 @@ leader election. Live concurrent work uses atomic updates and retrying transacti
 not independent fork/publication policies. Incoming venue merges preserve remote
 stamps; local edits pass through `StampedCursor`.
 
-Workspace path operations live in `Workspace`; operations such as
-`covia:write` handle request routing, authority checks and the creation of
-missing levels before calling this domain API. Raw cursor access
+A path into a workspace resolves to an `Entry`, whose operations change it;
+operations such as `covia:write` handle request routing and authority checks,
+and create missing levels in the same transaction as the change. Raw cursor access
 remains an internal integration primitive, not an authorised public endpoint.
 Bootstrap catalog changes use `Workspace.transact` over the narrow
 venue-owned workspace. The materialiser is ordinary code operating on that draft,

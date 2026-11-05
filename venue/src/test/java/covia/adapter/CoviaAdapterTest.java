@@ -2748,7 +2748,7 @@ public class CoviaAdapterTest {
 		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("c/draft"));
 		assertNull(target.read());
 		var refused = assertThrows(InvalidInputException.class,
-			() -> target.workspace().write(target.path(), CVMLong.ONE));
+			() -> target.entry().write(CVMLong.ONE));
 		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
 		assertNull(engine.getVenueState().users().get(ALICE_DID).agent(agentId).getSession(sessionId),
 			"scoped scratch must never mint a phantom session");
@@ -2761,7 +2761,7 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("n/draft"));
-		target.workspace().write(target.path(), Strings.create("note"));
+		target.entry().write(Strings.create("note"));
 
 		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().get(ALICE_DID)
 			.agent(agentId).getRecord(), "n", "draft"));
@@ -2792,7 +2792,7 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("t/draft"));
-		target.workspace().write(target.path(), Strings.create("task note"));
+		target.entry().write(Strings.create("task note"));
 
 		// The scratch must be the FOCUSED TASK's Job record, not the transition Job's.
 		assertEquals(Strings.create("task note"), RT.getIn(user.jobs().getRecord(taskId), Fields.TEMP, "draft"),
@@ -2810,7 +2810,7 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		Position target = covia.resolveVirtual(ctx, CoviaPath.parse("t/draft"));
-		target.workspace().write(target.path(), Strings.create("job note"));
+		target.entry().write(Strings.create("job note"));
 
 		assertEquals(Strings.create("job note"), RT.getIn(user.jobs().getRecord(jobId), Fields.TEMP, "draft"),
 			"t/ must resolve to the current Job record");

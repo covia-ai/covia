@@ -3,6 +3,7 @@ package covia.lattice;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
+import convex.core.data.ADataStructure;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -10,6 +11,7 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -137,6 +139,71 @@ public final class ValuePath {
 		}
 	}
 
+	// ========== Keys ==========
+
+	/**
+	 * The lattice keys a path goes through in a value.
+	 *
+	 * @param keys One key per segment of the path
+	 * @param refusal Why a change cannot reach the end of the path, or null when it can
+	 */
+	public record Keys(ACell[] keys, String refusal) {}
+
+	/**
+	 * The lattice key each segment of {@code path} names in {@code root}, read by
+	 * the value it meets as {@link #child} reads it: a list position, a map key, or
+	 * an Index key, which is the Blob the segment writes in hex where only that is
+	 * stored. A level that does not exist yet takes the segment itself, the key of
+	 * the map {@link #createPath} makes there. A segment the value it meets cannot
+	 * hold ({@link #keyRefusal}) ends the walk: it and the segments below it keep
+	 * their strings, and the refusal says why.
+	 */
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	public static Keys keys(ACell root, CoviaPath path) {
+		ACell[] keys = new ACell[path.length()];
+		String refusal = null;
+		ACell node = root;
+		for (int i = 0; i < path.length(); i++) {
+			AString segment = path.get(i);
+			ACell key = segment;
+			if (node != null) {
+				refusal = keyRefusal(node, path, i);
+				if (refusal == null) {
+					if (node instanceof AVector<?>) {
+						key = CVMLong.create(parseIndex(segment));
+					} else if (node instanceof Index index && !index.containsKey(segment)) {
+						Blob blob = blobKey(segment);
+						if (blob != null && index.containsKey(blob)) key = blob;
+					}
+					node = ((ADataStructure<ACell>) node).get(key);
+				} else {
+					node = null;
+				}
+			}
+			keys[i] = key;
+		}
+		return new Keys(keys, refusal);
+	}
+
+	/**
+	 * Why {@code container}, the value segment {@code i} of {@code path} is read
+	 * from, cannot hold that segment, or null when it can: a list holds only a
+	 * position within it, and a value that is neither a list nor a map holds no keys.
+	 *
+	 * @param container A value, not null
+	 */
+	public static String keyRefusal(ACell container, CoviaPath path, int i) {
+		if (container instanceof AVector<?> vec) {
+			long idx = parseIndex(path.get(i));
+			if (idx >= 0 && idx < vec.count()) return null;
+			String at = at(path, i);
+			if (idx >= 0) return String.format(INDEX_OUT_OF_RANGE, at, idx, vec.count());
+			return String.format(NOT_AN_INDEX, at, vec.count(), path.get(i));
+		}
+		if (container instanceof AMap) return null;
+		return notAMapReason(path, i);
+	}
+
 	// ========== Changes ==========
 
 	/** {@code root} with {@code value} at {@code path}; every level above it must exist. */
@@ -237,15 +304,17 @@ public final class ValuePath {
 
 	/** The list position segment {@code i} of {@code path} names in {@code vec}; refuses one out of range or not a position. */
 	private static long position(AVector<ACell> vec, CoviaPath path, int i) {
-		long idx = parseIndex(path.get(i));
-		if (idx >= 0 && idx < vec.count()) return idx;
-		String at = at(path, i);
-		if (idx >= 0) throw new InvalidInputException(String.format(INDEX_OUT_OF_RANGE, at, idx, vec.count()));
-		throw new InvalidInputException(String.format(NOT_AN_INDEX, at, vec.count(), path.get(i)));
+		String refusal = keyRefusal(vec, path, i);
+		if (refusal != null) throw new InvalidInputException(refusal);
+		return parseIndex(path.get(i));
 	}
 
 	private static InvalidInputException notAMap(CoviaPath path, int i) {
-		return new InvalidInputException(String.format(NOT_A_MAP, path.get(i), at(path, i)));
+		return new InvalidInputException(notAMapReason(path, i));
+	}
+
+	private static String notAMapReason(CoviaPath path, int i) {
+		return String.format(NOT_A_MAP, path.get(i), at(path, i));
 	}
 
 	/** The address of the level segment {@code i} of {@code path} is read from, as the caller wrote it. */
@@ -258,7 +327,7 @@ public final class ValuePath {
 	 * receives in place of a missing path, starts a new list.
 	 */
 	@SuppressWarnings("unchecked")
-	private static ACell appendTo(ACell current, ACell element) {
+	static ACell appendTo(ACell current, ACell element) {
 		if (current == null) return Vectors.of(element);
 		if (current instanceof AVector) return ((AVector<ACell>) current).conj(element);
 		if (current instanceof AMap && ((AMap<?, ?>) current).isEmpty()) return Vectors.of(element);

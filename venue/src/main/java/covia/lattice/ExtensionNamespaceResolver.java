@@ -66,7 +66,7 @@ public final class ExtensionNamespaceResolver implements NamespaceResolver {
 				return value;
 			}
 		};
-		return new Position(new Workspace(guarded), path);
+		return new Workspace(guarded).resolve(path);
 	}
 
 	private static void requireWritable(AAdapter adapter, RequestContext ctx, CoviaPath path) {

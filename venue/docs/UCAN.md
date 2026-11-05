@@ -473,7 +473,7 @@ grid:invoke {
 }
 ```
 `anonymous` is the default, `caller` requires a target-audienced empty-`att`
-credential, and `venue` is only for the venue itself. Credentials and grants
+credential presented with the request, and `venue` is only for the venue itself. Credentials and grants
 are forwarded in their distinct channels, filtered to the selected principal,
 and only to a venue whose DID is proven. Grant presence never selects a mode.
 See §5.6.
@@ -1252,7 +1252,13 @@ the authentication channel. The three concerns never infer one another:
   envelope. It grants nothing and is inert at the relay. Only an explicit
   `authenticateAs: "caller"` request causes the relay to install that credential
   in the target request's `Authorization` header. The target verifies the
-  caller's own signature — zero trust in the relay.
+  caller's own signature — zero trust in the relay. The credential proves the
+  caller's presence and the relay never stores it, so the hop lasts only as
+  long as the venue runs: after a restart a recovered job that signed in this
+  way ends, its reason naming the remote job and its venue for the caller to
+  follow it there. Deferred work that must act as the caller at another venue
+  is scheduled at that venue: a scheduled hop has no credential, and fails
+  saying so (`VenueConnection.NO_CALLER_CREDENTIAL`).
 - **Venue identity** — `authenticateAs: "venue"` has the venue hop as itself,
   and only when the venue itself is the caller (`Engine.isDirectVenue`): not
   its agents, and never by delegation. Whoever authenticates as a principal
@@ -1271,9 +1277,9 @@ the authentication channel. The three concerns never infer one another:
   a `did:key` venue that answers a fresh nonce with a proof naming the address
   dialled. A target named by URL states its DID at `/.well-known/did.json`; a
   DID no listed mechanism proves there is refused before any credential leaves,
-  and a recovered job proves its target again before re-sending a saved
-  credential. `auth.requireVenueProof: false` takes the stated DID instead, for
-  test venues.
+  and a recovered job that authenticated as the venue proves its target again
+  before authenticating again. `auth.requireVenueProof: false` takes the stated
+  DID instead, for test venues.
 - **`authenticateAs: "anonymous"`** is the default and sends neither identity
   nor grants, even when valid credentials or grants were presented locally.
 - **Local targets** carry the caller's verified proofs into the local context

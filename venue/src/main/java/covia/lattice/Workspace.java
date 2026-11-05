@@ -17,11 +17,12 @@ import covia.exception.InvalidInputException;
  * {@code temp}. Its owner binds the cursor at the area's root, with the owner's
  * stamping, and decides whether the root may be created.
  *
- * <p>Operations take the stretch of the caller's path that is the area's own,
- * read each segment by the value it meets ({@link ValuePath}), and change the
- * area in one atomic update. An absent root counts as empty. No operation but
- * {@link #createPath} creates a level: a change below a level that does not
- * exist is refused.</p>
+ * <p>A caller's path resolves to the {@link Entry} it names, whose keys are
+ * fixed then. The area's own operations, for its owner's code, take the
+ * stretch of a path that is the area's own, read each segment by the value it
+ * meets ({@link ValuePath}), and change the area in one atomic update. An
+ * absent root counts as empty. No operation but {@link #createPath} creates a
+ * level: a change below a level that does not exist is refused.</p>
  */
 public final class Workspace extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, Workspace> {
@@ -63,6 +64,17 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 */
 	public Workspace area(AString key) {
 		return new Workspace(cursor().withDefault(Maps.empty()).path(key));
+	}
+
+	/** Where {@code path} ends in this area: the {@link Entry} there. */
+	@Override
+	public Position resolve(CoviaPath path) {
+		return new Position(entry(path), path.rest(path.length()));
+	}
+
+	/** The entry at {@code path} in this area, its keys fixed now by the values the path meets. */
+	public Entry entry(CoviaPath path) {
+		return new Entry(this, path, ValuePath.keys(read(), path));
 	}
 
 	/**

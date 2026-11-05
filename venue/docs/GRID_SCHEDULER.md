@@ -238,6 +238,11 @@ Every context that can schedule is a principal's own as it stands, so this
 loses nothing: an agent's step always runs as that agent, under its record's
 caps, whatever its input names (`Engine.stepContext`).
 
+A fire presents no sign-in credential: only a live request carries one, and
+the venue keeps none. A grid hop with `authenticateAs: "caller"` therefore
+fails when it fires; work that must act as its caller at another venue is
+scheduled at that venue (UCAN.md §5.6).
+
 See [UCAN.md](./UCAN.md).
 
 ---

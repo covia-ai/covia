@@ -35,6 +35,7 @@ import covia.exception.UnavailableException;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
+import covia.lattice.Entry;
 import covia.lattice.Namespace;
 import covia.lattice.NamespaceResolver;
 import covia.lattice.ExtensionNamespaceResolver;
@@ -43,7 +44,6 @@ import covia.lattice.SessionNamespaceResolver;
 import covia.lattice.TempNamespaceResolver;
 import covia.lattice.ValuePath;
 import covia.lattice.VenueGlobalsResolver;
-import covia.lattice.Workspace;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -602,17 +602,16 @@ public class CoviaAdapter extends AAdapter {
 	 * also needs write authority at the nearest level that exists.
 	 *
 	 * @param address The path as the caller named it
-	 * @param change The change, made through the transaction's workspace
+	 * @param change The change, made to the entry in the transaction
 	 * @return Whether a level above the changed value was created
 	 */
 	private boolean changeCreatingLevels(RequestContext ctx, AString address, Position target,
-			Consumer<Workspace> change) {
-		CoviaPath path = target.path();
+			Consumer<Entry> change) {
 		boolean[] created = {false};
-		target.workspace().transact(draft -> {
-			int missing = ValuePath.missingLevels(draft.read(), path);
+		target.entry().transact(draft -> {
+			int missing = draft.missingLevels();
 			if (missing > 0) engine.requireLocalAccess(ctx, ancestor(address, missing), Capability.CRUD_WRITE);
-			created[0] = draft.createPath(path.parent()) > 0;
+			created[0] = draft.createLevels() > 0;
 			change.accept(draft);
 		});
 		return created[0];
@@ -667,7 +666,7 @@ public class CoviaAdapter extends AAdapter {
 		Position target = resolvePathTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		boolean[] existed = {false};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target,
-			draft -> existed[0] = draft.write(target.path(), value));
+			draft -> existed[0] = draft.write(value));
 		return withPathCreated(Maps.of(Fields.EXISTED, CVMBool.of(existed[0])), created);
 	}
 
@@ -684,7 +683,7 @@ public class CoviaAdapter extends AAdapter {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		Position target = resolvePathTarget(ctx, path, Capability.CRUD_WRITE);
 		changeCreatingLevels(ctx, capResource(input), target,
-			draft -> draft.update(target.path(), change));
+			draft -> draft.update(change));
 	}
 
 	/**
@@ -768,7 +767,7 @@ public class CoviaAdapter extends AAdapter {
 			}
 			return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 		}
-		boolean deleted = target.workspace().delete(path);
+		boolean deleted = target.entry().delete();
 		return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 	}
 
@@ -792,8 +791,8 @@ public class CoviaAdapter extends AAdapter {
 		boolean[] existed = {false};
 		long[] size = {0};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target, draft -> {
-			existed[0] = draft.contains(target.path());
-			size[0] = draft.append(target.path(), element);
+			existed[0] = draft.contains();
+			size[0] = draft.append(element);
 		});
 		return withPathCreated(Maps.of(
 			Fields.EXISTED, CVMBool.of(existed[0]),
