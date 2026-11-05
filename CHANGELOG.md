@@ -24,7 +24,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
-- A `covia` path given as an array takes strings only, a list position written in digits as in a string path; any other element is refused (#617).
+- A `covia` path given as an array takes strings only, none containing `/`, a list position written in digits as in a string path; any other element is refused (#617).
 - A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
 - A forced `agent:trigger` no longer presents a parked task.
 - An LLM agent's job results show an open HITL ask as still waiting, not as ended with no reason.

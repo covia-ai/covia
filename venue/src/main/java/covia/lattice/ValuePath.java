@@ -21,6 +21,12 @@ import covia.exception.NotFoundException;
  * position (a string of digits), or an Index key (the string itself, or a Blob
  * written in hex). A stored null counts as present.
  *
+ * <p>A path is made here and nowhere else: {@link #parse} splits a string on
+ * {@code /}, and {@link #of} takes a caller's string or array. No segment
+ * contains {@code /}, so a path and the string {@link #format} gives for it
+ * name the same place, and authority checked on that string covers exactly
+ * what the path reaches.</p>
+ *
  * <p>Changes are pure functions of a value, so they can run inside one atomic
  * update. They never create a missing level: {@link #createPath} creates levels,
  * and only when a caller asks. Refusals name the path as the caller wrote it,
@@ -286,7 +292,39 @@ public final class ValuePath {
 		throw new InvalidInputException(String.format(NOT_A_LIST, current.getType()));
 	}
 
-	// ========== Path strings ==========
+	// ========== Making paths ==========
+
+	/** Refusal for a path array with an element that is not a string; names its position and type. */
+	public static final String SEGMENT_NOT_STRING = "Path segment %d must be a string, not %s";
+
+	/** Refusal for a path array with an element containing {@code /}; names its position. */
+	public static final String SEGMENT_HAS_SLASH = "Path segment %d must not contain '/'";
+
+	/**
+	 * The path a caller gives: a string, split as {@link #parse} does, or an
+	 * array of the segments themselves. Anything else, and null, is the empty
+	 * path.
+	 *
+	 * @throws InvalidInputException if an array element is not a string, or contains {@code /}
+	 */
+	public static AString[] of(ACell path) {
+		if (path instanceof AVector<?> vec) {
+			AString[] segments = new AString[Math.toIntExact(vec.count())];
+			for (int i = 0; i < segments.length; i++) {
+				ACell element = vec.get(i);
+				if (!(element instanceof AString segment)) {
+					throw new InvalidInputException(String.format(SEGMENT_NOT_STRING, i,
+						(element == null) ? "null" : element.getType()));
+				}
+				if (segment.toString().indexOf('/') >= 0) {
+					throw new InvalidInputException(String.format(SEGMENT_HAS_SLASH, i));
+				}
+				segments[i] = segment;
+			}
+			return segments;
+		}
+		return (path instanceof AString string) ? parse(string.toString()) : new AString[0];
+	}
 
 	/** The path to the level at {@code path[from]}, as the caller wrote it. */
 	private static String at(AString[] path, int from) {

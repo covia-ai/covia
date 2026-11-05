@@ -56,8 +56,8 @@ import covia.venue.User;
  * <h3>Paths</h3>
  *
  * <p>A path is string segments: {@code "g"}, {@code "my-agent"}, a hex job
- * ID, a list position in digits. A path given as an array holds strings only
- * ({@link #SEGMENT_NOT_STRING}). The component a segment reaches maps it to a
+ * ID, a list position in digits, made from the caller's input by
+ * {@link ValuePath#of}. The component a segment reaches maps it to a
  * lattice key, and below the last component {@link ValuePath} reads it by the
  * value it meets: a map key, an Index key as the string or as a hex Blob, or a
  * vector index.</p>
@@ -587,7 +587,7 @@ public class CoviaAdapter extends AAdapter {
 	private static AString capResource(ACell input) {
 		ACell path = RT.getIn(input, Fields.PATH);
 		AString resource = RT.ensureString(path);
-		if (path instanceof AVector<?>) resource = Strings.create(ValuePath.format(parsePath(path)));
+		if (path instanceof AVector<?>) resource = Strings.create(ValuePath.format(ValuePath.of(path)));
 		if (resource != null && resource.startsWith(Strings.create("/"))) resource = resource.slice(1);
 		return resource;
 	}
@@ -1195,40 +1195,6 @@ public class CoviaAdapter extends AAdapter {
 		return desc.assoc(K_EXISTS, CVMBool.TRUE);
 	}
 
-	// ========== Path parsing ==========
-
-	/** Refusal for a path array with an element that is not a string; names its position and type. */
-	public static final String SEGMENT_NOT_STRING = "Path segment %d must be a string, not %s";
-
-	/**
-	 * Parses a path input into its segments, which are strings. A string is split
-	 * on {@code /} ({@code "g/my-agent/timeline/3"}); an array gives the segments
-	 * themselves ({@code ["g", "my-agent", "timeline", "3"]}). What a segment
-	 * means, such as a list position, is decided by the component it reaches.
-	 *
-	 * @throws InvalidInputException if an array element is not a string
-	 */
-	static AString[] parsePath(ACell pathCell) {
-		if (pathCell == null) return new AString[0];
-
-		if (pathCell instanceof AVector<?> vec) {
-			AString[] path = new AString[Math.toIntExact(vec.count())];
-			for (int i = 0; i < path.length; i++) {
-				ACell element = vec.get(i);
-				if (!(element instanceof AString segment)) {
-					throw new InvalidInputException(String.format(SEGMENT_NOT_STRING, i,
-						(element == null) ? "null" : element.getType()));
-				}
-				path[i] = segment;
-			}
-			return path;
-		}
-
-		AString pathStr = RT.ensureString(pathCell);
-		if (pathStr == null) return new AString[0];
-		return ValuePath.parse(pathStr.toString());
-	}
-
 	// ========== Helpers ==========
 
 	/**
@@ -1266,7 +1232,7 @@ public class CoviaAdapter extends AAdapter {
 		if (raw != null && raw.startsWith(Strings.create("/"))) raw = raw.slice(1);
 		var didTarget = raw != null && raw.toString().startsWith("did:")
 			? engine.resolveUserPath(ctx, raw, false) : null;
-		AString[] segments = didTarget == null ? parsePath(path) : didTarget.path();
+		AString[] segments = didTarget == null ? ValuePath.of(path) : didTarget.path();
 		if (didTarget != null && isExtensionPath(segments)) {
 			return ExtensionNamespaceResolver.resolveForUser(ctx, this, didTarget.ownerDID(), segments, ability);
 		}

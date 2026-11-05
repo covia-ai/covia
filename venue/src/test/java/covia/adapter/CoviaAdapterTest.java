@@ -2,6 +2,8 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Map;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
@@ -124,17 +126,27 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testVectorPathSegmentsMustBeStrings() {
+	public void testVectorPathSegmentsAreSeparateStrings() {
 		// A list position is written as digits, never a number: the component a
-		// segment reaches decides what it means.
-		AVector<ACell> path = Vectors.of("w", "items", CVMLong.ONE);
-		String refusal = String.format(CoviaAdapter.SEGMENT_NOT_STRING, 2, CVMLong.ONE.getType());
-		for (String op : new String[] {"read", "write"}) {
-			Job job = engine.jobs().invokeOperation("v/ops/covia/" + op,
-				Maps.of(Fields.PATH, path, Fields.VALUE, CVMLong.ONE), ALICE);
-			assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000), op);
-			assertEquals(refusal, job.getErrorMessage(), op);
-		}
+		// segment reaches decides what it means. A segment holds no '/', so an
+		// array path names the place its segments joined with '/' name.
+		Map<AVector<ACell>, String> refused = Map.of(
+			Vectors.of("w", "items", CVMLong.ONE),
+				String.format(ValuePath.SEGMENT_NOT_STRING, 2, CVMLong.ONE.getType()),
+			Vectors.of("w", "items/0"), String.format(ValuePath.SEGMENT_HAS_SLASH, 1));
+		refused.forEach((path, refusal) -> {
+			for (String op : new String[] {"read", "write"}) {
+				Job job = engine.jobs().invokeOperation("v/ops/covia/" + op,
+					Maps.of(Fields.PATH, path, Fields.VALUE, CVMLong.ONE), ALICE);
+				assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000), op);
+				assertEquals(refusal, job.getErrorMessage(), op);
+			}
+		});
+		assertNull(engine.getVenueState().users().get(ALICE_DID).workspace().read(ValuePath.parse("items"), 0),
+			"a refused path writes nothing");
+
+		AString[] path = ValuePath.of(Vectors.of("g", "my-agent", "", "timeline", "3"));
+		assertArrayEquals(path, ValuePath.parse(ValuePath.format(path)));
 	}
 
 	@Test

@@ -296,9 +296,12 @@ the design that replaces them.
 writes (`w/list/0` is `"w"`, `"list"`, `"0"`), and it never holds a lattice
 key. The component a segment reaches maps it to a key: `Jobs` reads hex as a
 job's Blob id, `User` reads a namespace letter as a record field, and below the
-last component a segment means what the value it meets needs. A path given as
-an array holds strings only; any other element is refused
-(`CoviaAdapter.SEGMENT_NOT_STRING`).
+last component a segment means what the value it meets needs. A path is made
+only by `ValuePath`: `parse` splits a string on `/`, and `of` takes a caller's
+string or array, refusing an array element that is not a string or that
+contains `/` (`ValuePath.SEGMENT_NOT_STRING`, `SEGMENT_HAS_SLASH`). No segment
+contains `/`, so a path names the same place as its segments joined with `/`,
+the address its authority is checked on.
 
 **One entry point.** `engine.paths().resolve(ctx, path, ability)` is the only
 request-aware step. It:
