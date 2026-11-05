@@ -306,6 +306,75 @@ class RemoteDelegationTest {
 		}
 	}
 
+	/**
+	 * After a restart an A2A job reads its bearer again from its caller's
+	 * secrets, so a secret rotated meanwhile is sent as it now stands. A job
+	 * whose token the caller passed literally ends instead, naming the remote
+	 * task: only the request presented that token.
+	 */
+	@Test void a2aRecoveryReadsTheBearerAgainAndEndsAJobWhoseTokenWasNotKept() throws Exception {
+		// Each request's Authorization, as the peer received it
+		java.util.List<String> authorizations = new java.util.concurrent.CopyOnWriteArrayList<>();
+		TestSignal received = new TestSignal();
+		HttpServer peer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		peer.createContext("/a2a", exchange -> {
+			exchange.getRequestBody().readAllBytes();
+			String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+			authorizations.add(String.valueOf(authorization));
+			// Each job's remote task is the one its token reaches
+			String task = "Bearer literal-token".equals(authorization) ? "literal-task" : "secret-task";
+			byte[] response = ("{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{\"id\":\"" + task
+				+ "\",\"contextId\":\"ctx\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}}").getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, response.length);
+			try (var out = exchange.getResponseBody()) { out.write(response); }
+			received.signal();
+		});
+		peer.start();
+		String url = "http://127.0.0.1:" + peer.getAddress().getPort();
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		AKeyPair key = AKeyPair.generate();
+		// The caller dials the loopback peer, which the guard allows only when the operator lists it
+		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
+		RequestContext user = RequestContext.of(Strings.create(covia.grid.auth.UcanTokens.did(AKeyPair.generate())));
+		ACell message = Maps.of("role", "user", "parts", Vectors.of(Maps.of("type", "text", "text", "hello")));
+		Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+		Engine.addDemoAssets(first);
+		Job fromSecret, fromLiteral;
+		try {
+			setSecret(first, user, "first-token");
+			fromSecret = first.jobs().invokeOperation("v/ops/a2a/raw/send",
+				Maps.of(Fields.URL, url, Fields.BEARER_SECRET, "s/PARTNER", Fields.MESSAGE, message), user);
+			fromLiteral = first.jobs().invokeOperation("v/ops/a2a/raw/send",
+				Maps.of(Fields.URL, url, Fields.BEARER_TOKEN, "literal-token", Fields.MESSAGE, message), user);
+			awaitRemoteId(fromSecret);
+			awaitRemoteId(fromLiteral);
+			assertTrue(authorizations.contains("Bearer first-token"));
+			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().credentials(fromSecret)).contains("first-token"),
+				"the secret's value is not kept for recovery");
+			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().credentials(fromLiteral)).contains("literal-token"),
+				"the literal token is not kept for recovery");
+			setSecret(first, user, "second-token");
+		} finally { first.close(); }
+		Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+		try {
+			Engine.addDemoAssets(second);
+			second.jobs().recoverJobs();
+			Job ended = second.jobs().getJob(fromLiteral.getID(), user);
+			assertEquals(Status.FAILED, ended.getStatus());
+			assertEquals(RemoteJobs.NOT_FOLLOWED.formatted("literal-task", url + "/a2a"), ended.getErrorMessage());
+			received.await("a poll carrying the rotated secret", () -> authorizations.contains("Bearer second-token"));
+			assertFalse(second.jobs().getJob(fromSecret.getID(), user).isFinished());
+		} finally { second.close(); peer.stop(0); }
+	}
+
+	/** Stores, or replaces, the caller's secret {@code PARTNER}. */
+	private static void setSecret(Engine engine, RequestContext caller, String value) {
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "PARTNER", Fields.VALUE, value, "overwrite", true), caller).awaitResult(5000);
+	}
+
 	private static void awaitOutcome(Job job, AString outcome) {
 		await(job, j -> outcome.equals(convex.core.lang.RT.getIn(j.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME)));
 	}

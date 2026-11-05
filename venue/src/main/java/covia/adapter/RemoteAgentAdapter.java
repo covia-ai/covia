@@ -179,15 +179,16 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (record == null) { super.recoverJob(job); return; }
 		if (LOCAL_PROTOCOL.equals(record.get(RemoteJobs.PROTOCOL))) {
 			// A caller DID alone cannot reconstruct the original attenuated local context.
-			job.fail(LOCAL_INTERRUPTED);
+			engine.remoteJobs().end(job, LOCAL_INTERRUPTED);
 			return;
 		}
 		ACell savedId = record.get(RemoteJobs.REMOTE_ID);
 		Blob id = savedId == null ? null : Job.parseID(savedId);
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
-			Venue venue = VenueConnection.restore(engine, RT.ensureString(record.get(RemoteJobs.TARGET)),
-				engine.remoteJobs().credentials(job));
+			AMap<AString, ACell> saved = engine.remoteJobs().credentials(job);
+			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().notFollowed(job); return; }
+			Venue venue = VenueConnection.restore(engine, RT.ensureString(record.get(RemoteJobs.TARGET)), saved);
 			VenueRemoteAgent proxy = new VenueRemoteAgent(venue, RT.ensureString(job.getData().get(AGENT)));
 			bind(job, proxy, id);
 			watch(job, proxy, id);

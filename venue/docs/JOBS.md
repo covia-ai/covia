@@ -381,13 +381,23 @@ the remote adapter's execution. If the remote venue reports `FAILED` because
 its adapter could not recover after restart, the local mirror fails too. If
 the remote job has disappeared, its outcome remains unknown; a saved ID alone
 cannot recover it. The resolved operation
-metadata and original transport credentials are saved encrypted in the venue
-principal's SecretStore; job state carries an opaque `authRef` secret name.
-Recovery does not resolve a changed catalog binding or silently elevate the
-original authority. Missing credentials or an unavailable adapter leave the
-remote outcome unresolved. Credentials are removed on local termination;
-encrypted orphan records left by a process crash require operator cleanup.
-Secret rotation/reconnection is not automated in this first delivery.
+metadata and what recovery needs to reach the remote job again are saved
+encrypted in the venue principal's SecretStore; job state carries an opaque
+`authRef` secret name. That is the connection's mode, with the target's DID
+and grants when the venue authenticated as itself, or the SecretStore
+reference an A2A bearer was read from: never a sign-in credential or a
+secret's value. A hop that signed in with a credential only its request
+presented (`authenticateAs: "caller"`, or an A2A `bearerToken`) is therefore
+not resumed: its recovered job fails, naming the remote job and its venue
+(`RemoteJobs.NOT_FOLLOWED`). A recovered A2A job reads its bearer again from
+its caller's secrets, under the context `Engine.context` rebuilds from the job
+record, so a rotated secret is sent as it now stands. The record keeps no
+grants, so a secret the caller can use only through a grant leaves the job
+waiting for authority. Recovery does not resolve a changed catalog binding or
+silently elevate the original authority. Missing authority or an unavailable
+adapter leave the remote outcome unresolved. The saved record is removed on
+local termination; encrypted orphan records left by a process crash require
+operator cleanup.
 
 Cancellation commits locally and propagates through owned local child hooks
 without waiting for network IO. Grid runs, A2A sends and remote-agent calls

@@ -41,6 +41,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A login being verified when an adapter is enabled, disabled, replaced or reconfigured completes instead of failing; later logins use the new configuration.
 - `covia:write`, `append` and `copy` need write authority at the nearest existing level of a path whose missing levels they create (#617).
 - Listings need `crud/read` on the collection they list: `agent:list` and `GET /api/v1/agents` on `g/`, `hitl:list` on `h/`, and `GET /api/v1/jobs` on `j/`. `/status` leaves out the caller's job count without it.
+- The venue keeps no caller's sign-in credential for a remote job: after a restart, a grid or remote-agent job that signed in with `authenticateAs: "caller"` ends, naming the remote job and its venue.
+- A scheduled grid hop with `authenticateAs: "caller"` fails, saying to schedule it at the target venue.
+- After a restart, an outbound A2A job reads its bearer secret again, so a rotated secret is used; one sent with a literal `bearerToken` ends, naming the remote task.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.

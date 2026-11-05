@@ -84,9 +84,11 @@ continue with another chat or request using the same Covia `sessionId`.
 the backend task; it does not erase the conversation or prove remote cessation.
 On restart, the parent reattaches to its recorded backend Job, and the provider
 adapter determines whether that Job can be recovered. Missing handles and
-uncertain submissions are not replayed. Remote Covia proxies recover saved
-transport authority; a local proxy currently fails recovery explicitly because
-its attenuated execution context cannot be reconstructed from a caller DID.
+uncertain submissions are not replayed. A remote Covia proxy reconnects as it
+first connected, unless it signed in as its caller, whose credential the venue
+does not keep: its recovery fails, naming the remote task and its venue. A local
+proxy fails recovery explicitly because its attenuated execution context cannot
+be reconstructed from a caller DID.
 Resuming a provider conversation on a later turn does not recover an interrupted
 turn. Any provider session identity extractable on failure or cancellation is
 retained for later calls.
