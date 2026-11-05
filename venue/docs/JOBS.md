@@ -339,7 +339,9 @@ monitor (`JobManager.shutdown`):
    ([Remote delegation](#remote-delegation)).
 2. **Grace**: in-flight work (`PENDING`/`STARTED`) gets up to
    `shutdown.graceMs` (default 2000) to finish on its own. An upper bound:
-   shutdown proceeds the moment nothing is in flight.
+   shutdown proceeds the moment nothing is in flight. A job that has just
+   finished is in flight until its finish effects end, so a cancellation it
+   sends to a remote venue starts before remote requests close.
 3. **Suspend**: each job still in flight is handed to its adapter,
    `AAdapter.suspendJob(job)`. In-process execution is bounded and ends with
    the process; a wait on something outside it is state, not a thread. The

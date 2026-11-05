@@ -1811,11 +1811,17 @@ public class JobManager {
 	/** Cap on one drain wait: catches status-only changes (a Job parking itself) that do not evict. */
 	private static final long DRAIN_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(20);
 
-	/** True while some active Job is PENDING or STARTED — a thread may be working. */
+	/**
+	 * True while some active Job may still be working: PENDING or STARTED, or
+	 * finished with its finish effects still running, such as a cancel hook
+	 * telling a remote venue. Every active Job starts unfinished and leaves the
+	 * active set when those effects end ({@link #evictActive}), which wakes the
+	 * drain.
+	 */
 	private boolean inFlight() {
 		for (Job job : activeJobs.values()) {
 			AString s = job.getStatus();
-			if (Status.PENDING.equals(s) || Status.STARTED.equals(s)) return true;
+			if (Status.PENDING.equals(s) || Status.STARTED.equals(s) || job.isFinished()) return true;
 		}
 		return false;
 	}
