@@ -116,8 +116,9 @@ public final class RemoteJobs implements AutoCloseable {
 	 * Checkpoint intent before submitting once. {@code credentials} is what
 	 * recovery needs to reach the remote job again, kept encrypted with the
 	 * resolved operation metadata until the job ends: the connection's mode,
-	 * a secret's reference and the grants that let it be read, never a
-	 * sign-in credential or a secret's value.
+	 * with the target's DID and forwarded grants when the venue signs in as
+	 * itself, or the reference of a secret to read again; never a sign-in
+	 * credential or a secret's value.
 	 */
 	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials) {
 		prepare(job, protocol, target, credentials, true);
