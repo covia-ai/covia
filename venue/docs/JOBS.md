@@ -106,16 +106,16 @@ remains the application's choice.
   explicitly (#499). Only an inline definition has no reference, in which
   case the metadata's own hash stands in. Records written before 0.9.9
   always carry the resolved hash; readers must accept both forms. A path is
-  a mutable binding, so on recovery the venue re-resolves it (venue context
-  first, then the owner's namespace for `o/`, `w/` forms) and a job
-  whose reference no longer resolves is restored without metadata rather
-  than aborting recovery. Invoke by hash when the record must pin the exact
-  definition that ran.
+  a mutable binding. What a job in flight needs from its definition is kept
+  when the job is admitted ([The venue's job entries](#the-venues-job-entries)),
+  so a later change to the binding does not reach it. Invoke by hash when the
+  record must pin the exact definition that ran.
 - **`adapter`** is the name of the adapter the venue dispatched to (`covia`,
   `langchain`, `grid`, …), stamped at submission (#520). It is the job-list
   fact a client cannot derive from a hash-valued `op` without resolving each
   record's definition, and it survives that definition becoming unavailable.
-  Absent on records written before 0.9.9.
+  The venue routes a job's messages, shutdown and recovery to this adapter.
+  Absent on records written before 0.9.9, whose operation names it instead.
 - **`parent`** is the id of the nearest *recorded* job inside whose execution
   this job was dispatched (#500); absent on top-level jobs. Transient
   wrappers never appear in a record, so a recorded grandchild dispatched
@@ -124,6 +124,27 @@ remains the application's choice.
   children query; a client reconstructs a tree by tracing `parent` from each
   job it holds. Links are venue- and user-local: a job run on another venue
   through the grid adapter carries none.
+
+## The venue's job entries
+
+A job's record is what its caller sees. What the venue needs to carry an
+unfinished job to its end is its own, kept in the venue's `:jobs` region by
+job id (`JobIndex`), and no route reads it. Each entry holds:
+
+- **`owner`**: the user whose `j/` holds the record.
+- **`rules`**: what the job's operation declared about its data when the job
+  was admitted (`OutputRules`): its `secretFields`, hidden in the job's input
+  and output on every write, and its output schema, checked when the job
+  completes if the operator turns `outputValidation` on. A catalog change
+  while the job runs changes neither. Absent when the operation declares
+  neither.
+
+An entry is written with its record when the job is admitted, in one
+transaction, and removed in the same transaction as the update that finishes
+the job. Deleting the job removes it with the record, and deleting a user
+removes the entries of that user's jobs with the account. So an entry exists
+exactly while its record is unfinished, and nothing is left to sweep. A job
+held only in memory has neither.
 
 ## Kept proofs
 
@@ -252,10 +273,11 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
 
 ## Persistence, redaction, validation
 
-- Admission creates the job record once, in its owner's jobs (`:user-data/<owner>/j/<id>`).
-  Runtime mutations use the existing component and apply `redactJobSecrets`
-  inside its atomic update, before storage. Both `input` and `output` are
-  redacted per `secretFields`.
+- Admission creates the job record once, in its owner's jobs (`:user-data/<owner>/j/<id>`),
+  with its entry ([The venue's job entries](#the-venues-job-entries)).
+  Runtime mutations edit the existing record and hide the job's
+  `secretFields` inside the same atomic update, before storage. Both `input`
+  and `output` are redacted.
 - Legacy records are normalised lazily: reads ignore only the top-level `prev`
   link, without traversing the chain or writing to storage. The next accepted
   record or scratch update drops that link atomically. Imports also drop it.
@@ -278,9 +300,10 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
   ([Mirrors](#mirrors)). Public invoke always persists. Explicit private runs
   require the operator's `enablePrivateJobs` opt-in and omit only the Job
   record, not operation side effects.
-- `VenueJob.completeWith` runs output-schema validation first; in strict
-  mode a violation fails the job instead of completing it. This covers every
-  completion path, including job-aware adapter overrides.
+- `VenueJob.completeWith` first checks the output against the schema the
+  job's operation declared when it was admitted; in strict mode a violation
+  fails the job instead of completing it. This covers every completion path,
+  including job-aware adapter overrides.
 
 ## Recovery on restart (#214)
 
@@ -295,8 +318,10 @@ The framework never re-fires an operation: re-execution would double side
 effects for non-idempotent ops (`convex:transact`, `http:post`, …).
 
 The decision is the owning adapter's. At boot, before the venue serves
-requests, `JobManager.recoverJobs()` rebuilds each non-terminal durable job
-from its record, registers it, and calls `AAdapter.recoverJob(job)`. The job
+requests, `JobManager.recoverJobs()` reads the venue's job entries
+([The venue's job entries](#the-venues-job-entries)), not every user's
+records. It rebuilds each job from its record and entry, registers it, and
+calls `AAdapter.recoverJob(job)` on the adapter its record names. The job
 carries its record and every verb; whatever state it is in when the hook
 returns is the durable truth, and anything still non-terminal is restored
 live. For ordinary jobs, the default also applies when the adapter is absent
@@ -405,9 +430,8 @@ observation. Recovery attempts to observe that same handle; it does not resume
 the remote adapter's execution. If the remote venue reports `FAILED` because
 its adapter could not recover after restart, the local mirror fails too. If
 the remote job has disappeared, its outcome remains unknown; a saved ID alone
-cannot recover it. The resolved operation
-metadata and what recovery needs to reach the remote job again are saved
-encrypted in the venue principal's SecretStore; job state carries an opaque
+cannot recover it. What recovery needs to reach the remote job again is
+saved encrypted in the venue principal's SecretStore; job state carries an opaque
 `authRef` secret name. That is the connection's mode, with the target's DID
 and grants when the venue authenticated as itself, or the SecretStore
 reference an A2A bearer was read from: never a sign-in credential or a

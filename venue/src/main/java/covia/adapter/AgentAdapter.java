@@ -1833,7 +1833,7 @@ public class AgentAdapter extends AAdapter {
 				if (intake == AgentState.SessionIntake.APPLIED
 						&& !ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
 				if (intake == AgentState.SessionIntake.APPLIED) {
-					Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft.users(), data ->
+					Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data ->
 						data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
 							.assoc(Fields.SESSION_ID, sid).assoc(DELIVERY_ACCEPTED, CVMBool.TRUE));
 					if (changed == null) throw new NotSupportedException(DELIVERY_JOB_UNAVAILABLE);

@@ -594,7 +594,7 @@ changes and cannot undo its external effects.
 
 The **interior** of `:value` (`:version`, `:assets`, `:storage`, `:did`,
 `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`,
-`:user-data → <DID> → {j, g, s, w, o, h, a}`) is navigable but has no merge of
+`:jobs`, `:user-data → <DID> → {j, g, s, w, o, h, a}`) is navigable but has no merge of
 its own. Writes are stamped on the way up by a stamp-on-write boundary (Convex
 `StampedCursor`) whose time comes from the `VenueContext` write clock.
 
@@ -607,6 +607,10 @@ or replaces `w.data.foo`; changed writes keep the container and ratchet
 `:schedule` keeps its extensible `{updated, events, ...}` record shape. Writes
 under `events` go through a stamp-on-write boundary, so they keep sibling
 metadata and refresh `updated`.
+
+`:jobs` holds the venue's entry for each unfinished job, by job id: what the
+venue needs to carry the job to its end ([JOBS.md](JOBS.md#the-venues-job-entries)).
+No path reaches it.
 
 | Region | Merge | Why |
 |--------|-------|-----|
@@ -774,7 +778,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
 | `Covia.VENUE` | `StampedCursor` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
 | `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
-| Venue interior | `KeyedLattice` (structural children) | `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:user-data` — navigated structurally; merged only at `:value` |
+| Venue interior | `KeyedLattice` (structural children) | `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:jobs`, `:user-data` — navigated structurally; merged only at `:value` |
 | `:schedule` | `StampedCursor` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
 | `:user-data → <DID>` | `MapLattice` → `StampedCursor` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
 | `j` / each Job | `IndexLattice` → `StampedCursor` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |

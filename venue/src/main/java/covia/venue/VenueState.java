@@ -406,6 +406,8 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 		transact(draft -> {
 			DeletedUser deleted = draft.deleteUser(did, actor);
 			result[0] = deleted;
+			// The user's job records go with the account, so their entries do too.
+			draft.jobIndex().removeOwner(did);
 			Set<String> names = new LinkedHashSet<>(cleanups.keySet());
 			AMap<AString, ACell> stored = RT.ensureMap(RT.getIn(draft.get(), Covia.ADAPTERS));
 			if (stored != null) for (AString name : stored.keySet()) names.add(name.toString());
@@ -450,6 +452,11 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Stored authentication directory; provider/runtime policy belongs to Auth. */
 	public AuthState auth() {
 		return new AuthState(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.USERS));
+	}
+
+	/** The entries of unfinished jobs; the jobs themselves belong to JobManager. */
+	public JobIndex jobIndex() {
+		return new JobIndex(LatticeComponent.resolve(cursor(), Covia.VENUE, Covia.JOBS));
 	}
 
 	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */

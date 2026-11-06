@@ -82,7 +82,7 @@ Open questions for #624:
 
 ## Migrations in this build
 
-The venue is at version 2.
+The venue is at version 3.
 
 ### Venue steps
 
@@ -90,6 +90,7 @@ The venue is at version 2.
 |------|--------|------|
 | 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `UserDeletionsRegion` |
 | 1 → 2 | Records of calls name `caller` and `owner` (COG-8): a job's `actor` becomes its `caller` and its old `caller` its `owner`; a scheduled event's `actor` (else `owner`) becomes its `caller` and `by` goes; a HITL request's `from` and `requesterUser` become `caller` and `owner`; an agent output snapshot's `user` becomes `owner` and its `caps` copy goes. A HITL request or snapshot naming only its caller takes its owner's namespace when the caller is an existing agent of this venue, else its own | `CallerAndOwner` |
+| 2 → 3 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner, with no output rules: a step cannot resolve the job's operation | `JobEntries` |
 
 ### Adapter steps
 

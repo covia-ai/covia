@@ -21,7 +21,7 @@ public class VenueJob extends Job {
 	public static final String RECORDED_JOB_REQUIRED = "A transaction requires a recorded Job";
 
 	private final JobManager manager;
-	private final AMap<AString, ACell> meta;
+	private final OutputRules rules;
 	private final JobState record;
 	/** Last observed snapshot, used only if the primary record/account is erased. */
 	private volatile AMap<AString, ACell> lastKnown;
@@ -32,20 +32,21 @@ public class VenueJob extends Job {
 	private final boolean directRun;
 
 	/** An observable recorded Job over its existing record. */
-	VenueJob(JobState record, AMap<AString, ACell> data, AMap<AString, ACell> meta,
+	VenueJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
 			AString ownerDID, JobManager manager) {
-		this(record, data, meta, ownerDID, manager, true, false);
+		this(record, data, rules, ownerDID, manager, true, false);
 	}
 
 	/**
 	 * @param record The Job's record, or null for a memory-only Job
 	 * @param data The Job's data when the handle is made
+	 * @param rules What the Job's operation declared about its data when the Job was admitted
 	 */
-	VenueJob(JobState record, AMap<AString, ACell> data, AMap<AString, ACell> meta,
+	VenueJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
 			AString ownerDID, JobManager manager, boolean observable, boolean directRun) {
 		super((record == null) ? data : null, record != null);
 		this.manager = manager;
-		this.meta = meta;
+		this.rules = (rules == null) ? OutputRules.NONE : rules;
 		this.account = manager.account(ownerDID);
 		this.record = record;
 		this.lastKnown = data;
@@ -66,9 +67,9 @@ public class VenueJob extends Job {
 	/** Fence nested work from a deleted lifecycle even after the DID is recreated. */
 	void requireAccount() { account.get(); }
 
-	/** Resolved operation metadata, or null when the operation could not be resolved. */
-	AMap<AString, ACell> meta() {
-		return meta;
+	/** What the Job's operation declared about its data when the Job was admitted. */
+	OutputRules rules() {
+		return rules;
 	}
 
 	@Override
@@ -115,13 +116,19 @@ public class VenueJob extends Job {
 	@Override protected State updateState(UnaryOperator<AMap<AString, ACell>> updater, Throwable failure) {
 		if (hasLocalRecord()) return super.updateState(updater, failure);
 		var original = new AtomicReference<AMap<AString, ACell>>();
+		var result = new AtomicReference<AMap<AString, ACell>>();
 		AMap<AString, ACell> committed;
 		try {
-			committed = record.update(current -> {
-				AMap<AString, ACell> next = updater.apply(current);
-				original.set(next);
-				return next == null ? null : JobManager.redactJobSecrets(next, meta);
+			manager.venue().transact(draft -> {
+				JobState current = recordIn(draft);
+				if (current == null) throw new AuthException(Users.ACCOUNT_DELETED);
+				result.set(edit(draft, current, data -> {
+					AMap<AString, ACell> next = updater.apply(data);
+					original.set(next);
+					return next == null ? null : rules.redactJob(next);
+				}));
 			});
+			committed = result.get();
 		} catch (AuthException erased) {
 			if (primaryRecord() != null) throw erased; // an updater rejection is not erasure
 			committed = null;
@@ -142,24 +149,42 @@ public class VenueJob extends Job {
 		if (observable) manager.notifyGlobalListeners(this);
 	}
 
-	/** Edit this recorded Job in a caller-owned users transaction. The updater must
-	 * be pure. Run only the successful draft's returned notification after commit;
-	 * null means the row was missing, terminal, or the update was rejected. */
-	public Runnable updateIn(Users draft, UnaryOperator<AMap<AString, ACell>> updater) {
-		if (isMemoryOnly()) throw new IllegalStateException(RECORDED_JOB_REQUIRED);
-		User owner = draft.get(account.getDID());
+	/**
+	 * This Job's record in a venue transaction's draft, in the account
+	 * lifecycle the handle was made in.
+	 *
+	 * @return the record, or null when the owner's account or the row is gone
+	 * @throws AuthException when the account was deleted and made again since
+	 */
+	private JobState recordIn(VenueState draft) {
+		User owner = draft.users().get(account.getDID());
 		if (owner == null) return null;
 		Users.requireCurrent(owner.get(), convex.core.lang.RT.getIn(account.get(), Users.GENERATION));
-		JobState job = owner.jobs().get(getID());
+		return owner.jobs().get(getID());
+	}
+
+	/** Edits the record in the draft; an edit that finishes the Job removes its entry with it. */
+	private AMap<AString, ACell> edit(VenueState draft, JobState job, UnaryOperator<AMap<AString, ACell>> edit) {
+		AMap<AString, ACell> updated = job.update(edit);
+		if (updated != null && Job.isFinished(updated)) draft.jobIndex().remove(getID());
+		return updated;
+	}
+
+	/** Edit this recorded Job in a caller-owned venue transaction. The updater must
+	 * be pure. Run only the successful draft's returned notification after commit;
+	 * null means the row was missing, terminal, or the update was rejected. */
+	public Runnable updateIn(VenueState draft, UnaryOperator<AMap<AString, ACell>> updater) {
+		if (isMemoryOnly()) throw new IllegalStateException(RECORDED_JOB_REQUIRED);
+		JobState job = recordIn(draft);
 		if (job == null) return null;
 		var original = new AtomicReference<AMap<AString, ACell>>();
-		AMap<AString, ACell> updated = job.update(current -> {
+		AMap<AString, ACell> updated = edit(draft, job, current -> {
 			if (Job.isFinished(current)) return null;
 			AMap<AString, ACell> next = updater.apply(current);
 			if (next == null) return null;
-			if (covia.grid.Status.COMPLETE.equals(next.get(Fields.STATUS))) manager.validateOutput(meta, next.get(Fields.OUTPUT));
+			if (covia.grid.Status.COMPLETE.equals(next.get(Fields.STATUS))) manager.validateOutput(rules, next.get(Fields.OUTPUT));
 			original.set(next);
-			return JobManager.redactJobSecrets(next, meta);
+			return rules.redactJob(next);
 		});
 		if (updated == null) return null;
 		AMap<AString, ACell> outcome = updated.containsKey(Fields.OUTPUT)
@@ -190,7 +215,7 @@ public class VenueJob extends Job {
 	@Override
 	public void completeWith(ACell result, java.util.function.UnaryOperator<AMap<AString, ACell>> decorate) {
 		try {
-			manager.validateOutput(meta, result);
+			manager.validateOutput(rules, result);
 		} catch (RuntimeException | Error e) {
 			fail(e, decorate);
 			return;

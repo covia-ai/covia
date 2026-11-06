@@ -51,10 +51,10 @@ import covia.grid.Status;
  * Every job has an owner identified by caller DID — there are no
  * anonymous jobs. Venue-internal operations use the venue's own DID.</p>
  *
- * <p>Per-user lattice ({@code :user-data → <DID> → :jobs}) is the single
- * source of truth. The venue-level {@code :jobs} index is not used. Terminal
- * jobs are evicted from in-memory cache — the lattice retains the full
- * history.</p>
+ * <p>A job's record is in its owner's jobs ({@code :user-data → <DID> → j});
+ * while it is unfinished the venue also keeps its entry in {@code :jobs}
+ * ({@link JobIndex}), and recovery reads those entries. Terminal jobs are
+ * evicted from in-memory cache — the lattice retains the full history.</p>
  *
  * <p>Dependencies are passed via constructor to avoid circular references
  * with Engine.</p>
@@ -823,18 +823,18 @@ public class JobManager {
 	 * @throws IllegalArgumentException in {@code strict} mode when the result
 	 *         does not satisfy the operation's output schema
 	 */
-	public void validateOutput(AMap<AString, ACell> meta, ACell result) {
+	public void validateOutput(OutputRules rules, ACell result) {
 		String mode = engine.config().getOutputValidation();
 		if (mode == null || "off".equals(mode)) return;
-		AMap<AString, ACell> outputSchema = getMap(RT.getIn(meta, Fields.OPERATION, Fields.OUTPUT));
-		if (outputSchema == null || outputSchema.isEmpty()) return;
+		AMap<AString, ACell> outputSchema = rules.outputSchema();
+		if (outputSchema == null) return;
 		String err = JsonSchema.validate(outputSchema, result);
 		if (err == null) return;
 		if ("strict".equals(mode)) {
 			// The operation broke its own declared contract, not the caller's input.
 			throw new CoviaException(OUTPUT_SCHEMA_VIOLATION + err);
 		}
-		log.warn("Output schema violation for {}: {}", AAdapter.getAdapterName(meta), err);
+		log.warn("Output schema violation: {}", err);
 	}
 
 	/**
@@ -885,58 +885,6 @@ public class JobManager {
 		return (cell instanceof AMap) ? (AMap<AString, ACell>) cell : null;
 	}
 
-	// ========== Secret Redaction ==========
-
-	private static final AString K_SECRET_FIELDS = Strings.intern("secretFields");
-
-	/**
-	 * Returns a copy of {@code input} with secret fields replaced by {@link Fields#HIDDEN}.
-	 * Secret fields are declared in {@code meta.operation.secretFields} as a vector of field names.
-	 * If there are no secret fields (or input is not a map), returns input unchanged.
-	 * The scheduler applies it to the inputs it lists, so a listing never shows
-	 * more than the job history would.
-	 */
-	@SuppressWarnings("unchecked")
-	static ACell redactSecrets(ACell input, AMap<AString, ACell> meta) {
-		if (!(input instanceof AMap)) return input;
-		ACell sf = RT.getIn(meta, Fields.OPERATION, K_SECRET_FIELDS);
-		if (!(sf instanceof AVector)) return input;
-
-		AMap<AString, ACell> map = (AMap<AString, ACell>) input;
-		AVector<ACell> secretFields = (AVector<ACell>) sf;
-		for (long i = 0; i < secretFields.count(); i++) {
-			AString field = RT.ensureString(secretFields.get(i));
-			if (field != null && map.containsKey(field)) {
-				map = map.assoc(field, Fields.HIDDEN);
-			}
-		}
-		return map;
-	}
-
-	/**
-	 * Returns a copy of job data with secret fields in the output redacted.
-	 * Uses the same {@code secretFields} list as input redaction.
-	 */
-	static AMap<AString, ACell> redactOutputSecrets(AMap<AString, ACell> jobData, AMap<AString, ACell> meta) {
-		ACell output = jobData.get(Fields.OUTPUT);
-		if (output == null) return jobData;
-		ACell redacted = redactSecrets(output, meta);
-		if (redacted == output) return jobData;
-		return jobData.assoc(Fields.OUTPUT, redacted);
-	}
-
-	/** Redacts both directions on every durable transition. Adapters may update
-	 *  a job record after submission, so redacting only the initial input is not
-	 *  sufficient to maintain the persistence invariant. */
-	static AMap<AString, ACell> redactJobSecrets(AMap<AString, ACell> jobData,
-			AMap<AString, ACell> meta) {
-		AMap<AString, ACell> redacted = redactOutputSecrets(jobData, meta);
-		ACell input = redacted.get(Fields.INPUT);
-		if (input == null) return redacted;
-		ACell safeInput = redactSecrets(input, meta);
-		return (safeInput == input) ? redacted : redacted.assoc(Fields.INPUT, safeInput);
-	}
-
 	// ========== Job Submission ==========
 
 	/**
@@ -959,6 +907,7 @@ public class JobManager {
 
 		long ts = Utils.getCurrentTimestamp();
 		Blob jobID = generateJobID(ts);
+		OutputRules rules = OutputRules.of(meta);
 
 		AMap<AString, ACell> status = Maps.of(
 				Fields.ID, jobID,
@@ -966,7 +915,7 @@ public class JobManager {
 				Fields.STATUS, Status.PENDING,
 				Fields.UPDATED, CVMLong.create(ts),
 				Fields.CREATED, CVMLong.create(ts),
-				Fields.INPUT, redactSecrets(input, meta));
+				Fields.INPUT, rules.redact(input));
 		status = Attribution.attribute(status, callerDID, ownerDID);
 		if (parentID != null) {
 			status = status.assoc(Fields.PARENT, parentID);
@@ -985,17 +934,18 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		VenueJob job = admit(jobID, status, meta, ownerDID, memoryOnly, directRun, resultOriented);
+		VenueJob job = admit(jobID, status, rules, ownerDID, memoryOnly, directRun, resultOriented);
 		if (memoryOnly) log.debug("Started transient job: {}", jobID);
 		else log.info("Submitted job: {}", jobID);
 		return job;
 	}
 
 	/**
-	 * Writes a job's row, unless it is memory-only, and publishes its live
-	 * handle, under the account monitor that fences deletion.
+	 * Writes a job's row and its entry ({@link JobIndex}) in one transaction,
+	 * unless it is memory-only, and publishes its live handle, under the
+	 * account monitor that fences deletion.
 	 */
-	private VenueJob admit(Blob jobID, AMap<AString, ACell> status, AMap<AString, ACell> meta,
+	private VenueJob admit(Blob jobID, AMap<AString, ACell> status, OutputRules rules,
 			AString ownerDID, boolean memoryOnly, boolean directRun, boolean preserveFailureCause) {
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(ownerDID);
@@ -1003,10 +953,20 @@ public class JobManager {
 			// Readers can see the row first, so by-id lookups go through liveJob.
 			JobState record = null;
 			if (!memoryOnly) {
-				record = account(ownerDID).jobs().create(jobID, status);
-				if (record == null) throw new IllegalStateException(JOB_ID_EXISTS + jobID);
+				User account = account(ownerDID);
+				AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, ownerDID);
+				AMap<AString, ACell> kept = rules.toCell();
+				if (kept != null) entry = entry.assoc(JobIndex.RULES, kept);
+				AMap<AString, ACell> admitted = entry;
+				venue().transact(draft -> {
+					if (draft.users().ensure(ownerDID).jobs().create(jobID, status) == null) {
+						throw new IllegalStateException(JOB_ID_EXISTS + jobID);
+					}
+					draft.jobIndex().admit(jobID, admitted);
+				});
+				record = account.jobs().get(jobID);
 			}
-			VenueJob job = new VenueJob(record, status, meta, ownerDID, this, !memoryOnly, directRun);
+			VenueJob job = new VenueJob(record, status, rules, ownerDID, this, !memoryOnly, directRun);
 			job.setPreserveFailureCause(preserveFailureCause);
 			activeJobs.put(jobID, job);
 			return job;
@@ -1098,7 +1058,7 @@ public class JobManager {
 			ACell value = data.get(field);
 			if (value != null) status = status.assoc(field, value);
 		}
-		VenueJob mirror = admit(jobID, status, unrecorded.meta(),
+		VenueJob mirror = admit(jobID, status, unrecorded.rules(),
 			Attribution.owner(data), false, false, false);
 		mirror.setCancelHook(() -> {
 			AString reason = RT.ensureString(mirror.getData().get(Fields.ERROR));
@@ -1392,14 +1352,17 @@ public class JobManager {
 		if (data == null) return false;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
 		AString ownerDID = Attribution.owner(data);
-		boolean removed = false;
+		AtomicBoolean removed = new AtomicBoolean();
 		if (ownerDID != null) {
-			User user = engine.getVenueState().users().get(ownerDID);
-			if (user != null) removed = user.jobs().remove(id);
+			venue().transact(draft -> {
+				User user = draft.users().get(ownerDID);
+				removed.set(user != null && user.jobs().remove(id));
+				if (removed.get()) draft.jobIndex().remove(id);
+			});
 		}
 		// Remove from active cache if present (may already be evicted for terminal jobs)
 		deleteJob(id);
-		return removed;
+		return removed.get();
 	}
 
 	public boolean deleteJob(Blob id) {
@@ -1504,51 +1467,41 @@ public class JobManager {
 	// ========== Job Recovery ==========
 
 	/**
-	 * Recovers durable Jobs from the lattice after a restart. The decision is
-	 * the owning adapter's ({@link AAdapter#recoverJob}): the framework
-	 * rebuilds each non-terminal Job from its record, registers it, and calls
-	 * the hook — whatever state the Job is in afterwards is the durable truth.
-	 * Jobs still non-terminal are restored live and re-occupy their caller's
-	 * concurrency permit. A Job whose adapter is absent (module not loaded,
-	 * boot-disabled) gets the default: PENDING and STARTED fail as interrupted
-	 * and are never re-executed; the paused family is restored.
+	 * Recovers durable Jobs after a restart, from the venue's entries of
+	 * unfinished jobs ({@link JobIndex}). The decision is the owning adapter's
+	 * ({@link AAdapter#recoverJob}): the framework rebuilds each Job from its
+	 * record and entry, registers it, and calls the hook — whatever state the
+	 * Job is in afterwards is the durable truth. Jobs still non-terminal are
+	 * restored live and re-occupy their caller's concurrency permit. A Job
+	 * whose adapter is absent (module not loaded, boot-disabled) gets the
+	 * default: PENDING and STARTED fail as interrupted and are never
+	 * re-executed; the paused family is restored.
 	 */
-	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
-		AMap<AString, ACell> userData = engine.getVenueState().users().getAll();
-		if (userData == null || userData.isEmpty()) return;
+		Index<Blob, ACell> entries = venue().jobIndex().all();
 		int stabilised = 0, kept = 0;
 		java.util.List<VenueJob> restored = new java.util.ArrayList<>();
-		for (var entry : userData.entrySet()) {
-			AString did = (AString) entry.getKey();
-			User user = engine.getVenueState().users().get(did);
-			if (user == null) continue;
-			// Recovery already visits every record. Avoid a separate normalisation
-			// pass over the listing; terminal legacy records need no startup rewrite.
-			ACell storedJobs = RT.getIn(entry.getValue(), covia.lattice.Namespace.J);
-			if (!(storedJobs instanceof Index)) continue;
-			Index<Blob, ACell> userJobs = (Index<Blob, ACell>) storedJobs;
-			long n = userJobs.count();
-			for (long i = 0; i < n; i++) {
-				var jobEntry = userJobs.entryAt(i);
-				Blob jobID = (Blob) jobEntry.getKey();
-				ACell value = jobEntry.getValue();
-				if (!(value instanceof AMap)) continue;
-				AMap<AString, ACell> record = (AMap<AString, ACell>) value;
-				if (activeJobs.containsKey(jobID)) continue; // already live
-				if (Job.isFinished(record)) continue;
-				JobState state = user.jobs().get(jobID);
-				if (state == null) continue;
-				VenueJob job = restoreJob(jobID, state, JobState.view(record), did);
-				restored.add(job);
-			}
+		for (var e : entries.entrySet()) {
+			Blob jobID = e.getKey();
+			if (activeJobs.containsKey(jobID)) continue; // already live
+			AMap<AString, ACell> entry = RT.ensureMap(e.getValue());
+			AString ownerDID = RT.ensureString(RT.getIn(entry, JobIndex.OWNER));
+			User user = (ownerDID == null) ? null : venue().users().get(ownerDID);
+			JobState state = (user == null) ? null : user.jobs().get(jobID);
+			// An entry goes with its record and with the update that finishes it.
+			AMap<AString, ACell> record = (state == null) ? null : state.getRecord();
+			if (record == null || Job.isFinished(record)) continue;
+			OutputRules rules = OutputRules.fromCell(RT.getIn(entry, JobIndex.RULES));
+			VenueJob job = new VenueJob(state, record, rules, ownerDID, this);
+			activeJobs.put(jobID, job);
+			restored.add(job);
 		}
 		// Parent interactions may reference children owned by another user. Restore
 		// every handle first so subscriptions bind to the canonical live object.
 		for (VenueJob job : restored) {
 			if (job.isFinished()) continue;
 			Blob jobID = job.getID();
-			AAdapter adapter = adapterFor(job);
+			AAdapter adapter = runningAdapter(job);
 			try {
 				if (adapter != null) adapter.recoverJob(job);
 				else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().adapterUnavailable(job);
@@ -1571,29 +1524,6 @@ public class JobManager {
 		}
 	}
 
-	/**
-	 * Rebuilds a non-terminal Job from its record and registers it as active
-	 * before any verb runs on it. The handle binds to the existing lattice row;
-	 * recovery never creates or copies a second mutable job record.
-	 */
-	private VenueJob restoreJob(Blob jobID, JobState state, AMap<AString, ACell> record, AString ownerDID) {
-		AMap<AString, ACell> delegation = RT.ensureMap(record.get(RemoteJobs.DELEGATION));
-		AString opRef = RT.ensureString(record.get(Fields.OP));
-		Operation op = null;
-		if (opRef != null && delegation == null) {
-			Asset asset = resolveRecordedOp(opRef, ownerDID);
-			op = (asset != null) ? Operation.from(asset) : null;
-		}
-		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
-		if (delegation != null) {
-			try { meta = engine.remoteJobs().recoveryMetadata(delegation); }
-			catch (RuntimeException unavailable) { meta = null; }
-		}
-		VenueJob job = new VenueJob(state, record, meta, ownerDID, this);
-		activeJobs.put(jobID, job);
-		return job;
-	}
-
 	/** A restored non-terminal Job re-occupies its owner's concurrency permit. */
 	private void reserveRecoveredPermit(Blob jobID, AString ownerDID) {
 		if (jobCapEnabled && ownerDID != null) {
@@ -1604,30 +1534,22 @@ public class JobManager {
 		}
 	}
 
-	/** The live adapter owning a Job's operation, or null when absent or disabled, or for a mirror. */
-	private AAdapter adapterFor(VenueJob job) {
-		if (isMirror(job)) return null;
-		// Live jobs and recovered delegations retain their resolved operation
-		// metadata (protected with the saved transport authority). Route by that
-		// owner so new remote-agent adapters do not need a protocol switch here.
-		AMap<AString, ACell> meta = job.meta();
-		String name = (meta != null) ? AAdapter.getAdapterName(meta) : null;
-		if (name != null) return engine.getAdapter(name);
-		AMap<AString, ACell> delegation = RemoteJobs.descriptor(job);
-		if (delegation != null) {
-			// Compatibility for older records or temporarily unavailable metadata.
-			ACell protocol = delegation.get(RemoteJobs.PROTOCOL);
-			if (Strings.create("covia").equals(protocol)) return engine.getAdapter("grid");
-			if (Strings.create("a2a").equals(protocol)) return engine.getAdapter("a2a");
-			return null;
-		}
-		return null;
+	/**
+	 * The live adapter that runs a Job ({@link #adapterName}), or null for a
+	 * mirror, or when that adapter is absent or disabled.
+	 */
+	private AAdapter runningAdapter(Job job) {
+		String name = adapterName(job);
+		return (name == null) ? null : engine.getAdapter(name);
 	}
 
 	// ========== Persistence ==========
 
 
 	User account(AString did) { return engine.getVenueState().users().ensure(did); }
+
+	/** The venue's state: job records with every other area it holds, one transaction for both. */
+	VenueState venue() { return engine.getVenueState(); }
 
 	/** Cancel all accepted work owned by a now-deleted account, including transient jobs. */
 	void cancelUserJobs(AString did, Job deletion) {
@@ -1691,19 +1613,24 @@ public class JobManager {
 	 * @throws UnavailableException if that adapter is not enabled here now
 	 */
 	private AAdapter resolveJobAdapter(Job job) {
-		if (isMirror(job)) return null;
-		AString recorded = RT.ensureString(job.getData().get(Fields.ADAPTER));
-		String adapterName;
-		if (recorded != null) {
-			adapterName = recorded.toString();
-		} else {
-			AMap<AString, ACell> meta = resolveJobMeta(job);
-			adapterName = (meta != null) ? AAdapter.getAdapterName(meta) : null;
-		}
+		String adapterName = adapterName(job);
 		if (adapterName == null) return null;
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) throw new UnavailableException(ADAPTER_NOT_AVAILABLE + adapterName);
 		return adapter;
+	}
+
+	/**
+	 * The name of the adapter that runs a Job: the one its record says it was
+	 * dispatched to, else, for a record written before 0.9.9, the one its
+	 * operation names; null for a mirror, which no adapter runs.
+	 */
+	private String adapterName(Job job) {
+		if (isMirror(job)) return null;
+		AString recorded = RT.ensureString(job.getData().get(Fields.ADAPTER));
+		if (recorded != null) return recorded.toString();
+		AMap<AString, ACell> meta = resolveJobMeta(job);
+		return (meta != null) ? AAdapter.getAdapterName(meta) : null;
 	}
 
 	// ========== Job ID Generation ==========
@@ -1789,7 +1716,7 @@ public class JobManager {
 		awaitDrain(graceMs);
 		for (Job job : activeJobs.values()) {
 			if (job.isFinished()) continue;
-			AAdapter adapter = (job instanceof VenueJob vj) ? adapterFor(vj) : null;
+			AAdapter adapter = runningAdapter(job);
 			try {
 				if (adapter != null) adapter.suspendJob(job);
 				else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);

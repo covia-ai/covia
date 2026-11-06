@@ -84,6 +84,9 @@ public final class Covia {
 	/** Framework-owned unfinished user cleanup, indexed by adapter and DID. */
 	public static final Keyword USER_DELETIONS = Keyword.intern("user-deletions");
 
+	/** Framework-owned entries of unfinished jobs, by job id ({@code covia.venue.JobIndex}). */
+	public static final Keyword JOBS = Keyword.intern("jobs");
+
 	/** Framework-owned state schema version reached by each adapter, by name. */
 	public static final Keyword ADAPTER_VERSIONS = Keyword.intern("adapter-versions");
 
@@ -272,6 +275,7 @@ public final class Covia {
 		ADAPTERS, MapLattice.create(JSONLattice.INSTANCE),
 		ADAPTER_VERSIONS, MapLattice.create(JSONLattice.INSTANCE),
 		USER_DELETIONS, JSONLattice.INSTANCE,
+		JOBS, IndexLattice.create(JSONLattice.INSTANCE),
 		USER_DATA, MapLattice.create(USER_RECORD)));
 
 	/**

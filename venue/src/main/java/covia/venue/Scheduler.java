@@ -302,7 +302,7 @@ public class Scheduler {
 		if (input == null) return null;
 		Asset op = engine.jobs().resolveRecordedOp(RT.ensureString(rec.get(K_OP)),
 			Attribution.owner(rec));
-		return (op == null) ? null : JobManager.redactSecrets(input, op.meta());
+		return (op == null) ? null : OutputRules.of(op.meta()).redact(input);
 	}
 
 	/** Arm the alarm from the (already-loaded) lattice index. Call once on boot. */

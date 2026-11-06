@@ -77,7 +77,6 @@ public final class RemoteJobs implements AutoCloseable {
 	private static final AString RETRYING = Strings.intern("retrying");
 	private static final AString UNKNOWN = Strings.intern("acceptance-unknown");
 	private static final AString SUSPENDED = Strings.intern("suspended");
-	private static final AString OPERATION_METADATA = Strings.intern("operationMetadata");
 	private final Engine engine;
 	private final ScheduledThreadPoolExecutor timer;
 	private final ConcurrentHashMap<Job, Watch> watches = new ConcurrentHashMap<>();
@@ -144,7 +143,6 @@ public final class RemoteJobs implements AutoCloseable {
 			TARGET, Strings.create(target), OBSERVATION, SUBMITTING,
 			OWNS_REMOTE, convex.core.data.prim.CVMBool.create(ownsRemote));
 		if (job.isRecorded()) {
-			if (job instanceof VenueJob hosted) credentials = credentials.assoc(OPERATION_METADATA, hosted.meta());
 			AString ref = Strings.create("remote-job-" + job.getID().toHexString());
 			secrets().store(ref, JSON.print(credentials), SecretStore.keys(engine.getKeyPair()));
 			record = record.assoc(AUTH_REF, ref);
@@ -192,11 +190,6 @@ public final class RemoteJobs implements AutoCloseable {
 		AString value = ref == null ? null : secrets().decrypt(ref, SecretStore.keys(engine.getKeyPair()));
 		if (value == null) throw new UnavailableException("Remote observation credentials unavailable");
 		return RT.ensureMap(JSON.parse(value));
-	}
-
-	/** Restore the resolved definition, independent of later catalog edits. */
-	AMap<AString, ACell> recoveryMetadata(AMap<AString, ACell> record) {
-		return RT.ensureMap(credentials(record).get(OPERATION_METADATA));
 	}
 
 	void adapterUnavailable(Job job) { health(job, Strings.intern("adapter-unavailable"), null); }

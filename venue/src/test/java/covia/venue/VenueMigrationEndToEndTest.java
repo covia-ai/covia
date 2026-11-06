@@ -44,7 +44,7 @@ class VenueMigrationEndToEndTest {
 	 * The venue version this test seeds shapes for. A new venue version needs
 	 * the shapes its step converts seeded here, and fails until it has them.
 	 */
-	private static final long SEEDED_THROUGH = 2;
+	private static final long SEEDED_THROUGH = 3;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
 	private static final CoviaPath OLD_DELETIONS = CoviaPath.parse("w/user-deletions");
@@ -65,6 +65,8 @@ class VenueMigrationEndToEndTest {
 	private static final AString REQUEST = Strings.create("e2e-request");
 	private static final String PARKED = "migration-e2e-parked";
 	private static final Blob PARKED_TASK = Blob.fromHex("e2e4e2e4e2e4e2e4e2e4e2e4e2e4e2e4");
+	/** A job still running when a version 2 venue stopped, with no entry: that version kept none. */
+	private static final Blob RUNNING_JOB = Blob.fromHex("e2e5e2e5e2e5e2e5e2e5e2e5e2e5e2e5");
 
 	private static CoviaPath adapterPath(String name) {
 		return CoviaPath.parse("w/adapters/" + name);
@@ -124,6 +126,9 @@ class VenueMigrationEndToEndTest {
 			AMap<AString, ACell> agentJob = Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, Status.COMPLETE,
 				Fields.CALLER, USER, Strings.create("actor"), agentDID);
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(AGENT_JOB, agentJob));
+			AMap<AString, ACell> running = Maps.of(Fields.ID, RUNNING_JOB, Fields.STATUS, Status.STARTED,
+				Fields.CALLER, USER, Fields.OP, "v/test/ops/never", Fields.ADAPTER, "test");
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(RUNNING_JOB, running));
 			user.inbox().put(REQUEST, Maps.of(Hitl.ID, REQUEST, Strings.create("from"), agentDID,
 				Hitl.STATUS, Hitl.OPEN));
 			AgentState parked = user.ensureAgent(PARKED, Maps.empty(), null);
@@ -164,6 +169,8 @@ class VenueMigrationEndToEndTest {
 				Strings.create("outputContext")));
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
 				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
+			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));
+			assertEquals(1, venue.jobIndex().all().count(), "only the unfinished job has an entry");
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
 			assertEquals(legacyJob, venue.users().get(USER).cursor().path(Namespace.J, JOB).get());
@@ -172,6 +179,10 @@ class VenueMigrationEndToEndTest {
 			engine.launch();
 			RequestContext ctx = RequestContext.of(USER);
 			user = venue.users().get(USER);
+
+			// The running job is recovered from its entry, as any job is after a restart.
+			assertEquals(Status.FAILED, RT.getIn(engine.jobs().getJobData(RUNNING_JOB, ctx), Fields.STATUS));
+			assertNull(venue.jobIndex().entry(RUNNING_JOB));
 
 			// An unversioned adapter's state moves when it is first used.
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());
@@ -216,7 +227,7 @@ class VenueMigrationEndToEndTest {
 			// Migrating again changes nothing migration owns.
 			ACell current = venue.get();
 			engine.migrate();
-			for (var region : List.of(Covia.VERSION, Covia.ADAPTERS, Covia.ADAPTER_VERSIONS, Covia.USER_DELETIONS)) {
+			for (var region : List.of(Covia.VERSION, Covia.ADAPTERS, Covia.ADAPTER_VERSIONS, Covia.USER_DELETIONS, Covia.JOBS)) {
 				assertSame(RT.getIn(current, region), RT.getIn(venue.get(), region), region.toString());
 			}
 		} finally {

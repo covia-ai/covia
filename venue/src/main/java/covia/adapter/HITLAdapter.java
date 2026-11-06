@@ -664,7 +664,8 @@ public class HITLAdapter extends AAdapter {
 		AString requestingAgent = job == null ? null : Engine.agentIdIn(requester, job.getCaller());
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().get(requester);
 		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
-		engine.getVenueState().users().transact(draft -> {
+		engine.getVenueState().transact(venue -> {
+			var draft = venue.users();
 			resolved.set(false);
 			notification.set(null);
 			unavailable.set(false);
@@ -677,7 +678,7 @@ public class HITLAdapter extends AAdapter {
 			if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
 			target.inbox().put(id, updated);
 			if (job != null) {
-				Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data -> {
+				Runnable changed = ((covia.venue.VenueJob) job).updateIn(venue, data -> {
 					if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
 					String error = Hitl.REJECTED.equals(status) ? rejection(RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED;
 					return data.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(error)).dissoc(Fields.ERROR_CODE);

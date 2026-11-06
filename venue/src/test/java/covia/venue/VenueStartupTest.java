@@ -79,6 +79,16 @@ public class VenueStartupTest {
 		@Override public void close() { closed.countDown(); }
 	}
 
+	/** A job a previous run left STARTED: its record and the venue's entry for it, as admission writes them. */
+	private static void leaveStarted(Engine engine) {
+		AString owner = engine.getDIDString();
+		engine.getVenueState().transact(draft -> {
+			draft.users().ensure(owner).jobs().create(RECOVERED_JOB, Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP,
+				Fields.STATUS, Status.STARTED, Fields.CALLER, owner, Fields.INPUT, Maps.empty()));
+			draft.jobIndex().admit(RECOVERED_JOB, Maps.of(JobIndex.OWNER, owner));
+		});
+	}
+
 	@Test
 	public void newStoreHookCanUseConfiguredCoviaAndRegisterOperations() {
 		AKeyPair key = AKeyPair.generate();
@@ -172,9 +182,7 @@ public class VenueStartupTest {
 			try {
 				seed.registerAdapter(new StartupAdapter());
 				seed.materialiseBootstrapState();
-				seed.getVenueState().users().ensure(seed.getDIDString()).jobs().create(RECOVERED_JOB,
-					Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
-						Fields.CALLER, seed.getDIDString(), Fields.INPUT, Maps.empty()));
+				leaveStarted(seed);
 				seed.gridScheduler().schedule(OP, Strings.create("due"), seed.venueContext(), 1L);
 			} finally {
 				seed.close();
@@ -383,9 +391,7 @@ public class VenueStartupTest {
 			Engine seed = new Engine(config, application, key).prepare();
 			seed.registerAdapter(new StartupAdapter());
 			seed.materialiseBootstrapState();
-			seed.getVenueState().users().ensure(seed.getDIDString()).jobs().create(RECOVERED_JOB,
-				Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
-					Fields.CALLER, seed.getDIDString(), Fields.INPUT, Maps.empty()));
+			leaveStarted(seed);
 			seed.gridScheduler().schedule(OP, Strings.create("embedded due"), seed.venueContext(), 1L);
 			seed.close();
 
@@ -472,9 +478,7 @@ public class VenueStartupTest {
 				assertEquals(START_FAILURE, assertThrows(IllegalStateException.class,
 					() -> engine.launch(prepared -> {
 						prepared.registerAdapter(adapter);
-						prepared.getVenueState().users().ensure(prepared.getDIDString()).jobs().create(RECOVERED_JOB,
-							Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP, Fields.STATUS, Status.STARTED,
-								Fields.CALLER, prepared.getDIDString(), Fields.INPUT, Maps.empty()));
+						leaveStarted(prepared);
 						return CompletableFuture.completedFuture(null);
 					})).getMessage());
 				assertTrue(adapter.recovered);

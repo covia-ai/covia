@@ -235,7 +235,7 @@ public class JobManagerTest {
 				Maps.of(Fields.ADAPTER, Strings.create("test:never")));
 			Job original = eng.jobs().invokeOperation(meta, null, owner);
 			JobState record = eng.getVenueState().users().get(owner.getUserDID()).jobs().get(original.getID());
-			Job job = new VenueJob(record, original.getData(), meta, owner.getUserDID(), eng.jobs()) {
+			Job job = new VenueJob(record, original.getData(), OutputRules.of(meta), owner.getUserDID(), eng.jobs()) {
 				@Override public void onUpdate(AMap<AString, ACell> next) {
 					if (Status.PAUSED.equals(next.get(Fields.STATUS))) {
 						entered.countDown();
@@ -618,7 +618,7 @@ public class JobManagerTest {
 		// violates the schema) must NOT raise. No validation, no logging.
 		Engine eng = Engine.createTemp(null);
 		try {
-			eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+			eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object"));
 		} finally {
 			eng.close();
 		}
@@ -629,9 +629,9 @@ public class JobManagerTest {
 		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
 		try {
 			assertThrows(CoviaException.class,
-				() -> eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object")));
+				() -> eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object")));
 			// A conforming result (an object) passes.
-			eng.jobs().validateOutput(metaWithObjectOutput(), Maps.empty());
+			eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Maps.empty());
 		} finally {
 			eng.close();
 		}
@@ -642,7 +642,7 @@ public class JobManagerTest {
 		// warn logs a mismatch but completes — must not raise.
 		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("warn")));
 		try {
-			eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+			eng.jobs().validateOutput(OutputRules.of(metaWithObjectOutput()), Strings.create("not an object"));
 		} finally {
 			eng.close();
 		}
@@ -655,7 +655,7 @@ public class JobManagerTest {
 		try {
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
 				Maps.of(Fields.ADAPTER, Strings.create("test:out")));
-			eng.jobs().validateOutput(meta, Strings.create("anything"));
+			eng.jobs().validateOutput(OutputRules.of(meta), Strings.create("anything"));
 		} finally {
 			eng.close();
 		}
@@ -794,25 +794,28 @@ public class JobManagerTest {
 		var future = job.future();
 		var output = Maps.of(token, "private-test-value");
 		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
-		var users = engine.getVenueState().users();
-		assertThrows(IllegalStateException.class, () -> users.transact(draft -> {
+		var venue = engine.getVenueState();
+		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
 			assertNotNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output)));
+			assertNull(draft.jobIndex().entry(job.getID()), "the update that finishes the job removes its entry");
 			assertFalse(job.isFinished());
 			throw new IllegalStateException("rollback");
 		}));
 		assertFalse(job.isFinished());
 		assertFalse(future.isDone());
 		assertEquals(0, notifications.get());
-		users.transact(draft -> notification.set(job.updateIn(draft,
+		assertNotNull(venue.jobIndex().entry(job.getID()), "a rolled back finish keeps the entry");
+		venue.transact(draft -> notification.set(job.updateIn(draft,
 			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output))));
 		assertEquals(Status.COMPLETE, job.getStatus());
-		assertEquals(Fields.HIDDEN, RT.getIn(users.get(did).jobs().getRecord(job.getID()), Fields.OUTPUT, token));
+		assertNull(venue.jobIndex().entry(job.getID()));
+		assertEquals(Fields.HIDDEN, RT.getIn(venue.users().get(did).jobs().getRecord(job.getID()), Fields.OUTPUT, token));
 		assertFalse(future.isDone(), "draft edits cannot notify live waiters");
 		notification.get().run();
 		notification.get().run();
 		assertEquals(output, future.get(5, TimeUnit.SECONDS));
 		assertEquals(1, notifications.get(), "terminal lifecycle notifications run once");
-		users.transact(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
+		venue.transact(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
 	}
 
 	@Test
