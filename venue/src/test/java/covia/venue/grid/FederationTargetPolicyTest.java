@@ -90,9 +90,11 @@ public class FederationTargetPolicyTest {
 			String refused = refusal(ENGINE, op, gridInput(venue));
 			assertTrue(refused != null && refused.contains(HTTPAdapter.PRIVATE_ADDRESS), op + ": " + refused);
 		}
-		String refused = refusal(ENGINE, "v/ops/grid/job-status",
-			Maps.of(Fields.VENUE, venue, Fields.ID, "00112233445566778899aabbccddeeff"));
-		assertTrue(refused != null && refused.contains(HTTPAdapter.PRIVATE_ADDRESS), refused);
+		for (String op : List.of("v/ops/grid/job-status", "v/ops/grid/job-result")) {
+			String refused = refusal(ENGINE, op,
+				Maps.of(Fields.VENUE, venue, Fields.ID, "00112233445566778899aabbccddeeff"));
+			assertTrue(refused != null && refused.contains(HTTPAdapter.PRIVATE_ADDRESS), op + ": " + refused);
+		}
 
 		// The same venue answers a user whose operator allows its host
 		Job job = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(GRID_RUN, gridInput(venue), ctx);
