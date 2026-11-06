@@ -144,6 +144,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `auth:identity-token` refuses restricted self-tokens and the public principal.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
+- An agent's pinned context and skills index show only what its caps cover.
 
 ### Migration
 
