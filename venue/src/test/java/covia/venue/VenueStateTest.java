@@ -32,6 +32,8 @@ import covia.venue.AgentState;
  * no raw lattice data construction.
  */
 public class VenueStateTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 
 	// ========== Factory Methods ==========
 
@@ -68,7 +70,7 @@ public class VenueStateTest {
 			application.setContext(LatticeContext.create(null, kp));
 			VenueState venue = application.venue(kp.getAccountKey());
 
-			venue.initialise(Strings.create("did:key:test"));
+			venue.initialise(Strings.create("did:key:test"), NO_SECRETS);
 			AssetStore assets = venue.assets();
 			assets.store(Strings.create("{\"name\":\"Hosted\"}"), null);
 
@@ -272,7 +274,7 @@ public class VenueStateTest {
 
 		// Bootstrap via the atomic init path (raw set() was removed — app code
 		// mutates through cursor atomics only)
-		vs.initialise(Strings.create("did:key:test"));
+		vs.initialise(Strings.create("did:key:test"), NO_SECRETS);
 
 		assertNotNull(vs.get());
 	}
@@ -303,7 +305,7 @@ public class VenueStateTest {
 		var context = VenueContext.create(() -> CVMLong.create(clock.get()));
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
-		connected.initialise(Strings.create("did:key:fork-clock"));
+		connected.initialise(Strings.create("did:key:fork-clock"), NO_SECRETS);
 		VenueState forked = connected.fork();
 
 		clock.set(2000);
@@ -466,12 +468,12 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 
 		assertNull(vs.get(), "Uninitialised venue should have null state");
-		vs.initialise(Strings.create("did:key:zTest"));
+		vs.initialise(Strings.create("did:key:zTest"), NO_SECRETS);
 		assertNotNull(vs.get(), "Initialised venue should have non-null state");
 
 		// Calling initialise again should be a no-op
 		ACell state = vs.get();
-		vs.initialise(Strings.create("did:key:zDifferent"));
+		vs.initialise(Strings.create("did:key:zDifferent"), NO_SECRETS);
 		assertEquals(state, vs.get(), "Second initialise should be no-op");
 	}
 

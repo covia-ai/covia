@@ -29,6 +29,8 @@ import covia.venue.migration.MigrationStep;
 
 /** Adapters migrate their own state schema when they register (#621). */
 class AdapterStateMigrationTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	private static final String NAME = "versioned";
 	private static final AString SCHEMA = Strings.create("schema");
 
@@ -290,10 +292,10 @@ class AdapterStateMigrationTest {
 
 		Versioned embedded = new Versioned(NAME, 2);
 		assertThrows(UnsupportedVersionException.class,
-			() -> venue.migrate(List.of(embedded.stateMigration(), new Versioned("newer", 1).stateMigration())));
+			() -> venue.migrate(NO_SECRETS, List.of(embedded.stateMigration(), new Versioned("newer", 1).stateMigration())));
 		assertSame(before, venue.get(), "neither the venue nor the earlier adapter migrated");
 
-		venue.migrate(List.of(embedded.stateMigration(), new Versioned("newer", 3).stateMigration()));
+		venue.migrate(NO_SECRETS, List.of(embedded.stateMigration(), new Versioned("newer", 3).stateMigration()));
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(2, venue.adapterVersion(NAME));
 		assertEquals(Maps.of("items", Vectors.of("a")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());

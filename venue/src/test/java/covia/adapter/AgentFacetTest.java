@@ -206,7 +206,8 @@ class AgentFacetTest {
             ACell first;
             try { first = firstJob.awaitResult(5000); }
             catch (Exception e) {
-                Job child = engine.jobs().getJob(Job.parseID(firstJob.getData().get(ExternalAgents.CHILD)), ctx);
+                ACell childId = RT.getIn(engine.jobs().adapterData(firstJob), ExternalAgents.CHILD);
+                Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), ctx);
                 throw new AssertionError("parent=" + firstJob.getData() + " child=" + (child == null ? null : child.getData()) + " received=" + received.get(), e);
             }
             ACell sid = RT.getIn(first, Fields.SESSION_ID);

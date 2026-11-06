@@ -8,7 +8,7 @@ the persisted format contract, independently of the software release published
 at `v/info/version`. Each venue owns its version; the application root and the
 upstream signing envelope do not.
 
-`VenueState.initialise(did, adapters)` runs `VenueState`'s ordered migrations,
+`VenueState.initialise(did, keys, adapters)` runs `VenueState`'s ordered migrations,
 then the state migrations of every adapter starting with the venue, before any
 Engine bootstrap writes, adapter activation or recovered work. On launch those
 adapters are the built-ins and every configured module's adapters, collected by
@@ -19,11 +19,13 @@ as it was. An engine prepared with plain `prepare()` migrates each adapter as it
 registers instead.
 
 Start-up is only one caller: migration is a call, at any time.
-`VenueState.migrate(adapters)` runs the venue's steps and the given adapters'
-in one transaction, on a running venue or on a store before launch.
-`Engine.migrate()` runs it with every installed adapter, and an adapter
-installed afterwards migrates as it registers. `VenueState.migrate()` alone
-migrates the venue without adapters.
+`VenueState.migrate(keys, adapters)` runs the venue's steps and the given
+adapters' in one transaction, on a running venue or on a store before launch.
+`keys` are the venue's secret store keys (`SecretStore.keys(venueKeyPair)`),
+which a step that carries secrets over reads them with. `Engine.migrate()`
+runs it with every installed adapter, and an adapter installed afterwards
+migrates as it registers. `VenueState.migrate(keys)` alone migrates the venue
+without adapters.
 
 A missing version means
 legacy `0`; explicit `0` follows the same path. Nil, negative and non-integer
@@ -77,8 +79,8 @@ and writers must understand, not completion of a bulk rewrite. Adapters retain
 ownership of their private schemas.
 
 For a venue format change, add a step class at the end of
-`VenueMigrations.STEPS` (`covia.venue.migration`), with its own tests;
-`CURRENT_VERSION` is the number of steps. A step is a pure function of the
+`VenueMigrations.steps` (`covia.venue.migration`), with its own tests, and
+raise `VenueMigrations.VERSION`, the number of steps. A step is a pure function of the
 venue value, with no I/O, and may run again on a retried transaction; the
 version advances only after the step succeeds. Keep expensive per-record conversion lazy and explicitly include the
 supported transitional forms in that version's contract. Test rollback,
@@ -426,7 +428,7 @@ connected, path-derived component at the venue owner boundary:
 
 ```java
 this.venueState = application.venue(getAccountKey());
-venueState.initialise(getDIDString());
+venueState.initialise(getDIDString(), SecretStore.keys(getKeyPair()));
 ```
 
 A successful component mutation crosses the signed owner boundary and updates

@@ -61,6 +61,8 @@ import covia.test.DurabilityTest;
 // `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
 @DurabilityTest
 public class EnginePersistenceTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	@Test
 	public void unsupportedVenueVersionLeavesStoreUntouched() throws Exception {
 		File file = newTempEtch();
@@ -71,7 +73,7 @@ public class EnginePersistenceTest {
 		try (var store = convex.etch.EtchStore.create(file)) {
 			CoviaApplication application = CoviaApplication.open(store, key);
 			VenueState venue = application.venue(key.getAccountKey());
-			venue.initialise(Strings.create("did:test:future"));
+			venue.initialise(Strings.create("did:test:future"), NO_SECRETS);
 			venue.cursor().path(Covia.VERSION).set(convex.core.data.prim.CVMLong.create(future));
 			application.host().sync();
 			application.host().flush();

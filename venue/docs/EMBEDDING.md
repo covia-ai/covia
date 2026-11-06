@@ -44,8 +44,10 @@ schema versions, Covia's and each adapter's, without starting a venue.
 - `engine.migrate()` migrates the venue and every installed adapter's state,
   enabled or disabled, in one transaction, at any time.
 - Before launch, open the application over the store and call
-  `application.venue(venueKey).migrate(adapters)` with your adapters'
-  `stateMigration()`. Launch then finds the state current.
+  `application.venue(venueKey).migrate(SecretStore.keys(venueKeyPair), adapters)`
+  with your adapters' `stateMigration()`. The venue's secret store keys let a
+  step read what it carries over from the venue's secrets. Launch then finds
+  the state current.
 - Launch itself migrates the venue with the built-in and configured-module
   adapters, and an adapter you register later migrates as it registers.
 - Stored state newer than the build fails with `UnsupportedVersionException`,
@@ -134,6 +136,7 @@ caller can mint a token for itself with `auth:identity-token`. See AUTH.md,
 |--------|---------|
 | `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `CoviaPath.parse` (see User data) |
 | `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
+| `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
 
 ## Upgrading from 0.9.x
 

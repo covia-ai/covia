@@ -801,7 +801,7 @@ public class Engine {
 		VenueState connected = application.venue(getAccountKey());
 		// Version validation and every start-up migration, the venue's and its
 		// adapters', precede every bootstrap write and worker, in one transaction.
-		connected.initialise(getDIDString(), migrationsOf(adapters));
+		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrationsOf(adapters));
 		migratedAtStart.addAll(adapters);
 		this.venueState = connected;
 
@@ -1403,7 +1403,7 @@ public class Engine {
 			if (adapter != null) installed.add(adapter);
 		}
 		installed.addAll(disabledAdapters.values());
-		venueState.migrate(migrationsOf(installed));
+		venueState.migrate(SecretStore.keys(getKeyPair()), migrationsOf(installed));
 	}
 
 	public static final String MIGRATE_BEFORE_PREPARE = "A venue is migrated once the engine is prepared";

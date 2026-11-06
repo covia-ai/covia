@@ -18,6 +18,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
@@ -45,6 +46,13 @@ class RemoteJobsTest {
 
 	private static Job job() {
 		return Job.create(Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.STARTED));
+	}
+
+	/** A job the venue recorded, with an entry to keep its connection in. */
+	private static Job recorded(Engine engine) {
+		engine.registerAdapter(new TestAdapter());
+		return engine.jobs().invokeOperation(Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:never")),
+			Maps.empty(), engine.venueContext());
 	}
 
 	@Test void repeatedTimeoutsDoNotFailExecutionAndOnlyChangesEnterHistory() throws Exception {
@@ -179,32 +187,32 @@ class RemoteJobsTest {
 		}
 	}
 
-	@Test void credentialsAreEncryptedOutsideJobHistoryAndMissingCredentialsDoNotChangeOutcome() {
+	@Test void theConnectionIsKeptOffTheRecordAndItsLossDoesNotChangeTheOutcome() {
 		Engine engine = Engine.createTemp(null);
 		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
-			Job job = job();
+			Job job = recorded(engine);
 			AMap<AString, ACell> saved = Maps.of("token", "private-token");
 			observer.prepare(job, "test", "test://peer", saved);
-			assertEquals(saved, observer.credentials(job));
+			assertEquals(saved, observer.connection(job));
 			assertFalse(job.getData().toString().contains("private-token"));
-			AString ref = (AString) RemoteJobs.descriptor(job).get(RemoteJobs.AUTH_REF);
-			engine.getVenueState().users().ensure(engine.getDIDString()).secrets().delete(ref);
-			assertThrows(UnavailableException.class, () -> observer.credentials(job));
+			engine.jobs().updateAdapterData(job, kept -> null);
+			assertEquals(RemoteJobs.NO_CONNECTION,
+				assertThrows(UnavailableException.class, () -> observer.connection(job)).getMessage());
 			observer.unavailable(job, new IllegalStateException("private-token"));
 			assertEquals(Status.STARTED, job.getStatus());
 			assertFalse(job.getData().toString().contains("private-token"));
 		} finally { engine.close(); }
 	}
 
-	@Test void terminalEvidenceAndCredentialCleanupPrecedeResultContinuation() {
+	@Test void terminalEvidenceAndConnectionRemovalPrecedeResultContinuation() {
 		Engine engine = Engine.createTemp(null);
 		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
-			Job job = job();
+			Job job = recorded(engine);
 			observer.prepare(job, "test", "test://peer", Maps.of("token", "private-token"));
 			observer.accepted(job, "remote");
 			CompletableFuture<Void> checked = job.future().thenAccept(result -> {
 				assertEquals(Status.COMPLETE, RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_STATUS));
-				assertThrows(UnavailableException.class, () -> observer.credentials(job));
+				assertThrows(UnavailableException.class, () -> observer.connection(job));
 			});
 			job.completeWith(Strings.create("done"), data -> RemoteJobs.observed(data, Status.COMPLETE));
 			checked.join();

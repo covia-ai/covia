@@ -30,6 +30,8 @@ public class VenueJob extends Job {
 	private final boolean observable;
 	/** Set only by public top-level result dispatch, never from operation metadata. */
 	private final boolean directRun;
+	/** What the adapter keeps for a memory-only Job, which has no entry ({@link JobManager#adapterData}). */
+	private final AtomicReference<AMap<AString, ACell>> heldData = new AtomicReference<>();
 
 	/** An observable recorded Job over its existing record. */
 	VenueJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
@@ -70,6 +72,17 @@ public class VenueJob extends Job {
 	/** What the Job's operation declared about its data when the Job was admitted. */
 	OutputRules rules() {
 		return rules;
+	}
+
+	/** What the adapter keeps for this memory-only Job; null once it has finished. */
+	AMap<AString, ACell> adapterData() {
+		return isFinished() ? null : heldData.get();
+	}
+
+	/** Changes what the adapter keeps for this memory-only Job, unless it has finished. */
+	void updateAdapterData(UnaryOperator<AMap<AString, ACell>> change) {
+		if (isFinished()) return;
+		heldData.updateAndGet(kept -> change.apply((kept == null) ? convex.core.data.Maps.empty() : kept));
 	}
 
 	@Override

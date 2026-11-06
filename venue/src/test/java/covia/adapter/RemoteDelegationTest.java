@@ -378,9 +378,9 @@ class RemoteDelegationTest {
 			awaitRemoteId(fromDeleted);
 			assertTrue(authorizations.contains("Bearer granted-token"));
 			assertTrue(authorizations.contains("Bearer first-token"));
-			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().credentials(fromSecret)).contains("first-token"),
+			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().connection(fromSecret)).contains("first-token"),
 				"the secret's value is not kept for recovery");
-			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().credentials(fromLiteral)).contains("literal-token"),
+			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().connection(fromLiteral)).contains("literal-token"),
 				"the literal token is not kept for recovery");
 			setSecret(first, user, "second-token");
 			first.jobs().invokeOperation("v/ops/secret/delete", Maps.of(Fields.NAME, "DELETED"), user).awaitResult(5000);

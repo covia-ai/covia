@@ -21,7 +21,6 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.ResponseException;
 import covia.exception.ShuttingDownException;
@@ -42,6 +41,8 @@ public final class RemoteJobs implements AutoCloseable {
 	public static final String SENDS_CLOSED = "Venue is shutting down; nothing new is sent to remote venues";
 	public static final String INVALID_CANCELLATION_STATUS = "Invalid remote cancellation status";
 	public static final String CANCELLATION_ID_MISMATCH = "Remote cancellation job ID mismatch";
+	/** Why a recovered job cannot reach its remote job again: it keeps nothing to do so with. */
+	public static final String NO_CONNECTION = "This job keeps nothing to reach its remote job again";
 	/**
 	 * Why a recovered job that signed in to its remote venue as its caller
 	 * ended: the venue keeps no sign-in credential, so it cannot follow the
@@ -55,7 +56,6 @@ public final class RemoteJobs implements AutoCloseable {
 	public static final AString TARGET = Strings.intern("target");
 	public static final AString REMOTE_ID = Strings.intern("remoteId");
 	public static final AString OBSERVATION = Strings.intern("observation");
-	public static final AString AUTH_REF = Strings.intern("authRef");
 	public static final AString ERROR_TYPE = Strings.intern("observationErrorType");
 	/** An expected observation failure's reason; absent for anything else. */
 	public static final AString ERROR = Strings.intern("observationError");
@@ -80,7 +80,6 @@ public final class RemoteJobs implements AutoCloseable {
 	private final Engine engine;
 	private final ScheduledThreadPoolExecutor timer;
 	private final ConcurrentHashMap<Job, Watch> watches = new ConcurrentHashMap<>();
-	private final ConcurrentHashMap<Job, Consumer<Job>> cleanups = new ConcurrentHashMap<>();
 	private final Semaphore permits = new Semaphore(32);
 	private final ConcurrentHashMap<ACell, Semaphore> peerPermits = new ConcurrentHashMap<>();
 	/** Requests started and not yet settled; {@link #close} waits for them. Its monitor guards {@link #closed}'s setting. */
@@ -112,15 +111,15 @@ public final class RemoteJobs implements AutoCloseable {
 	}
 
 	/**
-	 * Checkpoint intent before submitting once. {@code credentials} is what
-	 * recovery needs to reach the remote job again, kept encrypted with the
-	 * resolved operation metadata until the job ends: the connection's mode,
-	 * with the target's DID and forwarded grants when the venue signs in as
-	 * itself, or the reference of a secret to read again; never a sign-in
-	 * credential or a secret's value.
+	 * Checkpoint intent before submitting once. {@code connection} is what
+	 * recovery needs to reach the remote job again, kept as the adapter's data
+	 * in the job's entry until the job ends ({@link JobManager#adapterData}):
+	 * the connection's mode, with the target's DID and forwarded grants when
+	 * the venue signs in as itself, or the reference of a secret to read again;
+	 * never a sign-in credential or a secret's value.
 	 */
-	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials) {
-		prepare(job, protocol, target, credentials, true);
+	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> connection) {
+		prepare(job, protocol, target, connection, true);
 	}
 
 	/**
@@ -137,19 +136,14 @@ public final class RemoteJobs implements AutoCloseable {
 	}
 
 	/** Observation of an existing job does not confer cancellation ownership. */
-	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> credentials, boolean ownsRemote) {
+	public void prepare(Job job, String protocol, String target, AMap<AString, ACell> connection, boolean ownsRemote) {
 		if (closed) throw new ShuttingDownException(CLOSED);
 		AMap<AString, ACell> record = Maps.of(PROTOCOL, Strings.create(protocol),
 			TARGET, Strings.create(target), OBSERVATION, SUBMITTING,
 			OWNS_REMOTE, convex.core.data.prim.CVMBool.create(ownsRemote));
-		if (job.isRecorded()) {
-			AString ref = Strings.create("remote-job-" + job.getID().toHexString());
-			secrets().store(ref, JSON.print(credentials), SecretStore.keys(engine.getKeyPair()));
-			record = record.assoc(AUTH_REF, ref);
-			cleanUpOnFinish(job, ref);
-		}
-		AMap<AString, ACell> prepared = record;
-		job.update(data -> data.assoc(DELEGATION, prepared));
+		// The connection first: a delegation that recovery cannot follow is never recorded
+		if (job.isRecorded()) engine.jobs().updateAdapterData(job, kept -> connection);
+		job.update(data -> data.assoc(DELEGATION, record));
 		if (job.isRecorded()) engine.flush();
 	}
 
@@ -162,9 +156,16 @@ public final class RemoteJobs implements AutoCloseable {
 		}
 	}
 
-	/** What {@link #prepare} kept for recovery; never venue authority in its place. */
-	public AMap<AString, ACell> credentials(Job job) {
-		return credentials(descriptor(job));
+	/**
+	 * What {@link #prepare} kept for recovery to reach the remote job again;
+	 * never venue authority in its place.
+	 *
+	 * @throws UnavailableException with {@link #NO_CONNECTION} when the job keeps none
+	 */
+	public AMap<AString, ACell> connection(Job job) {
+		AMap<AString, ACell> kept = engine.jobs().adapterData(job);
+		if (kept == null) throw new UnavailableException(NO_CONNECTION);
+		return kept;
 	}
 
 	/**
@@ -177,39 +178,12 @@ public final class RemoteJobs implements AutoCloseable {
 		end(job, NOT_FOLLOWED.formatted(record.get(REMOTE_ID), record.get(TARGET)));
 	}
 
-	/** Fails a recovered job that will not be observed, and removes what was kept for its recovery. */
+	/** Fails a recovered job that will not be observed; what was kept for its recovery goes with its entry. */
 	public void end(Job job, String reason) {
-		AMap<AString, ACell> record = descriptor(job);
-		AString ref = record == null ? null : RT.ensureString(record.get(AUTH_REF));
-		if (ref != null && !closed) cleanUpOnFinish(job, ref);
 		job.fail(reason);
 	}
 
-	private AMap<AString, ACell> credentials(AMap<AString, ACell> record) {
-		AString ref = record == null ? null : RT.ensureString(record.get(AUTH_REF));
-		AString value = ref == null ? null : secrets().decrypt(ref, SecretStore.keys(engine.getKeyPair()));
-		if (value == null) throw new UnavailableException("Remote observation credentials unavailable");
-		return RT.ensureMap(JSON.parse(value));
-	}
-
 	void adapterUnavailable(Job job) { health(job, Strings.intern("adapter-unavailable"), null); }
-
-	private SecretStore secrets() {
-		return engine.getVenueState().users().ensure(engine.getDIDString()).secrets();
-	}
-
-	private void cleanUpOnFinish(Job job, AString ref) {
-		Consumer<Job> listener = j -> {
-			if (!j.isFinished()) return;
-			secrets().delete(ref);
-			Consumer<Job> installed = cleanups.remove(j);
-			if (installed != null) j.unsubscribe(installed);
-		};
-		if (cleanups.putIfAbsent(job, listener) == null) {
-			job.subscribe(listener);
-			listener.accept(job);
-		}
-	}
 
 	/** Supporting remote evidence, committed with the mirrored local state. */
 	public static AMap<AString, ACell> observed(AMap<AString, ACell> data, AString status) {
@@ -354,9 +328,6 @@ public final class RemoteJobs implements AutoCloseable {
 	}
 
 	private void health(Job job, AString value, Throwable error) {
-		AMap<AString, ACell> current = descriptor(job);
-		AString ref = current == null ? null : RT.ensureString(current.get(AUTH_REF));
-		if (ref != null && !closed) cleanUpOnFinish(job, ref);
 		AString type = error == null ? null : Strings.create(unwrap(error).getClass().getSimpleName());
 		AString reason = reason(error);
 		job.update(data -> {
@@ -373,8 +344,6 @@ public final class RemoteJobs implements AutoCloseable {
 	public void observe(Job job, Supplier<CompletableFuture<AMap<AString, ACell>>> poll,
 			Consumer<AMap<AString, ACell>> apply) {
 		synchronized (job) {
-			AString ref = RT.ensureString(descriptor(job).get(AUTH_REF));
-			if (ref != null) cleanUpOnFinish(job, ref);
 			Watch watch = new Watch(job, poll, apply);
 			Watch old = watches.put(job, watch);
 			if (old != null) old.stop();
@@ -499,8 +468,6 @@ public final class RemoteJobs implements AutoCloseable {
 		synchronized (requests) { closed = true; }
 		watches.forEach((job, watch) -> watch.stop());
 		watches.clear();
-		cleanups.forEach(Job::unsubscribe);
-		cleanups.clear();
 		timer.shutdownNow();
 		try {
 			for (CompletableFuture<?> request : requests) {

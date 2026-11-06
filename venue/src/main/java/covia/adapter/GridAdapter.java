@@ -186,7 +186,7 @@ public class GridAdapter extends AAdapter {
 		ACell id = record.get(RemoteJobs.REMOTE_ID);
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
-			AMap<AString, ACell> saved = engine.remoteJobs().credentials(job);
+			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().notFollowed(job); return; }
 			Venue venue = restoreConnection(RT.ensureString(record.get(RemoteJobs.TARGET)), saved);
 			if (convex.core.data.prim.CVMBool.TRUE.equals(record.get(RemoteJobs.OWNS_REMOTE))) {

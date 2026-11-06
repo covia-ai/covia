@@ -3487,10 +3487,9 @@ public class AgentAdapter extends AAdapter {
 
 	@Override public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
 		if (!externalAgents().owns(job)) { super.handleMessage(job, messageRecord); return; }
-		ACell childId = job.getData().get(ExternalAgents.CHILD);
-		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId));
+		Job child = externalAgents().child(job);
 		if (child == null) throw new NotSupportedException(ExternalAgents.MISSING_CHILD);
-		AString owner = RT.ensureString(job.getData().get(Strings.intern("agentOwner")));
+		AString owner = externalAgents().owner(job);
 		AgentState agent = getAgent(owner, RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		externalAgents().backend(externalAgents().stored(agent)).handleMessage(child, messageRecord);
 	}

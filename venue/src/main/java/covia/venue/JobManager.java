@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1021,6 +1022,39 @@ public class JobManager {
 		if (kept.get(Fields.JOB_ID) instanceof Blob jobId) ctx = ctx.withJobId(jobId);
 		if (kept.get(Fields.TASK_ID) instanceof Blob taskId) ctx = ctx.withTaskId(taskId);
 		return ctx;
+	}
+
+	// ========== Adapter data ==========
+
+	/**
+	 * What a job's adapter keeps to carry the job to its end
+	 * ({@link #updateAdapterData}).
+	 *
+	 * @return the data, or null when the adapter keeps none or the job has finished
+	 */
+	public AMap<AString, ACell> adapterData(Job job) {
+		if (job instanceof VenueJob held && held.isMemoryOnly()) return held.adapterData();
+		return RT.ensureMap(RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.ADAPTER_DATA));
+	}
+
+	/**
+	 * Changes what a job's adapter keeps to carry the job to its end. It is
+	 * kept in the job's entry ({@link JobIndex}), which no route reads and which
+	 * goes when the job finishes, or with the job itself when it is held only in
+	 * memory. A finished job keeps none.
+	 *
+	 * @param change Pure edit of the data, empty when there is none; null removes it
+	 */
+	public void updateAdapterData(Job job, UnaryOperator<AMap<AString, ACell>> change) {
+		if (job instanceof VenueJob held && held.isMemoryOnly()) {
+			held.updateAdapterData(change);
+			return;
+		}
+		venue().jobIndex().update(job.getID(), entry -> {
+			AMap<AString, ACell> kept = RT.ensureMap(entry.get(JobIndex.ADAPTER_DATA));
+			AMap<AString, ACell> next = change.apply((kept == null) ? Maps.empty() : kept);
+			return (next == null) ? entry.dissoc(JobIndex.ADAPTER_DATA) : entry.assoc(JobIndex.ADAPTER_DATA, next);
+		});
 	}
 
 	/** Why a job's work cannot regain authority: its record names no caller. */

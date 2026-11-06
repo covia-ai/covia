@@ -25,12 +25,14 @@ import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 
 class AdapterStateTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	private static final AString HOST = Strings.create("did:test:venue");
 	private static final AString OWNER = Strings.create("did:test:owner");
 
 	private static VenueState venue() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
-		venue.initialise(HOST);
+		venue.initialise(HOST, NO_SECRETS);
 		return venue;
 	}
 

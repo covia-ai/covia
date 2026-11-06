@@ -326,7 +326,7 @@ public class VenueIdentityProofTest {
 				job = first.jobs().invokeOperation(GRID_RUN, input(peer.url(), "caller"), caller);
 				assertTrue(peer.statusAsked.await(5, TimeUnit.SECONDS), "the venue observes the job it handed over");
 				assertTrue(peer.authenticated.get() > 0, "the job signed in as its caller");
-				assertFalse(JSON.toString(first.remoteJobs().credentials(job)).contains(credential),
+				assertFalse(JSON.toString(first.remoteJobs().connection(job)).contains(credential),
 					"the sign-in credential is not kept for recovery");
 			} finally { first.close(); }
 			peer.holdStatus.countDown();
@@ -338,7 +338,7 @@ public class VenueIdentityProofTest {
 				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());
 				assertEquals(Status.FAILED, recovered.getStatus());
 				assertEquals(RemoteJobs.NOT_FOLLOWED.formatted(REMOTE_ID, peer.url()), recovered.getErrorMessage());
-				assertThrows(UnavailableException.class, () -> second.remoteJobs().credentials(recovered),
+				assertThrows(UnavailableException.class, () -> second.remoteJobs().connection(recovered),
 					"what was kept for recovery is removed once the job ends");
 				assertEquals(requests, peer.discoveries.get() + peer.challenges.get() + peer.calls.get(),
 					"nothing is sent to the remote venue");

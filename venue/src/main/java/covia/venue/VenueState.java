@@ -41,6 +41,7 @@ import covia.lattice.Position;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
+import covia.venue.migration.MigrationStep;
 import covia.venue.migration.VenueMigrations;
 import covia.venue.storage.LatticeStorage;
 
@@ -71,8 +72,8 @@ import covia.venue.storage.LatticeStorage;
  * Children have no independent publication or merge boundary.</p>
  */
 public class VenueState extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
-	/** The venue schema version: the number of {@link VenueMigrations#STEPS}. */
-	public static final long CURRENT_VERSION = VenueMigrations.STEPS.size();
+	/** The venue schema version: the number of {@link VenueMigrations#steps}. */
+	public static final long CURRENT_VERSION = VenueMigrations.VERSION;
 	public static final String INVALID_STATE = "Venue state must be a keyword-keyed Index";
 	public static final String INVALID_VERSION = "Venue :version must be a non-negative integer";
 	public static final String UNSUPPORTED_VERSION = "Venue version %d is newer than supported version %d";
@@ -603,10 +604,13 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * Apply ordered venue migrations and their version changes in one transaction.
 	 * Current venues are a no-op. Callbacks are pure and may retry; failures leave
 	 * the entire original value intact. Bulk record migrations remain lazy.
-	 * Adapters' state is not migrated: use {@link #migrate(List)}.
+	 * Adapters' state is not migrated: use {@link #migrate(SecretStore.Keys, List)}.
+	 *
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys}), which
+	 *        read what a step carries over from the venue's secrets
 	 */
-	public void migrate() {
-		migrate(List.of());
+	public void migrate(SecretStore.Keys keys) {
+		migrate(keys, List.of());
 	}
 
 	/**
@@ -617,31 +621,35 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * exactly as it was; current state is not rewritten. Where two migrations
 	 * name the same adapter, the caller passes only the one that applies.
 	 *
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys}), which
+	 *        read what a step carries over from the venue's secrets
 	 * @param adapters Migration rules of the adapters to migrate with the venue,
 	 *        from {@code AAdapter.stateMigration()}
 	 * @throws UnsupportedVersionException if the venue, or an adapter's stored
 	 *         state, is at a newer version than supported
 	 */
-	public void migrate(List<AdapterMigration> adapters) {
-		transact(draft -> draft.migrateInPlace(adapters));
+	public void migrate(SecretStore.Keys keys, List<AdapterMigration> adapters) {
+		transact(draft -> draft.migrateInPlace(keys, adapters));
 	}
 
 	/** Only called on a transaction draft: the venue's steps, then each adapter's. */
-	private void migrateInPlace(List<AdapterMigration> adapters) {
-		migrateInPlace();
+	private void migrateInPlace(SecretStore.Keys keys, List<AdapterMigration> adapters) {
+		migrateInPlace(keys);
 		for (AdapterMigration migration : adapters) migrateAdapterInPlace(migration);
 	}
 
 	/**
 	 * Only called on a transaction draft: each venue step from the stored
 	 * version, recording each version reached. Steps are in
-	 * {@link VenueMigrations#STEPS}.
+	 * {@link VenueMigrations#steps}.
 	 */
-	private void migrateInPlace() {
+	private void migrateInPlace(SecretStore.Keys keys) {
 		long version = requireSupportedVersion();
+		if (version == CURRENT_VERSION) return;
+		List<MigrationStep> steps = VenueMigrations.steps(keys);
 		while (version < CURRENT_VERSION) {
 			ACell value = get();
-			ACell migrated = VenueMigrations.STEPS.get((int) version).apply(value);
+			ACell migrated = steps.get((int) version).apply(value);
 			if (migrated != value) cursor().set(migrated);
 			cursor().withDefault(Index.none()).path(Covia.VERSION).set(CVMLong.create(++version));
 		}
@@ -651,24 +659,26 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * Validate compatibility, migrate and initialise identity atomically, before
 	 * Engine bootstrap or adapter activation. Existing identity is preserved.
 	 * @param did The venue's DID string
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys})
 	 */
-	public void initialise(ACell did) {
-		initialise(did, List.of());
+	public void initialise(ACell did, SecretStore.Keys keys) {
+		initialise(did, keys, List.of());
 	}
 
 	/**
-	 * As {@link #initialise(ACell)}, also migrating the given adapters' state.
+	 * As {@link #initialise(ACell, SecretStore.Keys)}, also migrating the given adapters' state.
 	 * The venue's steps run first, then each adapter's in order, then identity is
 	 * initialised, all in one transaction: a refusal or a failing step leaves the
 	 * venue exactly as it was. Where two migrations name the same adapter, the
 	 * caller passes only the one that applies.
 	 *
 	 * @param did The venue's DID string
+	 * @param keys The venue's secret store keys ({@link SecretStore#keys})
 	 * @param adapters Migration rules of the adapters starting with the venue
 	 */
-	public void initialise(ACell did, List<AdapterMigration> adapters) {
+	public void initialise(ACell did, SecretStore.Keys keys, List<AdapterMigration> adapters) {
 		transact(draft -> {
-			draft.migrateInPlace(adapters);
+			draft.migrateInPlace(keys, adapters);
 			@SuppressWarnings("unchecked")
 			Index<Keyword, ACell> value = (Index<Keyword, ACell>) draft.get();
 			if (!value.containsKey(Covia.DID)) draft.cursor().set(value.assoc(Covia.DID, did));

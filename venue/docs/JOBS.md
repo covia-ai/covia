@@ -140,6 +140,11 @@ job id (`JobIndex`), and no route reads it. Each entry holds:
   neither.
 - **`context`**: the caller's context, kept when the job's adapter asks
   ([Kept caller context](#kept-caller-context)).
+- **`adapterData`**: what the job's adapter keeps to carry it to its end
+  (`JobManager.adapterData`), read only by that adapter: how a remote job is
+  reached again ([Remote delegation](#remote-delegation)), or which backend job
+  serves an external agent's turn. A job held only in memory keeps it with
+  its handle instead.
 
 An entry is written with its record when the job is admitted, in one
 transaction, and removed in the same transaction as the update that finishes
@@ -433,24 +438,24 @@ the remote adapter's execution. If the remote venue reports `FAILED` because
 its adapter could not recover after restart, the local mirror fails too. If
 the remote job has disappeared, its outcome remains unknown; a saved ID alone
 cannot recover it. What recovery needs to reach the remote job again is
-saved encrypted in the venue principal's SecretStore; job state carries an opaque
-`authRef` secret name. That is the connection's mode, with the target's DID
-and grants when the venue authenticated as itself, or the SecretStore
-reference an A2A bearer was read from: never a sign-in credential or a
-secret's value. A hop that signed in with a credential only its request
+kept as the adapter's data in the job's entry
+([The venue's job entries](#the-venues-job-entries)), never on the record:
+the connection's mode, with the target's DID and the forwarded grants when
+the venue authenticated as itself, or the SecretStore reference an A2A bearer
+was read from; never a sign-in credential or a secret's value. The grants
+are addressed to this venue, so only its key can present them. A hop that signed in with a credential only its request
 presented (`authenticateAs: "caller"`, or an A2A `bearerToken`) is therefore
 not resumed: its recovered job fails, naming the remote job and its venue
 (`RemoteJobs.NOT_FOLLOWED`). A recovered A2A job reads its bearer again from
 its caller's secrets, under the context `JobManager.callerContext` rebuilds
-from the job record, so a rotated secret is sent as it now stands. An A2A
+for the job, so a rotated secret is sent as it now stands. An A2A
 job keeps no grants ([Kept caller context](#kept-caller-context)). When its caller can no longer use the
 secret (it was deleted, the caller cannot act now, or it is another user's,
 used under a grant the request presented), the job fails, naming the remote
 task and the agent's address (`A2AAdapter.SECRET_UNREADABLE`). Recovery does not resolve a changed catalog binding or
 silently elevate the original authority. Missing authority or an unavailable
-adapter leave the remote outcome unresolved. The saved record is removed on
-local termination; encrypted orphan records left by a process crash require
-operator cleanup.
+adapter leave the remote outcome unresolved. What was kept goes with the
+entry when the job ends.
 
 Cancellation commits locally and propagates through owned local child hooks
 without waiting for network IO. Grid runs, A2A sends and remote-agent calls

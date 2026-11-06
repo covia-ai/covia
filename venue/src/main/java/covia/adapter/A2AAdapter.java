@@ -959,7 +959,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
 			String target = RT.ensureString(record.get(RemoteJobs.TARGET)).toString();
-			AMap<AString, ACell> saved = engine.remoteJobs().credentials(job);
+			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			// A literal token only the request presented; it was not kept
 			if (saved.get(K_LOCATION) != null && secretRef(saved) == null) {
 				engine.remoteJobs().notFollowed(job);
@@ -990,7 +990,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		AString location = RT.ensureString(saved.get(K_LOCATION));
 		if (location == null) return null;
 		String ref = secretRef(saved);
-		// The job's caller as it acts now, rebuilt from the record, which keeps no grants for it
+		// The job's caller as it acts now; the job keeps no grants for it
 		String value = resolveSecretRef(ref, engine.jobs().callerContext(job), destination);
 		if (convex.core.data.prim.CVMBool.TRUE.equals(saved.get(K_BEARER))) return RequestAuth.bearer(value, ref);
 		return new RequestAuth(location.toString(), RT.ensureString(saved.get(Fields.NAME)).toString(), value, ref, false);

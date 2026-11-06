@@ -29,9 +29,12 @@ public final class ExternalAgents {
 	public static final String IMMUTABLE_DEFINITION = "Changing agent metadata requires creating a new agent";
 	public static final String NO_ACTIVE_TURN = "External agent message requires an active task or session turn";
 	public static final String MISCONFIGURED = "Agent is misconfigured and cannot be reached until it is recreated: ";
+	/** In the adapter's data for a job ({@link covia.venue.JobManager#adapterData}): the backend job serving it. */
 	public static final AString CHILD = Strings.intern("agentBackendJob");
-	private static final AString KIND = Strings.intern("agentInteraction");
-	private static final AString OWNER = Strings.intern("agentOwner");
+	/** In the adapter's data: the asking operation, {@code chat} or {@code request}. */
+	public static final AString KIND = Strings.intern("agentInteraction");
+	/** In the adapter's data: the DID of the user whose agent it is. */
+	public static final AString OWNER = Strings.intern("agentOwner");
 	private final Engine engine;
 
 	public ExternalAgents(Engine engine) { this.engine = engine; }
@@ -82,9 +85,9 @@ public final class ExternalAgents {
 		}
 		if (supplied && agent.getSession(sid) == null) throw new NotFoundException(UNKNOWN_SESSION, sid.toHexString());
 		ACell content = RT.getIn(input, "chat".equals(operation) ? Fields.MESSAGE : Fields.INPUT);
+		engine.jobs().updateAdapterData(job, d -> d.assoc(OWNER, owner).assoc(KIND, Strings.create(operation)));
 		job.update(d -> d.assoc(Fields.AGENT_ID, id).assoc(Fields.ADDRESS, address)
-			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())).assoc(OWNER, owner)
-			.assoc(KIND, Strings.create(operation)));
+			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())));
 		if (job.isFinished()) return;
 		if (!agent.claimExternalTurn(sid, job.getID(), caller.getCallerDID(), content, !supplied))
 			throw new ConflictException(SESSION_BUSY);
@@ -99,7 +102,7 @@ public final class ExternalAgents {
 				.withOp(Strings.create("v/ops/" + adapter.getName() + "/" + invocation.operation()));
 			var prepared = engine.jobs().prepareAgentInteraction(meta, invocation.input(), execution);
 			Job child = prepared.job();
-			job.update(d -> d.assoc(CHILD, child.getID()));
+			engine.jobs().updateAdapterData(job, d -> d.assoc(CHILD, child.getID()));
 			attach(job, child, agent, sid, adapter);
 			if (job.isFinished()) child.cancel();
 			else job.setStatus(Status.STARTED);
@@ -122,7 +125,7 @@ public final class ExternalAgents {
 						AMap<AString, ACell> data = parent.getData();
 						AMap<AString, ACell> result = Maps.of(Fields.AGENT_ID, data.get(Fields.AGENT_ID),
 							Fields.ADDRESS, data.get(Fields.ADDRESS), Fields.SESSION_ID, data.get(Fields.SESSION_ID));
-						if (Strings.create("chat").equals(data.get(KIND))) {
+						if (Strings.create("chat").equals(kept(parent, KIND))) {
 							result = result.assoc(Fields.RESPONSE, response).assoc(Strings.intern("answered"),
 								Vectors.of(Strings.create(parent.getID().toHexString())));
 						} else {
@@ -152,11 +155,11 @@ public final class ExternalAgents {
 
 	/** Reattach by recorded handle only. The child adapter owns provider recovery. */
 	public boolean recover(Job job) {
-		if (job.getData().get(KIND) == null) return false;
-		AString owner = RT.ensureString(job.getData().get(OWNER));
+		if (!owns(job)) return false;
+		AString owner = owner(job);
 		User user = owner == null ? null : engine.getVenueState().users().get(owner);
 		AgentState agent = user == null ? null : user.agent(RT.ensureString(job.getData().get(Fields.AGENT_ID)));
-		ACell childId = job.getData().get(CHILD);
+		ACell childId = kept(job, CHILD);
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);
@@ -185,7 +188,21 @@ public final class ExternalAgents {
 		}
 	}
 
-	public boolean owns(Job job) { return job.getData().get(KIND) != null; }
+	/** Whether {@code job} is an unfinished call this component serves through an external agent's backend. */
+	public boolean owns(Job job) { return kept(job, KIND) != null; }
+
+	/** The DID of the user whose agent serves {@code job}, or null when this component does not serve it. */
+	public AString owner(Job job) { return RT.ensureString(kept(job, OWNER)); }
+
+	/** The backend job serving {@code job}, or null when none is started or this component does not serve it. */
+	public Job child(Job job) {
+		ACell id = kept(job, CHILD);
+		return (id == null) ? null : engine.jobs().getJob(Job.parseID(id));
+	}
+
+	private ACell kept(Job job, AString key) {
+		return RT.getIn(engine.jobs().adapterData(job), key);
+	}
 
 	public void deliver(AgentState agent, ACell taskId, Blob sid, ACell content) {
 		ACell id = taskId != null ? taskId : RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.JOB_ID);
@@ -193,7 +210,7 @@ public final class ExternalAgents {
 		if (parent == null || !owns(parent) || parent.isFinished()
 				|| !parent.getID().equals(RT.getIn(agent.getSession(sid), AgentState.KEY_EXTERNAL, Fields.JOB_ID)))
 			throw new NotSupportedException(NO_ACTIVE_TURN);
-		Job child = engine.jobs().getJob(Job.parseID(parent.getData().get(CHILD)));
+		Job child = child(parent);
 		if (child == null) throw new NotSupportedException(MISSING_CHILD);
 		backend(stored(agent)).handleMessage(child, Maps.of(Fields.MESSAGE, content));
 	}

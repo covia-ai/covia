@@ -24,6 +24,8 @@ import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 
 class VenueMigrationTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	private static final AString DID = Strings.create("did:test:migrations");
 	private static final CoviaPath OLD_QUEUE = CoviaPath.parse("w/user-deletions");
 	private static final CoviaPath OLD_ADAPTER = CoviaPath.parse("w/adapters/unloaded");
@@ -40,13 +42,13 @@ class VenueMigrationTest {
 	@Test void freshAndExistingVenuesUseTheSameMigrationEntryPoint() {
 		VenueState fresh = VenueState.create(AKeyPair.generate());
 		assertEquals(0, fresh.version());
-		fresh.initialise(DID);
+		fresh.initialise(DID, NO_SECRETS);
 		assertEquals(VenueState.CURRENT_VERSION, fresh.version());
 		assertEquals(CVMLong.create(VenueState.CURRENT_VERSION), RT.getIn(fresh.get(), Covia.VERSION));
 
 		VenueState venue = legacy();
 		assertEquals(0, venue.version());
-		venue.initialise(Strings.create("did:test:ignored"));
+		venue.initialise(Strings.create("did:test:ignored"), NO_SECRETS);
 		assertEquals(DID, RT.getIn(venue.get(), Covia.DID));
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
@@ -54,8 +56,8 @@ class VenueMigrationTest {
 		assertEquals(Vectors.of("opaque", 42L), venue.users().get(DID).readInternalPath(OLD_ADAPTER));
 		assertNull(RT.getIn(venue.get(), Covia.ADAPTERS), "migration must not scan adapter records");
 		ACell before = venue.get();
-		venue.migrate();
-		venue.initialise(DID);
+		venue.migrate(NO_SECRETS);
+		venue.initialise(DID, NO_SECRETS);
 		assertSame(before, venue.get(), "current state is neither rewritten nor re-stamped");
 		assertEquals(Vectors.of("opaque", 42L), venue.adapterState("unloaded").get());
 	}
@@ -63,7 +65,7 @@ class VenueMigrationTest {
 	@Test void explicitZeroUsesTheLegacyMigration() {
 		VenueState venue = legacy();
 		venue.cursor().path(Covia.VERSION).set(CVMLong.ZERO);
-		venue.migrate();
+		venue.migrate(NO_SECRETS);
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
 	}
@@ -72,7 +74,7 @@ class VenueMigrationTest {
 		VenueState venue = legacy();
 		venue.cursor().path(Covia.USER_DELETIONS).set(Maps.of("conflicting", true));
 		ACell before = venue.get();
-		var error = assertThrows(IllegalStateException.class, () -> venue.initialise(DID));
+		var error = assertThrows(IllegalStateException.class, () -> venue.initialise(DID, NO_SECRETS));
 		assertEquals(covia.venue.migration.UserDeletionsRegion.CONFLICT, error.getMessage());
 		assertSame(before, venue.get());
 		assertEquals(0, venue.version());
@@ -82,7 +84,7 @@ class VenueMigrationTest {
 		VenueState venue = legacy();
 		ACell before = venue.get();
 		assertThrows(IllegalArgumentException.class, () -> venue.transact(draft -> {
-			draft.migrate();
+			draft.migrate(NO_SECRETS);
 			assertEquals(VenueState.CURRENT_VERSION, draft.version());
 			throw new IllegalArgumentException("test rollback");
 		}));
@@ -96,7 +98,7 @@ class VenueMigrationTest {
 		ACell latest = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.create(2)));
 		try {
 			var migration = CompletableFuture.runAsync(() -> venue.transact(draft -> {
-				draft.migrate();
+				draft.migrate(NO_SECRETS);
 				if (attempts.incrementAndGet() == 1) {
 					staged.countDown();
 					try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
@@ -158,7 +160,7 @@ class VenueMigrationTest {
 			VenueState venue = VenueState.create(AKeyPair.generate())
 				.withCursor(convex.lattice.cursor.Cursors.root(value));
 			assertEquals(VenueState.INVALID_STATE,
-				assertThrows(IllegalStateException.class, () -> venue.initialise(DID)).getMessage());
+				assertThrows(IllegalStateException.class, () -> venue.initialise(DID, NO_SECRETS)).getMessage());
 			assertSame(value, venue.get());
 		}
 	}
@@ -194,7 +196,7 @@ class VenueMigrationTest {
 		ACell peerBefore = peer.get();
 		Keyword extension = Keyword.intern("extension");
 		local.cursor().set(Index.<Keyword, ACell>none().assoc(extension, Vectors.of("keep")));
-		local.initialise(DID);
+		local.initialise(DID, NO_SECRETS);
 		assertEquals(Vectors.of("keep"), RT.getIn(local.get(), extension));
 		assertEquals(VenueState.CURRENT_VERSION, local.version());
 		assertEquals(peerBefore, peer.get());

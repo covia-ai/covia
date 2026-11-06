@@ -23,6 +23,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.agent.GoalTreeContext;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.hitl.Hitl;
 import covia.grid.Status;
@@ -67,6 +68,9 @@ class VenueMigrationEndToEndTest {
 	private static final Blob PARKED_TASK = Blob.fromHex("e2e4e2e4e2e4e2e4e2e4e2e4e2e4e2e4");
 	/** A job still running when a version 2 venue stopped, with no entry: that version kept none. */
 	private static final Blob RUNNING_JOB = Blob.fromHex("e2e5e2e5e2e5e2e5e2e5e2e5e2e5e2e5");
+	/** A grid hop that signed in as its caller, with the sign-in credential 0.10.0 kept in a venue secret. */
+	private static final Blob REMOTE_JOB = Blob.fromHex("e2e6e2e6e2e6e2e6e2e6e2e6e2e6e2e6");
+	private static final String REMOTE_TARGET = "https://peer.migration.test";
 
 	private static CoviaPath adapterPath(String name) {
 		return CoviaPath.parse("w/adapters/" + name);
@@ -129,6 +133,14 @@ class VenueMigrationEndToEndTest {
 			AMap<AString, ACell> running = Maps.of(Fields.ID, RUNNING_JOB, Fields.STATUS, Status.STARTED,
 				Fields.CALLER, USER, Fields.OP, "v/test/ops/never", Fields.ADAPTER, "test");
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(RUNNING_JOB, running));
+			AString remoteRef = Strings.create("remote-job-" + REMOTE_JOB.toHexString());
+			AMap<AString, ACell> remote = Maps.of(Fields.ID, REMOTE_JOB, Fields.STATUS, Status.STARTED,
+				Fields.CALLER, USER, Fields.OP, "v/ops/grid/run", Fields.ADAPTER, "grid",
+				RemoteJobs.DELEGATION, Maps.of(RemoteJobs.PROTOCOL, "covia", RemoteJobs.TARGET, REMOTE_TARGET,
+					RemoteJobs.REMOTE_ID, "remote-1", Strings.create("authRef"), remoteRef));
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(REMOTE_JOB, remote));
+			host.secrets().store(remoteRef, Strings.create("{\"authenticateAs\":\"caller\",\"bearerToken\":\"e2e-sign-in\"}"),
+				SecretStore.keys(key));
 			user.inbox().put(REQUEST, Maps.of(Hitl.ID, REQUEST, Strings.create("from"), agentDID,
 				Hitl.STATUS, Hitl.OPEN));
 			AgentState parked = user.ensureAgent(PARKED, Maps.empty(), null);
@@ -170,7 +182,10 @@ class VenueMigrationEndToEndTest {
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
 				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
 			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));
-			assertEquals(1, venue.jobIndex().all().count(), "only the unfinished job has an entry");
+			assertEquals(Maps.of(JobIndex.OWNER, USER, JobIndex.ADAPTER_DATA, Maps.of("authenticateAs", "caller")),
+				venue.jobIndex().entry(REMOTE_JOB), "the remote job's connection, without its sign-in credential");
+			assertFalse(venue.users().get(venueDID).secrets().exists(remoteRef));
+			assertEquals(2, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
 			assertEquals(legacyJob, venue.users().get(USER).cursor().path(Namespace.J, JOB).get());
@@ -183,6 +198,8 @@ class VenueMigrationEndToEndTest {
 			// The running job is recovered from its entry, as any job is after a restart.
 			assertEquals(Status.FAILED, RT.getIn(engine.jobs().getJobData(RUNNING_JOB, ctx), Fields.STATUS));
 			assertNull(venue.jobIndex().entry(RUNNING_JOB));
+			Job remoteJob = engine.jobs().getJob(REMOTE_JOB, ctx);
+			assertEquals(RemoteJobs.NOT_FOLLOWED.formatted("remote-1", REMOTE_TARGET), remoteJob.getErrorMessage());
 
 			// An unversioned adapter's state moves when it is first used.
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());

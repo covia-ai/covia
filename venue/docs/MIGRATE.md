@@ -46,7 +46,7 @@ Each part of the schema has one owner, which defines its migrations.
   cell. An unrecognised shape is refused with a reason.
 - **Each version step is a class.** A step is a `MigrationStep`
   (`covia.venue.migration`) with its own tests. Covia's are listed in order in
-  `VenueMigrations.STEPS` and an adapter's in its `stateSteps()`; step `i`
+  `VenueMigrations.steps(keys)` and an adapter's in its `stateSteps()`; step `i`
   takes version `i` to `i + 1`, so a version is the number of steps. A schema
   change adds a step at the end, and a released step never changes.
   `VenueState` only runs them.
@@ -54,13 +54,13 @@ Each part of the schema has one owner, which defines its migrations.
   kind visits the whole store, so it happens once, in a venue or adapter step,
   never on a routine start-up. Readers keep no fallback for a shape a step has
   converted.
-- **Start-up is one transaction.** `VenueState.initialise(did, adapters)` runs
+- **Start-up is one transaction.** `VenueState.initialise(did, keys, adapters)` runs
   the venue's steps, then those of the built-in and configured module
   adapters, before any other write. A refusal or a failing step discards the
   whole transaction. An adapter registered later migrates in its own
   transaction as it registers (`VenueState.migrateAdapter`).
 - **Migration is also a call.** `Engine.migrate()` migrates the venue and
-  every installed adapter. `VenueState.migrate(adapters)` does the same on a
+  every installed adapter. `VenueState.migrate(keys, adapters)` does the same on a
   store before launch. `VenueState.peekVersions` reads the stored versions
   without writing.
 - **Some shapes convert on use.** A venue version may read an older shape and
@@ -90,7 +90,7 @@ The venue is at version 3.
 |------|--------|------|
 | 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `UserDeletionsRegion` |
 | 1 → 2 | Records of calls name `caller` and `owner` (COG-8): a job's `actor` becomes its `caller` and its old `caller` its `owner`; a scheduled event's `actor` (else `owner`) becomes its `caller` and `by` goes; a HITL request's `from` and `requesterUser` become `caller` and `owner`; an agent output snapshot's `user` becomes `owner` and its `caps` copy goes. A HITL request or snapshot naming only its caller takes its owner's namespace when the caller is an existing agent of this venue, else its own | `CallerAndOwner` |
-| 2 → 3 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner, with no output rules: a step cannot resolve the job's operation. Proofs its record kept move to the entry's caller context | `JobEntries` |
+| 2 → 3 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner. Proofs its record kept move to the entry's caller context. A remote job's connection, kept encrypted in the venue's `remote-job-<id>` secret that `delegation.authRef` named, moves to the entry's adapter data without any sign-in credential (only the mode of a caller-signed hop), and its pinned definition gives the entry's output rules; `authRef` and every `remote-job-*` secret go. An external agent's job moves `agentOwner`, `agentInteraction` and `agentBackendJob` to the entry's adapter data. Any other job's entry has no output rules: a step cannot resolve an operation. Built with the venue's secret keys | `JobEntries` |
 
 ### Adapter steps
 

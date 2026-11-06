@@ -33,6 +33,8 @@ import covia.venue.server.VenueServer;
  */
 @DurabilityTest
 class EmbedderContractTest {
+	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
+	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 
 	static final AString ALICE = Strings.create("did:key:z6MkEmbedderContractAlice");
 	static final AString BOB = Strings.create("did:key:z6MkEmbedderContractBob");
@@ -131,7 +133,7 @@ class EmbedderContractTest {
 		CoviaApplication beforeLaunch = CoviaApplication.open(reopened, AKeyPair.create(Blob.fromHex(SEED)));
 		VenueState offline = beforeLaunch.venue(venueKey);
 		ACell current = offline.get();
-		offline.migrate(java.util.List.of(new EmbedderAdapter().stateMigration()));
+		offline.migrate(NO_SECRETS, java.util.List.of(new EmbedderAdapter().stateMigration()));
 		assertSame(current, offline.get(), "migrating a current store writes nothing");
 		beforeLaunch.host().close(); // whoever opens a host closes it; the store stays open
 		VenueServer again = VenueServer.launch(config(), reopened);

@@ -43,6 +43,13 @@ public final class JobIndex extends ACoviaComponent<Index<Blob, ACell>>
 	 */
 	public static final AString CONTEXT = Strings.intern("context");
 
+	/**
+	 * What the job's adapter keeps to carry it to its end, such as how to reach
+	 * a remote job again ({@link JobManager#adapterData}). Only that adapter
+	 * reads it.
+	 */
+	public static final AString ADAPTER_DATA = Strings.intern("adapterData");
+
 	JobIndex(AForkableCursor<Index<Blob, ACell>> cursor) {
 		super(cursor);
 	}

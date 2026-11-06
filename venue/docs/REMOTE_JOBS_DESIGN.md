@@ -5,7 +5,7 @@ The implemented contract is in [JOBS.md](JOBS.md#remote-delegation). This docume
 also describes planned extensions; it does not claim they have all shipped.
 
 The first delivery implements unkeyed submit-once, durable handle recovery,
-a protected recovery record with operation metadata, shared bounded observation,
+a connection kept in the job's entry for recovery, shared bounded observation,
 and conservative acceptance uncertainty. Synchronous adapters and simple
 requests remain valid without keys or delegation machinery. Transient/private
 jobs retain their existing recording policy. Optional submission keys,
@@ -93,7 +93,6 @@ delegation:
   lastObservationError           bounded, redacted diagnostic
   nextAction, nextAttemptAt       durable description of the next step
   generation                     rejects superseded callbacks
-  authRef                        reference to the protected recovery record, never tokens
 ```
 
 These are orthogonal facts, not new terminal Job statuses. `STARTED` means the

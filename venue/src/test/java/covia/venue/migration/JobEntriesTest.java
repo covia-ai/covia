@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -14,11 +15,14 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Status;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.JobIndex;
+import covia.venue.OutputRules;
+import covia.venue.SecretStore;
 
 /** Venue step 2 → 3 as a function of the venue value. */
 class JobEntriesTest {
@@ -28,7 +32,10 @@ class JobEntriesTest {
 	private static final Blob PAUSED = Blob.fromHex("02");
 	private static final Blob DONE = Blob.fromHex("03");
 	private static final Blob ERASED = Blob.fromHex("04");
-	private static final MigrationStep STEP = new JobEntries();
+	private static final AString HOST = Strings.create("did:test:venue");
+	private static final SecretStore.Keys KEYS = SecretStore.keys(AKeyPair.generate());
+	private static final MigrationStep STEP = new JobEntries(KEYS);
+	private static final AString TOKEN = Strings.create("token");
 
 	private static AMap<AString, ACell> job(Blob id, AString status) {
 		return Maps.of(Fields.ID, id, Fields.STATUS, status, Fields.CALLER, ALICE);
@@ -82,5 +89,60 @@ class JobEntriesTest {
 		ACell finished = Index.<Keyword, ACell>none().assoc(Covia.USER_DATA,
 			Maps.of(ALICE, Maps.of(Namespace.J, Index.of(DONE, job(DONE, Status.COMPLETE)))));
 		assertSame(finished, STEP.apply(finished));
+	}
+	/** A remote job as version 2 kept it: its record names a secret of the venue's, which holds {@code kept}. */
+	private static ACell withRemoteJob(ACell venue, Blob id, AMap<AString, ACell> kept) {
+		AString ref = Strings.create("remote-job-" + id.toHexString());
+		AMap<AString, ACell> record = job(id, Status.STARTED).assoc(Strings.create("delegation"),
+			Maps.of("protocol", "covia", "target", "https://peer.test", "remoteId", "r1", "authRef", ref));
+		ACell value = RT.assocIn(venue, record, Covia.USER_DATA, ALICE, Namespace.J, id);
+		value = RT.assocIn(value, HOST, Covia.DID);
+		return RT.assocIn(value, SecretStore.seal(Strings.create(JSON.print(kept).toString()), KEYS),
+			Covia.USER_DATA, HOST, Namespace.S, ref);
+	}
+
+	@Test void aRemoteJobsConnectionMovesToItsEntryWithoutItsSecret() {
+		Blob venueHop = Blob.fromHex("10");
+		Blob callerHop = Blob.fromHex("11");
+		Blob a2a = Blob.fromHex("12");
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Strings.create("secretFields"), Vectors.of(TOKEN)));
+		ACell value = withRemoteJob(version2(), venueHop, Maps.of("authenticateAs", "venue", "venue", "did:web:peer.test",
+			"ucans", Vectors.of("grant.jwt"), "operationMetadata", meta));
+		// As 0.10.0 kept them: a caller's sign-in credential, and an A2A send's literal header value
+		value = withRemoteJob(value, callerHop, Maps.of("authenticateAs", "caller", "bearerToken", "sign-in.jwt",
+			"ucans", Vectors.of("grant.jwt")));
+		value = withRemoteJob(value, a2a, Maps.of("location", "header", "name", "Authorization", "value", "Bearer literal"));
+		value = RT.assocIn(value, SecretStore.seal(Strings.create("{}"), KEYS), Covia.USER_DATA, HOST, Namespace.S,
+			Strings.create("remote-job-ff"));
+		value = RT.assocIn(value, SecretStore.seal(Strings.create("kept"), KEYS), Covia.USER_DATA, HOST, Namespace.S,
+			Strings.create("OTHER"));
+
+		ACell migrated = STEP.apply(value);
+		AMap<AString, ACell> entry = RT.ensureMap(RT.getIn(migrated, Covia.JOBS, venueHop));
+		assertEquals(Maps.of("authenticateAs", "venue", "venue", "did:web:peer.test", "ucans", Vectors.of("grant.jwt")),
+			entry.get(JobIndex.ADAPTER_DATA), "how to reach the remote job again");
+		assertEquals(OutputRules.of(meta).toCell(), entry.get(JobIndex.RULES), "the rules of the definition pinned with it");
+		assertEquals(Maps.of("authenticateAs", "caller"), RT.getIn(migrated, Covia.JOBS, callerHop, JobIndex.ADAPTER_DATA),
+			"a caller-signed hop keeps its mode, never its sign-in credential or grants");
+		assertEquals(Maps.of("location", "header", "name", "Authorization"),
+			RT.getIn(migrated, Covia.JOBS, a2a, JobIndex.ADAPTER_DATA), "never a literal credential");
+		assertNull(RT.getIn(migrated, Covia.USER_DATA, ALICE, Namespace.J, venueHop, "delegation", "authRef"));
+		assertEquals(Strings.create("r1"), RT.getIn(migrated, Covia.USER_DATA, ALICE, Namespace.J, venueHop, "delegation", "remoteId"));
+		AMap<AString, ACell> secrets = RT.ensureMap(RT.getIn(migrated, Covia.USER_DATA, HOST, Namespace.S));
+		assertEquals(java.util.Set.of(Strings.create("OTHER")), secrets.keySet(),
+			"every remote job's secret goes, one no job names included");
+		assertSame(migrated, STEP.apply(migrated), "migrating again changes nothing");
+	}
+
+	@Test void anExternalAgentsFieldsMoveToItsEntry() {
+		AMap<AString, ACell> fields = Maps.of("agentOwner", ALICE, "agentInteraction", "chat",
+			"agentBackendJob", Blob.fromHex("20"));
+		AMap<AString, ACell> record = job(RUNNING, Status.STARTED).assoc(Fields.AGENT_ID, Strings.create("helper"));
+		AMap<AString, ACell> kept = record;
+		for (var field : fields.entrySet()) kept = kept.assoc(field.getKey(), field.getValue());
+		ACell value = RT.assocIn(version2(), kept, Covia.USER_DATA, ALICE, Namespace.J, RUNNING);
+		ACell migrated = STEP.apply(value);
+		assertEquals(fields, RT.getIn(migrated, Covia.JOBS, RUNNING, JobIndex.ADAPTER_DATA));
+		assertEquals(record, RT.getIn(migrated, Covia.USER_DATA, ALICE, Namespace.J, RUNNING), "the record keeps what its caller sees");
 	}
 }
