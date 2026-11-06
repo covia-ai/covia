@@ -142,10 +142,6 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 *  as its turn records it — {@code {caller?, authentication?, source?}}
 	 *  ({@link covia.adapter.AgentAdapter#withRecordedProvenance}). */
 	public static final AString KEY_INPUT_SOURCE = Strings.intern("inputSource");
-	/** Task-record key: the requester's context for a pending {@code outputPath}
-	 *  write, {@code {caller, owner?, proofs?, agentId?, jobId?, sessionId?,
-	 *  taskId?}}. Its proofs are shown to no caller ({@link #view}). */
-	public static final AString KEY_OUTPUT_CONTEXT = Strings.intern("outputContext");
 	/** Session-record `frames` key — vector of frame maps. First entry is the
 	 *  root frame; subsequent entries are pushed by {@code subgoal}. See
 	 *  {@code venue/docs/GOAL_TREE.md}. */
@@ -185,30 +181,10 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 
-	/** The agent as callers see it ({@link #view}). */
+	/** The agent as callers see it: its record. */
 	@Override
 	public ACell read() {
-		return view(getRecord());
-	}
-
-	/**
-	 * An agent record as callers see it: each pending output write's snapshot
-	 * without the proofs it keeps for the write ({@link #KEY_OUTPUT_CONTEXT}).
-	 * The same cell when there are none.
-	 */
-	@SuppressWarnings("unchecked")
-	public static AMap<AString, ACell> view(AMap<AString, ACell> record) {
-		if (record == null || !(record.get(K_TASKS) instanceof Index<?, ?> tasks)) return record;
-		Index<Blob, ACell> shown = (Index<Blob, ACell>) tasks;
-		for (var entry : ((Index<Blob, ACell>) tasks).entrySet()) {
-			if (!(entry.getValue() instanceof AMap<?, ?> task)) continue;
-			ACell snapshot = task.get(KEY_OUTPUT_CONTEXT);
-			if (!(snapshot instanceof AMap<?, ?> context) || !context.containsKey(Fields.PROOFS)) continue;
-			AMap<AString, ACell> row = (AMap<AString, ACell>) task;
-			shown = shown.assoc(entry.getKey(),
-				row.assoc(KEY_OUTPUT_CONTEXT, ((AMap<AString, ACell>) context).dissoc(Fields.PROOFS)));
-		}
-		return (shown == tasks) ? record : record.assoc(K_TASKS, shown);
+		return getRecord();
 	}
 
 	/** Replaces the entire record. Use for initialisation only. */

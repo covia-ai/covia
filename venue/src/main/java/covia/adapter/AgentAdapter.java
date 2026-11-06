@@ -202,15 +202,6 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_CREATED          = Strings.intern("created");
 	private static final AString K_RUNNING          = Strings.intern("running");
 	private static final int MAX_CONFIG_LAYER_DEPTH = 32;
-	/** Persisted, non-secret requester scope used to reconstruct an output
-	 * handoff after a venue restart. Live requests use the complete immutable
-	 * RequestContext held in {@link #outputContexts}; raw bearer UCANs are never
-	 * written into agent state. */
-	private static final AString K_OUTPUT_CONTEXT   = AgentState.KEY_OUTPUT_CONTEXT;
-	private static final AString K_CONTEXT_AGENT_ID = Strings.intern("agentId");
-	private static final AString K_CONTEXT_JOB_ID   = Strings.intern("jobId");
-	private static final AString K_CONTEXT_SESSION_ID = Strings.intern("sessionId");
-	private static final AString K_CONTEXT_TASK_ID  = Strings.intern("taskId");
 	private static final AString DEFAULT_AGENT_TEMPLATE = Strings.intern("v/agents/templates/skilled");
 
 	/** Maximum run loop iterations before forced exit (safety net) */
@@ -249,11 +240,12 @@ public class AgentAdapter extends AAdapter {
 		= new ConcurrentHashMap<>();
 
 	/**
-	 * Complete requester contexts for live {@code outputPath} handoffs, keyed by
-	 * the request Job (= task) ID. This preserves execution scopes and verified
-	 * proof/raw-UCAN material without persisting bearer credentials in lattice
-	 * state. The task row carries a non-secret identity/caps/scope snapshot as a
-	 * restart-safe fallback for own-resource writes.
+	 * The live contexts of requests that name an {@code outputPath}, keyed by
+	 * the request Job (= task) ID: the request completes by writing there as it
+	 * arrived, with its raw UCANs, including one held only in memory. After a
+	 * restart the write takes the caller context the request Job keeps instead
+	 * ({@link covia.venue.JobManager#callerContext}); nothing of it is on the
+	 * worker's task.
 	 */
 	private final ConcurrentHashMap<Blob, RequestContext> outputContexts
 		= new ConcurrentHashMap<>();
@@ -1567,11 +1559,9 @@ public class AgentAdapter extends AAdapter {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 			if (strict) taskData = taskData.assoc(Fields.STRICT, CVMBool.TRUE);
 		}
-		if (outputPath != null) {
-			taskData = taskData
-				.assoc(Fields.OUTPUT_PATH, outputPath)
-				.assoc(K_OUTPUT_CONTEXT, snapshotOutputContext(ctx));
-		}
+		// The request completes by writing to its outputPath as its caller: the
+		// request Job keeps the caller's context for that, not the worker's task
+		if (outputPath != null) engine.jobs().keepCallerContext(job, ctx);
 		AgentState.SessionIntake intake = agent.addTaskInSession(sid,
 			ctx.getCallerDID(), session.loads(), taskId, taskData);
 		if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
@@ -3317,12 +3307,6 @@ public class AgentAdapter extends AAdapter {
 			valueField,    value);
 		ACell sid = extractTaskSessionId(task);
 		if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
-		if (task instanceof AMap<?, ?> taskMap) {
-			ACell outputPath = taskMap.get(Fields.OUTPUT_PATH);
-			if (outputPath != null) envelope = envelope.assoc(Fields.OUTPUT_PATH, outputPath);
-			ACell outputContext = taskMap.get(K_OUTPUT_CONTEXT);
-			if (outputContext != null) envelope = envelope.assoc(K_OUTPUT_CONTEXT, outputContext);
-		}
 		deferredCompletions
 			.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
 			.put(taskId, envelope);
@@ -3370,7 +3354,7 @@ public class AgentAdapter extends AAdapter {
 				ACell err = envelope.get(Fields.ERROR);
 				pendingJob.fail(err == null ? "Task failed" : err.toString());
 			} else {
-				AString outputPath = RT.ensureString(envelope.get(Fields.OUTPUT_PATH));
+				AString outputPath = RT.ensureString(RT.getIn(pendingJob.getData(), Fields.INPUT, Fields.OUTPUT_PATH));
 				if (outputPath == null) {
 					// Compatibility contract: without outputPath the exact
 					// historical envelope (including the full output) survives.
@@ -3378,19 +3362,15 @@ public class AgentAdapter extends AAdapter {
 					continue;
 				}
 
+				// As the request arrived; after a restart, as its caller acts now
 				RequestContext outputCtx = outputContexts.remove(taskId);
 				if (outputCtx == null) {
 					try {
-						outputCtx = restoreOutputContext(envelope.get(K_OUTPUT_CONTEXT));
+						outputCtx = engine.jobs().callerContext(pendingJob);
 					} catch (covia.exception.AuthException unavailable) {
 						pendingJob.fail("Output handoff failed for '" + outputPath + "': " + unavailable.getMessage());
 						continue;
 					}
-				}
-				if (outputCtx == null) {
-					pendingJob.fail("Output handoff failed for '" + outputPath
-						+ "': requester authority is unavailable");
-					continue;
 				}
 
 				ACell output = envelope.get(Fields.OUTPUT);
@@ -3421,52 +3401,6 @@ public class AgentAdapter extends AAdapter {
 				});
 			}
 		}
-	}
-
-	/**
-	 * The requester's context for a pending output write, kept with the task
-	 * until the write: who called, in whose namespace, the verified proofs it
-	 * presented ({@link Fields#PROOFS}, shown to no caller) and its execution
-	 * scopes. Never a copy of its caps, nor bearer credentials.
-	 */
-	static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
-		AMap<AString, ACell> snapshot = Attribution.attribute(Maps.empty(), ctx.getCallerDID(), ctx.getUserDID());
-		AVector<ACell> proofs = ctx.getProofs();
-		if (proofs != null && !proofs.isEmpty()) snapshot = snapshot.assoc(Fields.PROOFS, proofs);
-		if (ctx.getAgentId() != null) snapshot = snapshot.assoc(K_CONTEXT_AGENT_ID, ctx.getAgentId());
-		if (ctx.getJobId() != null) snapshot = snapshot.assoc(K_CONTEXT_JOB_ID, ctx.getJobId());
-		if (ctx.getSessionId() != null) snapshot = snapshot.assoc(K_CONTEXT_SESSION_ID, ctx.getSessionId());
-		if (ctx.getTaskId() != null) snapshot = snapshot.assoc(K_CONTEXT_TASK_ID, ctx.getTaskId());
-		return snapshot;
-	}
-
-	/**
-	 * The requester's context for a pending output write after a restart: its
-	 * caller as it would act now in its namespace, presenting again the proofs
-	 * it presented ({@link covia.venue.Engine#context(AString, AString, AVector)}),
-	 * with the snapshot's execution scopes. Bearer credentials were never kept,
-	 * so nothing signs in as the caller elsewhere.
-	 *
-	 * @return the context, or null for a snapshot that names no caller
-	 * @throws covia.exception.AuthException when the caller could not act now
-	 */
-	@SuppressWarnings("unchecked")
-	RequestContext restoreOutputContext(ACell snapshotCell) {
-		if (!(snapshotCell instanceof AMap<?, ?> raw)) return null;
-		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
-		AString caller = Attribution.caller(snapshot);
-		if (caller == null) return null;
-		RequestContext ctx = engine.context(Attribution.owner(snapshot), caller,
-			RT.ensureVector(snapshot.get(Fields.PROOFS)));
-		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
-		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
-		ACell jobId = snapshot.get(K_CONTEXT_JOB_ID);
-		if (jobId instanceof Blob b) ctx = ctx.withJobId(b);
-		ACell sessionId = snapshot.get(K_CONTEXT_SESSION_ID);
-		if (sessionId instanceof Blob b) ctx = ctx.withSessionId(b);
-		ACell taskId = snapshot.get(K_CONTEXT_TASK_ID);
-		if (taskId instanceof Blob b) ctx = ctx.withTaskId(b);
-		return ctx;
 	}
 
 	/** Small completion envelope used only when outputPath was requested. */

@@ -13,7 +13,6 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
-import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -22,6 +21,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.lattice.Namespace;
 import covia.venue.server.AuthMiddleware;
 
@@ -94,10 +94,12 @@ class KeptCallerContextTest {
 		engine.getVenueState().users().create(delegate);
 		AString grant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp(),
 			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
-				Capability.create(Strings.create(owner + "/v/test/ops/never"), Strings.create("invoke"))),
+				Capability.create(Strings.create(owner + "/v/test/ops/never"), Strings.create("invoke")),
+				Capability.create(Strings.create(owner + "/w/output"), Capability.CRUD_WRITE)),
 			Vectors.empty()).toJWT(ownerKey);
 		RequestContext sudo = engine.sudoContext(AuthMiddleware.withTransportGrants(
-			RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX), owner);
+				RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX), owner)
+			.withAgentId(Strings.create("worker")).withSessionId(Blob.fromHex("1234"));
 
 		Job kept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
 		Job unkept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
@@ -108,6 +110,10 @@ class KeptCallerContextTest {
 			RequestContext resumed = engine.jobs().callerContext(kept);
 			assertEquals(delegate, resumed.getCallerDID());
 			assertEquals(owner, resumed.getUserDID(), "in the owner's namespace, as the grant allows");
+			assertEquals(sudo.getExecutionScope(), resumed.getExecutionScope());
+			assertTrue(engine.authorityCovers(resumed, Strings.create("w/output"), Capability.CRUD_WRITE));
+			assertFalse(engine.authorityCovers(resumed, Strings.create("w/other"), Capability.CRUD_WRITE),
+				"bounded by the grant, as it was");
 			assertThrows(AuthException.class, () -> engine.jobs().callerContext(unkept),
 				"without its grant a delegate cannot act for the owner again");
 		} finally {
@@ -116,27 +122,59 @@ class KeptCallerContextTest {
 		}
 	}
 
-	/** A pending output write keeps its requester's proofs with the task, shown to no caller. */
-	@Test void anAgentRecordShowsNoOutputSnapshotsProofs() {
+	/** A request naming an output path keeps its caller's context in its own job, for the write; the worker's task keeps none. */
+	@Test void aRequestNamingAnOutputPathKeepsItsCallersContextInItsJob() {
 		AKeyPair aliceKey = AKeyPair.generate();
 		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey());
 		AVector<ACell> proofs = grantTo(aliceKey);
-		Blob task = Blob.fromHex("0d".repeat(16));
-		User user = engine.getVenueState().users().ensure(alice);
-		AgentState agent = user.ensureAgent("writer", Maps.empty(), null);
-		AMap<AString, ACell> snapshot = Maps.of(Fields.CALLER, alice, Fields.PROOFS, proofs);
-		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_TASKS,
-			Index.of(task, Maps.of(AgentState.KEY_OUTPUT_CONTEXT, snapshot))));
 		RequestContext own = RequestContext.of(alice);
-		String taskHex = task.toHexString();
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "writer",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), own).awaitResult(10_000);
 
-		assertEquals(Maps.of(Fields.CALLER, alice),
-			RT.getIn(read("g/writer/tasks/" + taskHex + "/outputContext", own), Fields.VALUE));
-		assertEquals(Maps.of(Fields.CALLER, alice), RT.getIn(read("g/writer", own), Fields.VALUE,
-			AgentState.KEY_TASKS, task, AgentState.KEY_OUTPUT_CONTEXT));
-		assertEquals(Maps.of(Fields.CALLER, alice), RT.getIn(read("g", own), Fields.VALUE,
-			Strings.create("writer"), AgentState.KEY_TASKS, task, AgentState.KEY_OUTPUT_CONTEXT));
-		assertEquals(proofs, RT.getIn(agent.getTasks().get(task), AgentState.KEY_OUTPUT_CONTEXT, Fields.PROOFS),
-			"the task keeps them for the write");
+		Job request = engine.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "writer",
+			Fields.INPUT, Maps.of("q", "write"), Fields.OUTPUT_PATH, "w/out"), own.withProofs(proofs));
+		try {
+			assertEquals(proofs, RT.getIn(engine.getVenueState().jobIndex().entry(request.getID()), JobIndex.CONTEXT, Fields.PROOFS),
+				"the request's job keeps them for the write");
+			assertEquals(proofs, engine.jobs().callerContext(request).getProofs(), "the write presents them again");
+			AMap<AString, ACell> task = RT.ensureMap(engine.getVenueState().users().get(alice).agent("writer")
+				.getTasks().get(request.getID()));
+			assertNotNull(task);
+			assertFalse(task.containsKey(Fields.OUTPUT_PATH), "the request's input names the path");
+			assertFalse(task.containsKey(Strings.create("outputContext")), "the worker keeps nothing of its requester's context");
+		} finally {
+			engine.jobs().invokeOperation("v/ops/agent/cancel-task", Maps.of(Fields.AGENT_ID, "writer",
+				Fields.TASK_ID, request.getID().toHexString()), own).awaitResult(10_000);
+			engine.jobs().invokeOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "writer"), own).awaitResult(10_000);
+		}
+		assertNull(engine.getVenueState().jobIndex().entry(request.getID()), "gone when the request ends");
+	}
+
+	/** An agent's job acts as the agent stands now, never under a copy of its caps. */
+	@Test void anAgentsJobActsUnderItsCurrentCaps() {
+		AString owner = TestEngine.uniqueDID("KeptContextAgentOwner");
+		RequestContext ownerCtx = RequestContext.of(owner);
+		AVector<ACell> caps = Vectors.of(Maps.of(Capability.CAN, Strings.create("invoke")));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "worker",
+			Fields.CONFIG, Maps.of(Config.CAPS, caps)), ownerCtx).awaitResult(10_000);
+		RequestContext agent = engine.context(owner, Principals.agentDID(owner, Strings.create("worker")))
+			.withAgentId(Strings.create("worker"));
+
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), agent);
+		engine.jobs().keepCallerContext(job, agent);
+		try {
+			RequestContext resumed = engine.jobs().callerContext(job);
+			assertEquals(agent.getCallerDID(), resumed.getCallerDID());
+			assertEquals(owner, resumed.getUserDID());
+			assertEquals(agent.getExecutionScope(), resumed.getExecutionScope());
+			assertEquals(caps, resumed.getCaps());
+
+			AVector<ACell> narrower = Vectors.of(Maps.of(Capability.CAN, Strings.create("crud/read")));
+			engine.jobs().invokeOperation("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "worker",
+				Fields.CONFIG, Maps.of(Config.CAPS, narrower)), ownerCtx).awaitResult(10_000);
+			assertEquals(narrower, engine.jobs().callerContext(job).getCaps(), "narrowing the agent narrows the work");
+		} finally {
+			job.cancel();
+		}
 	}
 }

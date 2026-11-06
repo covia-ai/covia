@@ -145,4 +145,33 @@ class JobEntriesTest {
 		assertEquals(fields, RT.getIn(migrated, Covia.JOBS, RUNNING, JobIndex.ADAPTER_DATA));
 		assertEquals(record, RT.getIn(migrated, Covia.USER_DATA, ALICE, Namespace.J, RUNNING), "the record keeps what its caller sees");
 	}
+
+	@Test void aPendingWritesContextMovesFromTheWorkersTaskToTheRequestsEntry() {
+		AString bob = Strings.create("did:test:bob");
+		ACell proofs = Vectors.of(Maps.of("iss", "did:test:grantor"));
+		Blob session = Blob.fromHex("5e");
+		Blob other = Blob.fromHex("05");
+		AString outputContext = Strings.create("outputContext");
+		// As version 2 kept it: the requester's context and the path on the worker's task
+		AMap<AString, ACell> pending = Maps.of(Fields.INPUT, "write",
+			Fields.OUTPUT_PATH, "w/out",
+			outputContext, Maps.of(Fields.CALLER, ALICE, Fields.OWNER, ALICE, Fields.PROOFS, proofs, Fields.SESSION_ID, session));
+		AMap<AString, ACell> plain = Maps.of(Fields.INPUT, "read");
+		Index<Blob, ACell> tasks = Index.<Blob, ACell>none()
+			.assoc(RUNNING, pending)
+			.assoc(DONE, pending)
+			.assoc(other, plain);
+		ACell value = RT.assocIn(version2(), Maps.of(Namespace.G, Maps.of("worker", Maps.of("tasks", tasks))),
+			Covia.USER_DATA, bob);
+
+		ACell migrated = STEP.apply(value);
+		assertEquals(Maps.of(JobIndex.OWNER, ALICE, JobIndex.CONTEXT, Maps.of(Fields.PROOFS, proofs, Fields.SESSION_ID, session)),
+			RT.getIn(migrated, Covia.JOBS, RUNNING), "the request's job keeps its caller's context for the write");
+		assertNull(RT.getIn(migrated, Covia.JOBS, DONE), "a finished request has no entry");
+		Index<?, ?> kept = (Index<?, ?>) RT.getIn(migrated, Covia.USER_DATA, bob, Namespace.G, "worker", "tasks");
+		assertEquals(Maps.of(Fields.INPUT, "write"), kept.get(RUNNING), "the worker's task keeps neither");
+		assertEquals(Maps.of(Fields.INPUT, "write"), kept.get(DONE));
+		assertSame(plain, kept.get(other));
+		assertSame(migrated, STEP.apply(migrated), "migrating again changes nothing");
+	}
 }

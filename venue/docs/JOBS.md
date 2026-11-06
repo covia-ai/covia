@@ -157,8 +157,10 @@ held only in memory has neither.
 
 A job whose work continues for its caller after the request keeps that
 caller's context, so that it acts again with the authority it started with
-and no more. The adapter asks for it (`JobManager.keepCallerContext`); a
-Claude Code session does. The job's entry keeps the grant proofs the caller
+and no more. The adapter asks for it (`JobManager.keepCallerContext`): a
+Claude Code session does, and so does an agent request naming an
+`outputPath`, whose job completes by writing there as its caller
+(AGENT_TEMPLATES.md). The job's entry keeps the grant proofs the caller
 presented, in the form checked on arrival, and the request's execution
 scopes (agent, session, job and task). `JobManager.callerContext` rebuilds
 the caller from them with `Engine.context(owner, caller, proofs)`, checking

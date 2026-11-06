@@ -274,43 +274,24 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return super.resolve(path);
 	}
 
-	/** The user's data as callers see it, its jobs and agents included, without the venue's bookkeeping. */
+	/** The user's data as callers see it, its jobs included, without the venue's bookkeeping. */
 	@Override
 	public ACell read() {
 		AMap<AString, ACell> record = Users.content(cursor().get());
 		if (record == null) return null;
 		if (record.containsKey(Namespace.J)) record = record.assoc(Namespace.J, jobs().read());
-		if (record.containsKey(Namespace.G)) record = record.assoc(Namespace.G, agentsView(record.get(Namespace.G)));
 		return record;
 	}
 
-	/** Below the user only {@code g} itself is read here, with its agents as callers see them. */
+	/** Data no namespace component claims is read from the record as stored. */
 	@Override
 	public ACell read(CoviaPath path) {
-		if (path.isEmpty()) return read();
-		if (Namespace.G.equals(path.first())) return ValuePath.get(agentsView(RT.getIn(cursor().get(), Namespace.G)), path.rest());
-		return ValuePath.get(cursor().get(), path);
+		return path.isEmpty() ? read() : ValuePath.get(cursor().get(), path);
 	}
 
 	@Override
 	public boolean contains(CoviaPath path) {
-		if (!path.isEmpty() && Namespace.G.equals(path.first())) {
-			return ValuePath.contains(agentsView(RT.getIn(cursor().get(), Namespace.G)), path.rest());
-		}
 		return ValuePath.contains(cursor().get(), path);
-	}
-
-	/** The {@code g} map with each agent as callers see it ({@link AgentState#view}). */
-	@SuppressWarnings("unchecked")
-	private static ACell agentsView(ACell agents) {
-		if (!(agents instanceof AMap<?, ?> byId)) return agents;
-		AMap<ACell, ACell> shown = (AMap<ACell, ACell>) byId;
-		for (var entry : ((AMap<ACell, ACell>) byId).entrySet()) {
-			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
-			AMap<AString, ACell> view = AgentState.view(record);
-			if (view != record) shown = shown.assoc(entry.getKey(), view);
-		}
-		return shown;
 	}
 
 }

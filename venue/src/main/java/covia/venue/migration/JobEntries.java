@@ -40,6 +40,11 @@ import covia.venue.SecretStore;
  *   <li>The fields an external agent's job kept, {@code agentOwner},
  *       {@code agentInteraction} and {@code agentBackendJob}, become the
  *       entry's adapter data.</li>
+ *   <li>A request's pending {@code outputPath} write kept its requester's
+ *       context on the worker agent's task as {@code outputContext}: its
+ *       proofs and execution scopes become the request job's caller context,
+ *       and the task keeps neither {@code outputContext} nor
+ *       {@code outputPath}, which the request's input holds.</li>
  * </ul>
  *
  * <p>Every {@code remote-job-*} secret then goes, those left by a crash
@@ -60,6 +65,10 @@ public final class JobEntries implements MigrationStep {
 	static final AString[] CONNECTION = {
 		AUTHENTICATE_AS, Strings.intern("outboundAny"), Fields.VENUE, Fields.UCANS,
 		Strings.intern("location"), Fields.NAME, Strings.intern("bearer"), Strings.intern("secret")};
+	static final AString TASKS = Strings.intern("tasks");
+	static final AString OUTPUT_CONTEXT = Strings.intern("outputContext");
+	/** What a pending write's context keeps beyond its caller and owner, which the request's record names. */
+	static final AString[] CALLER_CONTEXT = {Fields.PROOFS, Fields.AGENT_ID, Fields.SESSION_ID, Fields.JOB_ID, Fields.TASK_ID};
 	static final AString[] EXTERNAL_AGENT = {
 		Strings.intern("agentOwner"), Strings.intern("agentInteraction"), Strings.intern("agentBackendJob")};
 
@@ -130,6 +139,30 @@ public final class JobEntries implements MigrationStep {
 			}
 			if (converted != jobs) users = users.assoc(did, assoc(state, Namespace.J, converted));
 		}
+		for (var user : users.entrySet()) {
+			if (!(user.getValue() instanceof AMap<?, ?> state) || !(state.get(Namespace.G) instanceof AMap<?, ?> agents)) continue;
+			ACell converted = agents;
+			for (var agent : agents.entrySet()) {
+				if (!(RT.getIn(agent.getValue(), TASKS) instanceof Index<?, ?> stored)) continue;
+				Index<Blob, ACell> tasks = index(stored);
+				Index<Blob, ACell> kept = tasks;
+				for (long i = 0, n = tasks.count(); i < n; i++) {
+					var task = tasks.entryAt(i);
+					if (!(task.getValue() instanceof AMap<?, ?> m)) continue;
+					@SuppressWarnings("unchecked")
+					AMap<AString, ACell> row = (AMap<AString, ACell>) m;
+					if (!row.containsKey(OUTPUT_CONTEXT) && !row.containsKey(Fields.OUTPUT_PATH)) continue;
+					AMap<AString, ACell> context = callerContext(RT.ensureMap(row.get(OUTPUT_CONTEXT)));
+					AMap<AString, ACell> entry = RT.ensureMap(entries.get(task.getKey()));
+					if (entry != null && context != null && !entry.containsKey(JobIndex.CONTEXT)) {
+						entries = entries.assoc(task.getKey(), entry.assoc(JobIndex.CONTEXT, context));
+					}
+					kept = kept.assoc(task.getKey(), row.dissoc(OUTPUT_CONTEXT).dissoc(Fields.OUTPUT_PATH));
+				}
+				if (kept != tasks) converted = assoc((AMap<?, ?>) converted, agent.getKey(), assoc((AMap<?, ?>) agent.getValue(), TASKS, kept));
+			}
+			if (converted != agents) users = users.assoc(user.getKey(), assoc(state, Namespace.G, converted));
+		}
 		AMap<AString, ACell> remaining = withoutRemoteJobs(secrets);
 		if (remaining != secrets) {
 			AString host = RT.ensureString(record.get(Covia.DID));
@@ -137,6 +170,17 @@ public final class JobEntries implements MigrationStep {
 		}
 		if (entries == before && users == found) return venue;
 		return record.assoc(Covia.USER_DATA, users).assoc(Covia.JOBS, entries);
+	}
+
+	/** A pending write's proofs and execution scopes, or null when it kept none. */
+	private static AMap<AString, ACell> callerContext(AMap<AString, ACell> snapshot) {
+		if (snapshot == null) return null;
+		AMap<AString, ACell> context = Maps.empty();
+		for (AString field : CALLER_CONTEXT) {
+			ACell v = snapshot.get(field);
+			if (v != null) context = context.assoc(field, v);
+		}
+		return context.isEmpty() ? null : context;
 	}
 
 	/** The venue user's secrets, or null when it has none. */

@@ -177,8 +177,8 @@ class VenueMigrationEndToEndTest {
 				migrated.jobs().getRecord(AGENT_JOB).dissoc(Fields.UPDATED));
 			assertEquals(Maps.of(Hitl.ID, REQUEST, Hitl.CALLER, agentDID, Hitl.OWNER, USER, Hitl.STATUS, Hitl.OPEN),
 				migrated.inbox().get(REQUEST));
-			assertEquals(Maps.of(Fields.CALLER, USER), RT.getIn(migrated.agent(PARKED).getTasks().get(PARKED_TASK),
-				Strings.create("outputContext")));
+			assertEquals(Maps.empty(), migrated.agent(PARKED).getTasks().get(PARKED_TASK),
+				"a pending write's context is the request's to keep, not the worker's");
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
 				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
 			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));

@@ -399,16 +399,15 @@ request:
 - **A check that happens later needs its evidence kept.** Grant proofs are
   kept only for work that continues after the request: a scheduled event
   keeps them with the event, and a job that can resume after a restart keeps
-  them in its entry, which no route reads (a Claude Code session,
-  `JobManager.keepCallerContext`; JOBS.md, The venue's job entries) or with a
-  pending agent `outputPath` write. They are kept in the form checked on
+  them in its entry, which no route reads (a Claude Code session, or an agent
+  request whose `outputPath` write is pending; `JobManager.keepCallerContext`,
+  JOBS.md, Kept caller context). They are kept in the form checked on
   arrival, with no second signature check, since the store is the trust
   boundary for the whole record. The work presents them again each time it
   acts, through `Engine.context(owner, caller, proofs)`, which checks what a
   live request would on arrival. They go when the work ends, and a job record
-  never holds them, so exports hold none. They never appear in API output
-  (`AgentState.view`), never serve another record's work and are never
-  handed to an agent.
+  never holds them, so exports hold none. They never appear in API output,
+  never serve another record's work and are never handed to an agent.
 - **Sign-in credentials prove presence and are never stored.** Deferred work
   that must act as the caller at another venue is scheduled at that venue.
 
@@ -833,7 +832,7 @@ another namespace, from a relationship it holds — running its own agent
 does). Whatever records a call records the namespace beside the caller, as
 COG-8 names them: `caller` is the principal that made the call, and `owner`
 the namespace, written only when it differs (`covia.grid.Attribution`). Jobs,
-scheduled events, HITL requests and agent output snapshots all do, and the
+scheduled events and HITL requests all do, and the
 policy-gate input is `{operation, input, caller, owner?}` on both the held
 grant and the proof path.
 

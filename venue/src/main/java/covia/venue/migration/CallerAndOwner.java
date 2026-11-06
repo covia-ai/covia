@@ -51,7 +51,7 @@ public final class CallerAndOwner implements MigrationStep {
 	static final AString USER = Strings.intern("user");
 	static final AString EVENTS = Strings.intern("events");
 	static final AString TASKS = AgentState.KEY_TASKS;
-	static final AString OUTPUT_CONTEXT = AgentState.KEY_OUTPUT_CONTEXT;
+	static final AString OUTPUT_CONTEXT = Strings.intern("outputContext");
 	static final AString CAPS = Strings.intern("caps");
 
 	@Override

@@ -391,8 +391,11 @@ authorised owner-scoped DID URLs use the same cross-user checks as `covia:write`
 and foreign `did:web` paths dispatch the write to the destination venue. Both
 venues enforce the requester's authority at write time, as the requester
 stands then: an agent under its current `config.caps`, a delegate through the
-grant it presented, which the task keeps until the write, across a restart
-too. Failed or cancelled tasks write nothing.
+grant it presented. The write completes the request's job, so it is made in
+the request's context: as the request arrived, or after a restart as the
+caller the job keeps acts now ([JOBS.md](JOBS.md#kept-caller-context)). The
+worker's task records neither the path nor anything of the requester. Failed
+or cancelled tasks write nothing.
 
 ### Capabilities for handoff
 
