@@ -93,6 +93,26 @@ class DelegationEntriesTest {
 		assertNull(entry(migrated, DONE), "a finished job has no entry");
 	}
 
+	/**
+	 * A 0.9 record still carrying its history chain: the current state is
+	 * converted and the chain left as it is, never walked, as reads leave it
+	 * ({@link covia.grid.Job#currentState}).
+	 */
+	@Test void aLegacyHistoryChainIsLeftAsItIs() {
+		AString prev = Strings.create("prev");
+		AMap<AString, ACell> older = job(RUNNING, Status.PENDING, Maps.of("protocol", "covia", "target", TARGET,
+			"observation", "submitting"));
+		AMap<AString, ACell> chained = job(RUNNING, Status.STARTED, Maps.of("protocol", "covia", "target", TARGET,
+			"ownsRemote", CVMBool.TRUE, "remoteId", "r1", "observation", "healthy")).assoc(prev, older);
+		ACell before = Index.<Keyword, ACell>none()
+			.assoc(Covia.USER_DATA, Maps.of(ALICE, Maps.of(Namespace.J, Index.<Blob, ACell>none().assoc(RUNNING, chained))))
+			.assoc(Covia.JOBS, Index.<Blob, ACell>none().assoc(RUNNING, Maps.of(JobIndex.OWNER, ALICE)));
+		ACell migrated = STEP.apply(before);
+		assertEquals(job(RUNNING, Status.STARTED, Maps.of("remoteId", "r1")).assoc(prev, older), record(migrated, RUNNING));
+		assertEquals(Maps.of(JobIndex.OWNER, ALICE, JobIndex.ADAPTER_DATA, Maps.of(RemoteJobs.PROTOCOL, "covia",
+			RemoteJobs.TARGET, TARGET, RemoteJobs.OWNS_REMOTE, CVMBool.TRUE)), entry(migrated, RUNNING));
+	}
+
 	@Test void aCurrentVenueComesBackAsTheSameCell() {
 		ACell migrated = STEP.apply(version3());
 		assertSame(migrated, STEP.apply(migrated));
