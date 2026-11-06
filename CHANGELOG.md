@@ -33,6 +33,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A Claude Code session restored after a restart acts as the principal that started it, with the grants it presented, and every turn checks project access again.
 - A `remoteagent` call to an agent on the same venue, and an external agent served by one, resumes after a restart as its caller, with the grants it presented; one whose caller cannot act then fails, naming the agent's task.
 - An agent's `outputPath` write acts as its requester stands at write time, after a restart too; the worker's task no longer records `outputPath` or the requester's context.
+- A request an agent has completed or failed is settled with it after a restart, its `outputPath` written; while its cycle runs, the agent's record shows it under `resolved`.
 - An agent's running work (orchestration steps, tool calls past their timeout, live Claude Code sessions, the rest of a cycle) acts under its caps as they stand at each check, and under none once it is deleted; `agent:update` no longer warns that a running transition keeps its old caps.
 - The venue migrates to version 2, renaming those fields in stored records once.
 - User exports are at version 2; `user:import` converts older ones, and `user:import` and `user:clone` leave out the user's jobs.

@@ -64,6 +64,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	private static final AString K_CONFIG   = Strings.intern("config");
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
+	private static final AString K_RESOLVED = Strings.intern("resolved");
 	private static final AString K_SESSIONS = Strings.intern("sessions");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
@@ -132,6 +133,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	public static final AString KEY_STATUS   = K_STATUS;
 	public static final AString KEY_CONFIG   = K_CONFIG;
 	public static final AString KEY_TASKS    = K_TASKS;
+	/** Tasks the agent has resolved whose requests are not yet settled ({@link #resolveTask}). */
+	public static final AString KEY_RESOLVED = K_RESOLVED;
 	public static final AString KEY_SESSIONS = K_SESSIONS;
 	/** Latest generated result per instruction, separate from conversation frames. */
 	public static final AString KEY_SUMMARIES = Strings.intern("summaries");
@@ -301,6 +304,16 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		if (r == null) return Index.none();
 		ACell v = r.get(K_TASKS);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+	}
+
+	/**
+	 * The tasks this agent has resolved whose requests are not yet settled, by
+	 * task ID: each holds the completion its request settles with
+	 * ({@link #resolveTask}).
+	 */
+	public Index<Blob, ACell> getResolved() {
+		AMap<AString, ACell> r = getRecord();
+		return (r == null) ? Index.none() : extractResolved(r);
 	}
 
 	/**
@@ -581,8 +594,13 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, taskData)));
 	}
 
+	/** Removes a task, queued or resolved. */
 	public void removeTask(Blob taskId) {
-		update(r -> r.assoc(K_TASKS, extractTasks(r).dissoc(taskId)));
+		update(r -> {
+			AMap<AString, ACell> next = r.assoc(K_TASKS, extractTasks(r).dissoc(taskId));
+			Index<Blob, ACell> resolved = extractResolved(r);
+			return resolved.containsKey(taskId) ? next.assoc(K_RESOLVED, resolved.dissoc(taskId)) : next;
+		});
 	}
 
 	/** Returns the continuation revision of a task row (legacy rows are zero). */
@@ -741,31 +759,54 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * immediately.</p>
 	 */
 	public ACell takeTask(Blob taskId) {
-		AMap<AString, ACell> before = getAndUpdate(r -> {
-			Index<Blob, ACell> tasks = extractTasks(r);
-			if (tasks.get(taskId) == null) return r;
-			return r.assoc(K_TASKS, tasks.dissoc(taskId));
-		});
-		return (before == null) ? null : extractTasks(before).get(taskId);
+		return takeTask(taskId, -1);
 	}
 
 	/**
 	 * Atomically claims a task only if it still has the revision presented to
 	 * the current transition cycle. A continuation arriving mid-cycle bumps the
 	 * revision and therefore leaves the task queued for a fresh cycle.
+	 *
+	 * @param expectedRevision the revision presented, or negative for any
 	 */
 	public ACell takeTask(Blob taskId, long expectedRevision) {
+		return claim(taskId, expectedRevision, null);
+	}
+
+	/**
+	 * Resolves a task: in one transaction its row leaves the queue, as
+	 * {@link #takeTask(Blob, long)} takes it, and {@code completion} is recorded
+	 * under {@link #KEY_RESOLVED}. It stays there until the task's request is
+	 * settled with it, so a resolution survives a restart before then. A
+	 * resolved task is no longer queued: it cannot be taken, cancelled or
+	 * resolved again.
+	 *
+	 * @param expectedRevision the revision presented, or negative for any
+	 * @param completion what the request settles with
+	 * @return the row taken, or null when the task is not queued at that revision
+	 */
+	public ACell resolveTask(Blob taskId, long expectedRevision, AMap<AString, ACell> completion) {
+		return claim(taskId, expectedRevision, java.util.Objects.requireNonNull(completion));
+	}
+
+	/** Takes a task's row at the expected revision, recording {@code completion} when given. */
+	private ACell claim(Blob taskId, long expectedRevision, AMap<AString, ACell> completion) {
 		AMap<AString, ACell> before = getAndUpdate(r -> {
 			Index<Blob, ACell> tasks = extractTasks(r);
-			ACell task = tasks.get(taskId);
-			if (task == null || taskRevision(task) != expectedRevision
-					|| hasUnpresentedTaskInputs(task)) return r;
-			return r.assoc(K_TASKS, tasks.dissoc(taskId));
+			if (!claimable(tasks.get(taskId), expectedRevision)) return r;
+			AMap<AString, ACell> next = r.assoc(K_TASKS, tasks.dissoc(taskId));
+			return (completion == null) ? next
+				: next.assoc(K_RESOLVED, extractResolved(r).assoc(taskId, completion));
 		});
 		if (before == null) return null;
 		ACell task = extractTasks(before).get(taskId);
-		return (task != null && taskRevision(task) == expectedRevision
-			&& !hasUnpresentedTaskInputs(task)) ? task : null;
+		return claimable(task, expectedRevision) ? task : null;
+	}
+
+	private static boolean claimable(ACell task, long expectedRevision) {
+		if (task == null) return false;
+		return expectedRevision < 0
+			|| (taskRevision(task) == expectedRevision && !hasUnpresentedTaskInputs(task));
 	}
 
 	/**
@@ -1133,6 +1174,12 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	@SuppressWarnings("unchecked")
 	private static Index<Blob, ACell> extractTasks(AMap<AString, ACell> r) {
 		ACell v = r.get(K_TASKS);
+		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Index<Blob, ACell> extractResolved(AMap<AString, ACell> r) {
+		ACell v = r.get(K_RESOLVED);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 

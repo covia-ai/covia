@@ -597,14 +597,19 @@ public class Job {
 	 */
 	public void cancel(String reason) {
 		if (isFinished()) return;
-		String message = (reason != null && !reason.isBlank())
-			? reason.strip()
-			: "Job cancelled" + (getID() == null ? "" : ": " + getID().toHexString());
+		String message = cancellationMessage(reason);
 		update(job -> {
 			job = job.assoc(Fields.STATUS, Status.CANCELLED);
 			job = job.assoc(Fields.ERROR, Strings.create(message));
 			return job;
 		});
+	}
+
+	/** The error a cancellation records: its reason, or that the Job was cancelled. */
+	protected final String cancellationMessage(String reason) {
+		return (reason != null && !reason.isBlank())
+			? reason.strip()
+			: "Job cancelled" + (getID() == null ? "" : ": " + getID().toHexString());
 	}
 
 	/**

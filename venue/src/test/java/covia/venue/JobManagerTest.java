@@ -818,6 +818,48 @@ public class JobManagerTest {
 		venue.transact(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
 	}
 
+	/** Settling jobs in a venue transaction: waiters wake only on the notification, and a refused result fails its job there. */
+	@Test
+	public void testCompleteInAndFailInSettleInATransaction() throws Exception {
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+		try {
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "held"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					return new CompletableFuture<>();
+				}
+				@Override public void invoke(Job job, RequestContext c, AMap<AString, ACell> m, ACell in) {
+					job.setStatus(Status.STARTED);
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "held:run",
+				Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+			VenueJob completed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+			VenueJob refused = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+			VenueJob failed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+			java.util.List<Runnable> after = new java.util.ArrayList<>();
+			eng.getVenueState().transact(draft -> {
+				after.clear();
+				after.add(completed.completeIn(draft, Maps.of("ok", "yes")));
+				after.add(refused.completeIn(draft, Strings.create("not an object")));
+				after.add(failed.failIn(draft, "gave up"));
+			});
+			assertEquals(Status.COMPLETE, completed.getStatus());
+			assertFalse(completed.future().isDone(), "waiters wake only when the notification runs");
+			after.forEach(Runnable::run);
+			assertEquals(Maps.of("ok", "yes"), completed.future().get(5, TimeUnit.SECONDS));
+			assertEquals(Status.FAILED, refused.getStatus(), "a refused result fails its job instead of aborting the transaction");
+			assertTrue(refused.getErrorMessage().startsWith(JobManager.OUTPUT_SCHEMA_VIOLATION));
+			assertEquals(Status.FAILED, failed.getStatus());
+			assertEquals("gave up", failed.getErrorMessage());
+			eng.getVenueState().transact(draft -> assertNull(completed.failIn(draft, "late"), "a finished job is left as it is"));
+		} finally {
+			eng.close();
+		}
+	}
+
 	@Test
 	public void testHistoryAppendDuringTerminalNotificationIsRetained() {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);

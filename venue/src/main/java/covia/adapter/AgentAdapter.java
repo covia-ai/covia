@@ -66,6 +66,8 @@ import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
 import covia.venue.User;
+import covia.venue.VenueJob;
+import covia.venue.VenueState;
 import covia.venue.Users;
 
 /**
@@ -230,14 +232,13 @@ public class AgentAdapter extends AAdapter {
 	private final ConcurrentHashMap<AgentKey, java.util.concurrent.atomic.AtomicBoolean> activeCancellations = new ConcurrentHashMap<>();
 
 	/**
-	 * Per-agent deferred task completions written by {@code agent:complete-task}
-	 * and {@code agent:fail-task} during a transition cycle. The framework
-	 * drains these AFTER {@code mergeRunResult} has written the timeline, so
-	 * the caller's {@code awaitResult} only returns once the cycle is fully
-	 * persisted. Inner key is the task (== caller Job) ID.
+	 * Resolved tasks whose request is settled after its handback commits,
+	 * because the write to its {@code outputPath} cannot join the transaction:
+	 * the path is another venue's, or a view's ({@link Handback}). A merge
+	 * passes them over while the write is in flight. Empty after a restart,
+	 * when reconciliation hands them back again.
 	 */
-	private final ConcurrentHashMap<AgentKey, ConcurrentHashMap<Blob, AMap<AString, ACell>>> deferredCompletions
-		= new ConcurrentHashMap<>();
+	private final java.util.Set<Blob> handbacksInFlight = ConcurrentHashMap.newKeySet();
 
 	/**
 	 * The live contexts of requests that name an {@code outputPath}, keyed by
@@ -1627,7 +1628,8 @@ public class AgentAdapter extends AAdapter {
 		Blob taskId = job.getID();
 		job.setCancelHook(() -> {
 			AgentState agent = getAgent(ownerDID, agentId);
-			if (agent != null && agent.takeTask(taskId) != null) outputContexts.remove(taskId);
+			if (agent != null) agent.removeTask(taskId);
+			outputContexts.remove(taskId);
 		});
 	}
 
@@ -2926,19 +2928,28 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Claim atomically so cancel cannot race completion or another cancel.
-		if (agent.takeTask(taskId) == null) {
+		// An optional reason becomes the task job's error, so the requester
+		// awaiting it sees why rather than only that it was cancelled. The task
+		// is claimed and its job cancelled in one transaction, so cancel cannot
+		// race completion or another cancel, and a restart finds both or neither.
+		AString reasonCell = RT.ensureString(RT.getIn(input, Fields.REASON));
+		String reason = (reasonCell != null) ? reasonCell.toString() : null;
+		Job pending = engine.jobs().getJob(taskId);
+		boolean[] taken = {false};
+		List<Runnable> after = new ArrayList<>();
+		engine.getVenueState().transact(draft -> {
+			after.clear();
+			AgentState current = agentIn(draft, target.ownerDID(), agentId);
+			taken[0] = current != null && current.takeTask(taskId) != null;
+			if (taken[0]) settle(draft, pending, after, recorded -> recorded.cancelIn(draft, reason),
+				live -> live.cancel(reason));
+		});
+		if (!taken[0]) {
 			job.fail("Task not found: " + taskIdHex);
 			return;
 		}
 		outputContexts.remove(taskId);
-		// An optional reason becomes the task job's error, so the requester
-		// awaiting it sees why rather than only that it was cancelled.
-		AString reason = RT.ensureString(RT.getIn(input, Fields.REASON));
-		Job pending = engine.jobs().getJob(taskId);
-		if (pending != null && !pending.isFinished()) {
-			pending.cancel((reason != null) ? reason.toString() : null);
-		}
+		after.forEach(Runnable::run);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
@@ -3247,8 +3258,8 @@ public class AgentAdapter extends AAdapter {
 			result = candidate;
 		}
 
-		ACell task = (expectedRevision >= 0)
-			? agent.takeTask(taskId, expectedRevision) : agent.takeTask(taskId);
+		ACell task = agent.resolveTask(taskId, expectedRevision,
+			completion(taskId, agent.getTasks().get(taskId), Status.COMPLETE, Fields.OUTPUT, result));
 		if (task == null) {
 			ACell current = agent.getTasks().get(taskId);
 			if (current != null && expectedRevision >= 0
@@ -3262,8 +3273,6 @@ public class AgentAdapter extends AAdapter {
 			}
 			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
 		}
-
-		parkCompletion(ctx.getUserDID(), agentId, task, taskId, Status.COMPLETE, Fields.OUTPUT, result);
 
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
@@ -3296,8 +3305,10 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = requireAgent(ctx.getUserDID(), agentId);
 		long expectedRevision = ctx.getTaskRevision();
-		ACell task = (expectedRevision >= 0)
-			? agent.takeTask(taskId, expectedRevision) : agent.takeTask(taskId);
+		ACell errorCell = RT.getIn(input, Fields.ERROR);
+		AString errorStr = (errorCell == null) ? Strings.create("Task failed") : Strings.create(errorCell.toString());
+		ACell task = agent.resolveTask(taskId, expectedRevision,
+			completion(taskId, agent.getTasks().get(taskId), Status.FAILED, Fields.ERROR, errorStr));
 		if (task == null) {
 			ACell current = agent.getTasks().get(taskId);
 			if (current != null && expectedRevision >= 0
@@ -3312,10 +3323,6 @@ public class AgentAdapter extends AAdapter {
 			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
 		}
 
-		ACell errorCell = RT.getIn(input, Fields.ERROR);
-		AString errorStr = (errorCell == null) ? Strings.create("Task failed") : Strings.create(errorCell.toString());
-		parkCompletion(ctx.getUserDID(), agentId, task, taskId, Status.FAILED, Fields.ERROR, errorStr);
-
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.TASK_ID,  taskIdHex(taskId),
@@ -3323,113 +3330,271 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Parks a completion envelope into {@link #deferredCompletions} for the
-	 * given agent. The framework drains these AFTER {@code mergeRunResult}
-	 * so the caller's {@code awaitResult} only returns once the cycle's
-	 * timeline / state writes are visible. Shared by
+	 * What a resolved task's request settles with ({@link AgentState#resolveTask}):
+	 * the task's ID and outcome, and its session. Shared by
 	 * {@link #handleCompleteTask} and {@link #handleFailTask}.
 	 */
-	private void parkCompletion(AString ownerDID, AString agentId, ACell task, Blob taskId,
+	private static AMap<AString, ACell> completion(Blob taskId, ACell task,
 			AString status, AString valueField, ACell value) {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.ID,     taskId,
 			Fields.STATUS, status,
 			valueField,    value);
 		ACell sid = extractTaskSessionId(task);
-		if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
-		deferredCompletions
-			.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
-			.put(taskId, envelope);
+		return (sid != null) ? envelope.assoc(Fields.SESSION_ID, sid) : envelope;
+	}
+
+	/** A resolved task's outcome as a timeline entry's {@code taskResults} records it. */
+	private static AMap<AString, ACell> taskResult(AMap<AString, ACell> completion) {
+		return Status.FAILED.equals(RT.ensureString(completion.get(Fields.STATUS)))
+			? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, completion.get(Fields.ERROR))
+			: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, completion.get(Fields.OUTPUT));
+	}
+
+	/** The agent as a venue transaction's draft holds it, or null when it is gone. */
+	private static AgentState agentIn(VenueState draft, AString ownerDID, AString agentId) {
+		User owner = draft.users().get(ownerDID);
+		return (owner == null) ? null : owner.agent(agentId);
 	}
 
 	/**
-	 * Builds the per-cycle {@code taskResults} map from drained completion
-	 * envelopes, or returns {@code null} if there are none. The returned
-	 * map is consumed by {@code mergeRunResult} for timeline + task cleanup.
+	 * Settles a request's job: a recorded one in the venue transaction
+	 * {@code draft} belongs to, collecting into {@code after} the notification
+	 * that releases its callers once that commits; one held only in memory
+	 * after the commit, as is one whose record went with its owner's account,
+	 * which settling it live finds.
 	 */
-	private static AMap<AString, ACell> buildTaskResultsFromDeferred(
-			ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred) {
-		if (deferred == null || deferred.isEmpty()) return null;
-		AMap<AString, ACell> taskResults = Maps.empty();
-		for (var e : deferred.entrySet()) {
-			AMap<AString, ACell> envelope = e.getValue();
-			AString status = RT.ensureString(envelope.get(Fields.STATUS));
-			ACell taskEntry = Status.FAILED.equals(status)
-				? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR,  envelope.get(Fields.ERROR))
-				: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, envelope.get(Fields.OUTPUT));
-			taskResults = taskResults.assoc(taskIdHex(e.getKey()), taskEntry);
+	private static void settle(VenueState draft, Job job, List<Runnable> after,
+			java.util.function.Function<VenueJob, Runnable> inDraft, java.util.function.Consumer<Job> live) {
+		if (job == null) return;
+		if (job.isRecorded() && job instanceof VenueJob recorded) {
+			try {
+				Runnable notification = inDraft.apply(recorded);
+				if (notification != null) after.add(notification);
+				return;
+			} catch (covia.exception.AuthException erased) {
+				// The owner's account was deleted and made again since the job began
+			}
 		}
-		return taskResults;
+		after.add(() -> { if (!job.isFinished()) live.accept(job); });
 	}
 
 	/**
-	 * Completes the caller's pending task Jobs from drained completion
-	 * envelopes. MUST be called AFTER {@code mergeRunResult} so a caller
-	 * blocked on {@link Job#awaitResult} only unblocks once the cycle's
-	 * timeline + state writes are visible. Idempotent and null-safe.
+	 * Hands back the tasks an agent resolved in a transaction of their own, as
+	 * a merge does with its cycle's: for a cycle that stopped before its merge,
+	 * or a restart that came in between.
 	 */
-	private void completeDeferredJobs(ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred) {
-		if (deferred == null) return;
-		for (var e : deferred.entrySet()) {
-			Blob taskId = e.getKey();
-			Job pendingJob = engine.jobs().getJob(taskId);
-			if (pendingJob == null || pendingJob.isFinished()) {
-				outputContexts.remove(taskId);
-				continue;
+	private void handBackResolved(AString ownerDID, AString agentId) {
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent == null || agent.getResolved().isEmpty()) return;
+		Handback handback = new Handback(ownerDID, agentId);
+		engine.getVenueState().transact(draft -> {
+			handback.reset();
+			AgentState current = agentIn(draft, ownerDID, agentId);
+			if (current != null) handback.settleAll(draft, current);
+		});
+		handback.afterCommit();
+	}
+
+	/** The context a request's output write is made in, or why there is none. */
+	private record WriteContext(RequestContext ctx, String unavailable) {}
+
+	/**
+	 * The context a request's output write is made in: as the request arrived,
+	 * with its raw credentials ({@link #outputContexts}); after a restart, as
+	 * its caller acts now ({@link JobManager#callerContext}).
+	 */
+	private WriteContext writeContext(Job request) {
+		RequestContext live = outputContexts.get(request.getID());
+		if (live != null) return new WriteContext(live, null);
+		try {
+			return new WriteContext(engine.jobs().callerContext(request), null);
+		} catch (covia.exception.AuthException unavailable) {
+			return new WriteContext(null, unavailable.getMessage());
+		}
+	}
+
+	/** A resolved task's write to another venue or a view, made after its handback commits. */
+	private record OutsideWrite(Blob taskId, Job request, AString path, RequestContext ctx,
+			ACell output, AMap<AString, ACell> receipt) {}
+
+	/** Discards a handback's write: its request finished first, cancelled, so it writes nothing. */
+	@SuppressWarnings("serial")
+	private static final class RequestFinished extends RuntimeException {
+		RequestFinished() { super(null, null, false, false); }
+	}
+
+	/**
+	 * Hands back an agent's resolved tasks ({@link AgentState#resolveTask}) in a
+	 * venue transaction, with whatever else that transaction commits: each task
+	 * leaves the agent, its request's local {@code outputPath} is written, and
+	 * its request job settles. A write to another venue or a view cannot join
+	 * the transaction: its task stays resolved, and the write and the settling
+	 * follow the commit, the task meanwhile in {@link #handbacksInFlight}. One
+	 * per transaction: {@link #reset} at the top of its body, which may run
+	 * more than once, then {@link #afterCommit} once it has committed.
+	 */
+	private final class Handback {
+		private final AString ownerDID;
+		private final AString agentId;
+		/**
+		 * Each request's write context, kept across runs of the body: the
+		 * caller's standing is read once per handback, as a live request's is
+		 * once on arrival, however often a conflict makes the body run again.
+		 */
+		private final java.util.HashMap<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
+		private final List<Runnable> after = new ArrayList<>();
+		private final List<Blob> settled = new ArrayList<>();
+		private final List<OutsideWrite> outside = new ArrayList<>();
+		private AMap<AString, ACell> results;
+
+		Handback(AString ownerDID, AString agentId) {
+			this.ownerDID = ownerDID;
+			this.agentId = agentId;
+		}
+
+		void reset() {
+			after.clear();
+			settled.clear();
+			outside.clear();
+			results = null;
+		}
+
+		/**
+		 * What the draft's agent resolved, as a timeline entry's
+		 * {@code taskResults}, passing over writes in flight; null when nothing.
+		 */
+		AMap<AString, ACell> taskResults(AgentState agent) {
+			AMap<AString, ACell> found = Maps.empty();
+			for (var e : agent.getResolved().entrySet()) {
+				if (handbacksInFlight.contains(e.getKey())) continue;
+				found = found.assoc(taskIdHex(e.getKey()), taskResult(RT.ensureMap(e.getValue())));
 			}
-			AMap<AString, ACell> envelope = e.getValue();
-			AString status = RT.ensureString(envelope.get(Fields.STATUS));
-			if (Status.FAILED.equals(status)) {
-				outputContexts.remove(taskId);
-				ACell err = envelope.get(Fields.ERROR);
-				pendingJob.fail(err == null ? "Task failed" : err.toString());
-			} else {
-				AString outputPath = RT.ensureString(RT.getIn(pendingJob.getData(), Fields.INPUT, Fields.OUTPUT_PATH));
-				if (outputPath == null) {
-					// Compatibility contract: without outputPath the exact
-					// historical envelope (including the full output) survives.
-					pendingJob.completeWith(envelope);
-					continue;
-				}
+			results = found.isEmpty() ? null : found;
+			return results;
+		}
 
-				// As the request arrived; after a restart, as its caller acts now
-				RequestContext outputCtx = outputContexts.remove(taskId);
-				if (outputCtx == null) {
-					try {
-						outputCtx = engine.jobs().callerContext(pendingJob);
-					} catch (covia.exception.AuthException unavailable) {
-						pendingJob.fail("Output handoff failed for '" + outputPath + "': " + unavailable.getMessage());
-						continue;
-					}
-				}
+		/** The task results {@link #taskResults} last found, or null. */
+		AMap<AString, ACell> results() {
+			return results;
+		}
 
-				ACell output = envelope.get(Fields.OUTPUT);
-				CompletableFuture<ACell> write;
-				try {
-					CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-					if (covia == null) throw new UnavailableException("covia adapter is unavailable");
-					write = covia.writeResolvedPath(outputCtx, outputPath, output);
-				} catch (Exception ex) {
-					write = CompletableFuture.failedFuture(ex);
-				}
-				write.whenComplete((ignored, failure) -> {
-					// A cancellation that won before the handoff completed stays
-					// terminal and never exposes a success receipt.
-					if (pendingJob.isFinished()) return;
-					if (failure != null) {
-						Throwable cause = failure;
-						while ((cause instanceof java.util.concurrent.CompletionException
-								|| cause instanceof java.util.concurrent.ExecutionException)
-								&& cause.getCause() != null) {
-							cause = cause.getCause();
-						}
-						pendingJob.fail("Output handoff failed for '" + outputPath
-							+ "': " + describeFailure(cause));
-						return;
-					}
-					pendingJob.completeWith(buildOutputReceipt(envelope, outputPath, output));
+		/** Settles every task the draft's agent resolved, passing over writes in flight. */
+		void settleAll(VenueState draft, AgentState agent) {
+			for (var e : agent.getResolved().entrySet()) {
+				if (!handbacksInFlight.contains(e.getKey())) settle(draft, agent, e.getKey(), RT.ensureMap(e.getValue()));
+			}
+		}
+
+		private void settle(VenueState draft, AgentState agent, Blob taskId, AMap<AString, ACell> completion) {
+			Job request = engine.jobs().getJob(taskId);
+			if (Status.FAILED.equals(RT.ensureString(completion.get(Fields.STATUS)))) {
+				ACell err = completion.get(Fields.ERROR);
+				end(draft, agent, taskId, request, (err == null) ? "Task failed" : err.toString());
+				return;
+			}
+			AString outputPath = (request == null) ? null
+				: RT.ensureString(RT.getIn(request.getData(), Fields.INPUT, Fields.OUTPUT_PATH));
+			if (outputPath == null) {
+				// Compatibility contract: without outputPath the exact
+				// historical envelope (including the full output) survives.
+				agent.removeTask(taskId);
+				settled.add(taskId);
+				AgentAdapter.settle(draft, request, after, recorded -> recorded.completeIn(draft, completion),
+					live -> live.completeWith(completion));
+				return;
+			}
+			String handoff = "Output handoff failed for '" + outputPath + "': ";
+			WriteContext context = writeContexts.computeIfAbsent(taskId, id -> writeContext(request));
+			if (context.ctx() == null) {
+				end(draft, agent, taskId, request, handoff + context.unavailable());
+				return;
+			}
+			if (!(engine.getAdapter("covia") instanceof CoviaAdapter covia)) {
+				end(draft, agent, taskId, request, handoff + "covia adapter is unavailable");
+				return;
+			}
+			ACell output = completion.get(Fields.OUTPUT);
+			AMap<AString, ACell> receipt = buildOutputReceipt(completion, outputPath, output);
+			Runnable[] notification = {null};
+			boolean[] local = {true};
+			try {
+				// The write and the request's completion commit together, or neither does
+				draft.transact(inner -> {
+					notification[0] = null;
+					local[0] = covia.writeIn(inner, context.ctx(), outputPath, output);
+					if (!local[0] || !request.isRecorded()) return;
+					notification[0] = ((VenueJob) request).completeIn(inner, receipt);
+					if (notification[0] == null) throw new RequestFinished();
 				});
+			} catch (RequestFinished finished) {
+				agent.removeTask(taskId);
+				settled.add(taskId);
+				return;
+			} catch (RuntimeException refused) {
+				end(draft, agent, taskId, request, handoff + describeFailure(refused));
+				return;
 			}
+			if (!local[0]) {
+				outside.add(new OutsideWrite(taskId, request, outputPath, context.ctx(), output, receipt));
+				return;
+			}
+			agent.removeTask(taskId);
+			settled.add(taskId);
+			after.add((notification[0] != null) ? notification[0]
+				: () -> { if (!request.isFinished()) request.completeWith(receipt); });
+		}
+
+		/** The task leaves the agent and its request fails with {@code error}. */
+		private void end(VenueState draft, AgentState agent, Blob taskId, Job request, String error) {
+			agent.removeTask(taskId);
+			settled.add(taskId);
+			AgentAdapter.settle(draft, request, after, recorded -> recorded.failIn(draft, error),
+				live -> live.fail(error));
+		}
+
+		/** Releases the settled requests' callers and starts the writes that could not join the transaction. */
+		void afterCommit() {
+			for (Blob taskId : settled) outputContexts.remove(taskId);
+			for (Runnable notification : after) notification.run();
+			for (OutsideWrite write : outside) writeOutside(write);
+		}
+
+		/** Makes a write outside the venue's lattice, then settles its request and lets its task go, together. */
+		private void writeOutside(OutsideWrite w) {
+			handbacksInFlight.add(w.taskId());
+			CompletableFuture<ACell> write;
+			try {
+				write = ((CoviaAdapter) engine.getAdapter("covia")).writeResolvedPath(w.ctx(), w.path(), w.output());
+			} catch (Exception ex) {
+				write = CompletableFuture.failedFuture(ex);
+			}
+			write.whenComplete((ignored, failure) -> {
+				try {
+					String error = (failure == null) ? null
+						: "Output handoff failed for '" + w.path() + "': " + describeFailure(failure);
+					List<Runnable> released = new ArrayList<>();
+					engine.getVenueState().transact(draft -> {
+						released.clear();
+						AgentState agent = agentIn(draft, ownerDID, agentId);
+						if (agent != null) agent.removeTask(w.taskId());
+						if (error == null) {
+							AgentAdapter.settle(draft, w.request(), released,
+								recorded -> recorded.completeIn(draft, w.receipt()), live -> live.completeWith(w.receipt()));
+						} else {
+							AgentAdapter.settle(draft, w.request(), released,
+								recorded -> recorded.failIn(draft, error), live -> live.fail(error));
+						}
+					});
+					outputContexts.remove(w.taskId());
+					released.forEach(Runnable::run);
+				} catch (RuntimeException unsettled) {
+					// The task stays resolved: a restart hands it back again
+					if (!engine.isClosing()) log.error("Could not settle the output handoff of task {}", w.taskId(), unsettled);
+				} finally {
+					handbacksInFlight.remove(w.taskId());
+				}
+			});
 		}
 	}
 
@@ -3501,7 +3666,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return false;
 		Blob jobId = job.getID();
 		Index<Blob, ACell> tasks = agent.getTasks();
-		if (tasks != null && tasks.containsKey(jobId)) {
+		if ((tasks != null && tasks.containsKey(jobId)) || agent.getResolved().containsKey(jobId)) {
 			if (reattach) leaveQueueOnCancel(job, ownerDID, agentId);
 			return true;
 		}
@@ -4396,26 +4561,14 @@ public class AgentAdapter extends AAdapter {
 		// conversation is written by the cycle's start, by a runtime that keeps
 		// its frames live, and by the turns this merge appends.
 
-		// Peek the parked envelopes (don't remove yet) so an exception
-		// before completeDeferredJobs leaves them visible to the outer
-		// catch (holdForResume) — the slot is only cleared after merge succeeds.
-		ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
-			deferredCompletions.get(key);
 		// A failed cycle fails the task it was working on, and nothing else: a
-		// failure lands on what failed (AGENT_LOOP.md §3.4). Use the ordinary
-		// deferred-completion path so task removal is atomic with the timeline
-		// write and its caller is released only after that state is visible. A
-		// task the agent already resolved (fail_task) keeps its own outcome. An
-		// agent that cannot continue leaves the task queued for after resume.
-		if (leanError != null && !cannotContinue && pickedTask != null) {
-			deferred = deferredCompletions.computeIfAbsent(key,
-				k -> new ConcurrentHashMap<>());
-			deferred.putIfAbsent(pickedTask.getKey(), Maps.of(
-				Fields.ID, pickedTask.getKey(),
-				Fields.STATUS, Status.FAILED,
-				Fields.ERROR, leanError));
-		}
-		AMap<AString, ACell> taskResults = buildTaskResultsFromDeferred(deferred);
+		// failure lands on what failed (AGENT_LOOP.md §3.4). The task is resolved
+		// as failed in the merge's transaction below, so it leaves the agent with
+		// the timeline write and its caller is released only after that state is
+		// visible. A task the agent already resolved (fail_task) keeps its own
+		// outcome. An agent that cannot continue leaves the task queued for after
+		// resume.
+		boolean failsPickedTask = leanError != null && !cannotContinue && pickedTask != null;
 		ACell result = (leanError != null) ? leanError : leanResponse;
 
 		AMap<AString, ACell> timelineEntry = Maps.of(
@@ -4430,7 +4583,6 @@ public class AgentAdapter extends AAdapter {
 		if (filteredInbox != null && filteredInbox.count() > 0) {
 			timelineEntry = timelineEntry.assoc(Fields.MESSAGES, filteredInbox);
 		}
-		if (taskResults != null) timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
 
 		// The cycle's exchange with the model (#392): the root frame's standing
 		// context and tools, then every inference — what it newly sent, the
@@ -4463,13 +4615,6 @@ public class AgentAdapter extends AAdapter {
 			(RT.getIn(transitionResult, Fields.TOKENS) instanceof AMap<?, ?> tm)
 				? (AMap<AString, ACell>) tm : null;
 
-		// Accumulate task results across iterations
-		if (taskResults != null) {
-			for (var entry : taskResults.entrySet()) {
-				allTaskResults = allTaskResults.assoc(entry.getKey(), entry.getValue());
-			}
-		}
-
 		// The turns a runtime that leaves the conversation to the run loop adds
 		// to frames[0].conversation: its own turns, then its reply. The cycle's
 		// input is already there, written when the cycle began; a runtime that
@@ -4500,14 +4645,42 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Merge results atomically (timeline, state, task cleanup, the
-		// runtime's turns, the end of the session claim). The turns land in the
-		// same CAS as the timeline, so external readers never see a cycle that
-		// wrote one but not the other.
-		AMap<AString, ACell> merged = agent.mergeRunResult(
-			snapshotState, newState, taskResults,
-			timelineEntry, pickedSessionBlob, turnsToAppend,
-			cycleTokens);
+		// Cost attribution (#217): stamp the cycle's token usage onto the picked
+		// task's job before the merge can settle it, so the record it settles
+		// with carries the tokens.
+		if (cycleTokens != null && pickedTask != null) {
+			attachTokens(engine.jobs().getJob(pickedTask.getKey()), cycleTokens);
+		}
+
+		// Merge results in one transaction: the timeline, state, the runtime's
+		// turns and the end of the session claim, so external readers never see
+		// a cycle that wrote one but not the other; and the handback of every
+		// task the cycle resolved, which leaves the agent with its request's
+		// local outputPath written and its request job settled. A restart finds
+		// the cycle wholly done or not done at all.
+		Handback handback = new Handback(callerDID, agentId);
+		var mergedRecord = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		AMap<AString, ACell> cycleEntry = timelineEntry;
+		AVector<ACell> cycleTurns = turnsToAppend;
+		engine.getVenueState().transact(draft -> {
+			handback.reset();
+			AgentState current = draft.users().at(callerDID).agentAt(agentId);
+			if (failsPickedTask) current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
+				pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
+			AMap<AString, ACell> results = handback.taskResults(current);
+			mergedRecord.set(current.mergeRunResult(snapshotState, newState, results,
+				(results == null) ? cycleEntry : cycleEntry.assoc(Fields.TASK_RESULTS, results),
+				pickedSessionBlob, cycleTurns, cycleTokens));
+			handback.settleAll(draft, current);
+		});
+		AMap<AString, ACell> merged = mergedRecord.get();
+		AMap<AString, ACell> taskResults = handback.results();
+		// Accumulate task results across iterations
+		if (taskResults != null) {
+			for (var entry : taskResults.entrySet()) {
+				allTaskResults = allTaskResults.assoc(entry.getKey(), entry.getValue());
+			}
+		}
 
 		// The live tap's commit event (#394): the entry and turns are
 		// persisted; callers are released below, so a consumer awaiting the
@@ -4570,22 +4743,10 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Cost attribution (#217): stamp the cycle's token usage onto the
-		// caller-facing job records BEFORE completing them, so the tokens
-		// field rides the same write-through persist as the completion.
-		// Job records accrete (completeWith builds on getData()), so this
-		// survives into the final persisted record.
-		if (cycleTokens != null) {
-			if (pickedTask != null) {
-				attachTokens(engine.jobs().getJob(pickedTask.getKey()), cycleTokens);
-			}
-		}
-
-		// Now that the timeline + state are persisted, claim the parked
-		// envelopes (atomic remove) and complete the caller's pending
-		// task Jobs. Doing this AFTER the merge guarantees that an
-		// awaitResult caller sees the completed cycle's writes.
-		completeDeferredJobs(deferredCompletions.remove(key));
+		// Release the callers of the requests the merge settled, and start the
+		// writes that could not join it. After the merge, so an awaitResult
+		// caller sees the completed cycle's writes.
+		handback.afterCommit();
 
 		// Complete every chat the agent has taken. A response on the session
 		// answers the whole conversation so far, so each waiting chat whose
@@ -4671,20 +4832,14 @@ public class AgentAdapter extends AAdapter {
 	 * Holds a suspended agent's work for its resume: queued tasks and chats
 	 * stay, and each waiting Job says the agent is suspended. Only what the
 	 * stopped cycle took and cannot give back is settled: a chat whose message
-	 * is already in its conversation fails with {@code error}, and a task
-	 * completion the cycle parked is applied if its merge committed (the task
-	 * left the queue) and dropped otherwise, so that task runs again.
+	 * is already in its conversation fails with {@code error}, and a task the
+	 * stopped cycle resolved is handed back, as its merge would have done.
 	 */
 	private void holdForResume(AString ownerDID, AString agentId, String error) {
 		AgentKey key = new AgentKey(ownerDID, agentId);
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent == null) return;
-		ConcurrentHashMap<Blob, AMap<AString, ACell>> parked = deferredCompletions.remove(key);
-		if (parked != null) {
-			Index<Blob, ACell> queued = agent.getTasks();
-			parked.keySet().removeIf(queued::containsKey);
-			completeDeferredJobs(parked);
-		}
+		handBackResolved(ownerDID, agentId);
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
 		if (agentChats != null) {
 			for (Blob sid : agentChats.keySet()) failTakenChats(key, sid, error, null);
@@ -5040,18 +5195,22 @@ public class AgentAdapter extends AAdapter {
 		return agent.hasNewWorkFor(row, System.currentTimeMillis());
 	}
 
-	/** Removes a queued task and fails its caller's Job with {@code reason}. */
+	/**
+	 * Removes a queued task and fails its caller's Job with {@code reason}, in
+	 * one transaction, so a restart finds both or neither. The caller is
+	 * released after the commit, so it never observes the task still queued.
+	 */
 	private void failTask(AString ownerDID, AString agentId, Blob taskId, String reason) {
-		// Drain before notification (the settled-state rule, S2.7c-2): the
-		// task leaves the agent's Index BEFORE the caller's job fails, so an
-		// awaitResult caller never observes the task still queued.
-		AgentState agent = getAgent(ownerDID, agentId);
-		if (agent != null) agent.removeTask(taskId);
-		outputContexts.remove(taskId);
 		Job pending = engine.jobs().getJob(taskId);
-		if (pending != null && !pending.isFinished()) {
-			pending.fail(reason);
-		}
+		List<Runnable> after = new ArrayList<>();
+		engine.getVenueState().transact(draft -> {
+			after.clear();
+			AgentState agent = agentIn(draft, ownerDID, agentId);
+			if (agent != null) agent.removeTask(taskId);
+			settle(draft, pending, after, recorded -> recorded.failIn(draft, reason), live -> live.fail(reason));
+		});
+		outputContexts.remove(taskId);
+		after.forEach(Runnable::run);
 	}
 
 	/** Stamps token usage onto a job's record (#217) — best-effort: an
@@ -5092,10 +5251,8 @@ public class AgentAdapter extends AAdapter {
 	 * <ul>
 	 *   <li>Tasks still listed in {@code agent.getTasks()} — venue op was
 	 *       never called; the caller's Job is still waiting in PENDING/STARTED.</li>
-	 *   <li>Envelopes parked in {@link #deferredCompletions} — venue op was
-	 *       called but the framework didn't reach {@code completeDeferredJobs}
-	 *       (e.g. exception fired between the inner peek and the post-merge
-	 *       remove). These would otherwise leak indefinitely.</li>
+	 *   <li>Tasks the agent resolved whose requests were not settled yet
+	 *       ({@code agent.getResolved()}).</li>
 	 *   <li>Per-session chat slots — {@code agent:chat} reserved a slot
 	 *       awaiting the next response. Any agent error must surface as a
 	 *       chat Job failure rather than leaving the caller blocked forever.</li>
@@ -5108,23 +5265,13 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent != null) {
 			failQueuedTasks(agent.getTasks(), error);
+			failQueuedTasks(agent.getResolved(), error);
 		}
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.remove(key);
 		if (agentChats != null) {
 			for (ConcurrentHashMap<Blob, Job> sessionChats : agentChats.values()) {
 				for (Job chatJob : sessionChats.values()) {
 					if (chatJob != null && !chatJob.isFinished()) chatJob.fail(error);
-				}
-			}
-		}
-		ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
-			deferredCompletions.remove(key);
-		if (deferred != null) {
-			for (var e : deferred.entrySet()) {
-				outputContexts.remove(e.getKey());
-				Job pending = engine.jobs().getJob(e.getKey());
-				if (pending != null && !pending.isFinished()) {
-					pending.fail(error);
 				}
 			}
 		}
@@ -5138,11 +5285,12 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> removedAgents = RT.ensureMap(RT.getIn(previousUser, covia.lattice.Namespace.G));
 		HashSet<AgentKey> keys = new HashSet<>(runningLoops.keySet());
 		keys.addAll(activeChats.keySet());
-		keys.addAll(deferredCompletions.keySet());
 		if (removedAgents != null) for (var entry : removedAgents.entrySet()) {
 			keys.add(new AgentKey(did, entry.getKey()));
-			ACell tasks = RT.getIn(entry.getValue(), AgentState.KEY_TASKS);
-			if (tasks instanceof Index<?, ?> index) failQueuedTasks((Index<Blob, ACell>) index, Users.ACCOUNT_DELETED);
+			for (AString held : new AString[] {AgentState.KEY_TASKS, AgentState.KEY_RESOLVED}) {
+				ACell tasks = RT.getIn(entry.getValue(), held);
+				if (tasks instanceof Index<?, ?> index) failQueuedTasks((Index<Blob, ACell>) index, Users.ACCOUNT_DELETED);
+			}
 		}
 		for (AgentKey key : keys) {
 			if (!did.equals(key.owner())) continue;
@@ -5313,6 +5461,8 @@ public class AgentAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	private void reconcileAgentAfterRestart(AString ownerDID, User user, AgentState agent) {
+		// Tasks resolved by a cycle the restart stopped before its merge
+		handBackResolved(ownerDID, agent.getAgentId());
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if (tasks != null) {
 			for (var entry : tasks.entrySet()) {

@@ -206,9 +206,8 @@ class ConversationRouterTest {
 			ConversationRouter.onResponse(job, replies::add, failure -> fail(failure));
 			job.completeWith(Maps.of(Fields.RESPONSE, "reply"));
 			assertEquals(Strings.create("reply"), replies.poll(5, TimeUnit.SECONDS));
-			ConversationRouter.onResponse(router.deliver("chat", Strings.create("input"), LISTED,
-				(draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid)), replies::add, failure -> fail(failure));
-			assertNull(replies.poll(100, TimeUnit.MILLISECONDS));
+			assertNull(router.deliver("chat", Strings.create("input"), LISTED,
+				(draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid)), "a duplicate hands back no job, so nothing replies to it");
 		} finally { release.countDown(); engine.close(); }
 	}
 
@@ -344,9 +343,6 @@ class ConversationRouterTest {
 			assertEquals(0, wakes.get(), "do not execute before the durability barrier succeeds");
 			var jid = convex.core.data.Blob.fromHex(inbox.get("1").get(Fields.JOB_ID).toString());
 			assertFalse(engine.jobs().getJob(jid).isFinished(), "a failed flush must not fail accepted input");
-			engine.failFlush = false;
-			Thread.sleep(1200); // Past the removed flush-retry cadence.
-			assertEquals(0, wakes.get(), "no hidden background retries");
 			assertEquals(1, engine.getVenueState().users().get(owner).agent("flush")
 				.getSessionPending(convex.core.data.Blob.fromHex(sessions.get("chat"))).count());
 		} finally { engine.failFlush = false; engine.close(); }

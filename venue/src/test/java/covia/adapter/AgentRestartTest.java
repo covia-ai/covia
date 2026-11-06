@@ -121,6 +121,66 @@ public class AgentRestartTest {
 	}
 
 	/**
+	 * A task its agent resolved, in a cycle a restart stopped before its merge,
+	 * is handed back at boot: its request completes, with its output written
+	 * at its {@code outputPath}, as the merge would have done.
+	 */
+	@Test
+	public void resolvedTaskIsHandedBackAfterRestart() throws Exception {
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
+		AKeyPair keyPair = AKeyPair.generate();
+		RequestContext alice = RequestContext.of(ALICE);
+		String agentId = "resolver";
+		String gateName = "agent-handback-" + System.nanoTime();
+		AString path = Strings.create("w/handback/after-restart");
+		Job request;
+
+		// Phase 1: the cycle completes its task, then holds before its merge.
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Engine first = new Engine(config(), covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
+			try {
+				Engine.addDemoAssets(first);
+				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")), alice).awaitResult(5000);
+				request = first.jobs().invokeOperation("v/ops/agent/request",
+					Maps.of(Fields.AGENT_ID, agentId,
+						Fields.INPUT, Strings.create("complete hold:" + gateName),
+						Fields.OUTPUT_PATH, path), alice);
+				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the cycle never reached its test gate");
+				AgentState worker = first.getVenueState().users().get(ALICE).agent(agentId);
+				assertNotNull(worker.getResolved().get(request.getID()), "the resolution is stored before the merge");
+				assertNull(worker.getTasks().get(request.getID()));
+				first.syncState();
+			} finally {
+				first.close();
+			}
+			assertFalse(request.isFinished(), "a resolved task's request is kept, not cancelled, at shutdown");
+		}
+
+		// Phase 2: boot on the same lattice; reconciliation hands the task back.
+		Engine second = new Engine(config(), covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
+		try {
+			Engine.addDemoAssets(second);
+			second.jobs().recoverJobs();
+			assertFalse(Job.isFinished(second.jobs().getJobData(request.getID(), alice)),
+				"the request is restored live, not failed as interrupted");
+			((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
+
+			Job live = second.jobs().getJob(request.getID(), alice);
+			ACell receipt = live.awaitResult(10_000);
+			assertEquals(path, RT.getIn(receipt, Fields.OUTPUT_PATH));
+			ACell written = RT.getIn(second.jobs().invokeOperation("v/ops/covia/read",
+				Maps.of(Fields.PATH, path), alice).awaitResult(5000), Fields.VALUE);
+			assertEquals(Strings.create("complete hold:" + gateName), RT.getIn(written, Fields.INPUT),
+				"the output the agent resolved its task with is written");
+			assertTrue(second.getVenueState().users().get(ALICE).agent(agentId).getResolved().isEmpty());
+		} finally {
+			second.close();
+		}
+	}
+
+	/**
 	 * A parked task survives a restart only while what it waits on does. A
 	 * wake time is durable, so that task stays parked. A task left with
 	 * nothing durable to wait on fails at boot rather than waiting forever.

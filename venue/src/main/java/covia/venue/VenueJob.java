@@ -4,10 +4,12 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import java.util.function.UnaryOperator;
 import java.util.concurrent.atomic.AtomicReference;
 import covia.exception.AuthException;
+import covia.exception.CoviaException;
 import covia.api.Fields;
 import covia.grid.Job;
 
@@ -195,6 +197,49 @@ public class VenueJob extends Job {
 			lastKnown = updated;
 			publishUpdate(new State(outcome, null), null);
 		};
+	}
+
+	/**
+	 * Completes this recorded Job with {@code result} in a caller-owned venue
+	 * transaction, as {@link #completeWith} does: a result its operation's
+	 * output schema refuses fails the Job instead, so a refusal never aborts the
+	 * transaction. Run only the successful draft's returned notification after
+	 * commit; it settles the Job's waiters.
+	 *
+	 * @return the notification, or null when the record is missing or the Job has finished
+	 */
+	public Runnable completeIn(VenueState draft, ACell result) {
+		try {
+			manager.validateOutput(rules, result);
+		} catch (RuntimeException | Error refused) {
+			return failIn(draft, CoviaException.describe(refused));
+		}
+		return updateIn(draft, data -> data.assoc(Fields.STATUS, covia.grid.Status.COMPLETE).assoc(Fields.OUTPUT, result));
+	}
+
+	/**
+	 * Fails this recorded Job with {@code message} in a caller-owned venue
+	 * transaction, as {@link #fail(String)} does. Run only the successful
+	 * draft's returned notification after commit.
+	 *
+	 * @return the notification, or null when the record is missing or the Job has finished
+	 */
+	public Runnable failIn(VenueState draft, String message) {
+		return updateIn(draft, data -> data.assoc(Fields.STATUS, covia.grid.Status.FAILED)
+			.assoc(Fields.ERROR, Strings.create(message)).dissoc(Fields.ERROR_CODE));
+	}
+
+	/**
+	 * Cancels this recorded Job in a caller-owned venue transaction, as
+	 * {@link #cancel(String)} does. Run only the successful draft's returned
+	 * notification after commit; it runs the Job's cancel hook.
+	 *
+	 * @return the notification, or null when the record is missing or the Job has finished
+	 */
+	public Runnable cancelIn(VenueState draft, String reason) {
+		String message = cancellationMessage(reason);
+		return updateIn(draft, data -> data.assoc(Fields.STATUS, covia.grid.Status.CANCELLED)
+			.assoc(Fields.ERROR, Strings.create(message)));
 	}
 
 	/** Called after a direct component edit commits, without replaying lifecycle effects. */

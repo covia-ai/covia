@@ -65,6 +65,37 @@ public class CoviaAdapterTest {
 		createJob.awaitResult(5000);
 	}
 
+	// ========== writes in a venue transaction ==========
+
+	/** A write in a venue transaction commits with it, or not at all; a path outside this venue's lattice is left to the caller. */
+	@Test
+	public void testWriteInCommitsWithItsTransaction() {
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		covia.venue.VenueState venue = engine.getVenueState();
+		AString path = Strings.create("w/handoff/out");
+		ACell value = Maps.of("ok", "yes");
+		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
+			assertTrue(covia.writeIn(draft, ALICE, path, value));
+			throw new IllegalStateException("rollback");
+		}));
+		assertEquals(CVMBool.FALSE, RT.getIn(read(path), "exists"), "a rolled back transaction writes nothing");
+
+		venue.transact(draft -> assertTrue(covia.writeIn(draft, ALICE, path, value)));
+		assertEquals(value, RT.getIn(read(path), Fields.VALUE));
+
+		assertFalse(covia.writeIn(venue, ALICE, Strings.create("did:web:remote.example/w/out"), value),
+			"another venue's path is written after the transaction");
+		assertFalse(covia.writeIn(venue, ALICE, Strings.create("x/preferences"), value), "so is a view's");
+		assertThrows(AuthException.class, () -> venue.transact(draft ->
+			covia.writeIn(draft, BOB, Strings.create(ALICE_DID + "/w/handoff/out"), Strings.create("intruder"))),
+			"the write's checks are covia:write's");
+		assertEquals(value, RT.getIn(read(path), Fields.VALUE));
+	}
+
+	private ACell read(AString path) {
+		return engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, path), ALICE).awaitResult(5000);
+	}
+
 	// ========== covia:read ==========
 
 	@Test
