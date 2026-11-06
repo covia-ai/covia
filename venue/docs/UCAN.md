@@ -552,19 +552,11 @@ The full proof chain travels with Carol's request.
 
 ### 4.6 Revocation
 
-A revocation is a signed record referencing a UCAN's CAD3 hash:
-
-```
-{
-  revoke: <cad3-hash-of-ucan>
-  iss: "did:key:zAlice..."        ; must be the UCAN's issuer
-  sig: 0x...                       ; Ed25519 signature
-}
-```
-
-Revocations are published to the lattice. Venues check revocation
-lists during verification. Revoking a parent invalidates all
-downstream delegations.
+An issued token cannot be revoked: it holds until its `exp`. COG-17 makes
+expiry the safety net and prefers short-lived grants issued again on demand.
+Only sign-in keys can be revoked (`AuthState`). How authority over the venue's
+own resources could be withdrawn is proposed in
+[VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md).
 
 ### 4.7 Authenticating — lifting the public read-only scope
 
