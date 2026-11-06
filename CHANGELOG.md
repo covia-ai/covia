@@ -137,6 +137,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - REST secret listing, operation lookup, job streams and agent lookup check the caller.
 - `auth:identity-token` refuses restricted self-tokens and the public principal.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
+- `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
 
 ### Migration
 

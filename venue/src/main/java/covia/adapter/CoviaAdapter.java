@@ -435,11 +435,13 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves a single path and renders the value via CellExplorer.
+	 * Resolves a single path and renders the value via CellExplorer, after the
+	 * same check as every other covia read ({@link #requireCap}).
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
-		engine.requireResourceAccess(ctx, Strings.create(pathStr), Capability.CRUD_READ);
-		ACell value = resolve(ctx, Strings.create(pathStr)).read();
+		AString path = Strings.create(pathStr);
+		requireCap(ctx, Maps.of(Fields.PATH, path), Capability.CRUD_READ);
+		ACell value = resolve(ctx, path).read();
 		if (value == null) return "null /* not found: " + pathStr + " */";
 
 		CellExplorer explorer = new CellExplorer(budget, compact);

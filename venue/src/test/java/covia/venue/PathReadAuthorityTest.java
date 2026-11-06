@@ -198,6 +198,25 @@ public class PathReadAuthorityTest {
 	}
 
 	@Test
+	public void testEveryCoviaReadChecksTheAddressItReads() {
+		for (String shape : new String[] {alice + "/w/cfg", "/" + alice + "/w/cfg"}) {
+			for (ACell input : new ACell[] {Maps.of(Fields.PATH, shape), Maps.of("paths", Vectors.of(shape))}) {
+				String shown = shown(run("v/ops/covia/inspect", input, BOB));
+				assertFalse(shown.contains(SECRET), "inspect " + input + ": " + shown);
+			}
+			for (String op : new String[] {"read", "slice"}) {
+				String shown = shown(run("v/ops/covia/" + op, Maps.of(Fields.PATH, shape), BOB));
+				assertFalse(shown.contains(SECRET), op + " " + shape + ": " + shown);
+			}
+		}
+	}
+
+	/** What a job showed its caller: its output, or nothing when it was refused. */
+	private static String shown(Job job) {
+		return (job.getStatus() == Status.COMPLETE) ? String.valueOf(job.getOutput()) : "";
+	}
+
+	@Test
 	public void testOddShapesStayInTheirNamespace() {
 		for (String odd : new String[] {
 				alice + "//w/cfg", alice + "/w//cfg", alice + "/./w/cfg", "/" + alice + "/w/cfg", alice + "/W/cfg"}) {
