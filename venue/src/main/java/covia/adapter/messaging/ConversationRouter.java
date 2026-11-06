@@ -144,8 +144,11 @@ public final class ConversationRouter {
 		return adapter.sessionDeliveryRefusal(asker, agentAddress());
 	}
 
-	/** Admit input without waiting for a response. The participant and session map
-	 * commit with the input; null means a previously accepted delivery. */
+	/** Hands a message to the agent without waiting for its reply. The participant
+	 * and session map commit with the input. Returns the chat Job when the agent
+	 * took the message, null when the participant had taken it already; throws
+	 * {@link JobFailedException} when the agent refused it, after one retry on a
+	 * new session when the conversation's saved session has gone. */
 	public Job deliver(String conversation, ACell message, Channel channel, RequestContext.SessionDelivery delivery) {
 		// Registration/deletion also takes Engine before the binding lock. Keep
 		// stop/delete from racing the transaction's publication of private state.
@@ -164,17 +167,12 @@ public final class ConversationRouter {
 			return applied;
 		});
 		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
-		Job job = adapter.deliverSession(input, ctx);
-		if (!deliveryAccepted(job) && sid != null && isUnknownSession(new JobFailedException(job))) {
-			job = adapter.deliverSession(input.dissoc(Fields.SESSION_ID), ctx);
+		try {
+			return adapter.deliverSession(input, ctx);
+		} catch (JobFailedException refused) {
+			if (sid == null || !isUnknownSession(refused)) throw refused;
+			return adapter.deliverSession(input.dissoc(Fields.SESSION_ID), ctx);
 		}
-		// Admission may succeed even if execution subsequently fails immediately.
-		if (!deliveryAccepted(job) && job.getStatus() != Status.COMPLETE) throw new JobFailedException(job);
-		return deliveryAccepted(job) ? job : null;
-	}
-
-	private static boolean deliveryAccepted(Job job) {
-		return convex.core.data.prim.CVMBool.TRUE.equals(job.getData().get(AgentAdapter.DELIVERY_ACCEPTED));
 	}
 
 	/** Observe a delivered chat independently of intake. A duplicate has no reply.
