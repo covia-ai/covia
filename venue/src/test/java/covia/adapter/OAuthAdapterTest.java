@@ -897,8 +897,15 @@ public class OAuthAdapterTest {
 				assertEquals("no-store", page.headers().firstValue("Cache-Control").orElse(null));
 				Matcher shown = PAGE_CODE.matcher(page.body());
 				assertTrue(shown.find(), page.body());
-				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", shown.group(1)),
-					RequestContext.of(Strings.create("did:test:oauth:bob")))).contains(OAuthAdapter.ANOTHER_ACCOUNT));
+				RequestContext bob = RequestContext.of(Strings.create("did:test:oauth:bob"));
+				int tokenRequests = fake.tokenRequests.size();
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", shown.group(1)), bob))
+					.contains(OAuthAdapter.ANOTHER_ACCOUNT));
+				assertEquals(tokenRequests, fake.tokenRequests.size(), "nothing was exchanged");
+				assertEquals(1, connections(engine, alice).count(), "Alice keeps only her earlier connection");
+				assertEquals(0, connections(engine, bob).count());
+				assertTrue(failed(run(engine, "v/ops/oauth/complete", Maps.of("code", shown.group(1)), alice))
+					.contains(OAuthAdapter.UNKNOWN_COMPLETION), "Bob's attempt spent the code");
 			} finally {
 				server.close();
 			}
