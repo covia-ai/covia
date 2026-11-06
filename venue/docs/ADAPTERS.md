@@ -686,7 +686,10 @@ results, message parts and session/task identifiers are preserved.
 
 Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
 submission intent, what is needed to reach the task again (never a sign-in
-credential or a secret's value; JOBS.md) and reattachment to an accepted task. Observation failure cannot manufacture execution failure or
+credential or a secret's value; JOBS.md) and reattachment to an accepted task.
+How a job follows its task is kept in the job's entry (`RemoteJobs.kept`);
+its record shows the task's `delegation.remoteId` and `remoteStatus`, and
+`delegation.notFollowed` once the venue stops following it. Observation failure cannot manufacture execution failure or
 authorize replay. Claude may reconstruct an idle conversation through
 `restoreInteraction`, as the job's caller in the context the job kept
 (`JobManager.callerContext`); resuming a transcript does not recover an

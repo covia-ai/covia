@@ -82,7 +82,7 @@ Open questions for #624:
 
 ## Migrations in this build
 
-The venue is at version 3.
+The venue is at version 4.
 
 ### Venue steps
 
@@ -91,6 +91,7 @@ The venue is at version 3.
 | 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `UserDeletionsRegion` |
 | 1 → 2 | Records of calls name `caller` and `owner` (COG-8): a job's `actor` becomes its `caller` and its old `caller` its `owner`; a scheduled event's `actor` (else `owner`) becomes its `caller` and `by` goes; a HITL request's `from` and `requesterUser` become `caller` and `owner`; an agent output snapshot's `user` becomes `owner` and its `caps` copy goes. A HITL request or snapshot naming only its caller takes its owner's namespace when the caller is an existing agent of this venue, else its own | `CallerAndOwner` |
 | 2 → 3 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner. Proofs its record kept move to the entry's caller context. A remote job's connection, kept encrypted in the venue's `remote-job-<id>` secret that `delegation.authRef` named, moves to the entry's adapter data without any sign-in credential (only the mode of a caller-signed hop), and its pinned definition gives the entry's output rules; `authRef` and every `remote-job-*` secret go. An external agent's job moves `agentOwner`, `agentInteraction` and `agentBackendJob` to the entry's adapter data. A pending agent `outputPath` write's context moves from the worker's task (`outputContext`) to the request job's entry, and the task keeps neither `outputContext` nor `outputPath`. Any other job's entry has no output rules: a step cannot resolve an operation. Built with the venue's secret keys | `JobEntries` |
+| 3 → 4 | A remote job's record keeps only what its caller can follow: every record's `delegation` keeps its `remoteId` and `remoteStatus`, and goes when it holds neither. An unfinished job's `protocol`, `target` and `ownsRemote` are copied into its entry's adapter data; anything else, observation health among it, is left behind | `DelegationEntries` |
 
 ### Adapter steps
 
