@@ -86,10 +86,11 @@ Brightside's `VenueGrants` becomes a call to this method.
 
 ### Token identifiers
 
-COG-17 identifies a token by the SHA3-256 hash of its JWT. The venue computes
-it for each presented token on arrival, while it still has the JWT, and keeps
-it with the parsed token: a job's kept grants are parsed maps, which cannot be
-encoded back to the JWT that was signed.
+COG-17 identifies a token by the SHA3-256 hash of its JWT. The links above a
+token in its chain travel as JWTs in its `prf`, so their identifiers can be
+computed whenever it is checked. The presented token's own JWT is gone once
+parsed, and a job's kept grants are parsed maps, so the venue computes that
+identifier on arrival and keeps it with the parsed token.
 
 ### Issuance records
 
@@ -152,6 +153,10 @@ issuing them are dropped.
 - **Tokens the venue never saw.** Revocation reaches only tokens someone can
   name. One signed with the venue key outside `ucan:issue`, Brightside's
   today or one made with a copied key, has no issuance record (decision 3).
+- **Minted tokens.** A token minted under a granting right can be revoked by
+  the venue that signed it or the steward who asked for it. The resource's
+  owner can end it only by revoking the right, which ends every token minted
+  under it.
 - **Agents as grantees.** What an agent reads can steer it. A long-lived
   grant to an agent is standing authority for whatever steers it; a lend for
   one call is the narrower tool.
