@@ -31,6 +31,7 @@ import covia.grid.auth.VenueAuth;
 import covia.grid.auth.UcanTokens;
 import covia.grid.client.VenueHTTP;
 import covia.venue.Engine;
+import covia.venue.RemoteJobs;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 import covia.venue.TwoVenueTestServer;
@@ -170,10 +171,11 @@ public class CrossVenueTest {
 			Fields.INPUT, Maps.of("first", "x", "second", "y")));
 		try {
 			Job local = TwoVenueTestServer.ENGINE_A.jobs().getJob(seed.getID(), TwoVenueTestServer.ENGINE_A.venueContext());
-			TestEngine.awaitJob(local, j -> Strings.create("acceptance-unknown").equals(
-				RT.getIn(j.getData(), "delegation", "observation")), 10_000, () -> "no uncertain acceptance recorded");
+			TestEngine.awaitJob(local, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED) != null,
+				10_000, () -> "no uncertain acceptance recorded");
 			assertEquals(Status.STARTED, local.getStatus());
-			assertEquals(Strings.create("acceptance-unknown"), RT.getIn(local.getData(), "delegation", "observation"));
+			assertEquals(Strings.create(RemoteJobs.ACCEPTANCE_UNKNOWN.formatted("http://localhost:1")),
+				RT.getIn(local.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED));
 			assertTrue(!local.future().isDone());
 		} finally { TwoVenueTestServer.COVIA_A.cancelJob(seed.getID()); }
 	}

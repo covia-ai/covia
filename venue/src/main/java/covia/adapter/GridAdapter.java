@@ -139,7 +139,7 @@ public class GridAdapter extends AAdapter {
 			} catch (RuntimeException | Error failure) {
 				observer.submissionUnknown(job, failure);
 			} finally {
-				ACell id = RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID);
+				AString id = RemoteJobs.remoteId(job);
 				if (id != null) watch(job, remote.venue(), Job.parseID(id));
 			}
 			});
@@ -158,9 +158,8 @@ public class GridAdapter extends AAdapter {
 	private void applyRemote(Job job, AMap<AString, ACell> snapshot) {
 		AString status = RT.ensureString(snapshot.get(Fields.STATUS));
 		if (status == null) throw new ResponseException("Remote Job has no status");
-		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
-		Blob expected = Job.parseID(record.get(RemoteJobs.REMOTE_ID));
-		if (!expected.equals(Job.parseID(snapshot.get(Fields.ID)))) throw new ResponseException("Remote Job ID mismatch");
+		Blob expected = Job.parseID(RemoteJobs.remoteId(job));
+		if (expected == null || !expected.equals(Job.parseID(snapshot.get(Fields.ID)))) throw new ResponseException("Remote Job ID mismatch");
 		if (Status.COMPLETE.equals(status)) {
 			job.completeWith(snapshot.get(Fields.OUTPUT), data -> RemoteJobs.observed(data, status));
 			return;
@@ -181,15 +180,15 @@ public class GridAdapter extends AAdapter {
 	}
 
 	@Override public void recoverJob(Job job) {
-		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
-		if (record == null) { super.recoverJob(job); return; }
-		ACell id = record.get(RemoteJobs.REMOTE_ID);
+		AMap<AString, ACell> kept = engine.remoteJobs().kept(job);
+		if (kept == null) { super.recoverJob(job); return; }
+		AString id = RemoteJobs.remoteId(job);
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().notFollowed(job); return; }
-			Venue venue = restoreConnection(RT.ensureString(record.get(RemoteJobs.TARGET)), saved);
-			if (convex.core.data.prim.CVMBool.TRUE.equals(record.get(RemoteJobs.OWNS_REMOTE))) {
+			Venue venue = restoreConnection(RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
+			if (convex.core.data.prim.CVMBool.TRUE.equals(kept.get(RemoteJobs.OWNS_REMOTE))) {
 				bindCancellation(job, venue, Job.parseID(id));
 			}
 			watch(job, venue, Job.parseID(id));
@@ -197,7 +196,7 @@ public class GridAdapter extends AAdapter {
 	}
 
 	@Override public void suspendJob(Job job) {
-		if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+		if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);
 		else super.suspendJob(job);
 	}
 

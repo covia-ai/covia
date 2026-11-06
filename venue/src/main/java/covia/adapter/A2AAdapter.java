@@ -750,7 +750,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 					try { handleSendResponse(job, rpcUrl, auth, resp); }
 					catch (RuntimeException | Error failure) { engine.remoteJobs().submissionUnknown(job, failure); }
 					finally {
-						AString id = RT.ensureString(RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID));
+						AString id = RemoteJobs.remoteId(job);
 						if (id != null && !job.isFinished()) startPoller(job, rpcUrl, id.toString(), auth);
 					}
 					});
@@ -952,12 +952,12 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 
 	@Override public void recoverJob(Job job) {
-		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
-		if (record == null) { super.recoverJob(job); return; }
-		AString id = RT.ensureString(record.get(RemoteJobs.REMOTE_ID));
+		AMap<AString, ACell> kept = engine.remoteJobs().kept(job);
+		if (kept == null) { super.recoverJob(job); return; }
+		AString id = RemoteJobs.remoteId(job);
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
-			String target = RT.ensureString(record.get(RemoteJobs.TARGET)).toString();
+			String target = RT.ensureString(kept.get(RemoteJobs.TARGET)).toString();
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			// A literal token only the request presented; it was not kept
 			if (saved.get(K_LOCATION) != null && secretRef(saved) == null) {
@@ -996,7 +996,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 
 	@Override public void suspendJob(Job job) {
-		if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+		if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);
 		else super.suspendJob(job);
 	}
 	/**

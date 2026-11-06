@@ -21,6 +21,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
 import covia.api.Fields;
@@ -482,8 +483,10 @@ class RemoteDelegationTest {
 			engine.registerAdapter(new GridAdapter());
 			try {
 				Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				await(job, j -> RemoteJobs.descriptor(j) != null
-					&& Strings.create("acceptance-unknown").equals(RemoteJobs.descriptor(j).get(RemoteJobs.OBSERVATION)));
+				await(job, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED) != null);
+				assertEquals(Maps.of(RemoteJobs.STOPPED, RemoteJobs.ACCEPTANCE_UNKNOWN.formatted(engine.remoteJobs().target(job))),
+					RemoteJobs.descriptor(job), "the record says why the venue stopped following, and nothing of how it follows");
+				assertEquals(Strings.create("acceptance-unknown"), engine.remoteJobs().kept(job).get(RemoteJobs.OBSERVATION));
 				assertEquals(Status.STARTED, job.getStatus());
 				assertFalse(job.future().isDone());
 				assertEquals(1, peer.submits.get());
@@ -514,11 +517,14 @@ class RemoteDelegationTest {
 				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());
 				assertNotNull(recovered);
 				assertEquals(Status.STARTED, recovered.getStatus());
-				assertEquals(Strings.create("adapter-unavailable"), RemoteJobs.descriptor(recovered).get(RemoteJobs.OBSERVATION));
+				assertEquals(Strings.create(RemoteJobs.ADAPTER_MISSING.formatted("grid", ID, second.remoteJobs().target(recovered))),
+					RT.getIn(recovered.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED));
 				Engine.addDemoAssets(second);
 				second.getAdapter("grid").recoverJob(recovered);
 				assertEquals(Strings.create("remote-output"), recovered.future().get(5, TimeUnit.SECONDS));
 				assertEquals(1, peer.submits.get());
+				assertEquals(Maps.of(RemoteJobs.REMOTE_ID, ID, RemoteJobs.REMOTE_STATUS, Status.COMPLETE), RemoteJobs.descriptor(recovered),
+					"followed again, the record no longer says it is not");
 			} finally { second.close(); }
 		}
 	}
@@ -547,7 +553,9 @@ class RemoteDelegationTest {
 				second.jobs().recoverJobs();
 				Job recovered = second.jobs().getJob(job.getID(), user);
 				assertEquals(Strings.create(covia.exception.InvalidInputException.class.getSimpleName()),
-					RemoteJobs.descriptor(recovered).get(RemoteJobs.ERROR_TYPE), "the guard refuses the reconnection");
+					second.remoteJobs().kept(recovered).get(RemoteJobs.ERROR_TYPE), "the guard refuses the reconnection");
+				assertNotNull(RT.getIn(recovered.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED),
+					"the record says the venue no longer follows the remote job");
 				assertFalse(recovered.isFinished());
 				assertEquals(1, peer.submits.get());
 			} finally { second.close(); }

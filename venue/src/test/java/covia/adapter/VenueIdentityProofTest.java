@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -298,9 +299,11 @@ public class VenueIdentityProofTest {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
 				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());
-				assertEquals(Strings.create("auth-required"), RemoteJobs.descriptor(recovered).get(RemoteJobs.OBSERVATION));
+				assertEquals(Strings.create("auth-required"), second.remoteJobs().kept(recovered).get(RemoteJobs.OBSERVATION));
 				assertEquals(Strings.create(AuthException.class.getSimpleName()),
-					RemoteJobs.descriptor(recovered).get(RemoteJobs.ERROR_TYPE));
+					second.remoteJobs().kept(recovered).get(RemoteJobs.ERROR_TYPE));
+				assertNotNull(convex.core.lang.RT.getIn(recovered.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED),
+					"the record says the venue no longer follows the remote job");
 				assertEquals(Status.STARTED, recovered.getStatus());
 				assertEquals(credentialed, peer.credentialed.get(), "no credential is re-sent");
 			} finally { second.close(); }
