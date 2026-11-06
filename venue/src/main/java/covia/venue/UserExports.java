@@ -267,8 +267,9 @@ public final class UserExports {
 		}
 		if (state.get(Namespace.G) instanceof AMap<?, ?> agents) {
 			for (ACell agent : agents.values()) {
-				if (RT.getIn(agent, AgentState.KEY_TASKS) instanceof ADataStructure<?> tasks
-						&& tasks.count() > 0) return BUSY;
+				for (AString held : new AString[] {AgentState.KEY_TASKS, AgentState.KEY_RESOLVED}) {
+					if (RT.getIn(agent, held) instanceof ADataStructure<?> tasks && tasks.count() > 0) return BUSY;
+				}
 			}
 		}
 		return null;

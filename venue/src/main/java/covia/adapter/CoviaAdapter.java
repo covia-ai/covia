@@ -44,6 +44,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
+import covia.venue.VenueState;
 
 /**
  * Adapter for native Covia venue operations.
@@ -653,6 +654,11 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
+		return handleWrite(engine.getVenueState(), ctx, input);
+	}
+
+	/** As {@link #handleWrite(RequestContext, ACell)}, in {@code state}: the venue's, or a transaction's draft of it. */
+	private ACell handleWrite(VenueState state, RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		// A write must supply a 'value'. An absent key means the caller (often an
 		// LLM tool call) forgot the argument — fail loudly so it retries. An
@@ -670,7 +676,7 @@ public class CoviaAdapter extends AAdapter {
 		// lives only at tool-call boundaries whose schema admits nothing else.
 		ACell value = RT.getIn(input, Fields.VALUE);
 
-		Position target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
+		Position target = resolveForChange(state, ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		boolean[] existed = {false};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target,
 			draft -> existed[0] = draft.write(value));
@@ -703,6 +709,29 @@ public class CoviaAdapter extends AAdapter {
 	 * prevents an output handoff from silently materialising a remote owner as a
 	 * shadow user in the local lattice.</p>
 	 */
+	/**
+	 * Writes {@code value} at {@code path} as {@code covia:write} does, with the
+	 * same checks, in {@code state}: a venue transaction's draft, so the write
+	 * commits with whatever else that transaction changes, or not at all. The
+	 * checks make no call out (no gate evaluator, as for
+	 * {@link #writeResolvedPath}), so the transaction may run them again.
+	 *
+	 * @return false, having written nothing, when the path is outside this
+	 *         venue's lattice (another venue's {@code did:web} path or an
+	 *         {@code x/} view): write it with {@link #writeResolvedPath} after
+	 *         the transaction
+	 */
+	boolean writeIn(VenueState state, RequestContext ctx, AString path, ACell value) {
+		AString remoteVenue = remoteVenueFor(path);
+		if (remoteVenue != null && !engine.isLocalDIDResource(path)) return false;
+		AString did = didPath(path);
+		CoviaPath segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
+		if (isExtensionPath(segments)) return false;
+		ACell writeInput = Maps.of(Fields.PATH, path, Fields.VALUE, value);
+		handleWrite(state, ctx.withInvocation(writeInput, null), writeInput);
+		return true;
+	}
+
 	CompletableFuture<ACell> writeResolvedPath(RequestContext ctx, AString path, ACell value) {
 		AString remoteVenue = remoteVenueFor(path);
 		if (remoteVenue == null || engine.isLocalDIDResource(path)) {
@@ -817,27 +846,31 @@ public class CoviaAdapter extends AAdapter {
 	 * @return Where the path ends
 	 */
 	private Position resolveForChange(RequestContext ctx, ACell path, AString ability) {
+		return resolveForChange(engine.getVenueState(), ctx, path, ability);
+	}
+
+	private Position resolveForChange(VenueState state, RequestContext ctx, ACell path, AString ability) {
 		boolean delete = Capability.CRUD_DELETE.equals(ability);
 		AString did = didPath(path);
 		Engine.UserPathTarget target = (did == null) ? null : engine.resolveUserPath(ctx, did, false);
 		CoviaPath segments = (target == null) ? CoviaPath.of(path) : target.path();
-		if (isExtensionPath(segments)) return resolve(ctx, path, ability);
+		if (isExtensionPath(segments)) return resolve(state, ctx, path, ability);
 		requireChangeable(ctx, segments, delete);
 		if (!delete) {
 			if (target == null) {
 				// The USER's record, not the acting principal's: an agent sub-principal
 				// works inside its owner's namespace and has no lattice record of its own.
-				engine.getVenueState().users().ensure(ctx.getUserDID());
+				state.users().ensure(ctx.getUserDID());
 			} else if (target.user() == null) {
 				// Another user's record is an entry of the venue's users, which no grant
 				// of theirs covers, so a write reaches only a user the venue has
 				if (!target.ownerDID().equals(ctx.getUserDID())) {
 					throw new NotFoundException(covia.venue.VenueState.UNKNOWN_USER, target.ownerDID().toString());
 				}
-				engine.getVenueState().users().ensure(target.ownerDID());
+				state.users().ensure(target.ownerDID());
 			}
 		}
-		return resolve(ctx, path, ability);
+		return resolve(state, ctx, path, ability);
 	}
 
 	/**
@@ -1222,13 +1255,18 @@ public class CoviaAdapter extends AAdapter {
 
 	/** As {@link #resolve(RequestContext, ACell)}; {@code ability} is for an {@code x/} view's write policy. */
 	private Position resolve(RequestContext ctx, ACell path, AString ability) {
+		return resolve(engine.getVenueState(), ctx, path, ability);
+	}
+
+	/** As {@link #resolve(RequestContext, ACell, AString)}, in {@code state}: the venue's, or a transaction's draft of it. */
+	private Position resolve(VenueState state, RequestContext ctx, ACell path, AString ability) {
 		AString did = didPath(path);
 		if (did != null) {
 			Engine.UserPathTarget target = engine.resolveUserPath(ctx, did, false);
 			if (isExtensionPath(target.path())) {
 				return AdapterView.resolve(ctx, this, target.ownerDID(), target.path(), ability);
 			}
-			return engine.getVenueState().resolve(CoviaPath.segments(target.ownerDID()).append(target.path()));
+			return state.resolve(CoviaPath.segments(target.ownerDID()).append(target.path()));
 		}
 		CoviaPath segments = CoviaPath.of(path);
 		AString namespace = segments.isEmpty() ? null : segments.first();
@@ -1236,23 +1274,23 @@ public class CoviaAdapter extends AAdapter {
 			return AdapterView.resolve(ctx, this, (ctx == null) ? null : ctx.getUserDID(), segments, ability);
 		}
 		if (V.equals(namespace)) {
-			return engine.getVenueState().users().at(engine.getDIDString()).resolve(venueGlobals(segments));
+			return state.users().at(engine.getDIDString()).resolve(venueGlobals(segments));
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
 			if (agentId == null) throw new WrongScopeException(NO_AGENT_SCOPE);
-			return requestUser(ctx).agentAt(agentId).resolve(segments);
+			return requestUser(state, ctx).agentAt(agentId).resolve(segments);
 		}
 		if (C.equals(namespace)) {
 			Blob sessionId = (ctx == null) ? null : ctx.getSessionId();
 			if (agentId == null || sessionId == null) throw new WrongScopeException(NO_SESSION_SCOPE);
-			return requestUser(ctx).agentAt(agentId).session(sessionId).resolve(segments);
+			return requestUser(state, ctx).agentAt(agentId).session(sessionId).resolve(segments);
 		}
 		if (T.equals(namespace)) {
 			Blob jobId = scopedJob(ctx);
-			return requestUser(ctx).jobs().scratch(jobId).resolve(segments.rest());
+			return requestUser(state, ctx).jobs().scratch(jobId).resolve(segments.rest());
 		}
-		return requestUser(ctx).resolve(segments);
+		return requestUser(state, ctx).resolve(segments);
 	}
 
 	/**
@@ -1286,10 +1324,10 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * @throws WrongScopeException if the request has no user
 	 */
-	private User requestUser(RequestContext ctx) {
+	private User requestUser(VenueState state, RequestContext ctx) {
 		AString did = (ctx == null) ? null : ctx.getUserDID();
 		if (did == null) throw new WrongScopeException(NO_USER_SCOPE);
-		return engine.getVenueState().users().at(did);
+		return state.users().at(did);
 	}
 
 	/**

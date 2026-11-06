@@ -89,6 +89,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op) and `caps`, the agent's capability scope ([UCAN.md §5.4](./UCAN.md): Model A, user-scoped). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
+| `resolved` | index? | Tasks the agent has resolved whose requests are not settled yet, by Job ID: each holds `{id, status, output \| error, sessionId?}`, what its request settles with (§3.4.1). |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains `frames` (the goal-tree frame stack — `frames[0].conversation` is the canonical transcript), pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md and GOAL_TREE.md. |
 | `timeline` | vector | Append-only log of cycle records (§2.4), one per cycle whose transition ran — the complete record of each cycle's exchange with the model. |
@@ -577,10 +578,13 @@ A transition resolves its task by calling `agent:complete-task` or
 `agent:fail-task` during the cycle: an LLM agent through its `complete_task`
 and `fail_task` tools, any other transition by invoking the operation itself.
 The call is scoped to the cycle's task and refused once a continuation has
-arrived that the cycle has not shown. It removes the task from the queue at
-once; the request Job is settled after the merge (§4.4 step 7), so its caller
-sees the cycle's writes first. The timeline entry records each outcome in
-`taskResults`.
+arrived that the cycle has not shown. In one transaction it moves the task
+out of the queue and records its outcome under `resolved`
+(`AgentState.resolveTask`), so a resolved task can be neither cancelled nor
+resolved again, and the outcome survives a restart. The cycle's merge hands
+it back (§4.4 step 6): its request Job settles in the merge's transaction,
+so its caller sees the cycle's writes first. The timeline entry records each
+outcome in `taskResults`.
 
 A resolved task keeps its outcome when the cycle then fails: if the agent told
 a caller "done", the task was done. This matches how other side effects (tool
@@ -1027,8 +1031,15 @@ run's `finally` block.
      task/chat job record; the final assistant turn carries its own
      inference's usage. Absent means "not measured", never zero.
    - Do not write executor status; the launcher slot remains the liveness truth.
-7. Settle the task completions parked by `agent:complete-task` /
-   `agent:fail-task` calls made during the transition, and complete every
+   - Hand back every task the transition resolved (§3.4.1), in the same
+     venue transaction: the task leaves `resolved`, its request's
+     `outputPath`, when it names one in this venue's lattice, is written as
+     its requester, and its request Job settles. A refused write fails only
+     that request. A request cancelled before the merge writes nothing. A
+     write to another venue or a view cannot join the transaction: its task
+     stays resolved until the write ends, and its request then settles and
+     the task goes in one transaction.
+7. Release the callers of the requests the merge settled, and complete every
    waiting chat on the session that is STARTED with the reply — this
    cycle's and any an earlier cycle took and yielded on. A cycle without a
    reply yields, and those chats keep waiting. Both happen strictly AFTER
@@ -1257,8 +1268,14 @@ records survive independently. Recovery may start a fresh attempt from a
 durable boundary; it never treats a persisted executor bit as resumable state.
 
 Request and chat Jobs survive a restart: the adapter's `recoverJob` keeps a
-request whose task is still in `tasks` and a chat whose envelope is
-still pending on its session, so the boot wake completes them. Venue shutdown
+request whose task is still in `tasks` or `resolved`, and a chat whose
+envelope is still pending on its session, so the boot wake completes them. A
+task the agent resolved in a cycle the restart stopped before its merge is
+handed back at boot as the merge would have done (§4.4 step 6), with no
+timeline entry for that cycle. Its request's `outputPath` is written as its
+caller acts now (JOBS.md, Kept caller context); a write to another venue
+needs the caller's sign-in credential, which is never stored, so that
+request fails. Venue shutdown
 likewise leaves them as they are (`suspendJob`) and stops the run loop without
 relaunching it (see JOBS.md § Shutdown). A chat whose message a cycle had
 already taken is not kept, since no cycle would take it again: shutdown
