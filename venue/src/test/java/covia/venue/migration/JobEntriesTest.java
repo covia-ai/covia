@@ -154,8 +154,8 @@ class JobEntriesTest {
 		AString outputContext = Strings.create("outputContext");
 		// As version 2 kept it: the requester's context and the path on the worker's task
 		AMap<AString, ACell> pending = Maps.of(Fields.INPUT, "write",
-			Fields.OUTPUT_PATH, "w/out",
-			outputContext, Maps.of(Fields.CALLER, ALICE, Fields.OWNER, ALICE, Fields.PROOFS, proofs, Fields.SESSION_ID, session));
+			"outputPath", "w/out",
+			outputContext, Maps.of("caller", ALICE, "owner", ALICE, "proofs", proofs, "sessionId", session));
 		AMap<AString, ACell> plain = Maps.of(Fields.INPUT, "read");
 		Index<Blob, ACell> tasks = Index.<Blob, ACell>none()
 			.assoc(RUNNING, pending)
