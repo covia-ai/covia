@@ -39,7 +39,8 @@ public final class JobIndex extends ACoviaComponent<Index<Blob, ACell>>
 	 * What the job's caller presented beyond its identity, kept for work that
 	 * continues for the caller ({@link JobManager#keepCallerContext}): its
 	 * verified {@code proofs} and its execution scopes {@code agentId},
-	 * {@code sessionId}, {@code jobId} and {@code taskId}.
+	 * {@code sessionId}, {@code jobId} and {@code taskId}. Present, if empty,
+	 * whenever the job's adapter asked for it.
 	 */
 	public static final AString CONTEXT = Strings.intern("context");
 

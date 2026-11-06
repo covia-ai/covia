@@ -807,7 +807,6 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 		String remoteTaskId = remoteTask.id();
 		engine.remoteJobs().accepted(job, remoteTaskId);
-		job.update(current -> current.assoc(Fields.REMOTE_TASK_ID, Strings.create(remoteTaskId)));
 		bind(job, rpcUrl, remoteTaskId, auth);
 
 		if (remoteTask.status().state().isFinal()) {
@@ -1066,8 +1065,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 
 	/**
-	 * A working remote Task's status message is its progress: shown on the
-	 * mirror as any Job's is, never recorded, and gone once it stops working.
+	 * A working remote Task's status message is its progress: recorded on the
+	 * mirror as any Job's is, replacing the last, and cleared once it stops working.
 	 */
 	private static void showProgress(Job job, Task remote) {
 		boolean working = remote.status().state() == org.a2aproject.sdk.spec.TaskState.TASK_STATE_WORKING;

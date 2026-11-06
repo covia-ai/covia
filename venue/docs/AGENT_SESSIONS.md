@@ -87,8 +87,8 @@ adapter determines whether that Job can be recovered. Missing handles and
 uncertain submissions are not replayed. A remote Covia proxy reconnects as it
 first connected, unless it signed in as its caller, whose credential the venue
 does not keep: its recovery fails, naming the remote task and its venue. A local
-proxy fails recovery explicitly because its attenuated execution context cannot
-be reconstructed from a caller DID.
+proxy follows its task again as the agent it acts for, in the context its job
+kept (ADAPTERS.md, External agent interactions).
 Resuming a provider conversation on a later turn does not recover an interrupted
 turn. Any provider session identity extractable on failure or cancellation is
 retained for later calls.

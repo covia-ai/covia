@@ -2963,7 +2963,9 @@ Operations:
   finishes it. Restored after a restart, it resumes from the session id on
   its job record, as the principal that started it with the authority that
   principal holds then: the grants it presented are kept on the job until
-  the job ends. Every turn checks again that the caller may run in the
+  the job ends. It keeps the options its call asked for, as the job's input
+  records them; a `bypassPermissions` mode the project no longer allows ends
+  the job. Every turn checks again that the caller may run in the
   project; a turn it may not is refused to the sender, and the session
   waits.
 - `v/ops/claudecode/sessions {project?}` — the sessions this venue knows in

@@ -41,9 +41,9 @@ public class LocalVenue extends Venue {
 
 	/**
 	 * Complete immutable request context for an in-process hop. A local grid
-	 * invocation must preserve the same scoped authority as its caller; rebuilding
-	 * a context from only the DID and proofs would turn a restricted agent's
-	 * non-null grant scope into unrestricted ({@code null}) authority.
+	 * invocation carries its caller's context as it is, execution scopes and
+	 * any narrowed authority included; a context rebuilt from only the DID and
+	 * proofs would carry neither.
 	 */
 	private RequestContext requestContext;
 

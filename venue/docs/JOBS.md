@@ -158,11 +158,14 @@ held only in memory has neither.
 A job whose work continues for its caller after the request keeps that
 caller's context, so that it acts again with the authority it started with
 and no more. The adapter asks for it (`JobManager.keepCallerContext`): a
-Claude Code session does, and so does an agent request naming an
-`outputPath`, whose job completes by writing there as its caller
-(AGENT_TEMPLATES.md). The job's entry keeps the grant proofs the caller
-presented, in the form checked on arrival, and the request's execution
-scopes (agent, session, job and task). `JobManager.callerContext` rebuilds
+Claude Code session does, so does an agent request naming an `outputPath`,
+whose job completes by writing there as its caller (AGENT_TEMPLATES.md), and
+so does a `remoteagent` call to an agent on this venue, which follows the
+agent's task as its caller (ADAPTERS.md, External agent interactions). The job's
+entry keeps the grant proofs the caller presented, in the form checked on
+arrival, and the request's execution scopes (agent, session, job and task),
+even when there are none, so that `JobManager.keepsCallerContext` tells such
+a job from one whose adapter never asked. `JobManager.callerContext` rebuilds
 the caller from them with `Engine.context(owner, caller, proofs)`, checking
 what a live request would: the principal still exists, a delegate still holds
 its `user/sudo` grant, an agent acts under its current `config.caps`. The
@@ -406,10 +409,18 @@ the final flush runs, carrying the suspended states.
 
 Remote `grid:run`, remote `grid:jobResult` without a caller timeout, and A2A
 sends retain a `delegation` record. It carries the protocol, target, accepted
-`remoteId`, last observed `remoteStatus`, and observation health. Local
-processing stays `STARTED` while a remote job is queued. Remote interruptions
-and terminal outcomes are mirrored; a terminal result and its supporting
-remote status are committed atomically before result continuations run.
+`remoteId` (for an A2A send, the remote Task's id), last observed
+`remoteStatus`, and observation health. Local processing stays `STARTED` while
+a remote job is queued. Remote interruptions and terminal outcomes are
+mirrored; a terminal result and its supporting remote status are committed
+atomically before result continuations run.
+
+A `remoteagent:request` job also carries `sessionId`, taken from the
+destination's task as it is observed: the destination agent's session, which is
+one of this venue's own when the destination is this venue. An agent that
+serves its calls through a remote-agent backend is different: its own job names
+its Covia session, and the backend job beneath it names the destination's
+([AGENT_SESSIONS.md](AGENT_SESSIONS.md#22-external-agent-sessions)).
 
 Transport timeouts, malformed observations, missing remote records, and 5xx
 responses do not prove execution failed. They set observation health to

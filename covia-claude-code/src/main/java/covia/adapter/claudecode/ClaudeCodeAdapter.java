@@ -614,10 +614,16 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			}
 		}
 		requireProjectAccess(ctx, project);
+		return new Plan(project, options(project, input), resumeId, prompt);
+	}
 
-		// Options: adapter defaults <- project <- call (call keys only; the
-		// call's own keys are read from the input top level for convenience,
-		// or from an 'options' object).
+	/**
+	 * The options a call runs with: adapter defaults, then the project's, then
+	 * the call's own (call keys only; read from the input's top level for
+	 * convenience, or from an {@code options} object). A session restored after
+	 * a restart rebuilds them the same way from the input its job records.
+	 */
+	private RunOptions options(ProjectSpec project, ACell input) {
 		RunOptions base = defaults.overlay(project.options());
 		AMap<AString, ACell> in = RT.castMap(input);
 		AMap<AString, ACell> callOpts = Maps.empty();
@@ -649,7 +655,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			throw new AuthException("permissionMode " + RunOptions.BYPASS_PERMISSIONS
 				+ " is only available in a project configured with it (project '" + project.name() + "' is not)");
 		}
-		return new Plan(project, base.overlay(call), resumeId, prompt);
+		return base.overlay(call);
 	}
 
 	/**
@@ -908,17 +914,21 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			return null;
 		}
 		// The session resumes as its caller would act now, in the context the
-		// job keeps, and only while that caller may still use the project.
+		// job keeps, and only while that caller may still use the project. It
+		// keeps the options its call asked for, which the job's input records,
+		// and a mode the project no longer allows ends the job.
 		RequestContext ctx;
+		RunOptions options;
 		try {
 			ctx = engine.jobs().callerContext(job);
 			requireProjectAccess(ctx, project);
+			options = options(project, data.get(Fields.INPUT));
 		} catch (RuntimeException e) {
 			job.fail(e.getMessage());
 			return null;
 		}
 		ACell sid = data.get(K_SESSION);
-		Plan plan = new Plan(project, defaults.overlay(project.options()), sid == null ? null : sid.toString(), null);
+		Plan plan = new Plan(project, options, sid == null ? null : sid.toString(), null);
 		return new SessionJob(job, ctx, plan);
 	}
 

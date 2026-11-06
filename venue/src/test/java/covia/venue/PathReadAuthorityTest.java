@@ -278,6 +278,29 @@ public class PathReadAuthorityTest {
 	}
 
 	@Test
+	public void testScopedAgentCannotPinOwnPathsOutsideItsCaps() {
+		RequestContext parent = RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(Vectors.of(
+			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
+			Capability.create(Strings.create("g/"), Capability.CRUD_READ),
+			Maps.of(Capability.CAN, Strings.create("invoke"))));
+		Job created = createAgent("pinned", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"caps", Vectors.of(Capability.create(Strings.create("g/"), Capability.CRUD_READ)),
+			"context", Vectors.of(Strings.create("w/cfg"))), parent);
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+		String shown = shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned"), parent));
+		assertFalse(shown.contains(SECRET), "an agent's pinned context showed what its caps do not cover: " + shown);
+
+		Job covered = createAgent("pinned-covered", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"caps", Vectors.of(Capability.create(Strings.create("w/cfg"), Capability.CRUD_READ)),
+			"context", Vectors.of(Strings.create("w/cfg"))), ALICE);
+		assertEquals(Status.COMPLETE, covered.getStatus(), covered.getErrorMessage());
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned-covered"), ALICE)).contains(SECRET),
+			"caps that cover a pinned entry show it");
+	}
+
+	@Test
 	public void testOwnerReadsFreely() {
 		Job own = createAgent("mine", Strings.create("w/cfg"), ALICE);
 		assertEquals(Status.COMPLETE, own.getStatus(), own.getErrorMessage());

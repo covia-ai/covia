@@ -307,7 +307,7 @@ java -jar target/covia.jar [config.json]
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
-- `docs/VENUE_AUTHORITY.md` — authority over the venue's own resources (design): lent in process, standing grants outside it
+- `docs/VENUE_AUTHORITY.md` — venue authority lent in process, and revocation and lifetime limits for the grants the venue issues (design)
 - `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
   a user-signed, self-sovereign token for cross-venue access (covia#292)
 - `docs/SKILLS.md` — agent skill system

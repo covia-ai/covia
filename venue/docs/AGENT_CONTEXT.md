@@ -1186,7 +1186,7 @@ state.
 |------------|---------|
 | `config` | Effective configuration used for rendering and the L3 invocation |
 | `sourceConfig` | Declarative configuration used only to validate `renderedContext` |
-| `ctx` / `capsCtx` | Resolution context and capability-narrowed dispatch context |
+| `ctx` / `capsCtx` | The cycle's request context, and the agent's capability-narrowed context, under which pinned context, the skills index and tool calls resolve |
 | `sessionId`, `headNotice`, `budget`, `labels`, `toolCalling`, `cachePrefix` | Stable rendering parameters captured for this call; `cachePrefix` selects retained versus ephemeral initial rendering |
 | `tools` | Candidate initial manifest, persisted only when caching is enabled |
 | `loadElements`, `loadExchanges` | Candidate non-volatile starting loads, persisted only when caching is enabled |

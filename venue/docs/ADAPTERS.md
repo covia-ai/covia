@@ -107,8 +107,12 @@ Messaging adapters can use `ConversationRouter.deliver` with a trusted
 `VenueState.transact` draft, so the session input, adapter receipt and conversation
 mapping and Job admission state publish together. The callback must use only draft-bound components,
 perform no I/O, and tolerate retries. Returning false discards the draft as a
-duplicate. The engine flushes before waking the agent and returns the chat Job
-without waiting for its result. A flush failure propagates to the caller; no
+duplicate. The engine flushes before waking the agent, and `deliver` returns
+without waiting for the agent's reply: the chat Job when the agent took the
+message, whatever has become of the Job since; null when the participant had
+taken it already; and otherwise a `JobFailedException` saying why the agent
+refused it, after one retry on a new session when the conversation's saved
+session has gone. A flush failure propagates to the caller; no
 background retry is started and already committed input is not rolled back.
 `ConversationRouter.onResponse` observes replies
 on the shared virtual executor, handles failed Jobs and skips duplicate deliveries.
@@ -702,12 +706,19 @@ that task. The Job records `sessionId` separately from `delegation.remoteId`.
 Native remote connections share `VenueConnection` with Grid: anonymous by
 default, explicit target-bound caller identity, or an explicitly delegated
 venue relay. Omitting `venue` carries the complete current RequestContext to
-the local agent. A local proxy cannot reconstruct that attenuated context from
-a caller DID after restart, so its recovery fails explicitly and leaves the
-original task ID for inspection; it never substitutes venue authority. A remote
-proxy reconnects as it first connected and observes the same task, except one
-that signed in as its caller: the venue keeps no such credential, so its
-recovery fails, naming the remote task and its venue.
+the local agent, and the job keeps its caller's context in its entry
+(JOBS.md, Kept caller context). After a restart such a local proxy follows
+the same task again exactly as it first did, as its caller acts now
+(`JobManager.callerContext`): its status, messages and cancellation reach
+that task, and it finishes with the task's outcome. It ends instead when it
+keeps no context or had not recorded the task
+(`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when its
+caller cannot act now (`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the
+task). The task then runs on: the venue never acts on it without its
+caller's authority. A remote proxy reconnects as it first connected and
+observes the same task, except one that signed in as its caller: the venue
+keeps no such credential, so its recovery fails, naming the remote task and
+its venue.
 
 ### Agent dispatch hooks
 

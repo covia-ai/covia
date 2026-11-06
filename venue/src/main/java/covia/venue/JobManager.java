@@ -983,8 +983,10 @@ public class JobManager {
 	 * proofs it presents, in the form checked on arrival, and its execution
 	 * scopes (agent, session, job, task). They are kept in the job's entry
 	 * ({@link JobIndex}), which no route reads, and go with it when the job
-	 * ends. A job that is not recorded does not outlive the request, so it keeps
-	 * none.
+	 * ends. A job keeps a context even when its caller presented nothing
+	 * beyond itself, so {@link #keepsCallerContext} tells it from one whose
+	 * adapter never asked. A job that is not recorded does not outlive the
+	 * request, so it keeps none.
 	 */
 	public void keepCallerContext(Job job, RequestContext ctx) {
 		if (!job.isRecorded()) return;
@@ -995,9 +997,19 @@ public class JobManager {
 		if (ctx.getSessionId() != null) kept = kept.assoc(Fields.SESSION_ID, ctx.getSessionId());
 		if (ctx.getJobId() != null) kept = kept.assoc(Fields.JOB_ID, ctx.getJobId());
 		if (ctx.getTaskId() != null) kept = kept.assoc(Fields.TASK_ID, ctx.getTaskId());
-		if (kept.isEmpty()) return;
 		AMap<AString, ACell> context = kept;
 		venue().jobIndex().update(job.getID(), entry -> entry.assoc(JobIndex.CONTEXT, context));
+	}
+
+	/**
+	 * Whether {@code job} keeps its caller's context ({@link #keepCallerContext}),
+	 * so that {@link #callerContext} rebuilds the context it started in rather
+	 * than its caller alone.
+	 *
+	 * @return false when its adapter never asked, or the job has finished
+	 */
+	public boolean keepsCallerContext(Job job) {
+		return RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT) != null;
 	}
 
 	/**

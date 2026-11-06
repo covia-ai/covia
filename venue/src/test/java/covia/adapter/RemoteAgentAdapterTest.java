@@ -15,11 +15,14 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.Root;
 import covia.adapter.remote.VenueRemoteAgent;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.auth.UcanTokens;
+import covia.grid.hitl.Hitl;
 import covia.venue.*;
 
 class RemoteAgentAdapterTest {
@@ -252,20 +255,122 @@ class RemoteAgentAdapterTest {
 		}
 	}
 
-	@Test void localRecoveryRefusesToReconstructAuthorityFromIdentity() throws Exception {
+	/**
+	 * Calls to agents on this venue resume after a restart as their callers,
+	 * in the context their jobs kept: each follows the same task to its end,
+	 * an external agent served by one answers, and cancelling one reaches its
+	 * task. A call whose caller cannot act after the restart ends, naming its
+	 * task, which runs on.
+	 */
+	@Test void localCallsResumeAfterARestartAsTheirCallers() throws Exception {
+		Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
+		AKeyPair key = AKeyPair.generate();
+		AString user = TestEngine.uniqueDID("RemoteAgentResume");
+		RequestContext ctx = RequestContext.of(user);
+		Job asked, waited, served, anonymous;
+		Engine first = start(cursor, key, true);
+		try {
+			agent(first, ctx, "asker", "v/test/ops/askhuman");
+			agent(first, ctx, "waiter", "v/test/ops/never");
+			agent(first, ctx, "helper", "v/test/ops/askhuman");
+			first.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "front",
+				"agent", Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "helper")), ctx).awaitResult(5000);
+			RequestContext anon = first.context(first.publicPrincipal());
+			agent(first, anon, "lobby", "v/test/ops/never");
+			try (AgentWatch asker = AgentWatch.open(first, user, "asker");
+					AgentWatch helper = AgentWatch.open(first, user, "helper")) {
+				asked = first.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "asker", Fields.INPUT, Maps.of("ask", "decide")), ctx);
+				served = first.jobs().invokeOperation("v/ops/agent/request", Maps.of(Fields.AGENT_ID, "front",
+					Fields.INPUT, Maps.of("ask", "decide too")), ctx);
+				waited = first.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiter", Fields.INPUT, Maps.of("task", "wait")), ctx);
+				anonymous = first.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "lobby", Fields.INPUT, Maps.of("task", "wait")), anon);
+				asker.awaitRest(1);
+				helper.awaitRest(1);
+			}
+			for (Job call : new Job[] {asked, waited, anonymous}) await(call, RemoteAgentAdapterTest::following);
+		} finally { first.close(); }
+
+		Engine second = start(cursor, key, false);
+		try {
+			Job resumed = second.jobs().getJob(asked.getID(), ctx);
+			assertFalse(resumed.isFinished(), "the call follows its task again");
+			assertEquals(RemoteJobs.descriptor(asked).get(RemoteJobs.REMOTE_ID), RemoteJobs.descriptor(resumed).get(RemoteJobs.REMOTE_ID));
+			answer(second, ctx, "asker", "carry on");
+			assertTrue(resumed.future().get(10, TimeUnit.SECONDS).toString().contains("carry on"),
+				"the call finishes with its task's output: " + resumed.getOutput());
+
+			answer(second, ctx, "helper", "go ahead");
+			Job answered = second.jobs().getJob(served.getID(), ctx);
+			assertTrue(answered.future().get(10, TimeUnit.SECONDS).toString().contains("go ahead"),
+				"an external agent the call serves answers: " + answered.getOutput());
+
+			Job cancelled = second.jobs().getJob(waited.getID(), ctx);
+			Job waiting = second.jobs().getJob(taskOf(waited), ctx);
+			assertFalse(waiting.isFinished());
+			assertDoesNotThrow(() -> second.jobs().deliverMessage(cancelled.getID(), Maps.of("content", "still there?"), ctx),
+				"a message reaches the task as the call's caller");
+			cancelled.cancel();
+			assertEquals(Status.CANCELLED, waiting.getStatus(), "cancelling the call reaches its task");
+
+			// Public access is off now, so the anonymous caller cannot act, nor read its job
+			AMap<AString, ACell> ended = second.getVenueState().users().get(second.publicPrincipal()).jobs().getRecord(anonymous.getID());
+			assertEquals(Status.FAILED, ended.get(Fields.STATUS));
+			assertEquals(Strings.create(RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(Engine.PUBLIC_ACCESS_OFF,
+				taskOf(anonymous).toHexString())), ended.get(Fields.ERROR));
+			assertFalse(second.jobs().getJob(taskOf(anonymous)).isFinished(), "the task of a call that ended runs on");
+		} finally { second.close(); }
+	}
+
+	/** A call that had not recorded its task when the venue stopped cannot be followed: it ends, and its task runs on. */
+	@Test void localCallWithNoRecordedTaskEndsAtRecovery() throws Exception {
 		Engine engine = engine();
 		try {
 			RequestContext ctx = engine.venueContext();
-			engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), ctx).awaitResult(5000);
+			agent(engine, ctx, "waiting", "v/test/ops/never");
 			Job mirror = engine.jobs().invokeOperation(OP, Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), ctx);
-			await(mirror, j -> RemoteJobs.descriptor(j) != null && RemoteJobs.descriptor(j).get(RemoteJobs.REMOTE_ID) != null);
-			ACell id = RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID);
-			engine.getAdapter("remoteagent").recoverJob(mirror);
+			await(mirror, RemoteAgentAdapterTest::following);
+			Job task = engine.jobs().getJob(taskOf(mirror), ctx);
+			RemoteAgentAdapter adapter = (RemoteAgentAdapter) engine.getAdapter("remoteagent");
+			adapter.suspendJob(mirror);
+			// As if the venue had stopped before the agent's task was recorded
+			mirror.update(d -> d.assoc(RemoteJobs.DELEGATION, RemoteJobs.descriptor(mirror).dissoc(RemoteJobs.REMOTE_ID)));
+			adapter.recoverJob(mirror);
 			assertEquals(Status.FAILED, mirror.getStatus());
 			assertEquals(RemoteAgentAdapter.LOCAL_INTERRUPTED, mirror.getErrorMessage());
-			assertEquals(id, RemoteJobs.descriptor(mirror).get(RemoteJobs.REMOTE_ID));
+			assertFalse(task.isFinished(), "the agent's task runs on");
 		} finally { engine.close(); }
+	}
+
+	/** A venue over {@code cursor}, launched as it is at boot, with public access on or off. */
+	private static Engine start(Root<Index<Keyword, ACell>> cursor, AKeyPair key, boolean publicAccess) throws Exception {
+		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, publicAccess, Config.CAPS, "unrestricted")));
+		return new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).launch();
+	}
+
+	private static void agent(Engine engine, RequestContext ctx, String id, String operation) {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, id,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, operation)), ctx).awaitResult(5000);
+	}
+
+	/** Answers the one open ask of {@code ctx}'s agent {@code id}. */
+	private static void answer(Engine engine, RequestContext ctx, String id, String answer) {
+		AgentState agent = engine.getVenueState().users().get(ctx.getUserDID()).agent(id);
+		assertEquals(1, agent.getPending().count(), "the agent has one open ask");
+		String ask = agent.getPending().entrySet().iterator().next().getKey().toHexString();
+		engine.jobs().invokeOperation("v/ops/hitl/respond",
+			Hitl.answer(ask).answer("next", answer).build(), ctx).awaitResult(5000);
+	}
+
+	/** Whether a call has its agent's task and has seen it. */
+	private static boolean following(Job call) {
+		AMap<AString, ACell> delegation = RemoteJobs.descriptor(call);
+		return delegation != null && delegation.get(RemoteJobs.REMOTE_ID) != null && delegation.get(RemoteJobs.REMOTE_STATUS) != null;
+	}
+
+	private static Blob taskOf(Job call) {
+		return Job.parseID(RemoteJobs.descriptor(call).get(RemoteJobs.REMOTE_ID));
 	}
 
 	@Test void localCancellationHasReachedTheChildWhenItReturns() throws Exception {
