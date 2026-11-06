@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterAll;
@@ -26,6 +27,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.lang.RT;
 import covia.adapter.HTTPAdapter;
 import covia.api.Abilities;
 import covia.api.Fields;
@@ -35,6 +37,7 @@ import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.TwoVenueTestServer;
 
 /**
  * Every venue this venue dials on a caller's behalf passes the outbound guard
@@ -78,6 +81,22 @@ public class FederationTargetPolicyTest {
 		try (Peer peer = new Peer()) {
 			assertRefused(peer, HTTPAdapter.PRIVATE_ADDRESS, ENGINE, GRID_RUN, gridInput(peer.url("127.0.0.1")));
 		}
+	}
+
+	@Test
+	void aLoopbackVenueIsRefusedToAUserOnEveryGridRoute() {
+		String venue = TwoVenueTestServer.BASE_URL_B;
+		for (String op : List.of(GRID_RUN, "v/ops/grid/invoke")) {
+			String refused = refusal(ENGINE, op, gridInput(venue));
+			assertTrue(refused != null && refused.contains(HTTPAdapter.PRIVATE_ADDRESS), op + ": " + refused);
+		}
+		String refused = refusal(ENGINE, "v/ops/grid/job-status",
+			Maps.of(Fields.VENUE, venue, Fields.ID, "00112233445566778899aabbccddeeff"));
+		assertTrue(refused != null && refused.contains(HTTPAdapter.PRIVATE_ADDRESS), refused);
+
+		// The same venue answers a user whose operator allows its host
+		Job job = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(GRID_RUN, gridInput(venue), ctx);
+		assertEquals(Strings.create("hello"), RT.getIn(job.awaitResult(5000), "message"));
 	}
 
 	@Test
@@ -205,16 +224,20 @@ public class FederationTargetPolicyTest {
 
 	/** The call is refused with the given rule, at submission or as its job's failure, and nothing reached the peer. */
 	private void assertRefused(Peer peer, String rule, Engine engine, String op, ACell input) {
-		String refusal;
+		String refusal = refusal(engine, op, input);
+		assertTrue(refusal != null && refusal.contains(rule), refusal);
+		assertEquals(0, peer.requests.get(), "a refused target is never dialled");
+	}
+
+	/** Why the caller's call fails, at submission or as its job's failure. */
+	private String refusal(Engine engine, String op, ACell input) {
 		try {
 			Job job = engine.jobs().invokeOperation(op, input, ctx);
 			assertThrows(Exception.class, () -> job.awaitResult(5000));
-			refusal = job.getErrorMessage();
+			return job.getErrorMessage();
 		} catch (RuntimeException e) {
-			refusal = e.getMessage();
+			return e.getMessage();
 		}
-		assertTrue(refusal != null && refusal.contains(rule), refusal);
-		assertEquals(0, peer.requests.get(), "a refused target is never dialled");
 	}
 
 	private static Engine listedEngine() {

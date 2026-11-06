@@ -56,6 +56,7 @@ import covia.venue.Engine;
 import covia.venue.RemoteJobs;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.TwoVenueTestServer;
 import covia.venue.auth.AuthMethods;
 import covia.venue.auth.VenueAuthenticator;
 import covia.venue.auth.VenueProofs;
@@ -110,6 +111,21 @@ public class VenueIdentityProofTest {
 			peer.claims = "did:web:venue.example.com";
 			assertRefused(ENGINE, peer, peer.url());
 		}
+	}
+
+	@Test
+	void aVenueReachedAwayFromItsDidWebIsSentNoCredential() {
+		// Venue B states did:web:venue-b.test.covia.example but is reached on loopback
+		String venue = TwoVenueTestServer.BASE_URL_B;
+		String refused = refusal(ENGINE, input(venue, "venue"));
+		assertTrue(refused != null && refused.contains(VenueConnection.VENUE_UNPROVEN), refused);
+		assertTrue(refused.contains(VenueDID.NOT_ITS_ADDRESS), refused);
+		assertTrue(jobsAt(TwoVenueTestServer.ENGINE_B, ENGINE).isEmpty(), "venue B holds no job in the caller's name");
+
+		// With proof off, the credential is sent and venue B acts on it
+		Job job = LAX.jobs().invokeOperation(GRID_RUN, input(venue, "venue"), LAX.venueContext());
+		assertEquals(Strings.create("hello"), RT.getIn(job.awaitResult(5000), "message"));
+		assertFalse(jobsAt(TwoVenueTestServer.ENGINE_B, LAX).isEmpty(), "venue B ran the job in the caller's name");
 	}
 
 	@Test
@@ -361,6 +377,11 @@ public class VenueIdentityProofTest {
 		} catch (RuntimeException e) {
 			return e.getMessage();
 		}
+	}
+
+	/** The jobs {@code venue} holds in the name of {@code caller}'s venue identity. */
+	private static Index<Blob, ACell> jobsAt(Engine venue, Engine caller) {
+		return venue.jobs().getJobs(RequestContext.of(caller.getDIDString()));
 	}
 
 	/** The venue's own authenticated call is refused as unproven, and nothing but discovery and the challenge reached the peer. */
