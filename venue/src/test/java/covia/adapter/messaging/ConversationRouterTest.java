@@ -128,6 +128,36 @@ class ConversationRouterTest {
 		} finally { engine.close(); }
 	}
 
+	@Test void aMessageAnsweredBeforeDeliveryReturnsIsStillTaken() {
+		// The wake waits for the agent's run loop, so the agent has taken and
+		// answered the message before delivery returns: a finished chat Job must
+		// still come back as taken, not as a duplicate with no reply.
+		Engine engine = Engine.createTemp(Maps.empty());
+		try {
+			Engine.addDemoAssets(engine);
+			engine.registerAdapter(new AgentAdapter() {
+				@Override public CompletableFuture<ACell> wakeAgent(convex.core.data.AString owner,
+						convex.core.data.AString agent, boolean force) {
+					CompletableFuture<ACell> loop = super.wakeAgent(owner, agent, force);
+					if (loop != null) loop.join();
+					return loop;
+				}
+			});
+			var owner = Strings.create("did:test:answered-intake");
+			engine.getVenueState().users().ensure(owner);
+			var router = new ConversationRouter(engine, new Spec("bot", owner.toString(), "quick", null, null),
+				new ConversationSessions(engine.adapterState("messaging-test"), "quick/sessions"));
+			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "quick", Fields.CONFIG,
+				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")));
+			var agents = (AgentAdapter) engine.getAdapter("agent");
+			Job job = agents.deliverSession(Maps.of(Fields.AGENT_ID, "quick", Fields.MESSAGE, "answered at once"),
+				router.context().withSessionDelivery((draft, sid, jid) -> true));
+			assertNotNull(job);
+			assertEquals(Status.COMPLETE, job.getStatus(), "the agent answered before delivery returned");
+			assertTrue(RT.getIn(job.getOutput(), Fields.RESPONSE).toString().contains("answered at once"));
+		} finally { engine.close(); }
+	}
+
 	@Test void conflictingVenueEditRetriesIntakeButWakesAndRepliesOnce() throws Exception {
 		Engine engine = Engine.createTemp(Maps.empty());
 		var staged = new CountDownLatch(1);
@@ -314,7 +344,6 @@ class ConversationRouterTest {
 			assertEquals(0, wakes.get(), "do not execute before the durability barrier succeeds");
 			var jid = convex.core.data.Blob.fromHex(inbox.get("1").get(Fields.JOB_ID).toString());
 			assertFalse(engine.jobs().getJob(jid).isFinished(), "a failed flush must not fail accepted input");
-			assertEquals(convex.core.data.prim.CVMBool.TRUE, engine.jobs().getJob(jid).getData().get(AgentAdapter.DELIVERY_ACCEPTED));
 			engine.failFlush = false;
 			Thread.sleep(1200); // Past the removed flush-retry cadence.
 			assertEquals(0, wakes.get(), "no hidden background retries");

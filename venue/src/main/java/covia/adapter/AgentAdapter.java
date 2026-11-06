@@ -362,18 +362,46 @@ public class AgentAdapter extends AAdapter {
 		return null;
 	}
 
-	/** Admit local input atomically, then flush before waking. Storage failures
-	 * propagate to the caller; the committed state remains available for inspection. */
+	/**
+	 * Hands a message to a local agent's session in one transaction with the
+	 * caller's participant ({@link RequestContext#getSessionDelivery}), then
+	 * flushes before waking the agent. Storage failures propagate to the caller;
+	 * the committed state remains available for inspection.
+	 *
+	 * @return the chat Job when the agent took the message, whatever has become
+	 *         of the Job since; null when the participant had taken it already
+	 * @throws JobFailedException when the agent refused the message
+	 */
 	public Job deliverSession(ACell input, RequestContext ctx) {
-		java.util.Objects.requireNonNull(ctx.getSessionDelivery());
-		Job job = engine.jobs().invokeOperation("v/ops/agent/chat", input, ctx);
-		if (CVMBool.TRUE.equals(job.getData().get(DELIVERY_ACCEPTED)) || Status.COMPLETE.equals(job.getStatus())) {
-			engine.flush();
-			AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, Abilities.AGENT_MESSAGE, false);
-			AgentState agent = getAgent(target.ownerDID(), target.agentId());
-			if (agent != null && hasWork(agent)) wakeAgent(target.ownerDID(), target.agentId(), true);
+		Delivery delivery = new Delivery(java.util.Objects.requireNonNull(ctx.getSessionDelivery()));
+		Job job = engine.jobs().invokeOperation("v/ops/agent/chat", input, ctx.withSessionDelivery(delivery));
+		if (!delivery.taken && !delivery.duplicate) throw new JobFailedException(job);
+		engine.flush();
+		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID, Abilities.AGENT_MESSAGE, false);
+		AgentState agent = getAgent(target.ownerDID(), target.agentId());
+		if (agent != null && hasWork(agent)) wakeAgent(target.ownerDID(), target.agentId(), true);
+		return delivery.taken ? job : null;
+	}
+
+	/**
+	 * One session delivery's participant, which learns what became of the
+	 * message. The chat handler runs within {@code invokeOperation}, on the
+	 * delivering thread, and marks it once the intake transaction has committed:
+	 * the participant's own yes proves nothing, since the draft it answered may
+	 * be retried or discarded. Neither mark means the agent refused the message.
+	 */
+	private static final class Delivery implements RequestContext.SessionDelivery {
+		private final RequestContext.SessionDelivery participant;
+		/** The agent took the message. */
+		private boolean taken;
+		/** The participant had taken the message already, so the agent was not given it again. */
+		private boolean duplicate;
+
+		Delivery(RequestContext.SessionDelivery participant) { this.participant = participant; }
+
+		@Override public boolean accept(covia.venue.VenueState draft, AString sessionId, AString jobId) {
+			return participant.accept(draft, sessionId, jobId);
 		}
-		return job;
 	}
 
 	private AgentTarget resolveAgentTarget(RequestContext ctx, ACell input,
@@ -1690,7 +1718,6 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	public static final String DELIVERY_JOB_UNAVAILABLE = "Session delivery Job is no longer active";
-	public static final AString DELIVERY_ACCEPTED = Strings.intern("deliveryAccepted");
 	public static final String LOCAL_DELIVERY_REQUIRED = "Atomic session delivery requires a local agent";
 
 	/**
@@ -1825,16 +1852,19 @@ public class AgentAdapter extends AAdapter {
 				if (intake == AgentState.SessionIntake.APPLIED) {
 					Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data ->
 						data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
-							.assoc(Fields.SESSION_ID, sid).assoc(DELIVERY_ACCEPTED, CVMBool.TRUE));
+							.assoc(Fields.SESSION_ID, sid));
 					if (changed == null) throw new NotSupportedException(DELIVERY_JOB_UNAVAILABLE);
 					notification.set(changed);
 				}
 			});
 		} catch (DuplicateSessionDelivery duplicate) {
 			// Discard the private draft, including its speculative session append.
+			if (ctx.getSessionDelivery() instanceof Delivery delivery) delivery.duplicate = true;
 			return null;
 		}
 		if (notification.get() != null) notification.get().run();
+		if (result.get() == AgentState.SessionIntake.APPLIED
+				&& ctx.getSessionDelivery() instanceof Delivery delivery) delivery.taken = true;
 		return result.get();
 	}
 

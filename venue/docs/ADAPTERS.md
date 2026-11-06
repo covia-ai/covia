@@ -107,8 +107,12 @@ Messaging adapters can use `ConversationRouter.deliver` with a trusted
 `VenueState.transact` draft, so the session input, adapter receipt and conversation
 mapping and Job admission state publish together. The callback must use only draft-bound components,
 perform no I/O, and tolerate retries. Returning false discards the draft as a
-duplicate. The engine flushes before waking the agent and returns the chat Job
-without waiting for its result. A flush failure propagates to the caller; no
+duplicate. The engine flushes before waking the agent, and `deliver` returns
+without waiting for the agent's reply: the chat Job when the agent took the
+message, whatever has become of the Job since; null when the participant had
+taken it already; and otherwise a `JobFailedException` saying why the agent
+refused it, after one retry on a new session when the conversation's saved
+session has gone. A flush failure propagates to the caller; no
 background retry is started and already committed input is not rolled back.
 `ConversationRouter.onResponse` observes replies
 on the shared virtual executor, handles failed Jobs and skips duplicate deliveries.

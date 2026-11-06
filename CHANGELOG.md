@@ -63,6 +63,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A job keeps the secret fields and output schema its operation declared when it was admitted, across a restart and later changes to the operation.
 - The venue recovers jobs from its own entries for unfinished jobs, which venue version 3 adds on upgrade.
 - Job records no longer carry `delegation.authRef`, and an external agent's job no longer shows `agentOwner`, `agentInteraction` or `agentBackendJob`.
+- Chat jobs for messages a chat bot hands to an agent on its venue no longer show `deliveryAccepted`.
+- An A2A send's job names its remote task only as `delegation.remoteId`; `remoteTaskId` is gone.
 - The venue keeps no `remote-job-<id>` secrets; upgrading removes them, those left by a crash included.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
@@ -124,6 +126,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Memory edits made at once by a user and their agents all take effect.
 - Concurrent `agent:update` calls no longer undo each other's config changes.
 - A chat is no longer answered with the reply to an earlier message (#654).
+- A Claude Code session restored after a restart keeps the options its call asked for (model, tools, permission mode, limits, system prompt, JSON schema), and ends if its project no longer allows its permission mode.
 
 ### Security
 
@@ -144,6 +147,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `auth:identity-token` refuses restricted self-tokens and the public principal.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
+- An agent's pinned context and skills index show only what its caps cover.
 
 ### Migration
 

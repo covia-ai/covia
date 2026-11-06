@@ -136,8 +136,8 @@ public final class ExternalAgents {
 					} else if (Status.CANCELLED.equals(j.getStatus())) parent.cancel();
 					else parent.fail(j.getErrorMessage() == null ? MISSING_CHILD : j.getErrorMessage());
 				} else {
-					// The child's status is the parent's to record, when it changes;
-					// its progress is only shown, never recorded.
+					// The parent records the child's status when it changes, and
+					// its progress in place of the parent's own.
 					AString status = Status.PENDING.equals(j.getStatus()) ? Status.STARTED : j.getStatus();
 					parent.update(d -> status.equals(d.get(Fields.STATUS)) ? null : d.assoc(Fields.STATUS, status));
 					parent.setProgress(j.getData().get(Fields.PROGRESS));

@@ -552,11 +552,10 @@ The full proof chain travels with Carol's request.
 
 ### 4.6 Revocation
 
-An issued token cannot be revoked: it holds until its `exp`. COG-17 makes
-expiry the safety net and prefers short-lived grants issued again on demand.
-Only sign-in keys can be revoked (`AuthState`). How authority over the venue's
-own resources could be withdrawn is proposed in
-[VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md).
+The venue does not implement revocation: an issued token holds until its
+`exp`, and only sign-in keys can be revoked (`AuthState`). COG-17 lets a
+grantor revoke any grant it made; [VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md)
+proposes how the venue does so.
 
 ### 4.7 Authenticating — lifting the public read-only scope
 

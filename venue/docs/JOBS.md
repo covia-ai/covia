@@ -409,10 +409,18 @@ the final flush runs, carrying the suspended states.
 
 Remote `grid:run`, remote `grid:jobResult` without a caller timeout, and A2A
 sends retain a `delegation` record. It carries the protocol, target, accepted
-`remoteId`, last observed `remoteStatus`, and observation health. Local
-processing stays `STARTED` while a remote job is queued. Remote interruptions
-and terminal outcomes are mirrored; a terminal result and its supporting
-remote status are committed atomically before result continuations run.
+`remoteId` (for an A2A send, the remote Task's id), last observed
+`remoteStatus`, and observation health. Local processing stays `STARTED` while
+a remote job is queued. Remote interruptions and terminal outcomes are
+mirrored; a terminal result and its supporting remote status are committed
+atomically before result continuations run.
+
+A `remoteagent:request` job also carries `sessionId`, taken from the
+destination's task as it is observed: the destination agent's session, which is
+one of this venue's own when the destination is this venue. An agent that
+serves its calls through a remote-agent backend is different: its own job names
+its Covia session, and the backend job beneath it names the destination's
+([AGENT_SESSIONS.md](AGENT_SESSIONS.md#22-external-agent-sessions)).
 
 Transport timeouts, malformed observations, missing remote records, and 5xx
 responses do not prove execution failed. They set observation health to
