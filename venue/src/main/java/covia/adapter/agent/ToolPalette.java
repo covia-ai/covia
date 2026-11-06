@@ -173,7 +173,7 @@ public final class ToolPalette {
 		Set<String> skipped = (skipNames != null) ? skipNames : Set.of();
 		Palette palette = Palette.EMPTY;
 		if (config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS))) {
-			palette = build(engine, ctx, DEFAULT_TOOL_OPS,
+			palette = build(engine, resolutionCtx, DEFAULT_TOOL_OPS,
 				skipped::contains, null, SOURCE_DEFAULT, null);
 		}
 
