@@ -72,13 +72,16 @@ owner's data, such as `did:key:zBob.../o/transform`.
 | `s/` | Secrets | Encrypted secrets | `secret:set`; `covia:delete` of a whole secret |
 | `w/` | Workspace | User and agent data | `covia:write`, `covia:delete` |
 | `h/` | HITL inbox | Human-in-the-loop requests | The `hitl` operations |
-| `meta` | User meta record | Activity times for the user (Appendix A, *User meta record*) | The framework only |
 | `n/` | Agent workspace | `g/<agent>/n` for the running agent | `covia:write` within the agent |
 | `c/` | Session scratch | `g/<agent>/sessions/<session>/c` | `covia:write` within the session |
 | `t/` | Job scratch | `j/<job>/temp` for the current job | `covia:write` within the job |
 | `v/` | Venue definitions | `<venue>/w/global`: `v/ops`, `v/skills`, `v/adapters`, `v/models` | The venue's own identity |
 | `x/<adapter>/` | Adapter view | That adapter's view for the addressed user | As the adapter allows; read-only by default |
 | `dlfs/<drive>/` | DLFS drives | The owner's drive in the separate `:dlfs` region | The `dlfs` and `file` operations |
+
+A user's record also holds the venue's bookkeeping, its activity times
+(Appendix A, *User meta record*) and its account lifecycle, which no path
+reaches.
 
 `n/`, `c/`, `t/`, `v/` and `x/` are context-dependent (§4.5). An `x/` route
 exposes nothing unless the adapter opts in; see
@@ -288,9 +291,9 @@ A caller's path does not match the stored keys one for one. `w/foo` crosses the
 `{updated, data}` wrapper, `j/<hex>` is a Blob key read as the job's current
 state, `g/<id>` enters an agent record with its own `ts` stamp, `w/list/0` is a
 vector index, and `n/x` depends on who is asking. Path resolution maps one onto
-the other. Today it is done in several places, each with its own list of
-namespaces, and write policy is an allowlist in `CoviaAdapter`. This section is
-the design that replaces them.
+the other. Which reads need a grant is still decided by lists of namespaces
+(`Engine.requireReadable`, `ToolPalette`, `CoviaAPI`), and write policy is an
+allowlist in `CoviaAdapter`. This section is the design that replaces them.
 
 **A path is strings.** A Covia path is the sequence of string segments a caller
 writes (`w/list/0` is `"w"`, `"list"`, `"0"`), and it never holds a lattice
@@ -318,7 +321,10 @@ starts at, and the request decides only which component that is:
 
 `CoviaAdapter.resolve(ctx, path)` makes that choice and then hands the path to
 the component, so resolution itself never sees the request; it checks no
-authority and changes nothing. An `x/` view is the exception while adapters are
+authority, changes nothing and always returns a position. A request without
+the scope its path starts at (an agent for `n/`, a session for `c/`, a task
+or job for `t/`, a user for a path without an owner DID) is refused with
+`WrongScopeException`. An `x/` view is the exception while adapters are
 not components: the view depends on the request, so `AdapterView` checks the
 caller's authority itself. The operation acting for the request checks the
 caller's authority and applies its own write rules (*Components carry no
@@ -343,8 +349,8 @@ from its own cursor, so a walk from a draft root stays in the draft.
 | Component | Routes |
 |-----------|--------|
 | `VenueState` | a path's first segment, its owner's DID, to `Users`; `x/<adapter>` to the adapter's `Workspace` view |
-| `Users` | a user's DID to their `User` |
-| `User` | `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a`, and `w`, `o` to a `Workspace` |
+| `Users` | a user's DID to their `User` (`Users.at`) |
+| `User` | the names in its record's lattice (`Covia.USER_RECORD`): `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
 | `Jobs` | a job id, in hex, to its `JobState` |
 | `JobState` | `temp` to the job's `Workspace` |
 | `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState` |
@@ -355,9 +361,28 @@ meet (`ValuePath`): a map key, a vector index written in digits, an Index key
 as the string itself or, in hex, as a Blob. In a `Workspace` the path ends at
 an `Entry`, whose keys are fixed when it is resolved (`ValuePath.keys`); a
 level that does not exist yet takes the segment, the key of the map created
-there. A stored null counts as present. A segment that names no live user,
-agent, session or job ends the path at the component above it, where it reads
-as null; a deleted account's record is never read.
+there. A stored null counts as present.
+
+**Resolution follows the path's shape, not the data.** A component chooses a
+child by its key whether or not the child exists, because children come and
+go, within a transaction too: a position resolved early in a draft sees an
+agent the draft creates later. `ACoviaComponent.exists` and `Position.exists`
+say whether data is there now. A user, agent, session or job that does not
+exist reads as absent, and a workspace in it refuses changes. An account is
+reached through `Users.at`, which reads a record that is not live (never
+registered, or a deleted account's tombstone) as absent, refuses changes to
+it, and fences off a later account with the same DID as `Users.get` does.
+
+A path that names no place data could be ends at an invalid position
+(`Position.invalid`): a name a component does not have, such as any name in a
+user's record outside its lattice, where the venue keeps its bookkeeping; a
+first segment under the venue that is not a DID; or a job or session id that
+is not hex. Reading, testing or changing an invalid position is refused with
+`ACoviaComponent.NO_SUCH_PATH`, which names the path, and `Position.isValid`
+asks without the refusal. The covia read operations and `/values` report that
+refusal to the caller (READ_API.md). Code that tries several readings of a
+string takes an invalid path for something else: `Engine.resolvePath` returns
+null, and a context entry is text (`CoviaAdapter.isLatticePath`).
 
 **Operations define writability.** A component's domain operations are the
 only ways to change it. Each makes its own checks and then changes its cursor
@@ -616,10 +641,9 @@ would use: an identity's idle time is `now - meta.updated`. Job-free reads do
 not count, by design. Deleting a user (`user:delete`) removes their subtree,
 so store GC can reclaim its cells.
 
-`meta` is not a writable namespace (`covia:write` addresses `w` and `o` only),
-so users cannot forge their activity. It is readable as `<did>/meta` through
-the ordinary read path. New per-identity fields belong in `meta`, not as
-further top-level keys.
+`meta` is the venue's bookkeeping, not the user's data, so no path reaches it
+(§4.6) and users cannot forge their activity. New per-identity
+fields belong in `meta`, not as further top-level keys.
 
 ### A.3 Update Logic
 

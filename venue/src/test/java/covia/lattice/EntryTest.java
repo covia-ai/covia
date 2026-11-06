@@ -37,7 +37,7 @@ public class EntryTest {
 		Workspace area = area(Maps.of("a", Maps.empty()));
 		Entry entry = area.entry(path("a/b"));
 
-		assertFalse(entry.contains());
+		assertFalse(entry.exists());
 		assertFalse(entry.write(ONE), "the first write creates the entry");
 		assertEquals(Maps.of("a", Maps.of("b", ONE)), area.read());
 		assertTrue(entry.write(TWO));
@@ -55,13 +55,13 @@ public class EntryTest {
 		Entry entry = area.entry(path("a"));
 
 		assertFalse(entry.write(null));
-		assertTrue(entry.contains());
-		assertTrue(area.resolve(path("a")).contains());
+		assertTrue(entry.exists());
+		assertTrue(area.resolve(path("a")).exists());
 		assertNull(entry.read());
 		assertTrue(entry.write(null), "a stored null counts as present");
 
 		assertTrue(entry.delete());
-		assertFalse(entry.contains());
+		assertFalse(entry.exists());
 		assertEquals(Maps.empty(), area.read());
 	}
 
@@ -115,7 +115,7 @@ public class EntryTest {
 		Entry inList = area.entry(path("list/x"));
 
 		assertNull(inList.read());
-		assertFalse(inList.contains());
+		assertFalse(inList.exists());
 		assertFalse(inList.delete());
 		assertEquals(String.format(ValuePath.NOT_AN_INDEX, "/list", 1, "x"),
 			assertThrows(InvalidInputException.class, () -> inList.write(ONE)).getMessage());
@@ -178,9 +178,9 @@ public class EntryTest {
 		Workspace area = area(null);
 		Entry root = area.entry(CoviaPath.EMPTY);
 
-		assertFalse(root.contains());
+		assertFalse(root.exists());
 		assertFalse(root.write(Maps.of("a", ONE)));
-		assertTrue(root.contains());
+		assertTrue(root.exists());
 		assertEquals(Maps.of("a", ONE), area.read());
 		assertTrue(root.delete());
 		assertNull(area.read());

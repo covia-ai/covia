@@ -552,7 +552,7 @@ public final class Skills {
 				// lattice metadata, so it never goes through resolvePath.
 				return resolveContentSkill(engine, ctx, path, s);
 			}
-			if (ContextLoader.isAssetReference(str)) {
+			if (ContextLoader.isReference(engine, ctx, str)) {
 				// String reference — one hop to the skill asset (no chains,
 				// matching Engine.resolveContent's one-hop rule).
 				requireRead(engine, ctx, s);

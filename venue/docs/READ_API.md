@@ -6,7 +6,8 @@
 > `count` as the single cardinality word, camelCase fields, and no request echo;
 > `inspect` is the render route (`{result}`). `aggregate` ships as **count
 > (optionally grouped)**; `covia:aggregate` is also an op. Absence is
-> `200 {exists:false}`. `read` supports ETag/`304` conditional reads (value hash).
+> `200 {exists:false}`, and a path that names no place data could be is a `400`.
+> `read` supports ETag/`304` conditional reads (value hash).
 > `list` supports **field projection** (#191, see below).
 > **Still TODO:** numeric reductions (`sum`/`min`/`max`, pending a consumer).
 
@@ -380,14 +381,18 @@ restricting) is deferred to a **separate later review**.
 |------|------|
 | 200 | Success, **including** absence (`{exists:false}`) and truncation — parity with the ops |
 | 304 | `read` only: `If-None-Match` matches the value's CAD3 hash (conditional read) |
-| 400 | Malformed `path`/params or missing/contradictory execution-scope selectors |
+| 400 | Malformed `path`/params, a path that names no place data could be, or missing/contradictory execution-scope selectors |
 | 401 | Authentication required (no token, public access disabled) |
 | 403 | Capability denied for the requested path |
 
 **Absence is `200 {exists:false}`**, matching `covia:read` — GET and invoke agree,
 callers have one absence check, and a missing path is a normal read result, not an
-error. (No 5xx on this path: reads are local-only, so there is no remote-fetch
-failure to surface — see Principle 5.)
+error. That includes a path into a user, agent, session or job that does not
+exist. A path that could hold nothing at all, such as `wrok/notes` or a job id
+that is not hex, is a `400` naming the path
+([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6). (No 5xx on this path:
+reads are local-only, so there is no remote-fetch failure to surface — see
+Principle 5.)
 
 ## Compatibility — field renames (breaking, 0.3.0 window)
 

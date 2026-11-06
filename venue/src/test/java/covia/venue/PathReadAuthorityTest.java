@@ -163,6 +163,18 @@ public class PathReadAuthorityTest {
 			"a context entry must not render a path its agent cannot read");
 	}
 
+	@Test
+	public void testAContextEntryInAnyShapeNeedsRead() {
+		AString slashed = Strings.create("/" + alice + "/w/cfg");
+		Job created = createAgent("ctx-shape-probe", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"context", Vectors.of(slashed, Maps.of("ref", slashed))), BOB);
+		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
+		Job context = run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "ctx-shape-probe"), BOB);
+		assertFalse(String.valueOf(context.getOutput()).contains(SECRET),
+			"a context entry must not render a path its agent cannot read");
+	}
+
 	// ========== path shapes ==========
 
 	@Test

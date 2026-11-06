@@ -142,7 +142,7 @@ public class ContextLoader {
 			result = resolveMapEntry(map, ctx);
 		}
 		if (result != null || !includeAbsent || resolution != Resolution.ABSENT) return result;
-		return absent(entry);
+		return absent(entry, ctx);
 	}
 
 	private Resolved resolved(String label, String content, AMap<AString, ACell> provenance) {
@@ -156,11 +156,11 @@ public class ContextLoader {
 	}
 
 	/** Metadata-only value for an optional declaration whose source is absent. */
-	private Resolved absent(ACell entry) {
+	private Resolved absent(ACell entry, RequestContext ctx) {
 		String label = null;
 		AMap<AString, ACell> provenance = Maps.empty();
 		if (entry instanceof AString ref) {
-			boolean reference = isNamespacePath(ref.toString()) || isAssetReference(ref.toString());
+			boolean reference = isReference(engine, ctx, ref.toString());
 			label = reference ? deriveLabel(ref.toString()) : null;
 			provenance = reference ? Maps.of(K_REF, ref) : Maps.of(K_SOURCE, SOURCE_TEXT);
 		} else if (entry instanceof AMap<?, ?> raw) {
@@ -197,12 +197,12 @@ public class ContextLoader {
 	}
 
 	/**
-	 * Resolves a string context entry. Interprets as workspace path, asset
-	 * reference, or literal text based on prefix.
+	 * Resolves a string context entry: content, a lattice path, or literal
+	 * text ({@link #resolveReference}).
 	 */
 	Resolved resolveStringEntry(AString ref, RequestContext ctx) {
 		String str = ref.toString();
-		boolean reference = isNamespacePath(str) || isAssetReference(str);
+		boolean reference = isReference(engine, ctx, str);
 		String label = reference ? deriveLabel(str) : null;
 		AMap<AString, ACell> provenance = reference
 			? Maps.of(K_REF, ref) : Maps.of(K_SOURCE, SOURCE_TEXT);
@@ -329,52 +329,53 @@ public class ContextLoader {
 		if (ref == null) return null;
 		String refStr = ref.toString();
 
-		// Workspace/namespace path
-		if (isNamespacePath(refStr)) {
-			return resolveWorkspacePath(refStr, ctx);
-		}
+		// Content: a hash, an asset path, a DID URL, a file, DLFS or a catalog path
+		if (isAssetReference(refStr)) return resolveAssetContent(ref, ctx);
 
-		// Try as a content/asset reference (hash, lattice path, file, DLFS, DID URL)
-		return resolveAssetContent(ref, ctx);
+		// A value in the lattice
+		if (isLatticePath(engine, ctx, refStr)) return resolveWorkspacePath(refStr, ctx);
+
+		return refStr;                                    // literal text
+	}
+
+	/** Whether a string is a reference rather than text: content ({@link #isAssetReference}) or a lattice path ({@link #isLatticePath}). */
+	public static boolean isReference(Engine engine, RequestContext ctx, String ref) {
+		return isAssetReference(ref) || isLatticePath(engine, ctx, ref);
 	}
 
 	/**
-	 * Returns true if the string starts with a known namespace prefix.
+	 * Whether a string is a path into the lattice rather than text: it holds a
+	 * {@code /} after an optional leading one, and names a place that could
+	 * hold data, as {@code covia:read} resolves it
+	 * ({@link CoviaAdapter#isLatticePath}). {@code "w/docs/rules"} is a path
+	 * even when nothing is there; {@code "Be brief"} and {@code "foo/bar"} are
+	 * text.
 	 */
-	public static boolean isNamespacePath(String ref) {
+	public static boolean isLatticePath(Engine engine, RequestContext ctx, String ref) {
 		if (ref == null) return false;
-		// A leading slash is optional sugar (mirrors Engine.resolvePath): "/w/x"
-		// resolves like "w/x". Normalise it before matching namespace prefixes —
-		// without this, a context entry like "/w/docs/rules" fell through to
-		// literal text instead of resolving the workspace path.
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
-		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
-			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/");
+		if (s.indexOf('/') < 0) return false;
+		return engine.getAdapter("covia") instanceof CoviaAdapter covia && covia.isLatticePath(ctx, Strings.create(ref));
 	}
 
 	/**
-	 * Returns true if the string looks like an asset reference rather than literal text.
+	 * Returns true if the string is a reference read as content rather than
+	 * as a lattice value.
 	 *
-	 * <p>References include hex hashes, /a/ and /o/ paths, DID URLs, file/DLFS
-	 * content references, lattice
-	 * namespace paths (w/, g/, j/, s/, h/, n/, t/, o/), and venue catalog
-	 * paths under /v/. Strings with spaces are treated as literal text.</p>
+	 * <p>These are hex hashes, asset paths ({@code a/}, {@code /a/}), DID
+	 * URLs, file and DLFS content references, and venue catalog paths
+	 * ({@code v/}), whose entries read as the assets they describe. Strings
+	 * with spaces are treated as literal text.</p>
 	 */
 	public static boolean isAssetReference(String ref) {
 		if (ref == null || ref.isEmpty() || ref.contains(" ")) return false;
-		if (ref.startsWith("/a/") || ref.startsWith("/o/")) return true;
 		if (ref.startsWith("did:")) return true;
 		if (ref.startsWith("file:/") || ref.startsWith("dlfs/") || ref.startsWith("dlfs://")) return true;
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return true; // hex hash
-		// Lattice namespace paths — leading slash optional (mirrors resolvePath).
-		// a/ is the bare asset-ref form (matches AssetAdapter.parseAssetId).
+		// Leading slash optional (mirrors resolvePath). a/ is the bare asset-ref
+		// form (matches AssetAdapter.parseAssetId).
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
-		if (s.startsWith("a/") || s.startsWith("w/") || s.startsWith("o/") || s.startsWith("g/")
-			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/") || s.startsWith("x/")
-			|| s.startsWith("v/")) return true;
-		return false;
+		return s.startsWith("a/") || s.startsWith("v/");
 	}
 
 	/**
@@ -453,7 +454,7 @@ public class ContextLoader {
 	void requireReadAccess(AString ref, RequestContext ctx) {
 		if (ref == null) return;
 		String value = ref.toString();
-		if (!isNamespacePath(value) && !isAssetReference(value)) return; // literal text
+		if (!isReference(engine, ctx, value)) return; // literal text
 		AString ability = (AssetAdapter.parseAssetId(ref) != null)
 			? Abilities.ASSET_READ : Capability.CRUD_READ;
 		engine.requireResourceAccess(ctx, ref, ability);
@@ -558,7 +559,6 @@ public class ContextLoader {
 	 * Derives a label from a reference string.
 	 */
 	public static String deriveLabel(String ref) {
-		if (isNamespacePath(ref)) return ref;
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return ref.substring(0, 12) + "...";
 		return ref;
 	}

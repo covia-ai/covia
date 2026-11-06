@@ -200,6 +200,16 @@ public class ValuesApiTest {
 	}
 
 	@Test
+	public void testAPathThatNamesNoPlaceIsABadRequest() throws Exception {
+		for (String route : new String[] {"read", "list", "slice", "inspect", "aggregate"}) {
+			HttpResponse<String> r = get(route, "wrok/vNotes");
+			assertEquals(400, r.statusCode(), route + ": " + r.body());
+			assertTrue(r.body().contains(String.format(covia.lattice.ACoviaComponent.NO_SUCH_PATH, "/wrok/vNotes")),
+				route + ": " + r.body());
+		}
+	}
+
+	@Test
 	public void testListKeys() throws Exception {
 		HttpResponse<String> r = get("list", "w/vBox");
 		assertEquals(200, r.statusCode(), r.body());

@@ -145,23 +145,12 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return (jobs == null) ? null : views(jobs);
 	}
 
-	/** A job is named by its id in hex; a segment that names no job ends here, and reads as null. */
+	/** A job is named by its id in hex, whether or not it exists; a segment that is not hex names no job. */
 	@Override
 	public Position resolve(CoviaPath path) {
-		Blob id = path.isEmpty() ? null : ValuePath.blobKey(path.first());
-		JobState job = (id == null) ? null : get(id);
-		if (job == null) return super.resolve(path);
-		return job.resolve(path.rest());
-	}
-
-	/** Below the jobs, only a segment that names no job is read here, from the index as stored. */
-	@Override
-	public ACell read(CoviaPath path) {
-		return path.isEmpty() ? read() : ValuePath.get(cursor().get(), path);
-	}
-
-	@Override
-	public boolean contains(CoviaPath path) {
-		return ValuePath.contains(cursor().get(), path);
+		if (path.isEmpty()) return super.resolve(path);
+		Blob id = ValuePath.blobKey(path.first());
+		if (id == null) return Position.invalid(path);
+		return state(id).resolve(path.rest());
 	}
 }

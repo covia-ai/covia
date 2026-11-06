@@ -103,7 +103,8 @@ class ExtensionRouteTest {
 		assertEquals(Strings.create("alice"), engine.resolvePath(Strings.create("/" + path("/label")), alice));
 		assertEquals(Strings.create("alice"), read(aliceDID + "/" + path("/label"), alice));
 		assertEquals("alice", new ContextLoader(engine).resolveValue(Strings.create(path("/label")), alice).content());
-		assertNull(engine.getVenueState().users().get(aliceDID).resolve(CoviaPath.parse(path(""))).read());
+		assertFalse(engine.getVenueState().users().get(aliceDID).resolve(CoviaPath.parse(path(""))).isValid(),
+			"a user's own data has no x: only the adapter's view does");
 		assertEquals(before, engine.getVenueState().get(), "reading a view does not materialise user storage");
 	}
 

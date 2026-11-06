@@ -216,7 +216,7 @@ public class WorkspaceTest {
 
 		Position parent = component.resolve(path.parent());
 		assertEquals(Maps.of("b", CVMLong.ONE), parent.read());
-		assertTrue(parent.contains());
+		assertTrue(parent.exists());
 		assertEquals("/a", parent.path().toString());
 	}
 

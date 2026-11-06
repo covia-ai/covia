@@ -162,15 +162,15 @@ public class UserMetaStampTest {
 	}
 
 	@Test
-	public void testMetaReadableViaOrdinaryReadPath() {
-		// The doc promises meta is readable (covia:read <did>/meta) though
-		// framework-owned (not a writable namespace).
+	public void testMetaIsNotUserData() {
+		// meta is the venue's bookkeeping: no path reaches it.
 		user.ensureAgent("readable-agent", Maps.empty(), null);
-		ACell result = engine.jobs().invokeOperation("v/ops/covia/read",
+		assertTrue(metaField("updated") > 0, "the record has its meta");
+		covia.grid.Job read = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("meta")),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		assertTrue(RT.getIn(result, "value", "updated") instanceof CVMLong,
-			"meta must be readable via covia:read: " + result);
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> read.awaitResult(5000));
+		assertEquals(String.format(covia.lattice.ACoviaComponent.NO_SUCH_PATH, "/meta"), read.getErrorMessage());
 	}
 
 	@Test

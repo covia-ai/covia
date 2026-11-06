@@ -168,12 +168,10 @@ A write-side argument is constrained because you can't write to a content-addres
 
 1. **Bare hex hash** → fetch from CAS
 2. **`/a/<hash>`** → fetch from CAS
-3. **`/o/<name>`** → caller's own `/o/`
-4. **Virtual prefixes** → registered cursor views: `/v/<path>` for venue globals, `/n/`, `/c/` and `/t/` for execution scopes, `/x/<adapter>/...` for explicit adapter views
-5. **DID URL** → asset refs (`did:.../a/<hash>`) resolve local copies only; physical user refs (`did:.../w/...`, `did:.../g/...`, etc.) resolve through the named local user's cursor. `<owner-did>/x/<adapter>/...` selects that owner's adapter view under normal delegation checks. `resolvePath` never touches the network
-6. **Workspace path** (`w/`, `g/`, `o/`, `j/`, etc.) → caller's lattice cursor
+3. **DID URL naming an asset** (`did:.../a/<hash>`) → a local copy only; `resolvePath` never touches the network
+4. **Lattice path** → the value there, resolved from the component the request names ([GRID_LATTICE_DESIGN.md](GRID_LATTICE_DESIGN.md) §4.6): a path with an owner DID (`did:.../w/...`, `did:.../g/...`) through that local user, `<owner-did>/x/<adapter>/...` through that owner's adapter view under normal delegation checks, `/v/<path>` through the venue's globals, `/n/`, `/c/` and `/t/` through the request's execution scopes, and any other path, such as `/o/<name>` or `w/...`, through the caller's own data
 
-The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive.
+The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive. A path that names no place data could be, such as `wrok/notes`, resolves to nothing here; the covia read operations refuse it.
 
 **A leading slash is optional sugar.** Every form above resolves identically with or without a leading slash: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`. The slash is normalised away before resolution, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable.
 

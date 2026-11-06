@@ -177,8 +177,6 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	public AString getAgentId() { return agentId; }
 
-	public boolean exists() { return cursor().get() != null; }
-
 	// ========== Record access ==========
 
 	@SuppressWarnings("unchecked")
@@ -359,8 +357,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/**
 	 * {@code n} is the agent's workspace and {@code sessions/<id>} a session,
-	 * named by its id in hex. The rest of the record, and a segment that names
-	 * no session, is read as stored.
+	 * named by its id in hex, whether or not it exists; an id that is not hex
+	 * names no session. The rest of the record is read as stored.
 	 */
 	@Override
 	public Position resolve(CoviaPath path) {
@@ -369,7 +367,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 			if (K_N.equals(segment)) return workspace().resolve(path.rest());
 			if (K_SESSIONS.equals(segment) && path.length() > 1) {
 				Blob sid = ValuePath.blobKey(path.get(1));
-				if (sid != null && getSession(sid) != null) return session(sid).resolve(path.rest(2));
+				if (sid == null) return Position.invalid(path);
+				return session(sid).resolve(path.rest(2));
 			}
 		}
 		return super.resolve(path);

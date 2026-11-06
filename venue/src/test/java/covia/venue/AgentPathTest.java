@@ -19,6 +19,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.exception.AuthException;
+import covia.exception.InvalidInputException;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
@@ -112,17 +113,44 @@ public class AgentPathTest {
 	}
 
 	@Test
-	public void testAMissingAgentOrSessionIsAbsentAndReadOnly() {
+	public void testAMissingAgentOrSessionIsAbsentAndTakesNoChange() {
 		String missingSession = "g/" + AGENT + "/sessions/" + Blob.fromHex("ff").toHexString();
-		for (String path : new String[] {"g/nobody", "g/nobody/n/notes", missingSession, missingSession + "/c/draft",
-				"g/" + AGENT + "/sessions/not-hex/c/draft"}) {
-			Position position = resolve(path);
-			assertNull(position.read(), path);
-			assertFalse(position.contains(), path);
+		for (String path : new String[] {"g/nobody", missingSession}) {
+			Position record = resolve(path);
+			assertNull(record.read(), path);
+			assertFalse(record.exists(), path);
 			assertEquals(ACoviaComponent.READ_ONLY,
-				assertThrows(AuthException.class, position::entry, path).getMessage());
+				assertThrows(AuthException.class, record::entry, path).getMessage());
+		}
+		for (String path : new String[] {"g/nobody/n/notes", missingSession + "/c/draft"}) {
+			Position entry = resolve(path);
+			assertNull(entry.read(), path);
+			assertFalse(entry.exists(), path);
+			assertThrows(InvalidInputException.class, () -> entry.entry().write(CVMLong.ONE), path);
 		}
 		assertNull(user.agent("nobody"), "resolving a path creates no agent");
 		assertNull(agent.getSession(Blob.fromHex("ff")), "resolving a path creates no session");
+	}
+
+	@Test
+	public void testASessionIdThatIsNotHexNamesNoSession() {
+		Position position = resolve("g/" + AGENT + "/sessions/not-hex/c/draft");
+		assertFalse(position.isValid());
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, position.path()),
+			assertThrows(InvalidInputException.class, position::read).getMessage());
+	}
+
+	@Test
+	public void testAPositionSeesAnAgentItsTransactionCreates() {
+		AString later = Strings.intern("later-agent");
+		user.transact(draft -> {
+			Position notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
+			assertTrue(notes.isValid());
+			assertFalse(notes.exists(), "the agent does not exist yet");
+			draft.ensureAgent(later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);
+			assertTrue(notes.exists(), "the position sees the agent the draft created");
+			assertEquals(CVMLong.ONE, notes.read());
+		});
+		assertEquals(CVMLong.ONE, resolve("g/" + later + "/n/notes").read());
 	}
 }

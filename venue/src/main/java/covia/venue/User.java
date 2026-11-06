@@ -22,8 +22,9 @@ import convex.lattice.cursor.StampedCursor;
  *
  * <p>Wraps a lattice cursor at {@code :user-data → <did>} within the
  * venue state. Provides typed accessors for per-user data. Created by
- * {@link Users#get(AString)} (returns null if the user doesn't exist) or
- * {@link Users#ensure(AString)} (creates if needed).</p>
+ * {@link Users#get(AString)} (returns null if the user doesn't exist),
+ * {@link Users#ensure(AString)} (creates if needed) or, for a path,
+ * {@link Users#at(AString)} (whether or not the account is live).</p>
  *
  * <p>The per-user lattice uses short AString-compatible keys from
  * {@link Namespace} for JSON compliance:</p>
@@ -101,10 +102,10 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	}
 
 	/**
-	 * The agent at {@code agentId}, whether or not its record exists, for a
-	 * request that names its own agent ({@code n/}, {@code c/}): a missing agent
-	 * reads as absent, and its workspaces refuse changes. Domain callers use
-	 * {@link #agent}, which is null for a missing agent.
+	 * The agent at {@code agentId}, whether or not its record exists, for a path
+	 * that names it: a missing agent reads as absent, and its workspaces refuse
+	 * changes. Domain callers use {@link #agent}, which is null for a missing
+	 * agent.
 	 */
 	public AgentState agentAt(AString agentId) {
 		return new AgentState(context, agentStorage(agentId), agentId);
@@ -252,34 +253,38 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return new Jobs(context, convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J));
 	}
 
+	/**
+	 * A user's namespaces are the names in its record's lattice
+	 * ({@link Covia#USER_RECORD}), each resolved by its component, and
+	 * {@code g/<id>} by that agent whether or not it exists. Any other name,
+	 * the venue's own bookkeeping in the record among them, names no data.
+	 */
 	@Override
 	public Position resolve(CoviaPath path) {
-		if (!path.isEmpty()) {
-			AString segment = path.first();
-			if (Namespace.W.equals(segment)) return workspace().resolve(path.rest());
-			if (Namespace.O.equals(segment)) return operations().resolve(path.rest());
-			if (Namespace.H.equals(segment)) return inbox().resolve(path.rest());
-			if (Namespace.J.equals(segment)) return jobs().resolve(path.rest());
-			if (Namespace.S.equals(segment)) return secrets().resolve(path.rest());
-			if (Namespace.G.equals(segment) && path.length() > 1) {
-				AgentState agent = agent(path.get(1));
-				if (agent != null) return agent.resolve(path.rest(2));
-			}
-		}
+		if (path.isEmpty()) return super.resolve(path);
+		AString segment = path.first();
+		if (Covia.USER_RECORD.path(segment) == null) return Position.invalid(path);
+		if (Namespace.W.equals(segment)) return workspace().resolve(path.rest());
+		if (Namespace.O.equals(segment)) return operations().resolve(path.rest());
+		if (Namespace.H.equals(segment)) return inbox().resolve(path.rest());
+		if (Namespace.J.equals(segment)) return jobs().resolve(path.rest());
+		if (Namespace.S.equals(segment)) return secrets().resolve(path.rest());
+		if (Namespace.A.equals(segment)) return assets().resolve(path.rest());
+		if (Namespace.G.equals(segment) && path.length() > 1) return agentAt(path.get(1)).resolve(path.rest(2));
 		return super.resolve(path);
 	}
 
-	/** The user's record, its jobs and agents as callers see them. */
+	/** The user's data as callers see it, its jobs and agents included, without the venue's bookkeeping. */
 	@Override
 	public ACell read() {
-		AMap<AString, ACell> record = RT.ensureMap(cursor().get());
+		AMap<AString, ACell> record = Users.content(cursor().get());
 		if (record == null) return null;
 		if (record.containsKey(Namespace.J)) record = record.assoc(Namespace.J, jobs().read());
 		if (record.containsKey(Namespace.G)) record = record.assoc(Namespace.G, agentsView(record.get(Namespace.G)));
 		return record;
 	}
 
-	/** Data no namespace component claims is read from the record as stored, its agents as callers see them. */
+	/** Below the user only {@code g} itself is read here, with its agents as callers see them. */
 	@Override
 	public ACell read(CoviaPath path) {
 		if (path.isEmpty()) return read();

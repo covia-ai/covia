@@ -8,10 +8,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import covia.adapter.CoviaAdapter;
+import covia.api.Fields;
 import covia.exception.WrongScopeException;
+import covia.grid.Job;
+import covia.lattice.ACoviaComponent;
 
 /**
  * #175 — path navigation must not convert abnormal errors into phantom absence.
@@ -58,5 +67,39 @@ public class PathResolutionErrorTest {
 	public void testGenuineAbsenceStillNull() {
 		assertNull(engine.resolvePath(Strings.create("w/nothingHere"), ctx),
 			"an unwritten workspace path is a genuine absence");
+	}
+
+	@Test
+	public void testAnInvalidPathIsNotAReferenceButIsAnErrorToRead() {
+		assertNull(engine.resolvePath(Strings.create("wrok/notes"), ctx), "a reference to nothing resolves to nothing");
+		assertNull(engine.resolvePath(Strings.create("meta"), ctx));
+
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, "wrok/notes"), ctx);
+		assertThrows(Exception.class, () -> read.awaitResult(5000));
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/wrok/notes"), read.getErrorMessage());
+
+		ACell missing = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, "w/nothingHere"), ctx)
+			.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(missing, "exists"), "a missing value is no error");
+
+		ACell hash = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, "ab".repeat(32)), ctx)
+			.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(hash, "exists"), "a hash that names no asset is no error");
+	}
+
+	@Test
+	public void testAChangeToANameAUserHasNotIsRefused() {
+		AString own = ctx.getUserDID();
+		Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, own + "/n/notes", Fields.VALUE, CVMLong.ONE), ctx);
+		assertThrows(Exception.class, () -> write.awaitResult(5000));
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + own + "/n/notes"), write.getErrorMessage());
+		assertNull(RT.getIn(engine.getVenueState().users().get(own).get(), "n"), "no stray field is written");
+	}
+
+	@Test
+	public void testAPathWithoutAUserIsAbsence() {
+		assertNull(engine.resolvePathUnchecked(Strings.create("w/notes"), RequestContext.ANONYMOUS));
+		assertNull(engine.resolvePathUnchecked(Strings.create(""), ctx), "an empty path names no namespace");
 	}
 }

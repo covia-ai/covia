@@ -114,7 +114,8 @@ public class JobsTest {
 		assertEquals(output, user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT)).read());
 		assertEquals(output.get(PREV), user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT, PREV)).read());
 		assertNull(user.resolve(CoviaPath.segments(Namespace.J, HEX, PREV)).read());
-		assertNull(user.resolve(CoviaPath.segments(Namespace.J, Strings.create("not-a-job"))).read());
+		assertFalse(user.resolve(CoviaPath.segments(Namespace.J, Strings.create("not-a-job"))).isValid(),
+			"a job id that is not hex names no job");
 		assertNull(user.resolve(CoviaPath.segments(Namespace.J, Strings.create("0ffe"), Fields.STATUS)).read(),
 			"an id that names no job reads as null");
 	}

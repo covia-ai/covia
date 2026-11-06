@@ -55,14 +55,15 @@ public final class Entry extends ACoviaComponent<ACell> {
 	}
 
 	/** Whether a value is here; a stored null counts. */
-	public boolean contains() {
+	@Override
+	public boolean exists() {
 		if (keys.length == 0) return read() != null;
 		return resolved.refusal() == null && holds(above.get(), last());
 	}
 
 	@Override
 	public boolean contains(CoviaPath below) {
-		return below.isEmpty() ? contains() : super.contains(below);
+		return below.isEmpty() ? exists() : super.contains(below);
 	}
 
 	/**

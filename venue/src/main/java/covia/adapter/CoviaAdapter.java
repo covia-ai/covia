@@ -15,6 +15,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
+import convex.core.data.Hash;
 import convex.core.data.ASet;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -174,6 +175,7 @@ public class CoviaAdapter extends AAdapter {
 	public static final String NO_JOB_SCOPE =
 		"Cannot use 't/' prefix outside job or task scope (requires agentId+taskId or jobId on RequestContext)";
 	public static final String TASK_WITHOUT_AGENT = "Cannot use task-scoped 't/' without agentId on RequestContext";
+	public static final String NO_USER_SCOPE = "Cannot use a path without an owner DID outside a user's scope (requires userDID on RequestContext)";
 	public static final String VENUE_WRITES_ONLY = "Write permission denied for namespace: v";
 	public static final String NAMESPACE_AND_KEY = "Path must include namespace and key, e.g. 'w/my-key'";
 	public static final String NOT_WRITABLE = "Namespace '%s' is not writable (framework-managed). "
@@ -247,10 +249,13 @@ public class CoviaAdapter extends AAdapter {
 	 * <p>Response always includes {@code exists} (boolean) and {@code value}:</p>
 	 * <ul>
 	 *   <li>{@code {exists: true, value: <value>}} — path has data</li>
-	 *   <li>{@code {exists: false, value: null}} — path is valid in the lattice
-	 *       schema but has no data, OR the path is structurally invalid (e.g.
-	 *       unrecognised key at a KeyedLattice level), OR the user has no state</li>
+	 *   <li>{@code {exists: false, value: null}} — the path names a place that
+	 *       could hold data, but nothing is there, including in a user, agent,
+	 *       session or job that does not exist, and a content hash that names
+	 *       no asset</li>
 	 * </ul>
+	 * <p>A path that names no place data could be, such as a name a user's data
+	 * does not have, is refused with {@link covia.lattice.ACoviaComponent#NO_SUCH_PATH}.</p>
 	 *
 	 * <p>An optional {@code maxSize} parameter (default {@value #DEFAULT_MAX_SIZE}
 	 * bytes) guards against returning excessively large values. If the value's
@@ -272,17 +277,18 @@ public class CoviaAdapter extends AAdapter {
 			if (value != null) {
 				return sizeGuardedResult(value, input);
 			}
+			// A content hash names an asset, not a place in the lattice.
+			if (Hash.parse(pathStr) != null) return result(null);
 		}
 
-		// Fall back to local resolution: a stored null, or a vector path form.
+		// Then the lattice path itself: a stored null, an absent value, an
+		// invalid path, or a vector path form.
 		Position target = resolve(ctx, RT.getIn(input, Fields.PATH));
-		if (target == null) return result(null);
-
 		ACell value = target.read();
 		// A stored null reads back as present (exists:true, value:null), distinct
 		// from an absent path (exists:false) — decided by key presence in the parent.
 		if (value == null) {
-			return result(null, target.contains());
+			return result(null, target.exists());
 		}
 		return sizeGuardedResult(value, input);
 	}
@@ -298,10 +304,7 @@ public class CoviaAdapter extends AAdapter {
 	public ACell readContextValue(RequestContext ctx, AString path) {
 		if (path == null) return null;
 		engine.requireResourceAccess(ctx, path, Capability.CRUD_READ);
-		if (isContextDependent(CoviaPath.parse(path.toString()))) {
-			Position target = resolve(ctx, path);
-			if (target != null) return target.read();
-		}
+		if (isContextDependent(CoviaPath.parse(path.toString()))) return resolve(ctx, path).read();
 
 		// Physical namespaces and universal asset/op references.
 		return engine.resolvePathUnchecked(path, ctx);
@@ -436,10 +439,7 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
 		engine.requireResourceAccess(ctx, Strings.create(pathStr), Capability.CRUD_READ);
-		Position target = resolve(ctx, Strings.create(pathStr));
-		if (target == null) return "null /* no user data */";
-
-		ACell value = target.read();
+		ACell value = resolve(ctx, Strings.create(pathStr)).read();
 		if (value == null) return "null /* not found: " + pathStr + " */";
 
 		CellExplorer explorer = new CellExplorer(budget, compact);
@@ -760,7 +760,6 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
 		Position target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
-		if (target == null) return Maps.of(Fields.DELETED, CVMBool.FALSE);
 		CoviaPath path = target.path();
 		if (target.component() instanceof SecretStore secrets && path.length() == 1) {
 			AString name = path.first();
@@ -796,7 +795,7 @@ public class CoviaAdapter extends AAdapter {
 		boolean[] existed = {false};
 		long[] size = {0};
 		boolean created = changeCreatingLevels(ctx, capResource(input), target, draft -> {
-			existed[0] = draft.contains();
+			existed[0] = draft.exists();
 			size[0] = draft.append(element);
 		});
 		return withPathCreated(Maps.of(
@@ -813,7 +812,7 @@ public class CoviaAdapter extends AAdapter {
 	 * the caller's own record if it has none; another user's record must exist.
 	 * An {@code x/} path's view applies its adapter's write policy instead.
 	 *
-	 * @return Where the path ends, or null for a delete in a user with no record
+	 * @return Where the path ends
 	 */
 	private Position resolveForChange(RequestContext ctx, ACell path, AString ability) {
 		boolean delete = Capability.CRUD_DELETE.equals(ability);
@@ -873,8 +872,7 @@ public class CoviaAdapter extends AAdapter {
 	 * Reads the literal value targeted by an accessor input.
 	 */
 	private ACell readInputValue(RequestContext ctx, ACell input) {
-		Position target = resolve(ctx, RT.getIn(input, Fields.PATH));
-		return (target == null) ? null : target.read();
+		return resolve(ctx, RT.getIn(input, Fields.PATH)).read();
 	}
 
 	/**
@@ -1205,12 +1203,16 @@ public class CoviaAdapter extends AAdapter {
 	 *   <li>any other path: the request's user.</li>
 	 * </ul>
 	 * Resolution checks no authority and changes nothing, except that an
-	 * {@code x/} view checks its own.
+	 * {@code x/} view checks its own. It follows the path's shape, not the
+	 * data: a path into a user, agent, session or job that does not exist ends
+	 * at a position that reads as absent, and a path that names no place data
+	 * could be ends at an invalid one ({@link Position#isValid}).
 	 *
 	 * @param path The path as the caller gave it: a string, with an optional
 	 *        leading slash and owner DID, or a vector of segments
-	 * @return Where the path ends, or null when the user it starts at has no record
-	 * @throws WrongScopeException if {@code n/}, {@code c/} or {@code t/} is used outside its scope
+	 * @return Where the path ends, never null
+	 * @throws WrongScopeException if {@code n/}, {@code c/} or {@code t/} is used
+	 *         outside its scope, or a path without an owner DID in a request with no user
 	 */
 	public Position resolve(RequestContext ctx, ACell path) {
 		return resolve(ctx, path, Capability.CRUD_READ);
@@ -1224,7 +1226,6 @@ public class CoviaAdapter extends AAdapter {
 			if (isExtensionPath(target.path())) {
 				return AdapterView.resolve(ctx, this, target.ownerDID(), target.path(), ability);
 			}
-			if (target.user() == null) return null;
 			return engine.getVenueState().resolve(CoviaPath.segments(target.ownerDID()).append(target.path()));
 		}
 		CoviaPath segments = CoviaPath.of(path);
@@ -1233,42 +1234,60 @@ public class CoviaAdapter extends AAdapter {
 			return AdapterView.resolve(ctx, this, (ctx == null) ? null : ctx.getUserDID(), segments, ability);
 		}
 		if (V.equals(namespace)) {
-			AString venueDID = engine.getDIDString();
-			User venue = (venueDID == null) ? null : engine.getVenueState().users().get(venueDID);
-			return (venue == null) ? null : venue.resolve(venueGlobals(segments));
+			return engine.getVenueState().users().at(engine.getDIDString()).resolve(venueGlobals(segments));
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
 			if (agentId == null) throw new WrongScopeException(NO_AGENT_SCOPE);
-			User user = requestUser(ctx);
-			return (user == null) ? null : user.agentAt(agentId).resolve(segments);
+			return requestUser(ctx).agentAt(agentId).resolve(segments);
 		}
 		if (C.equals(namespace)) {
 			Blob sessionId = (ctx == null) ? null : ctx.getSessionId();
 			if (agentId == null || sessionId == null) throw new WrongScopeException(NO_SESSION_SCOPE);
-			User user = requestUser(ctx);
-			return (user == null) ? null : user.agentAt(agentId).session(sessionId).resolve(segments);
+			return requestUser(ctx).agentAt(agentId).session(sessionId).resolve(segments);
 		}
 		if (T.equals(namespace)) {
 			Blob jobId = scopedJob(ctx);
-			User user = requestUser(ctx);
-			return (user == null) ? null : user.jobs().scratch(jobId).resolve(segments.rest());
+			return requestUser(ctx).jobs().scratch(jobId).resolve(segments.rest());
 		}
-		User user = requestUser(ctx);
-		return (user == null) ? null : user.resolve(segments);
+		return requestUser(ctx).resolve(segments);
 	}
 
 	/**
-	 * The request's user, whose namespace a bare path names, or null without a
-	 * record. The USER's record, not the acting principal's: an agent
-	 * sub-principal works inside its owner's namespace and has no lattice record
-	 * of its own. This agrees with how bare paths canonicalise in the capability
-	 * check (RequestContext.grantsDenial), so a grant of {@code w/foo} and the
-	 * read of {@code w/foo} name the same place.
+	 * Whether {@code path} names a place in the lattice that could hold data,
+	 * as {@link #resolve} reads it, without reading it or checking authority:
+	 * an {@code x/} view, a context-dependent path outside its scope, or a path
+	 * that resolves to a valid position. A malformed path names none.
+	 *
+	 * @param path The path as the caller gave it, as for {@link #resolve}
+	 */
+	public boolean isLatticePath(RequestContext ctx, ACell path) {
+		try {
+			AString did = didPath(path);
+			CoviaPath segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
+			if (isExtensionPath(segments)) return true;
+			return resolve(ctx, path).isValid();
+		} catch (WrongScopeException e) {
+			return true;
+		} catch (InvalidInputException e) {
+			return false;
+		}
+	}
+
+	/**
+	 * The request's user, whose namespace a bare path names, whether or not it
+	 * has a record. The USER, not the acting principal: an agent sub-principal
+	 * works inside its owner's namespace and has no lattice record of its own.
+	 * This agrees with how bare paths canonicalise in the capability check
+	 * (RequestContext.grantsDenial), so a grant of {@code w/foo} and the read of
+	 * {@code w/foo} name the same place.
+	 *
+	 * @throws WrongScopeException if the request has no user
 	 */
 	private User requestUser(RequestContext ctx) {
 		AString did = (ctx == null) ? null : ctx.getUserDID();
-		return (did == null) ? null : engine.getVenueState().users().get(did);
+		if (did == null) throw new WrongScopeException(NO_USER_SCOPE);
+		return engine.getVenueState().users().at(did);
 	}
 
 	/**
@@ -1303,25 +1322,9 @@ public class CoviaAdapter extends AAdapter {
 		return VENUE_GLOBALS.append(path.rest());
 	}
 
-	/**
-	 * Reads the value at a context-dependent path (e.g. {@code n/notes},
-	 * {@code v/ops/json/merge}), or null for any other path or one that holds
-	 * nothing. {@link covia.venue.Engine#resolvePath} reads these namespaces
-	 * through it.
-	 */
-	public ACell readVirtualNamespace(RequestContext ctx, AString path) {
-		if (path == null || !isContextDependent(CoviaPath.parse(path.toString()))) return null;
-		Position target = resolve(ctx, path);
-		return (target == null) ? null : target.read();
-	}
-
+	/** Whether a path, after any owner DID, is an adapter's view ({@code x/}). */
 	public static boolean isExtensionPath(CoviaPath path) {
 		return !path.isEmpty() && Namespace.X.equals(path.first());
-	}
-
-	/** DID-qualified extension reads share the same view and authority checks as bare x paths. */
-	public ACell readExtensionNamespace(RequestContext ctx, AString owner, CoviaPath path) {
-		return AdapterView.resolve(ctx, this, owner, path, Capability.CRUD_READ).read();
 	}
 
 }

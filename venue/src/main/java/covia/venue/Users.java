@@ -193,33 +193,34 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 	}
 
 	/**
+	 * The account a path names by its DID, whether or not it is live, bound to
+	 * this cursor or transaction draft. Unlike {@link #get}, it is bound however
+	 * the record stands: a record that is not live, never registered or a
+	 * deleted account's, reads as absent and takes no change, and an account
+	 * created later in the same draft is seen. {@link User#exists} says which.
+	 *
+	 * @param did User DID
+	 * @return The account's user, never null
+	 */
+	public User at(AString did) {
+		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
+		return new User(context, new PathAccountCursor(userCursor, did), did);
+	}
+
+	/**
 	 * A path's first segment names a user by DID, and the rest is resolved by
-	 * that user. A DID with no live record, never registered or deleted, ends
-	 * the path here, where it reads as absent.
+	 * that user ({@link #at}), so a DID with no live account reads as absent. A
+	 * first segment that is not a DID names no user.
 	 */
 	@Override
 	public Position resolve(CoviaPath path) {
-		if (!path.isEmpty()) {
-			User user = get(path.first());
-			if (user != null) return user.resolve(path.rest());
-		}
-		return super.resolve(path);
+		if (path.isEmpty()) return super.resolve(path);
+		AString did = path.first();
+		if (!did.startsWith(DID_PREFIX)) return Position.invalid(path);
+		return at(did).resolve(path.rest());
 	}
 
-	/** The value at {@code path} in a live user's data, or null; a deleted account's record is never read. */
-	@Override
-	public ACell read(CoviaPath path) {
-		if (path.isEmpty()) return read();
-		User user = get(path.first());
-		return user == null ? null : user.resolve(path.rest()).read();
-	}
-
-	@Override
-	public boolean contains(CoviaPath path) {
-		if (path.isEmpty()) return super.contains(path);
-		User user = get(path.first());
-		return user != null && user.resolve(path.rest()).contains();
-	}
+	private static final AString DID_PREFIX = Strings.intern("did:");
 
 	/**
 	 * Gets all user data for iteration (e.g. job recovery).

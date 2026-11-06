@@ -2059,15 +2059,15 @@ public class Engine {
 	 * <ul>
 	 *   <li>Bare hex hash → asset metadata from CAS</li>
 	 *   <li>{@code a/<hash>} or {@code /a/<hash>} → asset metadata from CAS</li>
-	 *   <li>{@code /o/<name>} → caller's own /o/ entry value</li>
 	 *   <li>Local DID URL with {@code /a/<hash>} path → asset metadata</li>
-	 *   <li>DID-qualified physical user path ({@code <did>/w/...},
-	 *       {@code <did>/g/...}, etc.) → that user's cursor value</li>
-	 *   <li>Workspace path ({@code w/...}, {@code g/...}, etc.) → cursor value</li>
+	 *   <li>Any other path, with or without an owner DID → the value there,
+	 *       resolved from the component its request names
+	 *       ({@link CoviaAdapter#resolve})</li>
 	 * </ul>
 	 *
-	 * <p>Returns null for unresolvable refs, remote DID URLs, and refs that
-	 * resolve to a missing lattice cell. Remote DID URLs are handled by
+	 * <p>Returns null for unresolvable refs, remote DID URLs, paths that name no
+	 * place data could be, paths whose scope the request does not have, and
+	 * refs that resolve to nothing. Remote DID URLs are handled by
 	 * {@link #resolveAsset(AString, RequestContext)} via definition fetch —
 	 * resolvePath itself never touches the network.</p>
 	 *
@@ -2094,64 +2094,47 @@ public class Engine {
 			return (asset != null) ? asset.meta() : null;
 		}
 
-		// 3. DID URL — local cases only; remote asset fetch is handled by
-		// resolveAsset. Asset catalog refs and physical user paths share the
-		// platform DID-path grammar.
+		// 3. DID URL — a local asset; remote asset fetch is handled by
+		// resolveAsset. Asset catalog refs and user paths share the platform
+		// DID-path grammar, so any other DID URL is a path into a user here.
 		if (ref.startsWith(NS_DID)) {
 			Asset local = resolveLocalDIDURL(ref, ctx);
 			if (local != null) return local.meta();
-			UserPathTarget target;
 			try {
-				target = resolveUserPath(ctx, ref, false);
+				resolveUserPath(ctx, ref, false);
 			} catch (AuthException | InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
-			if (covia.adapter.CoviaAdapter.isExtensionPath(target.path())) {
-				var adapter = (covia.adapter.CoviaAdapter) getAdapter("covia");
-				return adapter == null ? null : adapter.readExtensionNamespace(ctx, target.ownerDID(), target.path());
-			}
-			if (!isPhysicalUserNamespace(target.path())) return null;
-			return readUserPathValue(target);
+		} else if (localRef.startsWith(NS_DID)) {
+			return null;   // a DID URL is written without a leading slash, as its read check names it
+		} else if (CoviaPath.parse(localRef.toString()).isEmpty()) {
+			return null;   // names no namespace
 		}
 
-		// Steps 4–5 cover the virtual and workspace namespaces, where a
-		// leading slash is optional sugar. Normalise it away once so "/w/notes" resolves exactly
-		// like "w/notes" and "/v/ops/x" like "v/ops/x".
-		AString navRef = localRef;
-
-		// 4. Virtual namespace prefix (n/, v/, t/, c/, ...) — delegate to the
-		// registered resolver via CoviaAdapter.
-		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
-		if (virtualValue != null) return virtualValue;
-
-		// 5. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
-		if (isUserNamespacePath(navRef)) {
-			return readWorkspacePathValue(navRef, ctx);
-		}
-
-		return null;
+		// 4. A lattice path, from the component its request names
+		return readLatticePath(ref, ctx);
 	}
 
 	/**
-	 * Delegates resolution of a virtual-namespace path to the
-	 * {@link covia.adapter.CoviaAdapter}'s registered resolvers. Returns
-	 * the literal value at the resolved location, or null if the path
-	 * doesn't match a registered virtual prefix.
+	 * The value at a lattice path ({@link CoviaAdapter#resolve}), or null when
+	 * nothing is there, when the path names no place data could be, or when it
+	 * starts in a scope the request does not have.
 	 */
-	private ACell resolveVirtualNamespace(AString ref, RequestContext ctx) {
-		covia.adapter.CoviaAdapter coviaAdapter =
-			(covia.adapter.CoviaAdapter) getAdapter("covia");
-		if (coviaAdapter == null) return null;
+	private ACell readLatticePath(AString ref, RequestContext ctx) {
+		CoviaAdapter covia = (CoviaAdapter) getAdapter("covia");
+		if (covia == null) return null;
+		covia.lattice.Position target;
 		try {
-			return coviaAdapter.readVirtualNamespace(ctx, ref);
+			target = covia.resolve(ctx, ref);
 		} catch (WrongScopeException e) {
-			// The only resolver condition that is a genuine absence for a read: the
-			// prefix (n/, c/) names a scope this context doesn't provide, so there
-			// is no such path here. Everything ELSE — an auth failure, a malformed
-			// path, a lower-level store fault, an abnormal navigation bug — is NOT
-			// absence and propagates rather than being masked as "not found" (#175).
+			// The one resolution failure that is an absence for a read: the path
+			// starts in a scope (an agent, session, job or user) this request does
+			// not have, so there is no such path here. Anything else, such as an
+			// authority refusal, a store fault or an abnormal navigation bug, is
+			// not absence and propagates rather than being masked as "not found" (#175).
 			return null;
 		}
+		return target.isValid() ? target.read() : null;
 	}
 
 	/**
@@ -2238,42 +2221,12 @@ public class Engine {
 		return null;
 	}
 
-	/**
-	 * Returns true if {@code ref} starts with a known user-namespace prefix
-	 * (w/, g/, o/, j/, s/, n/, h/, c/) without a leading slash. Mirrors
-	 * {@link covia.adapter.agent.ContextLoader} so the two resolvers stay aligned.
-	 */
-	static boolean isUserNamespacePath(AString ref) {
-		if (ref == null || ref.count() < 2) return false;
-		String s = ref.toString();
-		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
-			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/") || s.startsWith("c/");
-	}
-
-	/**
-	 * Reads the literal value at a workspace path through the caller's
-	 * lattice cursor. Returns whatever's there, with no interpretation.
-	 */
-	private ACell readWorkspacePathValue(AString ref, RequestContext ctx) {
-		if (ctx == null || ctx.getUserDID() == null) return null;
-		return readUserPathValue(resolveUserPath(ctx, ref, false));
-	}
-
 	private static boolean isPhysicalUserNamespace(CoviaPath path) {
 		if (path.isEmpty()) return false;
 		return switch (path.first().toString()) {
 			case "w", "g", "o", "j", "s", "h" -> true;
 			default -> false;
 		};
-	}
-
-	private ACell readUserPathValue(UserPathTarget target) {
-		// Absence is a null return (no user, empty path, or readPath finding
-		// nothing — none of which throw). Anything that throws is a real failure —
-		// an abnormal navigation error, or a lower-level store fault — and it
-		// propagates rather than collapsing to a phantom "path not found" (#175).
-		return venueState.resolve(CoviaPath.segments(target.ownerDID()).append(target.path())).read();
 	}
 
 	/**
