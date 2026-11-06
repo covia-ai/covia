@@ -74,19 +74,25 @@ removing the deadlines would leave work orphaned on restart.
 
 ## State and invariants
 
-Use one authoritative delegation descriptor inside the local Job's record,
-committed with its status/output. Do not maintain another competing execution
-status in the scheduler or adapter workspace. Proposed fields:
+Use one authoritative delegation descriptor per local Job, in two parts. What
+the caller can follow is on the Job's record, committed with its
+status/output; how the venue follows it is the venue's own, in the Job's
+entry (JOBS.md, The venue's job entries). Do not maintain another competing
+execution status in the scheduler or adapter workspace. Proposed fields:
 
 ```text
-delegation:
+delegation (on the record):
+  remoteId                       absent until acceptance is known
+  remoteStatus, remoteRevision    last authoritative observation, if available
+  notFollowed                    why the venue stopped following, while it has
+
+in the entry:
   version
   protocol                       covia | a2a
   target                         verified DID when available; endpoint/tenant
+  ownsRemote                     whether cancelling here cancels the remote job
   requestKey, requestDigest      stable identity of this submission
   phase                          prepared | submitting | observing | resolved
-  remoteId                       absent until acceptance is known
-  remoteStatus, remoteRevision    last authoritative observation, if available
   observedAt                     local observation time
   observation                    healthy | retrying | auth-required |
                                  acceptance-unknown | unavailable
@@ -233,7 +239,7 @@ EOF, or subscription expiry triggers snapshot reconciliation, never completion.
 
 ## Recovery, authority, and waiting
 
-Grid and A2A override `recoverJob`/`suspendJob` for delegation records. Shutdown
+Grid and A2A override `recoverJob`/`suspendJob` for delegated jobs. Shutdown
 invalidates pending callbacks, stops observations, and preserves the non-terminal
 record; it does not cancel remote work. Boot re-arms observation of the same ID,
 or reconciles the same submission key. The existing shutdown path can release

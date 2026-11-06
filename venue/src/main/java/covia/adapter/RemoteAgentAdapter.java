@@ -115,12 +115,12 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				}
 				try {
 					observer.accepted(job, accepted.getID().toHexString());
-					bind(job, proxy, accepted.getID());
+					bind(job, proxy, accepted.getID(), target == null);
 					if (job.isFinished()) return;
 					apply(job, accepted.getData());
 				} catch (RuntimeException | Error failure) { observer.submissionUnknown(job, failure); }
 				finally {
-					ACell savedId = RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID);
+					AString savedId = RemoteJobs.remoteId(job);
 					Blob id = savedId == null ? null : Job.parseID(savedId);
 					if (id != null && !job.isFinished()) watch(job, proxy, id);
 				}
@@ -128,12 +128,14 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		});
 	}
 
-	private void bind(Job job, VenueRemoteAgent proxy, Blob id) {
+	/**
+	 * Binds the job's messages and cancellation to its task. A task on this
+	 * venue ({@code local}) is reached in process, whatever shutdown is doing.
+	 */
+	private void bind(Job job, VenueRemoteAgent proxy, Blob id, boolean local) {
 		bindInteraction(job, new RemoteInteraction() {
 			@Override public void deliver(AMap<AString, ACell> record) {
-				if (!LOCAL_PROTOCOL.equals(RemoteJobs.descriptor(job).get(RemoteJobs.PROTOCOL))) {
-					engine.remoteJobs().requireNotClosing();
-				}
+				if (!local) engine.remoteJobs().requireNotClosing();
 				AMap<AString, ACell> message = RT.ensureMap(record.get(Fields.MESSAGE));
 				if (message == null) message = Maps.of(Fields.CONTENT, record.get(Fields.MESSAGE));
 				proxy.deliver(id, message);
@@ -141,7 +143,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				engine.remoteJobs().received(job, () -> { if (!job.isFinished()) watch(job, proxy, id); });
 			}
 			@Override public void cancel() {
-				if (LOCAL_PROTOCOL.equals(RemoteJobs.descriptor(job).get(RemoteJobs.PROTOCOL))) {
+				if (local) {
 					proxy.cancel(id); // In-process child: propagate before returning.
 					return;
 				}
@@ -156,7 +158,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 
 	private void apply(Job job, AMap<AString, ACell> snapshot) {
-		Blob expected = Job.parseID(RemoteJobs.descriptor(job).get(RemoteJobs.REMOTE_ID));
+		Blob expected = Job.parseID(RemoteJobs.remoteId(job));
 		AString status = RT.ensureString(snapshot.get(Fields.STATUS));
 		if (expected == null || !expected.equals(Job.parseID(snapshot.get(Fields.ID)))
 			|| !(Status.PENDING.equals(status) || Status.STARTED.equals(status) || Status.PAUSED.equals(status)
@@ -194,18 +196,18 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	}
 
 	@Override public void recoverJob(Job job) {
-		AMap<AString, ACell> record = RemoteJobs.descriptor(job);
-		if (record == null) { super.recoverJob(job); return; }
-		ACell savedId = record.get(RemoteJobs.REMOTE_ID);
+		AMap<AString, ACell> kept = engine.remoteJobs().kept(job);
+		if (kept == null) { super.recoverJob(job); return; }
+		AString savedId = RemoteJobs.remoteId(job);
 		Blob id = savedId == null ? null : Job.parseID(savedId);
-		if (LOCAL_PROTOCOL.equals(record.get(RemoteJobs.PROTOCOL))) { recoverLocal(job, id); return; }
+		if (LOCAL_PROTOCOL.equals(kept.get(RemoteJobs.PROTOCOL))) { recoverLocal(job, id); return; }
 		if (id == null) { engine.remoteJobs().submissionUnknown(job, null); return; }
 		try {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
-			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().notFollowed(job); return; }
-			Venue venue = VenueConnection.restore(engine, RT.ensureString(record.get(RemoteJobs.TARGET)), saved);
+			if (!VenueConnection.resumable(saved)) { engine.remoteJobs().credentialNotKept(job); return; }
+			Venue venue = VenueConnection.restore(engine, RT.ensureString(kept.get(RemoteJobs.TARGET)), saved);
 			VenueRemoteAgent proxy = new VenueRemoteAgent(venue, RT.ensureString(job.getData().get(AGENT)));
-			bind(job, proxy, id);
+			bind(job, proxy, id, false);
 			watch(job, proxy, id);
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
 	}
@@ -230,12 +232,12 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			return;
 		}
 		VenueRemoteAgent proxy = new VenueRemoteAgent(localVenue(caller), RT.ensureString(job.getData().get(AGENT)));
-		bind(job, proxy, id);
+		bind(job, proxy, id, true);
 		watch(job, proxy, id);
 	}
 
 	@Override public void suspendJob(Job job) {
-		if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+		if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);
 		else super.suspendJob(job);
 	}
 }

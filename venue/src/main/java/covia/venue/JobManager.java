@@ -1065,6 +1065,7 @@ public class JobManager {
 		venue().jobIndex().update(job.getID(), entry -> {
 			AMap<AString, ACell> kept = RT.ensureMap(entry.get(JobIndex.ADAPTER_DATA));
 			AMap<AString, ACell> next = change.apply((kept == null) ? Maps.empty() : kept);
+			if (next != null && next == kept) return entry;
 			return (next == null) ? entry.dissoc(JobIndex.ADAPTER_DATA) : entry.assoc(JobIndex.ADAPTER_DATA, next);
 		});
 	}
@@ -1568,12 +1569,12 @@ public class JobManager {
 			AAdapter adapter = runningAdapter(job);
 			try {
 				if (adapter != null) adapter.recoverJob(job);
-				else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().adapterUnavailable(job);
+				else if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().adapterUnavailable(job);
 				else AAdapter.defaultRecover(job);
 			} catch (RuntimeException e) {
 				log.warn("Adapter {} failed recovering job {}: {}",
 					(adapter != null) ? adapter.getName() : "<none>", jobID, e.toString());
-				if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().unavailable(job, e);
+				if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().unavailable(job, e);
 				else if (!job.isFinished()) AAdapter.defaultRecover(job);
 			}
 			if (job.isFinished()) {
@@ -1783,7 +1784,7 @@ public class JobManager {
 			AAdapter adapter = runningAdapter(job);
 			try {
 				if (adapter != null) adapter.suspendJob(job);
-				else if (RemoteJobs.descriptor(job) != null) engine.remoteJobs().suspend(job);
+				else if (engine.remoteJobs().kept(job) != null) engine.remoteJobs().suspend(job);
 				else AAdapter.defaultSuspend(job);
 			} catch (RuntimeException e) {
 				log.warn("Adapter {} failed suspending job {}: {}",

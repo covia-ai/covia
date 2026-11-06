@@ -14,7 +14,7 @@ public final class VenueMigrations {
 	private VenueMigrations() {}
 
 	/** The current venue version: the number of {@link #steps}. */
-	public static final long VERSION = 3;
+	public static final long VERSION = 4;
 
 	/**
 	 * The steps, built with the venue's secret store keys, which a step that
@@ -26,6 +26,7 @@ public final class VenueMigrations {
 		return List.of(
 			new UserDeletionsRegion(),	// 0 → 1
 			new CallerAndOwner(),		// 1 → 2
-			new JobEntries(keys));		// 2 → 3
+			new JobEntries(keys),		// 2 → 3
+			new DelegationEntries());	// 3 → 4
 	}
 }

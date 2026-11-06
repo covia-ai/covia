@@ -142,9 +142,9 @@ job id (`JobIndex`), and no route reads it. Each entry holds:
   ([Kept caller context](#kept-caller-context)).
 - **`adapterData`**: what the job's adapter keeps to carry it to its end
   (`JobManager.adapterData`), read only by that adapter: how a remote job is
-  reached again ([Remote delegation](#remote-delegation)), or which backend job
-  serves an external agent's turn. A job held only in memory keeps it with
-  its handle instead.
+  followed and reached again ([Remote delegation](#remote-delegation)), or
+  which backend job serves an external agent's turn. A job held only in
+  memory keeps it with its handle instead.
 
 An entry is written with its record when the job is admitted, in one
 transaction, and removed in the same transaction as the update that finishes
@@ -337,8 +337,8 @@ calls `AAdapter.recoverJob(job)` on the adapter its record names. The job
 carries its record and every verb; whatever state it is in when the hook
 returns is the durable truth, and anything still non-terminal is restored
 live. For ordinary jobs, the default also applies when the adapter is absent
-(module not loaded, boot-disabled). Delegation records have the observation
-behavior described under [Remote delegation](#remote-delegation).
+(module not loaded, boot-disabled). A job that delegates its work to a remote
+venue or agent behaves as described under [Remote delegation](#remote-delegation).
 
 | State at crash | Default at boot | Caller's move |
 |----------------|-----------------|---------------|
@@ -407,13 +407,30 @@ the final flush runs, carrying the suspended states.
 
 ## Remote delegation
 
-Remote `grid:run`, remote `grid:jobResult` without a caller timeout, and A2A
-sends retain a `delegation` record. It carries the protocol, target, accepted
-`remoteId` (for an A2A send, the remote Task's id), last observed
-`remoteStatus`, and observation health. Local processing stays `STARTED` while
-a remote job is queued. Remote interruptions and terminal outcomes are
-mirrored; a terminal result and its supporting remote status are committed
-atomically before result continuations run.
+Remote `grid:run`, remote `grid:jobResult` without a caller timeout, A2A
+sends and `remoteagent` calls delegate their work. The job's record shows its
+caller what they can follow of it, under `delegation`:
+
+- **`remoteId`**: the remote job, once the remote side accepted it (for an
+  A2A send, the remote Task's id).
+- **`remoteStatus`**: the remote job's status as last observed.
+- **`notFollowed`**: present only while this venue has stopped following the
+  remote job and will not take it up by itself, saying why and what the
+  caller can do: it does not know whether the remote side accepted the job
+  (`RemoteJobs.ACCEPTANCE_UNKNOWN`), it could not reach the remote job again
+  after a restart (`RemoteJobs.UNREACHABLE`), or it restarted without the
+  adapter that ran the job (`RemoteJobs.ADAPTER_MISSING`). It goes when the
+  venue follows the remote job again.
+
+How the venue follows it is its own, kept with the connection as the
+adapter's data in the job's entry
+([The venue's job entries](#the-venues-job-entries)): the protocol, the
+target, whether the job owns the remote job (`ownsRemote`), and observation
+health (`observation`, with the last failure's `observationErrorType` and,
+for an expected failure, `observationError`). Local processing stays
+`STARTED` while a remote job is queued. Remote interruptions and terminal
+outcomes are mirrored; a terminal result and its supporting remote status
+are committed atomically before result continuations run.
 
 A `remoteagent:request` job also carries `sessionId`, taken from the
 destination's task as it is observed: the destination agent's session, which is
@@ -424,9 +441,10 @@ its Covia session, and the backend job beneath it names the destination's
 
 Transport timeouts, malformed observations, missing remote records, and 5xx
 responses do not prove execution failed. They set observation health to
-`retrying`; 401/403 observations set `auth-required`. The failure's type is
-recorded as `observationErrorType` and, for an expected failure, its reason as
-`observationError`; both clear when observation is healthy again. Requests are bounded and
+`retrying`; 401/403 observations set `auth-required`, and the venue keeps
+trying either way. The failure's type is kept as `observationErrorType` and,
+for an expected failure, its reason as `observationError`; both clear when
+observation is healthy again. None of this reaches the record. Requests are bounded and
 back off with jitter (including HTTP Retry-After), with at most 32 requests
 globally and four per target. There is no job lifetime deadline. Interrupted
 A2A tasks remain observed, including when resumed directly at the remote peer.
@@ -440,8 +458,9 @@ Either way the local job is unchanged and observation continues.
 
 Submissions do not require a repeatable key. Grid submits once to `/invoke`;
 A2A requests `returnImmediately`. If acceptance cannot be established, the
-local job stays non-terminal with `acceptance-unknown`. It is not automatically
-resubmitted, including after restart. A definite protocol rejection can fail
+local job stays non-terminal and the venue stops following it
+(`acceptance-unknown`, and `delegation.notFollowed` on the record). It is not
+automatically resubmitted, including after restart. A definite protocol rejection can fail
 the local submission. Optional receiver-side deduplication is a later protocol
 extension, described in [REMOTE_JOBS_DESIGN.md](REMOTE_JOBS_DESIGN.md).
 
@@ -459,25 +478,27 @@ was read from; never a sign-in credential or a secret's value. The grants
 are addressed to this venue, so only its key can present them. A hop that signed in with a credential only its request
 presented (`authenticateAs: "caller"`, or an A2A `bearerToken`) is therefore
 not resumed: its recovered job fails, naming the remote job and its venue
-(`RemoteJobs.NOT_FOLLOWED`). A recovered A2A job reads its bearer again from
+(`RemoteJobs.CREDENTIAL_NOT_KEPT`). A recovered A2A job reads its bearer again from
 its caller's secrets, under the context `JobManager.callerContext` rebuilds
 for the job, so a rotated secret is sent as it now stands. An A2A
 job keeps no grants ([Kept caller context](#kept-caller-context)). When its caller can no longer use the
 secret (it was deleted, the caller cannot act now, or it is another user's,
 used under a grant the request presented), the job fails, naming the remote
 task and the agent's address (`A2AAdapter.SECRET_UNREADABLE`). Recovery does not resolve a changed catalog binding or
-silently elevate the original authority. Missing authority or an unavailable
-adapter leave the remote outcome unresolved. What was kept goes with the
-entry when the job ends.
+silently elevate the original authority. Missing authority, an unreachable
+remote job or an unavailable adapter leave the remote outcome unresolved: the
+job stays non-terminal and the venue stops following it
+(`delegation.notFollowed`), until a later restart reaches it again. What was
+kept goes with the entry when the job ends.
 
 Cancellation commits locally and propagates through owned local child hooks
 without waiting for network IO. Grid runs, A2A sends and remote-agent calls
 then attempt backend cancellation once, asynchronously, with their captured
 transport authority. A handle arriving after local cancellation still triggers
 the attempt. A `grid:jobResult` observer does not own the remote execution:
-cancelling that local wait never cancels the remote job. `delegation.ownsRemote`
-preserves this distinction during recovery; older Grid records without it do
-not gain cancellation authority.
+cancelling that local wait never cancels the remote job. The job's entry
+keeps this distinction (`ownsRemote`) for recovery; a job whose entry does
+not say it owns the remote job gains no cancellation authority.
 
 The optional `cancellation` record contains `remoteId`, `outcome`, and available
 `remoteStatus`, `httpStatus` or protocol `errorCode` evidence:

@@ -45,7 +45,7 @@ class VenueMigrationEndToEndTest {
 	 * The venue version this test seeds shapes for. A new venue version needs
 	 * the shapes its step converts seeded here, and fails until it has them.
 	 */
-	private static final long SEEDED_THROUGH = 3;
+	private static final long SEEDED_THROUGH = 4;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
 	private static final CoviaPath OLD_DELETIONS = CoviaPath.parse("w/user-deletions");
@@ -71,6 +71,10 @@ class VenueMigrationEndToEndTest {
 	/** A grid hop that signed in as its caller, with the sign-in credential 0.10.0 kept in a venue secret. */
 	private static final Blob REMOTE_JOB = Blob.fromHex("e2e6e2e6e2e6e2e6e2e6e2e6e2e6e2e6");
 	private static final String REMOTE_TARGET = "https://peer.migration.test";
+	/** A finished grid hop whose record showed how the venue followed it, as version 3 did. */
+	private static final Blob FINISHED_REMOTE_JOB = Blob.fromHex("e2e7e2e7e2e7e2e7e2e7e2e7e2e7e2e7");
+	/** A running grid hop whose connection secret is gone: nothing reaches its remote job again. */
+	private static final Blob LOST_REMOTE_JOB = Blob.fromHex("e2e8e2e8e2e8e2e8e2e8e2e8e2e8e2e8");
 
 	private static CoviaPath adapterPath(String name) {
 		return CoviaPath.parse("w/adapters/" + name);
@@ -139,6 +143,17 @@ class VenueMigrationEndToEndTest {
 				RemoteJobs.DELEGATION, Maps.of(RemoteJobs.PROTOCOL, "covia", RemoteJobs.TARGET, REMOTE_TARGET,
 					RemoteJobs.REMOTE_ID, "remote-1", Strings.create("authRef"), remoteRef));
 			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(REMOTE_JOB, remote));
+			AMap<AString, ACell> finishedRemote = Maps.of(Fields.ID, FINISHED_REMOTE_JOB, Fields.STATUS, Status.COMPLETE,
+				Fields.CALLER, USER, Fields.OP, "v/ops/grid/run", Fields.ADAPTER, "grid",
+				RemoteJobs.DELEGATION, Maps.of(RemoteJobs.PROTOCOL, "covia", RemoteJobs.TARGET, REMOTE_TARGET,
+					RemoteJobs.OWNS_REMOTE, true, RemoteJobs.REMOTE_ID, "remote-2", RemoteJobs.REMOTE_STATUS, Status.COMPLETE,
+					RemoteJobs.OBSERVATION, "healthy"));
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(FINISHED_REMOTE_JOB, finishedRemote));
+			AMap<AString, ACell> lostRemote = Maps.of(Fields.ID, LOST_REMOTE_JOB, Fields.STATUS, Status.STARTED,
+				Fields.CALLER, USER, Fields.OP, "v/ops/grid/run", Fields.ADAPTER, "grid",
+				RemoteJobs.DELEGATION, Maps.of(RemoteJobs.PROTOCOL, "covia", RemoteJobs.TARGET, REMOTE_TARGET,
+					RemoteJobs.REMOTE_ID, "remote-3", Strings.create("authRef"), "remote-job-" + LOST_REMOTE_JOB.toHexString()));
+			user.cursor().path(Namespace.J).updateAndGet(jobs -> ((Index<Blob, ACell>) jobs).assoc(LOST_REMOTE_JOB, lostRemote));
 			host.secrets().store(remoteRef, Strings.create("{\"authenticateAs\":\"caller\",\"bearerToken\":\"e2e-sign-in\"}"),
 				SecretStore.keys(key));
 			user.inbox().put(REQUEST, Maps.of(Hitl.ID, REQUEST, Strings.create("from"), agentDID,
@@ -182,10 +197,17 @@ class VenueMigrationEndToEndTest {
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
 				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
 			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));
-			assertEquals(Maps.of(JobIndex.OWNER, USER, JobIndex.ADAPTER_DATA, Maps.of("authenticateAs", "caller")),
-				venue.jobIndex().entry(REMOTE_JOB), "the remote job's connection, without its sign-in credential");
+			assertEquals(Maps.of(JobIndex.OWNER, USER, JobIndex.ADAPTER_DATA, Maps.of("authenticateAs", "caller",
+					RemoteJobs.PROTOCOL, "covia", RemoteJobs.TARGET, REMOTE_TARGET)),
+				venue.jobIndex().entry(REMOTE_JOB), "the remote job's connection, without its sign-in credential, and how the venue follows it");
+			assertEquals(Maps.of(RemoteJobs.REMOTE_ID, "remote-1"),
+				RT.getIn(migrated.jobs().getRecord(REMOTE_JOB), RemoteJobs.DELEGATION), "its record shows only what its caller can follow");
+			assertEquals(Maps.of(RemoteJobs.REMOTE_ID, "remote-2", RemoteJobs.REMOTE_STATUS, Status.COMPLETE),
+				RT.getIn(migrated.jobs().getRecord(FINISHED_REMOTE_JOB), RemoteJobs.DELEGATION), "a finished job's too");
+			assertEquals(Maps.of(JobIndex.OWNER, USER, JobIndex.ADAPTER_DATA, Maps.of(RemoteJobs.PROTOCOL, "covia",
+				RemoteJobs.TARGET, REMOTE_TARGET)), venue.jobIndex().entry(LOST_REMOTE_JOB), "no connection to carry");
 			assertFalse(venue.users().get(venueDID).secrets().exists(remoteRef));
-			assertEquals(2, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
+			assertEquals(3, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
 			assertEquals(legacyJob, venue.users().get(USER).cursor().path(Namespace.J, JOB).get());
@@ -199,7 +221,12 @@ class VenueMigrationEndToEndTest {
 			assertEquals(Status.FAILED, RT.getIn(engine.jobs().getJobData(RUNNING_JOB, ctx), Fields.STATUS));
 			assertNull(venue.jobIndex().entry(RUNNING_JOB));
 			Job remoteJob = engine.jobs().getJob(REMOTE_JOB, ctx);
-			assertEquals(RemoteJobs.NOT_FOLLOWED.formatted("remote-1", REMOTE_TARGET), remoteJob.getErrorMessage());
+			assertEquals(RemoteJobs.CREDENTIAL_NOT_KEPT.formatted("remote-1", REMOTE_TARGET), remoteJob.getErrorMessage());
+			// A remote job with nothing kept to reach it is no longer followed, and says so
+			Job lost = engine.jobs().getJob(LOST_REMOTE_JOB, ctx);
+			assertEquals(Status.STARTED, lost.getStatus());
+			assertEquals(Strings.create(RemoteJobs.UNREACHABLE_BECAUSE.formatted("remote-3", REMOTE_TARGET, RemoteJobs.NO_CONNECTION)),
+				RT.getIn(lost.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED));
 
 			// An unversioned adapter's state moves when it is first used.
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());

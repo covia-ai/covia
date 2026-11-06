@@ -77,7 +77,7 @@ class RemoteJobsTest {
 	@Test void suspensionFencesOldResponseAndReattachmentCanComplete() throws Exception {
 		Engine engine = Engine.createTemp(null);
 		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
-			Job job = job();
+			Job job = recorded(engine);
 			observer.prepare(job, "test", "test://peer", Maps.empty());
 			observer.accepted(job, "remote");
 			CompletableFuture<AMap<AString, ACell>> stale = new CompletableFuture<>();
@@ -87,7 +87,10 @@ class RemoteJobsTest {
 			observer.suspend(job);
 			stale.complete(Maps.empty());
 			assertEquals(Status.STARTED, job.getStatus());
-			assertEquals(Strings.create("suspended"), RemoteJobs.descriptor(job).get(RemoteJobs.OBSERVATION));
+			assertEquals(Strings.create("suspended"), observer.kept(job).get(RemoteJobs.OBSERVATION));
+			AtomicBoolean late = new AtomicBoolean();
+			observer.received(job, () -> late.set(true));
+			assertFalse(late.get(), "a late callback is fenced");
 			observer.observe(job, () -> CompletableFuture.completedFuture(Maps.empty()), data -> job.completeWith(Strings.create("fresh")));
 			assertEquals(Strings.create("fresh"), job.future().get(5, TimeUnit.SECONDS));
 		} finally { engine.close(); }
@@ -194,7 +197,9 @@ class RemoteJobsTest {
 			AMap<AString, ACell> saved = Maps.of("token", "private-token");
 			observer.prepare(job, "test", "test://peer", saved);
 			assertEquals(saved, observer.connection(job));
+			assertEquals(Strings.create("test://peer"), observer.target(job));
 			assertFalse(job.getData().toString().contains("private-token"));
+			assertNull(RemoteJobs.descriptor(job), "how the venue follows the job is its own, never on the record");
 			engine.jobs().updateAdapterData(job, kept -> null);
 			assertEquals(RemoteJobs.NO_CONNECTION,
 				assertThrows(UnavailableException.class, () -> observer.connection(job)).getMessage());

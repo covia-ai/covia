@@ -1048,8 +1048,9 @@ venue starts, and an entry whose adapter is disabled proves nothing. A
 mechanism dials the target through the outbound guard, as the hop does.
 
 A recovered job that authenticated as the venue proves its target again
-before authenticating again. If the target is no longer proven, the job waits
-for authority (`auth-required`) and nothing is sent. The venue never stores a
+before authenticating again. If the target is no longer proven, nothing is
+sent: the job stays unfinished, and its record says the venue no longer
+follows the remote job (`delegation.notFollowed`). The venue never stores a
 caller's credential, so a hop with `authenticateAs: "caller"` lasts only as
 long as the venue runs: after a restart its job ends, its reason naming the
 remote job and its venue, where the caller can follow it. A scheduled hop with
