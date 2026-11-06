@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,6 +33,8 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
+import covia.lattice.Covia;
+import covia.lattice.CoviaPath;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -222,6 +225,13 @@ class UserAdapterTest {
 		ACell managedInfo = adapter.info(engine.venueContext(), Maps.of(Fields.DID, managedDid));
 		assertEquals(CVMBool.TRUE, RT.getIn(managedInfo, Fields.MANAGED),
 			"a venue-managed username account reports managed:true");
+
+		// The venue's activity times are bookkeeping for operators, not the user's data.
+		engine.getVenueState().users().get(selfSovereign).workspace().write(CoviaPath.parse("seen"), CVMBool.TRUE);
+		assertNull(RT.getIn(adapter.info(RequestContext.of(selfSovereign), Maps.empty()), Covia.K_META),
+			"a user does not see the venue's bookkeeping");
+		assertNotNull(RT.getIn(adapter.info(engine.venueContext(), Maps.of(Fields.DID, selfSovereign)), Covia.K_META),
+			"an operator does");
 
 		// Non-operator, non-self access is denied identically to the op form.
 		assertThrows(AuthException.class,

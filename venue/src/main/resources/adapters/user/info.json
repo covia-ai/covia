@@ -18,7 +18,10 @@
       "properties": {
         "did": { "type": "string" },
         "registered": { "type": "boolean" },
-        "meta": { "type": "object" }
+        "meta": {
+          "type": "object",
+          "description": "The venue's activity times for the user (created, updated), shown to venue operators only"
+        }
       },
       "required": ["did", "registered"]
     }

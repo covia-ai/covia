@@ -127,6 +127,8 @@ class UserExportsTest {
 			"an export keeps the calls the user made");
 		String plaintextHex = Blob.wrap(SECRET.getBytes(StandardCharsets.UTF_8)).toHexString();
 		assertFalse(hex.toString().contains(plaintextHex), "secrets travel sealed");
+		assertNotNull(RT.getIn(users().get(source).get(), Covia.K_META), "the source has activity times");
+		assertNull(RT.getIn(UserExports.decode(Blobs.parse(hex)), Covia.K_META), "an export carries no venue bookkeeping");
 
 		// As a JSON caller sends it back: hex, through a recorded job.
 		Job job = engine.jobs().invokeOperation("v/ops/user/import", Maps.of(Fields.DID, target,

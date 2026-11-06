@@ -37,6 +37,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A `covia` path given as an array takes strings only, none containing `/`, a list position written in digits as in a string path; any other element is refused (#617).
 - The covia read operations and `/values` refuse a path that names no place data could be, such as `wrok/notes` or a job id that is not hex, where they returned nothing (#617).
 - A user's `meta`, `generation`, `deleting` and `deleted` are venue bookkeeping that no path reads (#617).
+- `user:info` and `/users/{did}` show a user's `meta` to operators only, and `user:export` leaves it out.
 - A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
 - A forced `agent:trigger` no longer presents a parked task.
 - An LLM agent's job results show an open HITL ask as still waiting, not as ended with no reason.

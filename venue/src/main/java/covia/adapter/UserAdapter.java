@@ -273,20 +273,22 @@ public class UserAdapter extends AAdapter {
 	}
 
 	/** Job-free REST reads (#255) call this directly, reusing the same
-	 *  capability checks as the {@code user:info} operation. */
+	 *  capability checks as the {@code user:info} operation. A user reading
+	 *  their own entry sees no venue bookkeeping; an operator sees its {@code meta}. */
 	public ACell info(RequestContext ctx, ACell input) {
 		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
 		if (did == null) did = ctx.getCallerDID();
 		if (did == null) throw new AuthException("Authentication required");
 		did = requireDID(did);
-		if (!did.equals(ctx.getCallerDID())) {
+		boolean operator = engine.hasVenueAuthority(ctx, USERS_RESOURCE, Abilities.USER_READ);
+		if (!operator && !did.equals(ctx.getCallerDID())) {
 			requireVenueUserAuthority(ctx, Abilities.USER_READ);
 		}
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) {
 			throw new NotFoundException(VenueState.UNKNOWN_USER + ": " + did, did.toString());
 		}
-		return summary(user);
+		return summary(user, operator);
 	}
 
 	/** Job-free REST reads (#255) call this directly, reusing the same
@@ -299,7 +301,7 @@ public class UserAdapter extends AAdapter {
 		if (all != null) {
 			for (var entry : all.entrySet()) {
 				User user = store.get(entry.getKey());
-				if (user != null) result = result.conj(summary(user));
+				if (user != null) result = result.conj(summary(user, true));
 			}
 		}
 		return Maps.of(USERS, result, TOTAL, CVMLong.create(result.count()));
@@ -384,17 +386,14 @@ public class UserAdapter extends AAdapter {
 		requireVenueUserAuthority(ctx, ability);
 	}
 
-	private AMap<AString, ACell> summary(User user) {
+	/** A user's entry; {@code withMeta} adds the venue's activity times for them, for an operator. */
+	private AMap<AString, ACell> summary(User user, boolean withMeta) {
 		AMap<AString, ACell> out = Maps.of(
 			Fields.DID, user.getDID(),
 			REGISTERED, CVMBool.TRUE,
 			Fields.MANAGED, CVMBool.create(engine.managedUserName(user.getDID()) != null));
-		ACell state = user.get();
-		if (state instanceof AMap<?, ?> map) {
-			ACell metadata = ((AMap<?, ?>) map).get(Covia.K_META);
-			if (metadata != null) out = out.assoc(Covia.K_META, metadata);
-		}
-		return out;
+		ACell metadata = withMeta ? RT.getIn(user.get(), Covia.K_META) : null;
+		return (metadata == null) ? out : out.assoc(Covia.K_META, metadata);
 	}
 
 	private AString requireDID(AString value) {
@@ -411,7 +410,10 @@ public class UserAdapter extends AAdapter {
 	 * is intentionally not enough: only direct venue execution or a presented
 	 * venue-rooted delegation over {@code <venue DID>/users} can authorise them.
 	 */
+	/** The venue resource whose authority makes a caller an operator over users. */
+	private static final String USERS_RESOURCE = "users";
+
 	private void requireVenueUserAuthority(RequestContext ctx, AString ability) {
-		engine.requireVenueAuthority(ctx, "users", ability);
+		engine.requireVenueAuthority(ctx, USERS_RESOURCE, ability);
 	}
 }

@@ -642,7 +642,8 @@ not count, by design. Deleting a user (`user:delete`) removes their subtree,
 so store GC can reclaim its cells.
 
 `meta` is the venue's bookkeeping, not the user's data, so no path reaches it
-(§4.6) and users cannot forge their activity. New per-identity
+(§4.6) and users cannot forge their activity. Operators see it in `user:info`
+and `user:list`; it is not part of a user's export. New per-identity
 fields belong in `meta`, not as further top-level keys.
 
 ### A.3 Update Logic

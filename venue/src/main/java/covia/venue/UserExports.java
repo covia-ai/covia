@@ -23,7 +23,6 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
-import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.venue.migration.CallerAndOwner;
 
@@ -39,7 +38,7 @@ import covia.venue.migration.CallerAndOwner;
  * anything outside it are carried as stored.</p>
  *
  * <p>An export is the CAD3 multi-cell encoding of
- * {@code {format, version, did, venue, exported, meta?, user, secrets?}}.
+ * {@code {format, version, did, venue, exported, user, secrets?}}.
  * {@code user} is the state without secrets. Secrets, encrypted on the venue
  * under its own key, are decrypted and sealed together to a caller-supplied
  * Ed25519 key with Convex ECIES; they are never exported in the clear or under
@@ -110,7 +109,6 @@ public final class UserExports {
 	public Blob exportUser(AString did, AccountKey recipient, boolean includeSecrets) {
 		requireOrdinary(did);
 		User user = engine.getVenueState().users().get(did);
-		// One read: state and meta come from the same record.
 		ACell record = (user == null) ? null : user.get();
 		AMap<AString, ACell> state = Users.content(record);
 		if (state == null) throw new NotFoundException(VenueState.UNKNOWN_USER, did.toString());
@@ -125,8 +123,6 @@ public final class UserExports {
 			K_VENUE, engine.getDIDString(),
 			K_EXPORTED, engine.getVenueState().getContext().currentTimestamp(),
 			K_USER, state.dissoc(Namespace.S));
-		ACell meta = RT.getIn(record, Covia.K_META);
-		if (meta != null) export = export.assoc(Covia.K_META, meta);
 		if (includeSecrets && secrets != null && !secrets.isEmpty()) {
 			if (recipient == null) throw new InvalidInputException(SECRETS_NEED_KEY);
 			AMap<AString, ACell> plain;
