@@ -807,7 +807,6 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 
 		String remoteTaskId = remoteTask.id();
 		engine.remoteJobs().accepted(job, remoteTaskId);
-		job.update(current -> current.assoc(Fields.REMOTE_TASK_ID, Strings.create(remoteTaskId)));
 		bind(job, rpcUrl, remoteTaskId, auth);
 
 		if (remoteTask.status().state().isFinal()) {

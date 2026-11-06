@@ -63,6 +63,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The venue recovers jobs from its own entries for unfinished jobs, which venue version 3 adds on upgrade.
 - Job records no longer carry `delegation.authRef`, and an external agent's job no longer shows `agentOwner`, `agentInteraction` or `agentBackendJob`.
 - Chat jobs for messages a chat bot hands to an agent on its venue no longer show `deliveryAccepted`.
+- An A2A send's job names its remote task only as `delegation.remoteId`; `remoteTaskId` is gone.
 - The venue keeps no `remote-job-<id>` secrets; upgrading removes them, those left by a crash included.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.

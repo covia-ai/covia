@@ -29,6 +29,7 @@ import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
+import covia.venue.RemoteJobs;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.TestEngine;
@@ -360,8 +361,8 @@ class A2AAdapterTest {
 		assertEquals(Status.INPUT_REQUIRED, RT.ensureString(data.get(Fields.STATUS)),
 				"Remote test:chat op goes INPUT_REQUIRED; adapter must mirror it onto the local Job");
 
-		AString remoteTaskId = RT.ensureString(data.get(Fields.REMOTE_TASK_ID));
-		assertNotNull(remoteTaskId, "Adapter must persist remoteTaskId on the local Job");
+		AString remoteTaskId = remoteId(data);
+		assertNotNull(remoteTaskId, "The local Job records the remote Task it follows");
 
 		ACell output = data.get(Fields.OUTPUT);
 		assertTrue(output instanceof AMap);
@@ -502,7 +503,7 @@ class A2AAdapterTest {
 				Fields.URL, Strings.create(TestServer.BASE_URL),
 				Fields.MESSAGE, coviaMessageRecord("seed task")));
 		AMap<AString, ACell> data = awaitStable(seed.getID());
-		String remoteTaskId = RT.ensureString(data.get(Fields.REMOTE_TASK_ID)).toString();
+		String remoteTaskId = remoteId(data).toString();
 
 		// Act: fetch it back via a2a:get-task (this one does reach COMPLETE)
 		Job getJob = covia.invokeSync("v/ops/a2a/raw/get-task", Maps.of(
@@ -543,7 +544,7 @@ class A2AAdapterTest {
 				Fields.URL, Strings.create(TestServer.BASE_URL),
 				Fields.MESSAGE, coviaMessageRecord("cancel me")));
 		AMap<AString, ACell> data = awaitStable(seed.getID());
-		String remoteTaskId = RT.ensureString(data.get(Fields.REMOTE_TASK_ID)).toString();
+		String remoteTaskId = remoteId(data).toString();
 
 		// Act: cancel
 		Job cancelJob = covia.invokeSync("v/ops/a2a/raw/cancel", Maps.of(
@@ -621,13 +622,18 @@ class A2AAdapterTest {
 	private static AString awaitRemoteTaskId(covia.venue.Engine engine, Blob jobId) {
 		Job mirror = engine.jobs().getJob(jobId);
 		if (mirror != null) {
-			TestEngine.awaitJob(mirror, j -> j.getData().get(Fields.REMOTE_TASK_ID) != null, 10_000,
+			TestEngine.awaitJob(mirror, j -> remoteId(j.getData()) != null, 10_000,
 				() -> "A2A mirror never recorded its remote task id: " + engine.jobs().getJobData(jobId));
 		}
 		AMap<AString, ACell> data = engine.jobs().getJobData(jobId,
 			RequestContext.of(Strings.create(engine.getDIDString() + ":public")));
-		AString taskId = data != null ? RT.ensureString(data.get(Fields.REMOTE_TASK_ID)) : null;
+		AString taskId = data != null ? remoteId(data) : null;
 		assertNotNull(taskId, "A2A mirror never recorded its remote task id: " + data);
 		return taskId;
+	}
+
+	/** The remote Task a job record says its A2A send follows. */
+	private static AString remoteId(AMap<AString, ACell> data) {
+		return RT.ensureString(RT.getIn(data, RemoteJobs.DELEGATION, RemoteJobs.REMOTE_ID));
 	}
 }
