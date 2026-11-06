@@ -3407,7 +3407,11 @@ public class AgentAdapter extends AAdapter {
 	private final class Handback {
 		private final AString ownerDID;
 		private final AString agentId;
-		/** Each request's write context, kept across runs of the body. */
+		/**
+		 * Each request's write context, kept across runs of the body: the
+		 * caller's standing is read once per handback, as a live request's is
+		 * once on arrival, however often a conflict makes the body run again.
+		 */
 		private final java.util.HashMap<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
 		private final List<Runnable> after = new ArrayList<>();
 		private final List<Blob> settled = new ArrayList<>();
