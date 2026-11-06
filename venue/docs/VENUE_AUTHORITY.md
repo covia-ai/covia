@@ -60,7 +60,7 @@ agent's `config.accepts` (#447) and the public scope (`auth.public.caps`).
 |--------|-------|-----|
 | Embedder code, operator modules | In the process | `engine.venueContext()`: full authority |
 | Brightside's gods (bridges, treasury) | In the process, as venue agents | A 300-second grant per call, signed and verified in the process (`VenueGrants`) |
-| GetMine administrators | Outside | A one-hour grant over users, sign-in keys, adapters, restart and store collection, issued on demand (`VenueGrantApi`) and presented over MCP or `X-Covia-Ucans` |
+| GetMine administrators | Outside | A one-hour grant over users, sign-in keys, adapters, restart and store collection, plus reads of the venue's namespaces but `s` on named non-production hosts, issued on demand (`VenueGrantApi`) and presented over MCP or `X-Covia-Ucans` |
 | Provisioning services, standing admin identities | Outside | A grant from `ucan:issue`, as deploy/README.md and CONFIG.md describe |
 
 Nothing in Covia itself signs a grant over the venue's own resources except
