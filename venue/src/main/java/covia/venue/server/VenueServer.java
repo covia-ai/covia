@@ -597,7 +597,9 @@ public class VenueServer {
 	 * (Javalin 7 requires routes at create time). Contributed routes receive no
 	 * implicit Covia policy based on their URL. Add {@link VenueRouteFeature}
 	 * roles to an endpoint to opt into verified identity, venue-user admission,
-	 * rate limiting, or post-request lattice sync.
+	 * rate limiting, or post-request lattice sync. A filter that admits or
+	 * refuses requests keys on the route a request matched, never on
+	 * {@code ctx.path()} (venue/docs/EMBEDDING.md, Routes).
 	 *
 	 * <pre>{@code
 	 * VenueServer.launch(config, List.of(routes ->

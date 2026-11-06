@@ -40,6 +40,7 @@ import covia.venue.server.VenueServer;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.BadRequestResponse;
 import io.javalin.http.MethodNotAllowedResponse;
+import io.javalin.router.Endpoint;
 import io.javalin.security.RouteRole;
 
 /**
@@ -67,12 +68,15 @@ class EmbedderRoutePolicyTest {
 	private static final String CUSTOM_FAILURE = "/api/getmine/custom-failure";
 	private static final String CUSTOM_AUTH = "/api/getmine/custom-auth";
 	private static final String API_KEY_AUTH = "/api/getmine/api-key-auth";
+	private static final String ROLE_GUARDED = "/api/getmine/role-guarded";
+	private static final String PATH_GUARDED = "/api/getmine/path-guarded";
 	private static final String AUTHENTICATED_IDENTITY_HEADER =
 		"X-GetMine-Authenticated-Identity";
 	private static final String VENUE_USER_HEADER = "X-GetMine-Venue-User";
 
 	private enum GetMineRole implements RouteRole {
-		ADMIN
+		ADMIN,
+		GUARDED
 	}
 
 	private static final class GetMineException extends RuntimeException {
@@ -203,6 +207,20 @@ class EmbedderRoutePolicyTest {
 			post(strictServer, "/mcp", token, "{}").statusCode(),
 			"native MCP must still reject an unknown authenticated DID");
 		assertNull(strictServer.getEngine().getVenueState().users().get(did));
+	}
+
+	/**
+	 * Routing ignores a trailing slash (EMBEDDING.md, Routes), so a filter that
+	 * keys on the matched route, by its roles or its registered path, sees every
+	 * request that reaches the route.
+	 */
+	@Test
+	void filtersKeyedOnTheMatchedRouteSeeEveryPathThatReachesIt() throws Exception {
+		assertResponse(200, "anonymous", get(strictServer, RAW + "/", null));
+		for (String route : List.of(ROLE_GUARDED, PATH_GUARDED)) {
+			assertResponse(403, "guarded", get(strictServer, route, null));
+			assertResponse(403, "guarded", get(strictServer, route + "/", null));
+		}
 	}
 
 	@Test
@@ -382,6 +400,17 @@ class EmbedderRoutePolicyTest {
 				ctx.status(401).result(e.getMessage());
 			}
 		}, GetMineRole.ADMIN);
+
+		routes.get(ROLE_GUARDED, ctx -> ctx.result("reached"), GetMineRole.GUARDED);
+		routes.get(PATH_GUARDED, ctx -> ctx.result("reached"));
+		routes.beforeMatched(ctx -> {
+			Endpoint matched = ctx.endpoints().matchedHttpEndpoint();
+			if (ctx.routeRoles().contains(GetMineRole.GUARDED)
+					|| (matched != null && PATH_GUARDED.equals(matched.path))) {
+				ctx.status(403).result("guarded");
+				ctx.skipRemainingHandlers();
+			}
+		});
 	}
 
 	private HttpResponse<String> get(VenueServer server, String path,

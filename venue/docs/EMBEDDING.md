@@ -55,6 +55,18 @@ schema versions, Covia's and each adapter's, without starting a venue.
 Covia never runs your own migration steps: run them after Covia's, in your
 own code. See [MIGRATE.md](MIGRATE.md).
 
+## Routes
+
+Routes you add with `VenueServer.launch(config, extraRoutes)` share the
+venue's server; its javadoc says how they opt into the venue's policy.
+
+A filter of yours that admits or refuses requests keys on the route a request
+matched, never on `ctx.path()`. Routing ignores a trailing slash, so
+`/app/admin/` reaches a route registered as `/app/admin`, while `ctx.path()` is
+the path as sent. Register the filter with `beforeMatched` and read the matched
+route's roles, `ctx.routeRoles()`, as the venue's own admission does, or the
+path it was registered with, `ctx.endpoints().matchedHttpEndpoint().path`.
+
 ## Adapters
 
 Register your own adapters with `engine.registerAdapter(adapter)` on a
