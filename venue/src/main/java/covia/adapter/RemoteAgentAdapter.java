@@ -162,7 +162,7 @@ public class RemoteAgentAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				if (Job.isFinished(snapshot)) next = next.assoc(Fields.ERROR, snapshot.get(Fields.ERROR));
 				return next;
 			});
-			// The remote Job's progress is shown here as it is there: never recorded.
+			// The remote Job's progress, as it is there, replaces this Job's in its record.
 			job.setProgress(snapshot.get(PROGRESS));
 		}
 	}
