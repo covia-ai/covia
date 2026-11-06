@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Cells;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -87,6 +88,30 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	/** This user's workspace ({@code w}). */
 	public Workspace workspace() {
 		return new Workspace(wrapped(Namespace.W));
+	}
+
+	/**
+	 * Storage size, in bytes, of the data this user and their agents write as
+	 * they choose: the workspace ({@code w}) and each agent's own workspace
+	 * ({@code n}). It is measured as stored, so a value held in two places
+	 * counts twice. Session and job scratch are not counted.
+	 *
+	 * @return Bytes, zero for a user with no workspace data
+	 */
+	public long workspaceSize() {
+		long size = storedSize(cursor().path(Namespace.W).get());
+		AMap<AString, ACell> agents = getAgents();
+		if (agents != null) {
+			for (AString agentId : agents.keySet()) {
+				AgentState agent = agent(agentId);
+				if (agent != null) size += storedSize(agent.workspace().cursor().get());
+			}
+		}
+		return size;
+	}
+
+	private static long storedSize(ACell value) {
+		return (value == null) ? 0 : Cells.storageSize(value);
 	}
 
 	/** This user's operation definitions ({@code o}), held as a workspace. */

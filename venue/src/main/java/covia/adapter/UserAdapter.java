@@ -47,6 +47,9 @@ public class UserAdapter extends AAdapter {
 
 	private static final AString USERNAME = Strings.intern("username");
 	private static final AString REGISTERED = Strings.intern("registered");
+	private static final AString STORAGE = Strings.intern("storage");
+	private static final AString WORKSPACE = Strings.intern("workspace");
+	private static final AString DRIVES = Strings.intern("drives");
 	private static final AString CREATED = Fields.CREATED;
 	private static final AString USERS = Strings.intern("users");
 	private static final AString TOTAL = Strings.intern("total");
@@ -391,9 +394,17 @@ public class UserAdapter extends AAdapter {
 		AMap<AString, ACell> out = Maps.of(
 			Fields.DID, user.getDID(),
 			REGISTERED, CVMBool.TRUE,
-			Fields.MANAGED, CVMBool.create(engine.managedUserName(user.getDID()) != null));
+			Fields.MANAGED, CVMBool.create(engine.managedUserName(user.getDID()) != null),
+			STORAGE, storage(user));
 		ACell metadata = withMeta ? RT.getIn(user.get(), Covia.K_META) : null;
 		return (metadata == null) ? out : out.assoc(Covia.K_META, metadata);
+	}
+
+	/** What a user's data takes up as stored, in bytes: their workspace and, where the dlfs adapter runs, their drives. */
+	private AMap<AString, ACell> storage(User user) {
+		AMap<AString, ACell> out = Maps.of(WORKSPACE, CVMLong.create(user.workspaceSize()));
+		DLFSAdapter dlfs = engine.findAdapter(DLFSAdapter.class);
+		return (dlfs == null) ? out : out.assoc(DRIVES, CVMLong.create(dlfs.storageSize(user.getDID())));
 	}
 
 	private AString requireDID(AString value) {
