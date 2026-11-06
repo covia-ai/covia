@@ -46,20 +46,20 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return new Jobs(context, draft);
 	}
 
-	/** Every job as callers see it ({@link JobState#view}), keyed by job id; empty when there are none. */
+	/** Every job in its current state, keyed by job id; empty when there are none. */
 	public Index<Blob, ACell> getAll() {
 		Index<Blob, ACell> jobs = cursor().get();
-		return (jobs == null) ? Index.none() : views(jobs);
+		return (jobs == null) ? Index.none() : current(jobs);
 	}
 
-	/** Each job as callers see it ({@link JobState#view}), without writing to storage. */
-	private static Index<Blob, ACell> views(Index<Blob, ACell> records) {
+	/** Each job in its current state ({@link Job#currentState}), without writing to storage. */
+	private static Index<Blob, ACell> current(Index<Blob, ACell> records) {
 		Index<Blob, ACell> result = records;
 		for (var entry : records.entrySet()) {
 			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
 			if (record == null) continue;
-			AMap<AString, ACell> view = JobState.view(record);
-			if (view != record) result = result.assoc(entry.getKey(), view);
+			AMap<AString, ACell> current = Job.currentState(record);
+			if (current != record) result = result.assoc(entry.getKey(), current);
 		}
 		return result;
 	}
@@ -84,14 +84,14 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	}
 
 	/**
-	 * One job's record as callers see it ({@link JobState#view}).
+	 * One job's record in its current state.
 	 *
 	 * @param id Job id
 	 * @return The record, or null if there is no such job
 	 */
 	public AMap<AString, ACell> getRecord(Blob id) {
 		Index<Blob, ACell> jobs = cursor().get();
-		return (jobs == null) ? null : JobState.view(RT.ensureMap(jobs.get(id)));
+		return (jobs == null) ? null : Job.currentState(RT.ensureMap(jobs.get(id)));
 	}
 
 	/**
@@ -138,11 +138,11 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return before != null && before.containsKey(id);
 	}
 
-	/** The jobs as callers see them; null when there are none. */
+	/** The jobs in their current state; null when there are none. */
 	@Override
 	public ACell read() {
 		Index<Blob, ACell> jobs = cursor().get();
-		return (jobs == null) ? null : views(jobs);
+		return (jobs == null) ? null : current(jobs);
 	}
 
 	/** A job is named by its id in hex, whether or not it exists; a segment that is not hex names no job. */

@@ -12,6 +12,7 @@ import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Status;
@@ -54,6 +55,18 @@ class JobEntriesTest {
 		assertNull(entries.get(DONE), "a finished job has none");
 		assertNull(entries.get(ERASED), "a deleted account's job has none");
 		assertSame(migrated, STEP.apply(migrated), "migrating again changes nothing");
+	}
+
+	@Test void proofsARecordKeptMoveToItsEntry() {
+		ACell proofs = Vectors.of(Maps.of("iss", "did:test:grantor"));
+		ACell value = RT.assocIn(version2(), job(RUNNING, Status.STARTED).assoc(Fields.PROOFS, proofs),
+			Covia.USER_DATA, ALICE, Namespace.J, RUNNING);
+		ACell migrated = STEP.apply(value);
+		assertEquals(Maps.of(JobIndex.OWNER, ALICE, JobIndex.CONTEXT, Maps.of(Fields.PROOFS, proofs)),
+			RT.getIn(migrated, Covia.JOBS, RUNNING));
+		assertEquals(job(RUNNING, Status.STARTED), RT.getIn(migrated, Covia.USER_DATA, ALICE, Namespace.J, RUNNING),
+			"the record no longer holds them");
+		assertSame(migrated, STEP.apply(migrated));
 	}
 
 	@Test void anEntryAlreadyMadeIsKept() {

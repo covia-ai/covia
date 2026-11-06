@@ -973,36 +973,54 @@ public class JobManager {
 		}
 	}
 
-	// ========== Authority kept for work that continues ==========
+	// ========== Caller context kept for work that continues ==========
 
 	/**
-	 * Keeps the verified UCAN proofs {@code ctx} presents with {@code job}, for
-	 * work that continues after this request, such as a session that resumes
-	 * after a restart ({@link #callerContext}). They are kept in the form checked
-	 * on arrival, dropped when the job ends, and never shown to a caller
-	 * ({@link JobState#view}). A job that is not recorded does not outlive the
-	 * request, so it keeps none.
+	 * Keeps what {@code ctx} carries beyond its caller with {@code job}, for
+	 * work that continues for the caller after this request, such as a session
+	 * that resumes after a restart ({@link #callerContext}): the verified UCAN
+	 * proofs it presents, in the form checked on arrival, and its execution
+	 * scopes (agent, session, job, task). They are kept in the job's entry
+	 * ({@link JobIndex}), which no route reads, and go with it when the job
+	 * ends. A job that is not recorded does not outlive the request, so it keeps
+	 * none.
 	 */
-	public void keepProofs(Job job, RequestContext ctx) {
+	public void keepCallerContext(Job job, RequestContext ctx) {
+		if (!job.isRecorded()) return;
+		AMap<AString, ACell> kept = Maps.empty();
 		AVector<ACell> proofs = ctx.getProofs();
-		if (proofs == null || proofs.isEmpty() || !job.isRecorded()) return;
-		job.update(data -> data.assoc(Fields.PROOFS, proofs));
+		if (proofs != null && !proofs.isEmpty()) kept = kept.assoc(Fields.PROOFS, proofs);
+		if (ctx.getAgentId() != null) kept = kept.assoc(Fields.AGENT_ID, ctx.getAgentId());
+		if (ctx.getSessionId() != null) kept = kept.assoc(Fields.SESSION_ID, ctx.getSessionId());
+		if (ctx.getJobId() != null) kept = kept.assoc(Fields.JOB_ID, ctx.getJobId());
+		if (ctx.getTaskId() != null) kept = kept.assoc(Fields.TASK_ID, ctx.getTaskId());
+		if (kept.isEmpty()) return;
+		AMap<AString, ACell> context = kept;
+		venue().jobIndex().update(job.getID(), entry -> entry.assoc(JobIndex.CONTEXT, context));
 	}
 
 	/**
-	 * The context a recorded job's caller acts under now, in the job's
-	 * namespace, presenting again the proofs the job keeps
-	 * ({@link Engine#context(AString, AString, AVector)}): what a live request of
-	 * the caller's would hold on arrival. This is how work that continues after
-	 * a restart regains its authority.
+	 * The context a job's caller acts under now, in the job's namespace:
+	 * what a live request of the caller's would hold on arrival
+	 * ({@link Engine#context(AString, AString, AVector)}), presenting again the
+	 * proofs the job keeps, with the execution scopes it keeps
+	 * ({@link #keepCallerContext}). This is how work that continues after a
+	 * restart regains its authority.
 	 *
 	 * @throws AuthException when the job names no caller, or its caller could not act now
 	 */
 	public RequestContext callerContext(Job job) {
 		AString caller = job.getCaller();
 		if (caller == null) throw new AuthException(NO_CALLER + job.getID().toHexString());
-		AVector<ACell> proofs = (job instanceof VenueJob recorded) ? recorded.keptProofs() : null;
-		return engine.context(job.getOwner(), caller, proofs);
+		AMap<AString, ACell> kept = RT.ensureMap(RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.CONTEXT));
+		RequestContext ctx = engine.context(job.getOwner(), caller, RT.ensureVector(RT.getIn(kept, Fields.PROOFS)));
+		if (kept == null) return ctx;
+		AString agentId = RT.ensureString(kept.get(Fields.AGENT_ID));
+		if (agentId != null) ctx = ctx.withAgentId(agentId);
+		if (kept.get(Fields.SESSION_ID) instanceof Blob sessionId) ctx = ctx.withSessionId(sessionId);
+		if (kept.get(Fields.JOB_ID) instanceof Blob jobId) ctx = ctx.withJobId(jobId);
+		if (kept.get(Fields.TASK_ID) instanceof Blob taskId) ctx = ctx.withTaskId(taskId);
+		return ctx;
 	}
 
 	/** Why a job's work cannot regain authority: its record names no caller. */

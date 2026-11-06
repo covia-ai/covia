@@ -83,17 +83,6 @@ public class VenueJob extends Job {
 		return newData.assoc(Fields.UPDATED, timestamp);
 	}
 
-	/**
-	 * The proofs this job keeps while its work can continue after the request
-	 * ({@link JobState#proofs}); null for a memory-only job or one that keeps
-	 * none.
-	 */
-	public AVector<ACell> keptProofs() {
-		if (record == null) return null;
-		try { return record.proofs(); }
-		catch (AuthException erased) { return null; }
-	}
-
 	/** Read the primary row, never a separately updated in-memory copy. */
 	@Override public AMap<AString, ACell> getData() {
 		if (hasLocalRecord()) return super.getData();

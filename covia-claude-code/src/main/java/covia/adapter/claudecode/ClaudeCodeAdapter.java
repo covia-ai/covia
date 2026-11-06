@@ -694,8 +694,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			if (plan.resumeId() != null) d = d.assoc(K_SESSION, Strings.create(plan.resumeId()));
 			return d;
 		});
-		// A session resumes after a restart as its caller, presenting these again.
-		if (multiTurn) engine.jobs().keepProofs(job, ctx);
+		// A session resumes after a restart as its caller, in the context it was started in.
+		if (multiTurn) engine.jobs().keepCallerContext(job, ctx);
 		if (job.isFinished()) return;
 		if (plan.prompt() == null) {
 			// A session opened without a first prompt waits for input. It claims
@@ -907,8 +907,8 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			job.fail("Claude Code project " + projectName + " no longer exists on this venue");
 			return null;
 		}
-		// The session resumes as its caller would act now, presenting the proofs
-		// the job keeps, and only while that caller may still use the project.
+		// The session resumes as its caller would act now, in the context the
+		// job keeps, and only while that caller may still use the project.
 		RequestContext ctx;
 		try {
 			ctx = engine.jobs().callerContext(job);

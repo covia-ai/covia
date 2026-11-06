@@ -26,11 +26,12 @@ import covia.lattice.Namespace;
 import covia.venue.server.AuthMiddleware;
 
 /**
- * Proofs a record keeps for work that continues after the request: kept in
- * the form checked on arrival, presented again when the work continues, shown
- * to no caller, and dropped when the work ends.
+ * A caller's context a job keeps for work that continues after the request:
+ * its proofs, in the form checked on arrival, and its execution scopes, kept
+ * in the job's entry, presented again when the work continues, never on the
+ * record, and gone when the job ends.
  */
-class KeptProofsTest {
+class KeptCallerContextTest {
 
 	private static final Engine engine = TestEngine.ENGINE;
 
@@ -50,38 +51,37 @@ class KeptProofsTest {
 		return engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, path), ctx).awaitResult(10_000);
 	}
 
-	@Test void aJobKeepsItsCallersProofsOutOfSightUntilItEnds() {
+	@Test void aJobKeepsItsCallersContextInItsEntryUntilItEnds() {
 		AKeyPair aliceKey = AKeyPair.generate();
 		AString alice = UCAN.toDIDKey(aliceKey.getAccountKey());
 		AVector<ACell> proofs = grantTo(aliceKey);
-		RequestContext presenting = RequestContext.of(alice).withProofs(proofs);
+		Blob session = Blob.fromHex("5e".repeat(16));
+		Blob task = Blob.fromHex("7a".repeat(16));
+		RequestContext presenting = RequestContext.of(alice).withProofs(proofs).withSessionId(session).withTaskId(task);
 		RequestContext own = RequestContext.of(alice);
 
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), presenting);
-		engine.jobs().keepProofs(job, presenting);
+		engine.jobs().keepCallerContext(job, presenting);
 		String id = job.getID().toHexString();
+		JobIndex index = engine.getVenueState().jobIndex();
 		try {
-			assertEquals(proofs, ((VenueJob) job).keptProofs(), "the job keeps them while its work can continue");
-			assertNull(job.getData().get(Fields.PROOFS));
-			job.updateData(job.getData().assoc(Fields.SESSION_ID, Strings.create("s1")));
-			assertEquals(proofs, ((VenueJob) job).keptProofs(), "an update from the record as callers see it keeps them");
-			assertNull(engine.jobs().getJobData(job.getID(), own).get(Fields.PROOFS));
-			assertNull(RT.getIn(engine.jobs().getJobs(own).get(job.getID()), Fields.PROOFS));
+			assertEquals(Maps.of(Fields.PROOFS, proofs, Fields.SESSION_ID, session, Fields.TASK_ID, task),
+				index.entry(job.getID()).get(JobIndex.CONTEXT), "the job's entry keeps them while its work can continue");
+			ACell stored = RT.getIn(engine.getVenueState().users().get(alice).cursor().path(Namespace.J).get(), job.getID());
+			assertFalse(RT.ensureMap(stored).containsKey(Fields.PROOFS), "the record never holds them");
 			assertNull(RT.getIn(read("j/" + id, own), Fields.VALUE, Fields.PROOFS));
-			assertNull(RT.getIn(read("j/" + id + "/proofs", own), Fields.VALUE));
-			ACell listed = RT.getIn(read("j", own), Fields.VALUE, job.getID());
-			assertNotNull(listed);
-			assertNull(RT.getIn(listed, Fields.PROOFS));
 
 			RequestContext resumed = engine.jobs().callerContext(job);
 			assertEquals(alice, resumed.getCallerDID());
 			assertEquals(proofs, resumed.getProofs(), "work that continues presents them again");
+			assertEquals(session, resumed.getSessionId(), "in the scopes it was started in");
+			assertEquals(task, resumed.getTaskId());
 		} finally {
 			job.cancel();
 		}
-		assertNull(((VenueJob) job).keptProofs(), "dropped when the job ends");
-		ACell stored = engine.getVenueState().users().get(alice).cursor().path(Namespace.J).get();
-		assertFalse(RT.ensureMap(((Index<?, ?>) stored).get(job.getID())).containsKey(Fields.PROOFS));
+		assertNull(index.entry(job.getID()), "gone when the job ends");
+		AVector<ACell> after = engine.jobs().callerContext(job).getProofs();
+		assertTrue(after == null || after.isEmpty(), "a finished job presents nothing again");
 	}
 
 	/** A delegate's job regains its authority only through the grant it presented, as a live request would. */
@@ -101,7 +101,7 @@ class KeptProofsTest {
 
 		Job kept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
 		Job unkept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);
-		engine.jobs().keepProofs(kept, sudo);
+		engine.jobs().keepCallerContext(kept, sudo);
 		try {
 			assertEquals(delegate, kept.getCaller());
 			assertEquals(owner, kept.getOwner());

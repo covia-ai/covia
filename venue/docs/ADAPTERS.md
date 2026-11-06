@@ -684,7 +684,7 @@ Recovery stays explicit. A2A and `remoteagent` compose `RemoteJobs` for durable
 submission intent, what is needed to reach the task again (never a sign-in
 credential or a secret's value; JOBS.md) and reattachment to an accepted task. Observation failure cannot manufacture execution failure or
 authorize replay. Claude may reconstruct an idle conversation through
-`restoreInteraction`, as the job's caller with the proofs the job kept
+`restoreInteraction`, as the job's caller in the context the job kept
 (`JobManager.callerContext`); resuming a transcript does not recover an
 interrupted turn. There is no default resubmission, polling loop or lifetime timeout in
 the base. Cancellation is a request, not proof of remote cessation.

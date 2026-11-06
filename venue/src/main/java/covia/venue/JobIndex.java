@@ -35,6 +35,14 @@ public final class JobIndex extends ACoviaComponent<Index<Blob, ACell>>
 	/** The job's {@link OutputRules}, as its operation declared them when it was admitted. */
 	public static final AString RULES = Strings.intern("rules");
 
+	/**
+	 * What the job's caller presented beyond its identity, kept for work that
+	 * continues for the caller ({@link JobManager#keepCallerContext}): its
+	 * verified {@code proofs} and its execution scopes {@code agentId},
+	 * {@code sessionId}, {@code jobId} and {@code taskId}.
+	 */
+	public static final AString CONTEXT = Strings.intern("context");
+
 	JobIndex(AForkableCursor<Index<Blob, ACell>> cursor) {
 		super(cursor);
 	}

@@ -138,6 +138,8 @@ job id (`JobIndex`), and no route reads it. Each entry holds:
   completes if the operator turns `outputValidation` on. A catalog change
   while the job runs changes neither. Absent when the operation declares
   neither.
+- **`context`**: the caller's context, kept when the job's adapter asks
+  ([Kept caller context](#kept-caller-context)).
 
 An entry is written with its record when the job is admitted, in one
 transaction, and removed in the same transaction as the update that finishes
@@ -146,19 +148,19 @@ removes the entries of that user's jobs with the account. So an entry exists
 exactly while its record is unfinished, and nothing is left to sweep. A job
 held only in memory has neither.
 
-## Kept proofs
+## Kept caller context
 
-A job whose work can continue after a restart keeps the grant proofs its
-caller presented, so that it acts again with the authority it started with
-and no more. The adapter asks for it (`JobManager.keepProofs`); a Claude Code
-session does. The record holds them as `proofs`, in the form checked on
-arrival, and `JobManager.callerContext` rebuilds the caller from it with
-`Engine.context(owner, caller, proofs)`, checking what a live request would:
-the principal still exists, a delegate still holds its `user/sudo` grant, an
-agent acts under its current `config.caps`. No read shows them
-(`JobState.view`: job reads, listings and `covia:read j/…`), and the update
-that finishes the job drops them, so a finished job, and therefore an export,
-holds none (UCAN.md §4.3).
+A job whose work continues for its caller after the request keeps that
+caller's context, so that it acts again with the authority it started with
+and no more. The adapter asks for it (`JobManager.keepCallerContext`); a
+Claude Code session does. The job's entry keeps the grant proofs the caller
+presented, in the form checked on arrival, and the request's execution
+scopes (agent, session, job and task). `JobManager.callerContext` rebuilds
+the caller from them with `Engine.context(owner, caller, proofs)`, checking
+what a live request would: the principal still exists, a delegate still holds
+its `user/sudo` grant, an agent acts under its current `config.caps`. The
+record never holds them, and they go with the entry when the job ends
+(UCAN.md §4.3).
 
 ## The update path — CAS-committed, terminal-sticky
 
@@ -441,7 +443,7 @@ not resumed: its recovered job fails, naming the remote job and its venue
 (`RemoteJobs.NOT_FOLLOWED`). A recovered A2A job reads its bearer again from
 its caller's secrets, under the context `JobManager.callerContext` rebuilds
 from the job record, so a rotated secret is sent as it now stands. An A2A
-job keeps no grants (Kept proofs). When its caller can no longer use the
+job keeps no grants ([Kept caller context](#kept-caller-context)). When its caller can no longer use the
 secret (it was deleted, the caller cannot act now, or it is another user's,
 used under a grant the request presented), the job fails, naming the remote
 task and the agent's address (`A2AAdapter.SECRET_UNREADABLE`). Recovery does not resolve a changed catalog binding or

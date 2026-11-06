@@ -396,18 +396,19 @@ The proofs travel with the request. This is the standard per-request UCAN
 proof-presentation model, and two rules cover work that continues after the
 request:
 
-- **A check that happens later needs its evidence on the record.** Grant
-  proofs are kept only with a record whose work continues after the request:
-  a scheduled event, a job that can resume after a restart (a Claude Code
-  session, `JobManager.keepProofs`) or a pending agent `outputPath` write.
-  They are kept in the form checked on arrival, with no second signature
-  check, since the store is the trust boundary for the whole record. The work
-  presents them again each time it acts, through `Engine.context(owner,
-  caller, proofs)`, which checks what a live request would on arrival. They
-  are dropped when the work ends, so finished jobs, and therefore exports,
-  hold none. They never appear in API output (`JobState.view`,
-  `AgentState.view`), never serve another record's work and are never handed
-  to an agent.
+- **A check that happens later needs its evidence kept.** Grant proofs are
+  kept only for work that continues after the request: a scheduled event
+  keeps them with the event, and a job that can resume after a restart keeps
+  them in its entry, which no route reads (a Claude Code session,
+  `JobManager.keepCallerContext`; JOBS.md, The venue's job entries) or with a
+  pending agent `outputPath` write. They are kept in the form checked on
+  arrival, with no second signature check, since the store is the trust
+  boundary for the whole record. The work presents them again each time it
+  acts, through `Engine.context(owner, caller, proofs)`, which checks what a
+  live request would on arrival. They go when the work ends, and a job record
+  never holds them, so exports hold none. They never appear in API output
+  (`AgentState.view`), never serve another record's work and are never
+  handed to an agent.
 - **Sign-in credentials prove presence and are never stored.** Deferred work
   that must act as the caller at another venue is scheduled at that venue.
 
