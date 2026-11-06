@@ -128,6 +128,36 @@ public class PathReadAuthorityTest {
 	}
 
 	@Test
+	public void testInvokingAPrivateOperationInAnyShapeNeedsRead() {
+		Job slashed = run("/" + alice + "/o/priv", Maps.of("echo", "x"), BOB);
+		assertEquals(Status.FAILED, slashed.getStatus(), "Bob invoked Alice's private operation");
+	}
+
+	@Test
+	public void testAToolListInAnyShapeNeedsRead() {
+		AMap<AString, ACell> own = toolAgent("o/priv");
+		assertEquals(Status.COMPLETE, createAgent("tools-own", own, ALICE).getStatus());
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "tools-own"), ALICE)).contains(SECRET),
+			"an agent's context shows its tools' descriptions");
+
+		String[] shapes = {alice + "/o/priv", "/" + alice + "/o/priv"};
+		for (int i = 0; i < shapes.length; i++) {
+			String id = "tools-probe-" + i;
+			Job created = createAgent(id, toolAgent(shapes[i]), BOB);
+			assertFalse(shown(created).contains(SECRET), shapes[i] + ": " + shown(created));
+			for (String op : new String[] {"v/ops/agent/context", "v/ops/agent/info"}) {
+				String shown = shown(run(op, Maps.of(Fields.AGENT_ID, id), BOB));
+				assertFalse(shown.contains(SECRET), op + " with tool " + shapes[i] + ": " + shown);
+			}
+		}
+	}
+
+	private static AMap<AString, ACell> toolAgent(String tool) {
+		return Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			Fields.TOOLS, Vectors.of(Strings.create(tool)));
+	}
+
+	@Test
 	public void testDIDQualifiedAssetNeedsRead() {
 		Job stored = run("v/ops/asset/store", Maps.of("metadata",
 			Maps.of("name", "private asset", "description", SECRET)), ALICE);
