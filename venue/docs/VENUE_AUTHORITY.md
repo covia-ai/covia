@@ -1,25 +1,27 @@
 # Venue Authority (design)
 
 How the venue lends its authority to code in its own process, and how it
-carries out COG-17's rules for the grants it signs, verifies and revokes.
+carries out COG-17's rules for the grants it holds, verifies and revokes.
 This is a design; none of it is implemented yet.
 
 Tracked by covia#660.
 
 ## Principle
 
-The venue is the authority for everything it hosts. It records every grant it
-signs, holds the revocations for its resources, and lends its own authority to
-code in its process without signing anything.
+The venue is the authority for everything it hosts. It holds the grants over
+what it hosts instead of signing them, holds the revocations for its
+resources, and lends its own authority to code in its process. It signs a
+grant only for a verifier elsewhere.
 
 A signature carries authority across a trust boundary, to a verifier who
 cannot see the issuer's state. Inside the process there is no boundary: code
 holding the `Engine` already holds the venue's key and its full authority
-(`Engine.venueContext()`). Outside it, a grant is a token, and under COG-17 its
-grantor stays in control: any grant can be revoked by a principal in its line
-of authority, and its expiry is the grantor's choice within the venue's
-policy. Grants over a resource are checked by the venue hosting it, so that
-venue holds the revocations.
+(`Engine.venueContext()`). Nor is there one between the venue and a grant it
+will check itself: grants over a resource are checked by the venue hosting it,
+so a grant the venue issues over what it hosts is its own state, and the
+holder presents the grant's identifier. Under COG-17 the grantor stays in
+control: any grant can be revoked by a principal in its line of authority, and
+its expiry is the grantor's choice within the venue's policy.
 
 The venue's own resources (everything under `<venueDID>/`: users, adapters,
 process, store, outbound reach, the resources of venue-owned adapters and the
@@ -87,67 +89,108 @@ make one; nothing in a request or the lattice constructs it.
 
 Brightside's `VenueGrants` becomes a call to this method.
 
-### Token identifiers
+### Held grants
 
-COG-17 identifies a token by the SHA3-256 hash of its JWT. The links above a
-token in its chain travel as JWTs in its `prf`, so their identifiers can be
-computed whenever it is checked. The presented token's own JWT is gone once
-parsed, and a job's kept grants are parsed maps, so the venue computes that
-identifier on arrival and keeps it with the parsed token.
+`ucan:issue` holds every grant over a resource this venue hosts, and signs
+nothing: it returns `{id}`, and HITL approvals return the same identifier as
+`grantId`. The rules for what a caller may grant are unchanged
+([UCAN.md](./UCAN.md) §4.1). A grant to be verified elsewhere is still a
+signed token: the venue passing on another venue's grant (`prf`), and, once
+custodial attestation exists, a grant over this venue's users' resources at
+another venue.
 
-### Issuance records
+A held grant's record holds:
 
-`ucan:issue` records each grant it signs, and so covers HITL approvals: the
-token's identifier, the principal that asked, the audience, the capabilities,
-the expiry, the granting right it was minted under and that right's issuers,
-and when. It returns the identifier with the token, so whoever asked can
-revoke it later without holding it.
+- its identifier: 32 bytes from `SecureRandom`, hex-encoded;
+- the grantee (`aud`), the grants (`att`, absolutised) and the expiry;
+- the principal that asked, and when;
+- its parent, if any: the held grant it narrows, or the granting right it was
+  minted under, with the identifiers of that right and of every link above it.
 
-`ucan:issued {aud?}` lists live records. The venue sees all of them. Any other
-caller sees the records it asked for, and those granting a resource it owns:
-an owner holds the root authority over its resources, and COG-17 audits
-delegation rather than preventing it. A record goes once its token has
-expired.
+**Passing one on.** A grantee passes on part of a held grant through
+`ucan:issue`, naming the held grant's identifier in `prf`. The venue checks
+that the caller is its grantee and that each new grant narrows it, and holds
+the result with the held grant as its parent. A token in `prf` remains the
+venue's own passing on of another venue's grant (UCAN.md §4.1).
 
-### Grants the venue never recorded
+### Presentation
 
-`crossUserAllows` refuses a chain containing a grant the venue signed but has
-no issuance record for (`Engine.UNRECORDED_VENUE_GRANT`), as COG-17 requires:
-authority is minted only at granting surfaces. It is checked at each link, by
-the same hook as revocation. A copy of the venue key then
-cannot mint authority the venue honours. Identity tokens, which grant
-nothing, are not affected.
+A grantee presents a held grant's identifier in the proof channel, beside
+tokens (`ucans`, `X-Covia-Ucans`); an identifier has no `.`, so it cannot be
+mistaken for a JWT. On arrival (`AuthMiddleware.withTransportGrants`) the
+venue looks each identifier up. A live grant whose grantee is the
+authenticated caller enters the request as a parsed proof
+(`RequestContext.withProofs`), in the form a verified token takes, with its
+parent nested as that token's proof, so `crossUserAllows` and every check
+work unchanged. Convex's validator already walks parsed token maps after
+ingress, so it needs no change for held grants.
+
+A grant is live while it has not expired, it has not been revoked, and
+neither has its parent nor any link the record names above it. Any other
+identifier is discarded, and nothing says why (COG-17).
+
+- **Recovery.** A recorded job keeps the identifiers it was given, not the
+  resolved grants, and recovery looks them up again
+  (`JobManager.callerContext`), so a grant revoked or expired meanwhile does
+  not come back with the job.
+- **Relays.** A grid hop (`VenueConnection`) forwards the identifiers it does
+  not hold, which the target may, and drops those it holds, which mean
+  nothing elsewhere.
+
+### Grants the venue signed
+
+On arrival, a token bearing the venue's own signature with a non-empty `att`
+is discarded (`UcanJwtValidator.OWN_SIGNED_GRANT`), as COG-17 requires: the
+venue holds every grant it will verify. A copy of the venue key then mints
+nothing the venue honours. Identity tokens, which grant nothing, are not
+affected.
+
+### Listing
+
+`ucan:issued {aud?}` lists live held grants. The venue sees all of them. Any
+other caller sees the grants it asked for, those held for it, and those
+granting a resource it owns: an owner holds the root authority over its
+resources, and COG-17 audits delegation rather than preventing it. Every route
+that reads a held grant applies this rule.
 
 ### Revocation
 
-`ucan:revoke {token}` or `ucan:revoke {id}` revokes a token. The caller must be
-in its line of authority (`UCANAdapter.REVOKE_NOT_ENTITLED`): an issuer of the
-token or of a token above it in its chain; for a token this venue signed,
-whoever asked for it; and for a token minted under a granting right, an issuer
-in that right's chain, read from the issuance record. An `id` must name a
-token this venue signed (`UCANAdapter.REVOKE_UNKNOWN_ID`). Revoking a granting
-right also revokes the tokens minted under it.
+`ucan:revoke {id}` revokes a held grant, and `ucan:revoke {token}` a token
+presented here. The caller must be in the grant's line of authority: whoever
+asked for a held grant, the grantor of any link above it, and for a grant
+minted under a granting right, an issuer in that right's chain, read from the
+record or from the token's chain. Anyone else, and any identifier the venue
+holds no grant under, gets the same refusal (`UCANAdapter.REVOKE_REFUSED`).
 
-- **Checking.** A chain through a revoked token is refused at the link it
-  passes through. Convex's validator works on capability paths and leaves
-  revocation to its callers by design; it gains a hook that lets the caller
-  reject a token at any link, and Covia supplies the test. Every point of
-  action checks afresh, so a revocation reaches running work at its next
-  check, `outbound/any` included.
-- **Retention.** A revocation is kept until its token's expiry, read from the
-  token or its issuance record; one for a token with no expiry is kept.
+- **Held grants.** Revoking a held grant adds a revocation under its
+  identifier. A grant passed on from it or minted under it stops being live,
+  because liveness checks its parent and the links its record names; nothing
+  else needs writing.
+- **Tokens.** A token is revoked under its token identifier, the SHA3-256
+  hash of its signing input (the JWT up to its second `.`), so respelling its
+  base64url signature, which Java's decoder accepts in several forms, does not
+  escape the revocation. A chain through a revoked token is refused at the
+  link it passes through. Convex's validator works on capability paths and
+  leaves revocation to its callers by design; it gains a hook that lets the
+  caller reject a token at any link, and Covia supplies the test.
+- **Running work.** Every point of action checks afresh, so a revocation
+  reaches running work at its next check, `outbound/any` included.
+- **Retention.** A revocation is kept until its grant's expiry; one for a
+  grant with no expiry is kept.
 
 ### Storage
 
-Revocations and issuance records are core state in the venue's auth state,
-beside sign-in keys; the operations are on the `ucan` adapter, the granting
-surface. Both stores only grow until their entries expire, and an entry never
-changes once written, so merging two copies is their union and dropping an
-expired entry is always safe.
+Held grants and revocations are core state in the venue's auth state, beside
+sign-in keys; the operations are on the `ucan` adapter, the granting surface,
+and nothing else writes them. Both stores only grow until their entries
+expire. An entry never changes once written, and revoking a held grant adds a
+revocation instead of removing the grant, so merging two copies is their union
+and a merge cannot revive a revoked grant. An identifier is drawn once, so
+two copies never disagree about an entry.
 
 ### Grant lifetime
 
-`auth.maxGrantLifetime` (seconds) bounds every grant the venue signs, as
+`auth.maxGrantLifetime` (seconds) bounds every grant the venue issues, as
 `auth.maxTokenLifetime` bounds bearers. It is absent by default, so issuing
 works as it does today. Set, a later or null `exp` is refused with a reason
 naming the limit (`UCANAdapter.EXP_EXCEEDS_LIMIT`), never shortened. An
@@ -157,36 +200,75 @@ for HITL alone.
 
 ### The venue's own resources
 
-Grants over them are recorded, bounded and revoked like any other. GetMine's
+Grants over them are held, bounded and revoked like any other. GetMine's
 administrators, the documented provisioning path and standing admin
-identities keep working, and the operator can list and revoke what they hold.
+identities keep working by presenting identifiers, and the operator can list
+and revoke what they hold.
+
+## Security
+
+- **Guessing an identifier.** It gains nothing: an identifier is honoured only
+  for its grantee, who must authenticate. Identifiers are random, and every
+  identifier that confers nothing gets the same answer, so no one can even
+  confirm that a grant exists. An identifier derived from the record would be
+  computable by anyone who can guess what the grant says and roughly when it
+  was issued.
+- **Identifiers are not secrets.** They appear in job records, logs, listings
+  and relays. No path may treat holding one as authority: every path that
+  takes one checks its grantee.
+- **Answers that probe.** Presentation, listing and revocation give the same
+  answer for a missing grant, an ended one and another principal's, so a
+  caller learns nothing about grants it cannot see.
+- **Authentication carries the weight.** As with tokens, a grant is good only
+  for its authenticated grantee, so a stolen sign-in key carries that
+  principal's grants. Sign-in keys and grants can each be revoked.
+- **No ambient authority.** A grant applies only to the requests that present
+  it, so an agent or service acting for several principals cannot be steered
+  into using one principal's grant for another.
+- **Writing held grants.** Only the granting surfaces write them. Whoever can
+  write the venue's store could grant anything it hosts, the same exposure as
+  the store holding the data itself.
+- **A copied venue key.** It mints nothing here. Venues that accept this
+  venue's attestation are bounded by their own trust policy, and the venue
+  signs only for them.
+- **Restarts.** Recovery looks kept identifiers up again, so revocation holds
+  across a restart.
 
 ## Upgrade
 
-Refusing unrecorded grants takes effect at one release. Every venue-signed
-grant issued before it has no record and stops working then, HITL approvals
-included: non-expiring service grants must be issued again, while GetMine's
-are issued hourly and need nothing. Brightside moves to lending first. The
+Refusing tokens the venue signed takes effect at one release. Every
+venue-signed grant issued before it stops working then, HITL approvals
+included: non-expiring service grants must be issued again as held grants, and
+GetMine must present identifiers rather than tokens (its grants are issued
+hourly, so none needs issuing again). Brightside moves to lending first. The
 CHANGELOG and upgrade notes say so.
 
 ## Staging
 
 1. Lending, and Brightside's move to it.
-2. The Convex hook for rejecting a token at a link.
-3. Token identifiers, issuance records, revocation and the lifetime limit.
-4. Refusing unrecorded grants, at a release.
-5. Docs: [UCAN.md](./UCAN.md) §4.1, §4.4 and §4.6, CONFIG.md, EMBEDDING.md
-   (lending) and the `ucan` skill.
+2. Held grants: `ucan:issue` holding grants over hosted resources,
+   presentation and recovery by identifier, `ucan:issued`,
+   `ucan:revoke {id}` and the lifetime limit; HITL returns `grantId`.
+3. GetMine presents identifiers (GetMine's repository).
+4. Refusing tokens the venue signed, at a release.
+5. Revoking tokens: token identifiers, `ucan:revoke {token}`, and the Convex
+   hook for rejecting a token at a link.
+6. Docs: [UCAN.md](./UCAN.md) §4, CONFIG.md, EMBEDDING.md (lending), the
+   `ucan` and `hitl` skills and the user guide.
 
 ## Considerations
 
-- **Revocation is local.** A token signed here and honoured at another venue
-  under its trust policy stays good there until it expires, and that venue
-  cannot see this one's records. Grants meant for other venues should be
-  short-lived. Having verifiers ask the issuer instead would end COG-17's rule
-  that a grant is checked without calling its grantor.
+- **Revocation is local.** A token honoured at another venue under its trust
+  policy stays good there until it expires, and that venue cannot see this
+  one's revocations. Grants meant for other venues should be short-lived.
+  Having verifiers ask the issuer instead would end COG-17's rule that a grant
+  is checked without calling its grantor.
 - **Grants with no expiry.** COG-17 lets a venue refuse presented grants that
-  have none. Nothing here does.
+  have none. Nothing here does. Held grants with no expiry accumulate until
+  revoked; `auth.maxGrantLifetime` bounds them.
+- **Self-sovereign owners.** `ucan:issue` refuses to issue over a
+  self-sovereign caller's own namespace, which they sign client-side. Holding
+  such grants for them is possible under COG-17 but not part of this design.
 - **Agents as grantees.** What an agent reads can steer it. A long-lived
   grant to an agent is standing authority for whatever steers it; a lend for
   one call is the narrower tool.
@@ -197,16 +279,20 @@ CHANGELOG and upgrade notes say so.
 
 - **Refusing tokens over the venue's own resources with no replacement**, as
   covia#660 first proposed: it breaks GetMine's administrators and the
-  documented provisioning path, and once tokens can be revoked and bounded it
-  gains nothing.
-- **Standing grants**, records the venue checks in place of tokens over its
-  own resources: once tokens can be revoked, a recorded grant and a token held
-  by a compromised principal carry the same risk, so a second mechanism adds
-  operations and a check but no control. They may still suit the users the
-  venue issued (#449, #450).
+  documented provisioning path.
+- **Signed tokens with issuance records**, the venue signing a token for each
+  grant and refusing any it has no record of: the record already is the
+  grant, so the token adds a signature the venue checks against itself, and
+  revoking by the hash of a JWT the holder can respell needs strict decoding
+  everywhere.
+- **Standing grants**, every live grant applying to its grantee's requests
+  without being presented: authority becomes ambient (see Security). They may
+  still suit the users the venue issued (#449, #450).
+- **Identifiers derived from the record**, such as its Convex value hash:
+  anyone who can guess the record can compute them (see Security).
 - **Covia dropping revoked tokens itself** before calling the validator: the
   links above a presented token sit inside signed parents, so Covia could only
   drop a whole parent, losing its other valid paths.
 - **Records held by a new adapter**: disabling it would quietly make revoked
-  tokens good again, and the core check would read adapter state.
+  grants good again, and the core check would read adapter state.
 - **The capability scope as the lend's carrier**: see Lending.
