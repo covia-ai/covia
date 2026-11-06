@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- `user:info` and `user:list` report each user's storage: workspace and DLFS drives, in bytes.
 - `agent:sessionRead` reads the turns behind the caller's own compaction summaries (#597).
 - Agent `accepts: "anyone"` admits every caller, anonymous ones included.
 - An LLM agent's context names who each turn comes from (COG-20 §4).

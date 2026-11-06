@@ -22,6 +22,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Cells;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -344,6 +345,20 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		DLFSDrive drive = engine.getDLFSDrives(ensureUserKeyPair(ctx)).getOrCreateDrive(driveName);
 		if (drive == null) throw new UnavailableException(DRIVE_UNAVAILABLE + driveName);
 		return (DLFSLocal) drive.fileSystem();
+	}
+
+	/**
+	 * Storage size, in bytes, of a user's DLFS drives as stored, the markers
+	 * deleted drives leave included. Never writes.
+	 *
+	 * @param userDID The user
+	 * @return Bytes, zero for a user with no drives
+	 */
+	public long storageSize(AString userDID) {
+		AKeyPair dlfsKey = existingUserKeyPair(RequestContext.of(userDID));
+		if (dlfsKey == null) return 0;
+		ACell drives = engine.getDLFSDrives(dlfsKey).cursor().get();
+		return (drives == null) ? 0 : Cells.storageSize(drives);
 	}
 
 	/** The user's live drive, or null if it is absent or deleted. Never writes. */

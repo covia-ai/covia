@@ -23,6 +23,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -193,6 +194,47 @@ class UserAdapterTest {
 		ACell list = engine.jobs().invokeInternal("v/ops/user/list", Maps.empty(),
 			engine.venueContext()).get(5, TimeUnit.SECONDS);
 		assertTrue(RT.ensureLong(RT.getIn(list, "total")).longValue() >= 2);
+	}
+
+	/** A user's entry reports what their workspace, their agents' workspaces and their drives take up. */
+	@Test
+	void infoReportsStorageOfWorkspaceAndDrives() throws Exception {
+		AString did = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		create(Maps.of(Fields.DID, did));
+		RequestContext self = RequestContext.of(did);
+		assertEquals(0, stored(self, "drives"), "a user with no drives stores none");
+
+		User user = engine.getVenueState().users().get(did);
+		long empty = stored(self, "workspace");
+		user.workspace().write(CoviaPath.parse("notes"), Strings.create("w".repeat(10_000)));
+		long withNotes = stored(self, "workspace");
+		assertTrue(withNotes >= empty + 10_000, "the workspace counts: " + withNotes);
+
+		user.ensureAgent("storage-agent", null, null);
+		user.agent("storage-agent").workspace().write(CoviaPath.parse("notes"), Strings.create("n".repeat(10_000)));
+		assertTrue(stored(self, "workspace") >= withNotes + 10_000, "an agent's workspace counts");
+
+		engine.jobs().invokeInternal("v/ops/dlfs/create-drive", Maps.of("drive", "docs"), self).get(5, TimeUnit.SECONDS);
+		engine.jobs().invokeInternal("v/ops/dlfs/write",
+			Maps.of("drive", "docs", "path", "big.txt", "content", "d".repeat(10_000)), self).get(5, TimeUnit.SECONDS);
+		assertTrue(stored(self, "drives") >= 10_000, "a drive's files count");
+		engine.jobs().invokeInternal("v/ops/dlfs/delete-drive", Maps.of("drive", "docs"), self).get(5, TimeUnit.SECONDS);
+		long deleted = stored(self, "drives");
+		assertTrue(deleted > 0 && deleted < 10_000, "a deleted drive leaves only its marker: " + deleted);
+
+		// The operator's listing reports the same figures
+		UserAdapter adapter = (UserAdapter) engine.getAdapter("user");
+		AVector<ACell> users = RT.ensureVector(RT.getIn(adapter.list(engine.venueContext()), "users"));
+		ACell listed = null;
+		for (long i = 0; i < users.count(); i++) {
+			if (did.equals(RT.getIn(users.get(i), Fields.DID))) listed = users.get(i);
+		}
+		assertEquals(RT.getIn(adapter.info(self, Maps.empty()), "storage"), RT.getIn(listed, "storage"));
+	}
+
+	private static long stored(RequestContext ctx, String figure) {
+		UserAdapter adapter = (UserAdapter) engine.getAdapter("user");
+		return RT.ensureLong(RT.getIn(adapter.info(ctx, Maps.empty()), "storage", figure)).longValue();
 	}
 
 	/** #524: stats.users is the registered population, external DIDs included —

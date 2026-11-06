@@ -1201,6 +1201,21 @@ shows the recorded-job path. An operator-installed adapter may use the same
 mechanism. OAuth callbacks are trusted venue provisioners and create the same
 did:web-managed account explicitly.
 
+### Storage usage
+
+`user:info` and `user:list`, and their REST forms `GET /api/v1/users/{did}`
+and `GET /api/v1/users`, report what each user's data takes up as stored, in
+bytes:
+
+- `storage.workspace`: the user's workspace (`w`) and each of their agents'
+  workspaces (`n`);
+- `storage.drives`: their DLFS drives, including the markers deleted drives
+  leave. It is absent when the venue runs without the `dlfs` adapter.
+
+Sizes are Convex storage sizes, so a value held in two places counts twice.
+Session and job scratch, jobs, agent records, the inbox, secrets and assets
+are not counted. The venue measures storage but sets no limit on it.
+
 ### Account deletion
 
 `v/ops/user/delete {"did":"did:..."}` and `DELETE /api/v1/users/{did}`
