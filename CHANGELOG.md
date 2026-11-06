@@ -125,6 +125,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Memory edits made at once by a user and their agents all take effect.
 - Concurrent `agent:update` calls no longer undo each other's config changes.
 - A chat is no longer answered with the reply to an earlier message (#654).
+- A Claude Code session restored after a restart keeps the options its call asked for (model, tools, permission mode, limits, system prompt, JSON schema), and ends if its project no longer allows its permission mode.
 
 ### Security
 
@@ -145,6 +146,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `auth:identity-token` refuses restricted self-tokens and the public principal.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
+- An agent's pinned context and skills index show only what its caps cover.
 
 ### Migration
 

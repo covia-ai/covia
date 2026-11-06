@@ -412,6 +412,13 @@ processing stays `STARTED` while a remote job is queued. Remote interruptions
 and terminal outcomes are mirrored; a terminal result and its supporting
 remote status are committed atomically before result continuations run.
 
+A `remoteagent:request` job also carries `sessionId`, taken from the
+destination's task as it is observed: the destination agent's session, which is
+one of this venue's own when the destination is this venue. An agent that
+serves its calls through a remote-agent backend is different: its own job names
+its Covia session, and the backend job beneath it names the destination's
+([AGENT_SESSIONS.md](AGENT_SESSIONS.md#22-external-agent-sessions)).
+
 Transport timeouts, malformed observations, missing remote records, and 5xx
 responses do not prove execution failed. They set observation health to
 `retrying`; 401/403 observations set `auth-required`. The failure's type is

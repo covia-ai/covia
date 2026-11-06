@@ -661,6 +661,52 @@ public class ClaudeCodeAdapterTest {
 		await(job::isFinished, 10_000);
 	}
 
+	@Test
+	public void testRestoredSessionKeepsTheOptionsItsCallAsked() throws Exception {
+		// Project beta says haiku and seven turns; the call asks for others.
+		Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "beta", "prompt", "count",
+			"model", "sonnet", "options", Maps.of("effort", "low", "maxTurns", 3)), OWNER_CTX);
+		await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+		String session = str(output(job), "session");
+		adapter.forgetSessionJobForTest(job.getID());
+		run(OWNER_CTX, "v/ops/claudecode/stop", Maps.of("session", session));
+		engine.jobs().deliverMessage(job.getID(), Maps.of("content", "args"), OWNER_CTX);
+		await(() -> {
+			String reply = str(output(job), "result");
+			return reply != null && reply.startsWith("args:");
+		}, 30_000);
+		String args = str(output(job), "result");
+		for (String expected : List.of("--model sonnet", "--effort low", "--max-turns 3", "--resume " + session)) {
+			assertTrue(args.contains(expected), expected + " in " + args);
+		}
+		assertFalse(args.contains("haiku") || args.contains("--max-turns 7"), "the project's settings do not replace the call's: " + args);
+		engine.jobs().deliverMessage(job.getID(), Maps.of("end", true), OWNER_CTX);
+		await(job::isFinished, 10_000);
+	}
+
+	@Test
+	public void testRestoredSessionEndsWhenItsProjectNoLongerAllowsItsPermissionMode() throws Exception {
+		Path dir = Files.createDirectory(root.resolve("restore-bypass"));
+		AMap<AString, ACell> project = Maps.of("name", "restore-bypass", "path", dir.toString(), "user", OWNER.toString());
+		run(engine.venueContext(), "v/ops/claudecode/create",
+			project.assoc(Strings.create("options"), Maps.of("permissionMode", RunOptions.BYPASS_PERMISSIONS)));
+		try {
+			Job job = engine.jobs().invokeOperation("v/ops/claudecode/session", Maps.of("project", "restore-bypass",
+				"prompt", "count", "permissionMode", RunOptions.BYPASS_PERMISSIONS), OWNER_CTX);
+			await(() -> Status.INPUT_REQUIRED.equals(job.getStatus()), 30_000);
+			adapter.forgetSessionJobForTest(job.getID());
+			// The operator takes the mode out of the project while the session waits.
+			run(engine.venueContext(), "v/ops/claudecode/delete", Maps.of("name", "restore-bypass"));
+			run(engine.venueContext(), "v/ops/claudecode/create", project);
+			assertThrows(Exception.class, () -> engine.jobs().deliverMessage(job.getID(), Maps.of("content", "count"), OWNER_CTX));
+			await(job::isFinished, 10_000);
+			assertEquals(Status.FAILED, job.getStatus(), "a mode the project no longer allows is not carried over silently");
+			assertTrue(job.getErrorMessage().contains(RunOptions.BYPASS_PERMISSIONS), job.getErrorMessage());
+		} finally {
+			run(engine.venueContext(), "v/ops/claudecode/delete", Maps.of("name", "restore-bypass"));
+		}
+	}
+
 	/** Caps an agent needs to open a session in the alpha project. */
 	private static AVector<ACell> alphaSessionCaps() {
 		return Vectors.of(

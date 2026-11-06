@@ -34,7 +34,7 @@
         },
         "sessionId": {
           "type": "string",
-          "description": "Optional session identifier (hex string, with or without a 0x prefix). Requests sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
+          "description": "Optional session identifier on the destination agent (hex string, with or without a 0x prefix). Requests sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
         },
         "venue": {
           "type": "string",
@@ -57,7 +57,7 @@
     },
     "output": {
       "type": "object",
-      "description": "The destination agent task result. The Job record also carries its sessionId and delegation.remoteId."
+      "description": "The destination agent task result. The Job record also carries sessionId, the destination agent's session (not a session of the requesting agent), and delegation.remoteId."
     },
     "activityLabel": "Requesting remote agent"
   }
