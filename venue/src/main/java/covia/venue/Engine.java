@@ -2019,9 +2019,10 @@ public class Engine {
 	 * authority ({@link #requireMetadataRead}: {@code crud/read}, or
 	 * {@code asset/read} for a content hash), so another user's needs a grant and
 	 * a capability scope must cover the caller's own. A bare hash names the
-	 * caller's own store, then the venue catalog. The virtual namespaces
-	 * ({@code v/}, {@code n/}, {@code t/}, {@code c/}) apply their resolvers' own
-	 * policy, and a remote DID URL is never read here.
+	 * caller's own store, then the venue catalog. The context-dependent
+	 * namespaces need no grant here: {@code v/} is open to every caller,
+	 * {@code n/}, {@code t/} and {@code c/} are the request's own, and an
+	 * {@code x/} view checks its own. A remote DID URL is never read here.
 	 *
 	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
 	 */
