@@ -407,8 +407,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Lean transition output: emit {state, response | error}. Task
 		// completion (if any) is signalled to the framework by the venue op
 		// invoked from the complete_task / fail_task tool wrappers, which
-		// parks an envelope in deferredCompletions; the run loop drains
-		// that map AFTER mergeRunResult to build the cycle's TASK_RESULTS.
+		// records the task as resolved on the agent; the run loop's merge
+		// hands it back and builds the cycle's TASK_RESULTS from it.
 		//
 		// Default response is the assistant's chat text. If the LLM called
 		// complete_task with structured output, that output overrides the

@@ -229,6 +229,19 @@ public class VenueJob extends Job {
 			.assoc(Fields.ERROR, Strings.create(message)).dissoc(Fields.ERROR_CODE));
 	}
 
+	/**
+	 * Cancels this recorded Job in a caller-owned venue transaction, as
+	 * {@link #cancel(String)} does. Run only the successful draft's returned
+	 * notification after commit; it runs the Job's cancel hook.
+	 *
+	 * @return the notification, or null when the record is missing or the Job has finished
+	 */
+	public Runnable cancelIn(VenueState draft, String reason) {
+		String message = cancellationMessage(reason);
+		return updateIn(draft, data -> data.assoc(Fields.STATUS, covia.grid.Status.CANCELLED)
+			.assoc(Fields.ERROR, Strings.create(message)));
+	}
+
 	/** Called after a direct component edit commits, without replaying lifecycle effects. */
 	void historyUpdated() {
 		try { onUpdate(getData()); }

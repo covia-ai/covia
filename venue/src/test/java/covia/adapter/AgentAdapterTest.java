@@ -4413,6 +4413,46 @@ public class AgentAdapterTest {
 			"v/ops/covia/read", Maps.of(Fields.PATH, path),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"));
+
+		// The refusal fails only the request: the cycle that resolved the task
+		// committed with it, and the task has left the agent.
+		AgentState worker = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		assertNull(worker.getTasks().get(request.getID()));
+		assertTrue(worker.getResolved().isEmpty());
+		AVector<ACell> timeline = worker.getTimeline();
+		assertEquals(Status.COMPLETE, RT.getIn(timeline.get(timeline.count() - 1), Fields.TASK_RESULTS,
+			request.getID().toHexString(), Fields.STATUS), "the agent's own outcome is recorded");
+	}
+
+	/** A request cancelled after its task is resolved, before the merge, writes nothing. */
+	@Test
+	public void testOutputPathCancelledBeforeTheMergeWritesNothing() throws Exception {
+		String agentId = "cancelled-before-merge";
+		String gateName = "cancel-before-merge-" + System.nanoTime();
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AString path = Strings.create("w/pipeline/run-71/cancelled-before-merge");
+		AgentState worker = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Job request = engine.jobs().invokeOperation("v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, agentId,
+					Fields.INPUT, Strings.create("complete hold:" + gateName),
+					Fields.OUTPUT_PATH, path),
+				RequestContext.of(ALICE_DID));
+			assertTrue(gate.awaitEntered(10, java.util.concurrent.TimeUnit.SECONDS));
+			assertNotNull(worker.getResolved().get(request.getID()), "resolved, not yet merged");
+			request.cancel();
+			try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, agentId)) {
+				gate.release();
+				watch.awaitCycles(1);
+			}
+			assertEquals(Status.CANCELLED, request.getStatus());
+			assertTrue(worker.getResolved().isEmpty());
+		}
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, path),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"));
 	}
 
 	@Test

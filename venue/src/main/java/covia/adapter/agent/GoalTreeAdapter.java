@@ -636,9 +636,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		// Lean transition output: emit {response | error}. When a task was
 		// picked this cycle, complete it explicitly via the venue op
-		// (agent:complete-task / agent:fail-task), which parks a completion
-		// envelope into the framework's deferredCompletions map. The run
-		// loop drains that map after mergeRunResult to build taskResults.
+		// (agent:complete-task / agent:fail-task), which records the task as
+		// resolved on the agent. The run loop's merge hands it back and builds
+		// taskResults from it.
 		//
 		// Sessioned (lattice-resident) runs do NOT emit frames: the session
 		// record is the single authoritative copy — every mutation already
