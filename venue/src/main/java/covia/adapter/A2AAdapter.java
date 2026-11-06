@@ -108,6 +108,16 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			.build();
 	public static final String INVALID_CANCELLATION_RESPONSE = "Invalid remote cancellation response";
 
+	/**
+	 * Why a recovered A2A job ended: its caller can no longer use the secret
+	 * its bearer came from, and the job keeps no grants, so the venue cannot
+	 * send the request again. Formatted with the remote task's ID and the
+	 * agent's address, where the caller can follow it.
+	 */
+	public static final String SECRET_UNREADABLE =
+		"This venue restarted and its caller can no longer use the secret this job signs in with, "
+		+ "so it no longer follows remote task %s; follow it at %s";
+
 	/** The remote Task each live mirror Job is bound to, for cancellation and continuation. */
 	private record RemoteLink(A2AAdapter adapter, Job job, String rpcUrl, String remoteTaskId,
 		RequestAuth auth) implements RemoteInteraction {
@@ -955,7 +965,14 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 				engine.remoteJobs().notFollowed(job);
 				return;
 			}
-			RequestAuth auth = restoreAuth(job, saved, target);
+			RequestAuth auth;
+			try {
+				auth = restoreAuth(job, saved, target);
+			} catch (AuthException | NotFoundException unusable) {
+				// The job keeps no grants: a secret its caller cannot use now ends it
+				engine.remoteJobs().end(job, SECRET_UNREADABLE.formatted(id, target));
+				return;
+			}
 			bind(job, target, id.toString(), auth);
 			startPoller(job, target, id.toString(), auth);
 		} catch (RuntimeException e) { engine.remoteJobs().unavailable(job, e); }
@@ -965,6 +982,9 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 	 * Reads a saved authentication's secret again, under the authority the
 	 * job's caller holds now: a rotated secret is sent as it now stands, and
 	 * one the caller can no longer use is refused.
+	 *
+	 * @throws AuthException when the caller cannot act now, or cannot use the secret without a grant
+	 * @throws NotFoundException when the secret no longer exists
 	 */
 	private RequestAuth restoreAuth(Job job, AMap<AString, ACell> saved, String destination) {
 		AString location = RT.ensureString(saved.get(K_LOCATION));

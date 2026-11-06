@@ -310,7 +310,9 @@ class RemoteDelegationTest {
 	 * After a restart an A2A job reads its bearer again from its caller's
 	 * secrets, so a secret rotated meanwhile is sent as it now stands. A job
 	 * whose token the caller passed literally ends instead, naming the remote
-	 * task: only the request presented that token.
+	 * task: only the request presented that token. So does a job whose caller
+	 * can no longer use its secret: one deleted meanwhile, or another user's
+	 * used under a grant, which the job does not keep.
 	 */
 	@Test void a2aRecoveryReadsTheBearerAgainAndEndsAJobWhoseTokenWasNotKept() throws Exception {
 		// Each request's Authorization, as the peer received it
@@ -322,7 +324,12 @@ class RemoteDelegationTest {
 			String authorization = exchange.getRequestHeaders().getFirst("Authorization");
 			authorizations.add(String.valueOf(authorization));
 			// Each job's remote task is the one its token reaches
-			String task = "Bearer literal-token".equals(authorization) ? "literal-task" : "secret-task";
+			String task = switch (String.valueOf(authorization)) {
+				case "Bearer literal-token" -> "literal-task";
+				case "Bearer granted-token" -> "granted-task";
+				case "Bearer deleted-token" -> "deleted-task";
+				default -> "secret-task";
+			};
 			byte[] response = ("{\"jsonrpc\":\"2.0\",\"id\":\"reply\",\"result\":{\"task\":{\"id\":\"" + task
 				+ "\",\"contextId\":\"ctx\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}}").getBytes(StandardCharsets.UTF_8);
 			exchange.sendResponseHeaders(200, response.length);
@@ -341,21 +348,42 @@ class RemoteDelegationTest {
 		ACell message = Maps.of("role", "user", "parts", Vectors.of(Maps.of("type", "text", "text", "hello")));
 		Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 		Engine.addDemoAssets(first);
-		Job fromSecret, fromLiteral;
+		// Another user's secret, which the caller uses under a grant presented with the request
+		AKeyPair ownerKey = AKeyPair.generate();
+		AString ownerDID = Strings.create(covia.grid.auth.UcanTokens.did(ownerKey));
+		AString granted = Strings.create(ownerDID + "/s/SHARED");
+		RequestContext grantee = user.withProofs(Vectors.of(convex.auth.ucan.UCAN.create(ownerKey,
+			convex.auth.ucan.UCAN.fromDIDKey(user.getCallerDID()), System.currentTimeMillis() / 1000 + 3600,
+			Vectors.of(convex.auth.ucan.Capability.create(granted, covia.api.Abilities.SECRET_USE,
+				Maps.of(Strings.create("url"), Strings.create(url)))),
+			Vectors.empty()).toMap()));
+		Job fromSecret, fromLiteral, fromGrant, fromDeleted;
 		try {
 			setSecret(first, user, "first-token");
+			first.getVenueState().users().ensure(ownerDID).secrets().store("SHARED", "granted-token",
+				covia.venue.SecretStore.keys(key));
+			first.jobs().invokeOperation("v/ops/secret/set",
+				Maps.of(Fields.NAME, "DELETED", Fields.VALUE, "deleted-token"), user).awaitResult(5000);
 			fromSecret = first.jobs().invokeOperation("v/ops/a2a/raw/send",
 				Maps.of(Fields.URL, url, Fields.BEARER_SECRET, "s/PARTNER", Fields.MESSAGE, message), user);
 			fromLiteral = first.jobs().invokeOperation("v/ops/a2a/raw/send",
 				Maps.of(Fields.URL, url, Fields.BEARER_TOKEN, "literal-token", Fields.MESSAGE, message), user);
+			fromGrant = first.jobs().invokeOperation("v/ops/a2a/raw/send",
+				Maps.of(Fields.URL, url, Fields.BEARER_SECRET, granted, Fields.MESSAGE, message), grantee);
+			fromDeleted = first.jobs().invokeOperation("v/ops/a2a/raw/send",
+				Maps.of(Fields.URL, url, Fields.BEARER_SECRET, "s/DELETED", Fields.MESSAGE, message), user);
 			awaitRemoteId(fromSecret);
 			awaitRemoteId(fromLiteral);
+			awaitRemoteId(fromGrant);
+			awaitRemoteId(fromDeleted);
+			assertTrue(authorizations.contains("Bearer granted-token"));
 			assertTrue(authorizations.contains("Bearer first-token"));
 			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().credentials(fromSecret)).contains("first-token"),
 				"the secret's value is not kept for recovery");
 			assertFalse(convex.core.util.JSON.toString(first.remoteJobs().credentials(fromLiteral)).contains("literal-token"),
 				"the literal token is not kept for recovery");
 			setSecret(first, user, "second-token");
+			first.jobs().invokeOperation("v/ops/secret/delete", Maps.of(Fields.NAME, "DELETED"), user).awaitResult(5000);
 		} finally { first.close(); }
 		Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
 		try {
@@ -364,6 +392,12 @@ class RemoteDelegationTest {
 			Job ended = second.jobs().getJob(fromLiteral.getID(), user);
 			assertEquals(Status.FAILED, ended.getStatus());
 			assertEquals(RemoteJobs.NOT_FOLLOWED.formatted("literal-task", url + "/a2a"), ended.getErrorMessage());
+			Job ungranted = second.jobs().getJob(fromGrant.getID(), user);
+			assertEquals(Status.FAILED, ungranted.getStatus());
+			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("granted-task", url + "/a2a"), ungranted.getErrorMessage());
+			Job deleted = second.jobs().getJob(fromDeleted.getID(), user);
+			assertEquals(Status.FAILED, deleted.getStatus());
+			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("deleted-task", url + "/a2a"), deleted.getErrorMessage());
 			received.await("a poll carrying the rotated secret", () -> authorizations.contains("Bearer second-token"));
 			assertFalse(second.jobs().getJob(fromSecret.getID(), user).isFinished());
 		} finally { second.close(); peer.stop(0); }

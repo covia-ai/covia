@@ -54,6 +54,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The venue keeps no caller's sign-in credential for a remote job: after a restart, a grid or remote-agent job that signed in with `authenticateAs: "caller"` ends, naming the remote job and its venue.
 - A scheduled grid hop with `authenticateAs: "caller"` fails, saying to schedule it at the target venue.
 - After a restart, an outbound A2A job reads its bearer secret again, so a rotated secret is used; one sent with a literal `bearerToken` ends, naming the remote task.
+- After a restart, an outbound A2A job whose caller can no longer use its bearer secret (deleted, or another user's used under a grant) ends, naming the remote task, instead of waiting as `auth-required`.
 
 - Every DID is its own namespace; scheduled fires and restored contexts keep the one they recorded.
 - `Engine.context` replaces `principalContext` and `publicContext`.

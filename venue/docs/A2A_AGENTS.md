@@ -241,7 +241,9 @@ direct Bearer authentication for private-card discovery. The secret is resolved
 once for an invocation and reused for send, polling, and cancellation. A send
 that outlives a restart keeps only the reference and reads the secret again
 under the caller's current authority, so a rotated secret is used as it now
-stands (JOBS.md). UCAN proofs are deliberately not projected onto A2A.
+stands. A send whose caller can no longer use the secret ends instead, naming
+the remote task and where to follow it (JOBS.md). UCAN proofs are deliberately
+not projected onto A2A.
 
 ## Implementation status and follow-ups
 

@@ -417,8 +417,10 @@ not resumed: its recovered job fails, naming the remote job and its venue
 (`RemoteJobs.NOT_FOLLOWED`). A recovered A2A job reads its bearer again from
 its caller's secrets, under the context `JobManager.callerContext` rebuilds
 from the job record, so a rotated secret is sent as it now stands. An A2A
-job keeps no grants (Kept proofs), so a secret the caller can use only through
-a grant leaves the job waiting for authority. Recovery does not resolve a changed catalog binding or
+job keeps no grants (Kept proofs). When its caller can no longer use the
+secret (it was deleted, the caller cannot act now, or it is another user's,
+used under a grant the request presented), the job fails, naming the remote
+task and the agent's address (`A2AAdapter.SECRET_UNREADABLE`). Recovery does not resolve a changed catalog binding or
 silently elevate the original authority. Missing authority or an unavailable
 adapter leave the remote outcome unresolved. The saved record is removed on
 local termination; encrypted orphan records left by a process crash require
