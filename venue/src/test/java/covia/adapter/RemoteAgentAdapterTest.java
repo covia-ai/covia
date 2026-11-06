@@ -307,6 +307,8 @@ class RemoteAgentAdapterTest {
 			Job cancelled = second.jobs().getJob(waited.getID(), ctx);
 			Job waiting = second.jobs().getJob(taskOf(waited), ctx);
 			assertFalse(waiting.isFinished());
+			assertDoesNotThrow(() -> second.jobs().deliverMessage(cancelled.getID(), Maps.of("content", "still there?"), ctx),
+				"a message reaches the task as the call's caller");
 			cancelled.cancel();
 			assertEquals(Status.CANCELLED, waiting.getStatus(), "cancelling the call reaches its task");
 

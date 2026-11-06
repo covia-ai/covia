@@ -707,8 +707,8 @@ the local agent, and the job keeps its caller's context in its entry
 the same task again exactly as it first did, as its caller acts now
 (`JobManager.callerContext`): its status, messages and cancellation reach
 that task, and it finishes with the task's outcome. It ends instead when it
-keeps no context (it started before the venue kept them) or had not
-recorded the task (`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when its
+keeps no context or had not recorded the task
+(`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when its
 caller cannot act now (`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the
 task). The task then runs on: the venue never acts on it without its
 caller's authority. A remote proxy reconnects as it first connected and

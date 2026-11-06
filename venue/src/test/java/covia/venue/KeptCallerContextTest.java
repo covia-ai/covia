@@ -102,9 +102,9 @@ class KeptCallerContextTest {
 	}
 
 	/**
-	 * A call to an agent on this venue that kept no context, as one started
-	 * before the venue kept them, is not followed again after a restart: it
-	 * ends, and the agent's task runs on.
+	 * A call to an agent on this venue that keeps no context, as one whose
+	 * entry was migrated from an older store, is not followed again after a
+	 * restart: it ends, and the agent's task runs on.
 	 */
 	@Test void aLocalAgentCallThatKeptNoContextEndsAtRecovery() {
 		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextLocalCall"));
