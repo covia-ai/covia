@@ -185,7 +185,7 @@ class RemoteAgentAdapterTest {
 			peer.loseAck = true; Engine engine = engine();
 			try {
 				Job mirror = engine.jobs().invokeOperation(OP, peer.input(), engine.venueContext());
-				await(mirror, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED) != null);
+				await(mirror, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED) != null);
 				assertEquals(Strings.create("acceptance-unknown"), engine.remoteJobs().kept(mirror).get(RemoteJobs.OBSERVATION));
 				engine.getAdapter("remoteagent").recoverJob(mirror);
 				assertFalse(mirror.isFinished()); assertEquals(1, peer.submits.get()); assertEquals(0, peer.polls.get());

@@ -35,7 +35,7 @@ import covia.grid.Status;
  *
  * <p>A job's record carries what its caller can follow under
  * {@link #DELEGATION}: the remote job's {@link #REMOTE_ID}, its last observed
- * {@link #REMOTE_STATUS}, and {@link #STOPPED} while this venue has stopped
+ * {@link #REMOTE_STATUS}, and {@link #NOT_FOLLOWED} while this venue has stopped
  * following it. How the venue follows it is kept in the job's entry
  * ({@link JobManager#adapterData}) beside the adapter's connection: the
  * {@link #PROTOCOL}, the {@link #TARGET}, whether it {@link #OWNS_REMOTE},
@@ -57,7 +57,7 @@ public final class RemoteJobs implements AutoCloseable {
 	 * remote job after a restart. Formatted with the remote job's ID and its
 	 * venue, where the caller can follow it.
 	 */
-	public static final String NOT_FOLLOWED =
+	public static final String CREDENTIAL_NOT_KEPT =
 		"This venue restarted and keeps no sign-in credential, so it no longer follows remote job %s; follow it at %s";
 	/**
 	 * Why this venue stopped following a job when it cannot tell whether the
@@ -90,7 +90,7 @@ public final class RemoteJobs implements AutoCloseable {
 	/** In {@link #DELEGATION}: the remote job's status as last observed. */
 	public static final AString REMOTE_STATUS = Strings.intern("remoteStatus");
 	/** In {@link #DELEGATION}: why this venue has stopped following the remote job, until it follows it again. */
-	public static final AString STOPPED = Strings.intern("notFollowed");
+	public static final AString NOT_FOLLOWED = Strings.intern("notFollowed");
 
 	/** In the job's entry: the protocol the remote job is reached by. */
 	public static final AString PROTOCOL = Strings.intern("protocol");
@@ -243,10 +243,10 @@ public final class RemoteJobs implements AutoCloseable {
 	/**
 	 * Ends a recovered job that signed in to its remote venue as its caller:
 	 * nothing is sent there, and the reason names the remote job and its venue
-	 * so the caller can follow it there ({@link #NOT_FOLLOWED}).
+	 * so the caller can follow it there ({@link #CREDENTIAL_NOT_KEPT}).
 	 */
-	public void notFollowed(Job job) {
-		end(job, NOT_FOLLOWED.formatted(remoteId(job), target(job)));
+	public void credentialNotKept(Job job) {
+		end(job, CREDENTIAL_NOT_KEPT.formatted(remoteId(job), target(job)));
 	}
 
 	/** Fails a recovered job that will not be observed; what was kept for its recovery goes with its entry. */
@@ -266,7 +266,7 @@ public final class RemoteJobs implements AutoCloseable {
 	 * venue follows the remote job again, so the record no longer says it does not.
 	 */
 	public static AMap<AString, ACell> observed(AMap<AString, ACell> data, AString status) {
-		return data.assoc(DELEGATION, shown(data).assoc(REMOTE_STATUS, status).dissoc(STOPPED));
+		return data.assoc(DELEGATION, shown(data).assoc(REMOTE_STATUS, status).dissoc(NOT_FOLLOWED));
 	}
 
 	/** What a record shows of its remote work, empty before it shows any. */
@@ -284,7 +284,7 @@ public final class RemoteJobs implements AutoCloseable {
 			if (old != null && !old.equals(Strings.create(id))) {
 				throw new ResponseException("Remote job identity changed");
 			}
-			return data.assoc(DELEGATION, record.assoc(REMOTE_ID, Strings.create(id)).dissoc(STOPPED));
+			return data.assoc(DELEGATION, record.assoc(REMOTE_ID, Strings.create(id)).dissoc(NOT_FOLLOWED));
 		});
 		health(job, HEALTHY, null);
 		if (job.isRecorded()) engine.flush();
@@ -426,14 +426,14 @@ public final class RemoteJobs implements AutoCloseable {
 	/**
 	 * This venue stops following a job's remote work, which it will not take
 	 * up again by itself: its health goes in the job's entry, and the record
-	 * says why ({@link #STOPPED}).
+	 * says why ({@link #NOT_FOLLOWED}).
 	 */
 	private void stopFollowing(Job job, AString value, Throwable error, String why) {
 		health(job, value, error);
 		AString text = Strings.create(why);
 		job.update(data -> {
 			AMap<AString, ACell> record = shown(data);
-			return text.equals(record.get(STOPPED)) ? null : data.assoc(DELEGATION, record.assoc(STOPPED, text));
+			return text.equals(record.get(NOT_FOLLOWED)) ? null : data.assoc(DELEGATION, record.assoc(NOT_FOLLOWED, text));
 		});
 		log.warn("Job {} no longer follows its remote work{}: {}", job.getID().toHexString(),
 			(error == null) ? "" : " (" + unwrap(error).getClass().getSimpleName() + ")", why);

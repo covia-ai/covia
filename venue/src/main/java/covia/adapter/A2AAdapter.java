@@ -961,7 +961,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 			AMap<AString, ACell> saved = engine.remoteJobs().connection(job);
 			// A literal token only the request presented; it was not kept
 			if (saved.get(K_LOCATION) != null && secretRef(saved) == null) {
-				engine.remoteJobs().notFollowed(job);
+				engine.remoteJobs().credentialNotKept(job);
 				return;
 			}
 			RequestAuth auth;

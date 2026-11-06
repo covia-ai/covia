@@ -14,10 +14,12 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
+import covia.exception.UnavailableException;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.auth.VenueDID;
 import covia.venue.Engine;
+import covia.venue.RemoteJobs;
 import covia.venue.RequestContext;
 
 /**
@@ -129,9 +131,12 @@ public record VenueConnection(Venue venue, AMap<AString, ACell> credentials) {
 	 * not {@link #resumable}.
 	 *
 	 * @throws AuthException if the target is not proven to hold the saved DID
+	 * @throws UnavailableException with {@link RemoteJobs#NO_CONNECTION} when {@code saved} keeps no connection
 	 */
 	public static Venue restore(Engine engine, AString target, AMap<AString, ACell> saved) {
-		String mode = RT.ensureString(saved.get(AUTHENTICATE_AS)).toString();
+		AString kept = RT.ensureString(saved.get(AUTHENTICATE_AS));
+		if (kept == null) throw new UnavailableException(RemoteJobs.NO_CONNECTION);
+		String mode = kept.toString();
 		boolean unrestricted = CVMBool.TRUE.equals(saved.get(OUTBOUND_ANY));
 		AString savedDID = RT.ensureString(saved.get(Fields.VENUE));
 		String targetDID = savedDID == null ? null : savedDID.toString();

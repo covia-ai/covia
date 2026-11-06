@@ -478,7 +478,7 @@ was read from; never a sign-in credential or a secret's value. The grants
 are addressed to this venue, so only its key can present them. A hop that signed in with a credential only its request
 presented (`authenticateAs: "caller"`, or an A2A `bearerToken`) is therefore
 not resumed: its recovered job fails, naming the remote job and its venue
-(`RemoteJobs.NOT_FOLLOWED`). A recovered A2A job reads its bearer again from
+(`RemoteJobs.CREDENTIAL_NOT_KEPT`). A recovered A2A job reads its bearer again from
 its caller's secrets, under the context `JobManager.callerContext` rebuilds
 for the job, so a rotated secret is sent as it now stands. An A2A
 job keeps no grants ([Kept caller context](#kept-caller-context)). When its caller can no longer use the

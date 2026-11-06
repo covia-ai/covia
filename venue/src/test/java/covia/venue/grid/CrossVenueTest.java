@@ -171,11 +171,11 @@ public class CrossVenueTest {
 			Fields.INPUT, Maps.of("first", "x", "second", "y")));
 		try {
 			Job local = TwoVenueTestServer.ENGINE_A.jobs().getJob(seed.getID(), TwoVenueTestServer.ENGINE_A.venueContext());
-			TestEngine.awaitJob(local, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED) != null,
+			TestEngine.awaitJob(local, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED) != null,
 				10_000, () -> "no uncertain acceptance recorded");
 			assertEquals(Status.STARTED, local.getStatus());
 			assertEquals(Strings.create(RemoteJobs.ACCEPTANCE_UNKNOWN.formatted("http://localhost:1")),
-				RT.getIn(local.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED));
+				RT.getIn(local.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED));
 			assertTrue(!local.future().isDone());
 		} finally { TwoVenueTestServer.COVIA_A.cancelJob(seed.getID()); }
 	}

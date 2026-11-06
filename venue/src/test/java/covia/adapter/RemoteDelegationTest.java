@@ -392,7 +392,7 @@ class RemoteDelegationTest {
 			second.jobs().recoverJobs();
 			Job ended = second.jobs().getJob(fromLiteral.getID(), user);
 			assertEquals(Status.FAILED, ended.getStatus());
-			assertEquals(RemoteJobs.NOT_FOLLOWED.formatted("literal-task", url + "/a2a"), ended.getErrorMessage());
+			assertEquals(RemoteJobs.CREDENTIAL_NOT_KEPT.formatted("literal-task", url + "/a2a"), ended.getErrorMessage());
 			Job ungranted = second.jobs().getJob(fromGrant.getID(), user);
 			assertEquals(Status.FAILED, ungranted.getStatus());
 			assertEquals(A2AAdapter.SECRET_UNREADABLE.formatted("granted-task", url + "/a2a"), ungranted.getErrorMessage());
@@ -483,8 +483,8 @@ class RemoteDelegationTest {
 			engine.registerAdapter(new GridAdapter());
 			try {
 				Job job = engine.jobs().invokeOperation(META, peer.input(), engine.venueContext());
-				await(job, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED) != null);
-				assertEquals(Maps.of(RemoteJobs.STOPPED, RemoteJobs.ACCEPTANCE_UNKNOWN.formatted(engine.remoteJobs().target(job))),
+				await(job, j -> RT.getIn(j.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED) != null);
+				assertEquals(Maps.of(RemoteJobs.NOT_FOLLOWED, RemoteJobs.ACCEPTANCE_UNKNOWN.formatted(engine.remoteJobs().target(job))),
 					RemoteJobs.descriptor(job), "the record says why the venue stopped following, and nothing of how it follows");
 				assertEquals(Strings.create("acceptance-unknown"), engine.remoteJobs().kept(job).get(RemoteJobs.OBSERVATION));
 				assertEquals(Status.STARTED, job.getStatus());
@@ -518,7 +518,7 @@ class RemoteDelegationTest {
 				assertNotNull(recovered);
 				assertEquals(Status.STARTED, recovered.getStatus());
 				assertEquals(Strings.create(RemoteJobs.ADAPTER_MISSING.formatted("grid", ID, second.remoteJobs().target(recovered))),
-					RT.getIn(recovered.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED));
+					RT.getIn(recovered.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED));
 				Engine.addDemoAssets(second);
 				second.getAdapter("grid").recoverJob(recovered);
 				assertEquals(Strings.create("remote-output"), recovered.future().get(5, TimeUnit.SECONDS));
@@ -554,7 +554,7 @@ class RemoteDelegationTest {
 				Job recovered = second.jobs().getJob(job.getID(), user);
 				assertEquals(Strings.create(covia.exception.InvalidInputException.class.getSimpleName()),
 					second.remoteJobs().kept(recovered).get(RemoteJobs.ERROR_TYPE), "the guard refuses the reconnection");
-				assertNotNull(RT.getIn(recovered.getData(), RemoteJobs.DELEGATION, RemoteJobs.STOPPED),
+				assertNotNull(RT.getIn(recovered.getData(), RemoteJobs.DELEGATION, RemoteJobs.NOT_FOLLOWED),
 					"the record says the venue no longer follows the remote job");
 				assertFalse(recovered.isFinished());
 				assertEquals(1, peer.submits.get());
