@@ -80,8 +80,54 @@ class KeptCallerContextTest {
 			job.cancel();
 		}
 		assertNull(index.entry(job.getID()), "gone when the job ends");
+		assertFalse(engine.jobs().keepsCallerContext(job));
 		AVector<ACell> after = engine.jobs().callerContext(job).getProofs();
 		assertTrue(after == null || after.isEmpty(), "a finished job presents nothing again");
+	}
+
+	/** A job that asked keeps a context even when its caller presented nothing beyond itself, unlike one that never asked. */
+	@Test void aJobThatAskedKeepsAContextWhenItsCallerPresentedNothingMore() {
+		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextBare"));
+		Job asked = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
+		Job never = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), own);
+		engine.jobs().keepCallerContext(asked, own);
+		try {
+			assertEquals(Maps.empty(), engine.getVenueState().jobIndex().entry(asked.getID()).get(JobIndex.CONTEXT));
+			assertTrue(engine.jobs().keepsCallerContext(asked));
+			assertFalse(engine.jobs().keepsCallerContext(never));
+		} finally {
+			asked.cancel();
+			never.cancel();
+		}
+	}
+
+	/**
+	 * A call to an agent on this venue that kept no context, as one started
+	 * before the venue kept them, is not followed again after a restart: it
+	 * ends, and the agent's task runs on.
+	 */
+	@Test void aLocalAgentCallThatKeptNoContextEndsAtRecovery() {
+		RequestContext own = RequestContext.of(TestEngine.uniqueDID("KeptContextLocalCall"));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "waiting",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")), own).awaitResult(10_000);
+		Job call = engine.jobs().invokeOperation("v/ops/remoteagent/request",
+			Maps.of(Fields.AGENT_ID, "waiting", Fields.INPUT, Maps.of("task", "wait")), own);
+		TestEngine.awaitJob(call, j -> RT.getIn(RemoteJobs.descriptor(j), RemoteJobs.REMOTE_STATUS) != null,
+			10_000, () -> "the call did not see its task: " + call.getData());
+		Job task = engine.jobs().getJob(Job.parseID(RemoteJobs.descriptor(call).get(RemoteJobs.REMOTE_ID)), own);
+		try {
+			assertTrue(engine.jobs().keepsCallerContext(call), "a call to an agent here keeps its caller's context");
+			engine.getVenueState().jobIndex().update(call.getID(), entry -> entry.dissoc(JobIndex.CONTEXT));
+			covia.adapter.AAdapter adapter = engine.getAdapter("remoteagent");
+			adapter.suspendJob(call);
+			adapter.recoverJob(call);
+			assertEquals(covia.grid.Status.FAILED, call.getStatus());
+			assertEquals(covia.adapter.RemoteAgentAdapter.LOCAL_INTERRUPTED, call.getErrorMessage());
+			assertFalse(task.isFinished(), "the agent's task runs on");
+		} finally {
+			task.cancel();
+			engine.jobs().invokeOperation("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "waiting"), own).awaitResult(10_000);
+		}
 	}
 
 	/** A delegate's job regains its authority only through the grant it presented, as a live request would. */

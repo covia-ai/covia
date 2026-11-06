@@ -702,12 +702,19 @@ that task. The Job records `sessionId` separately from `delegation.remoteId`.
 Native remote connections share `VenueConnection` with Grid: anonymous by
 default, explicit target-bound caller identity, or an explicitly delegated
 venue relay. Omitting `venue` carries the complete current RequestContext to
-the local agent. A local proxy cannot reconstruct that attenuated context from
-a caller DID after restart, so its recovery fails explicitly and leaves the
-original task ID for inspection; it never substitutes venue authority. A remote
-proxy reconnects as it first connected and observes the same task, except one
-that signed in as its caller: the venue keeps no such credential, so its
-recovery fails, naming the remote task and its venue.
+the local agent, and the job keeps its caller's context in its entry
+(JOBS.md, Kept caller context). After a restart such a local proxy follows
+the same task again exactly as it first did, as its caller acts now
+(`JobManager.callerContext`): its status, messages and cancellation reach
+that task, and it finishes with the task's outcome. It ends instead when it
+keeps no context (it started before the venue kept them) or had not
+recorded the task (`RemoteAgentAdapter.LOCAL_INTERRUPTED`), or when its
+caller cannot act now (`RemoteAgentAdapter.CALLER_CANNOT_ACT`, naming the
+task). The task then runs on: the venue never acts on it without its
+caller's authority. A remote proxy reconnects as it first connected and
+observes the same task, except one that signed in as its caller: the venue
+keeps no such credential, so its recovery fails, naming the remote task and
+its venue.
 
 ### Agent dispatch hooks
 
