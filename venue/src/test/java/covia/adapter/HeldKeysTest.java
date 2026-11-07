@@ -197,10 +197,17 @@ class HeldKeysTest {
 		assertTrue(failure("sign", Maps.of("key", did, "data", "0x00")).contains(CryptoAdapter.KEY_NOT_HELD));
 	}
 
-	@Test void thePublicPrincipalHasNoKeyring() {
+	@Test void thePublicPrincipalHasNoKeyringAndReachesNoOtherHolders() {
+		String key = resource(heldKey());
+		AString alice = ctx.getUserDID();
 		ctx = RequestContext.of(Strings.create(engine.getDIDString() + ":public"));
 		assertNotNull(failure("generate-key", Maps.of("keyring", true)));
 		assertNotNull(failure("list-keys", Maps.empty()));
+		assertNotNull(failure("sign", Maps.of("key", key, "data", "0x00")));
+		assertNotNull(failure("remove-key", Maps.of("key", key)));
+		assertNotNull(failure("list-keys", Maps.of("did", alice.toString())));
+		ctx = RequestContext.of(alice);
+		assertEquals(1, ((AVector<?>) RT.getIn(run("list-keys", Maps.empty()), "keys")).count());
 	}
 
 	@Test void pagingCountsKeysThenPhrases() {

@@ -28,10 +28,6 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `ucan:issue` results name their issuer as `iss`.
 - Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
 
-### Deprecated
-
-- `convex:sign` and `convex:generate-key`: use `crypto:sign` (with `encoding: utf8` for text) and `crypto:generate-key`.
-
 ### Changed
 
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
@@ -120,6 +116,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A secret or connected account the venue cannot decrypt is refused with how to fix it; a use of one is logged for the operator.
 - SQL failures quote no database text: callers get the SQLState and vendor code, or convex-db's parse and validation message; the venue logs the rest.
 - Error pages outside the REST API show a venue error's type and request id, never its message, and a refusal answers 400 (#540).
+
+### Deprecated
+
+- `convex:sign` and `convex:generate-key`: use `crypto:sign` (with `encoding: utf8` for text) and `crypto:generate-key`.
 
 ### Removed
 
