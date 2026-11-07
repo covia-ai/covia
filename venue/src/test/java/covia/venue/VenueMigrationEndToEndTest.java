@@ -186,6 +186,7 @@ class VenueMigrationEndToEndTest {
 					Strings.create("by"), agentDID, Strings.create("time"), Long.MAX_VALUE))), Covia.SCHEDULE));
 
 			// Before a start: the read-only check finds version 0 and writes nothing.
+			application.sync();
 			application.host().sync();
 			ACell seeded = application.hostStore().getRootData();
 			VenueState.StoredVersions stored = VenueState.peekVersions(application.hostStore(), key.getAccountKey()).orElseThrow();

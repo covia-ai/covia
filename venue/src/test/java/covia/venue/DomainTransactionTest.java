@@ -405,10 +405,8 @@ class DomainTransactionTest {
 	void provisioningIsAtomicAndSignsOnlyOnce() {
 		var key = AKeyPair.generate();
 		var signatures = new AtomicInteger();
-		var fail = new AtomicBoolean();
 		java.util.function.Function<ACell, SignedData<ACell>> signer = value -> {
 			signatures.incrementAndGet();
-			if (fail.get()) throw new IllegalStateException("test signer unavailable");
 			return key.signData(value);
 		};
 		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), signer, VenueContext.SYSTEM);
@@ -421,13 +419,9 @@ class DomainTransactionTest {
 			throw new IllegalStateException();
 		}));
 		assertEquals(before, venue.get());
-		assertEquals(0, signatures.get());
-		fail.set(true);
-		assertThrows(IllegalStateException.class, () -> venue.provisionLogin(id, DID, profile));
-		assertEquals(before, venue.get(), "failed signing cannot leave an orphan account");
-		fail.set(false);
-		signatures.set(0);
 		var result = venue.provisionLogin(id, DID, profile);
+		assertEquals(0, signatures.get(), "provisioning commits to the unsigned copy");
+		venue.sync();
 		assertEquals(1, signatures.get());
 		assertNotNull(venue.users().get(DID));
 		assertEquals(result, convex.core.lang.RT.getIn(venue.get(), Covia.USERS, id));
@@ -603,7 +597,7 @@ class DomainTransactionTest {
 	}
 
 	@Test
-	void venueTransactionSignsOnlyTheCompletedBatchAndSigningFailureRollsBack() {
+	void venueSignsOnceWhenSyncedAndASigningFailurePublishesNothing() {
 		var key = AKeyPair.generate();
 		var signatures = new AtomicInteger();
 		var fail = new AtomicBoolean();
@@ -612,24 +606,31 @@ class DomainTransactionTest {
 			if (fail.get()) throw new IllegalStateException("test signer unavailable");
 			return key.signData(value);
 		};
-		var venue = VenueState.fromRoot(Cursors.root(Index.none()), key.getAccountKey(), signer, VenueContext.SYSTEM);
+		var root = Cursors.root(Index.<convex.core.data.Keyword, ACell>none());
+		var venue = VenueState.fromRoot(root, key.getAccountKey(), signer, VenueContext.SYSTEM);
 		venue.execute(draft -> {
 			var user = draft.users().ensure(DID);
 			user.workspace().write(path("w/a"), CVMLong.ONE);
 			user.workspace().write(path("w/b"), CVMLong.ONE);
-			assertEquals(0, signatures.get());
 		});
-		assertEquals(1, signatures.get());
-		venue.execute(draft -> assertNotNull(draft.users().get(DID)));
-		assertEquals(1, signatures.get(), "unchanged transactions do not sign");
-		ACell before = venue.get();
+		venue.users().get(DID).workspace().write(path("w/c"), CVMLong.ONE);
+		assertEquals(0, signatures.get(), "edits and transactions do not sign");
+		venue.sync();
+		assertEquals(1, signatures.get(), "sync signs the whole batch once");
+		venue.sync();
+		assertEquals(1, signatures.get(), "an unchanged venue does not sign");
+
+		ACell published = root.get();
 		fail.set(true);
-		assertThrows(IllegalStateException.class, () -> venue.execute(draft ->
-			draft.users().get(DID).workspace().write(path("w/c"), CVMLong.ONE)));
-		assertEquals(before, venue.get());
+		venue.users().get(DID).workspace().write(path("w/d"), CVMLong.ONE);
+		assertThrows(IllegalStateException.class, venue::sync);
+		assertEquals(published, root.get(), "a failed signing publishes nothing");
+		assertEquals(CVMLong.ONE, venue.users().get(DID).workspace().read(path("w/d")),
+			"and the edit stays in the copy for the next sync");
 		fail.set(false);
-		venue.execute(draft -> draft.users().get(DID).workspace().write(path("w/c"), CVMLong.ONE));
-		assertEquals(CVMLong.ONE, venue.users().get(DID).workspace().read(path("w/c")));
+		venue.sync();
+		assertEquals(venue.get(), convex.core.lang.RT.getIn(root.get(),
+			Covia.GRID, Covia.VENUES, key.getAccountKey(), convex.core.cvm.Keywords.VALUE));
 	}
 
 	@Test

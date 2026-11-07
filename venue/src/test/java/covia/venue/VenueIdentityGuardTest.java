@@ -86,7 +86,7 @@ public class VenueIdentityGuardTest {
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost()), kpA).start();
+			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost(), kpA), kpA).start();
 			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			engine.flush();
@@ -100,7 +100,7 @@ public class VenueIdentityGuardTest {
 			ns.launch();
 			try {
 				ConfigurationException e = assertThrows(ConfigurationException.class,
-					() -> new Engine(configFor(kpB), CoviaApplication.connect(ns.getHost()), kpB).start());
+					() -> new Engine(configFor(kpB), CoviaApplication.connect(ns.getHost(), kpB), kpB).start());
 				assertTrue(e.getMessage().contains(didFor(kpA)),
 					"error names the owning identity: " + e.getMessage());
 				assertTrue(e.getMessage().contains(didFor(kpB)),
@@ -115,7 +115,7 @@ public class VenueIdentityGuardTest {
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost()), kpA).start();
+			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost(), kpA), kpA).start();
 			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			closeActivePhase();

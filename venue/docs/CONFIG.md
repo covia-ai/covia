@@ -649,8 +649,9 @@ Applications that already own a lattice host use the same startup sequence
 without HTTP through `Engine.launch(...)` or `Engine.launchAsync(...)`:
 
 ```java
-// The host must restore its root before connecting the application.
-CoviaApplication application = CoviaApplication.connect(host);
+// The host must restore its root before connecting the application, which
+// signs as the venue's key.
+CoviaApplication application = CoviaApplication.connect(host, keyPair);
 Engine engine = new Engine(config, application, keyPair);
 CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
     backend.bind(prepared);

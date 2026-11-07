@@ -1165,8 +1165,8 @@ public class VenueServer {
 		// the venue's own sign-in page and content endpoints set them as
 		// defaults (SecurityHeaders), and an embedder's routes are left alone.
 
-		// Native protocol routes and explicitly opted-in embedder routes sync
-		// the connected lattice root after handling. Matching by endpoint role
+		// Native protocol routes and explicitly opted-in embedder routes publish
+		// the venue and the lattice root after handling. Matching by endpoint role
 		// prevents an unrelated /api/* route from acquiring Covia persistence semantics.
 		routes.afterMatched(ctx -> {
 			// A handler unwinding across shutdown (an SSE stream ended by close) must

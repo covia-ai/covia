@@ -145,6 +145,7 @@ class VenueMigrationTest {
 				.assoc(Covia.VERSION, CVMLong.create(VenueState.CURRENT_VERSION + 1))
 				.assoc(Covia.ADAPTER_VERSIONS, Maps.of("telegram", 2L, "example", 7L));
 			application.venue(key.getAccountKey()).cursor().set(record);
+			application.sync();
 			application.host().sync();
 			ACell before = store.getRootData();
 
@@ -171,6 +172,7 @@ class VenueMigrationTest {
 		CoviaApplication application = CoviaApplication.create(key);
 		try (var store = application.hostStore()) {
 			application.venue(key.getAccountKey()).cursor().set(record);
+			application.sync();
 			application.host().sync();
 			ACell before = application.cursor().get();
 			Engine engine = new Engine(Maps.empty(), application, key);
@@ -191,17 +193,21 @@ class VenueMigrationTest {
 		CoviaApplication application = CoviaApplication.create(key);
 		VenueState local = application.venue(key.getAccountKey());
 		AKeyPair peerKey = AKeyPair.generate();
-		VenueState peer = VenueState.connect(application, peerKey.getAccountKey(),
-			application.venueContext().withSigner(peerKey));
+		VenueState peer = VenueState.fromRoot(application.cursor(), peerKey.getAccountKey(),
+			peerKey::signData, application.venueContext());
 		peer.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.VERSION, CVMLong.create(99)));
+		peer.sync();
 		ACell peerBefore = peer.get();
 		Keyword extension = Keyword.intern("extension");
 		local.cursor().set(Index.<Keyword, ACell>none().assoc(extension, Vectors.of("keep")));
 		local.initialise(DID, NO_SECRETS);
+		application.sync();
 		assertEquals(Vectors.of("keep"), RT.getIn(local.get(), extension));
 		assertEquals(VenueState.CURRENT_VERSION, local.version());
-		assertEquals(peerBefore, peer.get());
-		assertThrows(IllegalStateException.class, () -> peer.adapterState("unloaded"));
-		assertEquals(peerBefore, peer.get());
+		VenueState published = VenueState.fromRoot(application.cursor(), peerKey.getAccountKey(),
+			peerKey::signData, application.venueContext());
+		assertEquals(peerBefore, published.get());
+		assertThrows(IllegalStateException.class, () -> published.adapterState("unloaded"));
+		assertEquals(peerBefore, published.get());
 	}
 }

@@ -2,6 +2,7 @@ package covia.venue;
 
 import java.io.IOException;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiPredicate;
 
 import convex.core.crypto.AKeyPair;
@@ -24,6 +25,7 @@ import convex.lattice.OwnedMap;
 import convex.lattice.Regions;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.generic.CASLattice;
+import covia.exception.ConfigurationException;
 import covia.lattice.Covia;
 
 /**
@@ -40,8 +42,10 @@ import covia.lattice.Covia;
  * the service registers with the host and hands to the application
  * ({@link #dlfs()}); Covia never resolves it from its own position.</p>
  *
- * <p>Each running venue uses one authoritative connected state and atomic
- * transactions. Whole-venue LWW selects recovery/replication snapshots; it cannot
+ * <p>The application holds one working copy of each venue it authors
+ * ({@link #venue}), with atomic transactions over it. Edits to the copy are
+ * unsigned; {@link #sync()} signs each venue's record once and then publishes
+ * the regions. Whole-venue LWW selects recovery/replication snapshots; it cannot
  * reconcile the state or external effects of independently running forks.</p>
  */
 public final class CoviaApplication
@@ -50,8 +54,13 @@ public final class CoviaApplication
 	/** A venue's record is signed by the venue's own key. */
 	private static final BiPredicate<ACell, AccountKey> KEY_OWNER = (owner, key) -> key.equals(owner);
 
+	/** Refusal of a venue this application cannot sign for; the argument is the venue's key. */
+	public static final String CANNOT_SIGN = "This application does not sign as venue %s: build it with that venue's key pair";
+
 	private final Regions regions;
 	private final OwnedMap<ACell, ACell> venues;
+	/** The one working copy of each venue authored here, by owner key. */
+	private final ConcurrentHashMap<AccountKey, VenueState> venueStates = new ConcurrentHashMap<>();
 	private final DLFSRegion dlfs;
 	/** The host the factory opened or connected to; it owns storage and durability. */
 	private final LatticeHost<Index<Keyword, ACell>> host;
@@ -99,19 +108,31 @@ public final class CoviaApplication
 		return regions.mergeAt(value, path);
 	}
 
+	/** Each venue signs its working copy into its record, then the records publish. */
 	@Override
 	protected void syncChildren() {
+		for (VenueState venue : venueStates.values()) venue.sync();
 		regions.sync();
 	}
 
 	/**
 	 * Connects Covia to the root of an existing local or NodeServer-hosted host,
-	 * registering its application and a DLFS region at {@code :dlfs}. Venue
-	 * components it builds sign nothing until the engine adds its key.
+	 * registering its application and a DLFS region at {@code :dlfs}. It signs
+	 * as no venue, so it authors none: to run a venue, connect with that
+	 * venue's key pair.
 	 */
 	public static CoviaApplication connect(
 			LatticeHost<Index<Keyword, ACell>> host) {
 		return connect(host, VenueContext.SYSTEM);
+	}
+
+	/** As {@link #connect(LatticeHost)}, authoring the venue whose key pair is given. */
+	public static CoviaApplication connect(
+			LatticeHost<Index<Keyword, ACell>> host, AKeyPair keyPair) {
+		if (keyPair == null) {
+			throw new IllegalArgumentException("Venue key pair must not be null");
+		}
+		return connect(host, VenueContext.SYSTEM.withSigner(keyPair));
 	}
 
 	/** As {@link #connect(LatticeHost)}, its venue components using the given policy. */
@@ -163,9 +184,21 @@ public final class CoviaApplication
 		return application;
 	}
 
-	/** Returns the component for one owner-signed venue record. */
+	/**
+	 * Returns the venue a key owns: its one working copy here, the same component
+	 * on every call. Edits to it are unsigned and visible at once to every holder;
+	 * {@link #sync()} signs them into the venue's record.
+	 *
+	 * @throws ConfigurationException if this application does not sign as the key
+	 */
 	public VenueState venue(AccountKey ownerKey) {
-		return VenueState.connect(this, ownerKey, venueContext);
+		if (ownerKey == null) {
+			throw new IllegalArgumentException("Venue owner key must not be null");
+		}
+		if (!venueContext.signsAs(ownerKey)) {
+			throw new ConfigurationException(String.format(CANNOT_SIGN, ownerKey));
+		}
+		return venueStates.computeIfAbsent(ownerKey, key -> VenueState.draft(venues, key, venueContext));
 	}
 
 	/** Each venue's record, signed by that venue's key. */

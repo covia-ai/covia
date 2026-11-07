@@ -46,6 +46,11 @@ import covia.venue.storage.LatticeStorage;
 /**
  * Authoritative state of a running venue application and its domain components.
  *
+ * <p>A VenueState is a working copy of the venue's signed record. Its edits are
+ * unsigned: {@link #sync()} signs the reconciled venue into the record once, and
+ * publishing the record further belongs to the application and host. Within an
+ * application, {@link CoviaApplication#venue} gives the venue's one copy.</p>
+ *
  * <p>Ordinary domain mutations are atomic and immediately visible locally.
  * Use {@link #execute} for compound changes, or {@link #transact} when the
  * change returns a result: the callback receives an isolated venue with the
@@ -105,7 +110,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 		return record.getLattice().merge(own, other);
 	}
 
-	/** Binds signed storage and the policy its components share. */
+	/** Binds working storage and the policy its components share. */
 	private VenueState(AForkableCursor<ACell> cursor, AccountKey ownerKey, VenueContext context) {
 		super(cursor);
 		this.ownerKey = ownerKey;
@@ -124,43 +129,36 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 		return CoviaApplication.create(kp).venue(kp.getAccountKey());
 	}
 
-	/**
-	 * Connects a venue component beneath a containing Covia application. The
-	 * component signs with the context's signer and shares the context with its
-	 * children. Publication belongs to the host.
-	 */
-	public static VenueState connect(CoviaApplication parent,
-			AccountKey ownerKey, VenueContext context) {
-		if (parent == null) {
-			throw new IllegalArgumentException("Parent component must not be null");
-		}
-		if (ownerKey == null) {
-			throw new IllegalArgumentException("Venue owner key must not be null");
-		}
-		return connect(parent.venues(), ownerKey, context::sign, context);
+	/** The application's copy of a venue, signing with the context's signer. */
+	static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey, VenueContext context) {
+		return draft(venues, ownerKey, context::sign, context);
 	}
 
 	/**
-	 * Connects to the venue records under a Covia container, such as a root
-	 * cursor held by a test or a store snapshot.
+	 * A standalone working copy of a venue under a Covia container, such as a
+	 * root cursor held by a test or a store snapshot. Its edits reach the root
+	 * only when the caller syncs it. Two copies of one venue do not share
+	 * edits, so a venue in an application is reached through
+	 * {@link CoviaApplication#venue} instead.
 	 *
 	 * @param root Cursor at the container holding {@code :grid}
 	 * @param ownerKey Venue owner's account key
 	 * @param signer Signs a venue value as the owner, or returns null when it
 	 *        cannot; the owner's signing rule checks each result
 	 * @param context Policy shared by the venue's components
-	 * @return VenueState connected to the root cursor
+	 * @return Working copy of the venue in the root
 	 */
 	@SuppressWarnings("unchecked")
 	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey,
 			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
 		var venues = CoviaApplication.venueRecords((AForkableCursor<Index<Keyword, ACell>>) root);
-		return connect(venues, ownerKey, signer, context);
+		return draft(venues, ownerKey, signer, context);
 	}
 
-	private static VenueState connect(OwnedMap<ACell, ACell> venues, AccountKey ownerKey,
+	/** An unsigned copy of the venue's record that signs into it on sync. */
+	private static VenueState draft(OwnedMap<ACell, ACell> venues, AccountKey ownerKey,
 			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
-		return new VenueState(venues.authoringCursor(ownerKey, signer), ownerKey, context);
+		return new VenueState(venues.draft(ownerKey, signer).storage(), ownerKey, context);
 	}
 
 	/**
@@ -696,8 +694,8 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	}
 
 	/**
-	 * Creates independent working state. Sync reconciles it with the destination
-	 * using whole-venue LWW, which may select one complete concurrent version.
+	 * Creates independent working state. Its sync reconciles it with this copy,
+	 * unsigned, using whole-venue LWW, which may select one complete concurrent version.
 	 * For compound local edits with conflict retry, use {@link #execute} or {@link #transact}.
 	 */
 	@Override

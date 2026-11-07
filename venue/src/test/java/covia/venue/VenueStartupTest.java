@@ -317,6 +317,7 @@ public class VenueStartupTest {
 		application.venue(key.getAccountKey()).cursor().set(convex.core.data.Index.<convex.core.data.Keyword, ACell>none()
 			.assoc(covia.lattice.Covia.ADAPTERS, Maps.of("test", Maps.of("users", Maps.empty())))
 			.assoc(covia.lattice.Covia.ADAPTER_VERSIONS, Maps.of("test", supported + 1)));
+		application.sync();
 		application.host().sync();
 		application.host().flush();
 		ACell before = store.getRootData();

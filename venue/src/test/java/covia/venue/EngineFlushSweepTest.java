@@ -115,7 +115,8 @@ public class EngineFlushSweepTest {
 
 	private static Engine engineWith(CountingStore handler) throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		return new Engine(testConfig(), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, handler)), AKeyPair.generate()).start();
+		AKeyPair key = AKeyPair.generate();
+		return new Engine(testConfig(), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, handler), key), key).start();
 	}
 
 	// ========================================================================

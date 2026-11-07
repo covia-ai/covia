@@ -87,7 +87,7 @@ public class GoalTreeCrashResumeTest {
 			new NodeServer<>(CoviaApplication.open(store, keyPair).host(), NodeConfig.port(-1));
 		activeNode = node;
 		node.launch();
-		Engine engine = new Engine(config, CoviaApplication.connect(node.getHost()), keyPair).start();
+		Engine engine = new Engine(config, CoviaApplication.connect(node.getHost(), keyPair), keyPair).start();
 		activeEngine = engine;
 		Engine.addDemoAssets(engine);
 		return engine;

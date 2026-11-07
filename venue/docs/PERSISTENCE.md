@@ -421,34 +421,34 @@ Compliance audit:
 
 **No new class.** Three pieces, all in `Engine`. No convex-core change.
 
-### 5.0 Connected state; forks are transactions
+### 5.0 The venue's working copy; forks are transactions
 
-`engine.lattice` is the application root cursor and `engine.venueState` is a
-connected, path-derived component at the venue owner boundary:
+`engine.lattice` is the application root cursor and `engine.venueState` is the
+application's one working copy of the venue:
 
 ```java
 this.venueState = application.venue(getAccountKey());
 venueState.initialise(getDIDString(), SecretStore.keys(getKeyPair()));
 ```
 
-A successful component mutation crosses the signed owner boundary and updates
-the authoritative in-memory root immediately. Publication and durability are
-separate operations:
+A successful component mutation updates the copy at once and signs nothing.
+Signing, publication and durability are separate operations:
 
 | Call | Meaning |
 |---|---|
-| component mutation | atomically updates connected venue state and signs the resulting owner value |
-| `application.sync()` | publishes the current hosted root through the host policy |
-| `application.flush()` | invokes the store's physical durability barrier |
+| component mutation | atomically updates the venue's working copy |
+| `application.sync()` | signs each venue's copy into its record, then publishes Covia's regions |
+| `application.host().sync()` | publishes the hosted root through the host policy |
+| `application.host().flush()` | invokes the store's physical durability barrier |
 
-Local mutations do not compete through the LWW merge. Their atomic root update
-order decides the current value, including writes sharing a millisecond stamp.
-The wall-clock timestamp is only evidence for external snapshot reconciliation;
-it is not a logical local sequence number.
+Local mutations do not compete through the LWW merge. The atomic update order
+of the copy decides the current value, including writes sharing a millisecond
+stamp. The wall-clock timestamp is only evidence for external snapshot
+reconciliation; it is not a logical local sequence number.
 
-This removes the second long-lived working copy and the two-stage
-`venueState.sync()` → `application.sync()` protocol. `Engine.syncState()` is
-therefore only a publication hint; it is not a state commit.
+`Engine.syncState()` runs the first two steps and the host's sync. It is a
+publication hint, not a state commit: a mutation is committed once it is in
+the copy.
 
 `VenueState.fork()` remains available for an explicit bounded transaction, but
 the narrowest component fork is preferred. A component performs all transaction
@@ -457,7 +457,7 @@ How it commits depends on where the fork sits: `sync()` merges only at a level
 whose lattice defines a merge, and below the venue's whole-value LWW node the
 JSON regions define none. A narrow fork there is a staging and validation copy;
 the component commits by replaying its staged writes in one atomic
-`updateAndGet` on the connected cursor, which preserves concurrent unrelated
+`updateAndGet` on the venue's working copy, which preserves concurrent unrelated
 writes. The bootstrap materializer demonstrates this for the venue-owned
 `w/global` workspace, so catalog writes become visible together without
 copying unrelated venue state. Request lifetime, persistence cadence, and
@@ -465,7 +465,8 @@ signature batching alone are not transaction boundaries.
 
 ### 5.1 Background sweep
 
-A daemon publishes the connected root every 100 ms. Every 10 seconds it also
+A daemon publishes the application every 100 ms, signing the venue's record
+when it changed. Every 10 seconds it also
 invokes the store durability barrier, bounding the default unclean-shutdown
 loss window independently of the source of a mutation. Ephemeral applications
 and applications whose host has no store do not start the daemon.
@@ -496,11 +497,13 @@ private void sweep() {
 ```
 
 **Cost when idle**: 10 publication hints/sec plus one durability barrier every
-10 seconds. No venue state is copied or merged.
+10 seconds. An unchanged venue does not sign, and no venue state is copied or
+merged.
 
-**Latency bounds**: root visibility is immediate, host publication waits at
-most 100 ms by default, and physical durability waits at most 10 seconds unless
-the caller requests an explicit `flush()`.
+**Latency bounds**: an edit is visible in the venue's copy at once; the signed
+record and host publication wait at most 100 ms by default, and physical
+durability waits at most 10 seconds unless the caller requests an explicit
+`flush()`.
 
 ### 5.2 Synchronous barrier — `engine.flush()`
 
@@ -518,8 +521,8 @@ For mutations that need to be durable before continuing (job completion, audit r
  * history, etc.
  */
 public void flush() {
-    application.sync();     // root publication policy
-    application.flush();    // store durability barrier
+    publishApplicationRoot();      // sign the venue, publish the application and host
+    application.host().flush();    // store durability barrier
 }
 ```
 
@@ -541,8 +544,8 @@ public void close() {
 }
 ```
 
-There is no separate venue-state drain: successful component mutations are
-already in the root. Since Convex 0.8.18, `NodeServer.close()` neither
+There is no separate venue-state drain: the final flush signs the venue's
+copy and publishes it. Since Convex 0.8.18, `NodeServer.close()` neither
 publishes nor flushes. Whoever opened the host closes it: a standalone
 `VenueServer` closes its host after the node, and `LatticeHost.close()` makes
 the final checkpoint before the store closes. An Engine running on an
@@ -550,17 +553,14 @@ embedder's host (`CoviaApplication.connect`) never closes it; its final flush is
 its last save. On JVM shutdown, `MainVenue` closes each engine from a hook at
 `Shutdown.SERVICE`, before Convex closes its servers and Etch files.
 
-### 5.4 Delete the after-hook
+### 5.4 Request-boundary publication
 
-`VenueServer.java:386`: delete the line.
-
-```diff
-- app.after("/api/*", ctx -> engine.syncState());
-```
-
-And delete the four `app.after("/mcp", ...)` lines I added earlier (those are the wrong abstraction even within the old model).
-
-`engine.syncState()` becomes package-private — only callable from `Engine` itself, the propagator pipeline, and tests. Public API is `engine.flush()` for the explicit barrier case.
+Covia's native protocol routes, and embedder routes whose role carries
+`VenueRouteFeature.LATTICE_SYNC`, call `engine.syncState()` after handling, so
+a request's changes are signed and published without waiting for the sweep;
+`DLFSAdapter` does the same once it has generated a user's DLFS key. A venue
+changed by such a request signs once when it ends. `engine.flush()` remains
+the barrier for durability.
 
 ### 5.5 LatticePropagator.persistInterval — known upstream wart, no action
 

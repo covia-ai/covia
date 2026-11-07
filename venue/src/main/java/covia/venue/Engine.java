@@ -254,8 +254,10 @@ public class Engine {
 
 	/**
 	 * Assembles an inert runtime over a caller-owned application. The host must
-	 * restore its root first. Call launch() for a complete venue, or start() for
-	 * a manually assembled runtime. Close the engine before its host/store.
+	 * restore its root first, and the application must sign as {@code keyPair}:
+	 * build it with that key pair, or start() fails. Call launch() for a complete
+	 * venue, or start() for a manually assembled runtime. Close the engine before
+	 * its host/store.
 	 */
 	public Engine(Config config, CoviaApplication application, AKeyPair keyPair) throws IOException {
 		this.config = java.util.Objects.requireNonNull(config, "config");
@@ -789,11 +791,9 @@ public class Engine {
 		// can sign for its own persisted state is broken; fail before writing.
 		requireKeyMatchesStore();
 
-		// Keep the Engine's authoritative state connected to the application.
-		// Writes cross the signed owner boundary immediately; explicit forks are
-		// reserved for bounded component transactions.
-		VenueState connected = VenueState.connect(application, getAccountKey(),
-			application.venueContext().withSigner(keyPair));
+		// The Engine works on the application's copy of its venue: edits stay
+		// unsigned until publication signs the record (publishApplicationRoot).
+		VenueState connected = application.venue(getAccountKey());
 		// Version validation and every start-up migration, the venue's and its
 		// adapters', precede every bootstrap write and worker, in one transaction.
 		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrationsOf(adapters));
@@ -838,10 +838,10 @@ public class Engine {
 	}
 
 	/**
-	 * Publishes the Engine's connected venue state through the hosted application
-	 * boundary. This is a publication hint,
-	 * not a transaction commit: successful mutations are already present in the
-	 * authoritative in-memory root.
+	 * Publishes the Engine's venue state through the hosted application
+	 * boundary, signing the venue's record. This is a publication hint, not a
+	 * transaction commit: successful mutations are already present in the
+	 * venue's working copy.
 	 *
 	 * <p>Retained for request-boundary publication by VenueServer and embedded
 	 * venue routes carrying {@code VenueRouteFeature.LATTICE_SYNC}. Physical
@@ -858,7 +858,10 @@ public class Engine {
 		publishApplicationRoot();
 	}
 
-	/** Publishes the application through its caller-owned host. */
+	/**
+	 * Publishes the application through its caller-owned host: the application
+	 * signs the venue's working copy into its record, then the host publishes.
+	 */
 	private void publishApplicationRoot() {
 		application.sync();
 		application.host().sync();
@@ -869,8 +872,9 @@ public class Engine {
 	// ========================================================================
 
 	/**
-	 * Background sweep step. Publishes the already-connected root through the
-	 * host policy, then periodically invokes the physical durability barrier.
+	 * Background sweep step. Publishes the application, signing the venue's
+	 * record, through the host policy, then periodically invokes the physical
+	 * durability barrier.
 	 *
 	 * <p>Called from the persistence sweep daemon. Publishing an unchanged root
 	 * is cheap on idle venues.</p>

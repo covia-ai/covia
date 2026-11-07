@@ -6,6 +6,7 @@ import java.util.function.Supplier;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AccountKey;
 import convex.core.data.SignedData;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.Utils;
@@ -27,10 +28,14 @@ public final class VenueContext {
 
 	private final Supplier<CVMLong> clock;
 	private final Function<ACell, SignedData<ACell>> signer;
+	/** The key the signer signs as, or null when there is no signer. */
+	private final AccountKey signerKey;
 
-	private VenueContext(Supplier<CVMLong> clock, Function<ACell, SignedData<ACell>> signer) {
+	private VenueContext(Supplier<CVMLong> clock, Function<ACell, SignedData<ACell>> signer,
+			AccountKey signerKey) {
 		this.clock = clock;
 		this.signer = signer;
+		this.signerKey = signerKey;
 	}
 
 	/**
@@ -40,13 +45,18 @@ public final class VenueContext {
 	 * @return New policy
 	 */
 	public static VenueContext create(Supplier<CVMLong> clock) {
-		return new VenueContext(Objects.requireNonNull(clock, "clock"), null);
+		return new VenueContext(Objects.requireNonNull(clock, "clock"), null, null);
 	}
 
 	/** This policy's clock, signing as the given venue key. */
 	public VenueContext withSigner(AKeyPair keyPair) {
 		Objects.requireNonNull(keyPair, "keyPair");
-		return new VenueContext(clock, keyPair::signData);
+		return new VenueContext(clock, keyPair::signData, keyPair.getAccountKey());
+	}
+
+	/** Whether this policy signs as the given venue key. */
+	public boolean signsAs(AccountKey key) {
+		return signerKey != null && signerKey.equals(key);
 	}
 
 	/** The write clock: the timestamp for a stamp or record written now. */

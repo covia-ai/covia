@@ -71,7 +71,7 @@ public class DLFSPersistenceTest {
 			node.launch();
 
 			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost(), venueKey), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Write via DLFS adapter
@@ -142,7 +142,7 @@ public class DLFSPersistenceTest {
 
 			// Check the cursor chain that DLFSAdapter would use
 			engine = new Engine(Maps.of(
-				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost()), venueKey).start();
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), CoviaApplication.connect(node.getHost(), venueKey), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Navigate the same path DLFSAdapter.getUserDLFSCursor() takes

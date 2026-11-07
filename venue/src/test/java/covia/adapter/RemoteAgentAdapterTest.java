@@ -198,7 +198,7 @@ class RemoteAgentAdapterTest {
 			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
@@ -206,7 +206,7 @@ class RemoteAgentAdapterTest {
 				await(original, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished()); assertEquals(0, peer.cancels.get());
-			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -228,7 +228,7 @@ class RemoteAgentAdapterTest {
 			// outbound guard, so the operator allows the peer's host
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
-			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
@@ -239,7 +239,7 @@ class RemoteAgentAdapterTest {
 				await(original, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished());
-			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -346,7 +346,7 @@ class RemoteAgentAdapterTest {
 		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, publicAccess, Config.CAPS, "unrestricted")));
-		return new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).launch();
+		return new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).launch();
 	}
 
 	private static void agent(Engine engine, RequestContext ctx, String id, String operation) {

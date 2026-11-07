@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import convex.core.cvm.Keywords;
+import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -80,12 +81,18 @@ public class EngineTest {
 
 		LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor,
 				boolean failAfterSchedulerStart) throws IOException {
-			this(CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), failAfterSchedulerStart);
+			this(cursor, AKeyPair.generate(), failAfterSchedulerStart);
 		}
 
-		LifecycleTestEngine(CoviaApplication application,
+		private LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor, AKeyPair key,
 				boolean failAfterSchedulerStart) throws IOException {
-			super(new Config(null), application, convex.core.crypto.AKeyPair.generate());
+			this(CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key,
+				failAfterSchedulerStart);
+		}
+
+		LifecycleTestEngine(CoviaApplication application, AKeyPair key,
+				boolean failAfterSchedulerStart) throws IOException {
+			super(new Config(null), application, key);
 			this.failAfterSchedulerStart = failAfterSchedulerStart;
 		}
 
@@ -191,9 +198,10 @@ public class EngineTest {
 	public void testConnectedVenueStateUsesAtomicLocalWriteOrderAtSameTimestamp() throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 
+		AKeyPair key = AKeyPair.generate();
 		var application = CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null),
-			VenueContext.create(() -> CVMLong.create(1_000L)));
-		LifecycleTestEngine engine = new LifecycleTestEngine(application, false);
+			VenueContext.create(() -> CVMLong.create(1_000L)).withSigner(key));
+		LifecycleTestEngine engine = new LifecycleTestEngine(application, key, false);
 		AString did = Strings.create("did:test:connected-engine-state");
 		Blob jobId = Blob.parse("0x0001");
 
@@ -204,10 +212,11 @@ public class EngineTest {
 				Fields.STATUS, Status.PENDING, Fields.UPDATED, CVMLong.create(1_000L)));
 			user.jobs().get(jobId).update(job -> job.assoc(Fields.STATUS, Status.STARTED));
 
+			engine.syncState();
 			assertNotNull(RT.getIn(cursor.get(),
 				Covia.GRID, Covia.VENUES, engine.getAccountKey(), Keywords.VALUE,
 				Covia.USER_DATA, did),
-				"component writes must update the Engine's authoritative root immediately");
+				"publication signs component writes into the Engine's root");
 			assertEquals(Status.STARTED, RT.getIn(user.jobs().getRecord(jobId), Fields.STATUS),
 				"local write order, not wall-clock resolution, decides the current value");
 		} finally {

@@ -75,6 +75,7 @@ public class EnginePersistenceTest {
 			VenueState venue = application.venue(key.getAccountKey());
 			venue.initialise(Strings.create("did:test:future"), NO_SECRETS);
 			venue.cursor().path(Covia.VERSION).set(convex.core.data.prim.CVMLong.create(future));
+			application.sync();
 			application.host().sync();
 			application.host().flush();
 			before = store.getRootData();

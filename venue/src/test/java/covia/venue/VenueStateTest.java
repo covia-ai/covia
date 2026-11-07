@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.crypto.AKeyPair;
 import convex.core.cvm.Keywords;
 import convex.core.lang.RT;
+import covia.lattice.Covia;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -280,7 +281,7 @@ public class VenueStateTest {
 	// ========== Write Propagation ==========
 
 	@Test
-	public void testWritesPropagateToRoot() {
+	public void testWritesReachRootWhenSynced() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
 		var now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
@@ -288,10 +289,12 @@ public class VenueStateTest {
 
 		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey(), kp::signData, context);
 		vs.assets().store(Strings.create("{\"name\":\"Propagated\"}"), null);
+		assertNull(RT.getIn(root.get(), Covia.GRID, Covia.VENUES, kp.getAccountKey()),
+			"edits stay in the venue's unsigned copy until it syncs");
 
-		// Root cursor should have data
-		ACell rootValue = root.get();
-		assertNotNull(rootValue, "Root cursor should contain data after store");
+		vs.sync();
+		assertEquals(vs.get(), RT.getIn(root.get(), Covia.GRID, Covia.VENUES, kp.getAccountKey(), Keywords.VALUE),
+			"sync signs the venue into its record");
 	}
 
 	// ========== Fork / Sync ==========
@@ -559,11 +562,13 @@ public class VenueStateTest {
 
 		forked.assets().store(Strings.create("{\"name\":\"Once\"}"), null);
 		forked.sync();
+		connected.sync();
 
 		ACell stateAfterFirstSync = root.get();
 
 		// Second sync with no new writes should be a no-op
 		forked.sync();
+		connected.sync();
 
 		ACell stateAfterSecondSync = root.get();
 		assertEquals(stateAfterFirstSync, stateAfterSecondSync,

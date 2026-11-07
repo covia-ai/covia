@@ -210,6 +210,7 @@ class AdapterStateMigrationTest {
 			application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
 				.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a"), "newer", Vectors.of("future")))
 				.assoc(Covia.ADAPTER_VERSIONS, Maps.of("newer", 3L)));
+			application.sync();
 			application.host().sync();
 			ACell before = application.cursor().get();
 

@@ -199,7 +199,7 @@ public class JobMirrorTest {
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceMirrorRestart"));
 
-		Engine first = new Engine(config, CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), keyPair).start();
+		Engine first = new Engine(config, CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), keyPair), keyPair).start();
 		Engine.addDemoAssets(first);
 		String gateName = "mirror-restart-" + System.identityHashCode(first);
 		Job call;
@@ -217,7 +217,7 @@ public class JobMirrorTest {
 		assertEquals(AAdapter.VENUE_SHUT_DOWN, error(mirror));
 		assertEquals(Status.CANCELLED, call.getStatus(), "and with it the call");
 
-		Engine second = new Engine(config, CoviaApplication.connect(new convex.lattice.LatticeHost<>(crashed, null)), keyPair).start();
+		Engine second = new Engine(config, CoviaApplication.connect(new convex.lattice.LatticeHost<>(crashed, null), keyPair), keyPair).start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

@@ -298,7 +298,7 @@ public class VenueIdentityProofTest {
 			Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -310,7 +310,7 @@ public class VenueIdentityProofTest {
 			peer.holdStatus.countDown();
 			// The address no longer answers challenges
 			peer.key = null;
-			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -336,7 +336,7 @@ public class VenueIdentityProofTest {
 			Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
 			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine first = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -350,7 +350,7 @@ public class VenueIdentityProofTest {
 			} finally { first.close(); }
 			peer.holdStatus.countDown();
 			int requests = peer.discoveries.get() + peer.challenges.get() + peer.calls.get();
-			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)), key).start();
+			Engine second = new Engine(config, covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();

@@ -25,11 +25,20 @@ The venue opens a `LatticeHost` over the store, and closes in this order:
 acknowledging work that must be durable. Never close it yourself.
 
 **An engine on your own host.** Open the application with
-`CoviaApplication.open(store, keyPair)`, then run
-`new Engine(config, application, keyPair).start()`. `Engine.close()` makes its
+`CoviaApplication.open(store, keyPair)`, or `connect(host, keyPair)` over a
+host you already run, then run
+`new Engine(config, application, keyPair).start()`: the application must sign
+as the engine's key. `Engine.close()` makes its
 final flush but never closes the host or the store: whoever opens a host
 closes it. So close the engine, then `application.host().close()`, then the
 store.
+
+**The venue's state.** The application holds one working copy of each venue
+it signs as: `application.venue(venueKey)` returns it, and the engine works on
+the same copy. Edits to it sign nothing until `application.sync()` signs the
+venue's record; `application.host().sync()` then publishes the root. A running
+engine does both. Code that edits the venue with no engine running calls them
+itself.
 
 **JVM shutdown.** Register your shutdown work with
 `Shutdown.addHook(Shutdown.SERVICE, task)` (`convex.core.util.Shutdown`). It
@@ -45,9 +54,10 @@ schema versions, Covia's and each adapter's, without starting a venue.
   enabled or disabled, in one transaction, at any time.
 - Before launch, open the application over the store and call
   `application.venue(venueKey).migrate(SecretStore.keys(venueKeyPair), adapters)`
-  with your adapters' `stateMigration()`. The venue's secret store keys let a
-  step read what it carries over from the venue's secrets. Launch then finds
-  the state current.
+  with your adapters' `stateMigration()`, then `application.sync()` and
+  `application.host().sync()`. The venue's secret store keys let a step read
+  what it carries over from the venue's secrets. Launch then finds the state
+  current.
 - Launch itself migrates the venue with the built-in and configured-module
   adapters, and an adapter you register later migrates as it registers.
 - Stored state newer than the build fails with `UnsupportedVersionException`,
@@ -148,9 +158,9 @@ unchanged but fail at runtime against jars built for 0.9.x.
 
 | 0.9.x | 0.10.0 |
 |-------|--------|
-| `Engine` constructors taking a cursor | `new Engine(config, CoviaApplication, keyPair)`, with `CoviaApplication.open(store, keyPair)` or `connect(host)` |
+| `Engine` constructors taking a cursor | `new Engine(config, CoviaApplication, keyPair)`, with `CoviaApplication.open(store, keyPair)` or `connect(host, keyPair)` |
 | `getRootCursor()` and `User.cursor()` returning `ALatticeCursor` | They return `AForkableCursor`. Source-compatible, but binary-incompatible: recompile |
-| `VenueState.fromRoot(cursor, ownerKey)` | `fromRoot(AForkableCursor, AccountKey, signer, VenueContext)`, or `application.venue(ownerKey)` |
+| `VenueState.fromRoot(cursor, ownerKey)` | `application.venue(ownerKey)`, or `fromRoot(AForkableCursor, AccountKey, signer, VenueContext)` for a standalone copy that reaches the root when you `sync()` it |
 | `CoviaAdapter.writePathToCursor`, `CoviaAdapter.parseStringPath` | `user.workspace()` inside `user.transact` (see User data) |
 | `WrapperLattice`, `Covia.child`, `Engine.connectDLFSDrive` | Removed |
 | A job record's `prev` chain, `Job.getPreviousState` | Gone: a job record is its current state |

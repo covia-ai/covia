@@ -740,18 +740,20 @@ fields belong in `meta`, not as further top-level keys.
 
 ### A.3 Update Logic
 
-Engine holds one connected `VenueState`. Component mutations atomically replace
-the shared root through the signed owner boundary:
+Engine works on the application's one copy of its venue
+(`CoviaApplication.venue`). Component mutations atomically update that copy,
+unsigned, and publication signs it into the venue's record:
 
 ```
-startup: Engine → connected VenueState
-request A: component update job X → signed root
-request B: component update job Y → signed root
-publication: application.host().sync() → current root
+startup: Engine → application.venue(key), the venue's working copy
+request A: component update job X → working copy
+request B: component update job Y → working copy
+publication: application.sync() → signed venue record
+             application.host().sync() → published root
 ```
 
 `updateAndGet` on a sub-cursor is atomic because it ends in a compare-and-swap
-of the root. Compound domain edits use upstream
+of the copy's root. Compound domain edits use upstream
 `TransactionalComponent.transact`: callbacks work on isolated views of the same
 domain objects, and commit retries them if the state changed meanwhile.
 Exceptions discard the attempt. Bootstrap uses this over the venue's
@@ -763,9 +765,10 @@ cursor, composes `:grid` from standard components: a `Regions` holding
 `:venues` (an `OwnedMap` of signed venue records) and `:meta` (a
 `LatticeComponent` over `CASLattice`). Incoming state goes to those components,
 and other regions are left alone. `:dlfs` is a `DLFSRegion` that the host's
-service registers beside it and hands to it. `VenueState` holds the venue value as a Convex
-`Timestamped` record: local edits stamp it, and incoming merges keep the newest
-without re-stamping. `Users` gives lifecycle-guarded user views, and DLFS uses
+service registers beside it and hands to it. `VenueState` works on an unsigned
+draft of the venue's signed entry (`OwnedMap.draft`), holding the venue value as
+a Convex `Timestamped` record: local edits stamp it, and incoming merges keep
+the newest without re-stamping. `Users` gives lifecycle-guarded user views, and DLFS uses
 upstream `DLFSRegion` and `DLFSDrives`.
 
 `VenueState.fork().sync()` selects a snapshot; it is not a way to commit
@@ -775,22 +778,27 @@ components, adapters included, have no publication policy of their own.
 
 ### A.4 Signing
 
-The venue's Ed25519 key signs each connected component mutation as it crosses
-the `SignedCursor` boundary. A transaction signs the completed value at commit:
-an uncontended changed transaction signs once, and an unchanged one does not
-sign. A signing failure leaves live state
-unchanged. Rebinding restores editing policies on a draft, and commit targets
-bound storage, so policies are not applied twice.
+The venue's Ed25519 key signs the venue's record when the application syncs.
+Edits and transactions sign nothing. `CoviaApplication.sync()` syncs each
+venue's copy, which reconciles it with the record and signs the result once,
+then publishes the regions; an unchanged venue does not sign. A signing failure
+publishes nothing and keeps the copy, edits included, for the next sync. The
+application builds a copy only for a key it signs as, refusing any other
+(`CoviaApplication.CANNOT_SIGN`) before an edit is made. Rebinding restores editing policies on a
+transaction draft, and commit targets bound storage, so policies are not
+applied twice.
 
 ```
-[Component mutation] → atomic cursor update → sign venue owner value
-                                               |
-                              application.host().sync() publishes current root
+[Component mutation] → atomic update of the venue's working copy
+                              |
+   application.sync() signs the record → application.host().sync() publishes the root
 ```
 
-Signing makes a state transition authoritative in memory;
-`application.host().sync()` publishes the root and `application.flush()` is the
-durability barrier.
+The signed record is what the store and other nodes receive;
+`application.host().sync()` publishes the root and `engine.flush()` is the
+durability barrier. Incoming venue state delivered through the application
+lands in the record, and the copy takes it at its next sync: whole-venue LWW
+decides when both changed.
 
 On receiving foreign state (disk recovery, replication, federation),
 `SignedLattice.merge()` verifies the signature, merges if valid, re-signs a
