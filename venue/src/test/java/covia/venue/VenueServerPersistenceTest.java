@@ -135,6 +135,7 @@ public class VenueServerPersistenceTest {
 		{
 			VenueServer server = VenueServer.launch(config);
 
+			assertEquals(201, webdav(server.port(), "MKCOL", "test-drive/", null).statusCode(), "MKCOL should create the drive");
 			HttpResponse<String> putRes = webdav(server.port(), "PUT", "test-drive/hello.txt", "persistent data!");
 			assertEquals(201, putRes.statusCode(), "PUT should create file");
 
@@ -267,6 +268,7 @@ public class VenueServerPersistenceTest {
 
 		VenueServer server = VenueServer.launch(config);
 
+		assertEquals(201, webdav(server.port(), "MKCOL", "sync-drive/", null).statusCode(), "MKCOL should create the drive");
 		HttpResponse<String> putRes = webdav(server.port(), "PUT", "sync-drive/test.txt", "sync test");
 		assertEquals(201, putRes.statusCode());
 
