@@ -1745,12 +1745,14 @@ the venue no longer holds. Providers and default scopes are published at
 `v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the
 flow.
 
-A connection is the resource `<did>/oauth/<provider>`, which its owner holds
-outright. A capability-scoped caller such as an agent needs, on it:
+A connection is the resource `<did>/x/oauth/<provider>`, in the adapter's own
+`x/` space, which its owner holds outright. The `bearerSecret` reference stays
+`oauth/<provider>`. A capability-scoped caller such as an agent needs, on the
+resource:
 
 - `oauth/use` to attach its token, which an `nb.url` caveat limits to a
   destination;
-- `crud/read` for `oauth:status` (on `oauth/` to list them all);
+- `crud/read` for `oauth:status` (on `x/oauth/` to list them all);
 - `oauth/connect` (for `oauth:connect` and `oauth:complete`) and
   `oauth/disconnect`, which a `crud` grant does not cover;
 - or `oauth`, which covers all of these.

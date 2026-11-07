@@ -102,7 +102,7 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 | `did:key:zAlice.../o/` | All operations |
 | `did:key:zAlice.../g/helper` | Specific agent |
 | `did:key:zAlice.../s/api-key` | Specific secret |
-| `did:key:zAlice.../oauth/google` | Alice's connected Google account (`oauth/` for all of them) |
+| `did:key:zAlice.../x/oauth/google` | Alice's connected Google account (`x/oauth/` for all of them) |
 | `did:key:zAlice.../dlfs/docs/` | All files on Alice's `docs` DLFS drive |
 | `did:key:zAlice.../dlfs/docs/reports/q1.md` | Specific file on that drive |
 
@@ -724,11 +724,11 @@ record is an entry no grant of theirs covers.
 | `secret:delete` | `{ with: "s/<name>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "s/<name>", can: "secret/extract" }`, plus the direct-owner restriction in *Secret extraction* above |
 | Any adapter sending a secret (`apiKey`, `bearerSecret`, `secretHeaders`, `{s/NAME}`, MCP `auth`, A2A auth) | `{ with: "<ownerDID>/s/<name>", can: "secret/use" }`, its `nb.url` checked against the request's destination |
-| `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
-| `oauth:status` | `{ with: "oauth/", can: "crud/read" }`, or `oauth/<provider>` for one provider |
-| `oauth:connect` | `{ with: "oauth/<provider>", can: "oauth/connect" }` |
-| `oauth:complete` | `{ with: "oauth/<provider>", can: "oauth/connect" }`, and only by the account that started the connect |
-| `oauth:disconnect` | `{ with: "oauth/<provider>", can: "oauth/disconnect" }` |
+| `http:*` with `bearerSecret: "oauth/<provider>"` | `{ with: "<ownerDID>/x/oauth/<provider>", can: "oauth/use" }`, its `nb.url` checked against the request's destination |
+| `oauth:status` | `{ with: "x/oauth/", can: "crud/read" }`, or `x/oauth/<provider>` for one provider |
+| `oauth:connect` | `{ with: "x/oauth/<provider>", can: "oauth/connect" }` |
+| `oauth:complete` | `{ with: "x/oauth/<provider>", can: "oauth/connect" }`, and only by the account that started the connect |
+| `oauth:disconnect` | `{ with: "x/oauth/<provider>", can: "oauth/disconnect" }` |
 | `agent:create` | `{ with: "<ownerDID>/g/<id>", can: "agent/create" }` |
 | `agent:info` / `agent:context` (cross-user) | `{ with: "<ownerDID>/g/<id>", can: "crud/read" }` |
 | `agent:list` (and `GET /api/v1/agents`) | `{ with: "g/", can: "crud/read" }` |

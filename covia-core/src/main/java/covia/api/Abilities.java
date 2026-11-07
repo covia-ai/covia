@@ -25,14 +25,14 @@ public final class Abilities {
 	/** Reveal plaintext to its owner through a direct, non-recorded call. */
 	public static final AString SECRET_EXTRACT = Strings.intern("secret/extract");
 	/** Send a connected account's access token in a request without seeing it
-	 *  ({@code <did>/oauth/<provider>}). A grant of it may be bound to a
+	 *  ({@code <did>/x/oauth/<provider>}). A grant of it may be bound to a
 	 *  destination url prefix ({@code nb.url}). */
 	public static final AString OAUTH_USE     = Strings.intern("oauth/use");
 	/** Connect an account at a provider: whoever approves the returned URL
-	 *  becomes the connection ({@code <did>/oauth/<provider>}). */
+	 *  becomes the connection ({@code <did>/x/oauth/<provider>}). */
 	public static final AString OAUTH_CONNECT = Strings.intern("oauth/connect");
 	/** Disconnect an account, revoking its grant at the provider
-	 *  ({@code <did>/oauth/<provider>}). */
+	 *  ({@code <did>/x/oauth/<provider>}). */
 	public static final AString OAUTH_DISCONNECT = Strings.intern("oauth/disconnect");
 	/** Every use of a held key or mnemonic ({@code <did>/keys/<key>},
 	 *  {@code <did>/mnemonics/<id>}); covers each {@code key/…} ability. */

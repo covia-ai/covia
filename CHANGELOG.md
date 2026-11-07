@@ -172,7 +172,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The venue changes its catalog at `w/global/…`, which `v/…` shows; a write or delete through `v/…` is refused, the venue's own included.
 - A call naming a Convex peer other than the venue's needs `adapters.convex.anyPeer`.
 - A private-network `did:web` identity needs its host in `adapters.http.allowedHosts`.
-- Grant `oauth/use` on `oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
+- Grant `oauth/use` on `x/oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
 - A public agent's `a2a.caps` becomes `accepts: "anyone"`; beside another `accepts` it is refused.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
