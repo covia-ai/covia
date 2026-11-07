@@ -22,7 +22,6 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
-import covia.grid.Principals;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -48,12 +47,6 @@ public class UCANAdapter extends AAdapter {
 	public static final String PRF_VENUE_ONLY = "Only the venue itself may pass on a grant it holds (prf)";
 	public static final String KEY_OR_PRF = "A grant signed with a held key is a root: give key or prf, not both";
 	public static final String KEY_GRANTS_OWN_ONLY = "a grant signed with a held key covers only resources its did:key is root of: its own and those of identities nested below it";
-	/** Why the venue will not grant a resource the caller is not root of. */
-	public static final String NO_GRANTING_RIGHT = "Not yours to grant: it is neither your own, an identity's you sign in as, "
-		+ "nor your agent's, and your presented proofs do not hold the granting right";
-	/** Why the venue will not grant beyond the granting right it is asked under. */
-	public static final String GRANT_OUTLIVES_RIGHT = "exp exceeds the validity of the granting right enabling this "
-		+ "issuance: minted authority must not outlive the right it was minted under; request a shorter exp";
 	/** Why the venue will not sign a root: it does not host the resource's owner. */
 	public static final String NOT_HOSTED = "The venue roots grants only over identities it hosts; "
 		+ "an identity it does not host signs its own grants with its own key";
@@ -199,7 +192,7 @@ public class UCANAdapter extends AAdapter {
 					throw new InvalidInputException("att[" + i + "]: " + KEY_GRANTS_OWN_ONLY + " (" + keyIssuer + ")");
 				}
 			} else if (prf == null) {
-				requireGrantable(ctx, i, resource, can, now, exp);
+				requireGrantable(ctx, i, resource, can, exp);
 			}
 			// With prf, held grants authorise the entry instead (requireHeld)
 			canonAtt = canonAtt.conj(cap);
@@ -261,41 +254,15 @@ public class UCANAdapter extends AAdapter {
 
 	/**
 	 * Whether the caller may have the venue grant {@code can} on
-	 * {@code resource}. Issuance is a granting surface (COG-17), so it asks who
-	 * is asking ({@link RequestContext#getCallerDID}), never whose namespace the
-	 * request acts in. A caller grants what it is root of (UCAN.md, "Roots"):
-	 * its own resources, an identity's it signs in as, and, since an agent is
-	 * its owner's, its own agent's. It confers only what it holds, as anywhere
-	 * authority is handed on ({@link Engine#requireConferrable}), so a caller
-	 * whose scope is restricted cannot step outside it. Any other resource needs
-	 * a held granting right: presented proofs covering {@code grant/<can>} on it
-	 * now and through {@code exp}.
+	 * {@code resource} until {@code exp}: the check wherever authority is handed
+	 * on ({@link Engine#requireGrantable}). Proofs travel in the transport proof
+	 * channel (COG-15), never in operation input, which job records persist.
 	 */
-	private void requireGrantable(RequestContext ctx, long i, AString resource, AString can, long now, Long exp) {
-		AString caller = ctx.getCallerDID();
-		AString owner = Engine.ownerOf(resource);
-		boolean root = caller.equals(owner)
-			|| VenueAuthenticator.signsInAs(caller, owner)
-			|| (Principals.isAgentDID(owner) && caller.equals(Principals.userOf(owner)));
-		if (root) {
-			if (engine.authorityCovers(ctx, resource, can)) return;
-			throw new AuthException(Engine.CONFERRAL_DENIED + ": " + can + " on " + resource + " (att[" + i + "])");
-		}
-		// Proofs travel in the transport proof channel (COG-15), never in
-		// operation input (input is persisted in job records).
-		AString grantAbility = Strings.create("grant/" + can);
-		if (!engine.proofsCover(ctx, resource, grantAbility, now)) {
-			throw new AuthException(NO_GRANTING_RIGHT + " " + grantAbility + " over " + resource
-				+ " (att[" + i + "])");
-		}
-		// The granting chain must still exist at the minted token's expiry
-		// horizon — unbounded for a non-expiring mint, so exp: null requires the
-		// enabling right to be non-expiring too. Dynamic gates rule on the
-		// issuance happening now (the check above); they must not execute a
-		// second time against an imaginary future invocation.
-		long horizon = (exp == null) ? Long.MAX_VALUE : exp - 1;
-		if (!engine.proofsStructurallyCover(ctx, resource, grantAbility, horizon)) {
-			throw new AuthException(GRANT_OUTLIVES_RIGHT + " (att[" + i + "])");
+	private void requireGrantable(RequestContext ctx, long i, AString resource, AString can, Long exp) {
+		try {
+			engine.requireGrantable(ctx, ctx.getUserDID(), resource, can, exp, null);
+		} catch (AuthException e) {
+			throw new AuthException(e.getMessage() + " (att[" + i + "])");
 		}
 	}
 

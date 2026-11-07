@@ -27,12 +27,13 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `auth:identity-token` signs for a `did:key` that holds its own key, and the identities nested below it (#637).
 - `ucan:issue` results name their issuer as `iss`.
 - Agents hold keyrings of their own, removed when the agent is deleted (#637).
-- Agents can issue grants over their own resources, and owners over their agents'.
+- Agents can issue grants over their own resources and their owner's, and owners over their agents'.
 - Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
 
 ### Changed
 
-- A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only; `ucan:issue` signs them for a caller that is root of the resource or holds a `grant/` right, within the caller's scope.
+- A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only.
+- `ucan:issue` and an agent's `caps` and `accepts` hand on only what their author could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry. A right to use something no longer lets you give it to an agent, and an agent's caps, which do not expire, need a presented right that does not either.
 - A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
 - `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.

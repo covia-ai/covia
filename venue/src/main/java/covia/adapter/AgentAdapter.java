@@ -427,7 +427,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Refuses a config that confers authority its author does not hold (see
+	 * Refuses a config that confers authority its author could not grant (see
 	 * {@link Engine#requireConferrable}): the agent's own {@code caps}, absent
 	 * meaning unrestricted; and the right to talk to it for whoever its
 	 * admission {@link Admission#policy} admits. An update re-checks only what

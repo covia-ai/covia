@@ -145,19 +145,20 @@ public class AgentAdapterTest {
 		AString delegateDID = UCAN.toDIDKey(delegateKP.getAccountKey());
 		AString address = Strings.create(ownerDID + "/g/delegated-agent");
 
-		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		UCAN grant = UCAN.create(ownerKP, delegateKP.getAccountKey(), exp,
+		// Caps last, so the right to grant them must too.
+		UCAN grant = UCAN.create(ownerKP, delegateKP.getAccountKey(), (Long) null,
 			Vectors.of(
 				Capability.create(address, Abilities.AGENT_CREATE),
 				Capability.create(address, Capability.CRUD_READ),
+				Capability.create(address, Strings.create("grant/" + Capability.CRUD_READ)),
 				Capability.create(address, Abilities.AGENT_REQUEST),
 				Capability.create(address, Abilities.AGENT_WRITE)),
 			Vectors.empty());
 		RequestContext delegated = RequestContext.of(delegateDID)
 			.withProofs(Vectors.of(grant.toMap()));
 
-		// The delegate names caps it holds: it may not create an unrestricted agent
-		// in the owner's namespace.
+		// The delegate names caps it may grant: it may not create an unrestricted
+		// agent in the owner's namespace.
 		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, address,
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete",
@@ -6928,8 +6929,10 @@ public class AgentAdapterTest {
 			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/g/"),
 				Strings.create("can"), Strings.create("agent/create")),
 			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
-				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ)));
-		// A scoped creator confers only caps it holds.
+				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ),
+			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
+				Strings.create("can"), Strings.create("grant/crud/read"))));
+		// A scoped creator confers only caps it may grant.
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-unreadable-source-agent",
 			Fields.CONFIG, Maps.of(
@@ -6958,7 +6961,9 @@ public class AgentAdapterTest {
 			Maps.of(Strings.create("with"), Strings.create(ALICE_DID + "/w/skills"),
 				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ),
 			Maps.of(Strings.create("with"), Strings.create("v/skills"),
-				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ)));
+				Strings.create("can"), convex.auth.ucan.Capability.CRUD_READ),
+			Maps.of(Strings.create("with"), Strings.create("v/skills"),
+				Strings.create("can"), Strings.create("grant/crud/read"))));
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skills-readable-source-agent",
 			Fields.CONFIG, Maps.of(

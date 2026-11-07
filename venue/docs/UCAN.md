@@ -321,16 +321,20 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   in a venue-signed token a stored-bare path would denote the venue's own
   namespace (§3.1). For an agent that is its owner's namespace, which it may
   not grant. Empty paths and scheme forms are rejected.
-- Issuance is a *granting surface*, so it asks who is asking (the caller's
-  DID), never whose namespace the request acts in. A caller may grant what it
-  is root of:
+- You pass on only what you could grant. That one check
+  (`Engine.requireGrantable`) governs every place authority is handed on:
+  this operation, and an agent's caps and `accepts` (§5.4). A principal may
+  grant what it is root of:
   - its own resources, an agent's own DID included;
   - those of an identity it signs in as (a `did:key` and the identities
     nested below it);
   - those of its own agents, since an agent is its owner's.
 
-  It confers only what it holds, as wherever authority is handed on: a caller
-  whose scope is restricted grants only what that scope covers.
+  So may whatever acts with its authority: an agent with its owner's, a
+  request under `user/sudo` with the target's. That is the authority it has of
+  its own, never what others have granted it. Its scope must include the right
+  to grant, `grant/<can>`, as having no scope does, so an agent with no caps
+  grants what its owner could.
 - Any other resource is issuable only under a held **granting right**
   (COG-17), or passed on by the venue itself with `prf` (below). The caller's
   transport-presented proofs must cover `grant/<can>` on the resource (proofs
@@ -910,29 +914,33 @@ capabilities, read from her `config.caps` at each check. Carol can write to `w/d
 
 **Identity:** `did:key:zAlice...:g:Carol` (a sub-principal of Alice)
 **Keys:** None — the venue holds the relationship, and nothing is signed
-**Granting:** none, and **the gate is identity, not scope**. Both granting
-surfaces refuse an agent context outright (COG-17): `ucan:issue` directly, and
-`hitl:respond` because answering an ask mints a grant under the *inbox owner's*
-authority — an agent reaching it would approve its own request. An agent that
-must confer authority asks its human, and only the human can answer.
+**Granting:** by the rule for everyone (§4.1). With no caps an agent grants
+what its owner could grant of its own right, its owner's resources and its
+own, and never what others granted its owner; with caps, only what they
+include the right to grant (`grant/<can>`). `hitl:respond` refuses an agent
+context outright, because answering an ask mints a grant *as the inbox owner*:
+an agent reaching it would approve its own request with authority it may not
+have. An agent that needs more asks its human, and only the human can answer.
 
-This is why the guards are pinned to identity. An agent with no `config.caps`
-holds a `null` scope, which the `authorityCovers` fast path treats as
-unrestricted; a scope-based defence would therefore be absent on exactly the
-agent that most needs bounding.
+That guard is pinned to identity. An agent with no `config.caps` holds a
+`null` scope, which the `authorityCovers` fast path treats as unrestricted; a
+scope-based defence would therefore be absent on exactly the agent that most
+needs bounding.
 
 **Conferring:** attenuation only. Creating or reconfiguring an agent mints no
-token, but it hands authority on, so the caller may confer only what it holds
-(`Engine.requireConferrable`). `agent:create`, `agent:update` and `agent:fork`
-refuse a config whose `caps` the caller's own authority does not cover, one
-capability at a time; an absent `caps` is unrestricted, so only a caller
-unrestricted in that namespace may leave it out. The same holds for `accepts`,
-which confers `agent/request` and `agent/message` on the agent (an older public
-`a2a.caps` reads as `accepts: "anyone"`). An agent may therefore create
-sub-agents, never more capable ones,
-and a delegated `agent/create` or `agent/write` confers nothing beyond the
-delegation. An update re-checks only the fields it changes, against the config
-it replaces, in the same atomic update.
+token, but it hands authority on, so the caller may confer only what it could
+grant, by the same check as `ucan:issue` (`Engine.requireConferrable`).
+`agent:create`, `agent:update` and `agent:fork` refuse a config whose `caps`
+the caller could not grant, one capability at a time; an absent `caps` is
+unrestricted, so only a caller that may grant everything in that namespace may
+leave it out. Caps do not expire, so a presented right to grant them must not
+expire either. The same holds for `accepts`, which confers `agent/request` and
+`agent/message` on the agent (an older public `a2a.caps` reads as
+`accepts: "anyone"`). An agent may therefore create sub-agents only with what
+it may grant, and a delegated `agent/create` or `agent/write` confers nothing
+the delegation does not let it grant. An owner may give its agent caps over
+the agent's own keys, which are its agent's. An update re-checks only the
+fields it changes, against the config it replaces, in the same atomic update.
 
 **A step runs as its agent.** `llmagent:chat` and `goaltree:chat` always run
 as the agent they name, under its current `config.caps`, whoever invokes them

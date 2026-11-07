@@ -269,6 +269,7 @@ public class PathReadAuthorityTest {
 		RequestContext parent = RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(Vectors.of(
 			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
 			Capability.create(Strings.create("w/data/"), Capability.CRUD),
+			Capability.create(Strings.create("w/data/"), Strings.create("grant/crud")),
 			Maps.of(Capability.CAN, Strings.create("invoke"))));
 		assertReadDenied(createAgent("peek", Strings.create("w/cfg"), parent));
 		assertNull(agentPrompt(alice, "peek"));
@@ -282,6 +283,7 @@ public class PathReadAuthorityTest {
 		RequestContext parent = RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(Vectors.of(
 			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
 			Capability.create(Strings.create("g/"), Capability.CRUD_READ),
+			Capability.create(Strings.create("g/"), Strings.create("grant/crud/read")),
 			Maps.of(Capability.CAN, Strings.create("invoke"))));
 		Job created = createAgent("pinned", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",

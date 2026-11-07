@@ -3932,20 +3932,89 @@ public class Engine {
 	}
 
 	/** Opening of every {@link #requireConferrable} denial. */
-	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller does not hold";
+	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller could not grant";
+
+	/** Why a principal may not grant what it is root of: its scope leaves out the right to grant it. */
+	public static final String GRANT_BEYOND_SCOPE = "Your scope does not include the right to grant";
+
+	/** Why a principal may not grant what it is not root of: it presents no right to grant it. */
+	public static final String NO_GRANTING_RIGHT = "Not yours to grant, and your presented grants hold no right to grant";
+
+	/** Why a principal may not grant beyond the granting right it grants under. */
+	public static final String GRANT_OUTLIVES_RIGHT = "What you grant must not outlive the granting right it is "
+		+ "granted under: grant it for a shorter time, or present a right that lasts";
+
+	/**
+	 * May {@code ctx} grant {@code can} on {@code resource}? The one check
+	 * wherever authority is handed on: a grant the venue signs ({@code ucan:issue})
+	 * and an agent's {@code config.caps} ({@link #requireConferrable}). You pass
+	 * on only what you could grant.
+	 *
+	 * <ul>
+	 * <li>A principal is root of its own resources, of an identity's it signs in
+	 * as, and of its agents' (UCAN.md, "Roots"), and so is anything acting with
+	 * its authority: an agent with its owner's, a request under {@code user/sudo}
+	 * with the target's. That is the authority it has of its own, never what
+	 * others have granted it. Its scope must include {@code grant/<can>} there,
+	 * as having no scope does.</li>
+	 * <li>Over anything else, its presented grants must hold {@code grant/<can>},
+	 * through {@code exp} as well as now.</li>
+	 * </ul>
+	 *
+	 * <p>Nobody here is root of what the venue does not host, such as another
+	 * venue's resources or a file: a capability over it only bounds what its
+	 * holder may ask for, so it is granted as part of {@code namespace}.</p>
+	 *
+	 * @param namespace the namespace bare and match-any resources are in
+	 * @param resource an absolute resource, or null for every resource in {@code namespace}
+	 * @param exp when what is granted expires, or null for never
+	 * @param destination the {@code nb.url} its use is checked against, if any
+	 * @throws AuthException saying why not
+	 */
+	public void requireGrantable(RequestContext ctx, AString namespace, AString resource, AString can,
+			Long exp, AString destination) {
+		AString grant = Strings.create("grant/" + can);
+		AString owner = isHosted(resource) ? ownerOf(resource) : namespace;
+		// Presented grants are checked against the whole namespace for a match-any resource.
+		AString target = (resource != null) ? resource : namespace;
+		boolean root = isRootOf(ctx.getCallerDID(), owner) || isRootOf(ctx.getUserDID(), owner);
+		if (root) {
+			AVector<ACell> scope = ctx.getCaps();
+			if (scope == null || ctx.denialUnder(scope, resource, grant, ctx.getUserDID(), destination) == null) return;
+		}
+		if (!proofsCover(ctx, target, grant, System.currentTimeMillis() / 1000, destination)) {
+			throw new AuthException((root ? GRANT_BEYOND_SCOPE : NO_GRANTING_RIGHT) + " " + can + " on " + target);
+		}
+		// Granted under presented rights: they must still hold at the horizon,
+		// unbounded for what never expires. Dynamic gates rule on the grant
+		// happening now (above); they do not run again against a future use.
+		long horizon = (exp == null) ? Long.MAX_VALUE : exp - 1;
+		if (!proofsStructurallyCover(ctx, target, grant, horizon)) {
+			throw new AuthException(GRANT_OUTLIVES_RIGHT + " (" + grant + " on " + target + ")");
+		}
+	}
+
+	/** Whether {@code principal} is root of {@code owner}: it, an identity it signs in as, or one of its agents. */
+	private static boolean isRootOf(AString principal, AString owner) {
+		if (principal == null || owner == null) return false;
+		return principal.equals(owner) || VenueAuthenticator.signsInAs(principal, owner)
+			|| (covia.grid.Principals.isAgentDID(owner) && principal.equals(covia.grid.Principals.userOf(owner)));
+	}
 
 	/**
 	 * Attenuation where authority is handed on: may {@code ctx} confer {@code scope}
 	 * on a principal acting in {@code ownerDID}'s namespace, such as an agent's
-	 * {@code config.caps}? Each conferred capability must be covered by the
-	 * caller's own authority, so conferring only ever narrows: an agent may
-	 * create a sub-agent, never one more capable than itself.
+	 * {@code config.caps}? Each capability must be one the caller could grant
+	 * ({@link #requireGrantable}), and stored caps never expire, so conferring
+	 * only ever narrows: an agent may create a sub-agent only with what it may
+	 * grant.
 	 *
-	 * <p>A {@code null} scope is unrestricted, so only a caller unrestricted in that
-	 * namespace may confer it. A bare resource names {@code ownerDID}'s namespace, as
-	 * it will when the scope is used, and an empty one covers any resource. A
-	 * capability's {@code nb.url} is the destination its use is checked against;
-	 * other caveats only narrow it further.</p>
+	 * <p>A {@code null} scope is unrestricted, so only a caller that may grant
+	 * everything in that namespace may confer it. A bare resource names
+	 * {@code ownerDID}'s namespace, as it will when the scope is used, and an
+	 * empty one covers any resource. A capability's {@code nb.url} is the
+	 * destination its use is checked against; other caveats only narrow it
+	 * further.</p>
 	 *
 	 * @throws AuthException naming the first capability the caller cannot confer
 	 */
@@ -3967,18 +4036,12 @@ public class Engine {
 			AString destination) {
 		String resource = (with == null) ? "" : with.toString();
 		while (resource.startsWith("/")) resource = resource.substring(1);
+		AString absolute = resource.isEmpty() ? null
+			: Strings.create(covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID));
 		try {
-			if (!resource.isEmpty()) {
-				requireResourceAccess(ctx, Strings.create(
-					covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID)), can, destination);
-			} else if (ownerDID.equals(ctx.getUserDID())) {
-				requireAuthority(ctx, (AString) null, can, destination);   // only a match-any grant covers
-			} else {
-				requireLocalAccess(ctx, ownerDID, can, destination);       // the whole other namespace
-			}
+			requireGrantable(ctx, ownerDID, absolute, can, null, destination);
 		} catch (AuthException e) {
-			throw new AuthException(CONFERRAL_DENIED + ": " + can + " on "
-				+ (resource.isEmpty() ? "(any)" : resource) + " — " + e.getMessage());
+			throw new AuthException(CONFERRAL_DENIED + ": " + e.getMessage());
 		}
 	}
 

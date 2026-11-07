@@ -268,9 +268,8 @@ for keys:
   `x/crypto/keys/` in its caps names its owner's keyring, and its own is
   named in full, `<owner>:g:<id>/x/crypto/keys/`.
 - An owner uses its agent's keys under a grant, which it can have the venue
-  sign on the agent's behalf. Caps over them confer only what their author
-  holds, so an owner writes the agent's own keyring into its caps only while
-  presenting such a grant.
+  sign on the agent's behalf. It may also put them in the agent's caps, since
+  caps confer what their author could grant and the agent is its own.
 - A request under `user/sudo` is bounded by the grants it presents, a
   target's keys as anything else of the target's.
 - A grant covers a key as it covers any resource (principle 5), bounded to
