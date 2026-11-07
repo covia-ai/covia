@@ -23,9 +23,10 @@ settles payments; grid data flows over the lattice, not through consensus.
   always resolves to the same value; any other path names a location whose
   value can change.
 - **The lattice is permissive; convention pays.** Any CAD3 value can be stored
-  anywhere, but tooling, chaining and UIs work best with JSON-like maps with
-  string keys. Blobs, vectors and sets store and hash correctly but get less
-  tooling support.
+  anywhere, and Covia assumes no JSON shape: only an adapter that chooses
+  JSON-only data for its own state relies on one. Tooling, chaining and UIs
+  work best with JSON-like maps with string keys. Blobs, vectors and sets store
+  and hash correctly but get less tooling support.
 - **Freedom in the workspace, discipline elsewhere.** Framework-managed
   namespaces keep their record shapes; workspaces take any structure.
 - **Operations receive values, not paths.** References are resolved at
