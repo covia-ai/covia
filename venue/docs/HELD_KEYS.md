@@ -95,8 +95,7 @@ Keyrings are the crypto adapter's state, at `:adapters/crypto`
   (`CryptoKeyring.Keyrings`) takes it to version 1, this layout, and refuses
   any other shape.
 - **`holders`** is an `Index` keyed by the holder's DID, as an `AString`, in
-  order. Deleting a user removes the DID itself and the DIDs that continue it
-  with `:`.
+  order.
 - **`keys`** is an `Index` keyed by public key, as a `Blob`: the
   multicodec-prefixed key bytes, `0xed01` followed by the 32-byte key for
   Ed25519. The prefix names the key type, so other types fit without a layout
@@ -141,8 +140,10 @@ Using a key writes nothing to the store; the audit log records it.
 
 - **Deleted with its holder.** Deleting a user runs every adapter's
   `deleteUserState` in the deletion transaction, disabled adapters included,
-  and the crypto adapter removes the user's holder entry and those nested
-  below it.
+  and the crypto adapter removes the user's keyring and those of its agents
+  (`<did>:g:<id>`), which go with the user. A user nested below it
+  (`<did>:u:bob`) is a user of its own and keeps its keyring until it is
+  deleted itself.
 - **Disabling the crypto adapter** leaves the keys sealed in its state.
   Nothing uses them until it is enabled again, and other adapters' operations
   that would sign with a held key are refused meanwhile.

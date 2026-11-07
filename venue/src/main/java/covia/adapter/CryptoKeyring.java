@@ -20,6 +20,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.grid.Principals;
 import covia.venue.AdapterState;
 import covia.venue.SecretStore;
 import covia.venue.migration.MigrationStep;
@@ -202,14 +203,18 @@ final class CryptoKeyring {
 		return removed.get();
 	}
 
-	/** Removes {@code did}'s keyring and those of the identities nested below it ({@code <did>:…}). */
+	/**
+	 * Removes a deleted user's keyring and its agents' ({@code <did>:g:<id>}),
+	 * which go with the user. Another user nested below it ({@code <did>:u:bob})
+	 * is a user of its own, deleted on its own.
+	 */
 	static void deleteHolder(AdapterState state, AString did) {
-		String nested = did + ":";
 		state.update(current -> {
 			Index<AString, ACell> holders = holders(current);
 			AtomicReference<Index<AString, ACell>> rest = new AtomicReference<>(holders);
 			holders.forEach((holder, ring) -> {
-				if (holder.equals(did) || holder.toString().startsWith(nested)) rest.set(rest.get().dissoc(holder));
+				boolean agent = Principals.isAgentDID(holder) && did.equals(Principals.userOf(holder));
+				if (holder.equals(did) || agent) rest.set(rest.get().dissoc(holder));
 			});
 			return (rest.get() == holders) ? current : layout(current).assoc(HOLDERS, rest.get());
 		});
