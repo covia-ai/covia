@@ -137,7 +137,17 @@ The adapter's operations (names open):
   so job records keep it redacted.
 - **Remove** a key.
 - **List** the caller's own keys: public key, label and when it was added.
-- **Sign** a payload with one of the caller's keys.
+- **Sign** raw bytes with one of the caller's keys, the standard signing
+  interface. Input: the key's public key, as list shows it, and `payload`, a
+  `Blob`, which JSON callers may give as a hex string with or without `0x`
+  (`Blobs.parse`). Output: `signature`, a `Blob` (64 bytes for Ed25519), which
+  JSON renders as a `0x` hex string. The payload is signed exactly as given,
+  with no hashing or prefix (`AKeyPair.sign`). It needs `key/sign/raw`.
+
+Signing a token, a grant or a Convex transaction is the job of the operation
+that builds it (`auth:identity-token`, `ucan:issue`, `convex:transact`), which
+signs with a held key under `key/sign/token`, `key/sign/grant` or
+`key/sign/convex`.
 
 ## Abilities
 
@@ -181,10 +191,14 @@ code, signs with it; a grant from the venue never confers that.
 
 ## Open questions
 
-1. What the signing operation accepts: raw bytes, JWT claims, Convex values.
-2. Whether a root must opt in before identities nested below it have its key
+1. Moving the Convex adapter's keys to keyrings. Today `convex:generate-key` stores
+   a new seed in the caller's secret store, `convex:sign` signs raw bytes with
+   a seed named by secret reference, and `convex:transact` takes a seed by
+   secret reference or literally (redacted from job records).
+2. A size limit on the payload the sign operation accepts.
+3. Whether a root must opt in before identities nested below it have its key
    sign their identity tokens.
-3. Signing the venue's outbound calls made as a held identity, per call.
-4. Whether the sign operation and the HITL `sign` request (#293) share one
+4. Signing the venue's outbound calls made as a held identity, per call.
+5. Whether the sign operation and the HITL `sign` request (#293) share one
    path.
-5. The adapter's and operations' names.
+6. The adapter's and operations' names.
