@@ -68,8 +68,10 @@ Today keys live elsewhere:
 7. **One signing function** serves identity tokens, UCAN grants, Convex
    transactions and raw payloads, under the same consent and no-amplification
    rules as any issuance (COG-17).
-8. **It signs at the point of use.** The venue mints short-lived tokens when
-   they are needed, so no long-lived bearer has to be stored.
+8. **It can sign when needed.** Because the key stays held, a holder can have
+   tokens minted as they are needed instead of storing a long-lived bearer.
+   How a call to another service authenticates with a held key is for the
+   method it uses to decide, not a rule of the keyring.
 9. **Custody can end.** Removing a key, or deleting its holder, ends it. The
    venue then signs nothing new with it; tokens already issued last until they
    expire.
@@ -280,6 +282,5 @@ venue.
 
 1. When the deprecated Convex signing operations are removed, and how an owner
    moves an existing seed or phrase from the secret store into their keyring.
-2. Signing the venue's outbound calls made as a held identity, per call.
-3. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
-4. The new operations' names.
+2. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
+3. The new operations' names.
