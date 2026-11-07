@@ -22,9 +22,19 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `recordToolCalls`, per agent with a venue default, records an agent's tool calls as jobs from the start.
 - An MCP read-only tool call past its ceiling names a job that `grid_job_status` and `grid_job_result` can find.
 - Per-user preferences at `x/preferences`, edited with the `preferences` tool and pinned by the standard and chat-bot agent templates (`adapters.preferences.maxBytes`).
+- Keyrings: the venue holds keys and recovery phrases that can be used but never read, with `crypto:add-key`, `crypto:remove-key`, `crypto:list-keys` and the `key/…` abilities (#637).
+- `crypto:sign`, `jwt-sign`, `decrypt`, `convex:transact` and `ucan:issue` take a held `key`; `crypto:generate-key`, `derive-key` and `generate-mnemonic` take `keyring: true` (#637).
+- `auth:identity-token` signs for a `did:key` that holds its own key, and the identities nested below it (#637).
+- `ucan:issue` results name their issuer as `iss`.
+- Agents hold keyrings of their own, removed when the agent is deleted (#637).
+- Agents can issue grants over their own resources, and owners over their agents'.
+- Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
 
 ### Changed
 
+- A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only; `ucan:issue` signs them for a caller that is root of the resource or holds a `grant/` right, within the caller's scope.
+- A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
+- `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
 - Scheduled events name `caller` and `owner`; `scheduler:list` shows them in place of `by`.
 - HITL requests name the asker as `caller`, not `from`, and a delegate's or agent's namespace as `owner`; `hitl:list` shows `caller`.
@@ -115,6 +125,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Error pages outside the REST API show a fault's report, which names the request id, never its message, and a refusal answers 400 (#540).
 - An agent cycle stopped by `agent:suspend` or `agent:delete` can no longer complete or fail its task, and its result is not merged; the task runs again after resume.
 
+### Deprecated
+
+- `convex:sign` and `convex:generate-key`: use `crypto:sign` (with `encoding: utf8` for text) and `crypto:generate-key`.
+
 ### Removed
 
 - The `venue/relay` ability: users hop with `authenticateAs: "caller"` and grants.
@@ -169,7 +183,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The venue changes its catalog at `w/global/…`, which `v/…` shows; a write or delete through `v/…` is refused, the venue's own included.
 - A call naming a Convex peer other than the venue's needs `adapters.convex.anyPeer`.
 - A private-network `did:web` identity needs its host in `adapters.http.allowedHosts`.
-- Grant `oauth/use` on `oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
+- Grant `oauth/use` on `x/oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
 - A public agent's `a2a.caps` becomes `accepts: "anyone"`; beside another `accepts` it is refused.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.

@@ -32,13 +32,15 @@ Tracked by covia#660.
   its own records and start-up work. It reaches a user's namespace only as any
   other caller does, through grants or an agent's admission policy
   (`Engine.crossUserAllows`). Acting as a user (`Engine.sudoContext`) needs
-  `user/sudo` on that user, rooted by the user or, for a custodial user, by the
-  venue. Managing accounts, such as users' sign-in keys, is done on venue
-  resources.
-- **Issuing.** `ucan:issue` signs every grant. It roots grants over the
-  venue's own resources and its custodial users' namespaces, and accepts any
-  expiry or none. It does not check the issuer's caps when the issuer grants
-  over its own namespace.
+  `user/sudo` on that user, rooted by the user or by the venue, which roots
+  grants over every identity it hosts, self-sovereign users included, valid
+  only here (`Engine.rootAuthorityPolicy`, [UCAN.md](./UCAN.md) §5.6). Managing
+  accounts, such as users' sign-in keys, is done on venue resources.
+- **Issuing.** `ucan:issue` signs grants over the identities the venue hosts,
+  for a caller that is root of the resource (its own, an identity's it signs
+  in as, its agent's) within the caller's scope, or that presents a
+  `grant/<can>` right; it accepts any expiry or none ([UCAN.md](./UCAN.md)
+  §4.1). A caller with a held key signs as that key instead.
 - **Deferred work.** A recorded job (`JobManager.keepCallerContext`) and a
   scheduled event (`Scheduler.schedule`) keep the grants presented to them but
   not the scope. Agents are unaffected, because their scope is read again from
@@ -141,9 +143,10 @@ another allowance its holder holds still covers it.
   whose keys it holds, and never authenticates as a self-sovereign user. COG-17
   names its power over what it hosts as the host root, which holds only at
   this venue, so that power never reaches another venue.
-- **Change from today.** The venue cannot act as a self-sovereign user today,
-  because `user/sudo` needs that user's own grant. Under this design it can,
-  after activation.
+- **Change from today.** Trusted code that signs grants with the venue's key
+  reaches every user the venue hosts today, self-sovereign users included,
+  with no record of each use. Under this design that power is used only
+  through activation.
 
 ### Trusted code
 
@@ -202,24 +205,21 @@ provisioning services hold allowances the venue issued.
 4. Where allowances are stored, how they are listed, who may revoke one
    (issuer, holder, venue), and whether revoking ends activations in progress.
 5. Whether an allowance may have no expiry, as a grant may (COG-17).
-6. Whether the venue honours grants it signs as host over self-sovereign
-   users' resources. COG-17 allows them at the host; today's root rule
-   (`Engine.rootAuthorityPolicy`) refuses them.
-7. Deferred work keeps presented grants but not the base. Agents are safe
+6. Deferred work keeps presented grants but not the base. Agents are safe
    because their caps are read again; any other context with a scope would
    lose it.
-8. Moving Brightside, GetMine and provisioning services to allowances, and
+7. Moving Brightside, GetMine and provisioning services to allowances, and
    what becomes of the grants they hold or sign.
-9. Whether to refuse grants the venue signs over its own resources once
+8. Whether to refuse grants the venue signs over its own resources once
    allowances replace them, as covia#660 first proposed. Refusing every token
    bearing the venue's signature would also refuse its custodial users'
    grants, which the venue signs for them.
-10. Revoking tokens: a token's base64url signature can be spelt several ways,
-    so revocation needs an identifier from its signed content, and Convex's
-    validator needs a way for Covia to reject a token at any link of a chain.
-11. A limit on the lifetime of grants the venue issues; `ucan:issue` accepts
+9. Revoking tokens: a token's base64url signature can be spelt several ways,
+   so revocation needs an identifier from its signed content, and Convex's
+   validator needs a way for Covia to reject a token at any link of a chain.
+10. A limit on the lifetime of grants the venue issues; `ucan:issue` accepts
     no expiry today.
-12. Whether `*` covers granting rights (`grant/…`).
+11. Whether `*` covers granting rights (`grant/…`).
 
 ## Rejected alternatives
 

@@ -28,11 +28,19 @@
             24
           ],
           "default": 12
+        },
+        "keyring": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the new phrase in your keyring instead of a secret (give this or name): it can never be read, only derived from."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Your own name for the phrase in the keyring."
         }
       },
-      "required": [
-        "name"
-      ],
+      "required": [],
       "additionalProperties": false
     },
     "output": {
@@ -40,7 +48,11 @@
       "properties": {
         "secret": {
           "type": "string",
-          "description": "Secret reference; private material is never returned."
+          "description": "Secret reference; private material is never returned. Absent for a phrase kept in the keyring."
+        },
+        "did": {
+          "type": "string",
+          "description": "For a phrase kept in the keyring: its ID, the did:key of its SLIP-10 master node with no passphrase."
         },
         "words": {
           "type": "integer",
@@ -54,7 +66,6 @@
         }
       },
       "required": [
-        "secret",
         "words"
       ],
       "additionalProperties": false

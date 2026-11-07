@@ -8,6 +8,7 @@ import java.util.function.Supplier;
 import convex.auth.did.DID;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -51,7 +52,8 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	public static final String IDENTITY_AUTH_REQUIRED = "An authenticated non-public caller is required";
 	public static final String IDENTITY_DIRECT_ONLY = "The caller must act under its own authority, or as a sub-principal; "
 		+ "a principal acting as itself under a restricted scope cannot mint its identity";
-	public static final String IDENTITY_NOT_OWNED = "The caller identity must be the venue signing key DID or nested beneath it";
+	public static final String IDENTITY_NOT_OWNED = "No key here signs for the caller identity: it must be the venue signing key DID, "
+		+ "a did:key whose key it holds in its own keyring, or nested beneath one of these";
 	public static final String IDENTITY_INPUT = "Expected an object containing only aud, name, lifetime and overwrite";
 	public static final String IDENTITY_AUDIENCE = "aud must be a target venue DID without a path, query or fragment";
 	public static final String IDENTITY_LIFETIME = "lifetime must be an integer from 1 to 3600 seconds";
@@ -154,6 +156,27 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	}
 
 	/** Issue identity evidence only; never accept caller-supplied claims or keys. */
+	/**
+	 * The key that signs an identity token for {@code caller}: its root's. The
+	 * venue's key for the venue's did:key and the identities nested below it;
+	 * otherwise the key a root did:key holds for itself in its own keyring
+	 * (HELD_KEYS.md, principle 4). Null when no key signs for it here.
+	 */
+	private AKeyPair identitySigner(RequestContext ctx, AString caller) {
+		AString venue = UCAN.toDIDKey(engine.getKeyPair().getAccountKey());
+		if (venue.equals(caller) || VenueAuthenticator.isNestedIdentity(caller, venue)) return engine.getKeyPair();
+		String s = caller.toString();
+		if (!s.startsWith(DID_KEY)) return null;
+		int nested = s.indexOf(':', DID_KEY.length());
+		AString root = (nested < 0) ? caller : Strings.create(s.substring(0, nested));
+		if (!root.equals(caller) && !VenueAuthenticator.isNestedIdentity(caller, root)) return null;
+		// With the crypto adapter disabled, no held key signs.
+		if (!(engine.getAdapter("crypto") instanceof CryptoAdapter crypto)) return null;
+		return crypto.identityKeyPair(ctx, root);
+	}
+
+	private static final String DID_KEY = "did:key:";
+
 	private ACell identityToken(RequestContext ctx, ACell input) {
 		AString caller = ctx == null ? null : ctx.getCallerDID();
 		if (caller == null || engine.isPublicPrincipal(caller) || engine.isPublicPrincipal(ctx.getUserDID())) {
@@ -168,10 +191,8 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		if (ctx.getCaps() != null && !ctx.isSubPrincipal()) {
 			throw new AuthException(IDENTITY_DIRECT_ONLY);
 		}
-		AString signer = UCAN.toDIDKey(engine.getKeyPair().getAccountKey());
-		if (!signer.equals(caller) && !VenueAuthenticator.isNestedIdentity(caller, signer)) {
-			throw new AuthException(IDENTITY_NOT_OWNED);
-		}
+		AKeyPair signer = identitySigner(ctx, caller);
+		if (signer == null) throw new AuthException(IDENTITY_NOT_OWNED);
 		// Pin the signing action, so custom metadata/aliases cannot bypass its grant.
 		engine.requireAuthority(ctx, IDENTITY_OP, INVOKE);
 		if (!(input instanceof AMap<?, ?> params)) throw new InvalidInputException(IDENTITY_INPUT);
@@ -196,7 +217,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 			throw new InvalidInputException(IDENTITY_OVERWRITE);
 		}
 		AString name = params.get(Fields.NAME) instanceof AString s ? s : null;
-		AString token = Strings.create(VenueAuth.namedKeyPair(engine.getKeyPair(),
+		AString token = Strings.create(VenueAuth.namedKeyPair(signer,
 			caller.toString(), lifetime).mintToken(audience.toString()));
 		// Reuse the secret/write gate, encrypted storage, collision handling and audit.
 		SecretAdapter.storeSecret(engine, ctx, name, token, CVMBool.TRUE.equals(params.get(OVERWRITE)));

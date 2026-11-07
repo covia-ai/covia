@@ -73,7 +73,7 @@ import covia.venue.User;
  * the secret store as {@code oauth/<provider>} move here on first access.
  * Deleting an account revokes its grants at their providers.</p>
  *
- * <p><b>Authority.</b> A connection is the resource {@code <did>/oauth/<provider>}:
+ * <p><b>Authority.</b> A connection is the resource {@code <did>/x/oauth/<provider>}:
  * {@code crud/read} to see it in {@code oauth:status}, {@code oauth/connect},
  * {@code oauth/disconnect}, and {@code oauth/use} to send its token, which an
  * {@code nb.url} caveat binds to a destination. The owner holds them all.</p>
@@ -106,8 +106,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	public static final String NAME = "oauth";
 
-	/** The resource segment of a connection: {@code <did>/oauth/<provider>}. */
-	public static final String RESOURCE_PREFIX = "oauth/";
+	/** The resource segment of a connection: {@code <did>/x/oauth/<provider>}, under the
+	 *  adapter's own {@code x/} space like all adapter-owned data. */
+	public static final String RESOURCE_PREFIX = "x/oauth/";
 
 	/** All of a user's connections, as a resource relative to the user. */
 	static final AString ALL_CONNECTIONS = Strings.intern(RESOURCE_PREFIX);

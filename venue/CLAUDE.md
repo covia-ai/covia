@@ -79,7 +79,7 @@ AUTH_REQUIRED).
 | `remoteagent` | Covia agent proxy on a local or remote venue; selected by `g/<id>/agent.adapter`, used through `agent:chat` / `agent:request` | internal transport |
 | `p2p` | The venue's Convex P2P node (`convex-p2p`), off unless `adapters.p2p.join`; peer list plus in-process change events, venue-owned (`docs/CONFIG.md#p2p-network-adaptersp2p`) | `peers`, `connect` |
 | `convex` | Convex blockchain, CAD3 conversion, and secret-backed Ed25519 keys | `query`, `transact`, `generate-key`, `sign`, `decode-cad3`, `encode-cad3` |
-| `crypto` | Local cryptography in Convex formats; secret-backed keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode` |
+| `crypto` | Local cryptography in Convex formats; secret-backed and held keys, JWTs and BIP39 phrases (see `docs/CONFIG.md#cryptography-crypto`) | `hash`, `generate-key`, `public-key`, `sign`, `verify`, `encrypt`, `decrypt`, `generate-mnemonic`, `validate-mnemonic`, `derive-key`, `jwt-sign`, `jwt-verify`, `jwt-decode`, `add-key`, `remove-key`, `list-keys` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
 | `a2a` | Agent-to-Agent protocol client — remote agent cards, tasks and message relay | `send`, `get-task`, `cancel`, `agent-card`, `import-agent` |
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `xai`, `deepseek`, `mistral`, `openrouter`, `models` |
@@ -308,7 +308,7 @@ java -jar target/covia.jar [config.json]
 - `docs/ERRORS.md` — how the venue raises, types and reports failures, and what each surface tells a caller
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
 - `docs/VENUE_AUTHORITY.md` — raising authority above a principal's base: allowances, activation, and the venue's power over the users it hosts (design)
-- `docs/HELD_KEYS.md` — keyrings of private keys the crypto adapter holds for the identities a venue hosts: store format, use and custody rules (design)
+- `docs/HELD_KEYS.md` — keyrings of private keys the crypto adapter holds for the identities a venue hosts: store format, use and custody rules
 - `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
   a user-signed, self-sovereign token for cross-venue access (covia#292)
 - `docs/SKILLS.md` — agent skill system

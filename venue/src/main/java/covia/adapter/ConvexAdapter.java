@@ -214,7 +214,7 @@ public class ConvexAdapter extends AAdapter {
 		if (source == null) throw new JobFailedException("No transaction source provided");
 		ACell code = Reader.read(source.toString());
 		if (code == null) throw new JobFailedException("Transaction source is empty");
-		return new Transaction(address, resolveKeyPair(ctx, input, false), code);
+		return new Transaction(address, transactionKeyPair(ctx, input), code);
 	}
 
 	private CompletableFuture<ACell> executeQuery(Convex convex, Query request) {
@@ -315,6 +315,16 @@ public class ConvexAdapter extends AAdapter {
 			throw new IllegalStateException("Generated invalid CAD3 encoding", e);
 		}
 		return Maps.of(K_ENCODING, Strings.create("0x" + encoding.toHexString()));
+	}
+
+	public static final String KEY_OR_SEED = "Give either seed or key, not both";
+
+	/** A transaction's signer: a held {@code key}, used under {@code key/sign/convex}, or its {@code seed}. */
+	private AKeyPair transactionKeyPair(RequestContext ctx, ACell input) {
+		ACell key = RT.getIn(input, Fields.KEY);
+		if (key == null) return resolveKeyPair(ctx, input, false);
+		if (RT.getIn(input, Fields.SEED) != null) throw new InvalidInputException(KEY_OR_SEED);
+		return CryptoAdapter.of(engine).heldKeyPair(ctx, key, covia.api.Abilities.KEY_SIGN_CONVEX);
 	}
 
 	/** Resolves a transaction/signing seed. Transactions retain literal-seed

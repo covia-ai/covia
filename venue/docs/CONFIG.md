@@ -306,7 +306,9 @@ Per venue (`logging`, both default `false`):
   logins (`login`), token issue (`token.issued`), user and key administration
   (`user.create`, `user.sudo`, `auth.key.add`, `auth.key.revoke`), secret
   writes, deletions and extraction attempts (`secret.write`, `secret.delete`,
-  `secret.extract`, names and outcomes only), and venue administration
+  `secret.extract`, names and outcomes only), held keys put into, removed
+  from or used from a keyring (`keyring.add`, `keyring.remove`,
+  `keyring.use`, by holder and public key), and venue administration
   (`venue.gc`, `venue.restart`, `venue.admin`). Events carry DIDs, the client
   address, names, outcomes and refusal reasons — never a token, secret value,
   email or content — so they can be kept longer than operational logs.
@@ -1465,16 +1467,19 @@ the agent instruction/tool bundle is `v/skills/crypto/crypto`.
 | Operation | Input | Result |
 |-----------|-------|--------|
 | `hash` | blob `data`, optional string `encoding`, `algorithm` | `algorithm`, native `digest` blob |
-| `generate-key` | secret `name`, optional `overwrite` | `secret`, public `accountKey`, `did` |
+| `generate-key` | secret `name`, or `keyring: true` with optional `label`; optional `overwrite` | `secret` (not for the keyring), public `accountKey`, `did` |
 | `public-key` | `seed` secret reference | public `accountKey`, `did` |
-| `sign` | `seed` reference, `data`, optional `encoding` | public `accountKey`, `did`, detached `signature` |
+| `sign` | `seed` reference or held `key`, `data`, optional `encoding` | public `accountKey`, `did`, detached `signature` |
 | `verify` | `accountKey`, `signature`, `data`, optional `encoding` | `valid` (false for signature mismatch; malformed input fails) |
 | `encrypt` | recipient `accountKey`, blob `data`, optional string `encoding` | native `ciphertext` blob, `encoding: blob` |
-| `decrypt` | `seed` reference, blob `ciphertext`, optional output `encoding`, destination `name`, `overwrite` | `secret` when a name is supplied, otherwise native plaintext `data` by default; plus `encoding` |
-| `generate-mnemonic` | secret `name`, optional `words`, `overwrite` | `secret`, `words`; phrase remains encrypted |
-| `validate-mnemonic` | `mnemonic` secret reference | `valid`, without revealing words |
-| `derive-key` | `mnemonic` reference, destination `name`, optional `path`, `passphraseSecret`, `overwrite` | `secret`, public `accountKey`, `did`, effective hardened `path` |
-| `jwt-sign` | `seed` reference, `claims` map, optional `kid`, destination `name`, `overwrite` | public `accountKey`, `did`, and compact `token` or stored `secret` reference |
+| `decrypt` | `seed` reference or held `key`, blob `ciphertext`, optional output `encoding`, destination `name`, `overwrite` | `secret` when a name is supplied, otherwise native plaintext `data` by default; plus `encoding` |
+| `generate-mnemonic` | secret `name`, or `keyring: true` with optional `label`; optional `words`, `overwrite` | `secret`, or for the keyring the phrase's `did`; `words`; the phrase is never returned |
+| `validate-mnemonic` | `mnemonic` secret reference or held mnemonic | `valid`, without revealing words |
+| `derive-key` | `mnemonic` reference or held mnemonic, destination `name` or `keyring: true` (only the keyring for a held mnemonic), optional `label`, `path`, `passphraseSecret`, `overwrite` | `secret` (not for the keyring), public `accountKey`, `did`, effective hardened `path` |
+| `jwt-sign` | `seed` reference or held `key`, `claims` map, optional `kid`, destination `name`, `overwrite` | public `accountKey`, `did`, and compact `token` or stored `secret` reference |
+| `add-key` | `seed` or `mnemonic`, a reference to your own secret; optional `label`, `overwrite` (replaces the label of one already held) | a key's `accountKey` and `did`, or a phrase's `did` and `words` |
+| `remove-key` | held `key` or `mnemonic` | `removed` |
+| `list-keys` | optional `did` (default yours), `offset`, `limit` | `keys` (`accountKey`, `did`, `label`, `addedAt`), `mnemonics` (`did`, `label`, `addedAt`), `total`, `offset`, `nextOffset` while more remain |
 | `jwt-verify` | `token` or `tokenSecret` reference, trusted `accountKey`, optional `expectedIssuer`, `expectedAudience`, `requireExpiration` | `valid`; on success `header`, `claims`; on rejection `reason` without claims |
 | `jwt-decode` | `token` or `tokenSecret` reference | `verified: false`, unverified `header`, `claims`, native `signature` blob |
 
@@ -1615,7 +1620,7 @@ registration. A custom hierarchy such as `m/7/1234567/2147483647` also works;
 the same hardened Ed25519 derivation applies to every valid path.
 
 Private inputs (`seed`, `mnemonic`, `passphraseSecret`) accept secret references
-only. Import through the existing secret-store boundary, not through crypto
+only, or for `key` and `mnemonic` a held key or phrase (below). Import through the existing secret-store boundary, not through crypto
 tool arguments or prompts. Resolution uses `Engine.resolveSecret` with the
 request context. Own-user access follows the existing secret-use rules;
 cross-user references require `secret/use`, and URL-bound grants cannot be
@@ -1637,6 +1642,25 @@ upstream crypto APIs use immutable strings and managed memory, so the adapter
 does not promise deterministic memory erasure. Human recovery-phrase display
 and backup/export require a separate trusted interface; these agent operations
 do not expose plaintext phrases or enable `secret:extract`.
+
+#### Held keys
+
+A keyring holds keys and phrases the venue uses for an identity but never
+returns ([HELD_KEYS.md](./HELD_KEYS.md)). `add-key {"seed":"s/SIGNER"}` copies
+a seed from one of your own secrets into your keyring; delete the secret if the
+keyring copy should be the only one. `generate-key {"keyring":true}` makes a
+key there whose private half nobody ever sees. Name a held key by its
+`did:key`, multibase key or `0x` account key, as in
+`sign {"key":"did:key:z6Mk…","data":"0x…"}`, or another holder's as
+`<did>/x/crypto/keys/<key>`. Each use needs its `key/…` ability on the key by the
+standard capability rules: your own authority covers your keyring, and caps,
+`user/sudo` and grants work as for any resource, so a grant of `*` over a
+namespace includes its keys. An agent has a keyring of its own, under its own
+DID, which goes when the agent is deleted. A phrase kept with
+`generate-mnemonic {"keyring":true}` derives keys only into its holder's
+keyring. A did:key that holds its own key signs `auth:identity-token` for
+itself and the identities nested below it; `ucan:issue` and `convex:transact`
+take a held `key` too.
 
 ## Connected accounts (`adapters.oauth`)
 
@@ -1722,12 +1746,14 @@ the venue no longer holds. Providers and default scopes are published at
 `v/info/adapters/oauth`; the `v/skills/auth/oauth` skill teaches agents the
 flow.
 
-A connection is the resource `<did>/oauth/<provider>`, which its owner holds
-outright. A capability-scoped caller such as an agent needs, on it:
+A connection is the resource `<did>/x/oauth/<provider>`, in the adapter's own
+`x/` space, which its owner holds outright. The `bearerSecret` reference stays
+`oauth/<provider>`. A capability-scoped caller such as an agent needs, on the
+resource:
 
 - `oauth/use` to attach its token, which an `nb.url` caveat limits to a
   destination;
-- `crud/read` for `oauth:status` (on `oauth/` to list them all);
+- `crud/read` for `oauth:status` (on `x/oauth/` to list them all);
 - `oauth/connect` (for `oauth:connect` and `oauth:complete`) and
   `oauth/disconnect`, which a `crud` grant does not cover;
 - or `oauth`, which covers all of these.

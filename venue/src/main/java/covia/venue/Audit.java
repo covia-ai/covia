@@ -44,6 +44,11 @@ public final class Audit {
 	public static final String SECRET_WRITE = "secret.write";
 	public static final String SECRET_DELETE = "secret.delete";
 	public static final String SECRET_EXTRACT = "secret.extract";
+	/** A key or mnemonic put into a keyring (HELD_KEYS.md). */
+	public static final String KEYRING_ADD = "keyring.add";
+	public static final String KEYRING_REMOVE = "keyring.remove";
+	/** A held key or mnemonic used: signing, decrypting or deriving. */
+	public static final String KEYRING_USE = "keyring.use";
 	public static final String VENUE_GC = "venue.gc";
 	public static final String VENUE_RESTART = "venue.restart";
 	public static final String VENUE_ADMIN = "venue.admin";
@@ -62,6 +67,11 @@ public final class Audit {
 	public static final String K_TARGET = "target";
 	public static final String K_NAME = "name";
 	public static final String K_OPERATION = "operation";
+	/** The identity whose keyring an event touched. */
+	public static final String K_HOLDER = "holder";
+	/** A held key or mnemonic, by its public key in multibase form. */
+	public static final String K_KEY = "key";
+	public static final String K_ABILITY = "ability";
 	/** Same key the request log puts in the MDC. */
 	public static final String K_REQUEST_ID = "requestId";
 

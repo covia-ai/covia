@@ -152,30 +152,35 @@ public class AgentRunLoopIdentityTest {
 	 * A <b>fully empowered</b> agent — no {@code config.caps}, so the null-scope
 	 * fast path in {@code authorityCovers} short-circuits every scope check — is
 	 * still not its owner. The guards that matter are pinned to <em>identity</em>,
-	 * not to scope, so an unrestricted scope cannot reach past them.
+	 * not to scope, so an unrestricted scope cannot reach past them: it grants
+	 * what is its own, never its owner's.
 	 */
 	@Test
-	public void testFullyEmpoweredAgentStillCannotGrant() {
+	public void testFullyEmpoweredAgentGrantsOnlyItsOwn() throws Exception {
 		AString agentId = Strings.create("empowered");
+		engine.getVenueState().users().ensure(ALICE_DID);
 		RequestContext agentCtx = RequestContext.ofAgent(ALICE_DID, agentId);
 		assertNull(agentCtx.getCaps(), "precondition: an unrestricted agent");
+		AString agentDID = Principals.agentDID(ALICE_DID, agentId);
 
 		// It can act freely inside its owner's namespace — that is what
 		// "fully empowered" means, and it must keep working.
 		assertNotNull(engine.jobs()
 			.invokeOperation("v/test/ops/echo", Maps.of(), agentCtx).awaitResult(5000));
 
-		// But it cannot mint capability grants, directly...
-		AuthException direct = assertThrows(AuthException.class, () ->
-			unwrap(() -> engine.jobs().invokeInternal("v/ops/ucan/issue",
-				Maps.of(Strings.create("aud"), ALICE_DID,
-					Strings.create("att"), Vectors.of(
-						Maps.of(Strings.create("with"), Strings.create("w/"),
-							Strings.create("can"), Strings.create("crud/write"))),
-					Strings.create("exp"),
-					CVMLong.create(System.currentTimeMillis() / 1000 + 600)),
-				agentCtx).get(5, TimeUnit.SECONDS)));
-		assertTrue(direct.getMessage().contains("Agents cannot issue capability grants"));
+		// It grants its own resources...
+		ACell own = engine.jobs().invokeInternal("v/ops/ucan/issue",
+			issueInput(BOB_DID, Strings.create(agentDID + "/x/crypto/keys/"), "key/sign"),
+			agentCtx).get(5, TimeUnit.SECONDS);
+		assertNotNull(convex.core.lang.RT.getIn(own, "token"));
+
+		// ...but not its owner's, by a bare path or named...
+		for (AString ownerPath : new AString[] {Strings.create("w/"), Strings.create(ALICE_DID + "/w/")}) {
+			AuthException direct = assertThrows(AuthException.class, () ->
+				unwrap(() -> engine.jobs().invokeInternal("v/ops/ucan/issue",
+					issueInput(ALICE_DID, ownerPath, "crud/write"), agentCtx).get(5, TimeUnit.SECONDS)));
+			assertTrue(direct.getMessage().contains(UCANAdapter.NO_GRANTING_RIGHT), direct.getMessage());
+		}
 
 		// ...nor by answering its owner's HITL inbox, which would launder a
 		// self-approved grant through the human-in-the-loop surface.
@@ -185,6 +190,46 @@ public class AgentRunLoopIdentityTest {
 					Strings.create("outcome"), Strings.create("answer")),
 				agentCtx).get(5, TimeUnit.SECONDS)));
 		assertTrue(viaHitl.getMessage().contains("Agents cannot answer HITL requests"));
+	}
+
+	/**
+	 * An agent confers only what it holds: one whose scope stops at its owner's
+	 * {@code w/} cannot have the venue grant its own keyring, though the keyring
+	 * is its own. Its owner, whose agent it is, can.
+	 */
+	@Test
+	public void testRestrictedAgentCannotGrantBeyondItsScope() throws Exception {
+		AString agentId = Strings.create("restricted");
+		engine.getVenueState().users().ensure(ALICE_DID);
+		RequestContext agentCtx = RequestContext.ofAgent(ALICE_DID, agentId)
+			.withCaps(Vectors.of(
+				Maps.of(Strings.create("with"), Strings.create("v/ops/ucan/issue"),
+					Strings.create("can"), Strings.create("invoke")),
+				Maps.of(Strings.create("with"), Strings.create("w/"),
+					Strings.create("can"), Strings.create("crud/read"))));
+		AString keyring = Strings.create(Principals.agentDID(ALICE_DID, agentId) + "/x/crypto/keys/");
+
+		AuthException denied = assertThrows(AuthException.class, () ->
+			unwrap(() -> engine.jobs().invokeInternal("v/ops/ucan/issue",
+				issueInput(BOB_DID, keyring, "key/sign"), agentCtx).get(5, TimeUnit.SECONDS)));
+		assertTrue(denied.getMessage().contains(Engine.CONFERRAL_DENIED), denied.getMessage());
+
+		ACell byOwner = engine.jobs().invokeInternal("v/ops/ucan/issue",
+			issueInput(BOB_DID, keyring, "key/sign"), RequestContext.of(ALICE_DID)).get(5, TimeUnit.SECONDS);
+		assertNotNull(convex.core.lang.RT.getIn(byOwner, "token"),
+			"the owner grants on its agent's behalf");
+
+		AuthException stranger = assertThrows(AuthException.class, () ->
+			unwrap(() -> engine.jobs().invokeInternal("v/ops/ucan/issue",
+				issueInput(BOB_DID, keyring, "key/sign"), RequestContext.of(BOB_DID)).get(5, TimeUnit.SECONDS)));
+		assertTrue(stranger.getMessage().contains(UCANAdapter.NO_GRANTING_RIGHT), stranger.getMessage());
+	}
+
+	private static AMap<AString, ACell> issueInput(AString aud, AString with, String can) {
+		return Maps.of(Strings.create("aud"), aud,
+			Strings.create("att"), Vectors.of(Maps.of(Strings.create("with"), with,
+				Strings.create("can"), Strings.create(can))),
+			Strings.create("exp"), CVMLong.create(System.currentTimeMillis() / 1000 + 600));
 	}
 
 	/** Runs {@code body}, rethrowing the underlying cause so assertThrows sees the

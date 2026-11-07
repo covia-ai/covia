@@ -97,6 +97,7 @@ import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
+import covia.venue.auth.VenueAuthenticator;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.FileStorage;
 import covia.venue.storage.MemoryStorage;
@@ -3273,16 +3274,6 @@ public class Engine {
 		return userNameBelow(did, base);
 	}
 
-	/**
-	 * A venue-issued user below this venue's actual identity. Personal venues
-	 * sign login identities such as {@code did:key:...:u:alice}; this does not
-	 * make did:key a generally routable namespace, but it does make the venue
-	 * authoritative for the exact subjects it issued itself.
-	 */
-	private boolean isVenueIssuedUserDID(AString did) {
-		return userNameBelow(did, getDIDString()) != null;
-	}
-
 	/** One valid username segment immediately below an exact DID base. */
 	private static AString userNameBelow(AString did, AString base) {
 		if (base == null || did == null) return null;
@@ -3295,23 +3286,43 @@ public class Engine {
 	}
 
 	/**
-	 * Root-authority policy for resources enforced by this venue.
+	 * Root-authority policy for resources enforced by this venue: who may sign
+	 * the root of a grant over a resource (UCAN.md, "Roots"). There are two
+	 * kinds of root and no others:
 	 *
-	 * <p>Self-sovereign owners root their own grants. The venue may additionally
-	 * attest only for user DIDs it issued directly below its own identity. This
-	 * includes the venue-signed {@code did:key:...:u:name} subjects used by a
-	 * personal venue as well as named {@code did:web} users. Merely registering
-	 * an arbitrary external DID does not transfer control of that identity.</p>
+	 * <ul>
+	 * <li><b>An identity</b>, for its own resources and those of every identity
+	 * this venue accepts it as signing in as: a {@code did:key} and the
+	 * identities nested below it ({@link VenueAuthenticator#signsInAs}).</li>
+	 * <li><b>This venue</b>, for everything it hosts ({@link #isHosted}). Its
+	 * grants count only here: no other venue accepts it as a root.</li>
+	 * </ul>
+	 *
+	 * <p>Being a root confers nothing by itself: a root reaches another
+	 * identity's resources only by presenting a grant it signed.</p>
 	 */
 	public RootAuthorityPolicy rootAuthorityPolicy() {
 		AString venueDID = getDIDString();
 		return RootAuthorityPolicy.SELF_SOVEREIGN.or((root, resource) -> {
-			if (!venueDID.equals(root) || resource == null) return false;
-			DID owner = RootAuthorityPolicy.ownerDID(resource);
-			if (owner == null) return false;
-			AString ownerDID = Strings.create("did:" + owner.getMethod() + ":" + owner.getID());
-			return isManagedUserDID(ownerDID) || isVenueIssuedUserDID(ownerDID);
+			// The owner as written, as users are keyed and grants are matched:
+			// a differently encoded DID names nothing hosted here.
+			AString owner = ownerOf(resource);
+			if (root == null || owner == null) return false;
+			if (VenueAuthenticator.signsInAs(root, owner)) return true;
+			return venueDID.equals(root) && isHosted(owner);
 		});
+	}
+
+	/**
+	 * Whether this venue hosts the owner of {@code resource} (a DID or a DID
+	 * URL): it keeps a user record for it, or it is one of the venue's own
+	 * namespaces ({@link #isLocalDIDResource}), or it is an agent of one of those.
+	 */
+	public boolean isHosted(AString resource) {
+		AString owner = ownerOf(resource);
+		if (owner == null) return false;
+		if (isLocalDIDResource(owner)) return true;
+		return covia.grid.Principals.isAgentDID(owner) && isLocalDIDResource(covia.grid.Principals.userOf(owner));
 	}
 
 	/** Evaluate presented proofs under this venue's complete root policy. */
@@ -3415,6 +3426,23 @@ public class Engine {
 		}
 		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
 		return deleted.tombstone();
+	}
+
+	/**
+	 * Removes, in one transaction, what every registered adapter, enabled or
+	 * not, holds for the deleted agent {@code agentDID}
+	 * ({@link AAdapter#deleteAgentState}): its own keyring, for one. Agent
+	 * deletion calls it each time, so a later agent given the same id starts
+	 * with nothing of its predecessor's.
+	 */
+	public void deleteAgentState(AString agentDID) {
+		java.util.Map<String, AAdapter> registered;
+		synchronized (this) {
+			registered = new java.util.LinkedHashMap<>(disabledAdapters);
+			registered.putAll(adapters);
+		}
+		venueState.transact(draft -> registered.forEach((name, adapter) ->
+			adapter.deleteAgentState(agentDID, draft.adapterState(name))));
 	}
 
 	private void finishCoreUserDeletion(AString did, covia.grid.Job deletingJob) {
@@ -3842,9 +3870,10 @@ public class Engine {
 	 * public / venue-catalog policy). A cross-user resource the caller has no
 	 * rights to is a <b>denial</b>, never a silent miss.
 	 *
-	 * <p>Returns the DID whose namespace the operation targets — the caller's own
-	 * for an own/bare resource, the named owner for an authorised cross-user
-	 * access — so a read serves, and a write lands in, exactly the right store.
+	 * <p>Returns the DID whose namespace the operation targets — the named owner
+	 * of an explicit {@code did:…/} resource (the caller's own, an agent's own
+	 * DID, or another principal's it is authorised for), the request's namespace
+	 * for a bare one — so a read serves, and a write lands in, exactly the right store.
 	 * Callers that locate the target separately (e.g. via {@code resolveDIDURL})
 	 * may ignore the return.</p>
 	 *
@@ -3863,7 +3892,8 @@ public class Engine {
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ownedByCaller(ctx, resource)) {
 			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
-			return (ctx != null) ? ctx.getUserDID() : null;
+			AString owner = ownerOf(resource);
+			return (owner != null) ? owner : (ctx != null) ? ctx.getUserDID() : null;
 		}
 		if (!crossUserAllows(ctx, resource, ability, destination)) {
 			convex.core.data.AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
@@ -3881,8 +3911,9 @@ public class Engine {
 	 * Common point-of-action gate for a resource that may be either caller-owned,
 	 * another principal on this venue, or a remote/scheme reference.
 	 *
-	 * <p>Absolute DID resources belonging to a principal whose user record lives
-	 * here go through {@link #requireLocalAccess}; this prevents the null-scope
+	 * <p>Absolute DID resources belonging to a principal this venue hosts
+	 * ({@link #isHosted}: a user, the venue's own namespaces, or an agent of
+	 * one) go through {@link #requireLocalAccess}; this prevents the null-scope
 	 * own-resource fast path from authorising a different local user's data.
 	 * Bare, scheme-qualified and genuinely remote resources use the normal
 	 * capability seam.</p>
@@ -3893,7 +3924,7 @@ public class Engine {
 
 	/** As above for a use that sends the resource's value to {@code destination}. */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (isLocalDIDResource(resource)) {
+		if (isHosted(resource)) {
 			requireLocalAccess(ctx, resource, ability, destination);
 		} else {
 			requireAuthority(ctx, resource, ability, destination);
@@ -4197,21 +4228,21 @@ public class Engine {
 	public static final String NO_SUCH_AGENT = "%s is not an agent here";
 
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
-	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
-	 *  {@code did:<other>/…} path is another principal's. Owner = the DID prefix
-	 *  before the first {@code /}, compared to the caller's namespace by equality. */
+	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…},
+	 *  where self is the namespace the request acts in or the principal that
+	 *  acts (an agent's own DID). A {@code did:<other>/…} path is another
+	 *  principal's. Owner = the DID prefix before the first {@code /}, compared
+	 *  by equality. */
 	private static boolean ownedByCaller(RequestContext ctx, AString resource) {
 		if (resource == null || ctx == null) return true;
-		String s = resource.toString();
-		if (!s.startsWith("did:")) return true;
-		int slash = s.indexOf('/');
-		AString owner = Strings.create(slash < 0 ? s : s.substring(0, slash));
-		return owner.equals(ctx.getUserDID());
+		AString owner = ownerOf(resource);
+		if (owner == null) return true;
+		return owner.equals(ctx.getUserDID()) || owner.equals(ctx.getCallerDID());
 	}
 
 	/** The owner DID of a {@code did:<owner>/…} resource (prefix before the first
 	 *  {@code /}), or null for a bare/relative resource. */
-	private static AString ownerOf(AString resource) {
+	public static AString ownerOf(AString resource) {
 		if (resource == null) return null;
 		String s = resource.toString();
 		if (!s.startsWith("did:")) return null;

@@ -24,10 +24,14 @@
 				"seed": {
 					"type": "string",
 					"secret":true,
-					"description": "An s/<name> secret reference containing the Ed25519 seed. A literal hexadecimal seed is accepted only for compatibility."
+					"description": "An s/<name> secret reference containing the Ed25519 seed. A literal hexadecimal seed is accepted only for compatibility. Give this or key."
+				},
+				"key": {
+					"type": "string",
+					"description": "A held key to sign with instead of seed: its did:key, multibase public key or 0x account key in your keyring, or <did>/x/crypto/keys/<key> in another holder's. Needs key/sign/convex on it."
 				}
 			},
-			"required": ["address", "source", "seed"],
+			"required": ["address", "source"],
 			"additionalProperties": false
 		},
 		"output": {

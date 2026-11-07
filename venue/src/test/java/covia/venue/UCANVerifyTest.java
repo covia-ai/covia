@@ -108,6 +108,17 @@ public class UCANVerifyTest {
 	}
 
 	@Test
+	public void testRootOverANestedIdentityVerifiesAsOwnerRooted() {
+		// Alice signs in as her agent, so she is its root: an identity root, not the venue's.
+		String jwt = UcanTokens.grant(ALICE_KP, BOB_DID.toString(),
+			ALICE_DID + ":g:helper/x/crypto/keys/", "key/sign", 3600);
+
+		ACell r = verify(Maps.of("token", jwt));
+		AVector<?> att = RT.ensureVector(RT.getIn(r, "att"));
+		assertEquals(Strings.create("owner"), RT.getIn(att.get(0), "rootAuthority"));
+	}
+
+	@Test
 	public void testThirdPartyRootIsRefused() {
 		// Bob signs a "grant" over ALICE's namespace — valid signature, but
 		// Bob is neither the owner nor the venue: the capability is refused.

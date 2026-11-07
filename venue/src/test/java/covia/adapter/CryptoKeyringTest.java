@@ -96,19 +96,19 @@ class CryptoKeyringTest {
 		assertEquals(0, CryptoKeyring.entries(state.get(), alice, Kind.KEY).count());
 	}
 
-	@Test void deletingAHolderTakesItsNestedIdentitiesNotItsNeighbours() {
+	@Test void deletingAUserTakesItsAgentsKeyringsNotOtherUsers() {
 		AdapterState state = state();
 		SecretStore.Keys keys = CryptoKeyring.keys(engine.getKeyPair());
-		String[] holders = {"did:key:zA", "did:key:zA:u:alice", "did:key:zA0", "did:key:zAb"};
-		for (String h : holders) {
+		String[] gone = {"did:key:zA", "did:key:zA:g:helper"};
+		String[] kept = {"did:key:zA:u:alice", "did:key:zA:u:alice:g:helper", "did:key:zA0", "did:key:zAb"};
+		for (String[] group : new String[][] {gone, kept}) for (String h : group) {
 			AKeyPair pair = AKeyPair.generate();
 			AString holder = Strings.create(h);
 			CryptoKeyring.put(state, holder, Kind.KEY, CryptoKeyring.id(pair.getAccountKey()), keyRecord(keys, holder, pair), false);
 		}
 		new CryptoAdapter().deleteUserState(Strings.create("did:key:zA"), state);
-		assertEquals(0, CryptoKeyring.entries(state.get(), Strings.create("did:key:zA"), Kind.KEY).count());
-		assertEquals(0, CryptoKeyring.entries(state.get(), Strings.create("did:key:zA:u:alice"), Kind.KEY).count());
-		assertEquals(1, CryptoKeyring.entries(state.get(), Strings.create("did:key:zA0"), Kind.KEY).count());
-		assertEquals(1, CryptoKeyring.entries(state.get(), Strings.create("did:key:zAb"), Kind.KEY).count());
+		for (String h : gone) assertEquals(0, CryptoKeyring.entries(state.get(), Strings.create(h), Kind.KEY).count(), h);
+		// A user nested below is a user of its own, with its own agents.
+		for (String h : kept) assertEquals(1, CryptoKeyring.entries(state.get(), Strings.create(h), Kind.KEY).count(), h);
 	}
 }
