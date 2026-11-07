@@ -1,7 +1,6 @@
 package covia.venue;
 
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.UnaryOperator;
 
 import convex.auth.did.DID;
@@ -105,15 +104,13 @@ public final class AuthState extends ACoviaComponent<AMap<AString, AMap<AString,
 	 */
 	public boolean ensureManagedUser(AString id, AString did) {
 		CVMLong timestamp = getContext().currentTimestamp();
-		AtomicBoolean created = new AtomicBoolean(false);
-		cursor().updateAndGet(current -> {
+		ACell before = cursor().getAndUpdate(current -> {
 			@SuppressWarnings("unchecked")
 			AMap<AString, AMap<AString, ACell>> users =
 				(AMap<AString, AMap<AString, ACell>>) (AMap<?, ?>) RT.castMap(current);
 			if (users == null) users = Maps.empty();
 			AMap<AString, ACell> existing = users.get(id);
 			if (existing != null) {
-				created.set(false);
 				AString stored = RT.ensureString(existing.get(Fields.DID));
 				if (!did.equals(stored)) {
 					throw new ConflictException("Named user " + id
@@ -121,12 +118,12 @@ public final class AuthState extends ACoviaComponent<AMap<AString, AMap<AString,
 				}
 				return users;
 			}
-			created.set(true);
 			AMap<AString, ACell> record = stampUser(
 				Maps.of(Fields.DID, did, Fields.NAME, id), null, timestamp);
 			return users.assoc(id, record);
 		});
-		return created.get();
+		AMap<?, ?> previous = RT.castMap(before);
+		return previous == null || previous.get(id) == null;
 	}
 
 	/** Public authenticator lifecycle records for one named user. */

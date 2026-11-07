@@ -1,7 +1,6 @@
 package covia.venue;
 
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import convex.core.crypto.AESGCM;
 import convex.core.crypto.AKeyPair;
@@ -184,18 +183,13 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 	public boolean storeIfAbsent(AString name, AString plaintext, Keys keys) {
 		AMap<AString, ACell> record = record(encrypt(plaintext, keys),
 			getContext().currentTimestamp());
-		AtomicBoolean wrote = new AtomicBoolean(false);
-		cursor().updateAndGet(current -> {
+		ACell before = cursor().getAndUpdate(current -> {
 			AMap m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
-			if (m.containsKey(name)) {
-				wrote.set(false);
-				return m;
-			}
-			wrote.set(true);
-			return m.assoc(name, record);
+			return m.containsKey(name) ? m : m.assoc(name, record);
 		});
-		return wrote.get();
+		AMap previous = RT.castMap(before);
+		return previous == null || !previous.containsKey(name);
 	}
 
 	/**

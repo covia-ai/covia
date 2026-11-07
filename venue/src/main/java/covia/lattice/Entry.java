@@ -74,19 +74,9 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 * @return Whether a value was here already
 	 */
 	public boolean write(ACell value) {
-		boolean[] existed = {false};
-		if (keys.length == 0) {
-			cursor().getAndUpdate(current -> {
-				existed[0] = current != null;
-				return value;
-			});
-		} else {
-			changeAbove(container -> {
-				existed[0] = holds(container, last());
-				return put(container, last(), value);
-			});
-		}
-		return existed[0];
+		if (keys.length == 0) return cursor().getAndUpdate(current -> value) != null;
+		ACell before = changeAbove(container -> put(container, last(), value), false);
+		return holds(before, last());
 	}
 
 	/**
@@ -97,12 +87,8 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 */
 	public ACell update(UnaryOperator<ACell> change) {
 		if (keys.length == 0) return cursor().updateAndGet(change);
-		ACell[] result = {null};
-		changeAbove(container -> {
-			result[0] = change.apply(valueIn(container, last()));
-			return put(container, last(), result[0]);
-		});
-		return result[0];
+		ACell after = changeAbove(container -> put(container, last(), change.apply(valueIn(container, last()))), true);
+		return valueIn(after, last());
 	}
 
 	/**
@@ -122,24 +108,16 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public boolean delete() {
-		boolean[] removed = {false};
-		if (keys.length == 0) {
-			cursor().getAndUpdate(current -> {
-				removed[0] = current != null;
-				return null;
-			});
-			return removed[0];
-		}
+		if (keys.length == 0) return cursor().getAndUpdate(current -> null) != null;
 		if (resolved.refusal() != null) return false;
-		above.updateAndGet(container -> {
-			removed[0] = holds(container, last());
-			if (!removed[0]) return container;
+		ACell before = above.getAndUpdate(container -> {
+			if (!holds(container, last())) return container;
 			if (container instanceof AVector<?> list) {
 				return ((AVector<ACell>) list).assoc(((CVMLong) keys[last()]).longValue(), null);
 			}
 			return ((AMap<ACell, ACell>) container).dissoc(keys[last()]);
 		});
-		return removed[0];
+		return holds(before, last());
 	}
 
 	/**
@@ -175,12 +153,8 @@ public final class Entry extends ACoviaComponent<ACell> {
 	int createLevels(int count) {
 		refuseUnreachable();
 		if (count < 1) return 0;
-		int[] created = {0};
-		area.cursor().updateAndGet(root -> {
-			created[0] = 0;
-			return createBelow(root == null ? Maps.empty() : root, 0, count, created);
-		});
-		return created[0];
+		ACell before = area.cursor().getAndUpdate(root -> createBelow(root == null ? Maps.empty() : root, 0, count));
+		return absentLevels(before, count);
 	}
 
 	/**
@@ -209,26 +183,39 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 * Changes the level above this entry in one atomic update. An absent
 	 * workspace root counts as an empty map; any other missing level is refused.
 	 * {@code edit} returns the level it is given when nothing changes.
+	 *
+	 * @return The level after the change when {@code after}, otherwise before it
 	 */
-	private void changeAbove(UnaryOperator<ACell> edit) {
+	private ACell changeAbove(UnaryOperator<ACell> edit, boolean after) {
 		refuseUnreachable();
-		above.updateAndGet(value -> {
+		UnaryOperator<ACell> step = value -> {
 			ACell container = (value == null && keys.length == 1) ? Maps.empty() : value;
 			if (container == null) throw noLevel();
 			ACell changed = edit.apply(container);
 			return changed == container ? value : changed;
-		});
+		};
+		return after ? above.updateAndGet(step) : above.getAndUpdate(step);
 	}
 
 	/** {@code node}, the value at level {@code i}, with the levels below it created down to level {@code count}. */
-	private ACell createBelow(ACell node, int i, int count, int[] created) {
+	private ACell createBelow(ACell node, int i, int count) {
 		if (i >= count) return node;
 		ACell child = valueIn(node, i);
-		if (child == null) {
-			child = Maps.empty();
-			created[0]++;
+		return put(node, i, createBelow((child == null) ? Maps.empty() : child, i + 1, count));
+	}
+
+	/**
+	 * How many of the first {@code count} levels under {@code root} hold
+	 * nothing: those {@link #createBelow} creates. Below the first such level
+	 * every level is absent too.
+	 */
+	private int absentLevels(ACell root, int count) {
+		ACell node = root;
+		for (int i = 0; i < count; i++) {
+			node = valueIn(node, i);
+			if (node == null) return count - i;
 		}
-		return put(node, i, createBelow(child, i + 1, count, created));
+		return 0;
 	}
 
 	/** Whether {@code container} holds key {@code i} as the kind of value it was resolved against. */
