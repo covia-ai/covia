@@ -12,7 +12,7 @@ Tracked by covia#660.
 |------|---------|
 | Base | The authority a context starts with: a user's own authority; for an agent with no caps, its owner's; for an agent with caps, exactly those caps; for the venue, its own resources |
 | Addition | Authority added to the base for a request: a grant it presents, or an allowance it activates |
-| Allowance | A standing grant, kept by the venue, that confers nothing until its holder activates it |
+| Allowance | A standing right, kept by the venue as a record separate from grants, that confers nothing until its holder activates it |
 | Activation | An explicit request to add an allowance's privileges to a context for one request or job and everything it starts |
 | Own right | What a principal may do from its base, plus the venue's dormant power over its users. A grant or allowance received from someone else is not own right |
 
@@ -29,9 +29,12 @@ Tracked by covia#660.
   grant covering `<venueDID>/<resource>`. The scope is not read.
 - **The venue context.** `Engine.venueContext()` is the venue as caller. About
   two dozen call sites in this repository use it for the venue's own secrets,
-  its own records and start-up work. It does not reach a user's namespace on
-  its own: acting as a user (`Engine.sudoContext`) needs `user/sudo` on that
-  user, rooted by the user or, for a custodial user, by the venue.
+  its own records and start-up work. It reaches a user's namespace only as any
+  other caller does, through grants or an agent's admission policy
+  (`Engine.crossUserAllows`). Acting as a user (`Engine.sudoContext`) needs
+  `user/sudo` on that user, rooted by the user or, for a custodial user, by the
+  venue. Managing accounts, such as users' sign-in keys, is done on venue
+  resources.
 - **Issuing.** `ucan:issue` signs every grant. It roots grants over the
   venue's own resources and its custodial users' namespaces, and accepts any
   expiry or none. It does not check the issuer's caps when the issuer grants
