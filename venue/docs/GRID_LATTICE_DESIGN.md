@@ -390,7 +390,7 @@ from its own cursor, so a walk from a draft root stays in the draft.
 |-----------|--------|
 | `VenueState` | a path's first segment, its owner's DID, to `Users`; `x/<adapter>` to the adapter's `Workspace` view |
 | `Users` | a user's DID to their `User` (`Users.at`) |
-| `User` | the names in its record's lattice (`Covia.USER_RECORD`): `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
+| `User` | its namespaces: `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
 | `Jobs` | a job id, in hex, to its `JobState` |
 | `JobState` | `temp` to the job's `Workspace` |
 | `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState` |
@@ -848,19 +848,19 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 ### Covia Definitions
 
 The hierarchy, built from standard convex-core types (`covia.lattice.Covia`
-names its levels):
+names its levels). Merges stop at `:value`; below it each component creates the
+container it holds on the first change, so the stored shapes are plain data:
 
-| Definition | Type | Purpose |
-|------------|------|---------|
-| `CoviaApplication` | `Regions` | Root — `:grid`, a `Regions` of `:venues` and `:meta`; `:dlfs` is a sibling region its service registers |
-| `Covia.VENUE` | `StampedCursor` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
+| Level | Component and stored shape | Purpose |
+|-------|----------------------------|---------|
+| Root | `CoviaApplication`: `Regions` over a keyword `Index` | `:grid`, a `Regions` of `:venues` and `:meta`; `:dlfs` is a sibling region its service registers |
 | `:grid → :venues` | `OwnedMap` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
-| Venue interior | `KeyedLattice` (structural children) | `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:jobs`, `:user-data` — navigated structurally; merged only at `:value` |
-| `:schedule` | `StampedCursor` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
-| `:user-data → <DID>` | `MapLattice` → `StampedCursor` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
-| `j` / each Job | `IndexLattice` → `StampedCursor` → `JSONLattice` | Existing Job map shape; deep writes such as `t/` refresh `updated` |
-| `g` / each agent | `MapLattice` → `StampedCursor` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
-| `s` / `a` | `JSONLattice` | Plain structural navigation |
-| `w` / `o` / `h` | `StringKeyedLattice` (`Covia.WORKSPACE_RECORD`) | Existing `{updated, data}` container; `User` presents its `data` through a `StampedCursor` on the container |
+| Venue `:value` | `VenueState`: `Timestamped` keyword `Index`, ordered by `Covia.VENUE` | The whole per-venue value as one **whole-value-LWW** node with a stamp-on-write boundary; holds `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:jobs`, `:user-data` |
+| `:schedule` | `ScheduleState`: `StampedCursor` over a string-keyed map | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
+| `:user-data → <DID>` | `Users`, `User`: string-keyed map of `StampedCursor` records | Per-user record; every deep write refreshes `meta.updated` |
+| `j` / each Job | `Jobs` (an `Index` by job id), `JobState` (`StampedCursor`) | Existing Job map shape; deep writes such as `t/` refresh `updated` |
+| `g` / each agent | string-keyed map, `AgentState` (`StampedCursor`) | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
+| `s` / `a` | `SecretStore`, `AssetStore` | Plain maps |
+| `w` / `o` / `h` | `Workspace`, `Inbox` over an `{updated, data}` map | `User` presents its `data` through a `StampedCursor` on the container |
 | `:grid → :meta` | `LatticeComponent` → `CASLattice` | Shared content-addressed metadata (multi-writer union) |
 | `:dlfs` | `DLFSRegion` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |

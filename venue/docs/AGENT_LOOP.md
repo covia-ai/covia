@@ -66,14 +66,13 @@ An agent lives at `:user-data → <owner-DID> → "g" → <agent-id>`.
 ```
 signed venue :value
   → Timestamped venue record (:timestamp, whole-value LWW)
-  → typed venue interior
-      :user-data → MapLattice (DID → stamped user record)
-        "g" → MapLattice (agent-id → stamped agent record)
-          <agent-id> → stamped cursor (ts) → JSONLattice
+      :user-data → map (DID → stamped user record)
+        "g" → map (agent-id → agent record)
+          <agent-id> → stamped cursor (ts)
 ```
 
-The inner agent component supplies typed navigation and maintains `ts` when a
-deep cursor write enters the record (including `n/` and `c/`). It adds no stored
+The agent component maintains `ts` when a deep cursor write enters the record
+(including `n/` and `c/`). It adds no stored
 envelope: the physical value remains the same plain map. Merge stops at the outer
 venue LWW and therefore never combines individual agents or their fields.
 

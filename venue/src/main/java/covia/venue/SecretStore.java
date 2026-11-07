@@ -18,6 +18,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.Covia;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -163,11 +164,7 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 		cursor().updateAndGet(current -> {
 			AMap<AString, ACell> m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
-			CVMLong effective = timestamp;
-			ACell existing = m.get(name);
-			if (existing instanceof AMap<?, ?> oldRecord
-					&& oldRecord.get(UPDATED_KEY) instanceof CVMLong old
-					&& old.longValue() > effective.longValue()) effective = old;
+			CVMLong effective = Covia.ratchet(RT.getIn(m.get(name), UPDATED_KEY), timestamp);
 			return m.assoc(name, record(encryptedBlob, effective));
 		});
 	}

@@ -141,8 +141,9 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return new AgentState(context, agentStorage(agentId), did, agentId);
 	}
 
+	/** An agent's record in {@code g}, a map the first agent creates. */
 	private AForkableCursor<ACell> agentStorage(ACell id) {
-		return convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.G, id);
+		return cursor().withDefault(Maps.empty()).path(Namespace.G).withDefault(Maps.empty()).path(id);
 	}
 
 	/** Gets the user's DID string. */
@@ -280,12 +281,12 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
 	public Jobs jobs() {
-		return new Jobs(context, convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J), did);
+		return new Jobs(context, cursor().withDefault(Maps.empty()).path(Namespace.J), did);
 	}
 
 	/**
-	 * A user's namespaces are the names in its record's lattice
-	 * ({@link Covia#USER_RECORD}), each resolved by its component, and
+	 * A user's namespaces ({@code w}, {@code o}, {@code h}, {@code j},
+	 * {@code s}, {@code a}, {@code g}) are each resolved by their component, and
 	 * {@code g/<id>} by that agent whether or not it exists. Any other name,
 	 * the venue's own bookkeeping in the record among them, names no data.
 	 * The user's policy covers whatever no component below claims: a request
@@ -300,15 +301,16 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	private Position within(CoviaPath path) {
 		if (path.isEmpty()) return super.resolve(path);
 		AString segment = path.first();
-		if (Covia.USER_RECORD.path(segment) == null) return Position.invalid(path);
 		if (Namespace.W.equals(segment)) return workspace().resolve(path.rest());
 		if (Namespace.O.equals(segment)) return operations().resolve(path.rest());
 		if (Namespace.H.equals(segment)) return inbox().resolve(path.rest());
 		if (Namespace.J.equals(segment)) return jobs().resolve(path.rest());
 		if (Namespace.S.equals(segment)) return secrets().resolve(path.rest());
 		if (Namespace.A.equals(segment)) return assets().resolve(path.rest());
-		if (Namespace.G.equals(segment) && path.length() > 1) return agentAt(path.get(1)).resolve(path.rest(2));
-		return super.resolve(path);
+		if (Namespace.G.equals(segment)) {
+			return (path.length() > 1) ? agentAt(path.get(1)).resolve(path.rest(2)) : super.resolve(path);
+		}
+		return Position.invalid(path);
 	}
 
 	/** The user's data as callers see it, its jobs included, without the venue's bookkeeping. */

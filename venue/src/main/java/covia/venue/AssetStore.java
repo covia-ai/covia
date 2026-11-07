@@ -18,15 +18,15 @@ import convex.lattice.cursor.AForkableCursor;
  * Cursor wrapper for the venue's asset store.
  *
  * <p>Wraps a lattice cursor at the {@code :assets} level
- * ({@code Index<AString, AVector<ACell>>} with content-addressed keys).
+ * ({@code Index<ABlob, AVector<ACell>>}, keyed by each asset's metadata hash).
  * All writes propagate through the cursor chain and are automatically
  * signed at the {@code SignedCursor} boundary.</p>
  *
  * <p>Each asset record is a 3-element vector: [json, content, metaMap].</p>
  */
-public class AssetStore extends ACoviaComponent<Index<AString, AVector<ACell>>> implements TransactionalComponent<Index<AString, AVector<ACell>>, AssetStore> {
+public class AssetStore extends ACoviaComponent<Index<ABlob, AVector<ACell>>> implements TransactionalComponent<Index<ABlob, AVector<ACell>>, AssetStore> {
 	@Override
-	public AssetStore withCursor(AForkableCursor<Index<AString, AVector<ACell>>> draft) {
+	public AssetStore withCursor(AForkableCursor<Index<ABlob, AVector<ACell>>> draft) {
 		return new AssetStore(draft);
 	}
 
@@ -40,7 +40,7 @@ public class AssetStore extends ACoviaComponent<Index<AString, AVector<ACell>>> 
 	/** Position of parsed metadata map in asset record vector */
 	public static final long POS_META = 2;
 
-	AssetStore(AForkableCursor<Index<AString, AVector<ACell>>> cursor) {
+	AssetStore(AForkableCursor<Index<ABlob, AVector<ACell>>> cursor) {
 		super(cursor);
 	}
 

@@ -29,7 +29,6 @@ import convex.core.lang.RT;
 import convex.core.store.AStore;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
-import convex.lattice.LatticeComponent;
 import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
 import convex.lattice.cursor.AForkableCursor;
@@ -234,7 +233,12 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * @return AssetStore cursor wrapper
 	 */
 	public AssetStore assets() {
-		return new AssetStore(LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.ASSETS));
+		return new AssetStore(level(Covia.ASSETS));
+	}
+
+	/** One level of the venue record; a change through an absent record creates it. */
+	private <T extends ACell> AForkableCursor<T> level(Keyword key) {
+		return cursor().withDefault(Index.none()).path(key);
 	}
 
 	/**
@@ -243,7 +247,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * @return Users cursor wrapper
 	 */
 	public Users users() {
-		return new Users(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.USER_DATA));
+		return new Users(context, level(Covia.USER_DATA));
 	}
 
 	/**
@@ -453,17 +457,17 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/** Stored authentication directory; provider/runtime policy belongs to Auth. */
 	public AuthState auth() {
-		return new AuthState(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.USERS));
+		return new AuthState(context, level(Covia.USERS));
 	}
 
 	/** The entries of unfinished jobs; the jobs themselves belong to JobManager. */
 	public JobIndex jobIndex() {
-		return new JobIndex(LatticeComponent.resolve(cursor(), Covia.VENUE, Covia.JOBS));
+		return new JobIndex(level(Covia.JOBS));
 	}
 
 	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
 	public ScheduleState schedule() {
-		return new ScheduleState(context, LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.SCHEDULE));
+		return new ScheduleState(context, level(Covia.SCHEDULE));
 	}
 
 	/**
@@ -472,7 +476,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * @return LatticeStorage instance backed by this venue's cursor
 	 */
 	public LatticeStorage contentStorage() {
-		return new LatticeStorage(LatticeComponent.resolve(cursor(), Covia.VENUE,Covia.STORAGE));
+		return new LatticeStorage(level(Covia.STORAGE));
 	}
 
 	/**

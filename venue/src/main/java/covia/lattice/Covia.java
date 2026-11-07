@@ -6,13 +6,9 @@ import convex.core.data.AString;
 import convex.core.data.Keyword;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.core.data.Index;
 import convex.lattice.ALattice;
-import convex.lattice.generic.JSONLattice;
-import convex.lattice.generic.IndexLattice;
-import convex.lattice.generic.KeyedLattice;
 import convex.lattice.generic.LWWLattice;
-import convex.lattice.generic.MapLattice;
-import convex.lattice.generic.StringKeyedLattice;
 import covia.api.Fields;
 
 
@@ -106,10 +102,6 @@ public final class Covia {
 	/** Agent-record last-modified field. */
 	private static final AString K_AGENT_TS = Strings.intern("ts");
 
-	/** Unchecked cast helper: a typed navigation lattice used only for structure. */
-	@SuppressWarnings("unchecked")
-	private static ALattice<ACell> ac(ALattice<?> l) { return (ALattice<ACell>) l; }
-
 	/** Extracts the {@code :timestamp} from the venue value for LWW merge. */
 	@SuppressWarnings("unchecked")
 	private static long venueTimestamp(ACell v) {
@@ -139,7 +131,7 @@ public final class Covia {
 	 * equal-stamp merge, the directional Convex contract keeps {@code own} (the
 	 * venue's current authoritative value). See covia#214.</p>
 	 */
-	private static CVMLong ratchet(ACell existing, CVMLong ts) {
+	public static CVMLong ratchet(ACell existing, CVMLong ts) {
 		if (existing instanceof CVMLong prev && prev.longValue() > ts.longValue()) return prev;
 		return ts;
 	}
@@ -213,76 +205,12 @@ public final class Covia {
 	/** Caller-visible value inside a stamped workspace record. */
 	public static final AString WORKSPACE_DATA = Strings.intern("data");
 
-	/** Workspace envelope; components expose its data through an explicit view. */
-	public static final ALattice<ACell> WORKSPACE_RECORD =
-		ac(StringKeyedLattice.create(WORKSPACE_DATA, JSONLattice.INSTANCE));
-
-	/** Last-modified policy for a job record. */
-	public static final ALattice<ACell> JOB_RECORD =
-		JSONLattice.INSTANCE;
-
-	/** Last-modified policy for an agent record. */
-	public static final ALattice<ACell> AGENT_RECORD =
-		JSONLattice.INSTANCE;
-
 	/**
-	 * Per-DID user record. Jobs and agents have typed record boundaries that
-	 * maintain their existing {@code updated}/{@code ts} last-modified fields;
-	 * framework namespaces {@code s}/{@code a} are plain navigable JSON; and
-	 * user-writable {@code w}/{@code o}/{@code h} are
-	 * {@link #WORKSPACE_RECORD} regions ({@code {updated, data}} containers whose
-	 * {@code data} is the caller-visible value). Merge is whole-value at
-	 * {@code :value}, so these child lattices are used only for navigation and
-	 * write-stamping.
-	 *
-	 * <p>The whole record sits behind its own stamping boundary: every deep
-	 * write refreshes the record's {@code meta} slot ({@code created} minted
-	 * once, {@code updated} bumped) — see {@link #stampUserMeta} and the
-	 * "User meta record" section of {@code GRID_LATTICE_DESIGN.md}.</p>
-	 */
-	public static final ALattice<ACell> USER_RECORD =
-		ac(StringKeyedLattice.create(
-			"j", IndexLattice.create(JOB_RECORD),
-			"g", MapLattice.create(AGENT_RECORD),
-			"s", JSONLattice.INSTANCE,
-			"a", JSONLattice.INSTANCE,
-			"w", WORKSPACE_RECORD,
-			"o", WORKSPACE_RECORD,
-			"h", WORKSPACE_RECORD));
-
-	/**
-	 * Extensible scheduler record. Its stable physical shape is
-	 * {@code {updated, events, ...}}; writes below {@code events} refresh the
-	 * record's last-modified stamp without rebuilding or narrowing the record.
-	 */
-	public static final ALattice<ACell> SCHEDULE_RECORD =
-		ac(StringKeyedLattice.create("events", JSONLattice.INSTANCE));
-
-	/**
-	 * Venue interior — keyword-keyed regions; {@code :user-data} maps each DID to a
-	 * {@link #USER_RECORD}. Used for navigation and write-stamping only; the merge
-	 * is whole-value at {@code :value}.
-	 */
-	private static final ALattice<ACell> INTERIOR = ac(KeyedLattice.create(
-		VERSION, JSONLattice.INSTANCE,
-		ASSETS, JSONLattice.INSTANCE,
-		STORAGE, JSONLattice.INSTANCE,
-		DID, JSONLattice.INSTANCE,
-		USERS, JSONLattice.INSTANCE,
-		SCHEDULE, SCHEDULE_RECORD,
-		ADAPTERS, MapLattice.create(JSONLattice.INSTANCE),
-		ADAPTER_VERSIONS, MapLattice.create(JSONLattice.INSTANCE),
-		USER_DELETIONS, JSONLattice.INSTANCE,
-		JOBS, IndexLattice.create(JSONLattice.INSTANCE),
-		USER_DATA, MapLattice.create(USER_RECORD)));
-
-	/**
-	 * Venue lattice — the whole per-venue {@code :value} is a single navigable
-	 * whole-value-LWW node: whole-value LWW merge by {@code :timestamp} (newer wins,
-	 * tie&nbsp;→&nbsp;own, non-recursive, so deletions and asset GC survive the
-	 * propagator merge-back), with a typed navigable interior ({@link #INTERIOR}) and
-	 * a stamp-on-write boundary. Composed as
-	 * {@code stamping(write) -> LWW(merge) -> typed-navigation}.
+	 * Order of venue records — the whole per-venue {@code :value}, a keyword
+	 * {@code Index}, is one whole-value-LWW node: a newer {@code :timestamp} wins and
+	 * a tie keeps own, non-recursively, so deletions and asset GC survive the
+	 * propagator merge-back. Local edits are stamped by the venue's
+	 * {@code Timestamped} record; each component below creates its own containers.
 	 *
 	 * <p>This requires one authoritative running instance; signatures authenticate
 	 * snapshots but do not fence competing writers. Supported reconciliation
@@ -292,8 +220,13 @@ public final class Covia {
 	 * newest value already holds all content, making removal/GC durable). Genuinely
 	 * shared multi-writer content lives at grid {@code :meta} (a CAS region).
 	 */
-	public static final ALattice<ACell> VENUE =
-		LWWLattice.create(INTERIOR, Covia::venueTimestamp);
+	public static final ALattice<ACell> VENUE = new ALattice<>() {
+		private final LWWLattice<ACell> order = LWWLattice.create(Covia::venueTimestamp);
+		@Override public ACell merge(ACell own, ACell other) { return order.merge(own, other); }
+		@Override public boolean checkForeign(ACell value) { return value instanceof Index<?, ?>; }
+		@Override public ACell zero() { return null; }
+		@Override public <T extends ACell> ALattice<T> path(ACell key) { return null; }
+	};
 
 	private Covia() {
 		// Prevent instantiation

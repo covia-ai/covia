@@ -6,14 +6,11 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.lang.RT;
-import convex.lattice.ALattice;
-import convex.lattice.LatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.grid.Job;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
-import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
@@ -32,8 +29,6 @@ import covia.lattice.Workspace;
  */
 public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		implements TransactionalComponent<Index<Blob, ACell>, Jobs> {
-
-	private static final ALattice<ACell> LATTICE = Covia.USER_RECORD.path(Namespace.J);
 
 	private final VenueContext context;
 	private final AString owner;
@@ -133,7 +128,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 * {@link #get}, which is null for a missing job.
 	 */
 	public JobState at(Blob id) {
-		return new JobState(context, LatticeComponent.resolve(cursor(), LATTICE, id), owner, id);
+		return new JobState(context, cursor().withDefault(Index.none()).path(id), owner, id);
 	}
 
 	/**

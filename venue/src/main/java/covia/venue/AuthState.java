@@ -16,6 +16,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.Covia;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -92,12 +93,8 @@ public final class AuthState extends ACoviaComponent<AMap<AString, AMap<AString,
 
 	static AMap<AString, ACell> stampUser(AMap<AString, ACell> record,
 			AMap<AString, ACell> previous, CVMLong proposed) {
-		if (previous != null) {
-			ACell oldValue = previous.get(Fields.UPDATED);
-			if (oldValue instanceof CVMLong old
-					&& old.longValue() > proposed.longValue()) proposed = old;
-		}
-		return record.assoc(Fields.UPDATED, proposed);
+		ACell old = (previous == null) ? null : previous.get(Fields.UPDATED);
+		return record.assoc(Fields.UPDATED, Covia.ratchet(old, proposed));
 	}
 
 	/**
