@@ -205,6 +205,17 @@ public class AgentConcurrencyTest {
 	}
 
 	@Test
+	public void testAHandleToADeletedAgentNeitherResumesNorRuns() {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("deleted-under-handle", Maps.empty(), null);
+		agent.suspend(Strings.create("test error"));
+		user.removeAgent(agent.getAgentId());
+		assertFalse(agent.tryResume());
+		assertFalse(agent.tryRun());
+		assertNull(user.agent(agent.getAgentId()), "neither call recreates the agent");
+	}
+
+	@Test
 	public void testDeliberateStopSurvivesLateFaultAndCancellationDoesNotUndoResume() {
 		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
 			.ensureAgent("stop-race", Maps.empty(), null);

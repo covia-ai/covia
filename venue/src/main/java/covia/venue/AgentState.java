@@ -980,7 +980,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		AMap<AString, ACell> before = getAndUpdate(r ->
 			SUSPENDED.equals(RT.ensureString(r.get(K_STATUS)))
 				? r.assoc(K_STATUS, SLEEPING).dissoc(K_ERROR).dissoc(KEY_SUSPENSION) : r);
-		return SUSPENDED.equals(RT.ensureString(before.get(K_STATUS)));
+		// A deleted agent has no record to resume.
+		return before != null && SUSPENDED.equals(RT.ensureString(before.get(K_STATUS)));
 	}
 
 	/**
@@ -993,6 +994,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 			AString cur = RT.ensureString(r.get(K_STATUS));
 			return (SLEEPING.equals(cur) || RUNNING.equals(cur)) ? r.assoc(K_STATUS, RUNNING) : r;
 		});
+		if (before == null) return false; // a deleted agent does not run
 		AString was = RT.ensureString(before.get(K_STATUS));
 		return SLEEPING.equals(was) || RUNNING.equals(was);
 	}
