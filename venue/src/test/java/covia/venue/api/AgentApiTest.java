@@ -105,7 +105,7 @@ public class AgentApiTest {
 
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().user(callerDID);
-		return (u == null) ? 0 : u.jobs().count();
+		return (u == null) ? 0 : u.jobs().size();
 	}
 
 	/** True if the {@code {agents:[...]}} payload lists agentId (ids or annotated form). */

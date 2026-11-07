@@ -65,7 +65,7 @@ public class UserAdminApiTest {
 
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().user(Strings.create(callerDID));
-		return (u == null) ? 0 : u.jobs().count();
+		return (u == null) ? 0 : u.jobs().size();
 	}
 
 	@Test

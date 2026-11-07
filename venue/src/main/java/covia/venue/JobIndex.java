@@ -9,7 +9,7 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.lattice.ALatticeComponent;
+import convex.lattice.IndexComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -25,8 +25,12 @@ import covia.api.Fields;
  * job's record is unfinished, and a restart recovers jobs from these entries
  * alone (JOBS.md, Recovery on restart). A job held only in memory has
  * none.</p>
+ *
+ * <p>The admission writes an entry with {@link #put}, in the same transaction
+ * as the job's record, and the finishing update removes it with
+ * {@link #remove}.</p>
  */
-public final class JobIndex extends ALatticeComponent<Index<Blob, ACell>>
+public final class JobIndex extends IndexComponent<Blob, ACell>
 		implements TransactionalComponent<Index<Blob, ACell>, JobIndex> {
 
 	/** The DID of the user whose {@code j/} holds the job's record. */
@@ -62,7 +66,7 @@ public final class JobIndex extends ALatticeComponent<Index<Blob, ACell>>
 
 	/** Every entry, by job id; empty when no job is unfinished. */
 	public Index<Blob, ACell> all() {
-		Index<Blob, ACell> entries = cursor().getOrDefault(null);
+		Index<Blob, ACell> entries = get();
 		return (entries == null) ? Index.none() : entries;
 	}
 
@@ -74,12 +78,7 @@ public final class JobIndex extends ALatticeComponent<Index<Blob, ACell>>
 	 *         only in memory, or unknown
 	 */
 	public AMap<AString, ACell> entry(Blob id) {
-		return RT.ensureMap(all().get(id));
-	}
-
-	/** Writes a newly admitted job's entry. The caller writes the record in the same transaction. */
-	void admit(Blob id, AMap<AString, ACell> entry) {
-		cursor().updateAndGet(entries -> ((entries == null) ? Index.<Blob, ACell>none() : entries).assoc(id, entry));
+		return RT.ensureMap(get(id));
 	}
 
 	/**
@@ -89,17 +88,10 @@ public final class JobIndex extends ALatticeComponent<Index<Blob, ACell>>
 	 * @param change Pure edit of the entry; it may run again on a retried transaction
 	 */
 	void update(Blob id, UnaryOperator<AMap<AString, ACell>> change) {
-		cursor().updateAndGet(entries -> {
-			AMap<AString, ACell> current = (entries == null) ? null : RT.ensureMap(entries.get(id));
-			if (current == null) return entries;
-			AMap<AString, ACell> next = change.apply(current);
-			return (next == current) ? entries : entries.assoc(id, next);
+		path(id).updateAndGet(current -> {
+			AMap<AString, ACell> entry = RT.ensureMap(current);
+			return (entry == null) ? current : change.apply(entry);
 		});
-	}
-
-	/** Removes a job's entry, if it has one. */
-	void remove(Blob id) {
-		cursor().updateAndGet(entries -> (entries == null || !entries.containsKey(id)) ? entries : entries.dissoc(id));
 	}
 
 	/** Removes the entries of every job whose record {@code did} holds. */

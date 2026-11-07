@@ -7,6 +7,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.crypto.HKDF;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -19,6 +20,7 @@ import convex.core.lang.RT;
 import covia.lattice.Covia;
 import covia.lattice.CoviaValue;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.MapComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.PathCursor;
@@ -40,12 +42,10 @@ import covia.api.Fields;
 	 * from one seed. Every write encrypts under
  * {@link #CURRENT_KEY_VERSION}, so an older secret migrates on its next
  * write.</p>
- *
- * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
-public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, SecretStore> {
+public class SecretStore extends MapComponent<AString, ACell> implements TransactionalComponent<AHashMap<AString, ACell>, SecretStore> {
 	@Override
-	public SecretStore withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
+	public SecretStore withCursor(AForkableCursor<AHashMap<AString, ACell>> draft) {
 		return new SecretStore(context, draft);
 	}
 
@@ -116,7 +116,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	private static final CVMLong CURRENT_KEY_VERSION_CELL = CVMLong.create(CURRENT_KEY_VERSION);
 
 	SecretStore(VenueContext context,
-			AForkableCursor<AMap<AString, ACell>> cursor) {
+			AForkableCursor<AHashMap<AString, ACell>> cursor) {
 		super(cursor);
 		this.context = context;
 	}
@@ -199,12 +199,8 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	public void store(AString name, AString plaintext, Keys keys) {
 		Blob encryptedBlob = encrypt(plaintext, keys);
 		CVMLong timestamp = getContext().currentTimestamp();
-		cursor().updateAndGet(current -> {
-			AMap<AString, ACell> m = RT.castMap(current);
-			if (m == null) m = Maps.empty();
-			CVMLong effective = Covia.ratchet(RT.getIn(m.get(name), UPDATED_KEY), timestamp);
-			return m.assoc(name, record(encryptedBlob, effective));
-		});
+		path(name).updateAndGet(current ->
+			record(encryptedBlob, Covia.ratchet(RT.getIn(current, UPDATED_KEY), timestamp)));
 	}
 
 	/**
@@ -218,17 +214,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 * @param keys The venue's secret store keys (from {@link #keys})
 	 * @return true if this call wrote the entry; false if an entry already existed
 	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public boolean storeIfAbsent(AString name, AString plaintext, Keys keys) {
 		AMap<AString, ACell> record = record(encrypt(plaintext, keys),
 			getContext().currentTimestamp());
-		ACell before = cursor().getAndUpdate(current -> {
-			AMap m = RT.castMap(current);
-			if (m == null) m = Maps.empty();
-			return m.containsKey(name) ? m : m.assoc(name, record);
-		});
-		AMap previous = RT.castMap(before);
-		return previous == null || !previous.containsKey(name);
+		return path(name).getAndUpdate(current -> (current == null) ? record : current) == null;
 	}
 
 	/**
@@ -404,10 +393,9 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 * @return Vector of secret names, or empty vector if none
 	 */
 	public AVector<AString> list() {
-		AMap<AString, ACell> all = cursor().getOrDefault(null);
+		AHashMap<AString, ACell> all = get();
 		if (all == null || all.isEmpty()) return Vectors.empty();
 		return all.getKeys();
-
 	}
 
 	/**
@@ -425,12 +413,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 
 	/** Atomically removes an entry and reports whether it existed. */
 	public boolean deleteIfPresent(AString name) {
-		AMap<AString, ACell> previous = cursor().getAndUpdate(current -> {
-			AMap<AString,ACell> m = RT.ensureMap(current);
-			if (m == null) return null;
-			return m.dissoc(name);
-		});
-		return previous != null && previous.containsKey(name);
+		return remove(name) != null;
 	}
 
 	/**
@@ -438,7 +421,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> impleme
 	 */
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getRecord(AString name) {
-		AMap<AString, ACell> all = cursor().getOrDefault(null);
+		AHashMap<AString, ACell> all = get();
 		if (all == null) return null;
 		ACell value = all.get(name);
 		if (!(value instanceof AMap)) {

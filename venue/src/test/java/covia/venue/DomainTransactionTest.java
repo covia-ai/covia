@@ -84,7 +84,7 @@ class DomainTransactionTest {
 			}));
 			try {
 				assertTrue(entered.await(10, TimeUnit.SECONDS));
-				assertTrue(user.jobs().remove(id));
+				assertNotNull(user.jobs().remove(id));
 			} finally { resume.countDown(); }
 			pending.get(10, TimeUnit.SECONDS);
 		}
@@ -247,7 +247,7 @@ class DomainTransactionTest {
 			draft.auth().ensureManagedUser(id, DID);
 			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
 				null, 1000, null, false, null, 100);
-			assertNull(venue.auth().getUser(id));
+			assertNull(venue.auth().get(id));
 			assertTrue(venue.schedule().events().isEmpty());
 			throw new IllegalStateException();
 		}));
@@ -260,7 +260,7 @@ class DomainTransactionTest {
 			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
 				null, 1000, null, false, null, 100);
 		});
-		assertNotNull(venue.auth().getUser(id));
+		assertNotNull(venue.auth().get(id));
 		assertEquals(1, venue.schedule().events().count());
 	}
 
@@ -442,7 +442,7 @@ class DomainTransactionTest {
 			user.workspace().write(path("w/ready"), CVMLong.ONE);
 			draft.assets().store(Strings.create("{\"name\":\"private\"}"), null);
 			assertNull(venue.users().user(DID));
-			assertEquals(0, venue.assets().count());
+			assertEquals(0, venue.assets().size());
 			throw failure;
 		})));
 		assertEquals(before, venue.get(), "an aborted draft must not even change metadata");

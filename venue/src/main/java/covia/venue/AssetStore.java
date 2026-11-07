@@ -11,21 +11,19 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.IndexComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.CoviaValue;
 
 /**
- * Cursor wrapper for the venue's asset store.
+ * A content-addressed asset store: the venue's ({@code :assets}) or a user's
+ * ({@code a/}), an index of asset records keyed by each asset's metadata hash.
  *
- * <p>Wraps a lattice cursor at the {@code :assets} level
- * ({@code Index<ABlob, AVector<ACell>>}, keyed by each asset's metadata hash).
- * All writes propagate through the cursor chain and are automatically
- * signed at the {@code SignedCursor} boundary.</p>
- *
- * <p>Each asset record is a 3-element vector: [json, content, metaMap].</p>
+ * <p>Each asset record is a 3-element vector: [json, content, metaMap].
+ * {@code get(hash)} reads one, and {@link #store} adds one under its hash.</p>
  */
-public class AssetStore extends ALatticeComponent<Index<ABlob, AVector<ACell>>> implements TransactionalComponent<Index<ABlob, AVector<ACell>>, AssetStore> {
+public class AssetStore extends IndexComponent<ABlob, AVector<ACell>> implements TransactionalComponent<Index<ABlob, AVector<ACell>>, AssetStore> {
 	@Override
 	public AssetStore withCursor(AForkableCursor<Index<ABlob, AVector<ACell>>> draft) {
 		return new AssetStore(draft);
@@ -59,52 +57,23 @@ public class AssetStore extends ALatticeComponent<Index<ABlob, AVector<ACell>>> 
 	 * @return Content-addressed Hash ID for the asset
 	 * @throws IllegalArgumentException if meta is not valid JSON
 	 */
-	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public Hash store(AString meta, ACell content) {
 		AMap<AString, ACell> metaMap = RT.ensureMap(JSON.parse(meta));
 		if (metaMap == null) {
 			throw new IllegalArgumentException("Metadata is not a valid JSON object");
 		}
 		Hash id = metaMap.getHash();
-		AVector<ACell> record = Vectors.create(meta, content, metaMap);
-		cursor().updateAndGet(current -> {
-			// Content-addressed store is an Index; build one explicitly rather
-			// than relying on RT.castMap (which returns an empty AHashMap, not
-			// an Index, for a null input).
-			Index idx = (current instanceof Index) ? (Index) current : Index.none();
-			return idx.assoc(id, record);
-		});
+		put(id, Vectors.create(meta, content, metaMap));
 		return id;
-	}
-
-	/**
-	 * Gets the raw record vector for an asset.
-	 *
-	 * @param id Asset Hash ID
-	 * @return 3-element vector [json, content, metaMap], or null if not found
-	 */
-	public AVector<?> getRecord(Hash id) {
-		AMap<ABlob, AVector<?>> all = getAll();
-		return (all != null) ? all.get(id) : null;
 	}
 
 	/**
 	 * Gets all assets as a map from Hash to record vector.
 	 *
-	 * @return Map of all assets, or null if uninitialised
+	 * @return Map of all assets; empty when there are none
 	 */
 	public AMap<ABlob, AVector<?>> getAll() {
-		return RT.castMap(cursor().getOrDefault(null));
-	}
-
-	/**
-	 * Returns the number of stored assets.
-	 *
-	 * @return Asset count
-	 */
-	public long count() {
-		AMap<?, ?> all = getAll();
-		return (all != null) ? all.count() : 0;
+		return RT.castMap(get());
 	}
 
 }

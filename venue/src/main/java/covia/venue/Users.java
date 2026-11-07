@@ -1,11 +1,13 @@
 package covia.venue;
 
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.MapComponent;
 import convex.lattice.NoSuchPathException;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -15,21 +17,17 @@ import covia.lattice.Covia;
 import convex.core.lang.RT;
 
 /**
- * Cursor wrapper for the venue's user data store.
+ * The venue's accounts ({@code :user-data}): each user's record, keyed by DID.
  *
- * <p>Wraps a lattice cursor at the {@code :user-data} level
- * ({@code MapLattice<AString, StringKeyedLattice>}). Provides typed
- * accessors for per-user state, following the same pattern as
- * {@link AssetStore}.</p>
- *
- * <p>Each user is identified by a DID string and gets an independent
- * {@link User} lattice component backed by a
- * {@link convex.lattice.generic.StringKeyedLattice} with AString keys
- * for JSON compatibility.</p>
+ * <p>{@code get(did)} reads a record as stored, bookkeeping and tombstone
+ * included. {@link #user} binds a live account's {@link User} to its entry,
+ * and {@link #at} binds one for a path whether or not it is live. Accounts are
+ * registered with {@link #ensure} or {@link #create}; a record written with
+ * the inherited {@code put} or {@code remove} bypasses the account lifecycle.</p>
  */
-public class Users extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, Users> {
+public class Users extends MapComponent<AString, ACell> implements TransactionalComponent<AHashMap<AString, ACell>, Users> {
 	@Override
-	public Users withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
+	public Users withCursor(AForkableCursor<AHashMap<AString, ACell>> draft) {
 		return new Users(context, draft);
 	}
 
@@ -48,11 +46,11 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	}
 
 	boolean isDeleting(AString did) {
-		return RT.getIn(cursor().getOrDefault(null), did, DELETING) != null;
+		return RT.getIn(get(did), DELETING) != null;
 	}
 
 	public ACell tombstone(AString did) {
-		return did == null ? null : RT.getIn(cursor().getOrDefault(null), did, Covia.K_DELETED);
+		return did == null ? null : RT.getIn(get(did), Covia.K_DELETED);
 	}
 
 	public void requireNotDeleted(AString did) {
@@ -72,7 +70,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 		return current != null ? current : Maps.empty();
 	}
 
-	Users(VenueContext context, AForkableCursor<AMap<AString, ACell>> cursor) {
+	Users(VenueContext context, AForkableCursor<AHashMap<AString, ACell>> cursor) {
 		super(cursor);
 		this.context = context;
 	}
@@ -89,7 +87,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	}
 
 	public User user(AString did) {
-		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
+		AForkableCursor<ACell> userCursor = path(did);
 		ACell current = userCursor.getOrDefault(null);
 		if (current == null || RT.getIn(current, Covia.K_DELETED) != null) return null;
 		return new User(context, new AccountCursor(userCursor), did);
@@ -108,7 +106,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	}
 
 	public User ensure(AString did) {
-		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
+		AForkableCursor<ACell> userCursor = path(did);
 		// Atomic init: read-then-set is racy under concurrent first-touches —
 		// a late reader could observe null and set(zero), clobbering an earlier
 		// writer's committed user data (jobs, secrets, agents).
@@ -128,9 +126,8 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	 * @return true when a new registration was created
 	 */
 	public boolean create(AString did) {
-		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
 		ACell fresh = Maps.of(GENERATION, Strings.create(java.util.UUID.randomUUID().toString()));
-		ACell previous = userCursor.getAndUpdate(
+		ACell previous = path(did).getAndUpdate(
 			current -> {
 				if (RT.getIn(current, DELETING) != null) throw new AuthException(ACCOUNT_DELETED);
 				return RT.getIn(current, Covia.K_DELETED) != null ? fresh : initialise(current);
@@ -157,8 +154,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 
 	/** A registered user's state without its framework slots, or null if not registered. */
 	public AMap<AString, ACell> content(AString did) {
-		AMap<AString, ACell> all = cursor().getOrDefault(null);
-		return all == null ? null : content(all.get(did));
+		return content(get(did));
 	}
 
 	/**
@@ -185,7 +181,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 
 	/** Opens recreation only after runtime cleanup has completed. */
 	void finishDeletion(AString did) {
-		cursor().withDefault(Maps.empty()).path(did).updateAndGet(current -> {
+		path(did).updateAndGet(current -> {
 			AMap<AString, ACell> record = RT.ensureMap(current);
 			return record != null ? record.dissoc(DELETING) : current;
 		});
@@ -202,8 +198,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	 * @return The account's user, never null
 	 */
 	public User at(AString did) {
-		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
-		return new User(context, new PathAccountCursor(userCursor, did), did);
+		return new User(context, new PathAccountCursor(path(did), did), did);
 	}
 
 	/**
@@ -222,12 +217,13 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	private static final AString DID_PREFIX = Strings.intern("did:");
 
 	/**
-	 * Gets all user data for iteration (e.g. job recovery).
+	 * Every live account's record, for iteration (e.g. job recovery); deleted
+	 * accounts' tombstones are left out.
 	 *
 	 * @return Map of DID string to user state, or null if none
 	 */
 	public AMap<AString, ACell> getAll() {
-		AMap<AString, ACell> all = cursor().getOrDefault(null);
+		AMap<AString, ACell> all = get();
 		if (all == null) return null;
 		for (var entry : all.entrySet()) {
 			if (RT.getIn(entry.getValue(), Covia.K_DELETED) != null) all = all.dissoc(entry.getKey());

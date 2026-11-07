@@ -266,14 +266,14 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		Objects.requireNonNull(defaultDID);
 		Objects.requireNonNull(profile);
 		return transact(draft -> {
-			AMap<AString, ACell> previous = draft.auth().getUser(id);
+			AMap<AString, ACell> previous = draft.auth().get(id);
 			AString did = previous == null ? null : RT.ensureString(previous.get(Fields.DID));
 			if (did == null) did = defaultDID;
 			draft.users().create(did);
 			AMap<AString, ACell> updated = previous == null ? Maps.empty() : previous;
 			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
 			draft.auth().putUser(id, updated.assoc(Fields.DID, did));
-			return draft.auth().getUser(id);
+			return draft.auth().get(id);
 		});
 	}
 

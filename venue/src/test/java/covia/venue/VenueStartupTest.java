@@ -85,7 +85,7 @@ public class VenueStartupTest {
 		engine.getVenueState().execute(draft -> {
 			draft.users().ensure(owner).jobs().create(RECOVERED_JOB, Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP,
 				Fields.STATUS, Status.STARTED, Fields.CALLER, owner, Fields.INPUT, Maps.empty()));
-			draft.jobIndex().admit(RECOVERED_JOB, Maps.of(JobIndex.OWNER, owner));
+			draft.jobIndex().put(RECOVERED_JOB, Maps.of(JobIndex.OWNER, owner));
 		});
 	}
 

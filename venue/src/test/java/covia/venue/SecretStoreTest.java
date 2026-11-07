@@ -280,7 +280,7 @@ public class SecretStoreTest {
 		// After merge, both should be present
 		// We verify by reading through component wrappers, not raw Index equality
 		// (which would fail due to AString/Keyword key type normalisation)
-		assertEquals(1, user1.jobs().count(), "Jobs should be accessible via wrapper");
+		assertEquals(1, user1.jobs().size(), "Jobs should be accessible via wrapper");
 		assertTrue(user2.secrets().exists("key1"), "Secrets should be accessible via wrapper");
 	}
 
@@ -348,7 +348,7 @@ public class SecretStoreTest {
 				covia.api.Fields.STATUS, covia.grid.Status.PENDING,
 				covia.api.Fields.UPDATED, convex.core.data.prim.CVMLong.create(1000L)));
 
-		assertEquals(1, user.jobs().count(), "Jobs should work in extended USER lattice");
+		assertEquals(1, user.jobs().size(), "Jobs should work in extended USER lattice");
 	}
 
 	// ========== Key Derivation ==========

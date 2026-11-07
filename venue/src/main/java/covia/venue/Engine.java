@@ -1821,7 +1821,7 @@ public class Engine {
 		// Compatibility for internal operation resolution: many installed
 		// definitions are invoked by their hash. User-facing REST resolution does
 		// not use this fallback; it calls the exact-DID overload above.
-		return venueState.assets().getRecord(assetID);
+		return venueState.assets().get(assetID);
 	}
 
 	/**
@@ -1831,11 +1831,11 @@ public class Engine {
 	 */
 	public AVector<?> getAssetRecord(Hash assetID, AString userDID) {
 		if (assetID == null || userDID == null) return null;
-		if (userDID.equals(getDIDString())) return venueState.assets().getRecord(assetID);
+		if (userDID.equals(getDIDString())) return venueState.assets().get(assetID);
 		AString webDID = config.getWebDID();
-		if (webDID != null && userDID.equals(webDID)) return venueState.assets().getRecord(assetID);
+		if (webDID != null && userDID.equals(webDID)) return venueState.assets().get(assetID);
 		User user = getVenueState().users().user(userDID);
-		return (user != null) ? user.assets().getRecord(assetID) : null;
+		return (user != null) ? user.assets().get(assetID) : null;
 	}
 
 	/**
@@ -1853,7 +1853,7 @@ public class Engine {
 	 * Get an Asset by its Hash ID from venue-level store (no user context).
 	 */
 	public Asset getAsset(Hash assetID) {
-		AVector<?> arec=venueState.assets().getRecord(assetID);
+		AVector<?> arec=venueState.assets().get(assetID);
 		if (arec==null) return null;
 		AString metaString = RT.ensureString(arec.get(AssetStore.POS_JSON));
 		if (metaString==null) return null;
@@ -1866,7 +1866,7 @@ public class Engine {
 	 * @return Metadata string for the given Asset ID, or null if not found
 	 */
 	public AString getMetadata(Hash assetID) {
-		AVector<?> arec=venueState.assets().getRecord(assetID);
+		AVector<?> arec=venueState.assets().get(assetID);
 		if (arec==null) return null;
 		return RT.ensureString(arec.get(AssetStore.POS_JSON));
 	}
@@ -1878,7 +1878,7 @@ public class Engine {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString,ACell> getMetaValue(Hash assetID) {
-		AVector<?> arec=venueState.assets().getRecord(assetID);
+		AVector<?> arec=venueState.assets().get(assetID);
 		if (arec==null) return null;
 		// instanceof — RT.castMap(null) returns an empty map, which would
 		// violate the "null if not valid metadata" contract.
@@ -3624,7 +3624,7 @@ public class Engine {
 		long total = 0;
 		for (var entry : userData.entrySet()) {
 			User user = getVenueState().users().user((AString) entry.getKey());
-			if (user != null) total += user.jobs().count();
+			if (user != null) total += user.jobs().size();
 		}
 		return total;
 	}

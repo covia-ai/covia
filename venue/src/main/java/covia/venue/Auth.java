@@ -180,7 +180,7 @@ public class Auth {
 
 	private AuthState state() { return engine.getVenueState().auth(); }
 
-	public AMap<AString, ACell> getUser(AString id) { return state().getUser(id); }
+	public AMap<AString, ACell> getUser(AString id) { return state().get(id); }
 	public AMap<AString, AMap<AString, ACell>> getUsers() { return state().getUsers(); }
 	public AMap<AString, ACell> getAuthenticationKeys(AString id) { return state().getAuthenticationKeys(id); }
 	public boolean isAuthenticationKeyActive(AString id, AString key) { return state().isAuthenticationKeyActive(id, key); }

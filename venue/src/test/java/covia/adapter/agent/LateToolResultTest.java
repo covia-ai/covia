@@ -313,7 +313,7 @@ public class LateToolResultTest {
 		Engine second = restart(crashed);
 		try {
 			User user = second.getVenueState().users().user(RESTART_OWNER);
-			assertTrue(user.jobs().remove(crashed.mirrorId()), "the late call's job is deleted before the restart");
+			assertNotNull(user.jobs().remove(crashed.mirrorId()), "the late call's job is deleted before the restart");
 			second.jobs().recoverJobs();
 			((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
 			AgentState agent = user.agent("late-deleted");

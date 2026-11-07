@@ -397,6 +397,16 @@ read-only; one that takes no path keeps Convex's default and refuses any
 segment. Resolution returns Convex's `ALatticeComponent`, so a path may end at
 a component that is not Covia's.
 
+**Keyed collections are Convex's map components.** `Jobs`, `JobIndex` and
+`AssetStore` extend Convex's `IndexComponent`, and `Users`, `AuthState`,
+`SecretStore` and `Inbox` its `MapComponent`, so `get`, `put`, `remove` and
+`size` are Convex's and `get(key)` is the entry as stored. A collection binds a
+child component to one entry through `path(key)`, which reads a missing key as
+absent, under a name of its own (`Users.user`, `Jobs.job`). Its domain
+operations (`Users.create`, `Jobs.create`, `SecretStore.store`) keep the rules
+that a `put` or `remove` of a raw entry bypasses, so only venue code that keeps
+those rules itself uses them.
+
 **A read returns the value as stored.** Reading a path gives the value at the
 cursor of the component it resolves to, exactly as that cursor holds it, and
 the reader interprets it; no component filters or reshapes what a read
@@ -872,12 +882,13 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
+| `IndexComponent<K,V>`, `MapComponent<K,V>` | Atomic operations on a keyed collection, an `Index` or a hash map, that the first write creates: `get`, `put`, `remove`, `size`, and `path(key)` to bind a child component to one entry (§4.6) |
 | `VenueContext` (Covia) | Policy shared by every Covia component and passed down unchanged: the write clock and the venue's signer |
 | `CoviaValue` (Covia) | Convex's `ValueComponent` resolving segments by Covia's rules (`ValuePath.keys`); read-only where a path ends below any component but a workspace, which hands it the rest of the path with `CoviaValue.within` (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
-| `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |
-| `Jobs` (Covia) | A user's jobs at `j`, keyed by job id, each its `JobState`; only the venue admits a job |
+| `Inbox` (Covia) | A user's HITL requests at `h`, a `MapComponent` keyed by request id; only the venue writes them |
+| `Jobs` (Covia) | A user's jobs at `j`, an `IndexComponent` keyed by job id, each bound as its `JobState`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions

@@ -610,7 +610,7 @@ public class HITLAdapter extends AAdapter {
 		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
 		User user = engine.getVenueState().users().user(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
-		AMap<AString, ACell> all = user.inbox().getAll();
+		AMap<AString, AMap<AString, ACell>> all = user.inbox().getAll();
 		AVector<ACell> items = Vectors.empty();
 		for (long i = 0; i < all.count(); i++) {
 			ACell v = all.entryAt(i).getValue();
@@ -751,7 +751,7 @@ public class HITLAdapter extends AAdapter {
 			if (did == null) continue;
 			User user = engine.getVenueState().users().user(did);
 			if (user == null) continue;
-			AMap<AString, ACell> reqs = user.inbox().getAll();
+			AMap<AString, AMap<AString, ACell>> reqs = user.inbox().getAll();
 			for (long i = 0; i < reqs.count(); i++) {
 				ACell v = reqs.entryAt(i).getValue();
 				if (!(v instanceof AMap)) continue;

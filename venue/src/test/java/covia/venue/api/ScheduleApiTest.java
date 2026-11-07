@@ -65,7 +65,7 @@ public class ScheduleApiTest {
 
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().user(Strings.create(callerDID));
-		return (u == null) ? 0 : u.jobs().count();
+		return (u == null) ? 0 : u.jobs().size();
 	}
 
 	/** Schedules a far-future no-op event and returns its handle. */

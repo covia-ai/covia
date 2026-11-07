@@ -121,15 +121,15 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		AssetStore assets = vs.assets();
 
-		assertEquals(0, assets.count());
+		assertEquals(0, assets.size());
 
 		AString meta = Strings.create("{\"name\":\"Test Asset\"}");
 		Hash id = assets.store(meta, null);
 
 		assertNotNull(id);
-		assertEquals(1, assets.count());
+		assertEquals(1, assets.size());
 
-		AVector<?> record = assets.getRecord(id);
+		AVector<?> record = assets.get(id);
 		assertNotNull(record);
 		assertEquals(meta, record.get(AssetStore.POS_JSON));
 		assertNull(record.get(AssetStore.POS_CONTENT));
@@ -145,7 +145,7 @@ public class VenueStateTest {
 		ACell content = Strings.create("binary-data-here");
 		Hash id = assets.store(meta, content);
 
-		AVector<?> record = assets.getRecord(id);
+		AVector<?> record = assets.get(id);
 		assertEquals(content, record.get(AssetStore.POS_CONTENT));
 	}
 
@@ -159,7 +159,7 @@ public class VenueStateTest {
 		assets.store(Strings.create("{\"name\":\"Asset 2\"}"), null);
 		assets.store(Strings.create("{\"name\":\"Asset 3\"}"), null);
 
-		assertEquals(3, assets.count());
+		assertEquals(3, assets.size());
 	}
 
 	@Test
@@ -173,7 +173,7 @@ public class VenueStateTest {
 		Hash id2 = assets.store(meta, null);
 
 		assertEquals(id1, id2, "Same metadata should produce same ID");
-		assertEquals(1, assets.count(), "Duplicate store should not create new entry");
+		assertEquals(1, assets.size(), "Duplicate store should not create new entry");
 	}
 
 	@Test
@@ -212,7 +212,7 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zAlice");
 
-		assertEquals(0, user.jobs().count());
+		assertEquals(0, user.jobs().size());
 
 		Blob jobID = Blob.parse("0x0001");
 		AMap<AString, ACell> record = Maps.of(
@@ -220,7 +220,7 @@ public class VenueStateTest {
 			Fields.UPDATED, CVMLong.create(1000L));
 		user.jobs().create(jobID, record);
 
-		assertEquals(1, user.jobs().count());
+		assertEquals(1, user.jobs().size());
 		AMap<AString, ACell> retrieved = user.jobs().getRecord(jobID);
 		assertNotNull(retrieved);
 		assertEquals(Status.PENDING, retrieved.get(Fields.STATUS));
@@ -241,7 +241,7 @@ public class VenueStateTest {
 			"an existing job is not created again");
 		user.jobs().job(jobID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE));
 
-		assertEquals(1, user.jobs().count(), "Should still be one job");
+		assertEquals(1, user.jobs().size(), "Should still be one job");
 		assertEquals(Status.COMPLETE, user.jobs().getRecord(jobID).get(Fields.STATUS));
 	}
 
@@ -260,7 +260,7 @@ public class VenueStateTest {
 		// either linearisation order is valid for the update; the delete must win
 		java.util.List<Boolean> raced = covia.test.Rendezvous.all(
 			() -> job.update(record -> record.assoc(marker, Strings.create("raced"))) != null,
-			() -> user.jobs().remove(jobID));
+			() -> user.jobs().remove(jobID) != null);
 		assertTrue(raced.get(1));
 
 		assertNull(job.getRecord(),
@@ -348,7 +348,7 @@ public class VenueStateTest {
 			"the parent must remain unchanged until sync");
 		forked.sync();
 		assertEquals(CVMLong.create(2000), RT.getIn(connected.get(), Keywords.TIMESTAMP));
-		assertEquals(1, connected.assets().count());
+		assertEquals(1, connected.assets().size());
 	}
 
 	@Test
@@ -366,7 +366,7 @@ public class VenueStateTest {
 		forked.assets().store(Strings.create("{\"name\":\"Invisible\"}"), null);
 
 		// Forked writes should be visible through the fork
-		assertEquals(1, forked.assets().count());
+		assertEquals(1, forked.assets().size());
 
 		// Parent root cursor should be unchanged (no leakage before sync)
 		ACell rootAfter = root.get();
@@ -396,7 +396,7 @@ public class VenueStateTest {
 		forked.sync();
 
 		// Verify changes visible through the connected VenueState
-		assertNotNull(connected.assets().getRecord(assetId),
+		assertNotNull(connected.assets().get(assetId),
 			"Asset should be visible through connected cursor after sync");
 		User connectedAlice = connected.users().user("did:key:zAlice");
 		assertNotNull(connectedAlice,
@@ -432,10 +432,10 @@ public class VenueStateTest {
 		// Single sync propagates all 5 writes
 		forked.sync();
 
-		assertEquals(3, connected.assets().count(),
+		assertEquals(3, connected.assets().size(),
 			"All 3 assets should be visible after single sync");
 		User connectedAlice = connected.users().user("did:key:zAlice");
-		assertEquals(2, connectedAlice.jobs().count(),
+		assertEquals(2, connectedAlice.jobs().size(),
 			"All 2 jobs should be visible after single sync");
 	}
 
@@ -488,8 +488,8 @@ public class VenueStateTest {
 			Fields.UPDATED, CVMLong.create(2000L)));
 
 		// Each sees only their own data
-		assertEquals(1, alice.jobs().count(), "Alice should see only her job");
-		assertEquals(1, bob.jobs().count(), "Bob should see only his job");
+		assertEquals(1, alice.jobs().size(), "Alice should see only her job");
+		assertEquals(1, bob.jobs().size(), "Bob should see only his job");
 		assertNotNull(alice.jobs().getRecord(Blob.parse("0x0001")));
 		assertNull(alice.jobs().getRecord(Blob.parse("0x0002")));
 	}
@@ -577,7 +577,7 @@ public class VenueStateTest {
 
 		User finalUser = vs.users().user(did);
 		assertNotNull(finalUser, "user should exist after concurrent ensure");
-		assertEquals(writers, finalUser.jobs().count(),
+		assertEquals(writers, finalUser.jobs().size(),
 			"all jobs from concurrent ensure() callers must survive");
 	}
 

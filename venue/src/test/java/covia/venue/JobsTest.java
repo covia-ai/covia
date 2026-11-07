@@ -1,7 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -53,24 +53,24 @@ public class JobsTest {
 	@Test
 	public void testCreateAdmitsAJobOnce() {
 		Jobs jobs = user().jobs();
-		assertEquals(0, jobs.count());
+		assertEquals(0, jobs.size());
 		assertNull(jobs.job(ID));
 		assertNull(jobs.getRecord(ID));
 
 		JobState job = jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
 		assertEquals(Status.STARTED, job.getRecord().get(Fields.STATUS));
 		assertNull(jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.FAILED)));
-		assertEquals(1, jobs.count());
+		assertEquals(1, jobs.size());
 		assertEquals(Status.STARTED, jobs.getRecord(ID).get(Fields.STATUS));
 		assertEquals(job.getRecord(), jobs.job(ID).getRecord());
 
-		assertTrue(jobs.remove(ID));
-		assertFalse(jobs.remove(ID));
+		assertNotNull(jobs.remove(ID));
+		assertNull(jobs.remove(ID));
 		assertNull(jobs.job(ID));
 		assertNull(job.getRecord(), "a job removed while held reads as null");
 		assertNull(job.update(record -> record.assoc(Fields.STATUS, Status.COMPLETE)),
 			"an update to a removed job must not recreate it");
-		assertEquals(0, jobs.count());
+		assertEquals(0, jobs.size());
 	}
 
 	@Test
@@ -94,7 +94,7 @@ public class JobsTest {
 		jobs.execute(draft -> {
 			JobState admitted = draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
 			assertTrue(admitted.appendHistory(message));
-			assertTrue(draft.remove(other));
+			assertNotNull(draft.remove(other));
 			assertNull(jobs.job(ID), "the draft is private until it commits");
 		});
 		assertEquals(Vectors.of(message), jobs.getRecord(ID).get(Fields.HISTORY));

@@ -6,6 +6,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.IndexComponent;
 import convex.lattice.NoSuchPathException;
 import convex.core.lang.RT;
 import convex.lattice.TransactionalComponent;
@@ -24,8 +25,12 @@ import covia.lattice.Workspace;
  * component turns into the stored key. Transactions compose admissions,
  * removals and job edits; execution and notifications belong to the runtime
  * after the transaction commits.</p>
+ *
+ * <p>A job's record is removed with {@link #remove}, and the removal is
+ * durable: the venue merge is whole-value LWW, so the post-delete snapshot
+ * wins and the record is not resurrected on sync.</p>
  */
-public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
+public final class Jobs extends IndexComponent<Blob, ACell>
 		implements TransactionalComponent<Index<Blob, ACell>, Jobs>, Owner {
 
 	private final VenueContext context;
@@ -55,14 +60,8 @@ public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 
 	/** Every job's record, keyed by job id; empty when there are none. */
 	public Index<Blob, ACell> getAll() {
-		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
+		Index<Blob, ACell> jobs = get();
 		return (jobs == null) ? Index.none() : jobs;
-	}
-
-	/** Counts the jobs without reading their records. */
-	public long count() {
-		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
-		return (jobs == null) ? 0 : jobs.count();
 	}
 
 	/**
@@ -74,8 +73,7 @@ public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 	 *         there is no such job
 	 */
 	public JobState job(Blob id) {
-		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
-		return (jobs != null && jobs.containsKey(id)) ? at(id) : null;
+		return containsKey(id) ? at(id) : null;
 	}
 
 	/**
@@ -85,8 +83,7 @@ public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 	 * @return The record, or null if there is no such job
 	 */
 	public AMap<AString, ACell> getRecord(Blob id) {
-		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
-		return (jobs == null) ? null : RT.ensureMap(jobs.get(id));
+		return RT.ensureMap(get(id));
 	}
 
 	/**
@@ -97,11 +94,8 @@ public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 	 * @return The new job, or null if the job already existed
 	 */
 	JobState create(Blob id, AMap<AString, ACell> record) {
-		Index<Blob, ACell> before = cursor().getAndUpdate(jobs -> {
-			if (jobs == null) return Index.<Blob, ACell>none().assoc(id, record);
-			return jobs.containsKey(id) ? jobs : jobs.assoc(id, record);
-		});
-		return (before == null || !before.containsKey(id)) ? at(id) : null;
+		ACell before = path(id).getAndUpdate(current -> (current == null) ? record : current);
+		return (before == null) ? at(id) : null;
 	}
 
 	/**
@@ -121,20 +115,7 @@ public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 	 * {@link #job}, which is null for a missing job.
 	 */
 	public JobState at(Blob id) {
-		return new JobState(context, cursor().withDefault(Index.none()).path(id), owner, id);
-	}
-
-	/**
-	 * Removes a job's record, if present. The removal is durable: the venue
-	 * merge is whole-value LWW, so the post-delete snapshot wins and the record
-	 * is not resurrected on sync.
-	 *
-	 * @param id Job id
-	 * @return true if the job existed and was removed
-	 */
-	public boolean remove(Blob id) {
-		Index<Blob, ACell> before = cursor().getAndUpdate(jobs -> (jobs == null) ? null : jobs.dissoc(id));
-		return before != null && before.containsKey(id);
+		return new JobState(context, path(id), owner, id);
 	}
 
 	/**

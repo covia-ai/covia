@@ -963,7 +963,7 @@ public class JobManager {
 					if (draft.users().ensure(ownerDID).jobs().create(jobID, status) == null) {
 						throw new IllegalStateException(JOB_ID_EXISTS + jobID);
 					}
-					draft.jobIndex().admit(jobID, admitted);
+					draft.jobIndex().put(jobID, admitted);
 				});
 				record = account.jobs().job(jobID);
 			}
@@ -1329,7 +1329,7 @@ public class JobManager {
 		if (did == null) return 0;
 		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
 		User user = engine.getVenueState().users().user(did);
-		return user == null ? 0 : user.jobs().count();
+		return user == null ? 0 : user.jobs().size();
 	}
 
 	// ========== Job Lifecycle Control ==========
@@ -1419,7 +1419,7 @@ public class JobManager {
 		AString ownerDID = Attribution.owner(data);
 		boolean removed = ownerDID != null && venue().transact(draft -> {
 			User user = draft.users().user(ownerDID);
-			if (user == null || !user.jobs().remove(id)) return false;
+			if (user == null || user.jobs().remove(id) == null) return false;
 			draft.jobIndex().remove(id);
 			return true;
 		});

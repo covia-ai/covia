@@ -128,7 +128,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	}
 
 	/** The data of a namespace held in an {@code {updated, data}} record, which a change stamps. */
-	private AForkableCursor<ACell> wrapped(AString namespace) {
+	private <T extends ACell> AForkableCursor<T> wrapped(AString namespace) {
 		return StampedCursor.create(cursor().withDefault(Maps.empty()).path(namespace),
 				context::currentTimestamp, Covia::stampUpdated)
 			.withDefault(Maps.empty()).path(Covia.WORKSPACE_DATA);

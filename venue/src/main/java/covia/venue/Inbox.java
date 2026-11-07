@@ -1,10 +1,12 @@
 package covia.venue;
 
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.MapComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.CoviaValue;
 
@@ -16,9 +18,9 @@ import covia.lattice.CoviaValue;
  * {@code covia:write} cannot change them. The cursor is the {@code h} region's
  * data inside its stamped envelope, so every change stamps the region.</p>
  */
-public final class Inbox extends ALatticeComponent<ACell> {
+public final class Inbox extends MapComponent<AString, AMap<AString, ACell>> {
 
-	Inbox(AForkableCursor<ACell> cursor) {
+	Inbox(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> cursor) {
 		super(cursor);
 	}
 
@@ -29,35 +31,8 @@ public final class Inbox extends ALatticeComponent<ACell> {
 	}
 
 	/** Every request record, keyed by request id; empty when there are none. */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getAll() {
-		ACell v = cursor().getOrDefault(null);
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : Maps.empty();
-	}
-
-	/**
-	 * Gets one request record.
-	 *
-	 * @param id Request id
-	 * @return The record, or null if absent
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> get(AString id) {
-		ACell v = getAll().get(id);
-		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
-	}
-
-	/**
-	 * Writes a request record, replacing any with the same id.
-	 *
-	 * @param id Request id
-	 * @param record Request record
-	 */
-	@SuppressWarnings("unchecked")
-	public void put(AString id, AMap<AString, ACell> record) {
-		cursor().updateAndGet(data -> {
-			AMap<AString, ACell> m = (data instanceof AMap) ? (AMap<AString, ACell>) data : Maps.empty();
-			return m.assoc(id, record);
-		});
+	public AMap<AString, AMap<AString, ACell>> getAll() {
+		AMap<AString, AMap<AString, ACell>> records = get();
+		return (records == null) ? Maps.empty() : records;
 	}
 }

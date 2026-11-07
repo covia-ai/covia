@@ -6,6 +6,7 @@ import java.util.function.UnaryOperator;
 import convex.auth.did.DID;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -15,7 +16,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.Covia;
-import convex.lattice.ALatticeComponent;
+import convex.lattice.MapComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -24,18 +25,21 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 
-/** Stored authentication directory and key lifecycle rules. No providers or runtime services. */
-public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
-		implements TransactionalComponent<AMap<AString, AMap<AString, ACell>>, AuthState> {
+/**
+ * Stored authentication directory and key lifecycle rules: named users' records
+ * by id, which {@code get(id)} reads. No providers or runtime services.
+ */
+public final class AuthState extends MapComponent<AString, AMap<AString, ACell>>
+		implements TransactionalComponent<AHashMap<AString, AMap<AString, ACell>>, AuthState> {
 	private final VenueContext context;
 
-	AuthState(VenueContext context, AForkableCursor<AMap<AString, AMap<AString, ACell>>> cursor) {
+	AuthState(VenueContext context, AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> cursor) {
 		super(cursor);
 		this.context = context;
 	}
 
 	@Override
-	public AuthState withCursor(AForkableCursor<AMap<AString, AMap<AString, ACell>>> draft) {
+	public AuthState withCursor(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> draft) {
 		return new AuthState(context, draft);
 	}
 
@@ -47,47 +51,24 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	public static final String KEY_ALREADY_BOUND = "Authentication key is already bound to named user ";
 
 	/**
-	 * Get a user record by ID
-	 * @param id User identifier as AString (e.g. "alice_gmail_com")
-	 * @return User record map, or null if not found
-	 */
-	public AMap<AString, ACell> getUser(AString id) {
-		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
-		if (usersMap == null) return null;
-		return (AMap<AString, ACell>) usersMap.get(id);
-	}
-
-	/**
 	 * Store or update a user record. Adds an "updated" timestamp automatically.
 	 * @param id User identifier as AString (e.g. "alice_gmail_com")
 	 * @param record User record map (should contain "did" and any other fields)
 	 */
 	public void putUser(AString id, AMap<AString, ACell> record) {
 		CVMLong timestamp = getContext().currentTimestamp();
-		cursor().updateAndGet(current -> {
-			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(current);
-			if (m == null) m = Maps.empty();
-			AMap<AString, ACell> previous = m.get(id);
-			return m.assoc(id, stampUser(record, previous, timestamp));
-		});
+		path(id).updateAndGet(previous -> stampUser(record, previous, timestamp));
 	}
 
 	/** Atomically updates one user row without replacing unrelated fields. */
 	public AMap<AString, ACell> updateUser(AString id,
 			UnaryOperator<AMap<AString, ACell>> updater) {
 		CVMLong timestamp = getContext().currentTimestamp();
-		AMap<AString, AMap<AString, ACell>> result = cursor().updateAndGet(current -> {
-			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> users =
-				(AMap<AString, AMap<AString, ACell>>) (AMap<?, ?>) RT.castMap(current);
-			if (users == null) users = Maps.empty();
-			AMap<AString, ACell> previous = users.get(id);
+		return path(id).updateAndGet(previous -> {
 			AMap<AString, ACell> updated = updater.apply(previous);
-			if (updated == null || Objects.equals(previous, updated)) return users;
-			return users.assoc(id, stampUser(updated, previous, timestamp));
+			if (updated == null || Objects.equals(previous, updated)) return previous;
+			return stampUser(updated, previous, timestamp);
 		});
-		return (result != null) ? result.get(id) : null;
 	}
 
 	static AMap<AString, ACell> stampUser(AMap<AString, ACell> record,
@@ -104,31 +85,23 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	 */
 	public boolean ensureManagedUser(AString id, AString did) {
 		CVMLong timestamp = getContext().currentTimestamp();
-		ACell before = cursor().getAndUpdate(current -> {
-			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> users =
-				(AMap<AString, AMap<AString, ACell>>) (AMap<?, ?>) RT.castMap(current);
-			if (users == null) users = Maps.empty();
-			AMap<AString, ACell> existing = users.get(id);
+		AMap<AString, ACell> before = path(id).getAndUpdate(existing -> {
 			if (existing != null) {
 				AString stored = RT.ensureString(existing.get(Fields.DID));
 				if (!did.equals(stored)) {
 					throw new ConflictException("Named user " + id
 						+ " is already bound to a different DID: " + stored);
 				}
-				return users;
+				return existing;
 			}
-			AMap<AString, ACell> record = stampUser(
-				Maps.of(Fields.DID, did, Fields.NAME, id), null, timestamp);
-			return users.assoc(id, record);
+			return stampUser(Maps.of(Fields.DID, did, Fields.NAME, id), null, timestamp);
 		});
-		AMap<?, ?> previous = RT.castMap(before);
-		return previous == null || previous.get(id) == null;
+		return before == null;
 	}
 
 	/** Public authenticator lifecycle records for one named user. */
 	public AMap<AString, ACell> getAuthenticationKeys(AString id) {
-		AMap<AString, ACell> record = getUser(id);
+		AMap<AString, ACell> record = get(id);
 		if (record == null) return Maps.empty();
 		AMap<AString, ACell> keys = RT.ensureMap(record.get(Fields.AUTHENTICATION_KEYS));
 		return (keys != null) ? keys : Maps.empty();
@@ -177,7 +150,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 			throw new InvalidInputException("At least one authentication key is required");
 		}
 		requireActorDID(actorDID);
-		AMap<AString, ACell> user = getUser(id);
+		AMap<AString, ACell> user = get(id);
 		if (user == null) throw new NotFoundException("Unknown named user: " + id, id.toString());
 
 		AMap<AString, ACell> keys = getAuthenticationKeys(id);
@@ -226,7 +199,7 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	private boolean revokeAuthenticationKeyInDraft(AString id, AString keyDID,
 			AString actorDID, boolean allowLast) {
 		requireActorDID(actorDID);
-		AMap<AString, ACell> user = getUser(id);
+		AMap<AString, ACell> user = get(id);
 		if (user == null) throw new NotFoundException("Unknown named user: " + id, id.toString());
 		AMap<AString, ACell> keys = getAuthenticationKeys(id);
 		AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
@@ -283,12 +256,12 @@ public final class AuthState extends ALatticeComponent<AMap<AString, AMap<AStrin
 	}
 
 	/**
-	 * Get all users from the lattice cursor
-	 * @return Map of user ID to user record
+	 * Every named user's record.
+	 * @return Map of user ID to user record; empty when there are none
 	 */
-	@SuppressWarnings("unchecked")
 	public AMap<AString, AMap<AString, ACell>> getUsers() {
-		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(cursor().getOrDefault(null));
+		AMap<AString, AMap<AString, ACell>> users = get();
+		return (users == null) ? Maps.empty() : users;
 	}
 
 	/** Atomic directory mutation, including cross-user key constraints. */
