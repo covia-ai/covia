@@ -42,27 +42,28 @@ Today keys live elsewhere:
    private key yields the public key; nothing else is needed.
 2. **A keyring is its holder's alone.** Its keys are used, and listed, only
    for a request whose caller is the holder, authenticated as itself or acting
-   as itself in trusted in-process code, or by a principal the holder has
-   explicitly granted that use. A capability scope can narrow the holder's own
+   as itself in trusted in-process code, or by a principal holding a grant of
+   that use (principle 5). A capability scope can narrow the holder's own
    use, as an agent's caps do.
 3. **Nothing implicit reaches a keyring.** Nesting, ownership and acting on an
    identity's behalf confer no use of its keys: an identity nested below a root
    (`<root>:u:alice`) and an agent of an owner use the root's or owner's keys
-   only under an explicit grant, and `user/sudo`, an activated allowance or the
-   venue's power over its users ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md))
-   never sign as the identity. A signature travels to other venues, and the
-   host root holds only at its own venue.
+   only under a grant, and `user/sudo` never signs as the identity. The venue
+   reaches a holder's keys only as it reaches any of the holder's resources,
+   by a grant (principle 5): it is the root for the identities it custodies,
+   and today not for a self-sovereign holder's resources
+   ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md), open question 6).
 4. **An identity token for oneself is not key use.** A nested identity may
    always obtain an identity token naming itself, signed by its root's key,
    whether the root is the venue or an identity whose key the venue holds. The
    token attests only the identity the root's nesting already established, so
    it is authentication, under `auth:identity-token`'s own rules, and needs no
    right over the root's keys.
-5. **A grant of key use is the holder's own.** It counts only when its chain
-   starts with the holder: signed by the holder, or attested on the holder's
-   instruction by the venue custodying its identity (COG-17). A grant rooted in
-   the host root never confers key use, so the venue cannot grant itself, or
-   anyone, the use of a key it holds for someone else.
+5. **A grant of key use is an ordinary grant.** A key is a resource in its
+   holder's namespace, and grants cover it by the standard rules (COG-17): a
+   key ability, `key` or `*`, on the key, the keyring or anything containing
+   it, from a root for the holder's resources. A holder that grants `*` over
+   its namespace grants the use of its keys with it.
 6. **Keys are never readable.** No operation returns, exports or lends a
    private key, as for the venue's own key.
 7. **One signing function** serves identity tokens, UCAN grants, Convex
@@ -228,7 +229,8 @@ lattice paths.
 | `key/decrypt` | `<did>/keys/<pk>` | Decrypting with it (`crypto:decrypt`) |
 | `key/derive` | `<did>/keys/<pk>` | Deriving keys from a held mnemonic, named by its master node's public key (`crypto:derive-key`) |
 
-`key` covers every `key/…` ability. The kinds of signing let a capability
+`key` covers every `key/…` ability, and `*` covers them as it covers every
+ability. The kinds of signing let a capability
 scope narrow what a key may sign: an agent can hold `key/sign/token` on its
 own key without being able to sign transactions. An operation that signs
 whatever its caller supplies, such as `crypto:jwt-sign` with its free claims,
@@ -241,12 +243,11 @@ A check passes in one of two ways, and in no other:
    over its own keyring. An agent needs caps naming its own keyring by DID URL,
    since a bare path in caps names its owner's namespace. An `nb.gate` on such
    a cap can make signing wait for an approval.
-2. **The caller presents a grant of the ability on that key whose chain starts
-   with the holder** (principle 5). The grant bounds the use as any grant does:
-   to the key, the kind of signing, an expiry, and any `nb.gate`.
+2. **The caller presents a grant that covers the ability on that key,**
+   checked as any grant is (principle 5). The grant bounds the use as any
+   grant does: to the key, the kind of signing, an expiry, and any `nb.gate`.
 
-Admission, nesting, ownership, `user/sudo` and grants rooted in the host root
-never pass. An agent with no caps, whose base is its owner's authority, still
+Admission, nesting, ownership and `user/sudo` never pass. An agent with no caps, whose base is its owner's authority, still
 cannot use its owner's keys, because its DID is not its owner's.
 
 An identity token naming the caller, signed by its root's key, is not a use
@@ -255,8 +256,8 @@ nested below the root under that operation's own rules, as it does today for
 identities nested below the venue's `did:key` ([AUTH.md](./AUTH.md) §5.2).
 Any other use of the root's key needs a grant. The venue's own key is the
 venue's keyring entry under the same rules: the venue acting as itself, in
-trusted code, uses it, and anyone else only under an explicit grant from the
-venue.
+trusted code, uses it, and anyone else only under a grant from the venue that
+covers it.
 
 ## Security
 
@@ -269,14 +270,14 @@ venue.
 - **A secret is the readable choice.** A seed or mnemonic kept as a secret can
   be read back by its owner and lent with `secret/use`; one in a keyring
   cannot. The holder chooses which it wants.
-- **No implicit use.** A key is used only by its holder or under the holder's
-  explicit grant, so a deputy acting for the holder, an identity nested below
-  it, or the venue acting on its behalf can never make the venue sign as the
-  holder.
+- **No implicit use.** A key is used only by its holder or under a grant that
+  covers it, so a deputy acting for the holder or an identity nested below it
+  cannot make the venue sign as the holder without one.
 - **Granting key use is granting a signature.** A grantee of `key/sign/raw`
   can make the key sign anything, so its holder should grant the narrowest
-  kind of signing, on one key, for the shortest time. A grant of the venue's
-  own key hands out the venue's signature, the sharpest grant there is.
+  kind of signing, on one key, for the shortest time. A grant of `*` over a
+  namespace includes its keys. A grant of the venue's own key hands out the
+  venue's signature, the sharpest grant there is.
 
 ## Open questions
 
