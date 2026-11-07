@@ -519,6 +519,37 @@ class DomainTransactionTest {
 	}
 
 	@Test
+	void jobUpdateCannotCommitIntoARecreatedAccount() throws Exception {
+		var venue = VenueState.create(AKeyPair.generate());
+		var user = venue.users().ensure(DID);
+		var id = Blob.fromHex("01");
+		user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED));
+		var job = user.jobs().get(id);
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> job.update(data -> {
+				entered.countDown();
+				await(resume);
+				return data.assoc(Fields.STATUS, covia.grid.Status.COMPLETE);
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				venue.deleteUser(DID, DID);
+				venue.users().finishDeletion(DID);
+				assertTrue(venue.users().create(DID));
+				venue.users().get(DID).jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.PENDING));
+			} finally { resume.countDown(); }
+			var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+				() -> pending.get(10, TimeUnit.SECONDS));
+			assertInstanceOf(AuthException.class, failure.getCause());
+			assertEquals(Users.ACCOUNT_DELETED, failure.getCause().getMessage());
+		}
+		assertEquals(covia.grid.Status.PENDING,
+			venue.users().get(DID).jobs().getRecord(id).get(Fields.STATUS), "the new account's job is untouched");
+	}
+
+	@Test
 	void commitDoesNotApplyTheComponentsTimestampPolicyTwice() {
 		var key = AKeyPair.generate();
 		var ticks = new AtomicLong(100);

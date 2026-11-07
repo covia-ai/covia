@@ -109,16 +109,14 @@ public final class JobState extends ACoviaComponent<ACell>
 	private static final CoviaPath SCRATCH = CoviaPath.segments(Fields.TEMP);
 
 	/** Pure record edit; null rejects the edit. Returns the committed record,
-	 * or null for a rejected/missing row, resetting acceptance on every retry. */
+	 * or null for a rejected/missing row. */
 	AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> action) {
-		boolean[] accepted = {false};
-		ACell committed = cursor().updateAndGet(value -> {
-			AMap<AString, ACell> current = Job.currentState(RT.ensureMap(value));
+		return transact(draft -> {
+			AMap<AString, ACell> current = draft.getRecord();
 			AMap<AString, ACell> next = current == null ? null : action.apply(current);
-			accepted[0] = next != null;
-			return (next == null) ? value : Job.currentState(next);
+			if (next == null) return null;
+			return RT.ensureMap(draft.cursor().updateAndGet(value -> Job.currentState(next)));
 		});
-		return accepted[0] ? RT.ensureMap(committed) : null;
 	}
 
 	/** History remains appendable after terminal completion. Repeated message IDs

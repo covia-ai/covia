@@ -2,7 +2,6 @@ package covia.adapter;
 
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.UnaryOperator;
 
 import convex.auth.ucan.Capability;
@@ -143,7 +142,12 @@ public class PreferencesAdapter extends AAdapter {
 	}
 
 	private AForkableCursor<ACell> userCursor(AString did) {
-		return adapterState(did).cursor().withDefault(Maps.empty())
+		return userCursor(adapterState(did), did);
+	}
+
+	/** The user's preferences in {@code state}, live or a transaction's draft. */
+	private static AForkableCursor<ACell> userCursor(AdapterState state, AString did) {
+		return state.cursor().withDefault(Maps.empty())
 			.path(K_USERS).withDefault(Maps.empty()).path(did);
 	}
 
@@ -188,20 +192,20 @@ public class PreferencesAdapter extends AAdapter {
 		engine.requireLocalAccess(ctx,
 			Strings.create(user + "/" + VIEW_PATH + (path.isEmpty() ? "" : "/" + path)), Capability.CRUD_WRITE);
 		long limit = limitFor(user);
-		AtomicBoolean changed = new AtomicBoolean();
-		userCursor(user).updateAndGet(current -> {
+		boolean changed = adapterState(user).transact(draft -> {
+			AForkableCursor<ACell> preferences = userCursor(draft, user);
+			ACell current = preferences.getOrDefault(null);
 			ACell root = (current != null) ? current : Maps.empty();
 			ACell next = apply(command, root, keys, value, path);
-			boolean differs = !Utils.equals(root, next);
-			changed.set(differs);
-			if (!differs) return current;
+			if (Utils.equals(root, next)) return false;
 			long size = Cells.storageSize(next);
 			if (size > limit && size > Cells.storageSize(current)) {
 				throw new InvalidInputException(TOO_LARGE.formatted(size, limit));
 			}
-			return next;
+			preferences.set(next);
+			return true;
 		});
-		return ("remove".equals(command) && !changed.get())
+		return ("remove".equals(command) && !changed)
 			? Maps.of(K_OK, CVMBool.TRUE, Fields.REMOVED, CVMBool.FALSE)
 			: Maps.of(K_OK, CVMBool.TRUE);
 	}

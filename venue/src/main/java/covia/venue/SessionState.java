@@ -96,17 +96,16 @@ public final class SessionState extends ACoviaComponent<ACell>
 		return (policy == null) ? position : position.ownedBy(policy, path);
 	}
 
-	/** Null from the operation means rejection; unchanged records still count as accepted.
-	 * Reset the result on every retry, including a concurrently removed session. */
+	/** Null from the operation means rejection, as does a missing session;
+	 * unchanged records still count as accepted. */
 	private boolean update(UnaryOperator<AMap<AString, ACell>> action) {
-		boolean[] accepted = {false};
-		cursor().updateAndGet(value -> {
-			AMap<AString, ACell> record = RT.ensureMap(value);
+		return transact(draft -> {
+			AMap<AString, ACell> record = draft.getRecord();
 			AMap<AString, ACell> next = record == null ? null : action.apply(record);
-			accepted[0] = next != null;
-			return next == null ? value : next;
+			if (next == null) return false;
+			draft.cursor().set(next);
+			return true;
 		});
-		return accepted[0];
 	}
 
 	public ACell cycleEpoch() { return RT.getIn(getRecord(), K_IN_CYCLE); }
