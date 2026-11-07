@@ -10,7 +10,6 @@ import convex.lattice.NoSuchPathException;
 import convex.core.lang.RT;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
@@ -26,7 +25,7 @@ import covia.lattice.Workspace;
  * removals and job edits; execution and notifications belong to the runtime
  * after the transaction commits.</p>
  */
-public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
+public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 		implements TransactionalComponent<Index<Blob, ACell>, Jobs>, Owner {
 
 	private final VenueContext context;

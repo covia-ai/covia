@@ -16,7 +16,6 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.lattice.CoviaValue;
 import convex.lattice.ALatticeComponent;
@@ -44,7 +43,7 @@ import covia.api.Fields;
  *
  * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
-public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, SecretStore> {
+public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, SecretStore> {
 	@Override
 	public SecretStore withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
 		return new SecretStore(context, draft);
@@ -61,7 +60,7 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 	 */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
-		if (end - start != 1) return super.resolve(segments, start, end);
+		if (end - start != 1) return CoviaValue.within(this, segments, start, end);
 		return new Record(this, segments[start]);
 	}
 

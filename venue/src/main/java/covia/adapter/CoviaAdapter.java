@@ -33,7 +33,6 @@ import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.Access;
 import covia.lattice.AccessPolicy;
 import covia.lattice.AdapterView;
@@ -252,8 +251,8 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * <p>The path's string segments are resolved through the components they
 	 * reach, each mapping a segment to its lattice key
-	 * ({@link covia.lattice.ACoviaComponent#resolve(AString[], int, int)}), and the value where they
-	 * end is read.</p>
+	 * ({@link ALatticeComponent#resolve(AString[], int, int)}), and the value where they
+	 * end is read as stored.</p>
 	 *
 	 * <p>Response always includes {@code exists} (boolean) and {@code value}:</p>
 	 * <ul>
@@ -264,7 +263,7 @@ public class CoviaAdapter extends AAdapter {
 	 *       no asset</li>
 	 * </ul>
 	 * <p>A path that names no place data could be, such as a name a user's data
-	 * does not have, is refused with {@link covia.lattice.ACoviaComponent#NO_SUCH_PATH}.</p>
+	 * does not have, is refused with {@link covia.lattice.CoviaPath#NO_SUCH_PATH}.</p>
 	 *
 	 * <p>An optional {@code maxSize} parameter (default {@value #DEFAULT_MAX_SIZE}
 	 * bytes) guards against returning excessively large values. If the value's
@@ -1258,9 +1257,9 @@ public class CoviaAdapter extends AAdapter {
 	 * @param ownership The innermost owner's policy, or for {@code v/} and
 	 *        {@code x/} that of the view
 	 */
-	private record Located(ACoviaComponent<?> start, Path path, Owner.Ownership ownership) {
+	private record Located(ALatticeComponent<?> start, Path path, Owner.Ownership ownership) {
 		/** {@code path} below {@code owner}, decided by the owners it crosses. */
-		static <O extends ACoviaComponent<?> & Owner> Located below(O owner, Path path) {
+		static <O extends ALatticeComponent<?> & Owner> Located below(O owner, Path path) {
 			return new Located(owner, path, Owner.decide(owner, path));
 		}
 	}

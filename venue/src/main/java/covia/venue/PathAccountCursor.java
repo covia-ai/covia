@@ -33,6 +33,13 @@ final class PathAccountCursor extends ATransformCursor<ACell, ACell> {
 		return stored;
 	}
 
+	/** A record that is not live is absent here, not a stored nil, so the account does not exist. */
+	@Override
+	protected Object viewValue(ACell stored) {
+		ACell live = view(stored);
+		return (live == null) ? MISSING : live;
+	}
+
 	@Override
 	protected ACell write(ACell current, ACell value) {
 		// Evaluated inside the underlying atomic update, including CAS retries.

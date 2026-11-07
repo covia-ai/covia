@@ -24,7 +24,7 @@ import covia.venue.RequestContext;
  *
  * <p>A path that names no place is no failure to make an access: it answers
  * {@link #isValid} with false, and reading or changing it is refused with
- * {@link ACoviaComponent#NO_SUCH_PATH}, before any policy is asked, since
+ * {@link CoviaPath#NO_SUCH_PATH}, before any policy is asked, since
  * validity follows only the path's shape and says nothing of the data.</p>
  *
  * <p>The covia adapter makes these for the paths requests name
@@ -71,7 +71,7 @@ public final class Access {
 		try {
 			found = start.resolve(path);
 		} catch (NoSuchPathException e) {
-			reason = ACoviaComponent.noSuchPath(e);
+			reason = CoviaPath.noSuchPath(e);
 		}
 		this.destination = found;
 		this.invalid = reason;

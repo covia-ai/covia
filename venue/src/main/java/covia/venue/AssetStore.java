@@ -10,9 +10,10 @@ import convex.core.data.Index;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import covia.lattice.ACoviaComponent;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
+import covia.lattice.CoviaValue;
 
 /**
  * Cursor wrapper for the venue's asset store.
@@ -24,10 +25,16 @@ import convex.lattice.cursor.AForkableCursor;
  *
  * <p>Each asset record is a 3-element vector: [json, content, metaMap].</p>
  */
-public class AssetStore extends ACoviaComponent<Index<ABlob, AVector<ACell>>> implements TransactionalComponent<Index<ABlob, AVector<ACell>>, AssetStore> {
+public class AssetStore extends ALatticeComponent<Index<ABlob, AVector<ACell>>> implements TransactionalComponent<Index<ABlob, AVector<ACell>>, AssetStore> {
 	@Override
 	public AssetStore withCursor(AForkableCursor<Index<ABlob, AVector<ACell>>> draft) {
 		return new AssetStore(draft);
+	}
+
+	/** An asset's hash and the positions below it name data in its record, read-only. */
+	@Override
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+		return CoviaValue.within(this, segments, start, end);
 	}
 
 

@@ -10,10 +10,10 @@ import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.AUpdateCursor;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.ValuePath;
@@ -25,7 +25,7 @@ import covia.lattice.ValuePath;
  * atomic root; external effects belong after commit. Snapshot reconciliation
  * remains a whole-venue recovery policy, not a merge of adapter operations.
  */
-public final class AdapterState extends ACoviaComponent<ACell>
+public final class AdapterState extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, AdapterState> {
 	private static final Pattern ADAPTER_NAME = Pattern.compile("[a-z][a-z0-9-]*");
 	private final VenueContext context;

@@ -9,10 +9,10 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
-import covia.lattice.ACoviaComponent;
 
 /**
  * The venue's entries for its unfinished jobs ({@code :jobs}), by job id: what
@@ -26,7 +26,7 @@ import covia.lattice.ACoviaComponent;
  * alone (JOBS.md, Recovery on restart). A job held only in memory has
  * none.</p>
  */
-public final class JobIndex extends ACoviaComponent<Index<Blob, ACell>>
+public final class JobIndex extends ALatticeComponent<Index<Blob, ACell>>
 		implements TransactionalComponent<Index<Blob, ACell>, JobIndex> {
 
 	/** The DID of the user whose {@code j/} holds the job's record. */

@@ -5,6 +5,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Path;
 import convex.core.data.Strings;
+import convex.lattice.NoSuchPathException;
 import covia.exception.InvalidInputException;
 
 /**
@@ -32,6 +33,12 @@ public final class CoviaPath {
 
 	/** Refusal for a path array with an element containing {@code /}; names its position. */
 	public static final String SEGMENT_HAS_SLASH = "Path segment %d must not contain '/'";
+
+	/**
+	 * Refusal for a path that names no place data could be; names the path,
+	 * then the part of it up to the first segment that names nothing.
+	 */
+	public static final String NO_SUCH_PATH = "No such path: %s (nothing can be at %s)";
 
 	/** The path with no segments, the root of whatever it is resolved against. */
 	public static final Path EMPTY = Path.of();
@@ -118,5 +125,11 @@ public final class CoviaPath {
 			sb.append('/').append(request.get(i));
 		}
 		return sb.toString();
+	}
+
+	/** The refusal for a path that names no place, as {@link NoSuchPathException} reports it. */
+	public static String noSuchPath(NoSuchPathException e) {
+		Path from = e.getPath();
+		return String.format(NO_SUCH_PATH, address(from), address(from.slice(0, 1)));
 	}
 }

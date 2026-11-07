@@ -19,6 +19,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALatticeComponent;
+import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.ReadOnlyCursorException;
 import covia.exception.AuthException;
@@ -164,13 +165,23 @@ public class WorkspaceTest {
 		assertEquals(Maps.of("status", "STARTED", AREA, Maps.of("x", CVMLong.ONE)), record.get());
 	}
 
+	/** A component other than a workspace, whose data a path reads read-only by Covia's rules. */
+	private static ALatticeComponent<ACell> component(AForkableCursor<ACell> cursor) {
+		return new ALatticeComponent<ACell>(cursor) {
+			@Override
+			public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+				return CoviaValue.within(this, segments, start, end);
+			}
+		};
+	}
+
 	@Test
 	public void testOnlyAWorkspaceIsChangedByPath() {
 		var cursor = Cursors.<ACell>root(Maps.of("list", Vectors.of(CVMLong.ONE, CVMLong.create(2))));
-		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
+		ALatticeComponent<ACell> component = component(cursor);
 		ALatticeComponent<?> data = component.resolve(path("list/1"));
 		assertEquals(CVMLong.create(2), data.cursor().get());
-		assertEquals(ACoviaComponent.READ_ONLY,
+		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(data)).getMessage());
 		assertThrows(ReadOnlyCursorException.class, () -> data.cursor().set(CVMLong.ONE),
 			"data below a component other than a workspace takes no change");
@@ -213,7 +224,7 @@ public class WorkspaceTest {
 		Blob id = Blob.fromHex("0a0b");
 		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE),
 			"list", Vectors.of(Strings.create("first")), "ids", Index.of(id, CVMLong.create(2))));
-		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
+		ALatticeComponent<ACell> component = component(cursor);
 
 		assertEquals(CVMLong.ONE, component.resolve(path("a/b")).cursor().get());
 		assertEquals(CVMLong.ONE, component.resolve(path("a")).resolve(path("b")).cursor().get(),

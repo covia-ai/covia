@@ -11,7 +11,6 @@ import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.CoviaAdapter;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 
 /**
@@ -61,7 +60,7 @@ public class AddressingTest {
 	@Test
 	public void testADIDStartsAPathOnlyAsItsFirstElement() {
 		String slashed = "/" + alice + "/w/notes";
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, slashed, "/" + alice), noPlace(slashed));
+		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, slashed, "/" + alice), noPlace(slashed));
 		assertNull(engine.resolvePath(Strings.create(slashed), ALICE));
 	}
 
@@ -69,15 +68,15 @@ public class AddressingTest {
 	public void testAContextRootedNamespaceAfterADIDNamesNoPlace() {
 		for (String namespace : new String[] {"n", "c", "t", "v"}) {
 			String path = alice + "/" + namespace + "/x";
-			assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + path, "/" + alice + "/" + namespace),
+			assertEquals(String.format(CoviaPath.NO_SUCH_PATH, "/" + path, "/" + alice + "/" + namespace),
 				noPlace(path), path);
 		}
 	}
 
 	@Test
 	public void testARefusalSaysWhereThePathStopsNamingAPlace() {
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/wrok/notes/today", "/wrok"), noPlace("wrok/notes/today"));
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/j/not-hex/temp", "/j/not-hex"), noPlace("j/not-hex/temp"));
+		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, "/wrok/notes/today", "/wrok"), noPlace("wrok/notes/today"));
+		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, "/j/not-hex/temp", "/j/not-hex"), noPlace("j/not-hex/temp"));
 		assertNull(covia.resolve(ALICE, Strings.create("w/no/such/value")).reasonInvalid(),
 			"a missing value is a place with nothing there");
 	}

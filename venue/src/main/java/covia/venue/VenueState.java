@@ -28,7 +28,6 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
-import covia.lattice.ACoviaComponent;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.OwnedMap;
@@ -77,7 +76,7 @@ import covia.venue.storage.LatticeStorage;
  * a snapshot rather than replaying operations. Live work uses transactions.
  * Children have no independent publication or merge boundary.</p>
  */
-public class VenueState extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
+public class VenueState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
 	/** The venue schema version: the number of {@link VenueMigrations#steps}. */
 	public static final long CURRENT_VERSION = VenueMigrations.VERSION;
 	public static final String INVALID_STATE = "Venue state must be a keyword-keyed Index";

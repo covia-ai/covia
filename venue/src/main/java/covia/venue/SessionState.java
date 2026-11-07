@@ -13,8 +13,8 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
+import covia.lattice.CoviaValue;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
 import convex.lattice.ALatticeComponent;
@@ -31,7 +31,7 @@ import static covia.venue.AgentState.*;
  * sessions are never created by this view; creation belongs to AgentState.
  * Transactions compose session changes without runtime services or external I/O.
  */
-public final class SessionState extends ACoviaComponent<ACell>
+public final class SessionState extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, SessionState>, Owner {
 	private final VenueContext context;
 	private final AString owner;
@@ -92,7 +92,7 @@ public final class SessionState extends ACoviaComponent<ACell>
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		return (start < end && K_C.equals(segments[start]))
-			? workspace().resolve(segments, start + 1, end) : super.resolve(segments, start, end);
+			? workspace().resolve(segments, start + 1, end) : CoviaValue.within(this, segments, start, end);
 	}
 
 	/** See {@link #resolve(AString[], int, int)}; none outside any user. */

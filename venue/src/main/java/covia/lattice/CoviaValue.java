@@ -6,6 +6,7 @@ import java.util.Objects;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Path;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.ValueComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.PathCursor;
@@ -27,6 +28,17 @@ public class CoviaValue<V extends ACell> extends ValueComponent<V> {
 
 	public CoviaValue(AForkableCursor<V> cursor) {
 		super(cursor);
+	}
+
+	/**
+	 * The place segments {@code [start, end)} name in {@code component}'s own
+	 * value, read-only, for a component whose data only its own operations
+	 * change; the component itself for none.
+	 */
+	public static ALatticeComponent<?> within(ALatticeComponent<?> component, AString[] segments, int start, int end) {
+		Objects.checkFromToIndex(start, end, segments.length);
+		if (start == end) return component;
+		return new CoviaValue<>(component.cursor().readOnly()).resolve(segments, start, end);
 	}
 
 	@Override

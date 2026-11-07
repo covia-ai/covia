@@ -88,7 +88,7 @@ where it starts. One parser reads paths on every route (`CoviaAdapter`):
 | `/did:key:zBob…/w/notes` | no place |
 | `did:key:zBob…/n/memory`, `<venue DID>/v/ops` | no place |
 
-A path that names no place is refused with `ACoviaComponent.NO_SUCH_PATH`,
+A path that names no place is refused with `CoviaPath.NO_SUCH_PATH`,
 which names the path and the part of it up to the first segment that names
 nothing, such as `No such path: /wrok/notes (nothing can be at /wrok)`.
 Validity follows only the path's shape, so the refusal comes before any
@@ -380,8 +380,8 @@ Reads, writes, deletes, the job-free read API, context loading, tool and
 skill references and lattice paths in operation references start their paths
 this way. Other venues' paths stay with federation.
 
-**Components define their namespaces.** `ACoviaComponent extends
-ALatticeComponent` is the base of every component a caller can address. Each
+**Components define their namespaces.** Covia's components are Convex
+`ALatticeComponent`s, with no base class of Covia's. Each that a path reaches
 overrides Convex's resolution hook, `resolve(segments, start, end)`, which
 takes the segments of the caller's request from `start` and returns the
 component at the place they name; an empty range is the component itself. A
@@ -390,9 +390,12 @@ component reads the segments it owns and hands the rest to its child as
 caller's request; the array is the caller's, lent for the call, and anything
 kept is copied. Resolution sees no request, takes as many segments per step as
 the component's rules cover (as cursor paths do), and builds each child only
-from its own cursor, so a walk from a draft root stays in the draft.
-Resolution returns Convex's `ALatticeComponent`, so a path may end at a
-component that is not Covia's.
+from its own cursor, so a walk from a draft root stays in the draft. A
+component whose data only its own operations change hands the segments it
+does not route to `CoviaValue.within`, which reads them in its value,
+read-only; one that takes no path keeps Convex's default and refuses any
+segment. Resolution returns Convex's `ALatticeComponent`, so a path may end at
+a component that is not Covia's.
 
 **A read returns the value as stored.** Reading a path gives the value at the
 cursor of the component it resolves to, exactly as that cursor holds it, and
@@ -428,8 +431,8 @@ A stored null counts as present.
 **Resolution follows the path's shape, not the data.** A component chooses a
 child by its key whether or not the child exists, because children come and
 go, within a transaction too: a component resolved early in a draft sees an
-agent the draft creates later. `ACoviaComponent.exists` says whether data is
-there now. A user, agent, session or job that does not
+agent the draft creates later. A component's `exists()`, Convex's, says
+whether data is there now, a stored null counting. A user, agent, session or job that does not
 exist reads as absent, and a workspace in it refuses changes. An account is
 reached through `Users.at`, which reads a record that is not live (never
 registered, or a deleted account's tombstone) as absent, refuses changes to
@@ -441,9 +444,9 @@ component does not have, such as any name in a user's record outside its
 lattice, where the venue keeps its bookkeeping, or a context-rooted namespace
 after a DID; a first segment under the venue that is not a DID; or a job or
 session id that is not hex. An `Access` to such a path is still made: reading,
-testing or changing it is refused with `ACoviaComponent.NO_SUCH_PATH`, which
+testing or changing it is refused with `CoviaPath.NO_SUCH_PATH`, which
 names the path and where it stops naming a place (`Access.reasonInvalid`,
-built by `ACoviaComponent.noSuchPath`), and `Access.isValid` asks without the
+built by `CoviaPath.noSuchPath`), and `Access.isValid` asks without the
 refusal. The covia read operations and `/values` report that
 refusal to the caller (READ_API.md). Code that tries several readings of a
 string takes an invalid path for something else: `Engine.resolvePath` returns
@@ -520,9 +523,6 @@ an `Access`. A component refuses only what its data does not allow, such as a
 change to a missing record or a deleted account. `VenueContext`, shared by the
 venue's components and passed down unchanged, holds the write clock and no
 access check.
-
-`ACoviaComponent` is shaped so that it could move onto the Convex component
-hierarchy.
 
 ---
 
@@ -873,8 +873,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `VenueContext` (Covia) | Policy shared by every Covia component and passed down unchanged: the write clock and the venue's signer |
-| `ACoviaComponent` (Covia) | Base of addressable components (`resolve`, `read`) (§4.6) |
-| `CoviaValue` (Covia) | Convex's `ValueComponent` resolving segments by Covia's rules (`ValuePath.keys`); read-only where a path ends below any component but a workspace (§4.6) |
+| `CoviaValue` (Covia) | Convex's `ValueComponent` resolving segments by Covia's rules (`ValuePath.keys`); read-only where a path ends below any component but a workspace, which hands it the rest of the path with `CoviaValue.within` (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |

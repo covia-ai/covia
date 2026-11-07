@@ -26,7 +26,7 @@ import covia.exception.InvalidInputException;
  * {@link #createPath} creates a level: a change below a level that does not
  * exist is refused.</p>
  */
-public final class Workspace extends ACoviaComponent<ACell>
+public final class Workspace extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, Workspace> {
 
 	/** Refusal for a change to an area whose record does not exist; names the area. */

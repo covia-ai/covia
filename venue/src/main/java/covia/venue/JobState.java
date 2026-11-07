@@ -10,7 +10,6 @@ import convex.core.data.Blob;
 import convex.core.data.Path;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import covia.lattice.ACoviaComponent;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -19,6 +18,7 @@ import covia.api.Fields;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
+import covia.lattice.CoviaValue;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
 import covia.lattice.Workspace;
@@ -26,7 +26,7 @@ import covia.lattice.Workspace;
 /** Primary record of an existing venue job. Updates never create a missing row.
  * Transactions compose data changes only; execution and notifications belong
  * to the runtime after the enclosing transaction commits. */
-public final class JobState extends ACoviaComponent<ACell>
+public final class JobState extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, JobState>, Owner {
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
@@ -90,7 +90,7 @@ public final class JobState extends ACoviaComponent<ACell>
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
 		if (Fields.TEMP.equals(segments[start])) return workspace().resolve(segments, start + 1, end);
-		return super.resolve(segments, start, end);
+		return CoviaValue.within(this, segments, start, end);
 	}
 
 	/** See {@link #resolve(AString[], int, int)}; none outside any user. */

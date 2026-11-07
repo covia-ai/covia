@@ -7,7 +7,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
-import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
@@ -28,7 +27,7 @@ import convex.core.lang.RT;
  * {@link convex.lattice.generic.StringKeyedLattice} with AString keys
  * for JSON compatibility.</p>
  */
-public class Users extends ACoviaComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, Users> {
+public class Users extends ALatticeComponent<AMap<AString, ACell>> implements TransactionalComponent<AMap<AString, ACell>, Users> {
 	@Override
 	public Users withCursor(AForkableCursor<AMap<AString, ACell>> draft) {
 		return new Users(context, draft);

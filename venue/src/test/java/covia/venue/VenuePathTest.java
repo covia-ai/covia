@@ -22,7 +22,6 @@ import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Entry;
@@ -54,7 +53,7 @@ public class VenuePathTest {
 
 	/** The refusal for a path below the user that names no place. */
 	private String noSuchPath(String path) {
-		return ACoviaComponent.noSuchPath(assertThrows(NoSuchPathException.class, () -> resolve(path), path));
+		return CoviaPath.noSuchPath(assertThrows(NoSuchPathException.class, () -> resolve(path), path));
 	}
 
 	@Test
@@ -88,7 +87,9 @@ public class VenuePathTest {
 
 		assertNull(read(resolve("w/notes")));
 		assertFalse(resolve("w/notes").exists());
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + did + "/" + Covia.K_DELETED, "/" + did + "/" + Covia.K_DELETED),
+		assertNull(read(resolve("")));
+		assertFalse(resolve("").exists(), "the account is absent, not a stored null");
+		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, "/" + did + "/" + Covia.K_DELETED, "/" + did + "/" + Covia.K_DELETED),
 			noSuchPath(Covia.K_DELETED.toString()), "the tombstone is not user data");
 
 		assertEquals(Users.ACCOUNT_DELETED,
@@ -116,7 +117,7 @@ public class VenuePathTest {
 		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
 		for (String slot : new String[] {"meta", "generation", "deleting", "deleted", "n/notes", "foo"}) {
 			String first = slot.split("/")[0];
-			assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + did + "/" + slot, "/" + did + "/" + first),
+			assertEquals(String.format(CoviaPath.NO_SUCH_PATH, "/" + did + "/" + slot, "/" + did + "/" + first),
 				noSuchPath(slot), slot);
 		}
 	}
@@ -131,8 +132,8 @@ public class VenuePathTest {
 	public void testAFirstSegmentThatIsNotADIDNamesNoUser() {
 		NoSuchPathException e = assertThrows(NoSuchPathException.class,
 			() -> venue.resolve(CoviaPath.parse("not-a-did/w/notes")));
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/not-a-did/w/notes", "/not-a-did"),
-			ACoviaComponent.noSuchPath(e));
+		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, "/not-a-did/w/notes", "/not-a-did"),
+			CoviaPath.noSuchPath(e));
 	}
 
 	@Test

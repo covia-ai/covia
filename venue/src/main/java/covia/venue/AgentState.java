@@ -17,8 +17,8 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
+import covia.lattice.CoviaValue;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import convex.lattice.TransactionalComponent;
@@ -38,7 +38,7 @@ import covia.api.Fields;
  * atomic cursor updates; changes spanning sessions and agent state compose
  * through upstream transactions, without external locking or I/O.</p>
  */
-public class AgentState extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, AgentState>, Owner {
+public class AgentState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, AgentState>, Owner {
 	@Override
 	public AgentState withCursor(AForkableCursor<ACell> draft) {
 		return new AgentState(context, draft, owner, agentId);
@@ -373,7 +373,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		AString segment = segments[start];
 		if (K_N.equals(segment)) return workspace().resolve(segments, start + 1, end);
 		if (K_SESSIONS.equals(segment) && end - start > 1) throw new NoSuchPathException(segments, start + 1, end);
-		return super.resolve(segments, start, end);
+		return CoviaValue.within(this, segments, start, end);
 	}
 
 	/** A session ({@code sessions/<id>}), named by its id in hex, whether or not it exists. */

@@ -34,7 +34,10 @@ import covia.exception.NotFoundException;
  * a request reaches it through an {@link Access}, which asks the owner's
  * policy first.</p>
  */
-public final class Entry extends ACoviaComponent<ACell> {
+public final class Entry extends ALatticeComponent<ACell> {
+
+	/** Refusal for a change by path to data that only its component's operations change. */
+	public static final String READ_ONLY = "This data is read-only";
 
 	/** Refusal for a change at a level that changed kind while the path was in use; names that level. */
 	public static final String CHANGED = "The value at '%s' changed while this path was in use";
@@ -70,7 +73,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 * root for the workspace. Anything else only its component's operations
 	 * change.
 	 *
-	 * @throws AuthException with {@link ACoviaComponent#READ_ONLY} for anything but a workspace or its entry
+	 * @throws AuthException with {@link #READ_ONLY} for anything but a workspace or its entry
 	 */
 	public static Entry of(ALatticeComponent<?> destination) {
 		if (destination instanceof Entry entry) return entry;

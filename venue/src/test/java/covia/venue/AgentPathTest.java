@@ -23,7 +23,6 @@ import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 import covia.lattice.Entry;
 import covia.lattice.Namespace;
@@ -71,7 +70,7 @@ public class AgentPathTest {
 
 		ALatticeComponent<?> record = user.resolve(path.slice(0, 2));
 		assertEquals(agent.getRecord(), read(record));
-		assertEquals(ACoviaComponent.READ_ONLY,
+		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(record)).getMessage());
 
 		ALatticeComponent<?> area = user.resolve(path.slice(0, 3));
@@ -110,12 +109,12 @@ public class AgentPathTest {
 	public void testTheRestOfTheRecordIsReadOnly() {
 		ALatticeComponent<?> status = resolve("g/" + AGENT + "/status");
 		assertEquals(AgentState.SLEEPING, read(status));
-		assertEquals(ACoviaComponent.READ_ONLY,
+		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(status)).getMessage());
 
 		ALatticeComponent<?> meta = resolve(session + "/meta");
 		assertEquals(RT.getIn(agent.getSession(sid), "meta"), read(meta));
-		assertEquals(ACoviaComponent.READ_ONLY,
+		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(meta)).getMessage());
 	}
 
@@ -126,7 +125,7 @@ public class AgentPathTest {
 			ALatticeComponent<?> record = resolve(path);
 			assertNull(read(record), path);
 			assertFalse(record.exists(), path);
-			assertEquals(ACoviaComponent.READ_ONLY,
+			assertEquals(Entry.READ_ONLY,
 				assertThrows(AuthException.class, () -> Entry.of(record), path).getMessage());
 		}
 		for (String path : new String[] {"g/nobody/n/notes", missingSession + "/c/draft"}) {
@@ -144,8 +143,8 @@ public class AgentPathTest {
 		NoSuchPathException e = assertThrows(NoSuchPathException.class,
 			() -> resolve("g/" + AGENT + "/sessions/not-hex/c/draft"));
 		String path = "/g/" + AGENT + "/sessions/not-hex";
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, path + "/c/draft", path),
-			ACoviaComponent.noSuchPath(e), "the refusal says where the path stops naming a place");
+		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, path + "/c/draft", path),
+			CoviaPath.noSuchPath(e), "the refusal says where the path stops naming a place");
 	}
 
 	@Test

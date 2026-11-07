@@ -204,7 +204,7 @@ public class ValuesApiTest {
 		for (String route : new String[] {"read", "list", "slice", "inspect", "aggregate"}) {
 			HttpResponse<String> r = get(route, "wrok/vNotes");
 			assertEquals(400, r.statusCode(), route + ": " + r.body());
-			assertTrue(r.body().contains(String.format(covia.lattice.ACoviaComponent.NO_SUCH_PATH, "/wrok/vNotes", "/wrok")),
+			assertTrue(r.body().contains(String.format(covia.lattice.CoviaPath.NO_SUCH_PATH, "/wrok/vNotes", "/wrok")),
 				route + ": " + r.body());
 		}
 	}

@@ -8,8 +8,8 @@ import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
+import covia.lattice.CoviaValue;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -45,7 +45,7 @@ import convex.lattice.cursor.StampedCursor;
  * Merge is whole-value at the venue {@code :value}; these namespaces are
  * navigation structure only.
  */
-public class User extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, User>, Owner {
+public class User extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, User>, Owner {
 	@Override
 	public User withCursor(AForkableCursor<ACell> draft) {
 		return new User(context, draft, did);
@@ -321,7 +321,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		if (Namespace.H.equals(segment)) return inbox().resolve(segments, start + 1, end);
 		if (Namespace.S.equals(segment)) return secrets().resolve(segments, start + 1, end);
 		if (Namespace.A.equals(segment)) return assets().resolve(segments, start + 1, end);
-		if (Namespace.G.equals(segment)) return super.resolve(segments, start, end);
+		if (Namespace.G.equals(segment)) return CoviaValue.within(this, segments, start, end);
 		throw new NoSuchPathException(segments, start, end);
 	}
 
