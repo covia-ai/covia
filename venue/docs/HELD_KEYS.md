@@ -74,7 +74,10 @@ Keyrings are the crypto adapter's state, at `:adapters/crypto`
 ```
 {
   "version": 0,
-  "holders": Index<AString, Index<Blob, key record>>
+  "holders": Index<AString, {
+    "keys":      Index<Blob, key record>,
+    "mnemonics": Index<Blob, mnemonic record>
+  }>
 }
 ```
 
@@ -87,10 +90,14 @@ Keyrings are the crypto adapter's state, at `:adapters/crypto`
   `Index` keeps holders in order, so an identity and every identity nested
   below it (`<did>:…`) are adjacent, and deleting a user removes that range:
   the DID itself and the DIDs that continue it with `:`.
-- **Each keyring** is an `Index` keyed by public key, as a `Blob`: the
+- **`keys`** is an `Index` keyed by public key, as a `Blob`: the
   multicodec-prefixed key bytes, `0xed01` followed by the 32-byte key for
   Ed25519. The prefix names the key type, so other types fit without a layout
   change.
+- **`mnemonics`** holds the recovery phrases a holder chose to keep here
+  rather than as secrets, keyed the same way by the public key of the phrase's
+  SLIP-10 master node (no passphrase), which identifies the phrase without
+  revealing more than any key derived from it.
 
 A key record is a map:
 
@@ -114,6 +121,11 @@ A key record is a map:
   own, apart from the secret store's, so a sealed key cannot be read as a
   secret.
 - **`label`** is the holder's own name for the key, if it gave one.
+
+A mnemonic record has the same fields. Its sealed plaintext names the holder
+DID, the master node's public key and the phrase, checked the same way on
+opening. A passphrase is not kept with it: `crypto:derive-key` takes one by
+secret reference as now.
 
 Using a key writes nothing to the store; the audit log records it.
 
@@ -171,6 +183,9 @@ Existing crypto operations take a held key in place of the `seed` reference:
 - **`crypto:generate-key`** and **`crypto:derive-key`** can put the new key
   straight into the caller's keyring, so its private key is born in the venue
   and never seen.
+- **`crypto:generate-mnemonic`** keeps the new phrase as a secret, as now, or
+  in the caller's keyring, as the caller chooses; **`crypto:derive-key`** and
+  **`crypto:validate-mnemonic`** take either.
 
 The `seed` reference keeps working for existing callers and is deprecated.
 
@@ -198,6 +213,7 @@ lattice paths.
 | `key/sign/convex` | `<did>/keys/<pk>` | Signing Convex transactions (`convex:transact`) |
 | `key/sign/raw` | `<did>/keys/<pk>` | Signing content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any of the above |
 | `key/decrypt` | `<did>/keys/<pk>` | Decrypting with it (`crypto:decrypt`) |
+| `key/derive` | `<did>/keys/<pk>` | Deriving keys from a held mnemonic, named by its master node's public key (`crypto:derive-key`) |
 
 `key` covers every `key/…` ability. The kinds of signing let a capability
 scope narrow what a key may sign: an agent can hold `key/sign/token` on its
@@ -223,15 +239,28 @@ right over its root's keyring. The venue's own key is the venue's keyring
 entry under the same two steps, so only the venue acting as itself, in trusted
 code, signs with it; a grant from the venue never confers that.
 
+## Security
+
+- **Held keys are hot.** A held key, or a held mnemonic, is usable by whoever
+  controls the venue's process, or its seed together with its store: the
+  sealing protects keys at rest and between principals, not from the venue
+  itself. Keyrings suit hot keys, such as service identities and hot wallets.
+  A key of lasting value stays with its owner, who signs with it
+  self-sovereignly.
+- **A secret is the readable choice.** A seed or mnemonic kept as a secret can
+  be read back by its owner and lent with `secret/use`; one in a keyring
+  cannot. The holder chooses which it wants.
+- **No delegation.** Only the holder uses its keys, so a deputy acting for the
+  holder, or a grant presented to one, can never make the venue sign as the
+  holder.
+
 ## Open questions
 
 1. When the deprecated `seed` references and Convex signing operations are
    removed, and how an owner moves an existing seed from the secret store into
    their keyring.
-2. Whether mnemonics, which derive keys, move to keyrings too, or stay
-   secrets.
-3. Whether a root must opt in before identities nested below it have its key
+2. Whether a root must opt in before identities nested below it have its key
    sign their identity tokens.
-4. Signing the venue's outbound calls made as a held identity, per call.
-5. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
-6. The new operations' names.
+3. Signing the venue's outbound calls made as a held identity, per call.
+4. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
+5. The new operations' names.
