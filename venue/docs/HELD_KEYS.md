@@ -170,7 +170,7 @@ New crypto operations (names open):
 - **Remove** a key.
 - **List** the caller's own keys: public key, label and when it was added.
 
-Existing crypto operations take a held key in place of the `seed` reference:
+Existing crypto operations take a held key as well as a `seed` reference:
 
 - **`crypto:sign`** is the standard signing interface: it signs raw bytes.
   `data` is a `Blob`, which JSON callers may give as a hex string with or
@@ -180,14 +180,15 @@ Existing crypto operations take a held key in place of the `seed` reference:
   prefix, and messages are limited to 1 MiB.
 - **`crypto:jwt-sign`**, **`crypto:decrypt`** and **`crypto:public-key`** work
   the same way with a held key.
-- **`crypto:generate-key`** and **`crypto:derive-key`** can put the new key
-  straight into the caller's keyring, so its private key is born in the venue
-  and never seen.
-- **`crypto:generate-mnemonic`** keeps the new phrase as a secret, as now, or
-  in the caller's keyring, as the caller chooses; **`crypto:derive-key`** and
+- **`crypto:generate-key`** and **`crypto:derive-key`** store the new key as a
+  secret, as now, or in the caller's keyring, where its private key is born in
+  the venue and never seen.
+- **`crypto:generate-mnemonic`** likewise keeps the new phrase as a secret or
+  in the caller's keyring, and **`crypto:derive-key`** and
   **`crypto:validate-mnemonic`** take either.
 
-The `seed` reference keeps working for existing callers and is deprecated.
+Both stay supported, and the caller chooses: a secret it can read back and
+lend, or a keyring entry that nothing can read.
 
 The Convex adapter moves onto the same keyrings:
 
@@ -256,9 +257,8 @@ code, signs with it; a grant from the venue never confers that.
 
 ## Open questions
 
-1. When the deprecated `seed` references and Convex signing operations are
-   removed, and how an owner moves an existing seed from the secret store into
-   their keyring.
+1. When the deprecated Convex signing operations are removed, and how an owner
+   moves an existing seed or phrase from the secret store into their keyring.
 2. Whether a root must opt in before identities nested below it have its key
    sign their identity tokens.
 3. Signing the venue's outbound calls made as a held identity, per call.
