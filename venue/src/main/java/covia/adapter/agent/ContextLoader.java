@@ -16,9 +16,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
-import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
-import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
@@ -383,7 +381,6 @@ public class ContextLoader {
 	 * resolution as {@code covia:read}.
 	 */
 	String resolveWorkspacePath(String path, RequestContext ctx) {
-		requireReadAccess(Strings.create(path), ctx);
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		if (covia == null) return null;
 		ACell value = covia.readContextValue(ctx, Strings.create(path));
@@ -449,15 +446,19 @@ public class ContextLoader {
 	/**
 	 * Enforces the read represented by a dynamic context reference. Harness
 	 * tools do not pass through an adapter, so this is their equivalent
-	 * point-of-action gate.
+	 * point-of-action gate: a file or DLFS reference needs its provider's
+	 * {@code crud/read}, and anything else is read as {@link Engine#resolvePath}
+	 * reads it.
 	 */
 	void requireReadAccess(AString ref, RequestContext ctx) {
 		if (ref == null) return;
 		String value = ref.toString();
 		if (!isReference(engine, ctx, value)) return; // literal text
-		AString ability = (AssetAdapter.parseAssetId(ref) != null)
-			? Abilities.ASSET_READ : Capability.CRUD_READ;
-		engine.requireResourceAccess(ctx, ref, ability);
+		if (value.startsWith("file:/") || value.startsWith("dlfs/") || value.startsWith("dlfs://")) {
+			engine.requireResourceAccess(ctx, ref, Capability.CRUD_READ);
+		} else {
+			engine.requireReadable(ctx, ref);
+		}
 	}
 
 	/**

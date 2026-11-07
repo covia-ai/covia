@@ -321,18 +321,12 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * Resolves one exact lattice value for framework context assembly.
 	 * Unlike the public read operation this returns the value itself (no
-	 * {@code {exists,value}} envelope and no response-size guard), while using
-	 * the identical namespace semantics: physical user paths plus cursor-based
-	 * {@code n/}, job-scoped {@code t/}, and session-scoped {@code c/} views.
-	 * The caller must hold {@code crud/read} on the path.
+	 * {@code {exists,value}} envelope and no response-size guard), while
+	 * reading it as {@code covia:read} does, through the same access.
 	 */
 	public ACell readContextValue(RequestContext ctx, AString path) {
 		if (path == null) return null;
-		engine.requireResourceAccess(ctx, path, Capability.CRUD_READ);
-		if (isContextDependent(CoviaPath.parse(path.toString()))) return locate(ctx, path).read();
-
-		// Physical namespaces and universal asset/op references.
-		return engine.resolvePathUnchecked(path, ctx);
+		return readAt(ctx, resolve(ctx, path), path);
 	}
 
 	/**
@@ -1279,16 +1273,15 @@ public class CoviaAdapter extends AAdapter {
 
 	/**
 	 * The policy of {@code v/}, the venue's public view, which belongs to no
-	 * principal: any principal reads it within its own scope, so a read needs
-	 * only the request's own authority over the {@code v/} path. Only the venue
-	 * changes it, with authority over the place in its {@code w/global} that the
-	 * view shows.
+	 * principal: any principal on the venue reads it of right, in its own
+	 * request. Only the venue changes it, with authority over the place in its
+	 * {@code w/global} that the view shows.
 	 */
 	private AccessPolicy viewPolicy() {
 		AString venue = engine.getDIDString();
 		String venueGlobal = venue + VENUE_GLOBALS.toString();
 		return (ctx, ability, path) -> {
-			if (Capability.CRUD_READ.equals(ability)) return AccessPolicy.Need.authorityOver(AccessPolicy.address("", path));
+			if (Capability.CRUD_READ.equals(ability)) return AccessPolicy.Need.OF_RIGHT;
 			if (ctx == null || !venue.equals(ctx.getCallerDID())) return AccessPolicy.Need.refused(VENUE_WRITES_ONLY);
 			return AccessPolicy.Need.authorityOver(AccessPolicy.address(venueGlobal, path.rest()));
 		};
@@ -1350,13 +1343,6 @@ public class CoviaAdapter extends AAdapter {
 		return (raw != null && raw.startsWith(DID_PREFIX)) ? raw : null;
 	}
 
-	/** Whether a path starts in a context-dependent namespace: {@code n/}, {@code c/}, {@code t/}, {@code v/} or {@code x/}. */
-	private static boolean isContextDependent(CoviaPath path) {
-		if (path.isEmpty()) return false;
-		AString namespace = path.first();
-		return N.equals(namespace) || C.equals(namespace) || T.equals(namespace)
-			|| V.equals(namespace) || Namespace.X.equals(namespace);
-	}
 
 	/** The venue user's path a {@code v/} path stands for: {@link #VENUE_GLOBALS} followed by the rest of the path. */
 	public static CoviaPath venueGlobals(CoviaPath path) {

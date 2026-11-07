@@ -16,6 +16,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.CoviaAdapter;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -248,12 +249,31 @@ public class OwnerAccessTest {
 	// ========== the venue's view ==========
 
 	@Test
-	public void testEveryPrincipalReadsTheVenueViewInItsOwnScope() {
+	public void testEveryPrincipalReadsTheVenueView() {
 		assertNotNull(read(ALICE, "v/ops"));
 		assertNotNull(read(BOB, "v/ops"));
-		assertNotNull(read(agent(caps("v/", Capability.CRUD_READ)), "v/ops"));
-		assertDenied(agent(NONE), "v/ops");
+		assertNotNull(read(PUBLIC, "v/ops"));
+		assertNotNull(read(agent(NONE), "v/ops"), "the view needs no caps");
 		Access view = covia.resolve(BOB, Strings.create("v/ops/mine"));
 		assertThrows(AuthException.class, () -> view.entry(Capability.CRUD_WRITE));
+	}
+
+	// ========== references read as data ==========
+
+	@Test
+	public void testAReferenceIsReadWhereItsDataLives() {
+		assertThrows(AuthException.class, () -> engine.resolvePath(Strings.create("n/note"),
+			agent(caps("n/", Capability.CRUD_READ))), "n/ is checked where it lives");
+		assertEquals(Strings.create("n-note"), engine.resolvePath(Strings.create("n/note"),
+			agent(caps("g/" + AGENT + "/n/", Capability.CRUD_READ))));
+		assertEquals(Strings.create("c-draft"), engine.resolvePath(Strings.create("c/draft"), agent(NONE)));
+		assertNotNull(engine.resolvePath(Strings.create("v/ops/covia/read"), agent(NONE)));
+	}
+
+	@Test
+	public void testAPathIsReadAsDataEvenWhenAnAssetIsWanted() {
+		assertThrows(AuthException.class, () -> engine.requireMetadataRead(
+			agent(caps("w/shared/", Abilities.ASSET_READ)), Strings.create("w/shared/note")));
+		engine.requireMetadataRead(agent(caps("w/shared/", Capability.CRUD_READ)), Strings.create("w/shared/note"));
 	}
 }

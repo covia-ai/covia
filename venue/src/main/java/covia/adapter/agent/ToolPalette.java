@@ -9,18 +9,15 @@ import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
-import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.InvalidDefinitionException;
 import covia.grid.Asset;
@@ -501,23 +498,12 @@ public final class ToolPalette {
 	}
 
 	/** Private user-scoped operation definitions are data: the agent must be
-	 *  able to read their metadata as well as invoke them. Venue catalog entries
-	 *  are shared public metadata; remote DID references apply the publishing
-	 *  venue's policy during fetch. */
+	 *  able to read their metadata as well as invoke them, as
+	 *  {@link Engine#resolvePath} reads them. Venue catalog entries are read by
+	 *  every principal; remote DID references apply the publishing venue's
+	 *  policy during fetch. */
 	private static void requireToolMetadataRead(Engine engine, RequestContext ctx, AString operation) {
-		String ref = operation.toString();
-		String normalised = ref.startsWith("/") ? ref.substring(1) : ref;
-		if (normalised.startsWith("v/")) return;
-		if (Hash.parse(operation) != null || normalised.startsWith("a/")) {
-			engine.requireResourceAccess(ctx, operation, Abilities.ASSET_READ);
-			return;
-		}
-		if (normalised.startsWith("w/") || normalised.startsWith("o/")
-				|| normalised.startsWith("g/") || normalised.startsWith("j/")
-				|| normalised.startsWith("s/") || normalised.startsWith("h/")
-				|| normalised.startsWith("n/") || normalised.startsWith("c/")) {
-			engine.requireResourceAccess(ctx, operation, Capability.CRUD_READ);
-		}
+		engine.requireReadable(ctx, operation);
 	}
 
 	private static String safeMessage(Throwable error) {

@@ -849,6 +849,11 @@ public class OrchestratorTest {
 			assertEquals(CVMBool.TRUE, RT.getIn(result, "allowed"),
 				"invoke authority alone is sufficient when strict validation is off");
 
+			// The venue's catalog is public, so name an operation only its owner reads
+			AString owner = remote.getEngine().getDIDString();
+			remote.getEngine().jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, "o/private-echo",
+				Fields.VALUE, Maps.of("name", "private echo", "operation", Maps.of("adapter", "test:echo"))),
+				remote.getEngine().venueContext()).awaitResult(10000);
 			long jobsBefore = RT.ensureLong(
 				RT.getIn(remote.getEngine().getStats(), "jobs")).longValue();
 			String strict = storeJsonOrchestration(local, """
@@ -859,13 +864,13 @@ public class OrchestratorTest {
 						"strict": true,
 						"steps": [{
 							"venue": "%s",
-							"op": "v/test/ops/echo",
+							"op": "%s/o/private-echo",
 							"input": ["const", {"mustNotRun": true}]
 						}],
 						"result": [0]
 					}
 				}
-			""".formatted(remoteUrl));
+			""".formatted(remoteUrl, owner));
 
 			Job job = local.jobs().invokeOperation(strict,
 				Maps.empty(), RequestContext.of(ALICE_DID));
@@ -894,8 +899,11 @@ public class OrchestratorTest {
 	}
 
 	@Test
-	public void testStrictLocalStepRequiresAssetReadBeforeSideEffect() {
+	public void testStrictLocalStepRequiresReadBeforeSideEffect() {
 		String path = "w/orchestrator-strict/no-read";
+		// The venue's catalog is public, so the step names a private copy of covia:write
+		engine.jobs().invokeOperation("v/ops/covia/copy", Maps.of("from", "v/ops/covia/write",
+			"to", "o/strict-write"), RequestContext.of(ALICE_DID)).awaitResult(5000);
 		String hash = storeJsonOrchestration("""
 			{
 				"name": "Strict local metadata read",
@@ -903,7 +911,7 @@ public class OrchestratorTest {
 					"adapter": "orchestrator",
 					"strict": true,
 					"steps": [{
-						"op": "v/ops/covia/write",
+						"op": "o/strict-write",
 						"input": {
 							"path": ["const", "%s"],
 							"value": ["const", "must-not-be-written"]
@@ -915,12 +923,12 @@ public class OrchestratorTest {
 		""".formatted(path));
 		RequestContext invokeAndWriteOnly = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
 			Capability.create(Strings.create(hash), Strings.create("invoke")),
-			Capability.create(Strings.create("v/ops/covia/write"), Strings.create("invoke")),
+			Capability.create(Strings.create("o/strict-write"), Strings.create("invoke")),
 			Capability.create(Strings.create(path), Strings.create("crud/write"))));
 
 		Job job = engine.jobs().invokeOperation(hash, Maps.empty(), invokeAndWriteOnly);
 		assertThrows(RuntimeException.class, () -> job.awaitResult(5000));
-		assertTrue(job.getErrorMessage().contains("asset/read"), job.getErrorMessage());
+		assertTrue(job.getErrorMessage().contains(Capability.CRUD_READ.toString()), job.getErrorMessage());
 		assertFalse(readExists(path),
 			"strict metadata denial must happen before the child write is invoked");
 	}

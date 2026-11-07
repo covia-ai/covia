@@ -2014,35 +2014,49 @@ public class Engine {
 	}
 
 	/**
-	 * The read check of {@link #resolvePath}. A physical user path, bare or
-	 * DID-qualified, and a DID-qualified asset reference on this venue need read
-	 * authority ({@link #requireMetadataRead}: {@code crud/read}, or
-	 * {@code asset/read} for a content hash), so another user's needs a grant and
-	 * a capability scope must cover the caller's own. A bare hash names the
-	 * caller's own store, then the venue catalog. The context-dependent
-	 * namespaces need no grant here: {@code v/} is open to every caller,
-	 * {@code n/}, {@code t/} and {@code c/} are the request's own, and an
-	 * {@code x/} view checks its own. A remote DID URL is never read here.
+	 * The read check of {@link #resolvePath}, as {@link #requireMetadataRead}
+	 * makes it: a path is read where its data lives, as the component that owns
+	 * it allows, and a content-addressed reference as an asset. A remote DID URL
+	 * is never read here.
 	 *
 	 * @throws covia.exception.AuthException when the caller may not read {@code ref}
 	 */
 	public void requireReadable(RequestContext ctx, AString ref) {
 		if (ref == null) return;
-		AString resource = ref.startsWith(NS_DID) ? ref : stripLeadingSlash(ref);
-		boolean checked;
+		if (ref.startsWith(NS_DID) && !isLocalDIDResource(ref)) return;
 		try {
-			checked = ref.startsWith(NS_DID)
-				? isLocalDIDResource(ref)
-				: isPhysicalUserNamespace(CoviaPath.parse(resource.toString()));
+			requireMetadataRead(ctx, ref);
 		} catch (IllegalArgumentException malformed) {
 			return;   // navigation rejects the same path
-		}
-		if (!checked) return;
-		try {
-			requireMetadataRead(ctx, resource);
 		} catch (covia.exception.AuthException e) {
 			throw new covia.exception.AuthException(READ_DENIED + ref + " — " + e.getMessage());
 		}
+	}
+
+	/**
+	 * The read check of a path a request names, read as data
+	 * ({@code crud/read}): the component that owns the data there decides,
+	 * however the path is written ({@link CoviaAdapter#resolve}). Another
+	 * venue's path is read by asking that venue, so here it needs only the
+	 * request's own scope. A path that names no place, or starts in a scope the
+	 * request does not have, holds nothing to read and passes.
+	 *
+	 * @throws covia.exception.AuthException when the caller may not read {@code path}
+	 */
+	public void requirePathRead(RequestContext ctx, AString path) {
+		if (path == null) return;
+		if (!(getAdapter("covia") instanceof CoviaAdapter covia)
+				|| (path.startsWith(NS_DID) && !isLocalDIDResource(path))) {
+			requireResourceAccess(ctx, path, Capability.CRUD_READ);
+			return;
+		}
+		covia.lattice.Access access;
+		try {
+			access = covia.resolve(ctx, path);
+		} catch (WrongScopeException | InvalidInputException nothingThere) {
+			return;
+		}
+		if (access.isValid()) access.require(Capability.CRUD_READ);
 	}
 
 	/**
@@ -2220,14 +2234,6 @@ public class Engine {
 		}
 
 		return null;
-	}
-
-	private static boolean isPhysicalUserNamespace(CoviaPath path) {
-		if (path.isEmpty()) return false;
-		return switch (path.first().toString()) {
-			case "w", "g", "o", "j", "s", "h" -> true;
-			default -> false;
-		};
 	}
 
 	/**
@@ -2742,7 +2748,14 @@ public class Engine {
 		// namespace and enforce the native ability for it (for example crud/read on
 		// file:// and dlfs/); imposing asset/read on those references would make the
 		// same file behave differently through the content API and its native op.
-		requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+		// An asset is read as an asset; a path into the lattice is read as data
+		// where it lives, and what it holds is then resolved as content.
+		if (covia.adapter.AssetAdapter.parseAssetId(ref) != null
+				|| (ref.startsWith(NS_DID) && !isLocalDIDResource(ref))) {
+			requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+		} else {
+			requirePathRead(ctx, ref);
+		}
 
 		// An explicit remote DID URL is a fetch address, just as it is for asset
 		// metadata. Keep the fetch transient: asset:pin remains the operation that
@@ -3958,6 +3971,11 @@ public class Engine {
 	 * turn it into a licence to read every user's workspace metadata, so a path
 	 * still requires {@code crud/read} over that path and nothing else.</p>
 	 *
+	 * <p>A path is read as data, where it lives ({@link #requirePathRead}). A
+	 * bare hash names no place: it is the caller's own asset when the caller's
+	 * store holds it, and otherwise one in the venue's catalog, which every
+	 * principal reads.</p>
+	 *
 	 * <p>Content bytes are not covered here — {@link #resolveContent} keeps its
 	 * own {@code asset/read} pin.</p>
 	 *
@@ -3966,9 +3984,12 @@ public class Engine {
 	 */
 	public void requireMetadataRead(RequestContext ctx, AString resource) {
 		if (resource == null) return;
-		if (AssetAdapter.parseAssetId(resource) == null) {
-			// A path: namespace-scoped read only.
-			requireResourceAccess(ctx, resource, Capability.CRUD_READ);
+		Hash bare = Hash.parse(resource);
+		if (bare != null) {
+			AString user = (ctx == null) ? null : ctx.getUserDID();
+			if (getAssetRecord(bare, user) == null) return;   // the venue's catalog, or nothing
+		} else if (AssetAdapter.parseAssetId(resource) == null) {
+			requirePathRead(ctx, resource);
 			return;
 		}
 		// Content-addressed: either ability over this hash is enough.

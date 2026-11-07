@@ -582,9 +582,11 @@ public class CoviaAPI extends ACoviaAPI {
 	 * Resolves an asset reference to an Asset, accepting any lattice address —
 	 * a bare hash, {@code a/<hash>}, a workspace/operation path ({@code w/…},
 	 * {@code o/…}), or a DID URL — the same addressing scheme {@code invoke}
-	 * uses. Enforces the asset-read capability (consistent with the
-	 * {@code asset:get} operation); cross-DID reads are satisfied by a UCAN
-	 * grant presented through the request's proof channel.
+	 * uses. An asset is read as an asset, with the asset-read capability
+	 * (consistent with the {@code asset:get} operation), and any other lattice
+	 * address as data, where it lives ({@link Engine#requirePathRead});
+	 * cross-DID reads are satisfied by a UCAN grant presented through the
+	 * request's proof channel.
 	 *
 	 * @param ref Asset reference (lattice address or bare hash)
 	 * @param ctx Request context (caller identity, grant scope, proofs)
@@ -593,7 +595,12 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
 		AString refStr = Strings.create(ref);
-		engine().requireResourceAccess(ctx,refStr, Abilities.ASSET_READ);
+		if (covia.adapter.AssetAdapter.parseAssetId(refStr) != null
+				|| (ref.startsWith("did:") && !engine().isLocalDIDResource(refStr))) {
+			engine().requireResourceAccess(ctx, refStr, Abilities.ASSET_READ);
+		} else {
+			engine().requirePathRead(ctx, refStr);
+		}
 
 		// Caller-relative content-addressed forms (bare hex and a/<hash>) — fetch
 		// the stored record so the returned bytes are byte-identical to the legacy
