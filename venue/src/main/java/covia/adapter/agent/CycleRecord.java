@@ -6,9 +6,6 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -22,6 +19,7 @@ import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.JobFailedException;
 import covia.venue.AgentEvents;
 
@@ -55,8 +53,6 @@ import covia.venue.AgentEvents;
  * threads and never share a record.</p>
  */
 public final class CycleRecord {
-
-	private static final Logger log = LoggerFactory.getLogger(CycleRecord.class);
 
 	private static final ThreadLocal<CycleRecord> CURRENT = new ThreadLocal<>();
 
@@ -344,19 +340,22 @@ public final class CycleRecord {
 
 	// ========== Failure carrier ==========
 
+	/** What failed, when an agent's transition reports a fault in its own code. */
+	public static final String TRANSITION = "Transition";
+
 	/**
 	 * A transition failure carrying the record of what ran before it, so the
-	 * cycle's entry keeps its inferences. The message is what a caller is told
-	 * of the original ({@link CoviaException#describe}) and the original is
-	 * the cause; the run loop unwraps it.
+	 * cycle's entry keeps its inferences. The cause is the failure as the
+	 * transition reports it ({@link FaultException#within}), and the message
+	 * is its message; the run loop unwraps it.
 	 */
 	public static final class Failure extends JobFailedException {
 		private static final long serialVersionUID = 1L;
 		private final transient Result result;
 
-		private Failure(RuntimeException cause, Result result) {
-			super(CoviaException.describe(cause));
-			initCause(cause);
+		private Failure(CoviaException reported, Result result) {
+			super(reported.getMessage());
+			initCause(reported);
 			this.result = result;
 		}
 
@@ -364,16 +363,16 @@ public final class CycleRecord {
 
 		/**
 		 * Wraps when a record is open on this thread; otherwise the failure
-		 * passes through. A venue fault is logged here, where the cycle met it:
-		 * the carrier reads as an expected failure, so the Job it fails does
-		 * not log it.
+		 * passes through, for the transition's Job to report. A fault is
+		 * reported, and logged, here, where the cycle met it.
+		 *
+		 * @param owner whose code the transition is, such as {@code FaultException.ADAPTER.formatted("llmagent")}
 		 */
-		public static RuntimeException of(RuntimeException e) {
+		public static RuntimeException of(RuntimeException e, String owner) {
 			if (e instanceof Failure) return e;
 			Result r = end();
 			if (r == null) return e;
-			if (CoviaException.reasonOf(e) == null) log.error("Unexpected failure in an agent cycle", e);
-			return new Failure(e, r);
+			return new Failure(FaultException.within(TRANSITION, owner, e), r);
 		}
 
 		/** The carrier in a cause chain, or null. */

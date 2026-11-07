@@ -620,6 +620,14 @@ reconciles its queue. Normal startup checks only these small pending queues,
 with no sweep of user or job records. Repeating deletion repairs adapter data
 left by tombstones from older venues as well.
 
+`deleteAgentState(agentDID, state)` is the agent counterpart, for state an
+adapter keeps under an agent's own DID (`<owner>:g:<id>`), such as the crypto
+adapter's keyrings. `Engine.deleteAgentState` runs it for every registered
+adapter, enabled or disabled, in one transaction each time the agent is
+deleted, under the same rules as `deleteUserState`. A module adapter not loaded
+at the time is not called and keeps what it holds. State kept for an agent
+under its owner's DID goes with the owner.
+
 The messaging base implements both hooks for runtime and configured bots. It
 records configured-bot ownership, removes sessions/inboxes/caches, stops runners,
 and skips deleted owners during rearming. External effects already in flight
@@ -999,7 +1007,16 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 2. Implement `getName()` and an LLM-friendly `getDescription()`.
 3. Implement `invokeFuture`, or the job-aware `invoke` when the adapter owns
    the job lifecycle. Call `requireInvoke(ctx)` or the correct resource gate
-   before effects, and use `getSubOperation(meta)` for dispatch.
+   before effects, and use `getSubOperation(meta)` for dispatch. Refuse what
+   the caller can fix with the Covia type for it, such as
+   `InvalidInputException` for bad input, whose message says what is wrong
+   ([ERRORS.md](ERRORS.md#types)); catch a library's exceptions where they are
+   called. Anything else that escapes the operation, `IllegalArgumentException`
+   included, is the adapter's fault: its Job fails with `Operation <op> failed:
+   unexpected <ClassName> in adapter <name>`, logged at ERROR, and the caller
+   is told nothing more ([ERRORS.md](ERRORS.md#scopes)). A job-aware adapter
+   fails its Job with the exception itself, `job.fail(e)`, so the report names
+   the operation.
 4. Override `configure` when settings need validation or cached runtime state.
    Override `info` and `publicConfig` only for intentionally public facts.
 5. Override `installAssets()` and create JSON operation definitions under

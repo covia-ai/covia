@@ -1,0 +1,104 @@
+{
+  "name": "List a keyring",
+  "description": "List the public keys and phrase IDs a keyring holds, with their labels and when each was added. Private material is never listed.",
+  "operation": {
+    "adapter": "crypto:list-keys",
+    "readOnly": true,
+    "activityLabel": "List a keyring",
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "Whose keyring; omitted means yours. Another's needs crud/read on <did>/x/crypto/keys/ and <did>/x/crypto/mnemonics/."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Entries to skip, counting keys first, then phrases."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "accountKey": {
+                "type": "string",
+                "pattern": "^0x(?:[0-9a-f]{2})*$"
+              },
+              "did": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "addedAt": {
+                "type": "integer",
+                "description": "Unix milliseconds."
+              }
+            },
+            "required": [
+              "did",
+              "addedAt"
+            ]
+          }
+        },
+        "mnemonics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "did": {
+                "type": "string",
+                "description": "The phrase's ID: the did:key of its SLIP-10 master node with no passphrase."
+              },
+              "label": {
+                "type": "string"
+              },
+              "addedAt": {
+                "type": "integer",
+                "description": "Unix milliseconds."
+              }
+            },
+            "required": [
+              "did",
+              "addedAt"
+            ]
+          }
+        },
+        "total": {
+          "type": "integer",
+          "description": "Number of keys and phrases held."
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "nextOffset": {
+          "type": "integer",
+          "description": "Present only when more entries remain."
+        }
+      },
+      "required": [
+        "keys",
+        "mnemonics",
+        "total",
+        "offset"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

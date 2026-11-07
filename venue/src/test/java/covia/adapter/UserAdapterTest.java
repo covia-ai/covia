@@ -109,29 +109,58 @@ class UserAdapterTest {
 	}
 
 	@Test
-	void venueRootAuthorityIsLimitedToItsManagedUsers() {
+	void venueIsRootForWhatItHosts() {
 		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
 		AString venue = engine.getDIDString();
 		AString managed = Strings.create("did:web:venue.example.com:u:alice");
 		AString self = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		AString external = Strings.create("did:web:identity.example:u:bob");
+		AString external = Strings.create("did:web:identity.example:u:dana");
 
 		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + "/w/notes")));
-		assertTrue(policy.acceptsRoot(self, Strings.create(self + "/w/notes")));
-		assertFalse(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
-			"registration must not transfer control of a self-sovereign DID");
-		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
-			"a similarly shaped DID on another domain is not locally custodial");
+		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + ":admin/w/notes")),
+			"everything below the managed namespace is the venue's");
+		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + ":g:helper/x/crypto/keys/")),
+			"a hosted user's agent is hosted too");
 		assertFalse(policy.acceptsRoot(venue,
 			Strings.create("did:web:venue.example.com.evil:u:alice/w/notes")),
 			"a hostname-prefix lookalike must not enter the managed namespace");
-		assertFalse(policy.acceptsRoot(venue,
-			Strings.create(managed + ":admin/w/notes")),
-			"a nested managed-DID suffix must not be accepted as a username");
+
+		assertFalse(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
+			"an identity the venue does not host is not the venue's");
+		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")));
+		assertFalse(policy.acceptsRoot(venue, Strings.create(self + ":g:helper/w/notes")),
+			"nor is an agent of one");
+		engine.getVenueState().users().ensure(self);
+		engine.getVenueState().users().ensure(external);
+		assertTrue(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
+			"a self-sovereign identity the venue hosts is the venue's, here");
+		assertTrue(policy.acceptsRoot(venue, Strings.create(self + ":g:helper/w/notes")));
+		assertTrue(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")));
 	}
 
 	@Test
-	void personalVenueRootAuthorityCoversOnlyItsIssuedUsers() {
+	void identityIsRootForWhatItSignsInAs() {
+		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
+		AString self = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AString other = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AString web = Strings.create("did:web:identity.example:u:carol");
+
+		assertTrue(policy.acceptsRoot(self, Strings.create(self + "/w/notes")));
+		assertTrue(policy.acceptsRoot(self, Strings.create(self + ":g:helper/x/crypto/keys/")),
+			"a did:key signs in as its agents, so it roots their grants");
+		assertTrue(policy.acceptsRoot(self, Strings.create(self + ":u:bob:dev/w/notes")),
+			"and as every identity nested below it, at any depth");
+		assertFalse(policy.acceptsRoot(self, Strings.create(other + "/w/notes")));
+		assertFalse(policy.acceptsRoot(self, Strings.create(self + "x/w/notes")),
+			"a DID that only starts with the same text is not nested");
+		assertFalse(policy.acceptsRoot(web, Strings.create(web + ":g:helper/w/notes")),
+			"a did:web signs in as nothing below it");
+		assertFalse(policy.acceptsRoot(Strings.create(self + ":g:helper"), Strings.create(self + ":g:helper:x/w/notes")),
+			"only a bare did:key signs in as a nested identity");
+	}
+
+	@Test
+	void didKeyVenueIsRootForIdentitiesNestedBelowIt() {
 		Engine personal = Engine.createTemp(Maps.empty());
 		try {
 			RootAuthorityPolicy policy = personal.rootAuthorityPolicy();
@@ -141,11 +170,9 @@ class UserAdapterTest {
 				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()) + ":u:alice");
 
 			assertTrue(policy.acceptsRoot(venue, Strings.create(issued + "/w/notes")));
+			assertTrue(policy.acceptsRoot(venue, Strings.create(issued + ":admin/w/notes")));
 			assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
-				"another did:key user-shaped subject is not venue-issued");
-			assertFalse(policy.acceptsRoot(venue,
-				Strings.create(issued + ":admin/w/notes")),
-				"the issued user must be exactly one valid username segment");
+				"another did:key's nested identity is not the venue's");
 		} finally {
 			personal.close();
 		}

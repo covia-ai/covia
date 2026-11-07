@@ -1,68 +1,64 @@
-# Held Keys (design)
+# Held Keys
 
 How a venue keeps private keys for the identities it hosts, and uses them on
-their behalf. Keyrings belong to the crypto adapter. This is a design; none of
-it is implemented yet.
-
-Tracked by covia#637.
+their behalf. Keyrings belong to the crypto adapter; the operations are listed
+in [CONFIG.md](./CONFIG.md), "Cryptography".
 
 ## What a held key is
 
-Every identity on the venue has a keyring: the private keys it has given the
-venue, of any type, indexed by public key. A key may be the key of a
-`did:key` identity, in which case holding it is custody of that identity, or
-any other key its holder uses, such as a Convex account key.
+Every user on the venue, including one nested below another, and every agent
+has a keyring: the private keys and recovery phrases it has given the venue,
+indexed by public key. A key may be the key of a `did:key` identity, in which
+case holding it is custody of that identity, or any other key its holder uses,
+such as a Convex account key. An agent is a principal of its own, so its
+keyring is its own, under its own DID (`<owner>:g:<id>`), not its owner's.
 
 A held key follows the rules of identity, not those of secrets. A secret is
 data its owner can read (`secret/extract`) and lend (`secret/use`); a held
 key allows neither, because whoever can sign with a key acts as whatever that
 key identifies.
 
-Today keys live elsewhere:
+Keys can also live elsewhere:
 
-- `auth:identity-token` signs only with the venue's own key, for the venue's
-  `did:key` and identities nested below it ([AUTH.md](./AUTH.md) §5.2), and
-  `ucan:issue` signs every grant with the venue's key.
-- The crypto adapter ([CONFIG.md](./CONFIG.md), "Cryptography") keeps every private
-  seed and mnemonic in the caller's secret store: `crypto:generate-key` and
-  `crypto:derive-key` store new seeds there, and `crypto:public-key`, `sign`,
-  `jwt-sign` and `decrypt` take a `seed` secret reference, resolved in one
-  place (`CryptoAdapter.keyPair`).
-- The Convex adapter does the same with its own operations:
-  `convex:generate-key` stores a seed as a secret, `convex:sign` signs with a
-  seed named by secret reference, and `convex:transact` takes a seed by secret
-  reference or literally (redacted from job records).
+- As secrets: `crypto:generate-key`, `crypto:derive-key` and
+  `crypto:generate-mnemonic` store a seed or phrase in the caller's secret
+  store unless asked for the keyring, and the crypto operations take a `seed`
+  secret reference beside a held `key`. The holder chooses which it wants.
+- The venue's own key, loaded from configuration (Storage rules, below).
 - An embedder whose installation has its own `did:key` keeps that key in its
   own code and signs with `VenueAuth.namedKeyPair` itself.
 
 ## Principles
 
-1. **Any identity may hold keys.** An authenticated identity adds a key to its
+1. **Any user may hold keys.** An authenticated identity adds a key to its
    own keyring, given the capability to do so. The venue checks that the
    private key yields the public key; nothing else is needed.
-2. **A keyring is its holder's alone.** Its keys are used, and listed, only
-   for a request whose caller is the holder, authenticated as itself or acting
-   as itself in trusted in-process code, or by a principal the holder has
-   explicitly granted that use. A capability scope can narrow the holder's own
-   use, as an agent's caps do.
-3. **Nothing implicit reaches a keyring.** Nesting, ownership and acting on an
-   identity's behalf confer no use of its keys: an identity nested below a root
-   (`<root>:u:alice`) and an agent of an owner use the root's or owner's keys
-   only under an explicit grant, and `user/sudo`, an activated allowance or the
-   venue's power over its users ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md))
-   never sign as the identity. A signature travels to other venues, and the
-   host root holds only at its own venue.
-4. **An identity token for oneself is not key use.** A nested identity may
-   always obtain an identity token naming itself, signed by its root's key,
-   whether the root is the venue or an identity whose key the venue holds. The
-   token attests only the identity the root's nesting already established, so
-   it is authentication, under `auth:identity-token`'s own rules, and needs no
-   right over the root's keys.
-5. **A grant of key use is the holder's own.** It counts only when its chain
-   starts with the holder: signed by the holder, or attested on the holder's
-   instruction by the venue custodying its identity (COG-17). A grant rooted in
-   the host root never confers key use, so the venue cannot grant itself, or
-   anyone, the use of a key it holds for someone else.
+2. **A keyring is a resource of its holder.** Its keys are used and listed
+   under authority over that resource, by the standard rules and no others:
+   the holder's own authority, narrowed by a capability scope as for any
+   resource, or a grant (principle 5).
+3. **Authority over an identity includes its keys.** Whatever acts with a
+   holder's authority can use its keys: the holder itself, an agent as its
+   scope allows, and a grant of `*` over the holder's namespace. What confers
+   no authority over another identity's resources confers no use of its keys:
+   admission, and nesting below a root (`<root>:u:alice` gains nothing over
+   `<root>`). Being a root confers none either: a `did:key` is root of the
+   identities nested below it, its agents among them, and a user of its
+   agents, so each can grant their keys (principle 5) but uses them only under
+   such a grant. The venue is the root of every identity it hosts (UCAN.md
+   §5.6, "Roots"), so it reaches a holder's keys exactly as it reaches the
+   holder's other resources ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md)).
+4. **An identity token for oneself is not key use.** An identity may always
+   obtain an identity token naming itself, signed by its root's key (its own,
+   if it is a root), whether that is the venue's key or one the root holds
+   here. The token attests only the identity the root's nesting already
+   established, so it is authentication, under `auth:identity-token`'s own
+   rules, and needs no key ability.
+5. **A grant of key use is an ordinary grant.** A key is a resource in its
+   holder's namespace, and grants cover it by the standard rules (COG-17): a
+   key ability, `key` or `*`, on the key, the keyring or anything containing
+   it, from a root for the holder's resources. A holder that grants `*` over
+   its namespace grants the use of its keys with it.
 6. **Keys are never readable.** No operation returns, exports or lends a
    private key, as for the venue's own key.
 7. **One signing function** serves identity tokens, UCAN grants, Convex
@@ -85,7 +81,7 @@ Keyrings are the crypto adapter's state, at `:adapters/crypto`
 
 ```
 {
-  "version": 0,
+  "version": 1,
   "holders": Index<AString, {
     "keys":      Index<Blob, key record>,
     "mnemonics": Index<Blob, mnemonic record>
@@ -96,12 +92,12 @@ Keyrings are the crypto adapter's state, at `:adapters/crypto`
 - **`version`** (`CVMLong`) is the layout version. Each layout change is a
   migration step, and the step writes the new version here as the framework
   records it in `:adapter-versions` (ADAPTERS.md, "Versioned state and
-  migration"), so the value states its own version. The first release has no
-  steps and is version 0.
-- **`holders`** is an `Index` keyed by the holder's DID, as an `AString`. An
-  `Index` keeps holders in order, so an identity and every identity nested
-  below it (`<did>:…`) are adjacent, and deleting a user removes that range:
-  the DID itself and the DIDs that continue it with `:`.
+  migration"), so the value states its own version. Version 0 is the crypto
+  adapter's state before keyrings, which held nothing; step 0
+  (`CryptoKeyring.Keyrings`) takes it to version 1, this layout, and refuses
+  any other shape.
+- **`holders`** is an `Index` keyed by the holder's DID, as an `AString`, in
+  order.
 - **`keys`** is an `Index` keyed by public key, as a `Blob`: the
   multicodec-prefixed key bytes, `0xed01` followed by the 32-byte key for
   Ed25519. The prefix names the key type, so other types fit without a layout
@@ -116,7 +112,7 @@ A key record is a map:
 ```
 {
   "sealed": { "encrypted": <Blob>, "keyVersion": <CVMLong> },
-  "added":  <CVMLong, unix ms>,
+  "addedAt": <CVMLong, unix ms>,
   "label":  <AString, optional>
 }
 ```
@@ -131,13 +127,14 @@ A key record is a map:
   opens only where it was written.
 - **The sealing key** is derived from the venue's seed under a label of its
   own, apart from the secret store's, so a sealed key cannot be read as a
-  secret.
+  secret. It has no counterpart to the secret store's legacy version 1, a
+  plain hash of the seed, which would open records of either store.
 - **`label`** is the holder's own name for the key, if it gave one.
 
 A mnemonic record has the same fields. Its sealed plaintext names the holder
 DID, the master node's public key and the phrase, checked the same way on
 opening. A passphrase is not kept with it: `crypto:derive-key` takes one by
-secret reference as now.
+secret reference.
 
 Using a key writes nothing to the store; the audit log records it.
 
@@ -145,8 +142,12 @@ Using a key writes nothing to the store; the audit log records it.
 
 - **Deleted with its holder.** Deleting a user runs every adapter's
   `deleteUserState` in the deletion transaction, disabled adapters included,
-  and the crypto adapter removes the user's holder entry and those nested
-  below it.
+  and the crypto adapter removes the user's keyring and those of its agents
+  (`<did>:g:<id>`), which go with the user. A user nested below it
+  (`<did>:u:bob`) is a user of its own and keeps its keyring until it is
+  deleted itself. Deleting an agent runs every adapter's `deleteAgentState`
+  likewise (`Engine.deleteAgentState`), and the crypto adapter removes the
+  agent's keyring, so a later agent with the same id holds nothing of it.
 - **Disabling the crypto adapter** leaves the keys sealed in its state.
   Nothing uses them until it is enabled again, and other adapters' operations
   that would sign with a held key are refused meanwhile.
@@ -157,106 +158,128 @@ Using a key writes nothing to the store; the audit log records it.
 
 ## Using a key
 
-`CryptoAdapter.keyPair` resolves every private key the crypto adapter's
-operations use. It accepts a held key as well as a `seed` reference: it checks
-the holder and the ability the operation needs, opens the record, and makes
-an `AKeyPair` that lives for that one call. The existing signers then serve
-every use: `AKeyPair.sign` for raw bytes, `JWT.signPublic` for identity tokens
-and UCAN grants, `AKeyPair.signData` for Convex values, and ECIES for
-decryption. Other adapters (`auth:identity-token`, `ucan:issue`,
-`convex:transact`) obtain a held key's `AKeyPair` from the crypto adapter in
-the same way, for the one call. Other key types need signers of their own;
-Convex 0.8.18 provides Ed25519 only.
+`CryptoAdapter.heldKeyPair(ctx, key, ability)` is the one place a held key is
+opened: it checks the ability the operation needs on the key, opens the
+record, audits the use, and returns an `AKeyPair` that lives for that one
+call. The crypto operations reach it through `CryptoAdapter.keyPair`, which
+also resolves a `seed` reference, and `ucan:issue` and `convex:transact`
+call it directly. `auth:identity-token` opens a root's own key through
+`CryptoAdapter.identityKeyPair`, which checks no ability (principle 4). The
+existing signers then serve every use: `AKeyPair.sign` for raw bytes,
+`JWT.signPublic` for identity tokens and UCAN grants, `AKeyPair.signData` for
+Convex values, and ECIES for decryption. Other key types need signers of their
+own; Convex 0.8.18 provides Ed25519 only.
 
-A held key is named by its public key: its multibase string (`z6Mk…`), or for
-Ed25519 its 32-byte account key as a `Blob`, the form the crypto adapter's
-results already use.
+A held key is named by its public key, in any of the forms results already
+use: its `did:key`, its multibase string (`z6Mk…`), or for Ed25519 its 32-byte
+account key. A bare key names a key in the keyring of the principal that
+acts: a user's own, an agent's own, a delegate's own under `user/sudo`.
+`<did>/x/crypto/keys/<key>` names one in another holder's keyring. A held
+mnemonic is named the same way by its ID, the master node's public key, or as
+`<did>/x/crypto/mnemonics/<id>`.
 
 ## Operations
 
-New crypto operations (names open):
+The keyring operations:
 
-- **Add** a key, refused unless the private key yields the public key. The
-  private key is a secret field of the operation (`operation.secretFields`),
-  so job records keep it redacted.
-- **Remove** a key.
-- **List** the caller's own keys: public key, label and when it was added.
+| Operation | Input | Output |
+|-----------|-------|--------|
+| `crypto:add-key` | `seed` or `mnemonic`: a reference to the caller's own secret, as `crypto:derive-key` takes one; optional `label`; `overwrite` to replace the label of a key already held | `accountKey` and `did` of the key, or `did` and `words` of the phrase |
+| `crypto:remove-key` | `key` or `mnemonic`: a held key or mnemonic | `removed` |
+| `crypto:list-keys` | optional `did`, whose keyring (default: the principal that acts); `offset`, `limit` as `secret:list` takes them | `keys` and `mnemonics`, each entry with `accountKey` (Ed25519 only), `did`, `label` and `addedAt`; `total`, `nextOffset` |
 
-Existing crypto operations take a held key as well as a `seed` reference:
+Adding a key from a secret leaves the secret in place; deleting it is the
+caller's choice. A literal private key or phrase is never input, as for every
+crypto operation.
 
-- **`crypto:sign`** is the standard signing interface: it signs raw bytes.
-  `data` is a `Blob`, which JSON callers may give as a hex string with or
-  without `0x`, other string encodings being named explicitly; the result's
-  `signature` is a `Blob` (64 bytes for Ed25519), which JSON renders as a `0x`
-  hex string. The bytes are signed exactly as given, with no hashing or
-  prefix, and messages are limited to 1 MiB.
-- **`crypto:jwt-sign`**, **`crypto:decrypt`** and **`crypto:public-key`** work
-  the same way with a held key.
-- **`crypto:generate-key`** and **`crypto:derive-key`** store the new key as a
-  secret, as now, or in the caller's keyring, where its private key is born in
-  the venue and never seen.
-- **`crypto:generate-mnemonic`** likewise keeps the new phrase as a secret or
-  in the caller's keyring, and **`crypto:derive-key`** and
-  **`crypto:validate-mnemonic`** take either.
+Other operations take a held key beside a `seed` reference; a request that
+names neither works as it did before keyrings:
 
-Both stay supported, and the caller chooses: a secret it can read back and
-lend, or a keyring entry that nothing can read.
+- **`crypto:sign`**, **`crypto:jwt-sign`** and **`crypto:decrypt`** take
+  `key`, a held key, in place of `seed`. `crypto:sign` signs raw bytes
+  exactly as given.
+- **`crypto:generate-key`** and **`crypto:derive-key`** take `keyring: true`,
+  with an optional `label`, in place of `name`: the new key goes into the
+  keyring of the principal that acts, where its private key is born
+  in the venue and never seen, and the result has `accountKey` and `did` but
+  no `secret`.
+- **`crypto:generate-mnemonic`** takes `keyring: true` likewise, and returns
+  the phrase's `did` and `words`.
+- **`crypto:derive-key`** and **`crypto:validate-mnemonic`** take a held
+  mnemonic in `mnemonic`, beside an `s/NAME` reference. A key derived from a
+  held mnemonic goes only into its holder's keyring (`keyring: true`), never
+  into a secret, where it could be read; `key/derive` on the phrase covers
+  adding it. Validating a held phrase needs `crud/read` on it.
+- **`ucan:issue`** takes an optional `key`: the grant is signed with that held
+  key, its issuer is the key's `did:key`, bare `with` paths are made absolute
+  against that `did:key`, and every entry must name resources that `did:key`
+  is root of, its own or an identity's nested below it, since the grant is a
+  root there. The result names the issuer as `iss`, so a caller can tell when
+  a venue without this field signed with its own key instead. Without `key`,
+  the venue signs (UCAN.md §4.1): over an agent's keys at its own or its
+  owner's request.
+- **`convex:transact`** takes `key`, a held key, in place of `seed`.
+- **`auth:identity-token`** takes nothing new: it signs with the caller's
+  root's key when the root holds that key in its own keyring, and with the
+  venue's key for the venue's `did:key` and identities nested below it.
 
-The Convex adapter moves onto the same keyrings:
+Seeds and phrases as secrets stay supported, and the caller chooses: a secret
+it can read back and lend, or a keyring entry that nothing can read.
 
-- `convex:transact` takes a held key, under `key/sign/convex`.
-- `convex:sign` duplicates `crypto:sign` and is deprecated in its favour.
-- `convex:generate-key` is deprecated in favour of `crypto:generate-key`.
+`convex:sign` and `convex:generate-key` are deprecated in favour of
+`crypto:sign` and `crypto:generate-key`. `convex:sign` is not a drop-in:
+its `message` is UTF-8 by default, where `crypto:sign` reads hex unless given
+`encoding: utf8`.
 
 ## Abilities
 
-A keyring is the resource `<holder DID>/keys/`, and one key is
-`<holder DID>/keys/<public key>`, the key in multibase form. Like
-`<did>/oauth/<provider>`, they name resources for capability checks, not
-lattice paths.
+A keyring is a resource in the adapter's own `x/` space, as every adapter's
+data is addressed (ADAPTERS.md, "User-visible extension routes"):
+`<did>/x/crypto/keys/`, one key `<did>/x/crypto/keys/<key>` with the key in
+multibase form, and held mnemonics `<did>/x/crypto/mnemonics/` and
+`<did>/x/crypto/mnemonics/<id>`.
 
 | Ability | On | Allows |
 |---------|----|--------|
-| `crud/read` | `<did>/keys/` | Listing the keyring: public keys, labels and when each was added |
-| `key/add` | `<did>/keys/<pk>` | Adding that key, or generating or deriving it into the keyring |
-| `key/remove` | `<did>/keys/<pk>` | Removing it |
-| `key/sign` | `<did>/keys/<pk>` | Signing anything with it; covers every `key/sign/…` |
-| `key/sign/token` | `<did>/keys/<pk>` | Signing identity tokens (`auth:identity-token`) |
-| `key/sign/grant` | `<did>/keys/<pk>` | Signing UCAN grants (`ucan:issue`) |
-| `key/sign/convex` | `<did>/keys/<pk>` | Signing Convex transactions (`convex:transact`) |
-| `key/sign/raw` | `<did>/keys/<pk>` | Signing content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any of the above |
-| `key/decrypt` | `<did>/keys/<pk>` | Decrypting with it (`crypto:decrypt`) |
-| `key/derive` | `<did>/keys/<pk>` | Deriving keys from a held mnemonic, named by its master node's public key (`crypto:derive-key`) |
+| `crud/read` | `<did>/x/crypto/keys/`, `<did>/x/crypto/mnemonics/` | Listing them: public keys, labels and when each was added |
+| `key/add` | a key or mnemonic | Adding it, or generating or deriving it into the keyring |
+| `key/remove` | a key or mnemonic | Removing it |
+| `key/sign` | a key | Signing anything with it; covers every `key/sign/…` |
+| `key/sign/grant` | a key | Signing UCAN grants (`ucan:issue`) |
+| `key/sign/convex` | a key | Signing Convex transactions (`convex:transact`) |
+| `key/sign/raw` | a key | Signing content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any of the above |
+| `key/decrypt` | a key | Decrypting with it (`crypto:decrypt`) |
+| `key/derive` | a mnemonic | Deriving keys from it (`crypto:derive-key`) |
 
-`key` covers every `key/…` ability. The kinds of signing let a capability
-scope narrow what a key may sign: an agent can hold `key/sign/token` on its
-own key without being able to sign transactions. An operation that signs
-whatever its caller supplies, such as `crypto:jwt-sign` with its free claims,
-needs `key/sign/raw`.
+`key` covers every `key/…` ability, and `*` covers them as it covers every
+ability. The kinds of signing let a capability scope narrow what a key may
+sign: an agent can hold `key/sign/grant` on a key without being able to sign
+transactions. An operation that signs whatever its caller
+supplies, such as `crypto:jwt-sign` with its free claims, needs
+`key/sign/raw`. Identity tokens need no key ability (principle 4).
 
-A check passes in one of two ways, and in no other:
+A check is the standard capability check of the ability on the resource,
+made against the request's authority as for any resource, with nothing added
+for keys:
 
-1. **The caller is the holder, and its own base covers the ability.** The
-   keyring's DID equals the caller's DID. A user holds every `key/…` ability
-   over its own keyring. An agent needs caps naming its own keyring by DID URL,
-   since a bare path in caps names its owner's namespace. An `nb.gate` on such
-   a cap can make signing wait for an approval.
-2. **The caller presents a grant of the ability on that key whose chain starts
-   with the holder** (principle 5). The grant bounds the use as any grant does:
-   to the key, the kind of signing, an expiry, and any `nb.gate`.
+- A user's own authority covers its own keyring, and an agent's its own.
+- An agent with no caps uses its own keys, and its owner's as it reaches its
+  owner's other resources. An agent with caps uses what they cover: a bare
+  `x/crypto/keys/` in its caps names its owner's keyring, and its own is
+  named in full, `<owner>:g:<id>/x/crypto/keys/`.
+- An owner uses its agent's keys under a grant, which it can have the venue
+  sign on the agent's behalf. It may also put them in the agent's caps, since
+  caps confer what their author could grant and the agent is its own.
+- A request under `user/sudo` is bounded by the grants it presents, a
+  target's keys as anything else of the target's.
+- A grant covers a key as it covers any resource (principle 5), bounded to
+  the key, the kind of signing, an expiry and any `nb.gate`, which can make
+  signing wait for an approval.
 
-Admission, nesting, ownership, `user/sudo` and grants rooted in the host root
-never pass. An agent with no caps, whose base is its owner's authority, still
-cannot use its owner's keys, because its DID is not its owner's.
-
-An identity token naming the caller, signed by its root's key, is not a use
-of that key (principle 4): `auth:identity-token` issues it to an identity
-nested below the root under that operation's own rules, as it does today for
-identities nested below the venue's `did:key` ([AUTH.md](./AUTH.md) §5.2).
-Any other use of the root's key needs a grant. The venue's own key is the
-venue's keyring entry under the same rules: the venue acting as itself, in
-trusted code, uses it, and anyone else only under an explicit grant from the
-venue.
+The public principal has no keyring. The venue's own key is the venue's
+keyring entry under the same rules: the venue acting as itself, in trusted
+code, uses it, and anyone else only under a grant from the venue that covers
+it.
 
 ## Security
 
@@ -269,18 +292,17 @@ venue.
 - **A secret is the readable choice.** A seed or mnemonic kept as a secret can
   be read back by its owner and lent with `secret/use`; one in a keyring
   cannot. The holder chooses which it wants.
-- **No implicit use.** A key is used only by its holder or under the holder's
-  explicit grant, so a deputy acting for the holder, an identity nested below
-  it, or the venue acting on its behalf can never make the venue sign as the
-  holder.
+- **Authority over an identity includes its keys.** Whoever acts with a
+  holder's full authority can sign as it: the holder, an agent created
+  without caps over its owner's keys, a grantee of `*` over its namespace. An
+  agent that should not sign is given caps that leave the keyrings out.
 - **Granting key use is granting a signature.** A grantee of `key/sign/raw`
   can make the key sign anything, so its holder should grant the narrowest
   kind of signing, on one key, for the shortest time. A grant of the venue's
-  own key hands out the venue's signature, the sharpest grant there is.
+  own key, or of `*` over the venue's namespace, hands out the venue's
+  signature, the sharpest grant there is.
 
 ## Open questions
 
-1. When the deprecated Convex signing operations are removed, and how an owner
-   moves an existing seed or phrase from the secret store into their keyring.
+1. When the deprecated Convex operations are removed.
 2. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
-3. The new operations' names.

@@ -473,9 +473,10 @@ checks still apply. REST/native invocation remains subject to its own checks
 and operation restrictions, independently of MCP exposure.
 
 A `tools/call` that the venue accepts and that then fails answers a tool result
-marked `isError`. Its text is the failure's reason, or, for an unexpected
-failure, that a venue error occurred and its type ([ERRORS.md](ERRORS.md)). A
-malformed request or an unknown tool answers a JSON-RPC error instead.
+marked `isError`. Its text is the failure's reason, or, for a fault, the
+report of the scope it happened in, naming whose code it was and the
+exception's type ([ERRORS.md](ERRORS.md#scopes)). A malformed request or an
+unknown tool answers a JSON-RPC error instead.
 
 ### Lattice primitives
 

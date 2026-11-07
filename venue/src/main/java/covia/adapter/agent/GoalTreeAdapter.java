@@ -16,6 +16,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.venue.AgentState;
@@ -504,7 +505,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		try {
 			return goal(job, ctx, input);
 		} catch (RuntimeException e) {
-			throw CycleRecord.Failure.of(e);
+			throw CycleRecord.Failure.of(e, covia.exception.FaultException.ADAPTER.formatted(getName()));
 		}
 	}
 
@@ -796,7 +797,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			} catch (RuntimeException e) {
 				// The child is this frame's tool: however it failed, the parent
 				// sees a failed subgoal, and the child is popped like any other.
-				childResult = FrameResult.failed(Strings.create(toolFailure(e, call.name())), store.frames());
+				childResult = FrameResult.failed(Strings.create(toolFailure(e, call.name(), FaultException.ADAPTER.formatted(getName()))), store.frames());
 			} finally {
 				if (record != null) record.attachFrame(call.id(), record.closeFrame());
 			}

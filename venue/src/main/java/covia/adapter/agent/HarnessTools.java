@@ -15,6 +15,7 @@ import convex.core.util.Utils;
 import covia.adapter.ToolCallArguments;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.grid.Asset;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -359,7 +360,7 @@ final class HarnessTools {
 				}
 			}
 		} catch (RuntimeException e) {
-			return Strings.create("Error: more_tools denied: " + AbstractLLMAdapter.toolFailure(e, MORE_TOOLS));
+			return Strings.create("Error: more_tools denied: " + AbstractLLMAdapter.toolFailure(e, MORE_TOOLS, FaultException.VENUE));
 		}
 		AVector<ACell> resolved = ToolPalette.bindingsForOperations(
 			scope.engine, scope.context, requested);
@@ -465,7 +466,7 @@ final class HarnessTools {
 			try {
 				new ContextLoader(scope.engine).requireReadAccess(path, scope.context);
 			} catch (RuntimeException e) {
-				return Strings.create("Error: context_load denied: " + AbstractLLMAdapter.toolFailure(e, CONTEXT_LOAD));
+				return Strings.create("Error: context_load denied: " + AbstractLLMAdapter.toolFailure(e, CONTEXT_LOAD, FaultException.VENUE));
 			}
 		} else {
 			key = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_ID));
@@ -555,7 +556,7 @@ final class HarnessTools {
 			}
 			return outcome.result();
 		} catch (RuntimeException e) {
-			return Strings.create("Error: skill_load failed: " + AbstractLLMAdapter.toolFailure(e, SKILL_LOAD));
+			return Strings.create("Error: skill_load failed: " + AbstractLLMAdapter.toolFailure(e, SKILL_LOAD, FaultException.VENUE));
 		}
 	}
 

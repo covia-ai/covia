@@ -1751,7 +1751,7 @@ public class LangChainAdapter extends AAdapter {
 			resolved = engine.resolveContent(ref, ctx);
 			bytes = (resolved != null) ? resolved.content().getBlob().getBytes() : null;
 		} catch (UnavailableException | java.io.IOException e) {
-			throw new InvalidInputException(IMAGE_UNREADABLE.formatted(ref, CoviaException.describe(e)), e);
+			throw new InvalidInputException(IMAGE_UNREADABLE.formatted(ref, describeFailure(e)), e);
 		}
 		String mime = (resolved != null) ? resolved.contentType() : null;
 		if (bytes == null || bytes.length == 0) {

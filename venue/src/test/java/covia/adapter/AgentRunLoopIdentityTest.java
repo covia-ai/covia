@@ -149,33 +149,40 @@ public class AgentRunLoopIdentityTest {
 	}
 
 	/**
-	 * A <b>fully empowered</b> agent — no {@code config.caps}, so the null-scope
-	 * fast path in {@code authorityCovers} short-circuits every scope check — is
-	 * still not its owner. The guards that matter are pinned to <em>identity</em>,
-	 * not to scope, so an unrestricted scope cannot reach past them.
+	 * A <b>fully empowered</b> agent — no {@code config.caps} — has its owner's
+	 * own authority and nothing more: it grants what its owner could grant of
+	 * its own right, its own resources and its owner's, and never what others
+	 * granted its owner. Answering its owner's HITL inbox is acting as the
+	 * owner, which no agent does.
 	 */
 	@Test
-	public void testFullyEmpoweredAgentStillCannotGrant() {
+	public void testFullyEmpoweredAgentGrantsWhatItsOwnerCould() throws Exception {
 		AString agentId = Strings.create("empowered");
+		engine.getVenueState().users().ensure(ALICE_DID);
+		engine.getVenueState().users().ensure(BOB_DID);
 		RequestContext agentCtx = RequestContext.ofAgent(ALICE_DID, agentId);
 		assertNull(agentCtx.getCaps(), "precondition: an unrestricted agent");
+		AString agentDID = Principals.agentDID(ALICE_DID, agentId);
 
 		// It can act freely inside its owner's namespace — that is what
 		// "fully empowered" means, and it must keep working.
 		assertNotNull(engine.jobs()
 			.invokeOperation("v/test/ops/echo", Maps.of(), agentCtx).awaitResult(5000));
 
-		// But it cannot mint capability grants, directly...
-		AuthException direct = assertThrows(AuthException.class, () ->
+		// It grants its own resources and its owner's, by a bare path or named...
+		for (AString path : new AString[] {Strings.create(agentDID + "/x/crypto/keys/"),
+				Strings.create("w/"), Strings.create(ALICE_DID + "/w/")}) {
+			ACell issued = engine.jobs().invokeInternal("v/ops/ucan/issue",
+				issueInput(Strings.create("did:web:elsewhere.example:u:carol"), path, "crud/write"),
+				agentCtx).get(5, TimeUnit.SECONDS);
+			assertNotNull(convex.core.lang.RT.getIn(issued, "token"), path.toString());
+		}
+
+		// ...but not another user's...
+		AuthException others = assertThrows(AuthException.class, () ->
 			unwrap(() -> engine.jobs().invokeInternal("v/ops/ucan/issue",
-				Maps.of(Strings.create("aud"), ALICE_DID,
-					Strings.create("att"), Vectors.of(
-						Maps.of(Strings.create("with"), Strings.create("w/"),
-							Strings.create("can"), Strings.create("crud/write"))),
-					Strings.create("exp"),
-					CVMLong.create(System.currentTimeMillis() / 1000 + 600)),
-				agentCtx).get(5, TimeUnit.SECONDS)));
-		assertTrue(direct.getMessage().contains("Agents cannot issue capability grants"));
+				issueInput(ALICE_DID, Strings.create(BOB_DID + "/w/"), "crud/read"), agentCtx).get(5, TimeUnit.SECONDS)));
+		assertTrue(others.getMessage().contains(Engine.NO_GRANTING_RIGHT), others.getMessage());
 
 		// ...nor by answering its owner's HITL inbox, which would launder a
 		// self-approved grant through the human-in-the-loop surface.
@@ -185,6 +192,52 @@ public class AgentRunLoopIdentityTest {
 					Strings.create("outcome"), Strings.create("answer")),
 				agentCtx).get(5, TimeUnit.SECONDS)));
 		assertTrue(viaHitl.getMessage().contains("Agents cannot answer HITL requests"));
+	}
+
+	/**
+	 * An agent with caps grants only what they include the right to grant:
+	 * using its own keys or reading its owner's workspace is not granting them.
+	 * Its owner, whose agent it is, grants them as it likes.
+	 */
+	@Test
+	public void testRestrictedAgentGrantsOnlyWhatItsCapsLetItGrant() throws Exception {
+		AString agentId = Strings.create("restricted");
+		engine.getVenueState().users().ensure(ALICE_DID);
+		AString keyring = Strings.create(Principals.agentDID(ALICE_DID, agentId) + "/x/crypto/keys/");
+		AMap<AString, ACell> invoke = Maps.of(Strings.create("with"), Strings.create("v/ops/ucan/issue"),
+			Strings.create("can"), Strings.create("invoke"));
+		RequestContext agentCtx = RequestContext.ofAgent(ALICE_DID, agentId).withCaps(Vectors.of(invoke,
+			Maps.of(Strings.create("with"), keyring, Strings.create("can"), Strings.create("key/sign")),
+			Maps.of(Strings.create("with"), Strings.create("w/"), Strings.create("can"), Strings.create("crud/read"))));
+		for (AString path : new AString[] {keyring, Strings.create("w/")}) {
+			AuthException denied = assertThrows(AuthException.class, () ->
+				unwrap(() -> engine.jobs().invokeInternal("v/ops/ucan/issue",
+					issueInput(BOB_DID, path, "crud/read"), agentCtx).get(5, TimeUnit.SECONDS)));
+			assertTrue(denied.getMessage().contains(Engine.GRANT_BEYOND_SCOPE), denied.getMessage());
+		}
+
+		RequestContext granting = RequestContext.ofAgent(ALICE_DID, agentId).withCaps(Vectors.of(invoke,
+			Maps.of(Strings.create("with"), keyring, Strings.create("can"), Strings.create("grant/key/sign"))));
+		assertNotNull(convex.core.lang.RT.getIn(engine.jobs().invokeInternal("v/ops/ucan/issue",
+			issueInput(BOB_DID, keyring, "key/sign"), granting).get(5, TimeUnit.SECONDS), "token"));
+
+		ACell byOwner = engine.jobs().invokeInternal("v/ops/ucan/issue",
+			issueInput(BOB_DID, keyring, "key/sign"), RequestContext.of(ALICE_DID)).get(5, TimeUnit.SECONDS);
+		assertNotNull(convex.core.lang.RT.getIn(byOwner, "token"),
+			"the owner grants on its agent's behalf");
+
+		engine.getVenueState().users().ensure(BOB_DID);
+		AuthException stranger = assertThrows(AuthException.class, () ->
+			unwrap(() -> engine.jobs().invokeInternal("v/ops/ucan/issue",
+				issueInput(BOB_DID, keyring, "key/sign"), RequestContext.of(BOB_DID)).get(5, TimeUnit.SECONDS)));
+		assertTrue(stranger.getMessage().contains(Engine.NO_GRANTING_RIGHT), stranger.getMessage());
+	}
+
+	private static AMap<AString, ACell> issueInput(AString aud, AString with, String can) {
+		return Maps.of(Strings.create("aud"), aud,
+			Strings.create("att"), Vectors.of(Maps.of(Strings.create("with"), with,
+				Strings.create("can"), Strings.create(can))),
+			Strings.create("exp"), CVMLong.create(System.currentTimeMillis() / 1000 + 600));
 	}
 
 	/** Runs {@code body}, rethrowing the underlying cause so assertThrows sees the

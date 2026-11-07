@@ -21,6 +21,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 import covia.exception.NotSupportedException;
@@ -719,6 +720,8 @@ public class Job {
 
 	/**
 	 * Claims a pending Job and triggers execution only for the winning transition.
+	 * A continuation that throws fails the Job with what it {@linkplain #report reports},
+	 * and that report is thrown to the caller.
 	 * @param continuation action that schedules or starts the operation
 	 * @return true if STARTED committed, false if the Job was no longer pending
 	 */
@@ -735,11 +738,13 @@ public class Job {
 		try {
 			continuation.run();
 		} catch (RuntimeException | Error error) {
-			try { fail(error); }
-			catch (RuntimeException | Error reporting) {
-				if (reporting != error) error.addSuppressed(reporting);
+			// Reported once here; the caller that started the work receives the report
+			CoviaException reported = report(error);
+			try { fail(reported); }
+			catch (RuntimeException | Error recording) {
+				if (recording != reported) reported.addSuppressed(recording);
 			}
-			throw error;
+			throw reported;
 		}
 	}
 
@@ -866,18 +871,42 @@ public class Job {
 		});
 	}
 
-	/** Fail this Job while retaining a non-persisted typed cause for
-	 * result-oriented in-process callers. The recorded error is an expected
-	 * failure's reason, or the type of anything else, never its text. */
+	/** Fail this Job with what it {@linkplain #report reports} of {@code cause},
+	 * retained, not persisted, for result-oriented in-process callers. */
 	public void fail(Throwable cause) {
 		fail(cause, UnaryOperator.identity());
 	}
 
 	/** Fail with supporting state in the same transition; the decorator must be pure. */
 	protected void fail(Throwable cause, UnaryOperator<AMap<AString, ACell>> decorate) {
-		String detail = cause == null ? "Operation failed" : CoviaException.describe(cause);
+		CoviaException reported = (cause == null) ? null : report(cause);
+		String detail = (reported == null) ? "Operation failed" : reported.getMessage();
 		commitUpdate(job -> decorate.apply(job).assoc(Fields.STATUS, Status.FAILED)
-			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), cause, null);
+			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), reported, null);
+	}
+
+	/** What failed, when a Job reports a fault in its work: its operation as the caller referred to it follows. */
+	public static final String OPERATION = "Operation %s";
+
+	/** What failed, when a Job reports a fault and does not name its operation. */
+	public static final String UNNAMED_OPERATION = "Operation";
+
+	/** Whose code it was, when a Job does not name its adapter. */
+	public static final String UNNAMED_ADAPTER = "its adapter";
+
+	/**
+	 * What this Job reports of a failure in its work: a Covia exception with
+	 * its reason as it is, and anything else as a fault of its operation in
+	 * the adapter that runs it ({@link FaultException#within}), logged once.
+	 */
+	public CoviaException report(Throwable failure) {
+		AMap<AString, ACell> data = getData();
+		AString op = RT.ensureString(data.get(Fields.OP));
+		AString adapter = RT.ensureString(data.get(Fields.ADAPTER));
+		return FaultException.within(
+			(op == null) ? UNNAMED_OPERATION : OPERATION.formatted(op),
+			(adapter == null) ? UNNAMED_ADAPTER : FaultException.ADAPTER.formatted(adapter),
+			failure);
 	}
 
 	/**

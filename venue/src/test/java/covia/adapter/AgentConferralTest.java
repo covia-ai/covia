@@ -28,10 +28,10 @@ import covia.venue.TestEngine;
 
 /**
  * Conferring authority only narrows it: an agent's {@code caps}, {@code accepts}
- * and public A2A scope are written only by a caller that holds what they confer
- * ({@link Engine#requireConferrable}). Agents may create sub-agents, never more
- * capable ones, and a delegated create or update cannot plant authority the
- * delegation does not carry.
+ * and public A2A scope are written only by a caller that could grant what they
+ * confer ({@link Engine#requireConferrable}). Agents may create sub-agents with
+ * what they may grant, and a delegated create or update cannot plant authority
+ * the delegation does not let it grant.
  */
 public class AgentConferralTest {
 
@@ -82,18 +82,31 @@ public class AgentConferralTest {
 		return (user == null) ? null : user.agent(id);
 	}
 
-	private RequestContext bobWith(ACell... caps) {
-		long exp = System.currentTimeMillis() / 1000 + 3600;
+	/** Bob under Alice's grant of {@code caps}, lasting an hour or, with {@code exp} null, for ever. */
+	private RequestContext bobWith(Long exp, ACell... caps) {
 		return BOB.withProofs(Vectors.of(UCAN.create(aliceKP, bobKP.getAccountKey(), exp,
 			Vectors.of((Object[]) caps), Vectors.empty()).toMap()));
 	}
 
-	/** A scoped agent: may create sub-agents and read and write w/data/. */
-	private RequestContext parent() {
-		return RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(Vectors.of(
+	private RequestContext bobWith(ACell... caps) {
+		return bobWith(System.currentTimeMillis() / 1000 + 3600, caps);
+	}
+
+	private static final AString GRANT_CRUD = Strings.intern("grant/crud");
+	private static final AString GRANT_READ = Strings.intern("grant/crud/read");
+
+	/** A scoped agent: may create sub-agents, read and write w/data/ and invoke, and with {@code granting}, grant them. */
+	private RequestContext parent(boolean granting) {
+		AVector<ACell> caps = Vectors.of(
 			cap("g/", Abilities.AGENT_CREATE),
 			cap("w/data/", Capability.CRUD),
-			Maps.of(Capability.CAN, INVOKE)));
+			Maps.of(Capability.CAN, INVOKE));
+		if (granting) caps = caps.conj(cap("w/data/", GRANT_CRUD)).conj(Maps.of(Capability.CAN, Strings.create("grant/invoke")));
+		return RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(caps);
+	}
+
+	private RequestContext parent() {
+		return parent(true);
 	}
 
 	@Test
@@ -101,9 +114,26 @@ public class AgentConferralTest {
 		AVector<ACell> narrower = Vectors.of(
 			cap("w/data/reports/", Capability.CRUD_READ),
 			Maps.of(Capability.CAN, INVOKE));
+		// Using something is not the right to grant it.
+		assertNotConferrable(run("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "child", Fields.CONFIG, config(narrower)), parent(false)));
 		assertComplete(run("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "child", Fields.CONFIG, config(narrower)), parent()));
 		assertEquals(narrower, RT.getIn(agent(alice, "child").getConfig(), "caps"));
+	}
+
+	/** An owner gives its agent the agent's own keys: they are its agent's, which it may grant. */
+	@Test
+	public void testOwnerConfersAnAgentsOwnKeys() {
+		AString keys = Strings.create(covia.grid.Principals.agentDID(alice, Strings.create("signer")) + "/x/crypto/keys/");
+		AVector<ACell> caps = Vectors.of(Capability.create(keys, Abilities.KEY_SIGN), Maps.of(Capability.CAN, INVOKE));
+		assertComplete(run("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "signer", Fields.CONFIG, config(caps)), ALICE));
+		// Not Bob, whose agent it is not, though Alice lets him create agents.
+		assertNotConferrable(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, alice + "/g/signer2",
+			Fields.CONFIG, config(Vectors.of(Capability.create(Strings.create(
+				covia.grid.Principals.agentDID(alice, Strings.create("signer")) + "/x/crypto/keys/"), Abilities.KEY_SIGN)))),
+			bobWith(cap(alice + "/g/", Abilities.AGENT_CREATE))));
 	}
 
 	@Test
@@ -136,11 +166,19 @@ public class AgentConferralTest {
 		assertNotConferrable(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, address,
 			Fields.CONFIG, config(Vectors.of(cap("w/shared/", Capability.CRUD_READ)))
 				.assoc(Fields.ACCEPTS, Vectors.of(bob))), delegated));
+		// Reading Alice's w/shared/ is not the right to grant it...
+		AMap<AString, ACell> reader = Maps.of(Fields.AGENT_ID, address,
+			Fields.CONFIG, config(Vectors.of(cap("w/shared/", Capability.CRUD_READ))));
+		assertNotConferrable(run("v/ops/agent/create", reader, delegated));
+		// ...nor is a right to grant it that ends, since an agent's caps do not.
+		ACell create = cap(alice + "/g/", Abilities.AGENT_CREATE);
+		assertNotConferrable(run("v/ops/agent/create", reader,
+			bobWith(create, cap(alice + "/w/shared/", GRANT_READ))));
 		assertNull(agent(alice, "evil"));
 
 		// Bare caps name the owner's namespace, where the delegation applies
-		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, address,
-			Fields.CONFIG, config(Vectors.of(cap("w/shared/", Capability.CRUD_READ)))), delegated));
+		assertComplete(run("v/ops/agent/create", reader,
+			bobWith((Long) null, create, cap(alice + "/w/shared/", GRANT_READ))));
 		assertFalse(engine.crossUserAllows(BOB, Strings.create(address), Abilities.AGENT_REQUEST),
 			"the delegate is not admitted to talk to the agent it created");
 	}
@@ -188,14 +226,13 @@ public class AgentConferralTest {
 
 	@Test
 	public void testStoredCapsAreNotReCheckedOnRuns() {
-		// Alice confers a cap over Bob's data that Bob granted her. The agent runs
+		// Alice confers a cap over Bob's data that Bob let her grant. The agent runs
 		// under it without holding Bob's grant itself: conferral was checked once,
 		// against Alice, when the caps were written.
 		assertComplete(run("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, "for Alice"), BOB));
-		long exp = System.currentTimeMillis() / 1000 + 3600;
 		RequestContext aliceWithGrant = ALICE.withProofs(Vectors.of(UCAN.create(bobKP,
-			aliceKP.getAccountKey(), exp, Vectors.of(cap(bob + "/w/shared/", Capability.CRUD_READ)),
+			aliceKP.getAccountKey(), (Long) null, Vectors.of(cap(bob + "/w/shared/", GRANT_READ)),
 			Vectors.empty()).toMap()));
 		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "reader",
 			Fields.CONFIG, config(Vectors.of(cap(bob + "/w/shared/", Capability.CRUD_READ),

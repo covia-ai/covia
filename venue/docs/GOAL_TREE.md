@@ -48,13 +48,13 @@ Chat sessions typically never `complete` the root frame — they run indefinitel
 
 ### Persistence and interruption
 
-**Write model.** The run loop claims the session for each cycle by writing an `inCycle` epoch, and hands the transition that claim in `session.inCycle`; every frame write is fenced on that epoch, so a superseded attempt (cancelled by suspend/delete, session removed, or replaced by a later attempt) cannot corrupt the stack — its writes bounce. The merge at attempt end clears the claim. Terminal frames carry an explicit `status` (`complete` | `failed`), written in the same CAS as their terminal turn. Unsessioned and direct-invoke runs keep a local stack and return it in the transition output; sessioned runs emit no copy — the session record is authoritative.
+**Write model.** The run loop claims the session for each cycle by writing an `inCycle` epoch, and hands the transition that claim in `session.inCycle`; every frame write is fenced on that epoch, so a stopped or superseded attempt (its claim revoked by suspend or delete, its session removed, or replaced by a later attempt) cannot corrupt the stack — its writes bounce (AGENT_LOOP.md §2.5.1). The merge at attempt end clears the claim. Terminal frames carry an explicit `status` (`complete` | `failed`), written in the same CAS as their terminal turn. Unsessioned and direct-invoke runs keep a local stack and return it in the transition output; sessioned runs emit no copy — the session record is authoritative.
 
 **Durability bound.** Lattice writes reach the store's mmap via the ~100ms sweep and are fsynced every `FLUSH_INTERVAL_MS` (10s default). External interactions already written to the conversation therefore remain available for audit. The local execution attempt itself is not a checkpoint and is never resumed.
 
 **Venue restart.** Startup clears persisted `RUNNING` and stale `inCycle` markers after generic Job recovery. Request and chat Jobs whose work is still queued are kept for the boot wake (AGENT_LOOP.md §6.1); intake whose Job recovery settled is removed before remaining queued work is considered. A stale epoch alone never wakes an agent. If a later external input starts a fresh cycle on the same session, dangling tool calls are converted to explicit unknown-outcome failures as the cycle starts and unfinished child frames are popped un-run; their internal loops are not continued.
 
-**Operator suspend follows the same attempt boundary.** Suspend settles the claim. Leftover child frames are popped un-run ("interrupted — re-issue if needed") only if a later external input starts a fresh attempt.
+**Operator suspend follows the same attempt boundary.** Suspend revokes the claim. Leftover child frames are popped un-run ("interrupted — re-issue if needed") only if a later external input starts a fresh attempt.
 
 ### Per-question bracketing
 

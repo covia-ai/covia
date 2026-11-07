@@ -1,6 +1,6 @@
 {
 	"name": "Generate Convex Key",
-	"description": "Generate a new Ed25519 key pair and store its seed encrypted in the caller's secret store. The seed is never returned. Refuses to replace an existing secret unless overwrite is explicitly true.",
+	"description": "Deprecated: use crypto:generate-key, which can also keep the key in your keyring. Generate a new Ed25519 key pair and store its seed encrypted in the caller's secret store. The seed is never returned. Refuses to replace an existing secret unless overwrite is explicitly true.",
 	"operation": {
 		"adapter": "convex:generate-key",
 		"readOnly": false,

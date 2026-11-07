@@ -19,6 +19,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.venue.AgentEvents;
 
@@ -359,7 +360,7 @@ final class ToolCycleEngine {
 			toolInput = AbstractLLMAdapter.parseToolArguments(
 				RT.getIn(rawCall, AbstractLLMAdapter.K_ARGUMENTS));
 		} catch (InvalidInputException e) {
-			String detail = AbstractLLMAdapter.toolFailure(e, name);
+			String detail = AbstractLLMAdapter.toolFailure(e, name, FaultException.VENUE);
 			early = ToolOutcome.result(Strings.create("Error: " + detail));
 			log.warn("Tool call {} has malformed arguments: {}", name, detail);
 		}
@@ -388,7 +389,7 @@ final class ToolCycleEngine {
 						"Error: tool handler returned no outcome: " + call.name()));
 				}
 			} catch (Exception e) {
-				String detail = AbstractLLMAdapter.toolFailure(e, call.name());
+				String detail = AbstractLLMAdapter.toolFailure(e, call.name(), FaultException.VENUE);
 				outcome = ToolOutcome.result(Strings.create("Error: " + detail));
 				log.warn("Tool execution failed: {} — {}", call.name(), detail);
 			} finally {
@@ -433,7 +434,7 @@ final class ToolCycleEngine {
 			} catch (ExecutionException e) {
 				// execute() turns handler exceptions into outcomes; only an Error
 				// escapes to here. Report it like any other failed call.
-				String detail = AbstractLLMAdapter.toolFailure(e, call.name());
+				String detail = AbstractLLMAdapter.toolFailure(e, call.name(), FaultException.VENUE);
 				log.warn("Tool call {} failed outside its handler: {}", call.name(), detail);
 				out.add(failed(call, "Error: " + detail, tap, depth));
 			}

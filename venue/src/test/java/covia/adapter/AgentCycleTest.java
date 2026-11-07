@@ -18,6 +18,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.AbstractLLMAdapter;
@@ -455,6 +456,62 @@ public class AgentCycleTest {
 			assertEquals(Status.COMPLETE, task.getStatus(), "it runs again from its conversation");
 			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
 			assertEquals(1, userTurns(agent, sid, script).count(), "its input is still presented once");
+		}
+	}
+
+	/**
+	 * A stop revokes the cycle's claim in its own write, so the stop settles the
+	 * cycle however its step ends (AGENT_LOOP.md §2.5.1). Here the step is left
+	 * to run on, as a step the stop does not reach would: it tries to complete
+	 * its task, which is refused, and the cycle is recorded as stopped, not
+	 * failed. The agent keeps its task for its resume.
+	 */
+	@Test
+	public void aStoppedCycleCannotResolveItsTask(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("stopped");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			AgentState agent = stepAgent(owner, "stopped");
+			Job task = request(owner, "stopped", "hold:" + gateName + " complete");
+			awaitGate(gate);
+			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
+			gate.release();
+
+			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
+			assertFalse(task.isFinished(), "a stopped cycle keeps its task: " + task.getErrorMessage());
+			AVector<ACell> timeline = agent.getTimeline();
+			assertEquals(CVMBool.TRUE, RT.getIn(timeline.get(timeline.count() - 1), Fields.CANCELLED),
+				"the cycle is recorded as stopped, not failed");
+		}
+	}
+
+	/**
+	 * A resume does not undo a stop: the cycle stopped before the resume is
+	 * still recorded as stopped and frees its session, and the agent then runs
+	 * the task again.
+	 */
+	@Test
+	public void aCycleStoppedThenResumedBeforeItEndsIsRecordedAndRunsAgain(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("resumed");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			AgentState agent = stepAgent(owner, "resumed");
+			Job task = request(owner, "resumed", "hold:" + gateName + " complete");
+			awaitGate(gate);
+			Blob sid = sessionOf(task);
+			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
+			assertNull(agent.getSessionCycleEpoch(sid), "the stop released the session");
+			assertTrue(agent.tryResume());
+			gate.release();
+
+			task.awaitResult(10_000);
+			assertEquals(Status.COMPLETE, task.getStatus(), "the task runs again after the resume");
+			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			AVector<ACell> timeline = agent.getTimeline();
+			assertEquals(2, timeline.count(), timeline.toString());
+			assertEquals(CVMBool.TRUE, RT.getIn(timeline.get(0), Fields.CANCELLED),
+				"the cycle stopped before the resume is recorded as stopped");
+			assertNull(RT.getIn(timeline.get(1), Fields.CANCELLED));
 		}
 	}
 

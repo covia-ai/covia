@@ -241,7 +241,7 @@ class EmbedderRoutePolicyTest {
 			throws Exception {
 		// The venue logs the unhandled exception at ERROR with its stack —
 		// correct in production; here it is provoked on purpose.
-		TestLogs.quiet(VenueServer.class, () -> {
+		TestLogs.quiet(covia.exception.FaultException.class, () -> {
 			HttpResponse<String> json = getAccept(
 				strictServer, FAILURE, "application/json");
 			assertEquals(500, json.statusCode(), json.body());

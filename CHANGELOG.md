@@ -22,10 +22,22 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `recordToolCalls`, per agent with a venue default, records an agent's tool calls as jobs from the start.
 - An MCP read-only tool call past its ceiling names a job that `grid_job_status` and `grid_job_result` can find.
 - Per-user preferences at `x/preferences`, edited with the `preferences` tool and pinned by the standard and chat-bot agent templates (`adapters.preferences.maxBytes`).
+- Keyrings: the venue holds keys and recovery phrases that can be used but never read, with `crypto:add-key`, `crypto:remove-key`, `crypto:list-keys` and the `key/…` abilities (#637).
+- `crypto:sign`, `jwt-sign`, `decrypt`, `convex:transact` and `ucan:issue` take a held `key`; `crypto:generate-key`, `derive-key` and `generate-mnemonic` take `keyring: true` (#637).
+- `auth:identity-token` signs for a `did:key` that holds its own key, and the identities nested below it (#637).
+- `ucan:issue` results name their issuer as `iss`.
+- Agents hold keyrings of their own, removed when the agent is deleted (#637).
+- Agents can issue grants over their own resources and their owner's, and owners over their agents'.
+- Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
 
 ### Changed
 
 - Requires Convex 0.8.19.
+- A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only.
+- `ucan:issue` and an agent's `caps` and `accepts` hand on only what their author could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry. A right to use something no longer lets you give it to an agent, and an agent's caps, which do not expire, need a presented right that does not either.
+- A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
+- `auth:identity-token` takes any `lifetime` the caller chooses, no longer capped at an hour.
+- `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
 - Scheduled events name `caller` and `owner`; `scheduler:list` shows them in place of `by`.
 - HITL requests name the asker as `caller`, not `from`, and a delegate's or agent's namespace as `owner`; `hitl:list` shows `caller`.
@@ -100,21 +112,28 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Creating a workspace key, file, directory or drive needs `crud/write` on what holds it.
 - A cross-user write reaches only a user the venue already has.
 - Archive operations authorise as file operations do.
-- Refusals that were plain `RuntimeException`s are Covia exception types; a plain `RuntimeException` is a venue error.
+- Refusals that were plain `RuntimeException`s are Covia exception types; a plain `RuntimeException` is a fault.
 - `t/` outside a job or task reads as absent, as `n/` and `c/` do.
 - `VenueServer.launch` throws a startup failure as its own type.
 - `ConflictException` means two values that cannot both stand; a job, session or interaction that does not take the request is `NotSupportedException`, still 409.
 - A remote agent that answers for a different task answers 502.
-- A failure the venue did not expect is logged and shown to callers only by its type (#644).
-- A REST refusal a route does not list answers 400; a venue error answers 500.
+- A fault is reported by the scope it happened in, naming whose code it was and the exception's type, never its text, and logged once (#644).
+- An exception escaping an adapter, `IllegalArgumentException` included, fails its operation as that adapter's fault: `Operation <op> failed: unexpected <type> in adapter <name>`.
+- Output that breaks its operation's declared schema under strict validation is the adapter's fault and answers `/run` with 500.
+- A REST refusal a route does not list answers 400; a fault answers 500.
 - A store collection cancelled by `venue:gc` ends CANCELLED.
 - Model provider, MCP server and A2A failures are typed; a refused operator key is a configuration error, a caller's an input error.
-- A2A params that do not fit their method answer invalid params; a venue error on an A2A stream arrives as one error event.
+- A2A params that do not fit their method answer invalid params; a fault on an A2A stream arrives as one error event.
 - A secret or connected account the venue cannot decrypt is refused with how to fix it; a use of one is logged for the operator.
 - SQL failures quote no database text: callers get the SQLState and vendor code, or convex-db's parse and validation message; the venue logs the rest.
-- Error pages outside the REST API show a venue error's type and request id, never its message, and a refusal answers 400 (#540).
+- Error pages outside the REST API show a fault's report, which names the request id, never its message, and a refusal answers 400 (#540).
 - `covia:list`, `covia:slice` and `covia:aggregate` name a blob key in `0x` hex, as a value's JSON shows it.
 - A connection opened for a `did:web` DID compares it as did:web writes it: a port is `%3A8080`, while `:8080` names a path.
+- An agent cycle stopped by `agent:suspend` or `agent:delete` can no longer complete or fail its task, and its result is not merged; the task runs again after resume.
+
+### Deprecated
+
+- `convex:sign` and `convex:generate-key`: use `crypto:sign` (with `encoding: utf8` for text) and `crypto:generate-key`.
 
 ### Removed
 
@@ -141,6 +160,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A chat is no longer answered with the reply to an earlier message (#654).
 - A Claude Code session restored after a restart keeps the options its call asked for (model, tools, permission mode, limits, system prompt, JSON schema), and ends if its project no longer allows its permission mode.
 - A path starting with a `did:web` DID that encodes its port as `%3A` names that DID's data (#617).
+- `agent:cancelTask` with a task id that is not hex fails as invalid input.
+- Waiting on a cancelled job fails with the reason it was cancelled.
+- An agent cycle stopped by `agent:suspend` or `agent:delete` is recorded as stopped however its transition ends, even when the agent is resumed first, and frees its session.
 
 ### Security
 
@@ -170,7 +192,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The venue changes its catalog at `w/global/…`, which `v/…` shows; a write or delete through `v/…` is refused, the venue's own included.
 - A call naming a Convex peer other than the venue's needs `adapters.convex.anyPeer`.
 - A private-network `did:web` identity needs its host in `adapters.http.allowedHosts`.
-- Grant `oauth/use` on `oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
+- Grant `oauth/use` on `x/oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
 - A public agent's `a2a.caps` becomes `accepts: "anyone"`; beside another `accepts` it is refused.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.

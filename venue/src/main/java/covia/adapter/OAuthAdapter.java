@@ -40,6 +40,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -71,7 +72,7 @@ import covia.venue.User;
  * the secret store as {@code oauth/<provider>} move here on first access.
  * Deleting an account revokes its grants at their providers.</p>
  *
- * <p><b>Authority.</b> A connection is the resource {@code <did>/oauth/<provider>}:
+ * <p><b>Authority.</b> A connection is the resource {@code <did>/x/oauth/<provider>}:
  * {@code crud/read} to see it in {@code oauth:status}, {@code oauth/connect},
  * {@code oauth/disconnect}, and {@code oauth/use} to send its token, which an
  * {@code nb.url} caveat binds to a destination. The owner holds them all.</p>
@@ -104,8 +105,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	public static final String NAME = "oauth";
 
-	/** The resource segment of a connection: {@code <did>/oauth/<provider>}. */
-	public static final String RESOURCE_PREFIX = "oauth/";
+	/** The resource segment of a connection: {@code <did>/x/oauth/<provider>}, under the
+	 *  adapter's own {@code x/} space like all adapter-owned data. */
+	public static final String RESOURCE_PREFIX = "x/oauth/";
 
 	/** All of a user's connections, as a resource relative to the user. */
 	static final AString ALL_CONNECTIONS = Strings.intern(RESOURCE_PREFIX);
@@ -606,8 +608,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		try {
 			tokens = exchange(p, app.code(), pend.verifier());
 		} catch (Exception e) {
-			log.warn("OAuth token exchange with {} failed: {}", p.name(), describeFailure(e));
-			throw new UnavailableException("Token exchange with " + p.name() + " failed: " + describeFailure(e), e);
+			String cause = FaultException.describe(faultOwner(), e);
+			log.warn("OAuth token exchange with {} failed: {}", p.name(), cause);
+			throw new UnavailableException("Token exchange with " + p.name() + " failed: " + cause, e);
 		}
 		try {
 			return summary(storeGrant(pend, p, tokens));
@@ -691,7 +694,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 				refreshed = refresh(p, refreshToken);
 			} catch (Exception e) {
 				throw new UnavailableException("The connection to " + provider
-					+ " could not be refreshed (" + describeFailure(e) + ") — reconnect with oauth:connect", e);
+					+ " could not be refreshed (" + FaultException.describe(faultOwner(), e)
+					+ ") — reconnect with oauth:connect", e);
 			}
 			AMap<AString, ACell> fresh = tokens
 				.assoc(G_ACCESS_TOKEN, Strings.create(str(refreshed, Strings.intern("access_token"))));
@@ -809,7 +813,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
 			return response.statusCode() >= 200 && response.statusCode() < 300;
 		} catch (Exception e) {
-			log.warn("Token revocation at {} failed: {}", p.revocationEndpoint(), describeFailure(e));
+			log.warn("Token revocation at {} failed: {}", p.revocationEndpoint(), FaultException.describe(faultOwner(), e));
 			return false;
 		}
 	}
@@ -1047,7 +1051,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			try {
 				revokeSealed(providers.get(entry.getKey().toString()), entry.getValue());
 			} catch (RuntimeException e) {
-				log.warn("Could not revoke the deleted user {}'s {} connection: {}", did, entry.getKey(), describeFailure(e));
+				log.warn("Could not revoke the deleted user {}'s {} connection: {}", did, entry.getKey(),
+					FaultException.describe(faultOwner(), e));
 			}
 		}
 		AMap<AString, ACell> secrets = (previousUser != null) ? RT.ensureMap(previousUser.get(Namespace.S)) : null;

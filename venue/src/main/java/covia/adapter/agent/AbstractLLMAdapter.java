@@ -29,6 +29,7 @@ import covia.adapter.ToolCallArguments;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.NotFoundException;
@@ -73,6 +74,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final String LLM_TIMEOUT_PREFIX = "LLM call timed out after ";
 	/** A failed LLM call: the operation, then why. */
 	public static final String LLM_CALL_FAILED = "LLM call failed (%s): %s";
+
+	/** What failed, when a model call reports a fault: the model operation follows. */
+	public static final String LLM_CALL = "LLM call (%s)";
 	/** A {@code config.systemPrompt} entry that did not resolve: the entry, then why. */
 	public static final String SYSTEM_PROMPT_UNRESOLVED = "config.systemPrompt did not resolve — %s: %s";
 	/** An LLM operation, or the provider its model names, that did not resolve: the operation, then why. */
@@ -537,8 +541,11 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			if (record != null) record.endInference(reply);
 			return reply;
 		} catch (RuntimeException e) {
-			if (record != null) record.failInference(describeFailure(e));
-			throw e;
+			// Reported once here, so the record and the transition carry the same report
+			CoviaException reported = FaultException.within(LLM_CALL.formatted(model.operationRef()),
+				FaultException.ADAPTER.formatted(getName()), e);
+			if (record != null) record.failInference(conciseDetail(reported.getMessage(), MAX_FAILURE_CHARS));
+			throw reported;
 		}
 	}
 
@@ -587,7 +594,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				throw new CannotContinueException(LLM_CALL_FAILED.formatted(llmOperation, reason), cause);
 			}
 			if (cause instanceof RuntimeException re) throw re;
-			throw new JobFailedException(LLM_CALL_FAILED.formatted(llmOperation, describeFailure(cause)));
+			throw FaultException.within(LLM_CALL.formatted(llmOperation), FaultException.ADAPTER.formatted(getName()), cause);
 		}
 
 		// A level-3 op that completes with a failure VALUE — {status: FAILED,
@@ -978,7 +985,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		try {
 			op = Operation.from(engine.resolveAsset(named, ctx));
 		} catch (Exception e) {
-			return Strings.create("Error: " + toolFailure(e, toolName));
+			return Strings.create("Error: " + toolFailure(e, toolName, FaultException.VENUE));
 		}
 		if (op == null) return Strings.create("Error: " + HarnessTools.unboundTool(toolName, surface));
 		String refused = guard(toolName, named, input, ctx, timeoutMs);
@@ -1090,7 +1097,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		} catch (InterruptedException e) {
 			return toolInterrupted();
 		} catch (Exception e) {
-			return Strings.create("Error: " + toolFailure(e, operation.toString()));
+			return Strings.create("Error: " + toolFailure(e, operation.toString(), FaultException.VENUE));
 		} finally {
 			if (relay != null) relay.close();
 		}
@@ -1152,22 +1159,22 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return DEFAULT_LLM_TIMEOUT_MS;
 	}
 
-	/** Opens the tool result for a failure the venue did not expect (#644). */
-	public static final String UNEXPECTED_TOOL_FAILURE =
-		"unexpected venue error, not caused by this call's input; it has been logged";
+	/** What failed, when a tool call reports a fault in the code handling it: the tool's name follows. */
+	public static final String TOOL = "Tool %s";
 
 	/**
-	 * Explains a failed tool call to the model. An expected failure
-	 * ({@link AAdapter#isExpectedFailure}) is its own reason. Anything else —
-	 * including a CoviaException thrown without a reason — is a runtime or
-	 * venue bug: it is logged here at ERROR with its stack, and the model is
-	 * told it was unexpected and its type, never its text.
+	 * Explains a failed tool call to the model. A failure already reported
+	 * passes as it is: an expected failure's reason, or the fault an operation
+	 * reported where it happened. Anything else is a fault in the code handling
+	 * the call, reported here as the tool's failure in {@code owner}'s code
+	 * ({@link FaultException#within}): logged at ERROR, named only by its type.
+	 *
+	 * @param owner whose code handled the call: {@link FaultException#VENUE} for
+	 *        the venue's tool dispatch, or the adapter running the agent
 	 */
-	public static String toolFailure(Throwable failure, String toolName) {
-		Throwable cause = unwrap(failure);
-		if (isExpectedFailure(cause)) return conciseDetail(cause.getMessage(), MAX_FAILURE_CHARS);
-		log.error("Unexpected failure in tool {}", toolName, cause);
-		return UNEXPECTED_TOOL_FAILURE + " (" + cause.getClass().getSimpleName() + ")";
+	public static String toolFailure(Throwable failure, String toolName, String owner) {
+		CoviaException reported = FaultException.within(TOOL.formatted(toolName), owner, failure);
+		return conciseDetail(reported.getMessage(), MAX_FAILURE_CHARS);
 	}
 
 	/** The result of a tool call whose operation outran its budget. */

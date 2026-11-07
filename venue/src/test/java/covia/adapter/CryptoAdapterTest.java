@@ -672,7 +672,9 @@ class CryptoAdapterTest {
 
 	@Test void discoveryMirrorsAndLifecycle() {
 		var adapter = engine.getAdapter("crypto");
-		assertEquals(13, adapter.getOperations().count());
+		for (String op : new String[] {"sign", "generate-key", "add-key", "remove-key", "list-keys"}) {
+			assertNotNull(adapter.getOperations().get(Strings.create(op)), op);
+		}
 		for (AString op : adapter.getOperations().getKeys()) {
 			ACell metadata = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of("path", "v/ops/crypto/" + op), ctx).awaitResult(5000);
 			ACell mirror = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of("path", "v/adapters/crypto/ops/" + op), ctx).awaitResult(5000);

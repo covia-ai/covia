@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.api.ContentTypes;
 import convex.core.util.JSON;
+import covia.exception.FaultException;
 import covia.grid.Venue;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
@@ -128,10 +129,9 @@ public abstract class ACoviaAPI  {
 		ApiErrors.write(ctx, status, message);
 	}
 
-	/** Answers a storage failure: a venue error, logged, its text never sent. */
+	/** Answers a storage failure: the venue's fault, logged once, its text never sent. */
 	protected void storageFailure(Context ctx, String what, java.io.IOException e) {
-		log.error("{} failed in {} {}", what, ctx.method(), ctx.path(), e);
-		buildError(ctx, 500, what + " failed: " + covia.adapter.AAdapter.describeFailure(e));
+		buildError(ctx, 500, FaultException.within(what, FaultException.VENUE, e).getMessage());
 	}
 
 }

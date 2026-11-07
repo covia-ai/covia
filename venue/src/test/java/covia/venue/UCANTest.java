@@ -261,21 +261,27 @@ public class UCANTest {
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
 	}
 
+	/** The venue roots grants over everything it hosts, a self-sovereign
+	 *  user's included: Alice has it sign one over her own w/, valid here. */
 	@Test
-	public void testIssueRejectsVenueRootForSelfSovereignCaller() {
+	public void testVenueRootsGrantForHostedSelfSovereignCaller() {
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
-		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+		AMap<AString, ACell> issued = RT.ensureMap(engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
 					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
-		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"));
+			ALICE).awaitResult(5000));
+		assertEquals(venueDID, issued.get(UCAN.ISS));
+
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, UCAN.fromJWT(RT.ensureString(issued.get(Strings.create("token")))).toMap()));
+		assertEquals(Strings.create("shared content"), RT.getIn(read.awaitResult(5000), "value"));
 	}
 
 	@Test
-	public void testIssueRejectsVenueRootForExternalDidWebCaller() {
+	public void testVenueRootsGrantForHostedExternalDidWebCaller() {
 		AString external = Strings.create("did:web:identity.example:u:eve");
 		engine.getVenueState().users().ensure(external);
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
@@ -285,12 +291,13 @@ public class UCANTest {
 					Strings.create(external + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
 			RequestContext.of(external));
-		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(denied.getMessage().contains("not controlled by this venue"));
+		assertNotNull(RT.getIn(job.awaitResult(5000), "token"));
 	}
 
+	/** A granting right from a hosted owner lets the venue root the grant it
+	 *  passes on, as for a managed user. */
 	@Test
-	public void testGrantingProofCannotTurnVenueIntoSelfSovereignRoot() {
+	public void testGrantingRightOverHostedSelfSovereignIdentity() {
 		long now = System.currentTimeMillis() / 1000;
 		UCAN ownerGrantingRight = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), now + 2 * HOUR,
 			Vectors.of(Capability.create(
@@ -303,10 +310,29 @@ public class UCANTest {
 					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(BOB, ownerGrantingRight.toMap()));
+		assertNotNull(RT.getIn(job.awaitResult(5000), "token"));
+	}
 
+	/** No granting right makes the venue the root of an identity it does not
+	 *  host: that identity signs its own grants. */
+	@Test
+	public void testGrantingRightCannotMakeVenueRootOfUnhostedIdentity() {
+		long now = System.currentTimeMillis() / 1000;
+		AKeyPair zedKP = AKeyPair.generate();
+		AString zed = UCAN.toDIDKey(zedKP.getAccountKey());
+		UCAN zedGrantingRight = UCAN.create(zedKP, UCAN.fromDIDKey(BOB_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(zed + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, CAROL_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(zed + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(BOB, zedGrantingRight.toMap()));
 		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"),
-			"even a valid granting proof cannot make the venue a root for a self-sovereign DID");
+		assertTrue(denied.getMessage().contains(UCANAdapter.NOT_HOSTED));
 	}
 
 	@Test

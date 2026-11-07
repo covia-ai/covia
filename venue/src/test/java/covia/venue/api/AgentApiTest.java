@@ -237,12 +237,13 @@ public class AgentApiTest {
 		AKeyPair delegateKey = AKeyPair.generate();
 		AString owner = UCAN.toDIDKey(ownerKey.getAccountKey());
 		AString delegate = UCAN.toDIDKey(delegateKey.getAccountKey());
-		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
+		// The delegate gives the agent caps, which last, so its right to grant them does too.
+		AString createGrant = UCAN.create(ownerKey, delegateKey.getAccountKey(), (Long) null,
 			Vectors.of(
 				Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke")),
-				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE)),
+				Capability.create(Strings.create(owner + "/g/"), Abilities.AGENT_CREATE),
+				Capability.create(Strings.create(owner + "/g/"), Strings.create("grant/" + Abilities.AGENT_CREATE))),
 			Vectors.empty()).toJWT(ownerKey);
 
 		VenueHTTP delegated = VenueHTTP.create(
@@ -257,7 +258,7 @@ public class AgentApiTest {
 			RT.getIn(direct.getData(), Fields.OUTPUT, Fields.ADDRESS),
 			"presenting a sudo grant must not itself select the owner's namespace");
 
-		// The delegate confers only caps it holds: an unrestricted agent in the
+		// The delegate confers only caps it may grant: an unrestricted agent in the
 		// owner's namespace would exceed its grant.
 		Job created = delegated.invokeAndWait(OP_SUDO, Maps.of(
 			Fields.DID, owner,
@@ -280,6 +281,7 @@ public class AgentApiTest {
 
 		// Namespace selection cannot confer ambient owner authority: the token
 		// permits invocation but omits the action's agent/create capability.
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		AString invokeOnly = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
 			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/agent/create"), Strings.create("invoke"))),

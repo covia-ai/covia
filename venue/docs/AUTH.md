@@ -698,8 +698,11 @@ VenueAuth.namedKeyPair(installKey, installDID + ":u:alice:g:worker", 300).mintTo
 The signing key must match the exact base DID. Existing signature, audience,
 expiry and not-before checks still apply. As for a bare `did:key`, the
 `iss` claim does not confer authority. No subject register is needed for
-authentication at the receiving venue. This does not extend UCAN issuer
-resolution or grant an installation authority over descendant resources.
+authentication at the receiving venue. The same rule (`VenueAuthenticator.signsInAs`)
+makes the installation's `did:key` the root of grants over the nested
+identities' resources ([UCAN.md](./UCAN.md) §5.6, "Roots"): it can sign grants
+over them, and reaches them only under such a grant. Signing in confers no
+authority over them.
 
 `VenueAuthenticator.authenticatedIdentity(context)` returns the installation's
 `did:key`; `authenticatedUser(context)` and `AuthResult.userDID()` retain the
@@ -735,11 +738,21 @@ Call `v/ops/auth/identity-token` on the signing venue:
 
 The operation derives `sub` and `iss` from the exact caller, including an
 agent's full nested identity. It accepts no subject, claims, capabilities or
-signing key from input. The caller must be the venue's signing `did:key` or a
-valid identity nested below it. An unrelated external key identity, a
-`did:web` identity, and anonymous/public callers are refused; an embedder
-holding a different installation key uses `VenueAuth.namedKeyPair` instead
-([HELD_KEYS.md](./HELD_KEYS.md) designs the venue holding such keys).
+signing key from input, so no caller can mint another identity's token, a
+root included. An agent's token is saved in its owner's secret store (below),
+where the owner, which controls its agents, can use or extract it. Code running
+in the venue gets a user's token by invoking the operation as that user
+(`Engine.context`).
+
+The token is signed by the caller's root: the venue's key for the venue's
+signing `did:key` and the identities nested below it, or,
+for a `did:key` that holds its own key in its own keyring
+([HELD_KEYS.md](./HELD_KEYS.md)), that held key, for the `did:key` itself and
+the identities nested below it. Minting a token for oneself is not a use of
+the root's key, so it needs no `key/…` ability. Any other external key
+identity, a `did:web` identity, and anonymous/public callers are refused; an
+embedder holding a key outside the venue uses `VenueAuth.namedKeyPair`
+instead.
 The caller must also be acting under its own authority or as a sub-principal.
 A restricted scope on a principal acting as itself bounds what the request may
 do, and a bearer for that identity would carry it beyond the bound, so the
@@ -755,10 +768,11 @@ use `s/RELAY_TOKEN` as a model relay `apiKey`, subject to its separate
 the raw bearer can use `v/ops/secret/extract` under that operation's stricter
 rules.
 
-The audience is required. Lifetime defaults to 300 seconds and must be an
-integer from 1 to 3600. Refresh by invoking again with `overwrite:true` before
-expiry; there is no automatic refresh. The receiver still applies its own
-audience, lifetime and admission policies. The token conveys identity only:
+The audience is required. The caller chooses the lifetime, in whole seconds
+(default 300); the receiver applies its own limit when the token is presented
+(`auth.maxTokenLifetime` on a venue). Refresh by invoking again with
+`overwrite:true` before expiry; there is no automatic refresh. The receiver
+also applies its own audience and admission policies. The token conveys identity only:
 it contains no UCAN grants or proofs and adds no permissions.
 
 ### 5.3 Channel methods (messaging bindings)

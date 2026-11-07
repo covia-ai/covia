@@ -41,6 +41,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Attribution;
@@ -203,14 +204,19 @@ public class A2A extends ACoviaAPI {
 	}
 
 	/**
-	 * Answers a card request that failed: a 500 with the failure as
-	 * {@link AAdapter#describeFailure} renders it, never an unexpected
-	 * failure's text, which is logged at ERROR.
+	 * Answers a card request that failed: a 500 with its reason, or with the
+	 * venue's report of a fault ({@link FaultException#within}), never an
+	 * unexpected failure's text, which is logged at ERROR.
 	 */
 	private void cardFailure(Context ctx, Exception e) {
-		if (!AAdapter.isExpectedFailure(e)) log.error("Agent card failed in {} {}", ctx.method(), ctx.path(), e);
-		buildError(ctx, 500, AAdapter.describeFailure(e));
+		buildError(ctx, 500, FaultException.within(AGENT_CARD, FaultException.VENUE, e).getMessage());
 	}
+
+	/** What failed, when the venue fails building an agent card. */
+	public static final String AGENT_CARD = "Agent card";
+
+	/** What failed, when the venue fails answering an A2A method: its name follows. */
+	public static final String METHOD = "A2A %s";
 
 	private AgentCard buildAgentCard(String baseUrl) {
 		// The venue front-door agent. Per-agent cards share the same builder
@@ -557,29 +563,27 @@ public class A2A extends ACoviaAPI {
 	/**
 	 * Answers a failure no step of the method answered itself: params that do
 	 * not fit the method are {@code INVALID_PARAMS}, and anything else is
-	 * {@code INTERNAL} with the failure as {@link AAdapter#describeFailure}
-	 * renders it — an expected failure's reason, or only the type of an
-	 * unexpected one, which is logged at ERROR.
+	 * {@code INTERNAL} with its reason, or with the venue's report of a fault
+	 * ({@link FaultException#within}), which names only an unexpected
+	 * failure's type and logs it at ERROR.
 	 */
 	private void answerFailure(Context ctx, Rpc rpc, Exception e) {
-		if (!AAdapter.isExpectedFailure(e)) {
-			log.error("A2A {} failed in {} {}", rpc.method(), ctx.method(), ctx.path(), e);
-		} else if (e instanceof InvalidInputException) {
+		if (e instanceof InvalidInputException && CoviaException.reasonOf(e) != null) {
 			writeError(ctx, rpc.id(), A2AErrorCodes.INVALID_PARAMS, e.getMessage());
 			return;
 		}
-		writeError(ctx, rpc.id(), A2AErrorCodes.INTERNAL, AAdapter.describeFailure(e));
+		writeError(ctx, rpc.id(), A2AErrorCodes.INTERNAL,
+			FaultException.within(METHOD.formatted(rpc.method()), FaultException.VENUE, e).getMessage());
 	}
 
 	/**
-	 * The reason an expected failure gives its caller. Anything else is
-	 * rethrown, for {@link #answerFailure} to answer as a venue error: a step
-	 * answers only the failures its situation explains.
+	 * The reason an expected failure gives its caller. A fault, or anything
+	 * not yet reported, is rethrown for {@link #answerFailure} to answer as
+	 * {@code INTERNAL}: a step answers only the failures its situation explains.
 	 */
 	private static String reason(RuntimeException e) {
-		String reason = CoviaException.reasonOf(e);
-		if (reason == null) throw e;
-		return reason;
+		if (!AAdapter.isExpectedFailure(e)) throw e;
+		return CoviaException.reasonOf(e);
 	}
 
 	// ==================== Method handlers ====================

@@ -16,6 +16,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -181,7 +182,7 @@ final class TaskTools {
 					return ToolCycleEngine.ToolOutcome.result(AbstractLLMAdapter.toolInterrupted());
 				} catch (Exception e) {
 					return ToolCycleEngine.ToolOutcome.result(
-						Strings.create("Error: " + AbstractLLMAdapter.toolFailure(e, tool)));
+						Strings.create("Error: " + AbstractLLMAdapter.toolFailure(e, tool, FaultException.VENUE)));
 				}
 			}
 			if (results == null) results = Maps.empty();

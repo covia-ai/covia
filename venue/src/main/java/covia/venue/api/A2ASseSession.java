@@ -10,14 +10,12 @@ import org.a2aproject.sdk.spec.A2AErrorCodes;
 import org.a2aproject.sdk.spec.StreamingEventKind;
 import org.a2aproject.sdk.spec.Task;
 import org.a2aproject.sdk.spec.TaskStatusUpdateEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
-import covia.adapter.AAdapter;
+import covia.exception.FaultException;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -49,7 +47,8 @@ import io.javalin.http.sse.SseClient;
  */
 public class A2ASseSession {
 
-	private static final Logger log = LoggerFactory.getLogger(A2ASseSession.class);
+	/** What failed, when the venue fails streaming an A2A task: the task's id follows. */
+	public static final String STREAM = "A2A stream for task %s";
 
 	private final SseClient sseClient;
 	private final Engine engine;
@@ -155,18 +154,16 @@ public class A2ASseSession {
 
 	/**
 	 * Ends the stream on a failure: one JSON-RPC {@code INTERNAL} error frame
-	 * carrying the failure as {@link AAdapter#describeFailure} renders it,
-	 * never an unexpected failure's text, which is logged at ERROR. Sending
-	 * never fails for a peer that has gone (the emitter closes the client), so
-	 * what reaches here is a venue error.
+	 * carrying its reason, or the venue's report of a fault
+	 * ({@link FaultException#within}), never an unexpected failure's text,
+	 * which is logged at ERROR. Sending never fails for a peer that has gone
+	 * (the emitter closes the client), so what reaches here is the venue's.
 	 */
 	private void fail(Exception e) {
-		if (!AAdapter.isExpectedFailure(e)) {
-			log.error("A2A stream for task {} failed", taskId.toHexString(), e);
-		}
 		Map<String, Object> error = new LinkedHashMap<>();
 		error.put("code", A2AErrorCodes.INTERNAL.code());
-		error.put("message", AAdapter.describeFailure(e));
+		error.put("message", FaultException.within(
+			STREAM.formatted(taskId.toHexString()), FaultException.VENUE, e).getMessage());
 		sendEnvelope("error", error);
 		close();
 	}

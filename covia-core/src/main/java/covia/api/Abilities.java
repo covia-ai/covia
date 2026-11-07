@@ -8,13 +8,17 @@ import convex.core.data.Strings;
  *
  * <p>One home for the covia-specific ability strings so they are never
  * inline-interned or duplicated per adapter. The generic CRUD abilities
- * ({@code crud/read}, {@code crud/write}, {@code crud/delete}) and {@code invoke}
- * live on {@link convex.auth.ucan.Capability}; these are the covia-domain
- * additions on top.</p>
+ * ({@code crud/read}, {@code crud/write}, {@code crud/delete}) live on
+ * {@link convex.auth.ucan.Capability}; these are the covia-domain additions on
+ * top.</p>
  */
 public final class Abilities {
 
 	private Abilities() {}
+
+	/** Run an operation. Its {@code with} names the operation chosen, whoever
+	 *  publishes it: the operation runs with the invoker's own authority. */
+	public static final AString INVOKE        = Strings.intern("invoke");
 
 	public static final AString ASSET_READ    = Strings.intern("asset/read");
 	public static final AString ASSET_STORE   = Strings.intern("asset/store");
@@ -25,15 +29,35 @@ public final class Abilities {
 	/** Reveal plaintext to its owner through a direct, non-recorded call. */
 	public static final AString SECRET_EXTRACT = Strings.intern("secret/extract");
 	/** Send a connected account's access token in a request without seeing it
-	 *  ({@code <did>/oauth/<provider>}). A grant of it may be bound to a
+	 *  ({@code <did>/x/oauth/<provider>}). A grant of it may be bound to a
 	 *  destination url prefix ({@code nb.url}). */
 	public static final AString OAUTH_USE     = Strings.intern("oauth/use");
 	/** Connect an account at a provider: whoever approves the returned URL
-	 *  becomes the connection ({@code <did>/oauth/<provider>}). */
+	 *  becomes the connection ({@code <did>/x/oauth/<provider>}). */
 	public static final AString OAUTH_CONNECT = Strings.intern("oauth/connect");
 	/** Disconnect an account, revoking its grant at the provider
-	 *  ({@code <did>/oauth/<provider>}). */
+	 *  ({@code <did>/x/oauth/<provider>}). */
 	public static final AString OAUTH_DISCONNECT = Strings.intern("oauth/disconnect");
+	/** Every use of a held key or mnemonic ({@code <did>/x/crypto/keys/<key>},
+	 *  {@code <did>/x/crypto/mnemonics/<id>}); covers each {@code key/…} ability. */
+	public static final AString KEY           = Strings.intern("key");
+	/** Put a key or mnemonic into a keyring, or generate or derive one there. */
+	public static final AString KEY_ADD       = Strings.intern("key/add");
+	/** Remove a key or mnemonic from a keyring. */
+	public static final AString KEY_REMOVE    = Strings.intern("key/remove");
+	/** Sign anything with a held key; covers every {@code key/sign/…}. */
+	public static final AString KEY_SIGN      = Strings.intern("key/sign");
+	/** Sign UCAN grants with a held key ({@code ucan:issue}). */
+	public static final AString KEY_SIGN_GRANT  = Strings.intern("key/sign/grant");
+	/** Sign Convex transactions with a held key ({@code convex:transact}). */
+	public static final AString KEY_SIGN_CONVEX = Strings.intern("key/sign/convex");
+	/** Sign content the caller chooses with a held key ({@code crypto:sign},
+	 *  {@code crypto:jwt-sign}), which can produce any other kind of signature. */
+	public static final AString KEY_SIGN_RAW  = Strings.intern("key/sign/raw");
+	/** Decrypt with a held key ({@code crypto:decrypt}). */
+	public static final AString KEY_DECRYPT   = Strings.intern("key/decrypt");
+	/** Derive keys from a held mnemonic ({@code crypto:derive-key}). */
+	public static final AString KEY_DERIVE    = Strings.intern("key/derive");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");

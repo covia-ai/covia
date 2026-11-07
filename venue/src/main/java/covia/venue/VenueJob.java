@@ -10,6 +10,7 @@ import java.util.function.UnaryOperator;
 import java.util.concurrent.atomic.AtomicReference;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.api.Fields;
 import covia.grid.Job;
 
@@ -210,7 +211,7 @@ public class VenueJob extends Job {
 		try {
 			manager.validateOutput(rules, result);
 		} catch (RuntimeException | Error refused) {
-			return failIn(draft, CoviaException.describe(refused));
+			return failIn(draft, outputRefused(refused).getMessage());
 		}
 		return updateIn(draft, data -> data.assoc(Fields.STATUS, covia.grid.Status.COMPLETE).assoc(Fields.OUTPUT, result));
 	}
@@ -262,9 +263,17 @@ public class VenueJob extends Job {
 		try {
 			manager.validateOutput(rules, result);
 		} catch (RuntimeException | Error e) {
-			fail(e, decorate);
+			fail(outputRefused(e), decorate);
 			return;
 		}
 		super.completeWith(result, decorate);
+	}
+
+	/** What failed, when the venue's check of an operation's output fails unexpectedly. */
+	public static final String CHECKING_OUTPUT = "Checking the operation's output";
+
+	/** An output refusal as reported: a broken contract is the adapter's fault, a failing check the venue's. */
+	private static CoviaException outputRefused(Throwable refused) {
+		return FaultException.within(CHECKING_OUTPUT, FaultException.VENUE, refused);
 	}
 }

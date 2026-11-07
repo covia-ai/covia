@@ -75,6 +75,9 @@ public final class Skills {
 	/** The venue's skill library root — a directory of skillsets, never of skills. */
 	public static final String VENUE_SKILLS = "v/skills";
 
+	/** What failed, when finding a tool's providers meets a fault in a skill: the skill and the tool follow. */
+	public static final String PROVIDER_SEARCH = "Finding providers of %2$s in skill %1$s";
+
 	/** The skill facet key on asset metadata, and the flag key on loads entries. */
 	public static final AString K_SKILL = Strings.intern("skill");
 	/** Individual child skill refs contributed while a skill is loaded. */
@@ -313,11 +316,10 @@ public final class Skills {
 					}
 				}
 			} catch (RuntimeException e) {
-				// A skill that cannot be resolved or bound now is not hinted.
-				// Only an unexplained failure is a fault worth reporting.
-				if (!covia.adapter.AAdapter.isExpectedFailure(e)) {
-					log.error("Skill {} failed while finding providers of {}", entry.path(), toolName, e);
-				}
+				// A skill that cannot be resolved or bound now is not hinted. A
+				// failure not yet reported is a fault in this search, reported here
+				covia.exception.FaultException.within(
+					PROVIDER_SEARCH.formatted(entry.path(), toolName), covia.exception.FaultException.VENUE, e);
 			}
 		}
 		return List.copyOf(out);

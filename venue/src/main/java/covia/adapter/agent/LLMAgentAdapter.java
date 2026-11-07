@@ -316,7 +316,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		try {
 			return chat(ctx, input);
 		} catch (RuntimeException e) {
-			throw CycleRecord.Failure.of(e);
+			throw CycleRecord.Failure.of(e, covia.exception.FaultException.ADAPTER.formatted(getName()));
 		}
 	}
 

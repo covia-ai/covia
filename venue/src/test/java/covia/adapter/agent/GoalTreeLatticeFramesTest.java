@@ -377,19 +377,17 @@ public class GoalTreeLatticeFramesTest {
 			ACell zombieEpoch = ag.getSessionCycleEpoch(sid);
 			assertNotNull(zombieEpoch, "cycle epoch must be claimed before suspend");
 
-			// Suspend while the transition is parked in the tool: the settle clears
-			// the cycle claim, which fences every later write from the still-running
-			// transition thread (cancel does not stop it).
+			// Suspend while the transition is parked in the tool: the suspension
+			// revokes the cycle's claim in its own write, which fences every later
+			// write from the still-running transition thread (cancel does not stop it).
 			engine.jobs().invokeOperation(
 				"v/ops/agent/suspend",
 				Maps.of(Fields.AGENT_ID, "zombie-agent"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			assertEquals(AgentState.SUSPENDED, ag.getStatus(), "agent suspended");
 
-			// The cancelled run loop settles the cycle, releasing its claim, before
-			// it ends.
 			assertEquals(AgentState.SUSPENDED, runEnd.await(), "the run ends suspended");
-			assertNull(ag.getSessionCycleEpoch(sid), "suspend settle released the cycle claim");
+			assertNull(ag.getSessionCycleEpoch(sid), "the suspension released the cycle claim");
 
 			AVector<ACell> atSuspend = frames("zombie-agent", sid);
 

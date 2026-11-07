@@ -48,7 +48,7 @@ public class AgentStateTaskReadinessTest {
 	/** Starts a cycle on the task, as the run loop does: its next input is shown. */
 	private void startCycle() {
 		assertEquals(AgentState.CycleStart.NO_SESSION,
-			agent.beginCycle(TASK, row(), null, null, Vectors.empty(), 0));
+			agent.beginCycle(TASK, row(), null, Strings.create("claim"), Vectors.empty(), 0));
 	}
 
 	/** Shows the task its input and parks it, as a cycle that yields does. */

@@ -96,6 +96,7 @@ import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
+import covia.venue.auth.VenueAuthenticator;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.FileStorage;
 import covia.venue.storage.MemoryStorage;
@@ -3270,16 +3271,6 @@ public class Engine {
 		return userNameBelow(did, base);
 	}
 
-	/**
-	 * A venue-issued user below this venue's actual identity. Personal venues
-	 * sign login identities such as {@code did:key:...:u:alice}; this does not
-	 * make did:key a generally routable namespace, but it does make the venue
-	 * authoritative for the exact subjects it issued itself.
-	 */
-	private boolean isVenueIssuedUserDID(AString did) {
-		return userNameBelow(did, getDIDString()) != null;
-	}
-
 	/** One valid username segment immediately below an exact DID base. */
 	private static AString userNameBelow(AString did, AString base) {
 		if (base == null || did == null) return null;
@@ -3292,23 +3283,43 @@ public class Engine {
 	}
 
 	/**
-	 * Root-authority policy for resources enforced by this venue.
+	 * Root-authority policy for resources enforced by this venue: who may sign
+	 * the root of a grant over a resource (UCAN.md, "Roots"). There are two
+	 * kinds of root and no others:
 	 *
-	 * <p>Self-sovereign owners root their own grants. The venue may additionally
-	 * attest only for user DIDs it issued directly below its own identity. This
-	 * includes the venue-signed {@code did:key:...:u:name} subjects used by a
-	 * personal venue as well as named {@code did:web} users. Merely registering
-	 * an arbitrary external DID does not transfer control of that identity.</p>
+	 * <ul>
+	 * <li><b>An identity</b>, for its own resources and those of every identity
+	 * this venue accepts it as signing in as: a {@code did:key} and the
+	 * identities nested below it ({@link VenueAuthenticator#signsInAs}).</li>
+	 * <li><b>This venue</b>, for everything it hosts ({@link #isHosted}). Its
+	 * grants count only here: no other venue accepts it as a root.</li>
+	 * </ul>
+	 *
+	 * <p>Being a root confers nothing by itself: a root reaches another
+	 * identity's resources only by presenting a grant it signed.</p>
 	 */
 	public RootAuthorityPolicy rootAuthorityPolicy() {
 		AString venueDID = getDIDString();
 		return RootAuthorityPolicy.SELF_SOVEREIGN.or((root, resource) -> {
-			if (!venueDID.equals(root) || resource == null) return false;
-			DID owner = RootAuthorityPolicy.ownerDID(resource);
-			if (owner == null) return false;
-			AString ownerDID = Strings.create("did:" + owner.getMethod() + ":" + owner.getID());
-			return isManagedUserDID(ownerDID) || isVenueIssuedUserDID(ownerDID);
+			// The owner as written, as users are keyed and grants are matched:
+			// a differently encoded DID names nothing hosted here.
+			AString owner = ownerOf(resource);
+			if (root == null || owner == null) return false;
+			if (VenueAuthenticator.signsInAs(root, owner)) return true;
+			return venueDID.equals(root) && isHosted(owner);
 		});
+	}
+
+	/**
+	 * Whether this venue hosts the owner of {@code resource} (a DID or a DID
+	 * URL): it keeps a user record for it, or it is one of the venue's own
+	 * namespaces ({@link #isLocalDIDResource}), or it is an agent of one of those.
+	 */
+	public boolean isHosted(AString resource) {
+		AString owner = ownerOf(resource);
+		if (owner == null) return false;
+		if (isLocalDIDResource(owner)) return true;
+		return covia.grid.Principals.isAgentDID(owner) && isLocalDIDResource(covia.grid.Principals.userOf(owner));
 	}
 
 	/** Evaluate presented proofs under this venue's complete root policy. */
@@ -3412,6 +3423,23 @@ public class Engine {
 		}
 		log.info("user.delete did={} by={}", did, ctx.getCallerDID());
 		return deleted.tombstone();
+	}
+
+	/**
+	 * Removes, in one transaction, what every registered adapter, enabled or
+	 * not, holds for the deleted agent {@code agentDID}
+	 * ({@link AAdapter#deleteAgentState}): its own keyring, for one. Agent
+	 * deletion calls it each time, so a later agent given the same id starts
+	 * with nothing of its predecessor's.
+	 */
+	public void deleteAgentState(AString agentDID) {
+		java.util.Map<String, AAdapter> registered;
+		synchronized (this) {
+			registered = new java.util.LinkedHashMap<>(disabledAdapters);
+			registered.putAll(adapters);
+		}
+		venueState.execute(draft -> registered.forEach((name, adapter) ->
+			adapter.deleteAgentState(agentDID, draft.adapterState(name))));
 	}
 
 	private void finishCoreUserDeletion(AString did, covia.grid.Job deletingJob) {
@@ -3836,20 +3864,24 @@ public class Engine {
 	 * {@code s/}, {@code g/}, {@code j/}, …), governed uniformly for reads and
 	 * mutations alike — an asset ({@code a/}) exactly like a workspace path
 	 * ({@code w/}). The caller's own resource goes through the capability scope
-	 * seam; another user's needs {@code ability} rights (a presented proof, or
-	 * public / venue-catalog policy). A cross-user resource the caller has no
-	 * rights to is a <b>denial</b>, never a silent miss.
+	 * seam; another user's needs {@code ability} rights it holds (a presented
+	 * proof, admission, or public / venue-catalog policy), as
+	 * {@link #authorityCovers} rules for any identity this venue hosts. A local
+	 * path under a DID this venue does not host is refused the same way. A
+	 * cross-user resource the caller has no rights to is a <b>denial</b>, never
+	 * a silent miss.
 	 *
-	 * <p>Returns the DID whose namespace the operation targets — the caller's own
-	 * for an own/bare resource, the named owner for an authorised cross-user
-	 * access — so a read serves, and a write lands in, exactly the right store.
+	 * <p>Returns the DID whose namespace the operation targets — the named owner
+	 * of an explicit {@code did:…/} resource (the caller's own, an agent's own
+	 * DID, or another principal's it is authorised for), the request's namespace
+	 * for a bare one — so a read serves, and a write lands in, exactly the right store.
 	 * Callers that locate the target separately (e.g. via {@code resolveDIDURL})
 	 * may ignore the return.</p>
 	 *
 	 * <p>This is the LOCAL access gate. It is not the invoke path (invoking an
-	 * operation is a capability, not access to its owner's namespace) and it is
-	 * not for remote references (another venue's DID), which federation resolves
-	 * by asking that venue.</p>
+	 * operation is a choice of what to run, {@link #requireInvoke}, not access
+	 * to its owner's namespace) and it is not for remote references (another
+	 * venue's DID), which federation resolves by asking that venue.</p>
 	 */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability) {
 		return requireLocalAccess(ctx, resource, ability, null);
@@ -3861,29 +3893,23 @@ public class Engine {
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ownedByCaller(ctx, resource)) {
 			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
-			return (ctx != null) ? ctx.getUserDID() : null;
+			AString owner = ownerOf(resource);
+			return (owner != null) ? owner : (ctx != null) ? ctx.getUserDID() : null;
 		}
+		// Any other DID, hosted here or not: a local path under a DID this venue
+		// does not host names nothing here, and is refused as any other's is.
 		if (!crossUserAllows(ctx, resource, ability, destination)) {
-			convex.core.data.AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
-			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
-				+ " — accessing another user's resource requires " + ability + " rights"
-				+ ((proofs == null || proofs.isEmpty())
-					? " (no proof presented)" : " (the presented proofs do not cover it)")
-				+ (isTalkAbility(ability)
-					? "; the target's accepts policy does not admit this caller" : ""));
+			throw anothersDenial(ctx, resource, ability);
 		}
 		return ownerOf(resource);                               // authorised cross-user → the owner's store
 	}
 
 	/**
-	 * Common point-of-action gate for a resource that may be either caller-owned,
-	 * another principal on this venue, or a remote/scheme reference.
-	 *
-	 * <p>Absolute DID resources belonging to a principal whose user record lives
-	 * here go through {@link #requireLocalAccess}; this prevents the null-scope
-	 * own-resource fast path from authorising a different local user's data.
-	 * Bare, scheme-qualified and genuinely remote resources use the normal
-	 * capability seam.</p>
+	 * Point-of-action gate for a resource that may be the caller's own, another
+	 * principal's on this venue, or a remote or scheme reference. A resource
+	 * this venue hosts goes through {@link #requireLocalAccess}; a remote or
+	 * scheme reference through the capability seam, which reaches no hosted
+	 * identity's resource by scope alone ({@link #authorityCovers}).
 	 */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability) {
 		requireResourceAccess(ctx, resource, ability, null);
@@ -3891,7 +3917,7 @@ public class Engine {
 
 	/** As above for a use that sends the resource's value to {@code destination}. */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (isLocalDIDResource(resource)) {
+		if (isHosted(resource)) {
 			requireLocalAccess(ctx, resource, ability, destination);
 		} else {
 			requireAuthority(ctx, resource, ability, destination);
@@ -3899,20 +3925,89 @@ public class Engine {
 	}
 
 	/** Opening of every {@link #requireConferrable} denial. */
-	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller does not hold";
+	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller could not grant";
+
+	/** Why a principal may not grant what it is root of: its scope leaves out the right to grant it. */
+	public static final String GRANT_BEYOND_SCOPE = "Your scope does not include the right to grant";
+
+	/** Why a principal may not grant what it is not root of: it presents no right to grant it. */
+	public static final String NO_GRANTING_RIGHT = "Not yours to grant, and your presented grants hold no right to grant";
+
+	/** Why a principal may not grant beyond the granting right it grants under. */
+	public static final String GRANT_OUTLIVES_RIGHT = "What you grant must not outlive the granting right it is "
+		+ "granted under: grant it for a shorter time, or present a right that lasts";
+
+	/**
+	 * May {@code ctx} grant {@code can} on {@code resource}? The one check
+	 * wherever authority is handed on: a grant the venue signs ({@code ucan:issue})
+	 * and an agent's {@code config.caps} ({@link #requireConferrable}). You pass
+	 * on only what you could grant.
+	 *
+	 * <ul>
+	 * <li>A principal is root of its own resources, of an identity's it signs in
+	 * as, and of its agents' (UCAN.md, "Roots"), and so is anything acting with
+	 * its authority: an agent with its owner's, a request under {@code user/sudo}
+	 * with the target's. That is the authority it has of its own, never what
+	 * others have granted it. Its scope must include {@code grant/<can>} there,
+	 * as having no scope does.</li>
+	 * <li>Over anything else, its presented grants must hold {@code grant/<can>},
+	 * through {@code exp} as well as now.</li>
+	 * </ul>
+	 *
+	 * <p>Nobody here is root of what the venue does not host, such as another
+	 * venue's resources or a file: a capability over it only bounds what its
+	 * holder may ask for, so it is granted as part of {@code namespace}.</p>
+	 *
+	 * @param namespace the namespace bare and match-any resources are in
+	 * @param resource an absolute resource, or null for every resource in {@code namespace}
+	 * @param exp when what is granted expires, or null for never
+	 * @param destination the {@code nb.url} its use is checked against, if any
+	 * @throws AuthException saying why not
+	 */
+	public void requireGrantable(RequestContext ctx, AString namespace, AString resource, AString can,
+			Long exp, AString destination) {
+		AString grant = Strings.create("grant/" + can);
+		AString owner = isHosted(resource) ? ownerOf(resource) : namespace;
+		// Presented grants are checked against the whole namespace for a match-any resource.
+		AString target = (resource != null) ? resource : namespace;
+		boolean root = isRootOf(ctx.getCallerDID(), owner) || isRootOf(ctx.getUserDID(), owner);
+		if (root) {
+			AVector<ACell> scope = ctx.getCaps();
+			if (scope == null || ctx.denialUnder(scope, resource, grant, ctx.getUserDID(), destination) == null) return;
+		}
+		if (!proofsCover(ctx, target, grant, System.currentTimeMillis() / 1000, destination)) {
+			throw new AuthException((root ? GRANT_BEYOND_SCOPE : NO_GRANTING_RIGHT) + " " + can + " on " + target);
+		}
+		// Granted under presented rights: they must still hold at the horizon,
+		// unbounded for what never expires. Dynamic gates rule on the grant
+		// happening now (above); they do not run again against a future use.
+		long horizon = (exp == null) ? Long.MAX_VALUE : exp - 1;
+		if (!proofsStructurallyCover(ctx, target, grant, horizon)) {
+			throw new AuthException(GRANT_OUTLIVES_RIGHT + " (" + grant + " on " + target + ")");
+		}
+	}
+
+	/** Whether {@code principal} is root of {@code owner}: it, an identity it signs in as, or one of its agents. */
+	private static boolean isRootOf(AString principal, AString owner) {
+		if (principal == null || owner == null) return false;
+		return principal.equals(owner) || VenueAuthenticator.signsInAs(principal, owner)
+			|| (covia.grid.Principals.isAgentDID(owner) && principal.equals(covia.grid.Principals.userOf(owner)));
+	}
 
 	/**
 	 * Attenuation where authority is handed on: may {@code ctx} confer {@code scope}
 	 * on a principal acting in {@code ownerDID}'s namespace, such as an agent's
-	 * {@code config.caps}? Each conferred capability must be covered by the
-	 * caller's own authority, so conferring only ever narrows: an agent may
-	 * create a sub-agent, never one more capable than itself.
+	 * {@code config.caps}? Each capability must be one the caller could grant
+	 * ({@link #requireGrantable}), and stored caps never expire, so conferring
+	 * only ever narrows: an agent may create a sub-agent only with what it may
+	 * grant.
 	 *
-	 * <p>A {@code null} scope is unrestricted, so only a caller unrestricted in that
-	 * namespace may confer it. A bare resource names {@code ownerDID}'s namespace, as
-	 * it will when the scope is used, and an empty one covers any resource. A
-	 * capability's {@code nb.url} is the destination its use is checked against;
-	 * other caveats only narrow it further.</p>
+	 * <p>A {@code null} scope is unrestricted, so only a caller that may grant
+	 * everything in that namespace may confer it. A bare resource names
+	 * {@code ownerDID}'s namespace, as it will when the scope is used, and an
+	 * empty one covers any resource. A capability's {@code nb.url} is the
+	 * destination its use is checked against; other caveats only narrow it
+	 * further.</p>
 	 *
 	 * @throws AuthException naming the first capability the caller cannot confer
 	 */
@@ -3934,18 +4029,12 @@ public class Engine {
 			AString destination) {
 		String resource = (with == null) ? "" : with.toString();
 		while (resource.startsWith("/")) resource = resource.substring(1);
+		AString absolute = resource.isEmpty() ? null
+			: Strings.create(covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID));
 		try {
-			if (!resource.isEmpty()) {
-				requireResourceAccess(ctx, Strings.create(
-					covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID)), can, destination);
-			} else if (ownerDID.equals(ctx.getUserDID())) {
-				requireAuthority(ctx, (AString) null, can, destination);   // only a match-any grant covers
-			} else {
-				requireLocalAccess(ctx, ownerDID, can, destination);       // the whole other namespace
-			}
+			requireGrantable(ctx, ownerDID, absolute, can, null, destination);
 		} catch (AuthException e) {
-			throw new AuthException(CONFERRAL_DENIED + ": " + can + " on "
-				+ (resource.isEmpty() ? "(any)" : resource) + " — " + e.getMessage());
+			throw new AuthException(CONFERRAL_DENIED + ": " + e.getMessage());
 		}
 	}
 
@@ -4195,21 +4284,21 @@ public class Engine {
 	public static final String NO_SUCH_AGENT = "%s is not an agent here";
 
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
-	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
-	 *  {@code did:<other>/…} path is another principal's. Owner = the DID prefix
-	 *  before the first {@code /}, compared to the caller's namespace by equality. */
+	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…},
+	 *  where self is the namespace the request acts in or the principal that
+	 *  acts (an agent's own DID). A {@code did:<other>/…} path is another
+	 *  principal's. Owner = the DID prefix before the first {@code /}, compared
+	 *  by equality. */
 	private static boolean ownedByCaller(RequestContext ctx, AString resource) {
 		if (resource == null || ctx == null) return true;
-		String s = resource.toString();
-		if (!s.startsWith("did:")) return true;
-		int slash = s.indexOf('/');
-		AString owner = Strings.create(slash < 0 ? s : s.substring(0, slash));
-		return owner.equals(ctx.getUserDID());
+		AString owner = ownerOf(resource);
+		if (owner == null) return true;
+		return owner.equals(ctx.getUserDID()) || owner.equals(ctx.getCallerDID());
 	}
 
 	/** The owner DID of a {@code did:<owner>/…} resource (prefix before the first
 	 *  {@code /}), or null for a bare/relative resource. */
-	private static AString ownerOf(AString resource) {
+	public static AString ownerOf(AString resource) {
 		if (resource == null) return null;
 		String s = resource.toString();
 		if (!s.startsWith("did:")) return null;
@@ -4218,16 +4307,22 @@ public class Engine {
 	}
 
 	/**
-	 * The single authorisation seam. Does the caller's authority cover
-	 * {@code (resource, ability)}? Grants are <b>additive</b> — <em>either you
-	 * have the right or you don't</em>: an inherent (unrestricted, own-namespace)
-	 * grant, an agent {@code config.caps} grant, or a cross-user proof each
-	 * independently authorise; nothing subtracts. Callers pass the credential (the
-	 * {@link RequestContext}, wrapping an {@code Authority}) and the exact
-	 * resource+ability they guard. This method is the own/scoped authority seam;
-	 * a resource that may name another local principal must enter through
-	 * {@link #requireResourceAccess}, which classifies ownership before reaching
-	 * the {@code null}-scope fast path.
+	 * The single authorisation seam. Does the request's authority cover
+	 * {@code (resource, ability)}? One rule for every principal: its scope over
+	 * its own namespaces, plus what it holds.
+	 *
+	 * <ul>
+	 * <li>Its own namespaces are the one it acts in, its own DID's (an agent's),
+	 * and resources this venue does not host (scheme and remote references).
+	 * There a {@code null} scope is unrestricted, and any other scope covers
+	 * what its grants cover.</li>
+	 * <li>Another identity's resource that this venue hosts is reached only by
+	 * what the request holds ({@link #crossUserAllows}: a presented proof, an
+	 * agent's admission, the public scope), never by its scope, unrestricted or
+	 * not. No caller need classify a resource before asking.</li>
+	 * </ul>
+	 *
+	 * <p>Grants are additive: nothing subtracts.</p>
 	 */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
 		return authorityCovers(ctx, resource, ability, null);
@@ -4237,19 +4332,24 @@ public class Engine {
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
-		// Fast path FIRST — the common case by far. A null scope is unrestricted:
-		// the caller carries no capability restriction, so they are authorised over
-		// their OWN namespace with no proof/public evaluation at all. Every ordinary
-		// authenticated user is null-scope; their cross-user reach is gated
-		// separately by the adapter (which calls crossUserAllows directly), never by
-		// this fast path — so returning here is correct AND skips the string
-		// building, clock read and proof walk that crossUserAllows would do.
-		// An agent's scope is read as it stands now, once for this check.
+		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination);
+		return scopeOrHeldCovers(ctx, resource, ability, destination);
+	}
+
+	/** Whether {@code resource} is another identity's that this venue hosts. */
+	private boolean isAnothers(RequestContext ctx, AString resource) {
+		return !ownedByCaller(ctx, resource) && isHosted(resource);
+	}
+
+	/**
+	 * Whether the request's scope, or what it holds, covers
+	 * {@code (resource, ability)}. A null scope covers everything, with no proof
+	 * or public evaluation: the common case by far. An agent's scope is read as
+	 * it stands now, once for this check.
+	 */
+	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		AVector<ACell> scope = ctx.getCaps();
 		if (scope == null) return true;
-		// Restricted (agent) scope. Grants are additive: a presented cross-user
-		// proof (or the public read grant) authorises independently of the caller's
-		// scope; otherwise a grant in the scope must cover the resource.
 		if (crossUserAllows(ctx, resource, ability, destination)) return true;
 		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
@@ -4267,8 +4367,42 @@ public class Engine {
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
 		requireStanding(ctx);
 		if (authorityCovers(ctx, resource, ability, destination)) return;
+		if (ctx != null && isAnothers(ctx, resource)) throw anothersDenial(ctx, resource, ability);
+		throw scopeDenial(ctx, resource, ability, destination);
+	}
+
+	/** The refusal of another principal's resource the request holds no rights to. */
+	private static covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
+		AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
+		return new covia.exception.AuthException("Access denied: " + ability + " on " + resource
+			+ " — accessing another user's resource requires " + ability + " rights"
+			+ ((proofs == null || proofs.isEmpty())
+				? " (no proof presented)" : " (the presented proofs do not cover it)")
+			+ (isTalkAbility(ability)
+				? "; the target's accepts policy does not admit this caller" : ""));
+	}
+
+	/**
+	 * Requires that the request may run {@code operation}, the reference as the
+	 * caller gave it. Choosing what to run is not access to the namespace that
+	 * publishes it: the operation runs with the request's own authority, and
+	 * reading its definition is checked when it is resolved. So the request's
+	 * scope, or a grant it presents, must cover {@code invoke} on the reference,
+	 * whoever publishes it.
+	 *
+	 * @throws covia.exception.AuthException when neither covers it
+	 */
+	public void requireInvoke(RequestContext ctx, AString operation) {
+		requireStanding(ctx);
+		if (ctx != null && scopeOrHeldCovers(ctx, operation, Abilities.INVOKE, null)) return;
+		throw scopeDenial(ctx, operation, Abilities.INVOKE, null);
+	}
+
+	/** The refusal of {@code (resource, ability)} that the request's scope does not cover. */
+	private static covia.exception.AuthException scopeDenial(RequestContext ctx, AString resource, AString ability,
+			AString destination) {
 		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability, destination) : null;
-		throw new covia.exception.AuthException(denial != null ? denial
+		return new covia.exception.AuthException(denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));

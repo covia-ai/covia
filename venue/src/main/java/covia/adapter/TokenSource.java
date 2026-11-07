@@ -20,7 +20,7 @@ public interface TokenSource {
 	/**
 	 * The caller's access token for the provider, refreshed first when it has
 	 * expired, for a request to {@code destination}. Releasing it is a use of
-	 * the connection {@code <did>/oauth/<provider>}, so a capability-scoped
+	 * the connection {@code <did>/x/oauth/<provider>}, so a capability-scoped
 	 * caller needs {@code oauth/use} there, with any {@code nb.url} covering
 	 * {@code destination}. Refusals carry an actionable message.
 	 *

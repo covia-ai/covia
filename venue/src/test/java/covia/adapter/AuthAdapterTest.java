@@ -24,6 +24,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
 import convex.core.util.JSON;
@@ -136,7 +137,7 @@ class AuthAdapterTest {
 				identityFailure(ctx, Maps.of("aud", aud, "name", "IDENTITY")).getErrorMessage());
 		}
 		assertEquals(AuthAdapter.IDENTITY_AUDIENCE, identityFailure(ctx, Maps.of("name", "IDENTITY")).getErrorMessage());
-		for (Object seconds : new Object[] {0, -1, 3601, Long.MAX_VALUE, 1.5, "300"}) {
+		for (Object seconds : new Object[] {0, -1, Long.MAX_VALUE, 1.5, "300"}) {
 			assertEquals(AuthAdapter.IDENTITY_LIFETIME, identityFailure(ctx,
 				Maps.of("aud", TestEngine.ENGINE.getDIDString(), "name", "IDENTITY", "lifetime", seconds)).getErrorMessage());
 		}
@@ -146,6 +147,15 @@ class AuthAdapterTest {
 		assertEquals(SecretAdapter.INVALID_NAME, identityFailure(ctx,
 			identityInput().assoc(Strings.create("name"), Strings.create("../escape"))).getErrorMessage());
 		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", ctx));
+	}
+
+	@Test void identityTokenLastsAsLongAsTheCallerChooses() {
+		RequestContext ctx = localCaller();
+		long thirtyDays = 30L * 24 * 3600;
+		identityJob(ctx, identityInput().assoc(Strings.create("lifetime"), CVMLong.create(thirtyDays))).awaitResult(5000);
+		AMap<AString, ACell> claims = JWT.parse(Strings.create(TestEngine.ENGINE.resolveSecret("s/IDENTITY", ctx))).getClaims();
+		assertEquals(thirtyDays,
+			RT.ensureLong(claims.get(JWT.EXP)).longValue() - RT.ensureLong(claims.get(JWT.IAT)).longValue());
 	}
 
 	@Test void identityTokenRequiresExplicitRefreshAndBindsNewAudience() {

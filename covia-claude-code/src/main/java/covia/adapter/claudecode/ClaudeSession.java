@@ -34,7 +34,6 @@ import convex.core.data.prim.CVMDouble;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.UnavailableException;
 
@@ -248,10 +247,11 @@ final class ClaudeSession {
 				}
 			}
 			current = null;
-			next.future.completeExceptionally(new UnavailableException("Could not start Claude Code turn: " + AAdapter.describeFailure(e), e));
+			String cause = adapter.describeFailure(e);
+			next.future.completeExceptionally(new UnavailableException("Could not start Claude Code turn: " + cause, e));
 			stopLocked("start failed");
 			// The remaining queue fails too: nothing will drain it.
-			failQueue("Claude Code session could not start: " + AAdapter.describeFailure(e));
+			failQueue("Claude Code session could not start: " + cause);
 			adapter.onSlotFreed(this);
 		}
 	}

@@ -39,6 +39,7 @@ import convex.restapi.mcp.McpServer;
 import convex.restapi.mcp.McpSession;
 import convex.restapi.mcp.SseConnection;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Engine;
@@ -146,6 +147,9 @@ public class MCP extends McpServer {
 
 	/** Wildcard token in {@code includeAdapters} meaning "expose all groups". */
 	private static final String INCLUDE_ALL = "*";
+
+	/** What failed, when the venue fails handling an MCP tool call: the tool's name follows. */
+	public static final String TOOL_CALL = "MCP tool call %s";
 
 	/**
 	 * Adapter-name groups (the path segment under {@code v/ops/}) eligible
@@ -685,12 +689,11 @@ public class MCP extends McpServer {
 				return protocolError(-32602, "Unknown tool: " + toolName);
 			}
 		} catch (Exception e) {
-			// An expected failure is its reason; anything else is a venue error,
-			// logged here and named only by its type
-			if (!covia.adapter.AAdapter.isExpectedFailure(e)) {
-				log.error("Unexpected failure in MCP tool call {}", RT.getIn(params, Fields.NAME), e);
-			}
-			return toolError(covia.adapter.AAdapter.describeFailure(e));
+			// A failure is reported where it happened; anything not yet reported
+			// is the venue's own in handling the tool call, logged here and named
+			// only by its type
+			return toolError(FaultException.within(
+				TOOL_CALL.formatted(RT.getIn(params, Fields.NAME)), FaultException.VENUE, e).getMessage());
 		}
 	}
 
@@ -725,8 +728,10 @@ public class MCP extends McpServer {
 		} catch (java.util.concurrent.CancellationException e) {
 			return toolError("Cancelled");
 		} catch (java.util.concurrent.CompletionException e) {
-			// An expected failure is its reason; only an unexpected one names its class.
-			return toolError(covia.adapter.AAdapter.describeFailure(e));
+			// The operation's outcome, which its job reported; a call refused
+			// before it had a job is the caller's to report
+			if (run.job() == null) throw e;
+			return toolError(run.job().report(e).getMessage());
 		}
 	}
 

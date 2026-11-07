@@ -152,7 +152,8 @@ public class SecretAdapter extends AAdapter {
 		return result;
 	}
 
-	private static long pageNumber(ACell input, AString key, long fallback, long maximum) {
+	/** A page bound of a listing: {@code key}'s value, or {@code fallback}; shared with {@code crypto:list-keys}. */
+	static long pageNumber(ACell input, AString key, long fallback, long maximum) {
 		ACell value = RT.getIn(input, key);
 		if (value == null) return fallback;
 		if (!(value instanceof CVMLong n) || n.longValue() < 0 || n.longValue() > maximum) throw new InvalidInputException(INVALID_PAGE);

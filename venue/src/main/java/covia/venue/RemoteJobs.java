@@ -387,8 +387,8 @@ public final class RemoteJobs implements AutoCloseable {
 	 * remote's body; its type is recorded instead.
 	 */
 	private static AString reason(Throwable error) {
-		if (covia.exception.CoviaException.reasonOf(error) == null) return null;
-		return Strings.create(covia.adapter.AAdapter.describeFailure(error));
+		String reason = covia.exception.CoviaException.reasonOf(error);
+		return (reason == null) ? null : Strings.create(reason);
 	}
 
 	public static AMap<AString, ACell> cancellationHttpFailure(int code) {

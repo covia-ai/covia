@@ -429,6 +429,13 @@ public class OAuthAdapterTest {
 					Capability.create(Strings.create("s/oauth/fake"), Abilities.SECRET_USE))));
 				assertTrue(oldGrant.contains(Abilities.OAUTH_USE.toString()), oldGrant);
 
+				// A connection is under the adapter's own x/ space, not a bare oauth/ path.
+				assertEquals("Bearer access-1", RT.getIn(ok(run(engine, "v/ops/http/get", me, agent(aliceDID,
+					Capability.create(Strings.create("x/oauth/fake"), Abilities.OAUTH_USE)))), "body").toString());
+				String bare = failed(run(engine, "v/ops/http/get", me, agent(aliceDID,
+					Capability.create(Strings.create("oauth/fake"), Abilities.OAUTH_USE))));
+				assertTrue(bare.contains(Abilities.OAUTH_USE.toString()), bare);
+
 				// An oauth/use grant bound to a url prefix releases it there only.
 				RequestContext bound = agent(aliceDID, Capability.create(OAuthAdapter.resource("fake"),
 					Abilities.OAUTH_USE, Maps.of("url", fake.base() + "/api/")));
