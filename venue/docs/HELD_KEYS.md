@@ -40,19 +40,23 @@ Today keys live elsewhere:
 1. **Any identity may hold keys.** An authenticated identity adds a key to its
    own keyring, given the capability to do so. The venue checks that the
    private key yields the public key; nothing else is needed.
-2. **Only the holder uses its keys.** A key is used only for a request whose
-   caller is its holder, authenticated as itself or acting as itself in
-   trusted in-process code. Only the holder lists its keys. These rights cannot
-   be delegated: a grant of them would let another principal sign as the
-   holder. A capability scope can narrow them, as an agent's caps do.
-3. **Acting on an identity's behalf never signs as it:** not through
-   `user/sudo`, an activated allowance, or the venue's power over its users
-   ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md)). A signature travels to other
-   venues, and the host root holds only at its own venue.
-4. **Nested identities sign only as themselves.** An identity nested below a
-   root (`<root>:u:alice`) may have its root's key sign as the nested identity,
-   such as its own identity token, and never as the root. Agents are
-   identities with keyrings of their own, and cannot use their owner's keys.
+2. **A keyring is its holder's alone.** Its keys are used, and listed, only
+   for a request whose caller is the holder, authenticated as itself or acting
+   as itself in trusted in-process code, or by a principal the holder has
+   explicitly granted that use. A capability scope can narrow the holder's own
+   use, as an agent's caps do.
+3. **Nothing implicit reaches a keyring.** Nesting, ownership and acting on an
+   identity's behalf confer no use of its keys: an identity nested below a root
+   (`<root>:u:alice`) and an agent of an owner use the root's or owner's keys
+   only under an explicit grant, and `user/sudo`, an activated allowance or the
+   venue's power over its users ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md))
+   never sign as the identity. A signature travels to other venues, and the
+   host root holds only at its own venue.
+4. **A grant of key use is the holder's own.** It counts only when its chain
+   starts with the holder: signed by the holder, or attested on the holder's
+   instruction by the venue custodying its identity (COG-17). A grant rooted in
+   the host root never confers key use, so the venue cannot grant itself, or
+   anyone, the use of a key it holds for someone else.
 5. **Keys are never readable.** No operation returns, exports or lends a
    private key, as for the venue's own key.
 6. **One signing function** serves identity tokens, UCAN grants, Convex
@@ -222,23 +226,26 @@ own key without being able to sign transactions. An operation that signs
 whatever its caller supplies, such as `crypto:jwt-sign` with its free claims,
 needs `key/sign/raw`.
 
-A check has two steps, in order:
+A check passes in one of two ways, and in no other:
 
-1. **The caller is the holder.** The keyring's DID must equal the caller's
-   DID; nothing else counts, not a presented grant, an admission policy or
-   `user/sudo`. That is what makes these rights undelegable, and it keeps an
-   agent with no caps, whose base is its owner's authority, away from its
-   owner's keys.
-2. **The caller's own base covers the ability.** A user holds them all over
-   its own keyring. An agent needs caps naming its own keyring by DID URL,
+1. **The caller is the holder, and its own base covers the ability.** The
+   keyring's DID equals the caller's DID. A user holds every `key/…` ability
+   over its own keyring. An agent needs caps naming its own keyring by DID URL,
    since a bare path in caps names its owner's namespace. An `nb.gate` on such
    a cap can make signing wait for an approval.
+2. **The caller presents a grant of the ability on that key whose chain starts
+   with the holder** (principle 4). The grant bounds the use as any grant does:
+   to the key, the kind of signing, an expiry, and any `nb.gate`.
 
-A nested identity signing as itself with its root's key does so only through
-`auth:identity-token`, under that operation's rules, and holds no `key/…`
-right over its root's keyring. The venue's own key is the venue's keyring
-entry under the same two steps, so only the venue acting as itself, in trusted
-code, signs with it; a grant from the venue never confers that.
+Admission, nesting, ownership, `user/sudo` and grants rooted in the host root
+never pass. An agent with no caps, whose base is its owner's authority, still
+cannot use its owner's keys, because its DID is not its owner's.
+
+A nested identity whose identity token is to be signed by its root's key
+needs a grant of `key/sign/token` on that key from the root. The venue's own
+key is the venue's keyring entry under the same rules: the venue acting as
+itself, in trusted code, uses it, and anyone else only under an explicit grant
+from the venue.
 
 ## Security
 
@@ -251,16 +258,23 @@ code, signs with it; a grant from the venue never confers that.
 - **A secret is the readable choice.** A seed or mnemonic kept as a secret can
   be read back by its owner and lent with `secret/use`; one in a keyring
   cannot. The holder chooses which it wants.
-- **No delegation.** Only the holder uses its keys, so a deputy acting for the
-  holder, or a grant presented to one, can never make the venue sign as the
+- **No implicit use.** A key is used only by its holder or under the holder's
+  explicit grant, so a deputy acting for the holder, an identity nested below
+  it, or the venue acting on its behalf can never make the venue sign as the
   holder.
+- **Granting key use is granting a signature.** A grantee of `key/sign/raw`
+  can make the key sign anything, so its holder should grant the narrowest
+  kind of signing, on one key, for the shortest time. A grant of the venue's
+  own key hands out the venue's signature, the sharpest grant there is.
 
 ## Open questions
 
 1. When the deprecated Convex signing operations are removed, and how an owner
    moves an existing seed or phrase from the secret store into their keyring.
-2. Whether a root must opt in before identities nested below it have its key
-   sign their identity tokens.
+2. Identities nested below the venue's own `did:key` mint identity tokens with
+   the venue's key today without any grant ([AUTH.md](./AUTH.md) §5.2). Under
+   these rules they need one: whether the venue grants it to them standing, or
+   that use ends.
 3. Signing the venue's outbound calls made as a held identity, per call.
 4. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
 5. The new operations' names.
