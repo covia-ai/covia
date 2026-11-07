@@ -507,6 +507,7 @@ public class AgentStateSessionCycleTest {
 				() -> agent.suspend(userDid, Strings.create("stop")),
 				() -> agent.suspend(Strings.create("fault")),
 				() -> agent.setStatus(AgentState.TERMINATED),
+				() -> agent.terminate(),
 				agent::revokeClaim}) {
 			agent.setStatus(AgentState.SLEEPING);
 			assertEquals(AgentState.CycleStart.SESSION, agent.beginCycle(null, null, sid, EPOCH_A, null, 0));

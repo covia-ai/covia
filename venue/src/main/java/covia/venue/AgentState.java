@@ -642,14 +642,15 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/**
-	 * Terminates the agent in one write, returning its record from just
-	 * before. Intake refuses a terminated agent, so the tasks that record holds
-	 * are all the work the agent will ever have to give back.
+	 * Terminates the agent in one write, which revokes its cycle claim as
+	 * every stopping status does, returning its record from just before.
+	 * Intake refuses a terminated agent, so the tasks that record holds are all
+	 * the work the agent will ever have to give back.
 	 *
 	 * @return The record before termination, or null when there is no agent
 	 */
 	public AMap<AString, ACell> terminate() {
-		return getAndUpdate(r -> r.assoc(K_STATUS, TERMINATED));
+		return getAndUpdate(r -> withStatus(r, TERMINATED));
 	}
 
 	public void setError(AString error) {
