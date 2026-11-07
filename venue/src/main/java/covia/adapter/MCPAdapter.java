@@ -28,6 +28,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.api.Abilities;
+import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -1000,12 +1001,22 @@ public class MCPAdapter extends AAdapter {
 
 	private void writeLattice(RequestContext ctx, String path, ACell value) {
 		engine.jobs().invokeInternal(Strings.create("v/ops/covia/write"),
-			Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value), ctx).join();
+			Maps.of(Fields.PATH, storedPath(path), Fields.VALUE, value), ctx).join();
 	}
 
 	private void deleteLattice(RequestContext ctx, String path) {
 		engine.jobs().invokeInternal(Strings.create("v/ops/covia/delete"),
-			Maps.of(Fields.PATH, Strings.create(path)), ctx).join();
+			Maps.of(Fields.PATH, storedPath(path)), ctx).join();
+	}
+
+	/**
+	 * Where a change to {@code path} is made. {@code v/} is the venue's
+	 * read-only view of its {@code w/global}, so a venue entry is changed
+	 * there, by the venue.
+	 */
+	private static AString storedPath(String path) {
+		if (!path.startsWith("v/")) return Strings.create(path);
+		return Strings.create(CoviaAdapter.venueGlobals(CoviaPath.parse(path)).toString().substring(1));
 	}
 
 	private ACell readLattice(RequestContext ctx, String path) {

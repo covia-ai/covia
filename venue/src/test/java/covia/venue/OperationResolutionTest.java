@@ -518,19 +518,23 @@ public class OperationResolutionTest {
 
 	// ========== /v/ namespace — venue globals ==========
 	//
-	// Per OPERATIONS.md §3, /v/ is an alias: v/<rest> is the venue user's path
-	// w/global/<rest>. Reads are universally allowed; writes
-	// require the venue identity (engine.venueContext() or the venue's own
-	// DID). The venue user record exists at engine startup so /v/ paths
-	// always have a backing namespace to navigate.
+	// Per OPERATIONS.md §3, /v/ is the venue's read-only view of its user's
+	// w/global: v/<rest> shows w/global/<rest>. Every principal reads it;
+	// nothing changes through it, and the venue changes what it shows in its
+	// own w/global. The venue user record exists at engine startup so /v/
+	// paths always have a backing namespace to navigate.
+
+	/** Writes {@code value} at the venue's {@code w/global/<rest>}, which {@code v/<rest>} shows. */
+	private void writeVenueGlobal(String rest, ACell value) {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/global/" + rest, Fields.VALUE, value),
+			engine.venueContext()).awaitResult(5000);
+	}
 
 	@Test
 	public void testWriteAndReadVenueGlobalAsInternal() {
-		// Internal context can write to /v/
 		ACell value = Maps.of("name", "test entry", "version", CVMLong.create(1));
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/test/entry", Fields.VALUE, value),
-			engine.venueContext()).awaitResult(5000);
+		writeVenueGlobal("test/entry", value);
 
 		// Any caller can read it
 		ACell readBack = engine.resolvePath(Strings.create("v/test/entry"), alice);
@@ -542,38 +546,29 @@ public class OperationResolutionTest {
 	}
 
 	@Test
-	public void testNonVenueCallerCannotWriteToV() {
-		// Alice (a regular user) cannot write to /v/
-		assertThrows(Exception.class, () -> {
-			engine.jobs().invokeOperation("v/ops/covia/write",
-				Maps.of(Fields.PATH, "v/test/forbidden", Fields.VALUE, Strings.create("nope")),
-				alice).awaitResult(5000);
-		}, "non-venue caller should be rejected when writing to /v/");
+	public void testNothingChangesThroughV() {
+		for (RequestContext ctx : new RequestContext[] {alice, engine.venueContext()}) {
+			Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "v/test/forbidden", Fields.VALUE, Strings.create("nope")), ctx);
+			assertThrows(Exception.class, () -> write.awaitResult(5000));
+			assertEquals(covia.adapter.CoviaAdapter.VIEW_READ_ONLY, write.getErrorMessage());
+		}
+		assertNull(engine.resolvePath(Strings.create("v/test/forbidden"), alice));
 	}
 
 	@Test
 	public void testVenueGlobalsRouteThroughVenueUserWGlobal() {
-		// Verify the underlying storage location: writing to v/foo should be
-		// readable from <venue-DID>/w/global/foo by the venue itself.
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/foo", Fields.VALUE, Strings.create("hello")),
-			engine.venueContext()).awaitResult(5000);
-
-		// Read directly from the venue user's workspace via the venue's own
-		// internal context (which can read its own /w/).
-		AString venueDID = engine.getDIDString();
-		RequestContext venueCtx = RequestContext.of(venueDID);
-		ACell value = engine.resolvePath(Strings.create("w/global/foo"), venueCtx);
-		assertEquals(Strings.create("hello"), value,
-			"v/foo should physically live at <venue-DID>/w/global/foo");
+		// v/foo shows what the venue keeps at <venue-DID>/w/global/foo
+		writeVenueGlobal("foo", Strings.create("hello"));
+		assertEquals(Strings.create("hello"), engine.resolvePath(Strings.create("v/foo"), alice));
+		assertNull(engine.resolvePath(Strings.create(engine.getDIDString() + "/v/foo"), alice),
+			"the view is every request's own, so the venue's DID before it names no place");
 	}
 
 	@Test
 	public void testVenueGlobalsReadableViaCoviaRead() {
 		// Universal resolution: covia:read should accept v/ paths
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/welcome", Fields.VALUE, Strings.create("hi from venue")),
-			engine.venueContext()).awaitResult(5000);
+		writeVenueGlobal("welcome", Strings.create("hi from venue"));
 
 		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "v/welcome"), alice);
@@ -592,9 +587,7 @@ public class OperationResolutionTest {
 			"operation", Maps.of("adapter", "json:merge"),
 			"tags", convex.core.data.Vectors.of(Strings.create("data"), Strings.create("util"))
 		);
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/test-ops/structured", Fields.VALUE, complex),
-			engine.venueContext()).awaitResult(5000);
+		writeVenueGlobal("test-ops/structured", complex);
 
 		// Read via /v/ and verify it round-trips
 		ACell readBack = engine.resolvePath(Strings.create("v/test-ops/structured"), alice);
@@ -606,19 +599,12 @@ public class OperationResolutionTest {
 	}
 
 	@Test
-	public void testVenueGlobalsAreAnAliasOfTheVenueUsersPath() {
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/test-scalar", Fields.VALUE, Strings.create("leaf")),
-			engine.venueContext()).awaitResult(5000);
+	public void testVenueGlobalsAreAViewOfTheVenueUsersPath() {
+		writeVenueGlobal("test-scalar", Strings.create("leaf"));
 		User venue = engine.getVenueState().users().get(engine.getDIDString());
 		assertEquals(Strings.create("leaf"), venue.resolve(CoviaPath.parse("w/global/test-scalar")).read());
-
-		// A refusal names the path the alias stands for.
-		Job below = engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/test-scalar/below", Fields.VALUE, Strings.create("x")),
-			engine.venueContext());
-		assertThrows(JobFailedException.class, () -> below.awaitResult(5000));
-		assertEquals(String.format(ValuePath.NOT_A_MAP, "below", "/w/global/test-scalar"), below.getErrorMessage());
+		assertEquals(Strings.create("leaf"), engine.resolvePath(Strings.create("v/test-scalar"), alice));
+		assertNull(engine.resolvePath(Strings.create("v/test-scalar/below"), alice), "nothing is below a scalar");
 	}
 
 	@Test

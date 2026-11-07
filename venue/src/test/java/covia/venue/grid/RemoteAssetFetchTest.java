@@ -415,7 +415,7 @@ public class RemoteAssetFetchTest {
 		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
 		Job bind = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation(
 			"v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/ops/remotetest/pin-named",
+			Maps.of(Fields.PATH, "w/global/ops/remotetest/pin-named",
 				Strings.intern("value"), convex.core.util.JSON.parse(meta)),
 			TwoVenueTestServer.ENGINE_B.venueContext());
 		bind.awaitResult(10_000);

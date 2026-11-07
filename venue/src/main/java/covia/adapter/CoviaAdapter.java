@@ -77,18 +77,20 @@ import covia.venue.VenueState;
  *   └── a/          assets     (content-addressed references)
  * </pre>
  *
- * <p>A path is resolved by the component it starts from, which the request
- * chooses ({@link #resolve(RequestContext, ACell)}): the venue for a path that
+ * <p>A path is located from the component it starts at, which the request
+ * chooses ({@link #locate(RequestContext, ACell)}): the venue for a path that
  * starts with a DID, the request's user for a bare path, and for the
- * context-dependent namespaces the request's agent ({@code n/}), session
- * ({@code c/}), job's scratch ({@code t/}), the venue's user ({@code v/}) or an
- * adapter's view ({@code x/<adapter>/}). Resolution checks nothing; each
- * operation checks the caller's authority and applies its write rules.</p>
+ * context-rooted namespaces the request's agent ({@code n/}), session
+ * ({@code c/}), job's scratch ({@code t/}) or the venue's user ({@code v/});
+ * {@code x/<adapter>/} is that adapter's view. Locating checks nothing; each
+ * operation reaches the data through {@link #resolve(RequestContext, ACell)},
+ * whose access asks the data's owner, and applies its write rules.</p>
  *
  * <p>A change by path is accepted in {@code w/} and {@code o/}, through
- * {@code n/}, {@code c/} and {@code t/} within their agent, session or job, in
- * {@code v/} from the venue itself, and in an {@code x/} view as its adapter
- * allows; {@code covia:delete} also removes a whole secret ({@code s/<name>}).
+ * {@code n/}, {@code c/} and {@code t/} within their agent, session or job,
+ * and in an {@code x/} view as its adapter allows; nothing changes through
+ * {@code v/}, and {@code covia:delete} also removes a whole secret
+ * ({@code s/<name>}).
  * Other stored namespaces ({@code g/}, {@code s/}, {@code j/}) are
  * framework-managed and reject direct writes.</p>
  *
@@ -160,7 +162,7 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private static final Set<String> WRITABLE_NAMESPACES = Set.of("w", "o");
 
-	/** The context-dependent namespaces: the request names the component each starts at. */
+	/** The context-rooted namespaces: the request names the component each starts at. */
 	private static final AString N = Strings.intern("n");
 	private static final AString C = Strings.intern("c");
 	private static final AString T = Strings.intern("t");
@@ -176,7 +178,8 @@ public class CoviaAdapter extends AAdapter {
 		"Cannot use 't/' prefix outside job or task scope (requires agentId+taskId or jobId on RequestContext)";
 	public static final String TASK_WITHOUT_AGENT = "Cannot use task-scoped 't/' without agentId on RequestContext";
 	public static final String NO_USER_SCOPE = "Cannot use a path without an owner DID outside a user's scope (requires userDID on RequestContext)";
-	public static final String VENUE_WRITES_ONLY = "Write permission denied for namespace: v";
+	/** Refusal for a change through {@code v/}, the venue's read-only view. */
+	public static final String VIEW_READ_ONLY = "v/ is the venue's read-only view: nothing changes through it";
 	public static final String NAMESPACE_AND_KEY = "Path must include namespace and key, e.g. 'w/my-key'";
 	public static final String NOT_WRITABLE = "Namespace '%s' is not writable (framework-managed). "
 		+ "Writable namespaces: w/ (workspace), o/ (operation pins); "
@@ -807,6 +810,9 @@ public class CoviaAdapter extends AAdapter {
 		Engine.UserPathTarget target = (did == null) ? null : engine.resolveUserPath(ctx, did, false);
 		CoviaPath segments = (target == null) ? CoviaPath.of(path) : target.path();
 		Access access = access(ctx, locate(state, ctx, path, ability));
+		// A path that names no place is refused as such before anything else
+		String invalid = access.reasonInvalid();
+		if (invalid != null) throw new InvalidInputException(invalid);
 		// Checked before the write rules and before any record is created, so a
 		// refused change has no effect
 		access.require(ability);
@@ -832,7 +838,7 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * This adapter's write rules for a change by path, given the path after any
 	 * owner DID. {@code n/}, {@code c/} and {@code t/} take changes within their
-	 * scope, and {@code v/} as its {@link #viewPolicy policy} allows. A direct
+	 * scope, and {@code v/} as its {@link #VIEW_POLICY policy} allows. A direct
 	 * path changes only {@link #WRITABLE_NAMESPACES}, and a delete may also remove
 	 * a whole secret ({@code s/<name>}): secrets are created only by
 	 * {@code secret:set}, which encrypts them, and part of a secret's record is
@@ -1217,7 +1223,7 @@ public class CoviaAdapter extends AAdapter {
 	 * at a position that reads as absent, and a path that names no place data
 	 * could be ends at an invalid one ({@link Position#isValid}). The position
 	 * carries the policy of the innermost component that owns the data, and a
-	 * {@code v/} path that of the view ({@link #viewPolicy}).
+	 * {@code v/} path that of the view ({@link #VIEW_POLICY}).
 	 *
 	 * @param path The path as the caller gave it: a string, with an optional
 	 *        leading slash and owner DID, or a vector of segments
@@ -1252,7 +1258,7 @@ public class CoviaAdapter extends AAdapter {
 		if (V.equals(namespace)) {
 			CoviaPath global = venueGlobals(segments);
 			return state.users().at(engine.getDIDString()).workspace().resolve(global.rest())
-				.ownedBy(viewPolicy(), segments);
+				.ownedBy(VIEW_POLICY, segments);
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
@@ -1272,25 +1278,18 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * The policy of {@code v/}, the venue's public view, which belongs to no
-	 * principal: any principal on the venue reads it of right, in its own
-	 * request. Only the venue changes it, with authority over the place in its
-	 * {@code w/global} that the view shows.
+	 * The policy of {@code v/}, the venue's public read-only view, which belongs
+	 * to no principal: any principal on the venue reads it of right, in its own
+	 * request, and nothing changes through it. The venue changes what it shows
+	 * in its own {@code w/global}.
 	 */
-	private AccessPolicy viewPolicy() {
-		AString venue = engine.getDIDString();
-		String venueGlobal = venue + VENUE_GLOBALS.toString();
-		return (ctx, ability, path) -> {
-			if (Capability.CRUD_READ.equals(ability)) return AccessPolicy.Need.OF_RIGHT;
-			if (ctx == null || !venue.equals(ctx.getCallerDID())) return AccessPolicy.Need.refused(VENUE_WRITES_ONLY);
-			return AccessPolicy.Need.authorityOver(AccessPolicy.address(venueGlobal, path.rest()));
-		};
-	}
+	private static final AccessPolicy VIEW_POLICY = (ctx, ability, path) ->
+		Capability.CRUD_READ.equals(ability) ? AccessPolicy.Need.OF_RIGHT : AccessPolicy.Need.refused(VIEW_READ_ONLY);
 
 	/**
 	 * Whether {@code path} names a place in the lattice that could hold data,
 	 * as {@link #resolve} reads it, without reading it or checking authority:
-	 * an {@code x/} view, a context-dependent path outside its scope, or a path
+	 * an {@code x/} view, a context-rooted path outside its scope, or a path
 	 * that resolves to a valid position. A malformed path names none.
 	 *
 	 * @param path The path as the caller gave it, as for {@link #resolve}
@@ -1336,12 +1335,22 @@ public class CoviaAdapter extends AAdapter {
 		return jobId;
 	}
 
-	/** The path as a string without its leading slash when it starts with an owner DID, otherwise null. */
+	/**
+	 * The path as a DID URL when it starts with an owner DID, otherwise null: a
+	 * string whose first element is a DID, or an array whose first element is
+	 * one. A DID sets where a path starts only as its first element, so with a
+	 * slash before it the path starts at the request's user, where a DID names
+	 * nothing.
+	 */
 	private static AString didPath(ACell path) {
 		AString raw = RT.ensureString(path);
-		if (raw != null && raw.startsWith(SLASH)) raw = raw.slice(1);
-		return (raw != null && raw.startsWith(DID_PREFIX)) ? raw : null;
+		if (raw != null) return raw.startsWith(DID_PREFIX) ? raw : null;
+		if (!(path instanceof AVector<?>)) return null;
+		CoviaPath segments = CoviaPath.of(path);
+		if (segments.isEmpty() || !segments.first().startsWith(DID_PREFIX)) return null;
+		return Strings.create(segments.toString().substring(1));
 	}
+
 
 
 	/** The venue user's path a {@code v/} path stands for: {@link #VENUE_GLOBALS} followed by the rest of the path. */

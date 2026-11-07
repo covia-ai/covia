@@ -69,7 +69,7 @@ Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already s
 
 ### `/v/` — venue globals
 
-`/v/` is a **context-dependent namespace prefix**, like `n/` and `t/` (GRID_LATTICE_DESIGN §4.5). It is not a top-level lattice region; it is convenience syntax over an existing storage location.
+`/v/` is a **context-rooted namespace**, like `n/` and `t/` (GRID_LATTICE_DESIGN §4.5). It is not a top-level lattice region; it is a read-only view of an existing storage location.
 
 **Resolution.** `/v/<rest>` resolves to the venue user's workspace at `w/global/<rest>`. Concretely: `v/ops/json/merge` is the same lattice cell as the venue user's workspace path `w/global/ops/json/merge`. The venue is treated as a user — it has its own DID (already used for JWT signing, UCAN issuance, and DID document publication) and therefore has a user record with a `/w/` workspace. Its `/w/global/` sub-tree is the place it publishes public data.
 
@@ -102,20 +102,19 @@ A single `covia:slice v/info` round trip gives an agent or tool a complete venue
 
 ### `/v/` names the venue's own data
 
-`n/`, `c/` and `t/` name places in the caller's own data, picked by the request's agent, session or job. `/v/` names a fixed user, the venue's, whoever is calling: `v/ops/json/merge` is `<venue-DID>/w/global/ops/json/merge` whether Alice, Bob or an anonymous client reads it. A `/v/` path is resolved from the venue's user (GRID_LATTICE_DESIGN §4.6).
+`n/`, `c/` and `t/` name places in the caller's own data, picked by the request's agent, session or job. `/v/` names a fixed user's data, the venue's, whoever is calling: `v/ops/json/merge` shows `<venue-DID>/w/global/ops/json/merge` whether Alice, Bob or an anonymous client reads it. A `/v/` path is resolved from the venue's user (GRID_LATTICE_DESIGN §4.6). The view is every request's own, so `<venue-DID>/v/…` names no place.
 
 ### Access control
 
-`/v/` access is **enforced by the covia operations**, not by stored UCAN proofs:
+`/v/` is the venue's public read-only view, under its own policy rather than stored UCAN proofs:
 
 | Operation | Caller | Result |
 |-----------|--------|--------|
-| Read `/v/...` (any sub-namespace) | Anyone (anonymous, authenticated, internal) | Allowed |
-| Write `/v/...` | `RequestContext.INTERNAL` (engine code) | Allowed |
-| Write `/v/...` | JWT signed by venue keypair (operator) | Allowed |
-| Write `/v/...` | Anyone else | Rejected with permission error |
+| Read `/v/...` (any sub-namespace) | Any principal on the venue, whatever its caps | Allowed |
+| Change `/v/...` | Anyone, the venue included | Refused (`CoviaAdapter.VIEW_READ_ONLY`) |
+| Change `<venue-DID>/w/global/...` | The venue, or a principal it granted | Allowed; `/v/` shows the change |
 
-A write through `/v/` is refused unless the caller is the venue identity. There is **no UCAN issued at startup** for public reads; the policy is intrinsic to the namespace.
+Engine code writes the catalog directly at startup; the MCP adapter's venue-scope tools are written to the venue's `w/global` by the venue. There is **no UCAN issued at startup** for public reads; the policy is intrinsic to the namespace.
 
 User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
@@ -135,11 +134,12 @@ Any operation argument that accepts a lattice address — `path`, `from`, `ref`,
 | Explicit `/a/<hash>` | `/a/abc123...` | CAS lookup |
 | User namespace path | `o/merge`, `w/notes`, `g/alice/state` | Caller's own lattice region |
 | DID-qualified user path | `did:key:zAlice…/w/notes`, `did:key:zAlice…/g/Manager` | The named local user's physical lattice region, subject to capability checks |
-| Context-dependent prefix | `n/notes`, `t/draft`, `v/ops/json/merge`, `x/<adapter>/...` | Resolved from the component the request names (GRID_LATTICE_DESIGN §4.6); extension views are provided by the active adapter for this user |
+| Context-rooted prefix | `n/notes`, `t/draft`, `v/ops/json/merge` | Resolved from the component the request names (GRID_LATTICE_DESIGN §4.5, §4.6) |
+| Adapter view | `x/<adapter>/...`, `did:key:zAlice…/x/<adapter>/...` | The active adapter's view for the caller, or for the named principal |
 | DID URL (hash) | `did:key:z6Mk…/a/<hash>`, `did:web:venue.host/a/<hash>` | Asset as published by a principal — self-verifying. Read-side: local copies only. Invocation-side: a local copy if held, else a hash-verified metadata fetch from the publishing venue (`did:web` only) |
 | DID URL (named) | `did:web:venue.host/v/ops/json/merge` | Catalog binding maintained by the publishing venue — mutable, trusted at fetch time. Invocation-side only: name → id resolved at the publisher, then the same hash-verified definition fetch. The job record carries the resolved hash |
 
-A read-side argument never needs to know "is this a hash or a path or a DID?" — the resolver figures it out. Capability checks happen during resolution: the caller needs read access to whatever resolves.
+A read-side argument never needs to know "is this a hash or a path or a DID?" — the resolver figures it out. Access is checked before the value is read: a path is read as data where it lives, as the component that owns it allows, and a content-addressed reference as an asset (GRID_LATTICE_DESIGN §4.6). The grammar of paths is in GRID_LATTICE_DESIGN §3.
 
 > **Not accepted: the `adapter:op` dispatch string.** An operation's
 > `operation.adapter` field (e.g. `test:echo`, `covia:write`) is the adapter's
@@ -160,7 +160,7 @@ Op arguments fall into two classes:
 | **Content reference** (read-side bytes) | Any asset/lattice form above, plus `file://<root>/<path>`, `dlfs/<drive>/<path>`, and `<ownerDID>/dlfs/<drive>/<path>` | `asset:content ref`; `file:write`, `file:append`, `dlfs:write`, `dlfs:append`, and `vault:write` `contentRef`; `archive:list` and `archive:extract` `contentRef` |
 | **Mutable target** (write-side) | Writable lattice paths: `o/...`, `w/...`, virtual writable namespaces (`n/`, `t/`, `c/`, and adapter-permitted `x/<adapter>/...`); `s/NAME` permits whole-record deletion only. Physical paths and extension views also accept owner-scoped DID URLs when authority permits the mutation | `covia:write path`, `covia:append path`, `covia:delete path`, `covia:copy to` |
 
-A write-side argument is constrained because you can't write to a content-addressed location (`/a/` is hash-determined), to a read-only namespace (`/v/` from non-venue callers), or to another user's namespace without UCAN delegation.
+A write-side argument is constrained because you can't write to a content-addressed location (`/a/` is hash-determined), to a read-only view (`/v/`, through which nothing changes), or to another user's namespace without UCAN delegation.
 
 ### The resolution chain
 
@@ -173,7 +173,7 @@ A write-side argument is constrained because you can't write to a content-addres
 
 The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive. A path that names no place data could be, such as `wrok/notes`, resolves to nothing here; the covia read operations refuse it.
 
-**A leading slash is optional sugar.** Every form above except a DID URL resolves identically with or without a leading slash: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`. The slash is normalised away before resolution, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable. A DID URL is written without one.
+**A leading slash is optional sugar.** Every form above except a DID URL resolves identically with or without a leading slash: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`. The slash names the request's root, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable. A DID sets where a path starts only as its first element, so `/did:…` names no place (GRID_LATTICE_DESIGN §3.2).
 
 ### HTTP and SDK asset resolution
 
@@ -637,20 +637,21 @@ A separate `installTestAsset(catalogPath, resourcePath)` method writes to `/v/te
 
 ## 8. Capability model
 
-`/v/` access is enforced by the namespace resolver, not by stored UCAN proofs.
+`/v/` access is decided by the view's own policy, not by stored UCAN proofs. The catalog behind it is the venue user's `w/global`, under the same owner rule as any user's workspace (GRID_LATTICE_DESIGN §4.6).
 
 | Operation | Mechanism |
 |-----------|-----------|
-| Read `/v/...` | Resolver returns the value unconditionally. No UCAN required. |
-| Write `/v/...` (startup) | The engine writes `v/` directly, in one transaction; no external authorization surface or Job is involved. |
-| Write `/v/...` (operator) | JWT signed by the venue keypair. The auth middleware identifies the caller as the venue's own DID; the resolver allows the write. |
-| Write `/v/...` (anyone else) | Resolver rejects with a permission error. |
+| Read `/v/...` | Of right for any principal. No UCAN required. |
+| Change `/v/...` | Refused for everyone, the venue included (`CoviaAdapter.VIEW_READ_ONLY`). |
+| Change the catalog at startup | The engine writes the venue's `w/global` directly, in one transaction; no external authorization surface or Job is involved. |
+| Change the catalog (operator) | A request as the venue's own DID (JWT signed by the venue keypair) changes `<venue-DID>/w/global/...`, its own data. |
+| Change the catalog (anyone else) | Needs a grant from the venue over the path in `<venue-DID>/w/global/`; refused otherwise. |
 
-**No new auth machinery.** No "default proofs" registry, no UCAN issuance at startup, no special-case in `AccessControl.canAccess`. The special case lives where it belongs — inside the namespace resolver that owns the prefix.
+**No new auth machinery.** No "default proofs" registry and no UCAN issuance at startup: the view's policy lives with the view.
 
 User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
-**Admin UCAN delegation.** If an operator needs to grant write access to `/v/` to a specific admin user without sharing the venue keypair, the venue can issue a UCAN granting `{with: did:web:venue/v/, can: crud}` to that admin. The admin then signs requests with their own keypair and presents the UCAN as a proof. This is an extension beyond the base design, not part of the core model.
+**Admin delegation.** To let an admin change the catalog without sharing the venue keypair, the venue grants them `crud/write` over `<venue-DID>/w/global/` (or a narrower path under it). The admin signs requests with their own keypair, presents the grant as a proof, and writes the `w/global` path; `/v/` shows the change.
 
 ---
 
@@ -672,7 +673,6 @@ The refresh does **not** touch `/o/` — user pins are sacred, and a user can pi
 - Search / indexing over operation catalogs (client-side filter is sufficient).
 - Cross-venue capability negotiation (different doc).
 - The `/v/config/` sub-namespace (reserved but unused).
-- Admin UCAN delegation for `/v/` writes (venue keypair is the sole admin authority).
 - Other potential `/v/info/` fields (`/v/info/peers`, `/v/info/host`, runtime metrics) — added as concrete consumers appear.
 - Unifying budget / overflow semantics across `covia:read`, `covia:slice`, `covia:inspect` — tracked separately as [covia-ai/covia#78](https://github.com/covia-ai/covia/issues/78).
 - Toolsets (named bundles of operations) — tracked separately as [covia-ai/covia#79](https://github.com/covia-ai/covia/issues/79).
@@ -684,7 +684,7 @@ The refresh does **not** touch `/o/` — user pins are sacred, and a user can pi
 
 The design adds **one virtual namespace prefix (`/v/`)** and **removes one global registry (`engine.operations`)**, with everything else flowing from the existing lattice primitives:
 
-- `/v/` is a virtual prefix mapping `/v/<rest>` → `<venue-DID>/w/global/<rest>`. Storage reuses the venue user's workspace; access is enforced by the resolver (read open, write venue-only).
+- `/v/` is a read-only view mapping `/v/<rest>` → `<venue-DID>/w/global/<rest>`. Storage reuses the venue user's workspace; anyone reads through the view, nothing changes through it, and the venue changes its `w/global`.
 - `/v/ops/` holds venue-provided operation defaults as inline asset metadata. Catalog entries ARE assets, not descriptors.
 - `/v/info/` holds venue introspection: name, DID, version, started time, protocols, and per-adapter summaries.
 - `/o/` continues to hold per-user operation pins, unchanged from `GRID_LATTICE_DESIGN.md`.

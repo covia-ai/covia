@@ -53,6 +53,11 @@ public final class Access {
 		return position.isValid();
 	}
 
+	/** Why the path names no place, saying where it stops naming one; null when it names a place. */
+	public String reasonInvalid() {
+		return position.reasonInvalid();
+	}
+
 	/** The path as the caller wrote it. */
 	public CoviaPath path() {
 		return position.path();
@@ -124,13 +129,16 @@ public final class Access {
 	/** The ability last found allowed here, so a read or change that follows its check is not checked again. */
 	private AString allowed;
 
-	/** Checks that the request may use {@code ability} {@code levels} levels above here, never above the owner's namespace. */
+	/**
+	 * Checks that the request may use {@code ability} {@code levels} levels
+	 * above here, never above the owner's namespace. A path that names no place
+	 * needs no check: reading or changing it is refused as no such path, which
+	 * says nothing of the data, since validity follows only the path's shape.
+	 */
 	private void require(AString ability, int levels) {
+		if (!position.isValid()) return;
 		AccessPolicy.Need need = position.need(ctx, ability, levels);
-		if (need == null) {
-			if (!position.isValid()) return;   // reading or changing it is refused as no such path
-			throw new IllegalStateException(String.format(NO_OWNER, position.path()));
-		}
+		if (need == null) throw new IllegalStateException(String.format(NO_OWNER, position.path()));
 		if (need.refusal() != null) throw new AuthException(need.refusal());
 		authority.require(ctx, need.address(), ability);
 	}

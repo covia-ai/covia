@@ -136,8 +136,10 @@ public class AgentPathTest {
 	public void testASessionIdThatIsNotHexNamesNoSession() {
 		Position position = resolve("g/" + AGENT + "/sessions/not-hex/c/draft");
 		assertFalse(position.isValid());
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, position.path()),
-			assertThrows(InvalidInputException.class, position::read).getMessage());
+		String path = "/g/" + AGENT + "/sessions/not-hex";
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, path + "/c/draft", path),
+			assertThrows(InvalidInputException.class, position::read).getMessage(),
+			"the refusal says where the path stops naming a place");
 	}
 
 	@Test

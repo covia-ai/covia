@@ -38,7 +38,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The venue migrates to version 2, renaming those fields in stored records once.
 - User exports are at version 2; `user:import` converts older ones, and `user:import` and `user:clone` leave out the user's jobs.
 - A `covia` path given as an array takes strings only, none containing `/`, a list position written in digits as in a string path; any other element is refused (#617).
-- The covia read operations and `/values` refuse a path that names no place data could be, such as `wrok/notes` or a job id that is not hex, where they returned nothing (#617).
+- The covia read operations and `/values` refuse a path that names no place data could be, such as `wrok/notes` or a job id that is not hex, naming the part of it where nothing can be, where they returned nothing (#617).
+- A DID starts a path only as its first element: `/did:…` and `<did>/n/`, `c/`, `t/` or `v/` name no place, and an array whose first element is a DID is that DID URL (#617).
+- `v/` is the venue's public read-only view: any principal reads it, whatever its caps, and nothing changes through it (#617).
+- An agent reaches its session's `c/`, and work running in a job its `t/`, without a grant; a job's record needs its owner or a grant (#617).
+- A path given where an asset is wanted, as by `/assets` and `/content`, is read as data and needs `crud/read`; a bare hash is the caller's asset when their store holds it, otherwise the venue catalog's (#617).
 - A user's `meta`, `generation`, `deleting` and `deleted` are venue bookkeeping that no path reads (#617).
 - `user:info` and `/users/{did}` show a user's `meta` to operators only, and `user:export` leaves it out.
 - A task that yields waits for its HITL ask, late tool call or wake time; with none, it fails at once.
@@ -129,6 +133,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Concurrent `agent:update` calls no longer undo each other's config changes.
 - A chat is no longer answered with the reply to an earlier message (#654).
 - A Claude Code session restored after a restart keeps the options its call asked for (model, tools, permission mode, limits, system prompt, JSON schema), and ends if its project no longer allows its permission mode.
+- A path starting with a `did:web` DID that encodes its port as `%3A` names that DID's data (#617).
 
 ### Security
 
@@ -150,10 +155,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
 - An agent's pinned context and skills index show only what its caps cover.
+- Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>/` that job's record and `t/` (#617).
 
 ### Migration
 
 - Venue-local SQL databases from earlier versions are not carried over.
+- The venue changes its catalog at `w/global/…`, which `v/…` shows; a write or delete through `v/…` is refused, the venue's own included.
 - A call naming a Convex peer other than the venue's needs `adapters.convex.anyPeer`.
 - A private-network `did:web` identity needs its host in `adapters.http.allowedHosts`.
 - Grant `oauth/use` on `oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.

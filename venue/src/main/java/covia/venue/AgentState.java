@@ -383,7 +383,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 			if (K_N.equals(segment)) return workspace().resolve(path.rest());
 			if (K_SESSIONS.equals(segment) && path.length() > 1) {
 				Blob sid = ValuePath.blobKey(path.get(1));
-				if (sid == null) return Position.invalid(path);
+				if (sid == null) return Position.invalid(path.rest());
 				return session(sid).resolve(path.rest(2));
 			}
 		}

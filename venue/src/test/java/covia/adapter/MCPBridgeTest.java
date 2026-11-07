@@ -502,7 +502,7 @@ public class MCPBridgeTest {
 			// Shared TestServer catalog doubles as the venue's own MCP tool
 			// list — always remove venue-scope test entries.
 			engine.jobs().invokeOperation("v/ops/covia/delete",
-				Maps.of(Fields.PATH, Strings.create("v/ops/mcptest")),
+				Maps.of(Fields.PATH, Strings.create("w/global/ops/mcptest")),
 				engine.venueContext()).awaitResult(15000);
 		}
 		assertNull(engine.resolveAsset(Strings.create("v/ops/mcptest/echo"), RequestContext.of(ALICE_DID)));

@@ -25,7 +25,7 @@ import covia.lattice.ACoviaComponent;
 /**
  * #175 — path navigation must not convert abnormal errors into phantom absence.
  *
- * <p>Only a {@link WrongScopeException} (a context-dependent namespace such as
+ * <p>Only a {@link WrongScopeException} (a context-rooted namespace such as
  * {@code n/} used outside its agent, session or job) is a genuine absence for a
  * read. <b>Every other</b> exception during navigation — a broken request
  * context, a lower-level store fault, an auth failure, a malformed path —
@@ -76,7 +76,7 @@ public class PathResolutionErrorTest {
 
 		Job read = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, "wrok/notes"), ctx);
 		assertThrows(Exception.class, () -> read.awaitResult(5000));
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/wrok/notes"), read.getErrorMessage());
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/wrok/notes", "/wrok"), read.getErrorMessage());
 
 		ACell missing = engine.jobs().invokeOperation("v/ops/covia/read", Maps.of(Fields.PATH, "w/nothingHere"), ctx)
 			.awaitResult(5000);
@@ -93,7 +93,7 @@ public class PathResolutionErrorTest {
 		Job write = engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, own + "/n/notes", Fields.VALUE, CVMLong.ONE), ctx);
 		assertThrows(Exception.class, () -> write.awaitResult(5000));
-		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + own + "/n/notes"), write.getErrorMessage());
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + own + "/n/notes", "/" + own + "/n"), write.getErrorMessage());
 		assertNull(RT.getIn(engine.getVenueState().users().get(own).get(), "n"), "no stray field is written");
 	}
 

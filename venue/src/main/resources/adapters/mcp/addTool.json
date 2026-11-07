@@ -1,6 +1,6 @@
 {
 	"name": "MCP Add Tool",
-	"description": "Curates ONE tool from an MCP server at a catalog path you choose (#80). The bridged op is self-contained (server, tool name, auth reference, schema all in the asset) — no registry entry, and groups are just catalog paths: place tools from different servers under a common prefix (e.g. o/research/) to arrange them as a set. Paths under your own o/ need nothing extra; v/ops/... requires the mcp/manage ability. Remove with covia:delete on the path — nothing resurrects it. To mirror ALL of a server's tools instead, use v/ops/mcp/add-server. Browse a server's tools first with v/ops/mcp/tools-list.",
+	"description": "Curates ONE tool from an MCP server at a catalog path you choose (#80). The bridged op is self-contained (server, tool name, auth reference, schema all in the asset) — no registry entry, and groups are just catalog paths: place tools from different servers under a common prefix (e.g. o/research/) to arrange them as a set. Paths under your own o/ need nothing extra; v/ops/... requires the mcp/manage ability. Remove with covia:delete on the path (a v/ops/<rest> tool is stored at the venue's w/global/ops/<rest>, since nothing changes through v/) — nothing resurrects it. To mirror ALL of a server's tools instead, use v/ops/mcp/add-server. Browse a server's tools first with v/ops/mcp/tools-list.",
 	"dateCreated": "2026-07-16T00:00:00Z",
 	"operation": {
 		"adapter": "mcp:tool:add",

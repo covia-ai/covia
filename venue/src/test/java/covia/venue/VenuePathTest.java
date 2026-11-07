@@ -48,7 +48,8 @@ public class VenuePathTest {
 	}
 
 	private static String noSuchPath(Position position) {
-		return String.format(ACoviaComponent.NO_SUCH_PATH, position.path());
+		assertNotNull(position.reasonInvalid(), "the position names no place");
+		return position.reasonInvalid();
 	}
 
 	@Test
@@ -85,7 +86,8 @@ public class VenuePathTest {
 		assertFalse(resolve("w/notes").exists());
 		Position tombstone = resolve(Covia.K_DELETED.toString());
 		assertFalse(tombstone.isValid(), "the tombstone is not user data");
-		assertEquals(noSuchPath(tombstone), assertThrows(InvalidInputException.class, tombstone::read).getMessage());
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + did + "/" + Covia.K_DELETED, "/" + did + "/" + Covia.K_DELETED),
+			assertThrows(InvalidInputException.class, tombstone::read).getMessage());
 
 		assertEquals(Users.ACCOUNT_DELETED,
 			assertThrows(AuthException.class, () -> resolve("w/notes").entry().write(CVMLong.create(2))).getMessage());

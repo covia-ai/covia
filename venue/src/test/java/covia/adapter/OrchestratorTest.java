@@ -784,7 +784,7 @@ public class OrchestratorTest {
 					Fields.ADAPTER, Strings.create("test:echo"),
 					Fields.OUTPUT, Maps.of("type", Strings.create("string"))));
 			remote.getEngine().jobs().invokeOperation("v/ops/covia/write",
-				Maps.of(Fields.PATH, Strings.create("v/test/ops/echo"),
+				Maps.of(Fields.PATH, Strings.create("w/global/test/ops/echo"),
 					Fields.VALUE, remoteEcho),
 				remote.getEngine().venueContext()).awaitResult(5000);
 

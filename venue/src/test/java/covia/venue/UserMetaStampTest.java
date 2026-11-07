@@ -170,7 +170,7 @@ public class UserMetaStampTest {
 			Maps.of(Strings.create("path"), Strings.create("meta")),
 			RequestContext.of(ALICE_DID));
 		assertThrows(Exception.class, () -> read.awaitResult(5000));
-		assertEquals(String.format(covia.lattice.ACoviaComponent.NO_SUCH_PATH, "/meta"), read.getErrorMessage());
+		assertEquals(String.format(covia.lattice.ACoviaComponent.NO_SUCH_PATH, "/meta", "/meta"), read.getErrorMessage());
 	}
 
 	@Test

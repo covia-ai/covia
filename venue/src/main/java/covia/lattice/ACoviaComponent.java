@@ -37,8 +37,11 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 	/** Refusal for a change by path to data that only its component's operations change. */
 	public static final String READ_ONLY = "This data is read-only";
 
-	/** Refusal for a path that names no place data could be; names the path. */
-	public static final String NO_SUCH_PATH = "No such path: %s";
+	/**
+	 * Refusal for a path that names no place data could be; names the path,
+	 * then the part of it up to the first segment that names nothing.
+	 */
+	public static final String NO_SUCH_PATH = "No such path: %s (nothing can be at %s)";
 
 	protected ACoviaComponent(AForkableCursor<V> cursor) {
 		super(cursor);

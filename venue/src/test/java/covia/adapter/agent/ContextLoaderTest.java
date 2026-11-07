@@ -80,7 +80,7 @@ public class ContextLoaderTest {
 		assertTrue(ContextLoader.isLatticePath(engine, ctx, "/w/docs/rules"));
 		assertTrue(ContextLoader.isLatticePath(engine, ctx, "/g/my-agent/state"));
 
-		// A context-dependent path is a path outside its scope too.
+		// A context-rooted path is a path outside its scope too.
 		assertTrue(ContextLoader.isLatticePath(engine, ctx, "/n/notes"));
 		assertTrue(ContextLoader.isLatticePath(engine, ctx, "c/draft"));
 

@@ -498,8 +498,8 @@ and discovery now come exclusively from declared assets.
 
 An operator publishes a model by storing the asset and writing its metadata at
 the catalog name while authenticated as the venue identity (`asset:store`,
-then `covia:write v/models/...`) — the operator form of the same CAS plus
-declaration performed at boot. A user publishes an owned operation under
+then `covia:write w/global/models/...`, which `v/models/...` shows) — the
+operator form of the same CAS plus declaration performed at boot. A user publishes an owned operation under
 `/o/`.
 
 Ollama is the case where model facts may be discovered rather than known, but

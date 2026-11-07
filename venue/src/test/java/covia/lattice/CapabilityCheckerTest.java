@@ -563,7 +563,7 @@ public class CapabilityCheckerTest {
 			Maps.of(Fields.PATH, "w/x"), ctx).awaitResult(5000),
 			"delete must be denied under a read-only scope");
 		// s/ deletes take the delete-only namespace branch (#166) — the capability
-		// gate must still apply there (requireCap runs before the namespace rule).
+		// gate must still apply there (access is checked before the namespace rule).
 		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "s/x"), ctx).awaitResult(5000),
 			"secret delete must be denied under a read-only scope");

@@ -330,7 +330,7 @@ public class SkillsAdapterTest {
 		try {
 			RequestContext venueCtx = own.venueContext();
 			own.jobs().invokeInternal("v/ops/covia/write",
-				Maps.of(Fields.PATH, Strings.create("v/skills/house/house-rules"),
+				Maps.of(Fields.PATH, Strings.create("w/global/skills/house/house-rules"),
 					Fields.VALUE, Maps.of(Fields.DESCRIPTION,
 						Strings.create("The house way of doing things"))), venueCtx)
 				.get(5, TimeUnit.SECONDS);

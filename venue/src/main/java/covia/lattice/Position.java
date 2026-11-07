@@ -36,9 +36,24 @@ public record Position(ACoviaComponent<?> component, CoviaPath path, AccessPolic
 		this(component, path, null, null);
 	}
 
-	/** The position for a path that names no place data could be. */
+	/**
+	 * The position for a path that names no place data could be.
+	 *
+	 * @param path The stretch of the path from the first segment that names
+	 *        nothing, so a refusal can say where the path stops naming a place
+	 */
 	public static Position invalid(CoviaPath path) {
 		return new Position(null, path);
+	}
+
+	/**
+	 * Why reading or changing this position is refused as no such path, naming
+	 * where the path stops naming a place; null when it is valid. Validity
+	 * follows the path's shape, never the data.
+	 */
+	public String reasonInvalid() {
+		if (component != null) return null;
+		return String.format(ACoviaComponent.NO_SUCH_PATH, path, path.prefix(Math.min(1, path.length())));
 	}
 
 	/**
@@ -84,7 +99,7 @@ public record Position(ACoviaComponent<?> component, CoviaPath path, AccessPolic
 	}
 
 	private ACoviaComponent<?> valid() {
-		if (component == null) throw new InvalidInputException(String.format(ACoviaComponent.NO_SUCH_PATH, path));
+		if (component == null) throw new InvalidInputException(reasonInvalid());
 		return component;
 	}
 }

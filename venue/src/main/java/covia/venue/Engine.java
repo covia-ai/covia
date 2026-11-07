@@ -1980,7 +1980,12 @@ public class Engine {
 			} catch (IllegalArgumentException e) {
 				throw new InvalidInputException(INVALID_DID_URL + ref + " (" + e.getMessage() + ")", e);
 			}
-			ownerDID = Strings.create(didURL.getDID().toString());
+			// The DID is the URL up to its first '/', exactly as written: a did:web
+			// DID keeps its colons and %3A, so it names the principal whose
+			// authority is checked
+			String url = ref.toString();
+			int slash = url.indexOf('/');
+			ownerDID = Strings.create(slash < 0 ? url : url.substring(0, slash));
 			path = CoviaPath.parse(didURL.getPath());
 		} else {
 			ownerDID = ctx.getUserDID();
@@ -2120,8 +2125,6 @@ public class Engine {
 			} catch (AuthException | InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
-		} else if (localRef.startsWith(NS_DID)) {
-			return null;   // a DID URL is written without a leading slash, as its read check names it
 		} else if (CoviaPath.parse(localRef.toString()).isEmpty()) {
 			return null;   // names no namespace
 		}
@@ -3819,17 +3822,15 @@ public class Engine {
 
 	/** A read of the venue's explicitly addressed content catalog
 	 *  ({@code <venueDID>/a/…}). It is public only for reads and only for the
-	 *  venue's own DID; bare hashes and another user's {@code /a/} are private. */
+	 *  venue's own DID; bare hashes and another user's {@code /a/} are private.
+	 *  The venue's view {@code v/} is every request's own, read of right, so
+	 *  {@code <venueDID>/v/…} names no place. */
 	private boolean isVenueCatalogRead(AString resource, AString ability) {
 		if (!Capability.CRUD_READ.equals(ability) && !Abilities.ASSET_READ.equals(ability)) return false;
 		String value = resource.toString();
-		if (isVenueReference(value, getDIDString().toString())) return true;
+		if (value.startsWith(getDIDString() + "/a/")) return true;
 		AString web = config.getWebDID();
-		return web != null && isVenueReference(value, web.toString());
-	}
-
-	private static boolean isVenueReference(String resource, String did) {
-		return resource.startsWith(did + "/a/") || resource.startsWith(did + "/v/");
+		return web != null && value.startsWith(web + "/a/");
 	}
 
 	/**

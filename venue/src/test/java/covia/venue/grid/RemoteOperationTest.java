@@ -184,12 +184,12 @@ public class RemoteOperationTest {
 		// matches the hash case: local execution, local job, transient.
 
 		// Publish a B-only definition: into B's CAS, plus a catalog
-		// binding (venue-caller write to the v/ namespace).
+		// binding (the venue's write to its w/global, which v/ shows).
 		AString meta = concatOpMeta("named-fetch");
 		Hash opId = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
 		Job bind = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation(
 			"v/ops/covia/write",
-			Maps.of("path", "v/ops/remotetest/concat-named", "value", JSON.parse(meta)),
+			Maps.of("path", "w/global/ops/remotetest/concat-named", "value", JSON.parse(meta)),
 			TwoVenueTestServer.ENGINE_B.venueContext());
 		bind.awaitResult(10_000);
 		assertEquals(Status.COMPLETE, bind.getStatus(), "catalog binding write must succeed");

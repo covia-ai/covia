@@ -62,13 +62,13 @@ public class AdapterLifecycleTest {
 			assertEquals(Maps.of("hello", "world"), engine.jobs().invokeOperation(
 				metadata, Maps.of("hello", "world"), engine.venueContext()).awaitResult(5000));
 			var testOperations = engine.getAdapter("test").getOperations();
-			asVenue(engine, "v/ops/covia/write", Maps.of("path", ECHO, "value", "operator replacement"));
+			asVenue(engine, "v/ops/covia/write", Maps.of("path", "w/global/test/ops/echo", "value", "operator replacement"));
 			engine.configureAdapter("test", Maps.empty());
 			assertEquals(testOperations, engine.getAdapter("test").getOperations());
 			assertEquals(Strings.create("operator replacement"), venueRead(engine, ECHO));
 
 			// An arbitrary operation-shaped operator value is not a discovery declaration.
-			asVenue(engine, "v/ops/covia/write", Maps.of("path", "v/ops/discovery-probe/custom", "value", metadata));
+			asVenue(engine, "v/ops/covia/write", Maps.of("path", "w/global/ops/discovery-probe/custom", "value", metadata));
 			engine.configureAdapter("discovery-probe", Maps.empty());
 			assertEquals(1, adapter.getOperations().count());
 			assertEquals(metadata, venueRead(engine, "v/ops/discovery-probe/custom"));

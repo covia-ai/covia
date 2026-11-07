@@ -43,19 +43,56 @@ settles payments; grid data flows over the lattice, not through consensus.
 ### 3.1 Address Format
 
 ```
-<DID> / <namespace> / <path...>
+<DID>/<namespace>/<path...>     a principal's own data
+[/]<namespace>/<path...>         from the request's root
 ```
 
-- **DID** — the owner of the data: a user, agent or venue. Any DID method that
-  resolves to a public key works (`did:key:`, `did:web:`, …).
+- **DID** — the principal whose data it is: a user, agent or venue. Any DID
+  method that resolves to a public key works (`did:key:`, `did:web:`, …).
 - **Namespace** — one of the namespaces in §4.1.
 - **Path** — keys within the namespace.
 
-### 3.2 Relative and Absolute Paths
+### 3.2 Where a Path Starts
 
-Without a DID, a path belongs to the request's user: `/w/my/op`. A content
-hash needs no owner: `/a/cafebabe...`. A DID is needed only to reach another
-owner's data, such as `did:key:zBob.../o/transform`.
+Every path is resolved in a request's context, and its first element decides
+where it starts. One parser reads paths on every route (`CoviaAdapter`):
+
+- **A DID starts at that principal's own namespaces:** `w`, `o`, `g`, `j`,
+  `s`, `h`, `a`, and `x/<adapter>`, the adapter's view for that principal.
+  The DID is everything up to the first `/`, exactly as written, so a
+  `did:web` DID keeps its colons and `%3A`.
+- **Any other path starts at the request's root:** the request's user's
+  namespaces, plus the context-rooted namespaces `n`, `c`, `t` and `v`, whose
+  root the request's context supplies (§4.5). One leading slash names that
+  root and is optional: `/w/notes` is `w/notes`.
+- **A DID sets where a path starts only as its first element.** With a slash
+  before it, the path starts at the request's root, where a DID names
+  nothing.
+- **A context-rooted namespace after a DID names no place**, because no
+  principal's data holds one: an agent's workspace is
+  `<did>/g/<agent>/n/…`, and the venue's view shows `<venue>/w/global/…`.
+- **A path given as an array** is its segments, none containing `/`; one
+  whose first element is a DID is that DID URL.
+- **A content hash names an asset, not a place.** `a/<hash>` is in the
+  caller's asset store; a bare hash is the caller's own asset when its store
+  holds it, and otherwise the venue catalog's (§4.3).
+
+| Path | Names |
+|------|-------|
+| `w/notes`, `/w/notes`, `["w", "notes"]` | the request's user's `w/notes` |
+| `did:key:zBob…/o/transform`, `["did:key:zBob…", "o", "transform"]` | Bob's `o/transform` |
+| `n/memory` | the request's agent's `g/<agent>/n/memory` |
+| `v/ops/json/merge` | the venue's `w/global/ops/json/merge`, as every request sees it |
+| `did:key:zBob…/x/preferences` | the `preferences` adapter's view for Bob |
+| `/did:key:zBob…/w/notes` | no place |
+| `did:key:zBob…/n/memory`, `<venue DID>/v/ops` | no place |
+
+A path that names no place is refused with `ACoviaComponent.NO_SUCH_PATH`,
+which names the path and the part of it up to the first segment that names
+nothing, such as `No such path: /wrok/notes (nothing can be at /wrok)`.
+Validity follows only the path's shape, so the refusal comes before any
+access check and says nothing about the data. `AddressingTest` covers this
+section.
 
 ---
 
@@ -75,7 +112,7 @@ owner's data, such as `did:key:zBob.../o/transform`.
 | `n/` | Agent workspace | `g/<agent>/n` for the running agent | `covia:write` within the agent |
 | `c/` | Session scratch | `g/<agent>/sessions/<session>/c` | `covia:write` within the session |
 | `t/` | Job scratch | `j/<job>/temp` for the current job | `covia:write` within the job |
-| `v/` | Venue definitions | `<venue>/w/global`: `v/ops`, `v/skills`, `v/adapters`, `v/models` | The venue's own identity |
+| `v/` | Venue definitions | `<venue>/w/global`: `v/ops`, `v/skills`, `v/adapters`, `v/models` | Nothing: the venue changes its `w/global` |
 | `x/<adapter>/` | Adapter view | That adapter's view for the addressed user | As the adapter allows; read-only by default |
 | `dlfs/<drive>/` | DLFS drives | The owner's drive in the separate `:dlfs` region | The `dlfs` and `file` operations |
 
@@ -83,7 +120,8 @@ A user's record also holds the venue's bookkeeping, its activity times
 (Appendix A, *User meta record*) and its account lifecycle, which no path
 reaches.
 
-`n/`, `c/`, `t/`, `v/` and `x/` are context-dependent (§4.5). An `x/` route
+`n/`, `c/`, `t/` and `v/` are context-rooted (§4.5). An `x/` route is the
+adapter's own view, which it presents per principal under its own rules, and
 exposes nothing unless the adapter opts in; see
 [ADAPTERS.md](ADAPTERS.md#user-visible-extension-routes). DLFS addressing and
 authority are in [UCAN.md](UCAN.md).
@@ -231,17 +269,21 @@ Use a task when the result must be accounted for, and a message for informal
 coordination. Running an agent's transition is internal to the runtime (an
 `agent:trigger` job); callers track their request job instead.
 
-### 4.5 Context-dependent Namespaces
+### 4.5 Context-rooted Namespaces
 
-Some namespaces resolve through the request's context to a path elsewhere:
+Every path is resolved in a request's context. For these namespaces the
+context also supplies the root, so each is a short form of a full address:
 
 | Prefix | Resolves to | Needs on the request |
 |--------|-------------|----------------------|
 | `n/x` | `g/<agent>/n/x` — the running agent's workspace | the agent |
 | `c/x` | `g/<agent>/sessions/<session>/c/x` — the session's scratch | the agent and session |
 | `t/x` | `j/<job>/temp/x` — the job's scratch | the job |
-| `v/x` | `<venue>/w/global/x` — the venue's shared definitions | nothing |
-| `x/<adapter>/…` | that adapter's view for the addressed user | the user |
+| `v/x` | `<venue>/w/global/x` — the venue's shared definitions, read-only | nothing |
+
+`v/` is the venue's public read-only view. Every principal on the venue reads
+it, whatever its caps, and nothing changes through it: the venue changes what
+it shows in its own `w/global`, which needs the venue's authority.
 
 `n/`, `c/` and `t/` are user-level scratch for operation code and agent tool
 calls. They never reach fields the framework manages (status, `wakeTime`, task
@@ -282,18 +324,17 @@ For isolation between steps, use `grid:run`, which creates a job with its own
 | `n/` | Persona, learned patterns, long-term memory | The agent's life |
 | `w/` | Outputs and anything other agents or users should see | Permanent |
 
-A context-dependent path is resolved by the component its context names
-(§4.6).
+A context-rooted path is resolved by the component its context names (§4.6).
 
-### 4.6 Path Resolution (design, covia#617)
+### 4.6 Path Resolution and Access (covia#617)
 
 A caller's path does not match the stored keys one for one. `w/foo` crosses the
 `{updated, data}` wrapper, `j/<hex>` is a Blob key read as the job's current
 state, `g/<id>` enters an agent record with its own `ts` stamp, `w/list/0` is a
 vector index, and `n/x` depends on who is asking. Path resolution maps one onto
-the other. Which reads need a grant is still decided by lists of namespaces
-(`Engine.requireReadable`, `ToolPalette`, `CoviaAPI`), and write policy is an
-allowlist in `CoviaAdapter`. This section is the design that replaces them.
+the other, and the component that owns the data decides who may use it. Write
+policy is still an allowlist in `CoviaAdapter` (covia#617, step 7), and `x/`
+views are still built outside the adapters' components (step 11).
 
 **A path is strings.** A Covia path is the sequence of string segments a caller
 writes (`w/list/0` is `"w"`, `"list"`, `"0"`), and it never holds a lattice
@@ -319,20 +360,19 @@ starts at, and the request decides only which component that is:
 | `x/<adapter>/…` | the adapter's view for the request's user |
 | any other | the request's user |
 
-`CoviaAdapter.resolve(ctx, path)` makes that choice and then hands the path to
+`CoviaAdapter.locate(ctx, path)` makes that choice and then hands the path to
 the component, so resolution itself never sees the request; it checks no
 authority, changes nothing and always returns a position. A request without
 the scope its path starts at (an agent for `n/`, a session for `c/`, a task
 or job for `t/`, a user for a path without an owner DID) is refused with
 `WrongScopeException`. An `x/` view is the exception while adapters are
 not components: the view depends on the request, so `AdapterView` checks the
-caller's authority itself. The operation acting for the request checks the
-caller's authority and applies its own write rules (*Components carry no
-authority*, below). Authority is checked on the address of the data (`n/x` as
-`<owner>/g/<agent>/n/x`), so a grant covers every route to it. Reads, writes,
-deletes, the job-free read API, context loading and lattice paths in operation
-references start their paths this way. Content hashes and other venues' paths
-stay with `Engine.resolvePath` and federation.
+caller's authority itself. A request reaches the position only through
+`CoviaAdapter.resolve(ctx, path)`, which returns an `Access` (*Owners decide
+who may use their data*, below); `locate` is for venue code acting for itself.
+Reads, writes, deletes, the job-free read API, context loading, tool and
+skill references and lattice paths in operation references start their paths
+this way. Other venues' paths stay with federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.
@@ -374,12 +414,14 @@ registered, or a deleted account's tombstone) as absent, refuses changes to
 it, and fences off a later account with the same DID as `Users.get` does.
 
 A path that names no place data could be ends at an invalid position
-(`Position.invalid`): a name a component does not have, such as any name in a
-user's record outside its lattice, where the venue keeps its bookkeeping; a
-first segment under the venue that is not a DID; or a job or session id that
-is not hex. Reading, testing or changing an invalid position is refused with
-`ACoviaComponent.NO_SUCH_PATH`, which names the path, and `Position.isValid`
-asks without the refusal. The covia read operations and `/values` report that
+(`Position.invalid`, given the stretch from the first segment that names
+nothing): a name a component does not have, such as any name in a user's
+record outside its lattice, where the venue keeps its bookkeeping, or a
+context-rooted namespace after a DID; a first segment under the venue that is
+not a DID; or a job or session id that is not hex. Reading, testing or
+changing an invalid position is refused with `ACoviaComponent.NO_SUCH_PATH`,
+which names the path and where it stops naming a place
+(`Position.reasonInvalid`), and `Position.isValid` asks without the refusal. The covia read operations and `/values` report that
 refusal to the caller (READ_API.md). Code that tries several readings of a
 string takes an invalid path for something else: `Engine.resolvePath` returns
 null, and a context entry is text (`CoviaAdapter.isLatticePath`).
@@ -407,20 +449,51 @@ constant on the refusing component.
 
 **Paths are created above the component.** `covia:write`, `append` and `copy`
 create the missing levels of their path and make their change in one
-transaction over the workspace (`Entry.transact`). Creating a key changes the
-map that holds it, so they ask for write authority at the nearest level that
-exists, inside the transaction.
+transaction over the workspace (`Access.changeCreatingLevels`). Creating a key
+changes the map that holds it, so they need write authority at the nearest
+level that exists: it is checked before the transaction, and again inside it
+only when more levels are missing by then.
 
-**Components carry no authority.** A component trusts the code that calls it:
-Java code holding the component API is privileged venue code, tested, and
-access-controlled where it acts for a request. Authority belongs to the
-operation acting for a request. It checks the address it acts on
-(`engine.requireLocalAccess`) before the change, and runs any check that depends
-on current state inside the component's transaction, as `covia:write` does for
-the levels it creates. A component refuses only what its data does not allow,
-such as a change to a missing record or a deleted account; it never decides who
-may act. `VenueContext`, shared by the venue's components and passed down
-unchanged, holds the write clock and no access check.
+**Owners decide who may use their data.** A component that owns a kind of data
+knows whose it is and says who may use it, through an `AccessPolicy` it
+attaches to the positions it resolves. A position keeps the innermost owner's
+policy, so the rule holds however the path was written or where resolution
+started:
+
+| Owner | Data | Who may use it |
+|-------|------|----------------|
+| `User` | `w`, `o`, `s`, `h`, `a`, `g` and `j` where nothing below claims them | authority over `<did>/<path>`: the user within its own scope, or a grantee |
+| `AgentState` | the agent's record and `n` | authority over `<owner>/g/<agent>/<path>` |
+| `SessionState` | the session, and `c` | the agent serving the session reaches `c` of right; otherwise authority over `<owner>/g/<agent>/sessions/<id>/<path>` |
+| `Jobs`, `JobState` | job records, and `temp` | work running in the job reaches `temp` of right; otherwise authority over `<owner>/j/<id>/<path>` |
+| the venue's view | `v/` | any principal reads of right; nothing changes through it |
+| `AdapterView` | `x/` | authority over `<did>/x/<path>`, and the adapter's own write policy |
+
+A policy reads only the request and the stretch of the path below its owner,
+never the data, and checks nothing itself: it says whether the request acts
+of right, needs authority over an address, or is refused outright. An
+`Access` asks it before each read or change and makes the one check through
+Engine (`requireLocalAccess` for an address, `requireStanding` for a request
+acting of right, so a deleted account is refused either way). An invalid
+position is refused as no such path before any policy is asked. The owner
+builds the address from its own identity, so a grant written as `w/foo` or as
+`<did>/w/foo` covers the same data on every route.
+
+A read is of data at a path or of an asset. A covia operation, `/values` and
+a reference resolved by `Engine.resolvePath` read a path as data
+(`Engine.requirePathRead`, `crud/read` through the owner's access), `a/`
+included. Reading an asset as an asset (`asset/read`, or `crud/read` over its
+hash) is for content-addressed references; a path given where an asset is
+wanted, as by `/assets` or `/content`, is still read as data.
+`Engine.requireMetadataRead` decides which.
+
+Components themselves implement their data independently of whatever mediates
+requests to them. Java code holding the component API is privileged venue
+code, tested, and acts for the venue; code acting for a request goes through
+an `Access`. A component refuses only what its data does not allow, such as a
+change to a missing record or a deleted account. `VenueContext`, shared by the
+venue's components and passed down unchanged, holds the write clock and no
+access check.
 
 `ACoviaComponent` is shaped so that it could move onto the Convex component
 hierarchy.
