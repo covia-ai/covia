@@ -163,6 +163,43 @@ public class SecretUseTest {
 		assertThrows(AuthException.class, () -> engine.resolveSecret(ref, carol, "https://evil.example/api"));
 	}
 
+	/** A delegate acting for a user ({@code user/sudo}) works in the user's
+	 *  namespace, but the user's secrets are not its own: it uses one only
+	 *  under a grant, and never as the possession an own secret gives. */
+	@Test
+	public void testASudoDelegateUsesTheUsersSecretsOnlyUnderAGrant() {
+		AKeyPair aliceKP = AKeyPair.generate();
+		AKeyPair bobKP = AKeyPair.generate();
+		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
+		AString bobDID = UCAN.toDIDKey(bobKP.getAccountKey());
+		engine.getVenueState().users().ensure(aliceDID).secrets().store("KEY", "alice-key", encKey);
+		engine.getVenueState().users().ensure(bobDID);
+		long exp = now() + 3600;
+		UCAN sudo = UCAN.create(aliceKP, UCAN.fromDIDKey(bobDID), exp,
+			Vectors.of(Capability.create(aliceDID, Abilities.USER_SUDO)), Vectors.empty());
+		RequestContext delegate = engine.sudoContext(
+			RequestContext.of(bobDID).withProofs(Vectors.of(sudo.toMap())), aliceDID);
+		assertEquals(aliceDID, delegate.getUserDID());
+		assertThrows(AuthException.class, () -> engine.resolveSecret("s/KEY", delegate));
+		assertThrows(AuthException.class, () -> engine.resolveSecret(aliceDID + "/s/KEY", delegate));
+		assertFalse(engine.isOwnSecretRef("s/KEY", delegate));
+
+		// With a use grant as well, the delegate uses it where the grant points.
+		UCAN use = UCAN.create(aliceKP, UCAN.fromDIDKey(bobDID), exp,
+			useOf(Strings.create(aliceDID + "/s/KEY"), "https://safe.com/api"), Vectors.empty());
+		RequestContext granted = engine.sudoContext(
+			RequestContext.of(bobDID).withProofs(Vectors.of(sudo.toMap(), use.toMap())), aliceDID);
+		assertEquals("alice-key", engine.resolveSecret("s/KEY", granted, "https://safe.com/api/v1"));
+		assertThrows(AuthException.class, () -> engine.resolveSecret("s/KEY", granted, "https://evil.example/"));
+		assertFalse(engine.isOwnSecretRef("s/KEY", granted));
+
+		// Alice and her agents use it as of right.
+		assertEquals("alice-key", engine.resolveSecret("s/KEY", RequestContext.of(aliceDID)));
+		RequestContext agent = RequestContext.ofAgent(aliceDID, Strings.create("worker"));
+		assertEquals("alice-key", engine.resolveSecret("s/KEY", agent));
+		assertTrue(engine.isOwnSecretRef("s/KEY", agent));
+	}
+
 	@Test
 	public void testPublicStoreNeedsAnExplicitGrant() {
 		AString publicDID = Strings.create(engine.getDIDString() + ":public");

@@ -185,6 +185,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
 - `dlfs:deleteDrive` and `listDrives` check the drives they act on, whatever `path` the input names.
 - `agent:step` and `agent:context` refuse a deleted agent, as other agent operations do.
+- A delegate acting for a user (`user/sudo`) uses the user's secrets only under a `secret/use` grant.
 - An agent's pinned context and skills index show only what its caps cover.
 - Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>` that job's record and `t/` (#617).
 

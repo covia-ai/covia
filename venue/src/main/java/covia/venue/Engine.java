@@ -4634,9 +4634,9 @@ public class Engine {
 	/**
 	 * Resolves a secret reference for use, under the caller's authority.
 	 *
-	 * <p>A user, and the agents acting in its namespace, use the user's own
-	 * secrets ({@code s/NAME}, {@code /s/NAME} or a bare {@code NAME}) as of
-	 * right. Using anyone else's, named {@code <did>/s/NAME}, is an action on
+	 * <p>A user and its agents use the user's own secrets ({@code s/NAME},
+	 * {@code /s/NAME} or a bare {@code NAME}) as of right; a delegate acting for
+	 * the user needs a grant. Using anyone else's, named {@code <did>/s/NAME}, is an action on
 	 * that resource requiring {@link Abilities#SECRET_USE}, checked here and
 	 * nowhere else: a presented proof, or the public scope for the public store,
 	 * whose operator-provisioned secrets are nobody's own. A grant may be bound to a
@@ -4712,10 +4712,16 @@ public class Engine {
 	}
 
 	/** A user's own secrets are its own to use, and so its agents' (UCAN.md
-	 *  §5.1). The public principal's store is provisioned by the operator and
-	 *  nobody's own, so it needs a grant like any other principal's. */
+	 *  §5.1): the caller must be the user or one of its agents. A delegate
+	 *  acting for the user ({@code user/sudo}) works in the user's namespace
+	 *  but is neither, so it needs a grant like anyone else. The public
+	 *  principal's store is provisioned by the operator and nobody's own, so it
+	 *  needs a grant like any other principal's. */
 	private boolean isOwnSecret(AString owner, RequestContext ctx) {
-		return owner.equals(ctx.getUserDID()) && !isPublicPrincipal(owner);
+		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) return false;
+		// From the caller's DID alone: a delegate's namespace is the user's too.
+		covia.grid.Principals.Relation relation = covia.grid.Principals.relate(ctx.getCallerDID(), owner);
+		return relation == covia.grid.Principals.Relation.SELF || relation == covia.grid.Principals.Relation.OWNER;
 	}
 
 	/** Refusal for a stored secret the venue cannot decrypt; the secret's name follows. */

@@ -3294,8 +3294,9 @@ Top-level keys resolve as follows:
 
 Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
 
-A user, and the agents acting in its namespace, use the user's own secrets as
-of right: a reference a caller writes (`s/NAME` in an input, `bearerSecret`,
+A user, and its agents, use the user's own secrets as of right; a delegate
+acting for the user (`user/sudo`) needs a grant like anyone else. A reference a
+caller writes (`s/NAME` in an input, `bearerSecret`,
 `secretHeaders`, a `{s/NAME}` url placeholder, an operation's `secretKey`
 default) names the caller's own secret, which it may send anywhere the SSRF
 guard allows. Using anyone else's is an action on `<owner>/s/NAME` requiring
