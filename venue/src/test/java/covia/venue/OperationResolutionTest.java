@@ -8,12 +8,16 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -21,6 +25,7 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.lattice.CoviaPath;
 import covia.lattice.ValuePath;
 
@@ -605,6 +610,32 @@ public class OperationResolutionTest {
 		assertEquals(Strings.create("leaf"), venue.resolve(CoviaPath.parse("w/global/test-scalar")).read());
 		assertEquals(Strings.create("leaf"), engine.resolvePath(Strings.create("v/test-scalar"), alice));
 		assertNull(engine.resolvePath(Strings.create("v/test-scalar/below"), alice), "nothing is below a scalar");
+	}
+
+	@Test
+	public void testTheVenueLetsAnotherPrincipalChangeItsCatalogByGrant() {
+		AKeyPair adminKP = AKeyPair.generate();
+		RequestContext admin = RequestContext.of(UCAN.toDIDKey(adminKP.getAccountKey()));
+		String folder = "test/delegated-" + adminKP.getAccountKey().toHexString();
+		writeVenueGlobal(folder + "/seed", Strings.create("seed"));
+		AString place = Strings.create(engine.getDIDString() + "/w/global/" + folder + "/entry");
+
+		Job refused = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, place, Fields.VALUE, Strings.create("ungranted")), admin);
+		assertThrows(Exception.class, () -> refused.awaitResult(5000));
+		assertEquals(Status.FAILED, refused.getStatus());
+
+		long exp = System.currentTimeMillis() / 1000 + 3600;
+		RequestContext granted = admin.withProofs(Vectors.of(UCAN.create(engine.getKeyPair(),
+			adminKP.getAccountKey(), exp,
+			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/w/global/" + folder),
+				Capability.CRUD_WRITE)),
+			Vectors.empty()).toMap()));
+		Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, place, Fields.VALUE, Strings.create("granted")), granted);
+		write.awaitResult(5000);
+		assertEquals(Strings.create("granted"), engine.resolvePath(Strings.create("v/" + folder + "/entry"), alice),
+			"v/ shows what the grantee wrote to the venue's w/global");
 	}
 
 	@Test
