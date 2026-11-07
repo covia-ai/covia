@@ -1,34 +1,46 @@
 # Held Keys (design)
 
-How a venue keeps signing keys for the identities it hosts, and signs with
-them on their behalf. This is a design; none of it is implemented yet.
+How a venue keeps private keys for the identities it hosts, and uses them on
+their behalf. Keyrings belong to the crypto adapter. This is a design; none of
+it is implemented yet.
 
 Tracked by covia#637.
 
 ## What a held key is
 
-Every identity on the venue has a keyring: the signing keys it has given the
+Every identity on the venue has a keyring: the private keys it has given the
 venue, of any type, indexed by public key. A key may be the key of a
 `did:key` identity, in which case holding it is custody of that identity, or
-any other key its holder signs with, such as a Convex account key.
+any other key its holder uses, such as a Convex account key.
 
 A held key follows the rules of identity, not those of secrets. A secret is
 data its owner can read (`secret/extract`) and lend (`secret/use`); a held
 key allows neither, because whoever can sign with a key acts as whatever that
 key identifies.
 
-Today `auth:identity-token` signs only with the venue's own key, for the
-venue's `did:key` and identities nested below it ([AUTH.md](./AUTH.md) §5.2),
-and `ucan:issue` signs every grant with the venue's key. An embedder whose
-installation has its own `did:key` keeps that key in its own code and signs
-with `VenueAuth.namedKeyPair` itself.
+Today keys live elsewhere:
+
+- `auth:identity-token` signs only with the venue's own key, for the venue's
+  `did:key` and identities nested below it ([AUTH.md](./AUTH.md) §5.2), and
+  `ucan:issue` signs every grant with the venue's key.
+- The crypto adapter ([CONFIG.md](./CONFIG.md), "Cryptography") keeps every private
+  seed and mnemonic in the caller's secret store: `crypto:generate-key` and
+  `crypto:derive-key` store new seeds there, and `crypto:public-key`, `sign`,
+  `jwt-sign` and `decrypt` take a `seed` secret reference, resolved in one
+  place (`CryptoAdapter.keyPair`).
+- The Convex adapter does the same with its own operations:
+  `convex:generate-key` stores a seed as a secret, `convex:sign` signs with a
+  seed named by secret reference, and `convex:transact` takes a seed by secret
+  reference or literally (redacted from job records).
+- An embedder whose installation has its own `did:key` keeps that key in its
+  own code and signs with `VenueAuth.namedKeyPair` itself.
 
 ## Principles
 
 1. **Any identity may hold keys.** An authenticated identity adds a key to its
    own keyring, given the capability to do so. The venue checks that the
    private key yields the public key; nothing else is needed.
-2. **Only the holder uses its keys.** A key signs only for a request whose
+2. **Only the holder uses its keys.** A key is used only for a request whose
    caller is its holder, authenticated as itself or acting as itself in
    trusted in-process code. Only the holder lists its keys. These rights cannot
    be delegated: a grant of them would let another principal sign as the
@@ -43,20 +55,20 @@ with `VenueAuth.namedKeyPair` itself.
    identities with keyrings of their own, and cannot use their owner's keys.
 5. **Keys are never readable.** No operation returns, exports or lends a
    private key, as for the venue's own key.
-6. **Signing is generic.** One signing function serves identity tokens,
-   UCAN grants, Convex transactions and raw payloads, under the same consent
-   and no-amplification rules as any issuance (COG-17).
+6. **One signing function** serves identity tokens, UCAN grants, Convex
+   transactions and raw payloads, under the same consent and no-amplification
+   rules as any issuance (COG-17).
 7. **It signs at the point of use.** The venue mints short-lived tokens when
    they are needed, so no long-lived bearer has to be stored.
 8. **Custody can end.** Removing a key, or deleting its holder, ends it. The
    venue then signs nothing new with it; tokens already issued last until they
    expire.
-9. **Every signing is audited,** naming the holder, the public key and the
+9. **Every use is audited,** naming the holder, the public key and the
    principal that asked.
 
 ## Store format
 
-Held keys are their own adapter's state, at `:adapters/<name>`
+Keyrings are the crypto adapter's state, at `:adapters/crypto`
 ([ADAPTERS.md](./ADAPTERS.md)):
 
 ```
@@ -73,12 +85,12 @@ Held keys are their own adapter's state, at `:adapters/<name>`
   steps and is version 0.
 - **`holders`** is an `Index` keyed by the holder's DID, as an `AString`. An
   `Index` keeps holders in order, so an identity and every identity nested
-  below it (`<did>:…`) are adjacent, and deleting a user removes that range.
+  below it (`<did>:…`) are adjacent, and deleting a user removes that range:
+  the DID itself and the DIDs that continue it with `:`.
 - **Each keyring** is an `Index` keyed by public key, as a `Blob`: the
   multicodec-prefixed key bytes, `0xed01` followed by the 32-byte key for
   Ed25519. The prefix names the key type, so other types fit without a layout
-  change. The multibase string (`z6Mk…`) appears only where an operation
-  shows a key.
+  change.
 
 A key record is a map:
 
@@ -103,51 +115,70 @@ A key record is a map:
   secret.
 - **`label`** is the holder's own name for the key, if it gave one.
 
-Signing writes nothing to the store; the audit log records it.
+Using a key writes nothing to the store; the audit log records it.
 
 ## Storage rules
 
 - **Deleted with its holder.** Deleting a user runs every adapter's
   `deleteUserState` in the deletion transaction, disabled adapters included,
-  and this adapter removes the user's holder entry and those nested below it.
-- **Disabling the adapter** leaves the keys sealed in its state, and nothing
-  signs with them until it is enabled again.
+  and the crypto adapter removes the user's holder entry and those nested
+  below it.
+- **Disabling the crypto adapter** leaves the keys sealed in its state.
+  Nothing uses them until it is enabled again, and other adapters' operations
+  that would sign with a held key are refused meanwhile.
 - **The venue's own key stays where it is,** loaded from `seed`, `keystore` or
   `venue.key` ([CONFIG.md](./CONFIG.md), "Venue identity"). It is the root
   every sealed record depends on, so it cannot live in state it unlocks, and
-  signing with it does not depend on the adapter.
+  signing with it does not depend on the crypto adapter.
 
-## Signing
+## Using a key
 
-An Ed25519 key becomes a Convex `AKeyPair` in memory for one signing call
-only. The existing signers then serve every use: `JWT.signPublic` for identity
-tokens and UCAN grants, `AKeyPair.signData` for Convex transactions, and
-`AKeyPair.sign` for raw payloads. `auth:identity-token` and `ucan:issue` both
-sign with an `AKeyPair` today, so choosing the venue's key or a held one,
-after checking that the caller is the holder, is the one change to them.
-Other key types need signers of their own; Convex 0.8.18 provides Ed25519
-only.
+`CryptoAdapter.keyPair` resolves every private key the crypto adapter's
+operations use. It accepts a held key as well as a `seed` reference: it checks
+the holder and the ability the operation needs, opens the record, and makes
+an `AKeyPair` that lives for that one call. The existing signers then serve
+every use: `AKeyPair.sign` for raw bytes, `JWT.signPublic` for identity tokens
+and UCAN grants, `AKeyPair.signData` for Convex values, and ECIES for
+decryption. Other adapters (`auth:identity-token`, `ucan:issue`,
+`convex:transact`) obtain a held key's `AKeyPair` from the crypto adapter in
+the same way, for the one call. Other key types need signers of their own;
+Convex 0.8.18 provides Ed25519 only.
+
+A held key is named by its public key: its multibase string (`z6Mk…`), or for
+Ed25519 its 32-byte account key as a `Blob`, the form the crypto adapter's
+results already use.
 
 ## Operations
 
-The adapter's operations (names open):
+New crypto operations (names open):
 
 - **Add** a key, refused unless the private key yields the public key. The
   private key is a secret field of the operation (`operation.secretFields`),
   so job records keep it redacted.
 - **Remove** a key.
 - **List** the caller's own keys: public key, label and when it was added.
-- **Sign** raw bytes with one of the caller's keys, the standard signing
-  interface. Input: the key's public key, as list shows it, and `payload`, a
-  `Blob`, which JSON callers may give as a hex string with or without `0x`
-  (`Blobs.parse`). Output: `signature`, a `Blob` (64 bytes for Ed25519), which
-  JSON renders as a `0x` hex string. The payload is signed exactly as given,
-  with no hashing or prefix (`AKeyPair.sign`). It needs `key/sign/raw`.
 
-Signing a token, a grant or a Convex transaction is the job of the operation
-that builds it (`auth:identity-token`, `ucan:issue`, `convex:transact`), which
-signs with a held key under `key/sign/token`, `key/sign/grant` or
-`key/sign/convex`.
+Existing crypto operations take a held key in place of the `seed` reference:
+
+- **`crypto:sign`** is the standard signing interface: it signs raw bytes.
+  `data` is a `Blob`, which JSON callers may give as a hex string with or
+  without `0x`, other string encodings being named explicitly; the result's
+  `signature` is a `Blob` (64 bytes for Ed25519), which JSON renders as a `0x`
+  hex string. The bytes are signed exactly as given, with no hashing or
+  prefix, and messages are limited to 1 MiB.
+- **`crypto:jwt-sign`**, **`crypto:decrypt`** and **`crypto:public-key`** work
+  the same way with a held key.
+- **`crypto:generate-key`** and **`crypto:derive-key`** can put the new key
+  straight into the caller's keyring, so its private key is born in the venue
+  and never seen.
+
+The `seed` reference keeps working for existing callers and is deprecated.
+
+The Convex adapter moves onto the same keyrings:
+
+- `convex:transact` takes a held key, under `key/sign/convex`.
+- `convex:sign` duplicates `crypto:sign` and is deprecated in its favour.
+- `convex:generate-key` is deprecated in favour of `crypto:generate-key`.
 
 ## Abilities
 
@@ -159,17 +190,20 @@ lattice paths.
 | Ability | On | Allows |
 |---------|----|--------|
 | `crud/read` | `<did>/keys/` | Listing the keyring: public keys, labels and when each was added |
-| `key/add` | `<did>/keys/<pk>` | Adding that key |
+| `key/add` | `<did>/keys/<pk>` | Adding that key, or generating or deriving it into the keyring |
 | `key/remove` | `<did>/keys/<pk>` | Removing it |
 | `key/sign` | `<did>/keys/<pk>` | Signing anything with it; covers every `key/sign/…` |
-| `key/sign/token` | `<did>/keys/<pk>` | Signing identity tokens |
-| `key/sign/grant` | `<did>/keys/<pk>` | Signing UCAN grants |
-| `key/sign/convex` | `<did>/keys/<pk>` | Signing Convex transactions and values |
-| `key/sign/raw` | `<did>/keys/<pk>` | Signing arbitrary bytes, which can produce any of the above |
+| `key/sign/token` | `<did>/keys/<pk>` | Signing identity tokens (`auth:identity-token`) |
+| `key/sign/grant` | `<did>/keys/<pk>` | Signing UCAN grants (`ucan:issue`) |
+| `key/sign/convex` | `<did>/keys/<pk>` | Signing Convex transactions (`convex:transact`) |
+| `key/sign/raw` | `<did>/keys/<pk>` | Signing content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any of the above |
+| `key/decrypt` | `<did>/keys/<pk>` | Decrypting with it (`crypto:decrypt`) |
 
 `key` covers every `key/…` ability. The kinds of signing let a capability
 scope narrow what a key may sign: an agent can hold `key/sign/token` on its
-own key without being able to sign transactions.
+own key without being able to sign transactions. An operation that signs
+whatever its caller supplies, such as `crypto:jwt-sign` with its free claims,
+needs `key/sign/raw`.
 
 A check has two steps, in order:
 
@@ -191,14 +225,13 @@ code, signs with it; a grant from the venue never confers that.
 
 ## Open questions
 
-1. Moving the Convex adapter's keys to keyrings. Today `convex:generate-key` stores
-   a new seed in the caller's secret store, `convex:sign` signs raw bytes with
-   a seed named by secret reference, and `convex:transact` takes a seed by
-   secret reference or literally (redacted from job records).
-2. A size limit on the payload the sign operation accepts.
+1. When the deprecated `seed` references and Convex signing operations are
+   removed, and how an owner moves an existing seed from the secret store into
+   their keyring.
+2. Whether mnemonics, which derive keys, move to keyrings too, or stay
+   secrets.
 3. Whether a root must opt in before identities nested below it have its key
    sign their identity tokens.
 4. Signing the venue's outbound calls made as a held identity, per call.
-5. Whether the sign operation and the HITL `sign` request (#293) share one
-   path.
-6. The adapter's and operations' names.
+5. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
+6. The new operations' names.
