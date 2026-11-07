@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -187,6 +188,20 @@ class AuthAdapterTest {
 			Maps.of("operation", Maps.of("adapter", "auth:identity-token")), identityInput()).join()).getMessage();
 		assertFalse(message.contains(AuthAdapter.IDENTITY_DIRECT_ONLY), message);
 		assertNull(TestEngine.ENGINE.resolveSecret("s/IDENTITY", owner));
+	}
+
+	@Test void theInvokeGrantIsCheckedBeforeTheSigningKey() {
+		// A did:key user holding no key of its own: no key signs for its agent.
+		// Without the invoke grant the agent is refused for the grant, not told
+		// whether a key is held; with it, it learns that none is.
+		RequestContext owner = RequestContext.of(UCAN.toDIDKey(AKeyPair.generate().getAccountKey()));
+		TestEngine.ENGINE.getVenueState().users().ensure(owner.getUserDID());
+		RequestContext agent = RequestContext.ofAgent(owner.getUserDID(), Strings.create("worker"));
+		var write = Capability.create(Strings.create("s/IDENTITY"), Abilities.SECRET_WRITE);
+		String refused = identityFailure(agent.withCaps(Vectors.of(write)), identityInput()).getErrorMessage();
+		assertNotEquals(AuthAdapter.IDENTITY_NOT_OWNED, refused);
+		assertEquals(AuthAdapter.IDENTITY_NOT_OWNED, identityFailure(agent.withCaps(Vectors.of(write,
+			Capability.create(IDENTITY_OP, AAdapter.INVOKE))), identityInput()).getErrorMessage());
 	}
 
 	@Test void aScopedSelfCannotMintItsWholeIdentity() {
