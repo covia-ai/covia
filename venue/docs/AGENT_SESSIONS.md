@@ -693,7 +693,9 @@ Semantics and caveats:
 
 - **In-flight chat** — an awaiting `agent:chat` Job on the session is failed
   (`"Session deleted"`) and its slot cleared, so the blocked caller gets a
-  clean error rather than waiting forever.
+  clean error rather than waiting forever. The session goes first, so a chat
+  arriving during the deletion is either failed with the others or finds no
+  session and fails as an unknown one.
 - **Audit** — the deleteSession job itself persists only
   `{agentId, sessionId}`: a content-free record that a deletion happened.
 - **Operator kill-switch** — enabled by default; disable venue-wide with
