@@ -8,13 +8,17 @@ import convex.core.data.Strings;
  *
  * <p>One home for the covia-specific ability strings so they are never
  * inline-interned or duplicated per adapter. The generic CRUD abilities
- * ({@code crud/read}, {@code crud/write}, {@code crud/delete}) and {@code invoke}
- * live on {@link convex.auth.ucan.Capability}; these are the covia-domain
- * additions on top.</p>
+ * ({@code crud/read}, {@code crud/write}, {@code crud/delete}) live on
+ * {@link convex.auth.ucan.Capability}; these are the covia-domain additions on
+ * top.</p>
  */
 public final class Abilities {
 
 	private Abilities() {}
+
+	/** Run an operation. Its {@code with} names the operation chosen, whoever
+	 *  publishes it: the operation runs with the invoker's own authority. */
+	public static final AString INVOKE        = Strings.intern("invoke");
 
 	public static final AString ASSET_READ    = Strings.intern("asset/read");
 	public static final AString ASSET_STORE   = Strings.intern("asset/store");

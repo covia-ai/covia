@@ -809,6 +809,15 @@ left as-is), then matched with `Capability.covers`. Own and cross-user resources
 thus match by one rule. A caller with no scope (the null-caps fast path) holds
 the full implicit grant and is unaffected.
 
+A scope, unrestricted or not, applies only to the request's own namespaces:
+the one it acts in, its own DID's, and resources the venue does not host
+(scheme and remote references). Another identity's resource that the venue
+hosts is reached only by what the request holds: a presented grant, an
+agent's admission, the public scope. A scope entry naming one gives nothing
+there. `Engine.authorityCovers` applies this itself, so it holds whatever
+resource a call site passes. A local path under a DID the venue does not host
+names nothing here and is refused as another's (`Engine.requireLocalAccess`).
+
 ### 5.4 Agent Identity Models
 
 Agents need capabilities to act in the world. The critical question is
@@ -1145,6 +1154,13 @@ are shared public metadata and do not need an additional read grant.
 - **Caveat:** invoking by hex hash (or from resolved metadata directly)
   carries no path, so only the wildcard grant covers it — a path-scoped
   invoke grant denies hash-form invocation by design (fail-closed).
+
+- **Another principal's operation.** Invoking is a choice of what to run, not
+  access to the namespace that publishes it: the operation runs with the
+  invoker's own authority, and reading its definition needs read on it as any
+  read does. So `invoke` on `<did>/o/<op>` is checked against the invoker's
+  scope, or a grant it presents, whoever publishes it
+  (`Engine.requireInvoke`).
 
 ### 5.6 Trust Anchors and Federation
 

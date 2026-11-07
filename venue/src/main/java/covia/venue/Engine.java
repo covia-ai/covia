@@ -3866,9 +3866,12 @@ public class Engine {
 	 * {@code s/}, {@code g/}, {@code j/}, …), governed uniformly for reads and
 	 * mutations alike — an asset ({@code a/}) exactly like a workspace path
 	 * ({@code w/}). The caller's own resource goes through the capability scope
-	 * seam; another user's needs {@code ability} rights (a presented proof, or
-	 * public / venue-catalog policy). A cross-user resource the caller has no
-	 * rights to is a <b>denial</b>, never a silent miss.
+	 * seam; another user's needs {@code ability} rights it holds (a presented
+	 * proof, admission, or public / venue-catalog policy), as
+	 * {@link #authorityCovers} rules for any identity this venue hosts. A local
+	 * path under a DID this venue does not host is refused the same way. A
+	 * cross-user resource the caller has no rights to is a <b>denial</b>, never
+	 * a silent miss.
 	 *
 	 * <p>Returns the DID whose namespace the operation targets — the named owner
 	 * of an explicit {@code did:…/} resource (the caller's own, an agent's own
@@ -3878,9 +3881,9 @@ public class Engine {
 	 * may ignore the return.</p>
 	 *
 	 * <p>This is the LOCAL access gate. It is not the invoke path (invoking an
-	 * operation is a capability, not access to its owner's namespace) and it is
-	 * not for remote references (another venue's DID), which federation resolves
-	 * by asking that venue.</p>
+	 * operation is a choice of what to run, {@link #requireInvoke}, not access
+	 * to its owner's namespace) and it is not for remote references (another
+	 * venue's DID), which federation resolves by asking that venue.</p>
 	 */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability) {
 		return requireLocalAccess(ctx, resource, ability, null);
@@ -3895,28 +3898,20 @@ public class Engine {
 			AString owner = ownerOf(resource);
 			return (owner != null) ? owner : (ctx != null) ? ctx.getUserDID() : null;
 		}
+		// Any other DID, hosted here or not: a local path under a DID this venue
+		// does not host names nothing here, and is refused as any other's is.
 		if (!crossUserAllows(ctx, resource, ability, destination)) {
-			convex.core.data.AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
-			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
-				+ " — accessing another user's resource requires " + ability + " rights"
-				+ ((proofs == null || proofs.isEmpty())
-					? " (no proof presented)" : " (the presented proofs do not cover it)")
-				+ (isTalkAbility(ability)
-					? "; the target's accepts policy does not admit this caller" : ""));
+			throw anothersDenial(ctx, resource, ability);
 		}
 		return ownerOf(resource);                               // authorised cross-user → the owner's store
 	}
 
 	/**
-	 * Common point-of-action gate for a resource that may be either caller-owned,
-	 * another principal on this venue, or a remote/scheme reference.
-	 *
-	 * <p>Absolute DID resources belonging to a principal this venue hosts
-	 * ({@link #isHosted}: a user, the venue's own namespaces, or an agent of
-	 * one) go through {@link #requireLocalAccess}; this prevents the null-scope
-	 * own-resource fast path from authorising a different local user's data.
-	 * Bare, scheme-qualified and genuinely remote resources use the normal
-	 * capability seam.</p>
+	 * Point-of-action gate for a resource that may be the caller's own, another
+	 * principal's on this venue, or a remote or scheme reference. A resource
+	 * this venue hosts goes through {@link #requireLocalAccess}; a remote or
+	 * scheme reference through the capability seam, which reaches no hosted
+	 * identity's resource by scope alone ({@link #authorityCovers}).
 	 */
 	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability) {
 		requireResourceAccess(ctx, resource, ability, null);
@@ -4314,16 +4309,22 @@ public class Engine {
 	}
 
 	/**
-	 * The single authorisation seam. Does the caller's authority cover
-	 * {@code (resource, ability)}? Grants are <b>additive</b> — <em>either you
-	 * have the right or you don't</em>: an inherent (unrestricted, own-namespace)
-	 * grant, an agent {@code config.caps} grant, or a cross-user proof each
-	 * independently authorise; nothing subtracts. Callers pass the credential (the
-	 * {@link RequestContext}, wrapping an {@code Authority}) and the exact
-	 * resource+ability they guard. This method is the own/scoped authority seam;
-	 * a resource that may name another local principal must enter through
-	 * {@link #requireResourceAccess}, which classifies ownership before reaching
-	 * the {@code null}-scope fast path.
+	 * The single authorisation seam. Does the request's authority cover
+	 * {@code (resource, ability)}? One rule for every principal: its scope over
+	 * its own namespaces, plus what it holds.
+	 *
+	 * <ul>
+	 * <li>Its own namespaces are the one it acts in, its own DID's (an agent's),
+	 * and resources this venue does not host (scheme and remote references).
+	 * There a {@code null} scope is unrestricted, and any other scope covers
+	 * what its grants cover.</li>
+	 * <li>Another identity's resource that this venue hosts is reached only by
+	 * what the request holds ({@link #crossUserAllows}: a presented proof, an
+	 * agent's admission, the public scope), never by its scope, unrestricted or
+	 * not. No caller need classify a resource before asking.</li>
+	 * </ul>
+	 *
+	 * <p>Grants are additive: nothing subtracts.</p>
 	 */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
 		return authorityCovers(ctx, resource, ability, null);
@@ -4333,19 +4334,24 @@ public class Engine {
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
-		// Fast path FIRST — the common case by far. A null scope is unrestricted:
-		// the caller carries no capability restriction, so they are authorised over
-		// their OWN namespace with no proof/public evaluation at all. Every ordinary
-		// authenticated user is null-scope; their cross-user reach is gated
-		// separately by the adapter (which calls crossUserAllows directly), never by
-		// this fast path — so returning here is correct AND skips the string
-		// building, clock read and proof walk that crossUserAllows would do.
-		// An agent's scope is read as it stands now, once for this check.
+		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination);
+		return scopeOrHeldCovers(ctx, resource, ability, destination);
+	}
+
+	/** Whether {@code resource} is another identity's that this venue hosts. */
+	private boolean isAnothers(RequestContext ctx, AString resource) {
+		return !ownedByCaller(ctx, resource) && isHosted(resource);
+	}
+
+	/**
+	 * Whether the request's scope, or what it holds, covers
+	 * {@code (resource, ability)}. A null scope covers everything, with no proof
+	 * or public evaluation: the common case by far. An agent's scope is read as
+	 * it stands now, once for this check.
+	 */
+	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		AVector<ACell> scope = ctx.getCaps();
 		if (scope == null) return true;
-		// Restricted (agent) scope. Grants are additive: a presented cross-user
-		// proof (or the public read grant) authorises independently of the caller's
-		// scope; otherwise a grant in the scope must cover the resource.
 		if (crossUserAllows(ctx, resource, ability, destination)) return true;
 		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;
 	}
@@ -4363,8 +4369,42 @@ public class Engine {
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
 		requireStanding(ctx);
 		if (authorityCovers(ctx, resource, ability, destination)) return;
+		if (ctx != null && isAnothers(ctx, resource)) throw anothersDenial(ctx, resource, ability);
+		throw scopeDenial(ctx, resource, ability, destination);
+	}
+
+	/** The refusal of another principal's resource the request holds no rights to. */
+	private static covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
+		AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
+		return new covia.exception.AuthException("Access denied: " + ability + " on " + resource
+			+ " — accessing another user's resource requires " + ability + " rights"
+			+ ((proofs == null || proofs.isEmpty())
+				? " (no proof presented)" : " (the presented proofs do not cover it)")
+			+ (isTalkAbility(ability)
+				? "; the target's accepts policy does not admit this caller" : ""));
+	}
+
+	/**
+	 * Requires that the request may run {@code operation}, the reference as the
+	 * caller gave it. Choosing what to run is not access to the namespace that
+	 * publishes it: the operation runs with the request's own authority, and
+	 * reading its definition is checked when it is resolved. So the request's
+	 * scope, or a grant it presents, must cover {@code invoke} on the reference,
+	 * whoever publishes it.
+	 *
+	 * @throws covia.exception.AuthException when neither covers it
+	 */
+	public void requireInvoke(RequestContext ctx, AString operation) {
+		requireStanding(ctx);
+		if (ctx != null && scopeOrHeldCovers(ctx, operation, Abilities.INVOKE, null)) return;
+		throw scopeDenial(ctx, operation, Abilities.INVOKE, null);
+	}
+
+	/** The refusal of {@code (resource, ability)} that the request's scope does not cover. */
+	private static covia.exception.AuthException scopeDenial(RequestContext ctx, AString resource, AString ability,
+			AString destination) {
 		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability, destination) : null;
-		throw new covia.exception.AuthException(denial != null ? denial
+		return new covia.exception.AuthException(denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));

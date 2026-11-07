@@ -23,6 +23,7 @@ import convex.core.data.Index;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.cursor.AForkableCursor;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
@@ -830,7 +831,7 @@ public abstract class AAdapter {
     /** The baseline op-invocation ability — "the right to run an operation".
      *  Required by adapters that do not act on a specific named lattice resource
      *  (compute, LLM, external I/O, federation, scheduling, …). */
-    protected static final AString INVOKE = Strings.intern("invoke");
+    protected static final AString INVOKE = Abilities.INVOKE;
 
     /**
      * Asserts the baseline {@link #INVOKE} capability at the adapter's enforcement
@@ -857,7 +858,7 @@ public abstract class AAdapter {
         // (additive); fall back to the scope-only check when no engine is wired
         // (adapters constructed directly in unit tests).
         if (ctx == null) return;
-        if (engine != null) engine.requireAuthority(ctx, ctx.getOp(), INVOKE);
+        if (engine != null) engine.requireInvoke(ctx, ctx.getOp());
         else ctx.requireCapability(ctx.getOp(), INVOKE);
     }
 

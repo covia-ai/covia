@@ -19,8 +19,10 @@ Tracked by covia#660.
 ## How it works today
 
 - **Base and additions.** `Engine.authorityCovers` passes a context with no
-  capability scope over its own namespace, and otherwise passes when a
-  presented grant or the scope covers the request. Choosing the base replaces
+  capability scope over its own namespaces, and otherwise passes when a
+  presented grant or the scope covers the request. Another identity's resource
+  that the venue hosts passes only on a presented grant, admission or the
+  public scope, whatever the scope. Choosing the base replaces
   the owner's authority with the caps; nothing intersects. An agent is a
   sub-principal of its owner and works in the owner's namespace
   ([UCAN.md](./UCAN.md) §5.4).

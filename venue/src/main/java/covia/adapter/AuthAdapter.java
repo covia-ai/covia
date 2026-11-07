@@ -194,7 +194,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		AKeyPair signer = identitySigner(ctx, caller);
 		if (signer == null) throw new AuthException(IDENTITY_NOT_OWNED);
 		// Pin the signing action, so custom metadata/aliases cannot bypass its grant.
-		engine.requireAuthority(ctx, IDENTITY_OP, INVOKE);
+		engine.requireInvoke(ctx, IDENTITY_OP);
 		if (!(input instanceof AMap<?, ?> params)) throw new InvalidInputException(IDENTITY_INPUT);
 		for (long i = 0; i < params.count(); i++) {
 			if (!(params.entryAt(i).getKey() instanceof AString key) || !IDENTITY_FIELDS.contains(key)) {
