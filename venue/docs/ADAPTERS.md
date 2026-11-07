@@ -619,6 +619,14 @@ reconciles its queue. Normal startup checks only these small pending queues,
 with no sweep of user or job records. Repeating deletion repairs adapter data
 left by tombstones from older venues as well.
 
+`deleteAgentState(agentDID, state)` is the agent counterpart, for state an
+adapter keeps under an agent's own DID (`<owner>:g:<id>`), such as the crypto
+adapter's keyrings. `Engine.deleteAgentState` runs it for every registered
+adapter, enabled or disabled, in one transaction each time the agent is
+deleted, under the same rules as `deleteUserState`. A module adapter not loaded
+at the time is not called and keeps what it holds. State kept for an agent
+under its owner's DID goes with the owner.
+
 The messaging base implements both hooks for runtime and configured bots. It
 records configured-bot ownership, removes sessions/inboxes/caches, stops runners,
 and skips deleted owners during rearming. External effects already in flight
