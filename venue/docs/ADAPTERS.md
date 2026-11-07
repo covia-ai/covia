@@ -997,7 +997,16 @@ are bounded and in memory, so a restart loses only messages not yet collected.
 2. Implement `getName()` and an LLM-friendly `getDescription()`.
 3. Implement `invokeFuture`, or the job-aware `invoke` when the adapter owns
    the job lifecycle. Call `requireInvoke(ctx)` or the correct resource gate
-   before effects, and use `getSubOperation(meta)` for dispatch.
+   before effects, and use `getSubOperation(meta)` for dispatch. Refuse what
+   the caller can fix with the Covia type for it, such as
+   `InvalidInputException` for bad input, whose message says what is wrong
+   ([ERRORS.md](ERRORS.md#types)); catch a library's exceptions where they are
+   called. Anything else that escapes the operation, `IllegalArgumentException`
+   included, is the adapter's fault: its Job fails with `Operation <op> failed:
+   unexpected <ClassName> in adapter <name>`, logged at ERROR, and the caller
+   is told nothing more ([ERRORS.md](ERRORS.md#scopes)). A job-aware adapter
+   fails its Job with the exception itself, `job.fail(e)`, so the report names
+   the operation.
 4. Override `configure` when settings need validation or cached runtime state.
    Override `info` and `publicConfig` only for intentionally public facts.
 5. Override `installAssets()` and create JSON operation definitions under

@@ -6,8 +6,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Locale;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -33,6 +31,8 @@ import covia.adapter.messaging.MessagingText;
 import covia.adapter.messaging.ConversationRouter;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.ResponseException;
@@ -153,5 +153,10 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			if(r.body()==null||r.body().isBlank())return CVMBool.TRUE;return JSON.parse(r.body());
 		}catch(InterruptedException e){Thread.currentThread().interrupt();throw new JobFailedException("Discord call interrupted");}catch(java.io.IOException|IllegalArgumentException e){throw new JobFailedException("Discord "+method+" "+route+" failed: "+concise(e));}
 	}
-	static String concise(Throwable t){Throwable c=t;while((c instanceof CompletionException||c instanceof ExecutionException)&&c.getCause()!=null)c=c.getCause();String msg=AAdapter.describeFailure(c);return msg.length()>400?msg.substring(0,400)+"…":msg;}	private void logFailure(String what,InboundMessage m,Throwable t){if(AAdapter.isExpectedFailure(t))log.warn("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t));else log.warn("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t),t);}
+	/** Whose code it was, when a bot reports an unexpected failure in its own handling. */
+	static final String OWNER=FaultException.ADAPTER.formatted(DiscordAdapter.NAME);
+	/** A failure's reason, or an unexpected exception in this adapter by its type; not logged here (logFailure logs). */
+	static String concise(Throwable t){String msg=FaultException.describe(OWNER,t);return msg.length()>400?msg.substring(0,400)+"…":msg;}
+	/** One line for an expected failure or a fault reported elsewhere; ERROR with the stack for anything else. */
+	private void logFailure(String what,InboundMessage m,Throwable t){if(CoviaException.reasonOf(t)!=null)log.warn("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t));else log.error("Discord bot '{}': {} for message {} in channel {}: {}",spec.name(),what,m.id(),m.channelId(),concise(t),t);}
 }

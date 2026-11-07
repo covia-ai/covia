@@ -105,7 +105,8 @@ class ConversationRouterTest {
 				assertTrue(agent.getSessions().isEmpty(), "the live input must remain invisible until commit");
 				assertTrue(inbox.deliver(draft, "1", sid, jid));
 				assertEquals(covia.adapter.webhook.WebhookInbox.PENDING, inbox.get("1").get(Fields.STATUS));
-				throw new IllegalStateException("injected intake failure");
+				// An expected failure: what is under test is the rollback, not its report
+				throw new covia.exception.UnavailableException("injected intake failure");
 			}));
 			assertTrue(agent.getSessions().isEmpty());
 			assertNull(sessions.get("chat"));

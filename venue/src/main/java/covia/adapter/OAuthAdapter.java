@@ -41,6 +41,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -607,8 +608,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		try {
 			tokens = exchange(p, app.code(), pend.verifier());
 		} catch (Exception e) {
-			log.warn("OAuth token exchange with {} failed: {}", p.name(), describeFailure(e));
-			throw new UnavailableException("Token exchange with " + p.name() + " failed: " + describeFailure(e), e);
+			String cause = FaultException.describe(faultOwner(), e);
+			log.warn("OAuth token exchange with {} failed: {}", p.name(), cause);
+			throw new UnavailableException("Token exchange with " + p.name() + " failed: " + cause, e);
 		}
 		try {
 			return summary(storeGrant(pend, p, tokens));
@@ -692,7 +694,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 				refreshed = refresh(p, refreshToken);
 			} catch (Exception e) {
 				throw new UnavailableException("The connection to " + provider
-					+ " could not be refreshed (" + describeFailure(e) + ") — reconnect with oauth:connect", e);
+					+ " could not be refreshed (" + FaultException.describe(faultOwner(), e)
+					+ ") — reconnect with oauth:connect", e);
 			}
 			AMap<AString, ACell> fresh = tokens
 				.assoc(G_ACCESS_TOKEN, Strings.create(str(refreshed, Strings.intern("access_token"))));
@@ -810,7 +813,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
 			return response.statusCode() >= 200 && response.statusCode() < 300;
 		} catch (Exception e) {
-			log.warn("Token revocation at {} failed: {}", p.revocationEndpoint(), describeFailure(e));
+			log.warn("Token revocation at {} failed: {}", p.revocationEndpoint(), FaultException.describe(faultOwner(), e));
 			return false;
 		}
 	}
@@ -1048,7 +1051,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			try {
 				revokeSealed(providers.get(entry.getKey().toString()), entry.getValue());
 			} catch (RuntimeException e) {
-				log.warn("Could not revoke the deleted user {}'s {} connection: {}", did, entry.getKey(), describeFailure(e));
+				log.warn("Could not revoke the deleted user {}'s {} connection: {}", did, entry.getKey(),
+					FaultException.describe(faultOwner(), e));
 			}
 		}
 		AMap<AString, ACell> secrets = (previousUser != null) ? RT.ensureMap(previousUser.get(Namespace.S)) : null;

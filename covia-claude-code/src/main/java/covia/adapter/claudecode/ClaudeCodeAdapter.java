@@ -1066,7 +1066,7 @@ public class ClaudeCodeAdapter extends ARemoteAgentAdapter<RemoteInteraction> im
 			engine.jobs().invokeInternal("v/ops/covia/delete",
 				Maps.of(Fields.PATH, Strings.create(path)), engine.venueContext()).get(10, TimeUnit.SECONDS);
 		} catch (Exception e) {
-			log.warn("Claude Code: could not delete {}: {}", path, describeFailure(e));
+			log.warn("Claude Code: could not delete {}: {}", path, covia.exception.FaultException.describe(faultOwner(), e));
 		}
 	}
 }

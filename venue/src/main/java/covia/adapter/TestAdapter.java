@@ -484,7 +484,7 @@ public class TestAdapter extends AAdapter {
     			// cancelled — Job.cancel already updated lattice status
     			Thread.currentThread().interrupt();
     		} catch (Exception e) {
-    			job.fail(describeFailure(e));
+    			job.fail(e);
     		}
     	});
     	job.setCancelHook(() -> f.cancel(true));

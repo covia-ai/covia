@@ -62,6 +62,8 @@ import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
@@ -1313,24 +1315,27 @@ final class BotRunner implements MessagingBot<BotSpec> {
 		return r.errorCode() + " " + r.description();
 	}
 
-	/** What a person should read about a failure: the venue's shared rendering (an expected failure's reason, else its type). */
+	/** Whose code it was, when a bot reports an unexpected failure in its own handling. */
+	static final String OWNER = FaultException.ADAPTER.formatted(TelegramAdapter.NAME);
+
+	/**
+	 * What a person should read about a failure: its reason, or an unexpected
+	 * exception in this adapter by its type ({@link FaultException#describe}).
+	 * Not logged here: {@link #logFailure} logs a failure the bot handles.
+	 */
 	static String concise(Throwable t) {
-		Throwable c = t;
-		while ((c instanceof CompletionException || c instanceof ExecutionException) && c.getCause() != null) {
-			c = c.getCause();
-		}
-		String msg = AAdapter.describeFailure(c);
+		String msg = FaultException.describe(OWNER, t);
 		return (msg.length() > 400) ? msg.substring(0, 400) + "…" : msg;
 	}
 
-	/** Log a handler failure: one line for expected errors; the stack trace for anything else. */
+	/** Log a handler failure: one line for an expected failure or a fault reported elsewhere; ERROR with the stack for anything else. */
 	private void logFailure(String what, Long chatId, Throwable t) {
 		Throwable c = t;
 		while ((c instanceof CompletionException || c instanceof ExecutionException) && c.getCause() != null) c = c.getCause();
-		if (AAdapter.isExpectedFailure(c)) {
+		if (CoviaException.reasonOf(c) != null) {
 			log.warn("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c));
 		} else {
-			log.warn("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c), c);
+			log.error("Telegram bot '{}': {} in chat {}: {}", spec.name(), what, chatId, concise(c), c);
 		}
 	}
 }

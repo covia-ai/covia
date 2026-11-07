@@ -21,11 +21,14 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
 import covia.exception.JobPollingFailedException;
 import covia.exception.NotSupportedException;
 
+/** Isolated because a fault case silences the global fault logger. */
+@org.junit.jupiter.api.parallel.Isolated
 public class JobTest {
 	private static final AString LEGACY_PREV = Strings.intern("prev");
 
@@ -145,7 +148,7 @@ public class JobTest {
 		assertFalse(unclassified.getData().containsKey(Fields.ERROR_CODE));
 		assertNull(new JobFailedException(unclassified).getErrorCode());
 		Job exceptional = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
-		exceptional.fail(new IllegalArgumentException("Unknown session"));
+		exceptional.fail(new InvalidInputException("Unknown session"));
 		assertFalse(exceptional.getData().containsKey(Fields.ERROR_CODE));
 		assertNull(exceptional.getErrorCode());
 	}
@@ -246,11 +249,11 @@ public class JobTest {
 			}
 		};
 		job.setPreserveFailureCause(true);
-		var winner = new LinkageError("missing class");
+		var winner = new NotSupportedException("winner");
 		var update = CompletableFuture.runAsync(() -> job.fail(winner));
 		try {
 			assertTrue(committed.await(5, TimeUnit.SECONDS));
-			job.fail(new IllegalStateException("loser"));
+			job.fail(new InvalidInputException("loser"));
 			var error = assertThrows(java.util.concurrent.CompletionException.class, () -> job.future().join());
 			org.junit.jupiter.api.Assertions.assertSame(winner, error.getCause());
 		} finally { release.countDown(); }
@@ -287,14 +290,35 @@ public class JobTest {
 	}
 
 	@Test
-	public void testContinuationErrorFailsJobAndCancelledStartDoesNoWork() {
-		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
-		assertThrows(LinkageError.class, () -> job.start(() -> { throw new LinkageError("broken module"); }));
+	public void testContinuationErrorFailsJobAndCancelledStartDoesNoWork() throws Exception {
+		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING,
+			Fields.OP, Strings.create("broken:run"), Fields.ADAPTER, Strings.create("broken")));
+		var broken = new LinkageError("broken module");
+		// The Job reports the fault, logging it at ERROR as it must
+		FaultException thrown = quietFaults(() -> assertThrows(FaultException.class,
+			() -> job.start(() -> { throw broken; })));
+		String report = FaultException.FAILED.formatted(Job.OPERATION.formatted("broken:run"),
+			"LinkageError", FaultException.ADAPTER.formatted("broken"));
+		assertEquals(report, thrown.getMessage(), "the starter receives the Job's report");
+		assertSame(broken, thrown.getCause());
 		assertEquals(Status.FAILED, job.getStatus());
+		assertEquals(report, job.getErrorMessage());
 		assertTrue(job.future().isCompletedExceptionally());
 		Job cancelled = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
 		cancelled.cancel();
 		assertFalse(cancelled.start(() -> { throw new AssertionError("must not execute"); }));
+	}
+
+	/** Runs {@code body} with the fault logger silenced: the level is global, so the class is isolated. */
+	private static <T> T quietFaults(java.util.concurrent.Callable<T> body) throws Exception {
+		var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(FaultException.class);
+		var before = logger.getLevel();
+		logger.setLevel(ch.qos.logback.classic.Level.OFF);
+		try {
+			return body.call();
+		} finally {
+			logger.setLevel(before);
+		}
 	}
 
 	private static void awaitLatch(java.util.concurrent.CountDownLatch latch) {

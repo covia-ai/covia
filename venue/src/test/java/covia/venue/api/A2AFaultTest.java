@@ -34,19 +34,21 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
-import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.JobManager;
 import covia.venue.RequestContext;
 import covia.venue.TestLogs;
 import covia.venue.TestServer;
 
 /**
  * An unexpected failure inside an A2A method reaches the caller only as
- * {@code INTERNAL} naming its type, never its text (venue/docs/ERRORS.md). A
- * continuation is delivered to a task whose adapter fails as a venue bug
- * would, with text that must not leak.
+ * {@code INTERNAL} with the report of the scope it escaped, naming its owner
+ * and its type, never its text (venue/docs/ERRORS.md). A continuation is
+ * delivered to a task whose adapter fails as a bug would, with text that must
+ * not leak.
  *
  * <p>Registers a probe adapter on the shared venue for the test's duration,
  * and the venue logs the failure at ERROR, as it must in production; the class
@@ -120,7 +122,7 @@ public class A2AFaultTest {
 				envelope.put("params", new MessageSendParams(continuation, null, null));
 
 				AtomicReference<HttpResponse<String>> response = new AtomicReference<>();
-				TestLogs.quiet(A2A.class, () -> response.set(post(envelope, jwt)));
+				TestLogs.quiet(FaultException.class, () -> response.set(post(envelope, jwt)));
 
 				String body = response.get().body();
 				assertEquals(200, response.get().statusCode(), body);
@@ -128,7 +130,10 @@ public class A2AFaultTest {
 				Map<String, Object> error = cast(cast(JsonUtil.OBJECT_MAPPER.fromJson(body, Map.class)).get("error"));
 				assertNotNull(error, body);
 				assertEquals(A2AErrorCodes.INTERNAL.code(), ((Number) error.get("code")).intValue(), body);
-				assertEquals(CoviaException.UNEXPECTED.formatted("IllegalStateException"), error.get("message"));
+				// The adapter's handler failed: the report blames it, by type only
+				assertEquals(FaultException.FAILED.formatted(
+					JobManager.DELIVERING_MESSAGE.formatted(job.getID().toHexString()),
+					"IllegalStateException", FaultException.ADAPTER.formatted(PROBE)), error.get("message"));
 			}
 		} finally {
 			if (job != null) job.cancel();

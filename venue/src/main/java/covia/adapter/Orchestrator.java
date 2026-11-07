@@ -265,7 +265,7 @@ public class Orchestrator extends AAdapter {
 				orchOutput=computeInput(resultSpec,Vectors.empty(),null);
 				job.completeWith(orchOutput);
 			} catch (Exception e) {
-				job.fail(describeFailure(e));
+				job.fail(e);
 			}
 		}
 		

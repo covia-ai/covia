@@ -144,6 +144,8 @@ public class AgentAdapter extends AAdapter {
 	public static final String SUSPENDED_WAITING = "Agent '%s' is suspended%s; this waits until the agent is resumed";
 	/** How a cycle's error begins when its transition failed; the reason follows. */
 	public static final String TRANSITION_FAILED = "Transition failed: ";
+	/** A task id that is not hex: the id follows. */
+	public static final String INVALID_TASK_ID = "Invalid taskId format: ";
 	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
 	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
@@ -831,7 +833,7 @@ public class AgentAdapter extends AAdapter {
 				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
 			}
 		} catch (Exception e) {
-			job.fail(describeFailure(e));
+			job.fail(e);
 		}
 	}
 
@@ -887,8 +889,8 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> config;
 		try {
 			config = parseConfigArg(configArg, ctx);
-		} catch (InvalidInputException | IllegalArgumentException e) {
-			job.fail(describeFailure(e)); return;
+		} catch (InvalidInputException e) {
+			job.fail(e); return;
 		}
 		// A genuinely omitted config means "give me the useful platform
 		// default", not a tool-less shell. Reuse the provider-neutral installed
@@ -934,7 +936,7 @@ public class AgentAdapter extends AAdapter {
 			try {
 				defConfig = resolveConfigValue(defMeta, ctx, new ArrayList<>(), 0,
 					"definition '" + definitionRef + "'");
-			} catch (InvalidInputException | IllegalArgumentException e) {
+			} catch (InvalidInputException e) {
 				job.fail("Invalid agent definition " + definitionRef + ": " + e.getMessage());
 				return;
 			}
@@ -989,8 +991,8 @@ public class AgentAdapter extends AAdapter {
 		}
 		try {
 			validateComposedConfig(config);
-		} catch (InvalidInputException | IllegalArgumentException e) {
-			job.fail(describeFailure(e));
+		} catch (InvalidInputException e) {
+			job.fail(e);
 			return;
 		}
 		requireConferrable(ctx, target, config, null);
@@ -1469,8 +1471,8 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> overrideConfig;
 		try {
 			overrideConfig = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
-		} catch (InvalidInputException | IllegalArgumentException e) {
-			job.fail(describeFailure(e)); return;
+		} catch (InvalidInputException e) {
+			job.fail(e); return;
 		}
 		AMap<AString, ACell> sourceConfig = RT.ensureMap(
 			sourceRecord.get(AgentState.KEY_CONFIG));
@@ -1478,8 +1480,8 @@ public class AgentAdapter extends AAdapter {
 			: (sourceConfig != null ? mergeConfigMaps(sourceConfig, overrideConfig) : overrideConfig);
 		try {
 			validateComposedConfig(forkConfig);
-		} catch (InvalidInputException | IllegalArgumentException e) {
-			job.fail(describeFailure(e));
+		} catch (InvalidInputException e) {
+			job.fail(e);
 			return;
 		}
 		// The fork's authority is conferred by the forker, in the target's namespace.
@@ -2203,7 +2205,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> assistant;
 		try {
 			assistant = AbstractLLMAdapter.stepAssistant(RT.getIn(input, K_ASSISTANT));
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			job.fail(e.getMessage());
 			return;
 		}
@@ -2625,7 +2627,7 @@ public class AgentAdapter extends AAdapter {
 		DeleteRequest request;
 		try {
 			request = parseDeleteRequest(input);
-		} catch (InvalidInputException | IllegalArgumentException e) {
+		} catch (InvalidInputException e) {
 			job.fail(e.getMessage());
 			return;
 		}
@@ -2851,8 +2853,8 @@ public class AgentAdapter extends AAdapter {
 		if (configInput != null) {
 			try {
 				resolved = parseConfigArg(configInput, ctx);
-			} catch (InvalidInputException | IllegalArgumentException e) {
-				job.fail(describeFailure(e));
+			} catch (InvalidInputException e) {
+				job.fail(e);
 				return;
 			}
 		}
@@ -2885,8 +2887,8 @@ public class AgentAdapter extends AAdapter {
 				return composed;
 			}, newState);
 			newConfig = (changes == null) ? null : committed;
-		} catch (InvalidInputException | IllegalArgumentException e) {
-			job.fail(describeFailure(e));
+		} catch (InvalidInputException e) {
+			job.fail(e);
 			return;
 		}
 
@@ -2919,12 +2921,10 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 		requireNative(agent, "cancelTask");
 
-		// Parse hex task ID to Blob
-		Blob taskId;
-		try {
-			taskId = Blob.fromHex(taskIdHex.toString());
-		} catch (Exception e) {
-			job.fail("Invalid taskId format: " + taskIdHex);
+		// Parse hex task ID to Blob: null for text that is not hex
+		Blob taskId = Blob.fromHex(taskIdHex.toString());
+		if (taskId == null) {
+			job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex));
 			return;
 		}
 
@@ -3199,7 +3199,7 @@ public class AgentAdapter extends AAdapter {
 			job.setStatus(Status.STARTED);
 			job.completeWith(doCompleteTask(input, ctx));
 		} catch (Exception e) {
-			job.fail(describeFailure(e));
+			job.fail(e);
 		}
 	}
 
@@ -3291,7 +3291,7 @@ public class AgentAdapter extends AAdapter {
 			job.setStatus(Status.STARTED);
 			job.completeWith(doFailTask(input, ctx));
 		} catch (Exception e) {
-			job.fail(describeFailure(e));
+			job.fail(e);
 		}
 	}
 
@@ -4417,8 +4417,10 @@ public class AgentAdapter extends AAdapter {
 					CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
 					Throwable reason = (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
 					cannotContinue = agentCannotContinue(reason);
-					AMap<AString, ACell> failed = Maps.of(Fields.ERROR,
-						Strings.create(TRANSITION_FAILED + describeFailure(reason)));
+					// A fault's report says the transition failed and where
+					String failure = covia.exception.FaultException.isFault(reason) ? reason.getMessage()
+						: TRANSITION_FAILED + describeFailure(reason);
+					AMap<AString, ACell> failed = Maps.of(Fields.ERROR, Strings.create(failure));
 					if (carried != null) {
 						failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
 						if (carried.result().tokens() != null) {
@@ -4496,7 +4498,6 @@ public class AgentAdapter extends AAdapter {
 				Fields.RESULT, lastResult != null ? RT.getIn(lastResult, Fields.RESULT) : null,
 				Fields.TASK_RESULTS, allTaskResults));
 		} catch (Exception e) {
-			String failure = describeFailure(e);
 			if (engine.isClosing()) {
 				// Shutdown, typically the store closing under this loop: as at the
 				// isClosing breaks above, tasks and chats stay queued durably for the
@@ -4506,7 +4507,8 @@ public class AgentAdapter extends AAdapter {
 				completion.completeExceptionally(e);
 				return;
 			}
-			suspendOnError(ownerDID, agentId, e);
+			String failure = describeFailure(e);
+			suspendOnError(ownerDID, agentId, failure);
 			holdForResume(ownerDID, agentId, failure);
 			run.end(AgentState.SUSPENDED);
 			completion.completeExceptionally(e);
@@ -4805,11 +4807,14 @@ public class AgentAdapter extends AAdapter {
 			holdForResume(callerDID, agentId, errStr.toString());
 		}
 
+		// A record removed while the cycle ran (agent:delete, account deletion)
+		// merges to nothing: the agent has ended, and the loop exits at the top
+		// of the next iteration
 		ACell lastResult = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, Strings.create(callerDID + "/g/" + agentId),
 			Fields.STATUS, cannotContinue ? AgentState.SUSPENDED
-				: merged.get(AgentState.KEY_STATUS),
+				: (merged == null) ? AgentState.TERMINATED : merged.get(AgentState.KEY_STATUS),
 			Fields.RESULT, result,
 			Fields.TASK_RESULTS, allTaskResults);
 
@@ -4819,13 +4824,12 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Whether a transition's failure means the agent cannot continue, rather
 	 * than that the work it took failed: the transition said so
-	 * ({@link CannotContinueException}), or the failure is unexpected — a venue
-	 * fault, logged at ERROR where its Job failed — which would meet every unit
-	 * of work the same way (AGENT_LOOP.md §3.4).
+	 * ({@link CannotContinueException}), or the failure is a fault, reported
+	 * and logged where it happened, which would meet every unit of work the
+	 * same way (AGENT_LOOP.md §3.4).
 	 */
 	private static boolean agentCannotContinue(Throwable failure) {
-		return CannotContinueException.find(failure) != null
-			|| covia.exception.CoviaException.reasonOf(failure) == null;
+		return CannotContinueException.find(failure) != null || !isExpectedFailure(failure);
 	}
 
 	/**
@@ -5300,11 +5304,11 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	private void suspendOnError(AString callerDID, AString agentId, Exception e) {
+	private void suspendOnError(AString callerDID, AString agentId, String failure) {
 		try {
 			AgentState agent = getAgent(callerDID, agentId);
 			if (agent != null) {
-				AString error = Strings.create(describeFailure(e));
+				AString error = Strings.create(failure);
 				agent.suspend(error);
 				engine.agentEvents().status(callerDID, agentId, AgentState.SUSPENDED, error);
 			}
@@ -5610,9 +5614,9 @@ public class AgentAdapter extends AAdapter {
 				try {
 					parsed = JSON.parse(text);
 				} catch (RuntimeException e) {
+					// The parser's text is not written for the caller; the cause keeps it
 					throw new InvalidInputException(location
-						+ " looks like inline JSON but could not be parsed: "
-						+ describeFailure(e));
+						+ " looks like inline JSON but could not be parsed", e);
 				}
 				return resolveConfigValue(parsed, ctx, resolving, depth + 1, location);
 			}
@@ -5882,8 +5886,8 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
-		} catch (InvalidInputException | IllegalArgumentException e) {
-			job.fail(describeFailure(e));
+		} catch (InvalidInputException e) {
+			job.fail(e);
 			return null;
 		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
@@ -5923,8 +5927,8 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> initialLoads;
 		try {
 			initialLoads = mintLoads(input);
-		} catch (InvalidInputException | IllegalArgumentException e) {
-			job.fail(describeFailure(e));
+		} catch (InvalidInputException e) {
+			job.fail(e);
 			return null;
 		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);

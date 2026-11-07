@@ -2,6 +2,7 @@ package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -22,25 +23,28 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.exception.AuthException;
-import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.venue.TestLogs;
 
 /**
- * How a failed tool call is explained to the model (#644): an expected
- * failure is its own reason, whatever async wrappers it arrives in; anything
- * else is reported as an unexpected venue error, logged at ERROR. Isolated
- * because the unexpected cases silence that ERROR line.
+ * How a failed tool call is explained to the model: a failure already reported
+ * passes as it is, whatever async wrappers it arrives in; anything else is a
+ * fault in the code handling the call, reported as the tool's failure in its
+ * owner's code and logged at ERROR. Isolated because the fault cases silence
+ * that ERROR line.
  */
 @Isolated
 public class ToolFailureTest {
 
+	private static final String OWNER = FaultException.VENUE;
+
 	@Test
 	public void testExpectedFailureIsItsOwnReason() {
 		String reason = "refs[2] is not a hex hash";
-		assertEquals(reason, AbstractLLMAdapter.toolFailure(new InvalidInputException(reason), "op"));
-		assertEquals(reason, AbstractLLMAdapter.toolFailure(new AuthException(reason), "op"));
+		assertEquals(reason, AbstractLLMAdapter.toolFailure(new InvalidInputException(reason), "op", OWNER));
+		assertEquals(reason, AbstractLLMAdapter.toolFailure(new AuthException(reason), "op", OWNER));
 	}
 
 	@Test
@@ -54,45 +58,64 @@ public class ToolFailureTest {
 		} catch (ExecutionException e) {
 			wrapped = e;
 		}
-		assertEquals(reason, AbstractLLMAdapter.toolFailure(wrapped, "op"));
+		assertEquals(reason, AbstractLLMAdapter.toolFailure(wrapped, "op", OWNER));
 		assertEquals(reason, AbstractLLMAdapter.toolFailure(
-			new CompletionException(new ExecutionException(new NotSupportedException(reason))), "op"));
+			new CompletionException(new ExecutionException(new NotSupportedException(reason))), "op", OWNER));
 		assertTrue(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new AuthException(reason))));
 		assertFalse(covia.adapter.AAdapter.isExpectedFailure(new CompletionException(new NullPointerException(reason))));
 	}
 
-	/** A cycle's failure carrier tells a caller what any failure tells it: an
-	 *  expected one's reason, or that the venue failed, never a fault's text. */
+	/** An operation's fault, reported where it happened, reaches the model as that report. */
 	@Test
-	public void testACycleFailureSaysWhatACallerIsTold() throws Exception {
+	public void testAReportedFaultPassesUnchanged() throws Exception {
+		TestLogs.quiet(FaultException.class, () -> {
+			FaultException reported = (FaultException) FaultException.within("Operation crown:query",
+				FaultException.ADAPTER.formatted("crown"), new IllegalArgumentException("crown requires x"));
+			assertEquals(reported.getMessage(), AbstractLLMAdapter.toolFailure(reported, "crown", OWNER));
+			assertFalse(covia.adapter.AAdapter.isExpectedFailure(reported), "a fault is not the caller's to fix");
+		});
+	}
+
+	/** A cycle's failure carrier tells a caller what the transition reports:
+	 *  an expected failure's reason, or a fault in its adapter, never its text. */
+	@Test
+	public void testACycleFailureSaysWhatTheTransitionReports() throws Exception {
+		String owner = FaultException.ADAPTER.formatted("llmagent");
 		CycleRecord.begin();
-		assertEquals("bad input", CycleRecord.Failure.of(new InvalidInputException("bad input")).getMessage());
-		TestLogs.quiet(CycleRecord.class, () -> {
+		InvalidInputException refused = new InvalidInputException("bad input");
+		RuntimeException expected = CycleRecord.Failure.of(refused, owner);
+		assertEquals("bad input", expected.getMessage());
+		assertSame(refused, expected.getCause(), "the run loop reads the failure itself");
+		TestLogs.quiet(FaultException.class, () -> {
 			CycleRecord.begin();
 			IllegalStateException fault = new IllegalStateException("internal detail");
-			RuntimeException carried = CycleRecord.Failure.of(fault);
-			assertEquals(CoviaException.UNEXPECTED.formatted(IllegalStateException.class.getSimpleName()),
-				carried.getMessage());
-			assertSame(fault, carried.getCause(), "the run loop reads the fault itself");
+			RuntimeException carried = CycleRecord.Failure.of(fault, owner);
+			assertEquals(FaultException.FAILED.formatted(CycleRecord.TRANSITION,
+				IllegalStateException.class.getSimpleName(), owner), carried.getMessage());
+			FaultException report = assertInstanceOf(FaultException.class, carried.getCause(),
+				"the run loop reads the transition's report");
+			assertSame(fault, report.getCause());
 		});
 	}
 
 	@Test
-	public void testUnexpectedFailureIsReportedAsVenueError() throws Exception {
-		TestLogs.quiet(AbstractLLMAdapter.class, () -> {
+	public void testUnexpectedFailureIsTheToolsFault() throws Exception {
+		TestLogs.quiet(FaultException.class, () -> {
 			String npe = AbstractLLMAdapter.toolFailure(
-				new CompletionException(new NullPointerException("x is null")), "op");
-			assertTrue(npe.startsWith(AbstractLLMAdapter.UNEXPECTED_TOOL_FAILURE), npe);
-			assertTrue(npe.contains(NullPointerException.class.getSimpleName()), npe);
+				new CompletionException(new NullPointerException("x is null")), "op", OWNER);
+			assertEquals(FaultException.FAILED.formatted(AbstractLLMAdapter.TOOL.formatted("op"),
+				NullPointerException.class.getSimpleName(), OWNER), npe);
 			assertFalse(npe.contains("x is null"), "the model never sees an unexpected failure's text: " + npe);
 
 			// A JDK exception is unexpected whatever its message says.
-			String jdk = AbstractLLMAdapter.toolFailure(new IllegalArgumentException("bad ref"), "op");
-			assertTrue(jdk.startsWith(AbstractLLMAdapter.UNEXPECTED_TOOL_FAILURE), jdk);
+			String jdk = AbstractLLMAdapter.toolFailure(new IllegalArgumentException("bad ref"), "op", OWNER);
+			assertEquals(FaultException.FAILED.formatted(AbstractLLMAdapter.TOOL.formatted("op"),
+				IllegalArgumentException.class.getSimpleName(), OWNER), jdk);
 
-			// An expected type thrown without a reason explains nothing either.
-			String blank = AbstractLLMAdapter.toolFailure(new InvalidInputException((String) null), "op");
-			assertTrue(blank.startsWith(AbstractLLMAdapter.UNEXPECTED_TOOL_FAILURE), blank);
+			// A Covia exception thrown without a reason explains nothing either.
+			String blank = AbstractLLMAdapter.toolFailure(new InvalidInputException((String) null), "op", OWNER);
+			assertEquals(FaultException.FAILED.formatted(AbstractLLMAdapter.TOOL.formatted("op"),
+				InvalidInputException.class.getSimpleName(), OWNER), blank);
 		});
 	}
 
@@ -109,14 +132,15 @@ public class ToolFailureTest {
 			@Override public void recordCall(ToolCycleEngine.ToolCall call,
 				ToolCycleEngine.ToolOutcome outcome, long millis) {}
 		};
-		TestLogs.quiet(AbstractLLMAdapter.class, () -> ToolCycleEngine.executeBatch(
+		TestLogs.quiet(FaultException.class, () -> ToolCycleEngine.executeBatch(
 			Vectors.of(call("input"), call("bug")), 0, registry, new Object(), sink, NOPLogger.NOP_LOGGER));
 
 		assertEquals(2, messages.size());
 		String input = content(messages.get(0));
 		assertEquals("Error: bad input", input);
 		String bug = content(messages.get(1));
-		assertTrue(bug.startsWith("Error: " + AbstractLLMAdapter.UNEXPECTED_TOOL_FAILURE), bug);
+		assertEquals("Error: " + FaultException.FAILED.formatted(AbstractLLMAdapter.TOOL.formatted("op"),
+			NullPointerException.class.getSimpleName(), FaultException.VENUE), bug);
 		assertFalse(input.contains("java."), input);
 	}
 

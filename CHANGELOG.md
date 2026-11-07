@@ -98,19 +98,21 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Creating a workspace key, file, directory or drive needs `crud/write` on what holds it.
 - A cross-user write reaches only a user the venue already has.
 - Archive operations authorise as file operations do.
-- Refusals that were plain `RuntimeException`s are Covia exception types; a plain `RuntimeException` is a venue error.
+- Refusals that were plain `RuntimeException`s are Covia exception types; a plain `RuntimeException` is a fault.
 - `t/` outside a job or task reads as absent, as `n/` and `c/` do.
 - `VenueServer.launch` throws a startup failure as its own type.
 - `ConflictException` means two values that cannot both stand; a job, session or interaction that does not take the request is `NotSupportedException`, still 409.
 - A remote agent that answers for a different task answers 502.
-- A failure the venue did not expect is logged and shown to callers only by its type (#644).
-- A REST refusal a route does not list answers 400; a venue error answers 500.
+- A fault is reported by the scope it happened in, naming whose code it was and the exception's type, never its text, and logged once (#644).
+- An exception escaping an adapter, `IllegalArgumentException` included, fails its operation as that adapter's fault: `Operation <op> failed: unexpected <type> in adapter <name>`.
+- Output that breaks its operation's declared schema under strict validation is the adapter's fault and answers `/run` with 500.
+- A REST refusal a route does not list answers 400; a fault answers 500.
 - A store collection cancelled by `venue:gc` ends CANCELLED.
 - Model provider, MCP server and A2A failures are typed; a refused operator key is a configuration error, a caller's an input error.
-- A2A params that do not fit their method answer invalid params; a venue error on an A2A stream arrives as one error event.
+- A2A params that do not fit their method answer invalid params; a fault on an A2A stream arrives as one error event.
 - A secret or connected account the venue cannot decrypt is refused with how to fix it; a use of one is logged for the operator.
 - SQL failures quote no database text: callers get the SQLState and vendor code, or convex-db's parse and validation message; the venue logs the rest.
-- Error pages outside the REST API show a venue error's type and request id, never its message, and a refusal answers 400 (#540).
+- Error pages outside the REST API show a fault's report, which names the request id, never its message, and a refusal answers 400 (#540).
 
 ### Removed
 
@@ -134,6 +136,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A chat is no longer answered with the reply to an earlier message (#654).
 - A Claude Code session restored after a restart keeps the options its call asked for (model, tools, permission mode, limits, system prompt, JSON schema), and ends if its project no longer allows its permission mode.
 - A path starting with a `did:web` DID that encodes its port as `%3A` names that DID's data (#617).
+- `agent:cancelTask` with a task id that is not hex fails as invalid input.
+- Waiting on a cancelled job fails with the reason it was cancelled.
 
 ### Security
 

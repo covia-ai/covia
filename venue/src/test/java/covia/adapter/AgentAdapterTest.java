@@ -5811,6 +5811,8 @@ public class AgentAdapterTest {
 			fail("Should fail — invalid hex");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, job.getStatus());
+			assertEquals(AgentAdapter.INVALID_TASK_ID + "not-valid-hex!!!", job.getErrorMessage(),
+				"the caller's malformed id is the caller's to fix");
 		}
 	}
 

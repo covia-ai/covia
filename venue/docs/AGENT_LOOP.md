@@ -558,10 +558,11 @@ What happens next depends on what failed:
   `ConfigurationException` (a refused key, a missing model, an invalid
   setting) or `UnavailableException` (the provider cannot be reached, or keeps
   failing after the provider library's own retries), or returns a failure
-  value, which a level-3 operation returns only for a setup problem. An
-  unexpected failure, a venue fault logged at ERROR where it happened, counts
-  the same. The agent is suspended with the reason as its `error` (#88: an
-  agent whose key is missing stops after one cycle).
+  value, which a level-3 operation returns only for a setup problem. A fault,
+  reported and logged at ERROR where it happened
+  ([ERRORS.md](ERRORS.md#scopes)), counts the same. The agent is suspended
+  with the reason or report as its `error` (#88: an agent whose key is missing
+  stops after one cycle).
 
 A suspended agent keeps its queue, whether a fault or a deliberate
 `agent:suspend` stopped it. The task the stopped cycle took stays queued and
@@ -766,11 +767,13 @@ loop thread with no hop.
 #### Tool failures and unbound names
 
 Every failed call returns an `"Error: …"` result the model can act on
-(`AbstractLLMAdapter.toolFailure`). An expected failure, a `CoviaException`
-with a reason, is its own reason. Anything else is a runtime or venue bug: it
-is logged at ERROR with its stack, and the result says it was an unexpected
-venue error, not caused by the call's input, naming only its class
-([ERRORS.md](ERRORS.md)). Timeouts and interruptions have their own results.
+(`AbstractLLMAdapter.toolFailure`). A failure already reported is given as it
+is: an expected failure's reason, or the fault an operation reported, such as
+`Operation crown:query failed: unexpected IllegalArgumentException in adapter
+crown`. Anything else is a fault in the code handling the call: it is logged at
+ERROR with its stack, and the result is `Tool <name> failed: unexpected
+<ClassName> in the venue` ([ERRORS.md](ERRORS.md#scopes)). Timeouts and
+interruptions have their own results.
 
 A name the palette binds to no route (`dispatchUnbound`) runs nothing unless
 it resolves to an operation, which is dispatched as one. Otherwise the result

@@ -77,8 +77,13 @@ EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
 - **Expected failures are typed:** a failure a caller can cause or act on is a
   `CoviaException` subtype whose message says what failed and why, raised
   where that is known; library exceptions are wrapped where they are called.
-  Anything else reaching a caller is a runtime or venue bug, logged at ERROR
-  and reported as unexpected. See `venue/docs/ERRORS.md`.
+- **Faults are reported by their scope:** anything else is a fault of the
+  scope it escapes (an adapter running an operation, a tool call, the venue
+  handling a request). That scope logs it once at ERROR and reports it as its
+  own failure, naming whose code it was and the exception's type, never its
+  text (`FaultException.within`); outer scopes pass the report on. An
+  `IllegalArgumentException` escaping an adapter is that adapter's fault. See
+  `venue/docs/ERRORS.md`.
 - **Checks return reasons:** a check returns `null` when it passes and a
   human-readable reason when it does not (`CapabilityChecker.allows`,
   `UcanJwtValidator.Validation`, `VenueAuthenticator.Verdict`), so the reason

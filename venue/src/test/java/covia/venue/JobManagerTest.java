@@ -162,9 +162,8 @@ public class JobManagerTest {
 
 	@Test
 	public void testSynchronousAdapterErrorsSettleDurableJobs() throws Exception {
-		// A linkage error is a venue fault, logged at ERROR where the job fails
-		TestLogs.quiet(AAdapter.class, () -> TestLogs.quiet(JobManager.class,
-			this::synchronousAdapterErrorsSettleDurableJobs));
+		// A linkage error is the adapter's fault, logged at ERROR where its Job reports it
+		TestLogs.quiet(covia.exception.FaultException.class, this::synchronousAdapterErrorsSettleDurableJobs);
 	}
 
 	private void synchronousAdapterErrorsSettleDurableJobs() {
@@ -190,10 +189,13 @@ public class JobManagerTest {
 			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
 				Maps.of(Fields.ADAPTER, Strings.create("broken-module:run")));
 			for (ACell input : new ACell[] { null, Strings.create("custom") }) {
-				assertThrows(NoClassDefFoundError.class,
+				// The caller receives the Job's report: the adapter's fault, the error chained
+				covia.exception.FaultException thrown = assertThrows(covia.exception.FaultException.class,
 					() -> eng.jobs().invokeOperation(meta, input, eng.venueContext()));
+				assertTrue(thrown.getCause() instanceof NoClassDefFoundError, String.valueOf(thrown.getCause()));
 				Job job = invoked.get();
 				assertEquals(Status.FAILED, job.getStatus());
+				assertEquals(thrown.getMessage(), job.getErrorMessage());
 				assertTrue(job.future().isCompletedExceptionally());
 				assertEquals(Status.FAILED, eng.jobs().getJobData(job.getID(), eng.venueContext()).get(Fields.STATUS));
 			}

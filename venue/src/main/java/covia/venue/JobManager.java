@@ -32,6 +32,7 @@ import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -250,8 +251,9 @@ public class JobManager {
 				}
 			});
 		} catch (RuntimeException | Error failure) {
-			prepared.job().fail(failure);
-			throw failure;
+			CoviaException reported = FaultException.within(STARTING_JOB, FaultException.VENUE, failure);
+			prepared.job().fail(reported);
+			throw reported;
 		}
 		return prepared.job();
 	}
@@ -317,9 +319,11 @@ public class JobManager {
 
 		/**
 		 * Invoke the adapter. A synchronous capability denial fails the Job (the
-		 * same surface async adapters produce); any other synchronous adapter
-		 * failure is recorded on the Job and then rethrown, so a Job is never
-		 * stranded PENDING with no worker.
+		 * same surface async adapters produce); any other synchronous failure is
+		 * recorded on the Job and the report rethrown, so a Job is never stranded
+		 * PENDING with no worker. A failure in the adapter is its operation's
+		 * fault ({@link Job#report}); one in the venue's own check before it is
+		 * the venue's.
 		 */
 		public synchronized Job start() {
 			if (started) throw new IllegalStateException("Job already started: " + job.getID());
@@ -327,24 +331,36 @@ public class JobManager {
 			if (job.isFinished()) return job;
 			try {
 				if (job instanceof VenueJob venueJob) venueJob.requireAccount();
+			} catch (covia.exception.AuthException e) {
+				job.fail(e);
+				return job;
+			} catch (RuntimeException | Error e) {
+				throw failWith(FaultException.within(STARTING_JOB, FaultException.VENUE, e));
+			}
+			try {
 				adapter.invoke(job, jobCtx, meta, input);
 			} catch (java.util.concurrent.CancellationException e) {
 				job.cancel(e.getMessage());
 			} catch (covia.exception.AuthException e) {
 				job.fail(e);
 			} catch (RuntimeException | Error e) {
-				if (CoviaException.reasonOf(e) == null) {
-					log.error("Unexpected failure starting job {}", job.getID(), e);
-				}
-				try { job.fail(e); }
-				catch (RuntimeException | Error reporting) {
-					if (reporting != e) e.addSuppressed(reporting);
-				}
-				throw e;
+				throw failWith(job.report(e));
 			}
 			return job;
 		}
+
+		/** Records {@code reported} on the Job and returns it for the caller to throw. */
+		private CoviaException failWith(CoviaException reported) {
+			try { job.fail(reported); }
+			catch (RuntimeException | Error recording) {
+				if (recording != reported) reported.addSuppressed(recording);
+			}
+			return reported;
+		}
 	}
+
+	/** What failed, when the venue cannot start a Job before its adapter runs. */
+	public static final String STARTING_JOB = "Starting the job";
 
 	/**
 	 * Resolve a reference to an operation definition, failing fast otherwise:
@@ -832,8 +848,9 @@ public class JobManager {
 		String err = JsonSchema.validate(outputSchema, result);
 		if (err == null) return;
 		if ("strict".equals(mode)) {
-			// The operation broke its own declared contract, not the caller's input.
-			throw new CoviaException(OUTPUT_SCHEMA_VIOLATION + err);
+			// The operation broke its own declared contract: its adapter's fault,
+			// not the caller's input
+			throw new FaultException(OUTPUT_SCHEMA_VIOLATION + err);
 		}
 		log.warn("Output schema violation: {}", err);
 	}
@@ -1483,8 +1500,16 @@ public class JobManager {
 			record = record.assoc(Fields.SOURCE, source);
 		}
 
-		adapter.handleMessage(job, record);
+		try {
+			adapter.handleMessage(job, record);
+		} catch (RuntimeException | Error e) {
+			// The adapter taking the message: an unexpected exception is its fault
+			throw FaultException.within(DELIVERING_MESSAGE.formatted(jobID.toHexString()), adapter.faultOwner(), e);
+		}
 	}
+
+	/** What failed, when an adapter fails taking a message: the Job's id follows. */
+	public static final String DELIVERING_MESSAGE = "Message delivery to job %s";
 
 	// ========== History ==========
 

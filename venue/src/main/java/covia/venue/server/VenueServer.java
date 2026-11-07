@@ -51,6 +51,7 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
@@ -1134,23 +1135,25 @@ public class VenueServer {
 		routes.exception(Exception.class, (e, ctx) -> {
 			// A route answers the outcomes it defines. An expected failure that
 			// escapes it is a refusal in a situation it does not list, a 400 with
-			// its reason; anything else is a venue error, a 500 naming only its
-			// type, whose message stays in the log line the request's id finds
+			// its reason. A fault is a 500 with its report: one reported where it
+			// happened, or anything else, which is the venue's own fault in
+			// handling the request, logged here and named only by its type; the
+			// report names the request's id, which the log line carries too
 			// (COG-21, ERRORS.md). The same holds on every route.
-			String reason = CoviaException.reasonOf(e);
 			String requestId = RequestLog.id(ctx);
-			if (reason == null) log.error("Unhandled exception in {} {} (request {})", ctx.method(), ctx.path(), requestId, e);
+			CoviaException reported = FaultException.within(
+				REQUEST.formatted(ctx.method(), ctx.path(), requestId), FaultException.VENUE, e);
+			boolean fault = FaultException.isFault(reported);
 			if (VenueRouteFeature.isRestApi(ctx.routeRoles())) {
-				if (reason != null) ApiErrors.write(ctx, 400, reason);
-				else ApiErrors.write(ctx, 500, covia.adapter.AAdapter.describeFailure(e));
+				ApiErrors.write(ctx, fault ? 500 : 400, reported.getMessage());
 				return;
 			}
-			if (reason != null) {
-				renderHttpError(new BadRequestResponse(reason), ctx);
+			if (!fault) {
+				renderHttpError(new BadRequestResponse(reported.getMessage()), ctx);
 				return;
 			}
 			Map<String, String> details = new java.util.LinkedHashMap<>();
-			details.put("error", covia.adapter.AAdapter.describeFailure(e));
+			details.put("error", reported.getMessage());
 			if (requestId != null) details.put("requestId", requestId);
 			renderHttpError(new InternalServerErrorResponse("Internal server error", details), ctx);
 		});
@@ -1249,6 +1252,9 @@ public class VenueServer {
 
 	/** Reason given to an origin the CORS policy refuses. */
 	public static final String CORS_ORIGIN_DENIED = "CORS origin denied";
+
+	/** What failed, when the venue fails handling a request: its method, path and id ({@link RequestLog}) follow. */
+	public static final String REQUEST = "Request %s %s (id %s)";
 	/** Opening of the reason given to a caller over its request rate; the wait follows. */
 	public static final String RATE_LIMITED = "Rate limit exceeded; retry after ";
 

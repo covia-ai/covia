@@ -24,6 +24,8 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -347,8 +349,9 @@ public abstract class AAdapter {
 			// matching the Engine.materialiseVOps policy; strictAssets=false
 			// downgrades to a warning for test/debug scaffolding only.
 			if (engine == null || engine.config().isStrictAssets()) {
-				throw new IllegalStateException(
-					"Failed to install adapter asset from " + resourcePath + ": " + describeFailure(e), e);
+				// For the operator, who reads it where the venue's start fails
+				throw new IllegalStateException("Failed to install adapter asset from " + resourcePath + ": "
+					+ FaultException.describe(faultOwner(), e), e);
 			}
 			log.warn("Failed to install asset from {} (tolerated: strictAssets=false)", resourcePath, e);
 			return null;
@@ -918,12 +921,15 @@ public abstract class AAdapter {
 			try {
 				invocation = invokeFuture(ctx, meta, input);
 				if (invocation == null) invocation = CompletableFuture.completedFuture(null);
-			} catch (RuntimeException | Error e) {
-				try { settleJob(job, null, e); }
-				catch (RuntimeException | Error reporting) {
-					if (reporting != e) e.addSuppressed(reporting);
-				}
+			} catch (CancellationException e) {
+				job.cancel();
 				throw e;
+			} catch (RuntimeException | Error e) {
+				// The adapter's own failure, reported once by its Job; the caller
+				// that started the Job receives the same report
+				CoviaException reported = job.report(e);
+				job.fail(reported);
+				throw reported;
 			}
 			bridgeToJob(job, invocation);
 		});
@@ -1032,13 +1038,16 @@ public abstract class AAdapter {
 			try {
 				settleJob(job, result, error);
 			} catch (RuntimeException | Error failure) {
-				// A completion hook (e.g. output validation) can fail before it
-				// commits. Do not strand the Job on an ignored dependent future.
-				log.warn("Failed to settle job {}", job.getID(), failure);
-				job.fail(failure);
+				// Recording the outcome can fail before it commits. That is the
+				// venue's fault, not the adapter's; do not strand the Job on an
+				// ignored dependent future.
+				job.fail(FaultException.within(RECORDING_OUTCOME, FaultException.VENUE, failure));
 			}
 		});
 	}
+
+	/** What failed, when the venue cannot record an operation's outcome. */
+	public static final String RECORDING_OUTCOME = "Recording the operation's outcome";
 
 	/**
 	 * Map a completed {@code (result, error)} pair onto Job verbs — the single
@@ -1051,11 +1060,8 @@ public abstract class AAdapter {
 		} else if (unwrap(error) instanceof CancellationException) {
 			job.cancel();
 		} else {
-			Throwable cause = unwrap(error);
-			if (covia.exception.CoviaException.reasonOf(cause) == null) {
-				log.error("Unexpected failure in job {}", job.getID(), cause);
-			}
-			job.fail(cause);
+			// A fault in the adapter is reported, and logged, by the Job (Job.report)
+			job.fail(error);
 		}
 	}
 
@@ -1092,20 +1098,32 @@ public abstract class AAdapter {
 		}
 	}
 
+	/** Follows an unexpected class-loading failure's description: what the operator can do. */
+	public static final String CLASS_NOT_LOADED = " — a class could not be loaded; if a jar was rebuilt or "
+		+ "replaced while the venue was running, restart the venue";
+
 	/**
-	 * Render a Throwable for a caller, as {@link Job#fail} records it: an
-	 * expected failure's reason, or the type of anything else, never its text
-	 * ({@link covia.exception.CoviaException#describe}).
+	 * The cause of a failure as this adapter states it, after its own words for
+	 * what failed: a Covia exception's reason, or an unexpected exception in
+	 * this adapter by its type, never its text, logged here once
+	 * ({@link FaultException#cause}). To fail a Job, pass the failure to
+	 * {@link Job#fail(Throwable)}, which names the operation too.
 	 */
-	public static String describeFailure(Throwable t) {
+	public String describeFailure(Throwable t) {
 		if (t == null) return "Operation failed without an error detail";
 		Throwable cause = unwrap(t);
-		String text = covia.exception.CoviaException.describe(cause);
-		if (cause instanceof LinkageError) {
-			text += " — a class could not be loaded; if a jar was rebuilt or replaced while the venue "
-				+ "was running, restart the venue";
-		}
+		String text = FaultException.cause(faultOwner(), cause);
+		if (cause instanceof LinkageError) text += CLASS_NOT_LOADED;
 		return conciseDetail(text, MAX_FAILURE_CHARS);
+	}
+
+	/**
+	 * Whose code it is, as this adapter's fault reports name it
+	 * ({@link FaultException#ADAPTER}). A scope that logs a failure itself
+	 * describes it with {@code FaultException.describe(faultOwner(), e)}.
+	 */
+	public String faultOwner() {
+		return FaultException.ADAPTER.formatted(getName());
 	}
 
 	/** A remote's code or request id fit to quote in a message: an identifier, never free text. */
@@ -1137,13 +1155,12 @@ public abstract class AAdapter {
 	}
 
 	/**
-	 * Whether a failure was expected: a CoviaException carrying its reason
-	 * (#644), looking through async wrappers. Anything else reaching a caller —
-	 * including a CoviaException thrown without a reason — is a runtime or
-	 * venue bug.
+	 * Whether a failure is one its caller can cause or act on: a Covia
+	 * exception carrying its reason that is not a reported fault, looking
+	 * through async wrappers. A fault, or anything not yet reported, is not.
 	 */
 	public static boolean isExpectedFailure(Throwable t) {
-		return covia.exception.CoviaException.reasonOf(t) != null;
+		return CoviaException.reasonOf(t) != null && !FaultException.isFault(t);
 	}
 
 	/**

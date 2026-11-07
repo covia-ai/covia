@@ -40,6 +40,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.CoviaException;
+import covia.exception.FaultException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -971,12 +972,13 @@ public class CoviaAPI extends ACoviaAPI {
 			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 			if (run.job() != null) {
 				// The venue accepted the run; the operation then failed. However
-				// it failed, that is the job's outcome, not an HTTP refusal.
-				// An unexpected failure was logged when the job failed.
-				if (AAdapter.isExpectedFailure(cause)) {
-					buildError(ctx, 400, "Error running operation: " + cause.getMessage());
+				// it failed, that is the job's outcome, not an HTTP refusal: a
+				// fault, which the job reported, or the operation's stated reason.
+				CoviaException reported = run.job().report(cause);
+				if (FaultException.isFault(reported)) {
+					buildError(ctx, 500, reported.getMessage());
 				} else {
-					buildError(ctx, 500, "Operation failed: " + AAdapter.describeFailure(cause));
+					buildError(ctx, 400, "Error running operation: " + reported.getMessage());
 				}
 			} else if (cause instanceof AuthException) {
 				buildError(ctx, 403, cause.getMessage());
@@ -988,11 +990,12 @@ public class CoviaAPI extends ACoviaAPI {
 				ctx.header("Retry-After", Long.toString(rate.getRetryAfterSeconds()));
 				buildError(ctx, 429, rate.getMessage());
 			} else if (AAdapter.isExpectedFailure(cause)) {
-				// The operation ran and failed for its own stated reason.
+				// The run was refused for its own stated reason.
 				buildError(ctx, 400, "Error running operation: " + cause.getMessage());
 			} else {
-				log.error("Unexpected failure running operation {}", op, cause);
-				buildError(ctx, 500, "Operation failed: " + AAdapter.describeFailure(cause));
+				// A fault reported where it happened, or the venue's own in
+				// handling this request: the server answers both
+				throw e;
 			}
 		}
 	}
@@ -1111,9 +1114,12 @@ public class CoviaAPI extends ACoviaAPI {
 			ctx.header("Retry-After", Long.toString(e.getRetryAfterSeconds()));
 			this.buildError(ctx, 429, e.getMessage());
 			return;
+		} catch (FaultException e) {
+			// A fault, reported where it happened, is the server handler's to answer
+			throw e;
 		} catch (CoviaException e) {
 			// Any other expected refusal of the invocation; anything else is a
-			// venue error, which the server's handler reports
+			// fault, which the server's handler reports
 			this.buildError(ctx, 400, "Error invoking operation: " + e.getMessage());
 		}
 	}

@@ -258,8 +258,12 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 			queued.remove(id);
 			if (failure != null) {
 				lastError = PROCESSING_FAILED;
-				log.warn("{} bot '{}': {}: {}", adapter.getName(), spec.name(), PROCESSING_FAILED, AAdapter.describeFailure(failure));
-				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, AAdapter.describeFailure(failure), System.currentTimeMillis())); }
+				// A fault is logged where it is reported; an expected failure here
+				String cause = adapter.describeFailure(failure);
+				if (AAdapter.isExpectedFailure(failure)) {
+					log.warn("{} bot '{}': {}: {}", adapter.getName(), spec.name(), PROCESSING_FAILED, cause);
+				}
+				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, cause, System.currentTimeMillis())); }
 				catch (RuntimeException writeFailure) { log.warn("Could not record processing failure: {}", writeFailure.toString()); }
 			}
 		});

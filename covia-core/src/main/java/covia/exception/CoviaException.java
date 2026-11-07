@@ -1,9 +1,11 @@
 package covia.exception;
 
 /**
- * Base class for Covia client and server custom exceptions. A failure a caller
- * can cause or act on is one of these, and its message is the reason written
- * for that caller. Anything else reaching a caller is a runtime or venue bug.
+ * Base class for Covia client and server custom exceptions. Its message is
+ * written for the caller. A failure the caller can cause or act on is one of
+ * its subtypes; a {@link FaultException} is a scope's report of a fault in
+ * code the request ran. Anything else reaching a caller has not been reported
+ * yet: the scope it escapes reports it ({@link FaultException#within}).
  */
 @SuppressWarnings("serial")
 public class CoviaException extends RuntimeException {
@@ -16,13 +18,10 @@ public class CoviaException extends RuntimeException {
 		super(message, cause);
 	}
 
-	/** What a caller is told of an unexpected failure: its type, never its text. */
-	public static final String UNEXPECTED = "Unexpected venue error (%s)";
-
 	/**
-	 * The reason an expected failure gives its caller, looking through async
-	 * wrappers: a CoviaException's message. Null for anything else, including
-	 * a CoviaException without a message, whose text is not written for the
+	 * The reason a failure gives its caller, looking through async wrappers:
+	 * a CoviaException's message. Null for anything else, including a
+	 * CoviaException without a message, whose text is not written for the
 	 * caller and may carry a remote's body or a credential.
 	 */
 	public static String reasonOf(Throwable t) {
@@ -32,20 +31,12 @@ public class CoviaException extends RuntimeException {
 		return (message == null || message.isBlank()) ? null : message;
 	}
 
-	/**
-	 * What a caller is told of a failure: an expected failure's reason, or
-	 * {@link #UNEXPECTED} naming the type of anything else.
-	 */
-	public static String describe(Throwable t) {
-		String reason = reasonOf(t);
-		return (reason != null) ? reason : UNEXPECTED.formatted(unwrap(t).getClass().getSimpleName());
-	}
-
-	private static Throwable unwrap(Throwable t) {
+	/** Looks through {@code CompletionException} and {@code ExecutionException} wrappers to the failure itself. */
+	static Throwable unwrap(Throwable t) {
 		Throwable cause = t;
 		while ((cause instanceof java.util.concurrent.CompletionException
 				|| cause instanceof java.util.concurrent.ExecutionException)
-				&& cause.getCause() != null) {
+				&& cause.getCause() != null && cause.getCause() != cause) {
 			cause = cause.getCause();
 		}
 		return cause;

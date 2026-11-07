@@ -190,10 +190,12 @@ alike:
 | The front door's chat operation, or the agent, does not take a fresh message | `-32006` invalid agent response |
 | Anything else | `-32603` internal error |
 
-An unexpected failure answers `-32603` with only `Unexpected venue error
-(ClassName)`, never its text, and the venue logs it at ERROR. An expected
-failure that no situation above describes, such as an admission refusal or a
-venue that is shutting down, also answers `-32603`, with its reason.
+A fault answers `-32603` with the report of the scope it happened in: the
+adapter that failed taking the message, or the venue handling the method,
+naming the exception's type, never its text ([ERRORS.md](ERRORS.md#scopes)).
+An expected failure that no situation above describes, such as an admission
+refusal or a venue that is shutting down, also answers `-32603`, with its
+reason.
 
 On a stream (`SendStreamingMessage`, `SubscribeToTask`), a refusal before the
 stream opens is an ordinary JSON-RPC response. A failure after it opens arrives
@@ -202,7 +204,7 @@ as one `-32603` error event, and the stream closes.
 Two answers are HTTP rather than JSON-RPC. Access to a per-agent endpoint is
 refused before the body is read: 404 for an anonymous caller, 403 for an
 authenticated one (see Resolution and authorisation). An Agent Card request
-that fails answers 500, naming only the type of an unexpected failure.
+that fails answers 500 with its reason, or with the venue's report of a fault.
 
 ## Relationship to the venue-as-single-agent model
 

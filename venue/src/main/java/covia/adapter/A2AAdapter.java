@@ -698,7 +698,7 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		try {
 			target = resolveAgentTarget(input, ctx, allowRaw);
 		} catch (RuntimeException e) {
-			job.fail(describeFailure(e));
+			job.fail(e);
 			return;
 		}
 		String rpcUrl = target.rpcUrl();

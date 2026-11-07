@@ -234,8 +234,8 @@ public class HITLAdapterTest {
 
 	@Test
 	public void resolutionAndSessionDeliveryRollbackTogetherAndSurviveRestart() throws Exception {
-		// The injected delivery failure is a venue fault, logged at ERROR where the job fails
-		TestLogs.quiet(AAdapter.class, this::resolutionAndSessionDeliveryRollBackTogether);
+		// The injected delivery failure is a fault, logged at ERROR where it is reported
+		TestLogs.quiet(covia.exception.FaultException.class, this::resolutionAndSessionDeliveryRollBackTogether);
 	}
 
 	private void resolutionAndSessionDeliveryRollBackTogether() throws Exception {
@@ -318,8 +318,8 @@ public class HITLAdapterTest {
 
 	@Test
 	public void resolutionCommitsFinalJobBeforeFlushAndSurvivesRestart() throws Exception {
-		// The injected flush failure is a venue fault, logged at ERROR where the job fails
-		TestLogs.quiet(AAdapter.class, this::resolutionCommitsFinalJobBeforeFlush);
+		// The injected flush failure is a fault, logged at ERROR where it is reported
+		TestLogs.quiet(covia.exception.FaultException.class, this::resolutionCommitsFinalJobBeforeFlush);
 	}
 
 	private void resolutionCommitsFinalJobBeforeFlush() throws Exception {
