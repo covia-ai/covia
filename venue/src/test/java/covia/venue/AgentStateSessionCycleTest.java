@@ -2,6 +2,7 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -472,5 +473,104 @@ public class AgentStateSessionCycleTest {
 			Strings.create("op"), Strings.create("test-cycle"));
 		agent.mergeRunResult(null, Maps.empty(), null,
 			timelineEntry, sid, null, null);
+	}
+
+	// ========== The cycle claim (AGENT_LOOP.md §2.5.1) ==========
+
+	private static final AMap<AString, ACell> DONE = Maps.of(Fields.ID, TASK, Fields.STATUS, covia.grid.Status.COMPLETE);
+
+	@Test
+	public void testACycleClaimsTheAgentAndItsSession() {
+		assertEquals(AgentState.CycleStart.SESSION, agent.beginCycle(null, null, sid, EPOCH_A, null, 0));
+		assertTrue(agent.holdsClaim(EPOCH_A));
+		assertFalse(agent.holdsClaim(EPOCH_B));
+		assertEquals(EPOCH_A, agent.getSessionCycleEpoch(sid), "the session carries the same claim");
+	}
+
+	@Test
+	public void testACycleWithNeitherTaskNorSessionIsClaimedToo() {
+		assertEquals(AgentState.CycleStart.NO_SESSION, agent.beginCycle(null, null, null, EPOCH_A, null, 0));
+		assertTrue(agent.holdsClaim(EPOCH_A));
+	}
+
+	@Test
+	public void testACycleThatPickedOnlyAGoneSessionTakesNothing() {
+		agent.removeSession(sid);
+		AMap<AString, ACell> before = agent.getRecord();
+		assertEquals(AgentState.CycleStart.MOVED, agent.beginCycle(null, null, sid, EPOCH_A, null, 0));
+		assertEquals(before, agent.getRecord(), "no claim is issued");
+	}
+
+	@Test
+	public void testEveryStopRevokesTheClaimInItsOwnWrite() {
+		for (Runnable stop : new Runnable[] {
+				() -> agent.suspend(userDid, Strings.create("stop")),
+				() -> agent.suspend(Strings.create("fault")),
+				() -> agent.setStatus(AgentState.TERMINATED),
+				agent::revokeClaim}) {
+			agent.setStatus(AgentState.SLEEPING);
+			assertEquals(AgentState.CycleStart.SESSION, agent.beginCycle(null, null, sid, EPOCH_A, null, 0));
+			stop.run();
+			assertFalse(agent.holdsClaim(EPOCH_A), "the claim is revoked");
+			assertNull(agent.getSessionCycleEpoch(sid), "with its session's copy");
+			assertNull(agent.getRecord().get(AgentState.KEY_IN_CYCLE));
+			agent.tryResume();
+		}
+	}
+
+	@Test
+	public void testAStoppedAgentIsIssuedNoClaim() {
+		for (AString stopped : new AString[] {AgentState.SUSPENDED, AgentState.TERMINATED}) {
+			agent.setStatus(stopped);
+			AMap<AString, ACell> before = agent.getRecord();
+			assertEquals(AgentState.CycleStart.STOPPED, agent.beginCycle(null, null, sid, EPOCH_A, null, 0));
+			assertEquals(before, agent.getRecord(), stopped + ": nothing is taken");
+		}
+	}
+
+	@Test
+	public void testResumeIssuesNoClaim() {
+		agent.beginCycle(null, null, sid, EPOCH_A, null, 0);
+		agent.suspend(userDid, Strings.create("stop"));
+		assertTrue(agent.tryResume());
+		assertFalse(agent.holdsClaim(EPOCH_A), "the stopped cycle stays stopped");
+	}
+
+	@Test
+	public void testOnlyTheCycleHoldingTheClaimResolvesItsTask() {
+		ACell picked = queueTask("work");
+		agent.beginCycle(TASK, picked, sid, EPOCH_A, Vectors.of(turn("work")), 0);
+		long revision = AgentState.taskRevision(agent.getTasks().get(TASK));
+		agent.suspend(userDid, Strings.create("stop"));
+		assertNull(agent.resolveTask(TASK, revision, EPOCH_A, DONE), "a stopped cycle cannot resolve its task");
+		assertNotNull(agent.getTasks().get(TASK), "the task stays queued");
+
+		assertTrue(agent.tryResume());
+		agent.beginCycle(TASK, agent.getTasks().get(TASK), sid, EPOCH_B, null, 0);
+		assertNull(agent.resolveTask(TASK, revision, EPOCH_A, DONE), "nor after a later cycle claims the agent");
+		assertNotNull(agent.resolveTask(TASK, revision, EPOCH_B, DONE), "the cycle holding the claim does");
+	}
+
+	@Test
+	public void testTheMergeEndsTheClaim() {
+		agent.beginCycle(null, null, sid, EPOCH_A, null, 0);
+		mergeMinimalCycle();
+		assertFalse(agent.holdsClaim(EPOCH_A));
+		assertNull(agent.getRecord().get(AgentState.KEY_IN_CYCLE));
+	}
+
+	@Test
+	public void testAStoppedCycleIsRecordedWithItsStop() {
+		agent.beginCycle(null, null, sid, EPOCH_A, null, 0);
+		agent.suspend(userDid, Strings.create("review"));
+		agent.recordStoppedCycle(Maps.of(Fields.CANCELLED, convex.core.data.prim.CVMBool.TRUE));
+		AVector<ACell> timeline = agent.getTimeline();
+		assertEquals(1, timeline.count());
+		assertEquals(agent.getRecord().get(AgentState.KEY_SUSPENSION),
+			RT.getIn(timeline.get(0), AgentState.KEY_SUSPENSION), "the entry names the stop");
+
+		agent.setStatus(AgentState.TERMINATED);
+		agent.recordStoppedCycle(Maps.of(Fields.CANCELLED, convex.core.data.prim.CVMBool.TRUE));
+		assertEquals(1, agent.getTimeline().count(), "a terminated agent is written no more");
 	}
 }

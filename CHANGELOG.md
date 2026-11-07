@@ -113,6 +113,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A secret or connected account the venue cannot decrypt is refused with how to fix it; a use of one is logged for the operator.
 - SQL failures quote no database text: callers get the SQLState and vendor code, or convex-db's parse and validation message; the venue logs the rest.
 - Error pages outside the REST API show a fault's report, which names the request id, never its message, and a refusal answers 400 (#540).
+- An agent cycle stopped by `agent:suspend` or `agent:delete` can no longer complete or fail its task, and its result is not merged; the task runs again after resume.
 
 ### Removed
 
@@ -138,7 +139,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A path starting with a `did:web` DID that encodes its port as `%3A` names that DID's data (#617).
 - `agent:cancelTask` with a task id that is not hex fails as invalid input.
 - Waiting on a cancelled job fails with the reason it was cancelled.
-- `agent:suspend` or `agent:delete` that lands as a transition ends stops the cycle instead of failing its task.
+- An agent cycle stopped by `agent:suspend` or `agent:delete` is recorded as stopped however its transition ends, even when the agent is resumed first, and frees its session.
 
 ### Security
 

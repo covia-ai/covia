@@ -64,9 +64,11 @@ public class RequestContext {
 	/** Execution references are always qualified by their owning user. Delegating
 	 * a namespace never changes that ownership. Agent sessions use the owner,
 	 * agent ID and session ID together; job/task IDs are user-relative.
-	 * Task revision is -1 outside a task cycle and fences task completion. */
+	 * Task revision is -1 outside a task cycle and fences task completion. The
+	 * claim is the run-loop cycle's ({@code AGENT_LOOP.md} §2.5.1), null
+	 * outside one; it fences the cycle's own writes. */
 	public record ExecutionScope(AString ownerDID, AString agentId, Blob jobId,
-			Blob sessionId, Blob taskId, long taskRevision) {
+			Blob sessionId, Blob taskId, long taskRevision, ACell claim) {
 		public ExecutionScope {
 			if (ownerDID == null && (agentId != null || jobId != null || sessionId != null || taskId != null)) {
 				throw new IllegalArgumentException(EXECUTION_OWNER_REQUIRED);
@@ -135,7 +137,7 @@ public class RequestContext {
 		new RequestContext(Authority.ANONYMOUS);
 
 	private RequestContext(Authority authority) {
-		this(authority, new ExecutionScope(authority.getUserDID(), null, null, null, null, -1L),
+		this(authority, new ExecutionScope(authority.getUserDID(), null, null, null, null, -1L, null),
 			null, null, null, null, null, false, null, null, null, null, null);
 	}
 
@@ -173,7 +175,7 @@ public class RequestContext {
 	 * reinterprets the previous user's IDs. */
 	private ExecutionScope localExecutionScope() {
 		return hasLocalExecutionScope() ? executionScope
-			: new ExecutionScope(getUserDID(), null, null, null, null, -1L);
+			: new ExecutionScope(getUserDID(), null, null, null, null, -1L, null);
 	}
 
 	private RequestContext withExecutionScope(ExecutionScope scope) {
@@ -311,7 +313,7 @@ public class RequestContext {
 	 */
 	public RequestContext withAgentId(AString agentId) {
 		ExecutionScope scope = localExecutionScope();
-		return withExecutionScope(new ExecutionScope(getUserDID(), agentId, scope.jobId(), scope.sessionId(), scope.taskId(), scope.taskRevision()));
+		return withExecutionScope(new ExecutionScope(getUserDID(), agentId, scope.jobId(), scope.sessionId(), scope.taskId(), scope.taskRevision(), scope.claim()));
 	}
 
 	/**
@@ -322,7 +324,7 @@ public class RequestContext {
 	 */
 	public RequestContext withJobId(Blob jobId) {
 		ExecutionScope scope = localExecutionScope();
-		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), jobId, scope.sessionId(), scope.taskId(), scope.taskRevision()));
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), jobId, scope.sessionId(), scope.taskId(), scope.taskRevision(), scope.claim()));
 	}
 
 	/**
@@ -342,7 +344,7 @@ public class RequestContext {
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
 		ExecutionScope scope = localExecutionScope();
-		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), sessionId, scope.taskId(), scope.taskRevision()));
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), sessionId, scope.taskId(), scope.taskRevision(), scope.claim()));
 	}
 
 	/**
@@ -354,13 +356,28 @@ public class RequestContext {
 	 */
 	public RequestContext withTaskId(Blob taskId) {
 		ExecutionScope scope = localExecutionScope();
-		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), scope.sessionId(), taskId, -1L));
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), scope.sessionId(), taskId, -1L, scope.claim()));
 	}
 
 	/** Returns a context focused on the task row revision presented this cycle. */
 	public RequestContext withTaskId(Blob taskId, long taskRevision) {
 		ExecutionScope scope = localExecutionScope();
-		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), scope.sessionId(), taskId, taskRevision));
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), scope.sessionId(), taskId, taskRevision, scope.claim()));
+	}
+
+	/**
+	 * Returns a context carrying the claim of the run-loop cycle it drives
+	 * ({@code AGENT_LOOP.md} §2.5.1). The cycle's own writes made under it,
+	 * such as resolving its task, take effect only while the claim is current.
+	 */
+	public RequestContext withClaim(ACell claim) {
+		ExecutionScope scope = localExecutionScope();
+		return withExecutionScope(new ExecutionScope(getUserDID(), scope.agentId(), scope.jobId(), scope.sessionId(), scope.taskId(), scope.taskRevision(), claim));
+	}
+
+	/** The claim of the run-loop cycle this context drives, or null outside one. */
+	public ACell getClaim() {
+		return hasLocalExecutionScope() ? executionScope.claim() : null;
 	}
 
 	/**

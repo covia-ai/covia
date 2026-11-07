@@ -562,6 +562,8 @@ If the return value is non-null, the framework appends it as the terminal turn i
 | `agent:complete_task` (input: `result`) | Job → COMPLETE with `result`, task entry removed |
 | `agent:fail_task` (input: `error`) | Job → FAILED with `error`, task entry removed |
 
+Both are refused once the cycle's claim is revoked ([AGENT_LOOP.md §2.5.1](./AGENT_LOOP.md)): a stopped cycle's task stays queued.
+
 There is no `agent:yield` op — yield is the natural state when no completion op was invoked. There is no `agent:complete_chat` op — chat completes via the return value.
 
 **Framework-populated scope.** The transition runs under a request context scoped to `(agent, session?, task?)`. Any venue op invoked from inside the transition — directly or via the LLM tool loop — sees the correct scope without having to pass IDs explicitly.
@@ -572,7 +574,7 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 |-------|--------|------|
 | `pending` | intake (`appendSessionPending`) appends; the run loop takes | at cycle start, in the same CAS that lands the taken envelopes' user turns, for every runtime |
 | `frames` | the run loop and the owning cycle | the run loop writes the cycle's input at its start and, for a runtime that does not write frames itself, its turns at the merge; both built-in LLM runtimes write live, fenced by the claim. Nothing replaces the frames wholesale. Context-bearing frame fields are defined only in [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §1.1 |
-| `inCycle` | the run loop sets it as the cycle starts; merge/suspend/startup clear it | write fence only; it is never a wake signal or resume checkpoint |
+| `inCycle` | the cycle's claim ([AGENT_LOOP.md §2.5.1](./AGENT_LOOP.md)): issued as the cycle starts, ended by its merge, revoked by a stop and at startup | write fence only; it is never a wake signal or resume checkpoint |
 | `meta.turns` | the common frame store / framework append | bumped in the same CAS as a root-conversation append |
 | `meta.updated` | the common frame store / framework append | ratcheted to the newest persisted root-turn timestamp in the same CAS |
 

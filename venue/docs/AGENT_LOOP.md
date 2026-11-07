@@ -95,6 +95,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `timeline` | vector | Append-only log of cycle records (§2.4), one per cycle whose transition ran — the complete record of each cycle's exchange with the model. |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
 | `suspension` | map? | Deliberate stop: `{by: <actual caller DID>, reason?: <up to 512 characters>, ts: <epoch millis>}`. Set by `agent:suspend`, separate from faults; cleared on resume. |
+| `inCycle` | map? | The running cycle's claim, `{epoch, sessionId?}` (§2.5.1). Present only while a cycle runs. |
 
 All fields are framework-managed except `state`, which is owned by the transition
 function. CAD3 structural sharing means the timeline (which only appends) shares
@@ -202,8 +203,9 @@ exchange with the model: what the cycle was given, what the model was told
 beyond the conversation, every inference it made, and what came of it. The
 session keeps the conversation the next cycle continues from; the entry keeps
 what happened. An entry is written for every cycle whose transition ran,
-success or failure — a failure's entry carries the error and the inferences
-that ran before it.
+success, failure or stop — a failure's entry carries the error and the
+inferences that ran before it, and a stopped cycle's entry says it was stopped
+(§2.5.1).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -214,8 +216,10 @@ that ran before it.
 | `context` | vector | The root frame's standing context as rendered for its first inference — the head and live surface (system prompt, skills index, loads): the prompt minus the conversation. |
 | `tools` | vector | Names of the tools offered to the first inference. |
 | `inferences` | vector | One record per model call, in order — see below. |
-| `result` | any | The cycle's response, or its error. |
+| `result` | any | The cycle's response, or its error, or for a stopped cycle why it stopped. |
 | `taskResults` | map? | Task completions, `{<jobId>: {status, output}}`. |
+| `cancelled` | boolean? | `true` for a stopped cycle (§2.5.1). |
+| `suspension` | map? | On a stopped cycle, the `agent:suspend` that stopped it. |
 
 An inference record:
 
@@ -307,6 +311,43 @@ per agent, independent of other venue jobs and completed history, with no payloa
 traversal. HITL removes the pending reference in the transaction that delivers
 its response. Existing job notifications can trigger a summary refresh; this adds no
 new agent status or event type.
+
+### 2.5.1 Cycle claim
+
+**A cycle's writes take effect only while its claim is current.**
+
+- **Issued** when the cycle takes its input (§4.4 step 4), in that
+  transaction: a fresh epoch at `inCycle.epoch` on the agent record, with the
+  session the cycle took at `inCycle.sessionId` and the same epoch at that
+  session's `inCycle`. An agent that is SUSPENDED or TERMINATED is issued
+  none, and the cycle does not run.
+- **Revoked** by every write that sets SUSPENDED or TERMINATED or removes the
+  record, in that same write: `agent:suspend`, `agent:delete`, account
+  deletion and a fault suspension alike. So an agent holds a claim only while
+  it is neither SUSPENDED nor TERMINATED. Startup revokes every claim (§6.1),
+  and resume issues none.
+- **Checked** by each of the cycle's own writes, in that write's transaction:
+  the session's frames as the step writes them live, completing or failing its
+  task (`agent:completeTask`, `agent:failTask`), and the merge (§4.4 step 6).
+  A write whose claim is no longer current is refused.
+- **Ended** by the cycle's merge.
+
+A cycle whose claim was revoked is stopped, however its step ended: with a
+result, a failure or a cancellation. Its merge changes nothing the cycle took:
+the task stays queued and runs again after resume, and its state change and
+turns are discarded. A suspension settles the chats it took as any suspension
+does (§3.4). The timeline records the cycle with `cancelled: true`, except on a
+TERMINATED agent, which is written no more.
+
+The claim covers the cycle's record of its work, not the step's effects:
+workspace writes (`n/`, `c/`, `t/`), operations the step invoked, asks and
+tracked calls. A stop does not undo those, and a stopped task that runs again
+may repeat them.
+
+Stopping promptly is separate from being correct. After its write, a stop also
+cancels the step's Job and its request context's cancellation, so a step that
+watches them ends early. A step the stop does not reach ends at its next
+refused write or when it returns, and its merge records it as stopped.
 
 ### 2.6 Live events
 
@@ -448,10 +489,9 @@ For LLM agents (`llmagent:chat`), level 2:
 - Invokes level 3 (LLM call) as a grid operation
 - Handles tool call responses: execute tools, feed results back, call level 3
   again (loop until the LLM returns a text response or a limit is reached)
-- The shared frame store appends assistant and tool turns live, under the
-  cycle's claim on the session (`session.inCycle`), which the run loop set when
-  it took the cycle's input (§4.4). A later cycle's claim fences the writes of
-  an earlier one that is still running.
+- The shared frame store appends assistant and tool turns live under the
+  cycle's claim (§2.5.1), handed to it as `session.inCycle`. Once the claim is
+  revoked or replaced, its writes are refused.
 - The session frame stack is the canonical conversation record. Its rendered
   prefix is persisted and reused exactly; dynamic loads and tool-state changes
   append events. Only explicit boundaries such as compaction rebuild it.
@@ -512,7 +552,7 @@ The contract between level 1 and level 2:
 | `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, output, error when the job did not complete). |
 | `newInput` | any? | The picked task's input this cycle shows: its original input, then each continuation once. |
 | `jobId` | string? | With `newInput`: the task's request Job id. |
-| `session` | map? | The picked session record: `{id, parties, meta, c, frames, pending, inCycle}`. `pending` lists the messages this cycle took; they and `newInput` are already user turns in `frames` (§4.4). `inCycle` is the cycle's claim on the session. See AGENT_SESSIONS.md §6.1. |
+| `session` | map? | The picked session record: `{id, parties, meta, c, frames, pending, inCycle}`. `pending` lists the messages this cycle took; they and `newInput` are already user turns in `frames` (§4.4). `inCycle` is the cycle's claim (§2.5.1). See AGENT_SESSIONS.md §6.1. |
 
 **Output:**
 
@@ -998,11 +1038,11 @@ run's `finally` block.
    whose request Job has already finished is removed, and the loop goes back
    to step 1.
 4. **Take the cycle's input**, in one transaction on the agent record:
+   - Issue the cycle's claim (§2.5.1). An agent that is SUSPENDED or
+     TERMINATED is issued none: take nothing and go back to step 1.
    - Mark the task's next input shown: its original input, then each
      continuation once. If a continuation arrived since the pick, take
      nothing and go back to step 1.
-   - Claim the session for this cycle (`session.inCycle`), so live frame
-     writes of any earlier cycle still running are refused.
    - Close any tool call an interrupted cycle left without a result, with a
      result saying it did not return.
    - Append the pending messages and the task's input to
@@ -1018,7 +1058,10 @@ run's `finally` block.
    `tasks`, `pending` (with resolved statuses), the task's `newInput` and
    the picked `session`. The virtual thread blocks on `.join()` of the
    returned future — no lock is held; other agents' loops run
-   independently.
+   independently. However the step ends, the merge first checks the
+   cycle's claim in its transaction: a revoked claim settles the cycle as
+   stopped (§2.5.1) and the loop goes back to step 1. Steps 6–9 apply to a
+   cycle whose claim is current.
 6. On success — **merge with current state** atomically on the agent record:
    - Re-read the record inside the merge (not the stale snapshot from step 1).
    - Remove completed tasks from the **current** `tasks` index. This prevents
@@ -1026,7 +1069,7 @@ run's `finally` block.
      transition.
    - Append the transition's `turns` and its reply to the session's
      conversation, unless the transition writes its frames itself, and end
-     the session's claim.
+     the cycle's claim.
    - Update `state` from the returned value.
    - Append the cycle record (§2.4). The cycle's token usage — the sum
      over its inferences, provider-measured (#217) — is added to the picked
@@ -1095,7 +1138,7 @@ the response visible to callers without querying agent state separately.
 |-----------|---------|--------|----------------|------------|
 | **Suspend** | the agent cannot continue, or the run loop fails unexpectedly (§3.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged; waiting Jobs carry the suspension note. | RUNNING (internal) | SUSPENDED |
 | **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error` and `suspension`, clear waiting Jobs' suspension notes. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
-| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`; latest stop replaces previous actor/reason. Cancel an active transition, recording the stop on its timeline. The queue is kept as for any suspension (§3.4). | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
+| **Suspend (manual)** | `agent:suspend` | Atomically set SUSPENDED and `suspension`, clear `error`, and revoke the running cycle's claim, so that cycle is recorded as stopped (§2.5.1); latest stop replaces previous actor/reason. The queue is kept as for any suspension (§3.4). | SLEEPING, RUNNING, SUSPENDED | SUSPENDED |
 | **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
 | **Cancel task** | `agent:cancelTask`, or cancelling the request Job | Remove a pending task from the agent's `tasks` index, so the agent never runs it. Does not affect the run loop directly. | any except TERMINATED | unchanged |
 | **Delete** | `agent:delete` | Accepts exactly one `agentId` or an exact `agentIds` list (maximum 100; no prefixes/wildcards). One Job halts each named agent. Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove each lattice slot, making unreachable storage eligible for Etch GC. The full list is validated before deletion starts. | any | TERMINATED (or absent) |
@@ -1129,11 +1172,10 @@ is halted.
   the record with `agent:delete remove:true` before creating a new agent with
   the same ID; there is no "un-terminate".
 - RUNNING is persisted while a launcher future exists, but the stored value is
-  not a concurrency lock or resume checkpoint. Config mutations consult the
-  live future and are rejected while it exists.
-- SUSPENDED preserves session/history state but failed transition tasks and
-  cycle claims are settled before suspension. `agent:resume` preserves that
-  record; explicit delete with `remove:true` discards it.
+  not a concurrency lock or resume checkpoint.
+- A SUSPENDED or TERMINATED agent holds no cycle claim (§2.5.1). SUSPENDED
+  preserves session and history state; `agent:resume` preserves that record,
+  and explicit delete with `remove:true` discards it.
 
 ### 4.6 Scheduling — `wakeAgent`
 
@@ -1265,7 +1307,8 @@ the winner is always a state that genuinely existed on the hosting venue.
 ### 6.1 Recovery
 
 A venue restart has no live launcher slots, so startup clears every persisted
-RUNNING marker before scheduling remaining work.
+RUNNING marker and revokes every cycle claim (§2.5.1) before scheduling
+remaining work.
 Durable Jobs, queued inputs, stable lifecycle state, and external interaction
 records survive independently. Recovery may start a fresh attempt from a
 durable boundary; it never treats a persisted executor bit as resumable state.

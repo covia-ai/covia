@@ -146,6 +146,8 @@ public class AgentAdapter extends AAdapter {
 	public static final String TRANSITION_FAILED = "Transition failed: ";
 	/** A task id that is not hex: the id follows. */
 	public static final String INVALID_TASK_ID = "Invalid taskId format: ";
+	/** A stopped cycle tried to resolve its task (AGENT_LOOP.md §2.5.1): the task id. */
+	public static final String CYCLE_STOPPED = "Task %s was not resolved: the cycle working on it was stopped, and the task stays queued";
 	public static final String CHAT_UNKNOWN_SESSION = "Unknown sessionId: %s — omit sessionId to start a new session";
 	public static final String CONTEXT_UNKNOWN_SESSION = "Unknown session: %s";
 	public static final String QUERY_NO_OPERATION = "Agent has no transition operation configured";
@@ -224,14 +226,24 @@ public class AgentAdapter extends AAdapter {
 	private final ConcurrentHashMap<AgentKey, CompletableFuture<ACell>> runningLoops
 		= new ConcurrentHashMap<>();
 
-	/** Active transition job per agent — allows suspend to cancel running transitions */
-	private final ConcurrentHashMap<AgentKey, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
+	/**
+	 * The step a cycle is running, so a stop can end it promptly. Only for
+	 * promptness: the stop's revocation of the cycle's claim is what settles
+	 * the cycle (AGENT_LOOP.md §2.5.1), so a step a stop misses is still
+	 * recorded as stopped.
+	 */
+	private record ActiveStep(java.util.concurrent.atomic.AtomicBoolean cancellation, CompletableFuture<ACell> future) {
+		/** Flips the step's cancellation, which a long step watches through its
+		 *  request context, and cancels its future, which cancels its Job and
+		 *  frees the run loop's wait: cancelling alone does not stop the step's thread. */
+		void stop() {
+			cancellation.set(true);
+			future.cancel(true);
+		}
+	}
 
-	/** Cancellation token per active transition — flipped alongside
-	 *  {@code transitionFuture.cancel(true)}, which does NOT stop the running
-	 *  transition thread. Long transitions (goaltree) poll it via the cycle
-	 *  ctx to stop work and lattice writes promptly. */
-	private final ConcurrentHashMap<AgentKey, java.util.concurrent.atomic.AtomicBoolean> activeCancellations = new ConcurrentHashMap<>();
+	/** The running step of each agent's cycle ({@link ActiveStep}). */
+	private final ConcurrentHashMap<AgentKey, ActiveStep> activeSteps = new ConcurrentHashMap<>();
 
 	/**
 	 * Resolved tasks whose request is settled after its handback commits,
@@ -1314,7 +1326,7 @@ public class AgentAdapter extends AAdapter {
 		failAllPendingForAgent(ownerDID, agentId, pendingError);
 		agent.setStatus(AgentState.TERMINATED);
 		engine.agentEvents().status(ownerDID, agentId, AgentState.TERMINATED, null);
-		cancelActiveTransition(key);
+		stopActiveStep(key);
 		if (oldLoop != null && !oldLoop.isDone()) {
 			try {
 				awaitLoopExit(oldLoop, HALT_TIMEOUT_MS);
@@ -2785,9 +2797,9 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
 
-		// Cancel any active transition so the agent stops promptly (the token
-		// stops the transition thread itself; cancel unblocks the run loop)
-		cancelActiveTransition(target.key());
+		// The suspension revoked the running cycle's claim, so that cycle is
+		// stopped; end its step promptly too
+		stopActiveStep(target.key());
 		engine.agentEvents().status(target.ownerDID(), agentId, AgentState.SUSPENDED,
 			AgentState.suspensionDetail(stopped));
 		noteSuspended(target.key(), agent);
@@ -3258,9 +3270,10 @@ public class AgentAdapter extends AAdapter {
 			result = candidate;
 		}
 
-		ACell task = agent.resolveTask(taskId, expectedRevision,
+		ACell task = agent.resolveTask(taskId, expectedRevision, ctx.getClaim(),
 			completion(taskId, agent.getTasks().get(taskId), Status.COMPLETE, Fields.OUTPUT, result));
 		if (task == null) {
+			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
 			if (current != null && expectedRevision >= 0
 					&& (AgentState.taskRevision(current) != expectedRevision
@@ -3307,9 +3320,10 @@ public class AgentAdapter extends AAdapter {
 		long expectedRevision = ctx.getTaskRevision();
 		ACell errorCell = RT.getIn(input, Fields.ERROR);
 		AString errorStr = (errorCell == null) ? Strings.create("Task failed") : Strings.create(errorCell.toString());
-		ACell task = agent.resolveTask(taskId, expectedRevision,
+		ACell task = agent.resolveTask(taskId, expectedRevision, ctx.getClaim(),
 			completion(taskId, agent.getTasks().get(taskId), Status.FAILED, Fields.ERROR, errorStr));
 		if (task == null) {
+			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
 			if (current != null && expectedRevision >= 0
 					&& (AgentState.taskRevision(current) != expectedRevision
@@ -3327,6 +3341,13 @@ public class AgentAdapter extends AAdapter {
 			Fields.AGENT_ID, agentId,
 			Fields.TASK_ID,  taskIdHex(taskId),
 			Fields.STATUS,   Status.FAILED);
+	}
+
+	/** Refuses a task resolution the cycle could not make because it was stopped (AGENT_LOOP.md §2.5.1). */
+	private static void refuseIfStopped(AgentState agent, Blob taskId, RequestContext ctx) {
+		if (ctx.getClaim() != null && !agent.holdsClaim(ctx.getClaim())) {
+			throw new covia.exception.NotSupportedException(CYCLE_STOPPED.formatted(taskIdHex(taskId)));
+		}
 	}
 
 	/**
@@ -4282,38 +4303,33 @@ public class AgentAdapter extends AAdapter {
 				// input become turns in its conversation. Nothing after this may
 				// abandon the cycle, since only its merge settles what it took.
 				ACell pickedTaskInput = (pickedTask != null) ? AgentState.nextTaskInput(pickedTask.getValue()) : null;
-				ACell cycleClaim = null;
-				if (pickedTask != null || pickedSessionRecord != null) {
-					ACell epoch = Blob.createRandom(new java.util.Random(), 8);
-					// A continuation keeps its own sender's provenance, not the requester's
-					AVector<ACell> inputTurns = cycleInputTurns(filteredInbox, pickedTaskInput,
-						(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
-						(pickedTask != null) ? AgentState.nextTaskInputSource(pickedTask.getValue()) : null, startTs);
-					AgentState.CycleStart started = agent.beginCycle(
-						(pickedTask != null) ? pickedTask.getKey() : null,
-						(pickedTask != null) ? pickedTask.getValue() : null,
-						(pickedSessionRecord != null) ? pickedSessionBlob : null,
-						epoch, inputTurns, filteredInbox.count());
-					// A continuation landed on the task since it was picked: nothing
-					// was taken, so pick again and present the fresh input.
-					if (started == AgentState.CycleStart.MOVED) continue;
-					if (started == AgentState.CycleStart.SESSION) {
-						cycleClaim = epoch;
-					} else if (pickedTask == null) {
-						continue; // the session went before the cycle could claim it
-					} else {
-						// The task's session went before the cycle could claim it:
-						// the task runs without one, and took none of its messages.
-						pickedSessionRecord = null;
-						filteredInbox = Vectors.empty();
-					}
+				// The cycle's claim (AGENT_LOOP.md §2.5.1): the cycle's own writes
+				// take effect only while it is current, and a stop revokes it.
+				ACell claim = Blob.createRandom(new java.util.Random(), 8);
+				// A continuation keeps its own sender's provenance, not the requester's
+				AVector<ACell> inputTurns = cycleInputTurns(filteredInbox, pickedTaskInput,
+					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
+					(pickedTask != null) ? AgentState.nextTaskInputSource(pickedTask.getValue()) : null, startTs);
+				AgentState.CycleStart started = agent.beginCycle(
+					(pickedTask != null) ? pickedTask.getKey() : null,
+					(pickedTask != null) ? pickedTask.getValue() : null,
+					(pickedSessionRecord != null) ? pickedSessionBlob : null,
+					claim, inputTurns, filteredInbox.count());
+				// Stopped, the top of the loop exits. Moved, what was picked changed
+				// since and nothing was taken, so pick again.
+				if (started == AgentState.CycleStart.STOPPED || started == AgentState.CycleStart.MOVED) continue;
+				if (started != AgentState.CycleStart.SESSION) {
+					// The task's session went before the cycle could claim it:
+					// the task runs without one, and took none of its messages.
+					pickedSessionRecord = null;
+					filteredInbox = Vectors.empty();
 				}
 
 				// Per-cycle ctx: scope to the agent, picked task, and session so
 				// path resolvers (n/, t/, c/) can address the right slot, and
 				// agent:completeTask / agent:failTask can identify which
-				// agent + task they're acting on.
-				RequestContext cycleCtx = ctx.withAgentId(agentId);
+				// agent + task they're acting on, under the cycle's claim.
+				RequestContext cycleCtx = ctx.withAgentId(agentId).withClaim(claim);
 				if (pickedTask != null) {
 					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
 						AgentState.taskRevision(pickedTask.getValue()));
@@ -4329,7 +4345,7 @@ public class AgentAdapter extends AAdapter {
 						taskJob.setStatus(Status.STARTED);
 					}
 				}
-				if (cycleClaim != null) startTakenChats(key, pickedSessionBlob, filteredInbox);
+				if (pickedSessionRecord != null) startTakenChats(key, pickedSessionBlob, filteredInbox);
 
 				AMap<AString, ACell> transitionInput = Maps.of(
 					Fields.AGENT_ID, agentId,
@@ -4352,10 +4368,9 @@ public class AgentAdapter extends AAdapter {
 				// took, and the cycle's claim on it: a runtime that keeps its frames
 				// live writes under that claim, fenced against any later cycle.
 				if (pickedSessionRecord != null) {
-					AMap<AString, ACell> sessionMap = pickedSessionRecord
-						.assoc(Fields.SESSION_ID, pickedSession);
-					if (cycleClaim != null) sessionMap = sessionMap.assoc(AgentState.KEY_IN_CYCLE, cycleClaim);
-					transitionInput = transitionInput.assoc(Fields.SESSION, sessionMap);
+					transitionInput = transitionInput.assoc(Fields.SESSION, pickedSessionRecord
+						.assoc(Fields.SESSION_ID, pickedSession)
+						.assoc(AgentState.KEY_IN_CYCLE, claim));
 				}
 				AMap<AString, ACell> agentConfig = agent.getConfig();
 				if (agentConfig != null) {
@@ -4372,59 +4387,40 @@ public class AgentAdapter extends AAdapter {
 				// Invoke transition. Blocks on the vthread — cheap, and any
 				// work the transition enqueues on the lattice (e.g. a nested
 				// agent:chat that wakes this same agent) is naturally visible
-				// to the next iteration via hasWork(). A failed future becomes
-				// an error-shaped transitionResult for the merge; a cancelled one,
-				// or one that ends after its token was set, is handled apart from
-				// it. The cancellation token rides
-				// the cycle ctx: cancel(true) does not stop the transition
-				// thread, so long transitions poll the token to stop promptly.
-				java.util.concurrent.atomic.AtomicBoolean cancelToken =
+				// to the next iteration via hasWork(). However the step ends, the
+				// merge settles the cycle by its claim: a stop that revoked it
+				// settles the cycle as stopped. A stop also ends the step
+				// promptly where it can (ActiveStep#stop), but nothing here
+				// depends on that.
+				java.util.concurrent.atomic.AtomicBoolean cancellation =
 					new java.util.concurrent.atomic.AtomicBoolean(false);
 				// The live tap (#394): announce the cycle with what it was given
 				// and hand the transition the handle it emits through.
 				AgentEvents.Cycle cycle = run.beginCycle(pickedSession,
 					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
 					cycleStartData(transitionOp, filteredInbox, formattedTasks, resolvedPending));
-				activeCancellations.put(key, cancelToken);
 				CompletableFuture<ACell> transitionFuture =
 					engine.jobs().invokeInternal(transitionOp, transitionInput,
-						cycleCtx.withCancellation(cancelToken).withCycle(cycle));
-				activeTransitions.put(key, transitionFuture);
-
-				// Close the suspend/delete race: if the record was suspended,
-				// terminated or removed between the iteration-top status check
-				// and the put above, the suspender/deleter read an empty
-				// activeTransitions slot and could not cancel — re-check here
-				// (after the put, so one side always sees the other's write)
-				// and cancel locally rather than blocking on a doomed cycle.
-				AgentState recheck = getAgent(ownerDID, agentId);
-				if (shouldCancelRegisteredTransition(recheck)) {
-					cancelToken.set(true);
-					transitionFuture.cancel(true);
-				}
+						cycleCtx.withCancellation(cancellation).withCycle(cycle));
+				ActiveStep step = new ActiveStep(cancellation, transitionFuture);
+				activeSteps.put(key, step);
 
 				ACell transitionResult;
-				boolean transitionCancelled = false;
 				boolean cannotContinue = false;
 				try {
 					transitionResult = transitionFuture.join();
 				} catch (java.util.concurrent.CancellationException ce) {
-					transitionCancelled = true;
-					transitionResult = null; // handled separately from transition failures below
+					transitionResult = Maps.of(Fields.ERROR, Strings.create(TRANSITION_CANCELLED));
 				} catch (java.util.concurrent.CompletionException e) {
-					if (cancelToken.get()) {
-						// Stopped, not failed: agent:suspend or agent:delete set the
-						// token, and the transition saw it and ended its own Job
-						// before the stop could cancel the future
-						transitionCancelled = true;
-						transitionResult = null;
-					} else {
-						transitionResult = failedTransition(e);
-						cannotContinue = agentCannotContinue(transitionFailure(e));
-					}
+					Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+					// A failure that carries its cycle record (#392) still
+					// writes the entry, with the inferences that ran before it.
+					CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
+					Throwable reason = (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
+					cannotContinue = agentCannotContinue(reason);
+					transitionResult = failedTransition(reason, carried);
 				} finally {
-					activeTransitions.remove(key, transitionFuture);
-					activeCancellations.remove(key, cancelToken);
+					activeSteps.remove(key, step);
 				}
 
 				// Engine shutdown is a process boundary, not a transition result.
@@ -4435,38 +4431,17 @@ public class AgentAdapter extends AAdapter {
 				// before the transition returned.
 				if (engine.isClosing()) break;
 
-				// A cancelled transition is an administrative stop (agent:suspend
-				// or agent:delete cancelled it), not an agent failure — it must
-				// NOT flow into the merge, which would take it for a fault and stamp
-				// SUSPENDED over a TERMINATED record or poison a freshly
-				// recreated agent under the same id (#202). Settle per initiator
-				// and exit; the finally-block re-check handles any new work.
-				if (transitionCancelled) {
-					AString detail = Strings.create(TRANSITION_CANCELLED);
-					AMap<AString, ACell> entry = Maps.of(
-						K_START, CVMLong.create(startTs), K_END, CVMLong.create(System.currentTimeMillis()),
-						Fields.OP, transitionOp, Fields.RESULT, detail, Fields.CANCELLED, CVMBool.TRUE);
-					if (pickedSession != null) entry = entry.assoc(Fields.SESSION_ID, pickedSession);
-					if (formattedTasks != null && !formattedTasks.isEmpty()) entry = entry.assoc(Fields.TASKS, formattedTasks);
-					AMap<AString, ACell> stopped = agent.finishSuspendedCycle(entry, pickedSessionBlob);
-					if (stopped != null) {
-						AString cause = AgentState.suspensionDetail(stopped);
-						if (cause != null) detail = cause;
-						holdForResume(ownerDID, agentId, detail.toString());
-					}
-					cycle.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
-					// TERMINATED / removed / replaced: agent:delete has already
-					// settled the record and notified the queued callers.
-					break;
-				}
-
 				IterResult merged = mergeAndPostProcess(
 					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, currentState, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, filteredInbox, resolvedPending,
-					startTs, allTaskResults, cannotContinue, cycle);
-				lastResult = merged.lastResult();
-				allTaskResults = merged.allTaskResults();
+					startTs, allTaskResults, cannotContinue, claim, cycle);
+				// A stopped cycle merged nothing: the top of the loop exits, or
+				// carries on with the work of an agent resumed since
+				if (merged != null) {
+					lastResult = merged.lastResult();
+					allTaskResults = merged.allTaskResults();
+				}
 			}
 
 			// Clean exit clears the persisted executor marker. The atomic sleep
@@ -4524,17 +4499,15 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	/** Close the administrative-stop/transition-registration race. */
-	static boolean shouldCancelRegisteredTransition(AgentState agent) {
-		if (agent == null) return true;
-		AString status = agent.getStatus();
-		return AgentState.SUSPENDED.equals(status) || AgentState.TERMINATED.equals(status);
-	}
-
 	/**
 	 * Merges a transition result into the agent record and handles all the
 	 * post-transition bookkeeping: timeline entry, history turns, deferred
-	 * task-completion envelopes, in-flight chat completion.
+	 * task-completion envelopes, in-flight chat completion. The merge
+	 * transaction first checks the cycle's {@code claim}: a cycle whose claim
+	 * was revoked is stopped, and only its timeline entry is recorded
+	 * (AGENT_LOOP.md §2.5.1).
+	 *
+	 * @return what the merge settled, or null for a stopped cycle
 	 */
 	@SuppressWarnings("unchecked")
 	private IterResult mergeAndPostProcess(
@@ -4545,7 +4518,7 @@ public class AgentAdapter extends AAdapter {
 			AString pickedSession, Blob pickedSessionBlob,
 			AVector<ACell> filteredInbox, ACell pending,
 			long startTs, AMap<AString, ACell> allTaskResults, boolean cannotContinue,
-			AgentEvents.Cycle tap) {
+			ACell claim, AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
 		long endTs = Utils.getCurrentTimestamp();
 		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
@@ -4649,18 +4622,27 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		// Merge results in one transaction: the timeline, state, the runtime's
-		// turns and the end of the session claim, so external readers never see
+		// turns and the end of the cycle's claim, so external readers never see
 		// a cycle that wrote one but not the other; and the handback of every
 		// task the cycle resolved, which leaves the agent with its request's
 		// local outputPath written and its request job settled. A restart finds
-		// the cycle wholly done or not done at all.
+		// the cycle wholly done or not done at all. All of it only while the
+		// cycle's claim is current: a stopped cycle records its entry and
+		// changes nothing it took.
 		Handback handback = new Handback(callerDID, agentId);
 		var mergedRecord = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		var stopped = new java.util.concurrent.atomic.AtomicBoolean();
 		AMap<AString, ACell> cycleEntry = timelineEntry;
 		AVector<ACell> cycleTurns = turnsToAppend;
 		engine.getVenueState().transact(draft -> {
 			handback.reset();
 			AgentState current = draft.users().at(callerDID).agentAt(agentId);
+			stopped.set(!current.holdsClaim(claim));
+			if (stopped.get()) {
+				mergedRecord.set((current.getRecord() == null) ? null : current.recordStoppedCycle(
+					cycleEntry.assoc(Fields.RESULT, Strings.create(TRANSITION_CANCELLED)).assoc(Fields.CANCELLED, CVMBool.TRUE)));
+				return;
+			}
 			if (failsPickedTask) current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
 				pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
 			AMap<AString, ACell> results = handback.taskResults(current);
@@ -4670,6 +4652,17 @@ public class AgentAdapter extends AAdapter {
 			handback.settleAll(draft, current);
 		});
 		AMap<AString, ACell> merged = mergedRecord.get();
+		if (stopped.get()) {
+			// The stop announced itself; the waiting Jobs of a suspended agent
+			// carry the suspension, and its work waits for the resume
+			AString detail = AgentState.suspensionDetail(merged);
+			if (detail == null) detail = Strings.create(TRANSITION_CANCELLED);
+			if (merged != null && AgentState.SUSPENDED.equals(merged.get(AgentState.KEY_STATUS))) {
+				holdForResume(callerDID, agentId, detail.toString());
+			}
+			tap.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
+			return null;
+		}
 		AMap<AString, ACell> taskResults = handback.results();
 		// Accumulate task results across iterations
 		if (taskResults != null) {
@@ -4801,14 +4794,10 @@ public class AgentAdapter extends AAdapter {
 			holdForResume(callerDID, agentId, errStr.toString());
 		}
 
-		// A record removed while the cycle ran (agent:delete, account deletion)
-		// merges to nothing: the agent has ended, and the loop exits at the top
-		// of the next iteration
 		ACell lastResult = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, Strings.create(callerDID + "/g/" + agentId),
-			Fields.STATUS, cannotContinue ? AgentState.SUSPENDED
-				: (merged == null) ? AgentState.TERMINATED : merged.get(AgentState.KEY_STATUS),
+			Fields.STATUS, cannotContinue ? AgentState.SUSPENDED : merged.get(AgentState.KEY_STATUS),
 			Fields.RESULT, result,
 			Fields.TASK_RESULTS, allTaskResults);
 
@@ -4826,30 +4815,19 @@ public class AgentAdapter extends AAdapter {
 		return CannotContinueException.find(failure) != null || !isExpectedFailure(failure);
 	}
 
-	/** What a transition failed with, taken out of the carrier that holds its cycle record (#392). */
-	private static Throwable transitionFailure(java.util.concurrent.CompletionException e) {
-		Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-		CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
-		return (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
-	}
-
 	/**
-	 * A failed transition as the merge records it: its error, and, from a
+	 * A failed transition as the merge records it: why it failed, and, from a
 	 * failure that carries its cycle record (#392), the inferences that ran
 	 * before it. A fault's report says itself that the transition failed and
 	 * where.
 	 */
-	private AMap<AString, ACell> failedTransition(java.util.concurrent.CompletionException e) {
-		Throwable reason = transitionFailure(e);
+	private AMap<AString, ACell> failedTransition(Throwable reason, CycleRecord.Failure carried) {
 		String failure = covia.exception.FaultException.isFault(reason) ? reason.getMessage()
 			: TRANSITION_FAILED + describeFailure(reason);
 		AMap<AString, ACell> failed = Maps.of(Fields.ERROR, Strings.create(failure));
-		CycleRecord.Failure carried = CycleRecord.Failure.find((e.getCause() != null) ? e.getCause() : e);
-		if (carried != null) {
-			failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
-			if (carried.result().tokens() != null) failed = failed.assoc(Fields.TOKENS, carried.result().tokens());
-		}
-		return failed;
+		if (carried == null) return failed;
+		failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
+		return (carried.result().tokens() == null) ? failed : failed.assoc(Fields.TOKENS, carried.result().tokens());
 	}
 
 	/**
@@ -5318,7 +5296,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		for (AgentKey key : keys) {
 			if (!did.equals(key.owner())) continue;
-			cancelActiveTransition(key);
+			stopActiveStep(key);
 			failAllPendingForAgent(did, key.id(), Users.ACCOUNT_DELETED);
 			engine.agentEvents().status(did, key.id(), AgentState.TERMINATED, null);
 		}
@@ -5504,6 +5482,8 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
+		// No executor runs a cycle now: every claim is revoked (AGENT_LOOP.md §6.1)
+		agent.revokeClaim();
 		Index<Blob, ACell> sessions = agent.getSessions();
 		if (sessions == null) return;
 		for (var entry : sessions.entrySet()) {
@@ -5524,14 +5504,10 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	/** Flips the agent's active-transition cancellation token (if any) and
-	 *  cancels the transition future — both are needed: cancel unblocks the
-	 *  run loop's join, the token stops the still-running transition thread. */
-	private void cancelActiveTransition(AgentKey key) {
-		java.util.concurrent.atomic.AtomicBoolean token = activeCancellations.get(key);
-		if (token != null) token.set(true);
-		CompletableFuture<ACell> activeTransition = activeTransitions.get(key);
-		if (activeTransition != null) activeTransition.cancel(true);
+	/** Ends the agent's running step promptly, if it has one ({@link ActiveStep#stop}). */
+	private void stopActiveStep(AgentKey key) {
+		ActiveStep step = activeSteps.get(key);
+		if (step != null) step.stop();
 	}
 
 	/**

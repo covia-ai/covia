@@ -73,19 +73,6 @@ public class AgentAdapterTest {
 			"an exceptional completion is still a completed shutdown");
 	}
 
-	@Test
-	public void testTerminatedAgentCancelsLateRegisteredTransition() {
-		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(Strings.create("late-transition"), Maps.empty(), null);
-		assertFalse(AgentAdapter.shouldCancelRegisteredTransition(agent));
-
-		agent.setStatus(AgentState.TERMINATED);
-		assertTrue(AgentAdapter.shouldCancelRegisteredTransition(agent),
-			"a transition registered after deletion must be cancelled");
-		assertTrue(AgentAdapter.shouldCancelRegisteredTransition(null),
-			"a transition registered after physical removal must be cancelled");
-	}
-
 	@BeforeEach
 	public void setup(TestInfo info) {
 		ALICE_DID = TestEngine.uniqueDID(info);

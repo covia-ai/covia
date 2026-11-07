@@ -98,17 +98,19 @@ public class RequestContextAuthorityTest {
 		Blob session = Blob.fromHex("1234");
 		Blob job = Blob.fromHex("5678");
 		Blob task = Blob.fromHex("9abc");
+		Blob claim = Blob.fromHex("def0");
 		RequestContext original = RequestContext.ofAgent(DELEGATE, agent)
-			.withSessionId(session).withJobId(job).withTaskId(task, 7L);
+			.withSessionId(session).withJobId(job).withTaskId(task, 7L).withClaim(claim);
 		RequestContext delegated = original.onBehalfOf(ALICE);
 		assertSame(original.getExecutionScope(), delegated.getExecutionScope());
-		assertEquals(new RequestContext.ExecutionScope(DELEGATE, agent, job, session, task, 7L),
+		assertEquals(new RequestContext.ExecutionScope(DELEGATE, agent, job, session, task, 7L, claim),
 			delegated.getExecutionScope());
 		assertNull(delegated.getAgentId());
 		assertNull(delegated.getSessionId());
 		assertNull(delegated.getJobId());
 		assertNull(delegated.getTaskId());
 		assertEquals(-1L, delegated.getTaskRevision());
+		assertNull(delegated.getClaim());
 
 		RequestContext copied = delegated.withCaps(Vectors.empty()).withProofs(Vectors.of(PROOF))
 			.withRawUcans(Vectors.empty()).withOp(Strings.create("test:echo"))

@@ -89,6 +89,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Set on a task row that yielded while something it waits on is outstanding:
 	 *  it runs again only when something new arrives for it ({@link #isTaskReady}). */
 	private static final AString K_PARKED = Strings.intern("parked");
+	/** The running cycle's claim on the record, {@code inCycle}, holds its epoch here. */
+	private static final AString K_EPOCH = Strings.intern("epoch");
 
 	/** Operation the scheduler fires to wake this agent — a non-forcing,
 	 *  non-blocking {@code agent:trigger}. Package-visible so scheduler tests
@@ -528,10 +530,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Reads {@code sessions[sid].inCycle}, or null when absent. */
 	public ACell getSessionCycleEpoch(Blob sid) { return session(sid).cycleEpoch(); }
 	/**
-	 * Settles a session's cycle claim without a merge — used when an
-	 * interrupted cycle is administratively stopped (operator suspend): the
-	 * claim is released so the session does not register as crashed work,
-	 * and any zombie writes from the stopped cycle are fenced out.
+	 * Releases a session's cycle claim without a merge, as startup does for a
+	 * cycle no executor runs: any late writes of that cycle are fenced out.
 	 */
 	public void clearSessionCycle(Blob sid) {
 		if (sid != null) session(sid).clearCycle();
@@ -606,7 +606,47 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	// ========== Simple mutations ==========
 
 	public void setStatus(AString status) {
-		update(r -> r.assoc(K_STATUS, status));
+		update(r -> withStatus(r, status));
+	}
+
+	/**
+	 * The record with {@code status} set. SUSPENDED and TERMINATED stop the
+	 * agent, so they revoke its cycle claim in the same write: an agent holds
+	 * a claim only while it is neither (AGENT_LOOP.md §2.5.1).
+	 */
+	private static AMap<AString, ACell> withStatus(AMap<AString, ACell> r, AString status) {
+		AMap<AString, ACell> next = r.assoc(K_STATUS, status);
+		return stopsCycles(status) ? withoutClaim(next) : next;
+	}
+
+	private static boolean stopsCycles(AString status) {
+		return SUSPENDED.equals(status) || TERMINATED.equals(status);
+	}
+
+	/** The record with its cycle claim revoked: the claim, and the same epoch on the session it names. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> withoutClaim(AMap<AString, ACell> r) {
+		ACell claim = r.get(K_IN_CYCLE);
+		if (claim == null) return r;
+		AMap<AString, ACell> next = r.dissoc(K_IN_CYCLE);
+		AString sidHex = RT.ensureString(RT.getIn(claim, Fields.SESSION_ID));
+		Blob sid = (sidHex == null) ? null : Blob.parse(sidHex.toString());
+		if (sid == null || !(next.get(K_SESSIONS) instanceof Index<?, ?> index)) return next;
+		Index<Blob, ACell> sessions = (Index<Blob, ACell>) index;
+		if (!(sessions.get(sid) instanceof AMap<?, ?> found)) return next;
+		AMap<AString, ACell> session = (AMap<AString, ACell>) found;
+		if (!java.util.Objects.equals(RT.getIn(claim, K_EPOCH), session.get(K_IN_CYCLE))) return next;
+		return next.assoc(K_SESSIONS, sessions.assoc(sid, session.dissoc(K_IN_CYCLE)));
+	}
+
+	/** Whether {@code epoch} is the agent's current cycle claim (AGENT_LOOP.md §2.5.1). */
+	public boolean holdsClaim(ACell epoch) {
+		return epoch != null && epoch.equals(RT.getIn(getRecord(), K_IN_CYCLE, K_EPOCH));
+	}
+
+	/** Revokes the agent's cycle claim, as startup does for a cycle no executor runs. */
+	public void revokeClaim() {
+		if (RT.getIn(getRecord(), K_IN_CYCLE) != null) update(AgentState::withoutClaim);
 	}
 
 	public void setError(AString error) {
@@ -732,8 +772,10 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/** What {@link #beginCycle} took. */
 	public enum CycleStart {
-		/** The picked task's row changed after it was picked, so nothing was taken. */
+		/** What was picked changed after it was picked (the task's row, or the session it picked alone has gone), so nothing was taken. */
 		MOVED,
+		/** The agent is SUSPENDED or TERMINATED, or gone: it was issued no claim, and nothing was taken. */
+		STOPPED,
 		/** The task's next input was taken; there was no session to claim. */
 		NO_SESSION,
 		/** The session was claimed and the cycle's input is in its conversation. */
@@ -742,24 +784,32 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/**
 	 * Begins a cycle in one transaction, so what the cycle takes is recorded
-	 * where it is taken. The picked task, while its row is exactly as picked,
-	 * has its next input ({@link #nextTaskInput}) marked shown and is no longer
-	 * parked: it is in a cycle now, so a restart before the cycle ends finds it
-	 * interrupted rather than waiting. The picked session, when it exists, is
-	 * claimed and given the cycle's input ({@link SessionState#beginCycle}).
+	 * where it is taken, and issues the cycle's claim ({@code inCycle},
+	 * AGENT_LOOP.md §2.5.1). An agent that is SUSPENDED or TERMINATED is issued
+	 * none, and nothing is taken. The picked task, while its row is exactly as
+	 * picked, has its next input ({@link #nextTaskInput}) marked shown and is no
+	 * longer parked: it is in a cycle now, so a restart before the cycle ends
+	 * finds it interrupted rather than waiting. The picked session, when it
+	 * exists, is claimed with the same epoch and given the cycle's input
+	 * ({@link SessionState#beginCycle}); a cycle that picked only a session
+	 * that has gone takes nothing.
 	 *
 	 * @param taskId the picked task, or null
 	 * @param pickedTask the task's row as it was picked
 	 * @param sid the picked session, or null
-	 * @param epoch the cycle's claim on the session
+	 * @param epoch the cycle's claim
 	 * @param turns user turns for the presented messages, then the task's input
 	 * @param drainCount how many presented messages leave the session's pending queue
 	 */
 	@SuppressWarnings("unchecked")
 	public CycleStart beginCycle(Blob taskId, ACell pickedTask, Blob sid, ACell epoch,
 			AVector<ACell> turns, long drainCount) {
-		CycleStart[] result = {CycleStart.MOVED};
+		Objects.requireNonNull(epoch);
+		CycleStart[] result = {CycleStart.STOPPED};
 		transact(draft -> {
+			result[0] = CycleStart.STOPPED;
+			AMap<AString, ACell> record = draft.getRecord();
+			if (record == null || stopsCycles(RT.ensureString(record.get(K_STATUS)))) return;
 			result[0] = CycleStart.MOVED;
 			if (taskId != null) {
 				ACell current = draft.getTasks().get(taskId);
@@ -769,11 +819,16 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 					long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
 					task = task.assoc(K_PRESENTED_INPUTS, CVMLong.create(presented + 1));
 				}
-				AMap<AString, ACell> claimed = task;
-				draft.update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, claimed)));
+				AMap<AString, ACell> shown = task;
+				draft.update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, shown)));
 			}
-			result[0] = (sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount))
-				? CycleStart.SESSION : CycleStart.NO_SESSION;
+			boolean sessionClaimed = sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount);
+			if (taskId == null && sid != null && !sessionClaimed) return;
+			AMap<AString, ACell> claim = Maps.of(K_EPOCH, epoch);
+			if (sessionClaimed) claim = claim.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString()));
+			AMap<AString, ACell> issued = claim;
+			draft.update(r -> r.assoc(K_IN_CYCLE, issued));
+			result[0] = sessionClaimed ? CycleStart.SESSION : CycleStart.NO_SESSION;
 		});
 		return result[0];
 	}
@@ -797,7 +852,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * @param expectedRevision the revision presented, or negative for any
 	 */
 	public ACell takeTask(Blob taskId, long expectedRevision) {
-		return claim(taskId, expectedRevision, null);
+		return take(taskId, expectedRevision, null, null);
 	}
 
 	/**
@@ -813,25 +868,37 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * @return the row taken, or null when the task is not queued at that revision
 	 */
 	public ACell resolveTask(Blob taskId, long expectedRevision, AMap<AString, ACell> completion) {
-		return claim(taskId, expectedRevision, java.util.Objects.requireNonNull(completion));
+		return resolveTask(taskId, expectedRevision, null, completion);
 	}
 
-	/** Takes a task's row at the expected revision, recording {@code completion} when given. */
-	private ACell claim(Blob taskId, long expectedRevision, AMap<AString, ACell> completion) {
+	/**
+	 * As {@link #resolveTask(Blob, long, AMap)}, by the cycle holding
+	 * {@code expectedClaim}: only while that claim is current (AGENT_LOOP.md
+	 * §2.5.1), so a stopped cycle cannot resolve its task.
+	 *
+	 * @param expectedClaim the resolving cycle's claim, or null outside a cycle
+	 */
+	public ACell resolveTask(Blob taskId, long expectedRevision, ACell expectedClaim,
+			AMap<AString, ACell> completion) {
+		return take(taskId, expectedRevision, expectedClaim, java.util.Objects.requireNonNull(completion));
+	}
+
+	/** Takes a task's row at the expected revision and claim, recording {@code completion} when given. */
+	private ACell take(Blob taskId, long expectedRevision, ACell expectedClaim, AMap<AString, ACell> completion) {
 		AMap<AString, ACell> before = getAndUpdate(r -> {
-			Index<Blob, ACell> tasks = extractTasks(r);
-			if (!claimable(tasks.get(taskId), expectedRevision)) return r;
-			AMap<AString, ACell> next = r.assoc(K_TASKS, tasks.dissoc(taskId));
+			if (!takeable(r, taskId, expectedRevision, expectedClaim)) return r;
+			AMap<AString, ACell> next = r.assoc(K_TASKS, extractTasks(r).dissoc(taskId));
 			return (completion == null) ? next
 				: next.assoc(K_RESOLVED, extractResolved(r).assoc(taskId, completion));
 		});
-		if (before == null) return null;
-		ACell task = extractTasks(before).get(taskId);
-		return claimable(task, expectedRevision) ? task : null;
+		if (before == null || !takeable(before, taskId, expectedRevision, expectedClaim)) return null;
+		return extractTasks(before).get(taskId);
 	}
 
-	private static boolean claimable(ACell task, long expectedRevision) {
+	private static boolean takeable(AMap<AString, ACell> r, Blob taskId, long expectedRevision, ACell expectedClaim) {
+		ACell task = extractTasks(r).get(taskId);
 		if (task == null) return false;
+		if (expectedClaim != null && !expectedClaim.equals(RT.getIn(r, K_IN_CYCLE, K_EPOCH))) return false;
 		return expectedRevision < 0
 			|| (taskRevision(task) == expectedRevision && !hasUnpresentedTaskInputs(task));
 	}
@@ -1011,7 +1078,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		}
 		AMap<AString, ACell> suspension = stop;
 		AMap<AString, ACell> stopped = update(r -> TERMINATED.equals(r.get(K_STATUS)) ? r
-			: r.assoc(K_STATUS, SUSPENDED).assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
+			: withStatus(r, SUSPENDED).assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
 		return stopped != null && SUSPENDED.equals(stopped.get(K_STATUS)) ? stopped : null;
 	}
 
@@ -1022,32 +1089,24 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	private static AMap<AString, ACell> faultSuspension(AMap<AString, ACell> r, AString error) {
 		if (r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return r;
-		return r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED);
+		return withStatus(r, SUSPENDED).assoc(K_ERROR, error);
 	}
 
 	/**
-	 * Records an administratively cancelled cycle and releases the session claim
-	 * in one write. The queued tasks stay, the cancelled one among them, and run
-	 * after resume (AGENT_LOOP.md §3.4). Never re-suspends a resumed agent.
-	 * Returns the record before the write, or null when the agent is no longer
-	 * suspended.
+	 * Records a stopped cycle, one whose claim was revoked (AGENT_LOOP.md
+	 * §2.5.1): appends its timeline entry, naming the stop when
+	 * {@code agent:suspend} made it, and changes nothing the cycle took. A
+	 * TERMINATED agent is written no more. Returns the record after.
 	 */
-	public AMap<AString, ACell> finishSuspendedCycle(AMap<AString, ACell> entry, Blob sid) {
-		var before = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
-		transact(draft -> {
-			before.set(null);
-			AMap<AString, ACell> r = draft.getRecord();
-			if (r == null || !SUSPENDED.equals(r.get(K_STATUS))) return;
-			before.set(r);
+	public AMap<AString, ACell> recordStoppedCycle(AMap<AString, ACell> entry) {
+		return update(r -> {
+			if (TERMINATED.equals(r.get(K_STATUS))) return r;
 			AMap<AString, ACell> stopped = entry;
 			ACell suspension = r.get(KEY_SUSPENSION);
 			if (suspension != null) stopped = stopped.assoc(KEY_SUSPENSION, suspension)
 				.assoc(Fields.RESULT, suspensionDetail(r));
-			AMap<AString, ACell> recorded = stopped;
-			draft.clearSessionCycle(sid);
-			draft.update(current -> current.assoc(K_TIMELINE, extractTimeline(current).conj(recorded)));
+			return r.assoc(K_TIMELINE, extractTimeline(r).conj(stopped));
 		});
-		return before.get();
 	}
 
 	/**
@@ -1189,7 +1248,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 				.assoc(K_STATE, applyStateChange(r.get(K_STATE), snapshotState, newState))
 				.assoc(K_TASKS, removeCompletedTasks(extractTasks(r), taskResults))
 				.assoc(K_TIMELINE, extractTimeline(r).conj(timelineEntry))
-				.dissoc(K_ERROR));
+				.dissoc(K_ERROR)
+				.dissoc(K_IN_CYCLE));
 			if (historySid != null) draft.session(historySid).finishCycle(turnsToAppend, cycleTokens);
 			result.set(draft.getRecord());
 		});

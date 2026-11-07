@@ -42,7 +42,7 @@ public class AgentStateTaskResolutionTest {
 	/** Shows the task its input, as a cycle's start does. */
 	private long present() {
 		ACell row = agent.getTasks().get(TASK);
-		agent.beginCycle(TASK, row, null, null, Vectors.empty(), 0);
+		agent.beginCycle(TASK, row, null, Strings.create("claim"), Vectors.empty(), 0);
 		return AgentState.taskRevision(agent.getTasks().get(TASK));
 	}
 

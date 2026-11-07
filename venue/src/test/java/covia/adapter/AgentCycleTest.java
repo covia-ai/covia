@@ -460,30 +460,58 @@ public class AgentCycleTest {
 	}
 
 	/**
-	 * A stop can race the end of the transition it stops: agent:suspend sets
-	 * the cycle's cancellation token, and the transition sees it and ends its
-	 * own Job before the stop cancels the future the run loop awaits. The cycle
-	 * is still stopped, not failed: the agent keeps its task for its resume.
+	 * A stop revokes the cycle's claim in its own write, so the stop settles the
+	 * cycle however its step ends (AGENT_LOOP.md §2.5.1). Here the step is left
+	 * to run on, as a step the stop does not reach would: it tries to complete
+	 * its task, which is refused, and the cycle is recorded as stopped, not
+	 * failed. The agent keeps its task for its resume.
 	 */
 	@Test
-	public void aStopThatRacesTheTransitionsEndStillStopsTheCycle(TestInfo info) throws Exception {
+	public void aStoppedCycleCannotResolveItsTask(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		String gateName = gateName("raced-stop");
+		String gateName = gateName("stopped");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = stepAgent(owner, "raced-stop");
-			Job task = request(owner, "raced-stop", "hold:" + gateName + " complete");
+			AgentState agent = stepAgent(owner, "stopped");
+			Job task = request(owner, "stopped", "hold:" + gateName + " complete");
 			awaitGate(gate);
-			// What agent:suspend does before it cancels the future: the record,
-			// then the token. The future is left for the transition to end.
-			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("raced stop")));
-			TestAdapter.CAPTURED_CTX.get(owner.getUserDID()).getCancellation().set(true);
-			gate.release(); // the step sees its token and ends its own Job cancelled
+			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
+			gate.release();
 
 			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
 			assertFalse(task.isFinished(), "a stopped cycle keeps its task: " + task.getErrorMessage());
 			AVector<ACell> timeline = agent.getTimeline();
 			assertEquals(CVMBool.TRUE, RT.getIn(timeline.get(timeline.count() - 1), Fields.CANCELLED),
 				"the cycle is recorded as stopped, not failed");
+		}
+	}
+
+	/**
+	 * A resume does not undo a stop: the cycle stopped before the resume is
+	 * still recorded as stopped and frees its session, and the agent then runs
+	 * the task again.
+	 */
+	@Test
+	public void aCycleStoppedThenResumedBeforeItEndsIsRecordedAndRunsAgain(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("resumed");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			AgentState agent = stepAgent(owner, "resumed");
+			Job task = request(owner, "resumed", "hold:" + gateName + " complete");
+			awaitGate(gate);
+			Blob sid = sessionOf(task);
+			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
+			assertNull(agent.getSessionCycleEpoch(sid), "the stop released the session");
+			assertTrue(agent.tryResume());
+			gate.release();
+
+			task.awaitResult(10_000);
+			assertEquals(Status.COMPLETE, task.getStatus(), "the task runs again after the resume");
+			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			AVector<ACell> timeline = agent.getTimeline();
+			assertEquals(2, timeline.count(), timeline.toString());
+			assertEquals(CVMBool.TRUE, RT.getIn(timeline.get(0), Fields.CANCELLED),
+				"the cycle stopped before the resume is recorded as stopped");
+			assertNull(RT.getIn(timeline.get(1), Fields.CANCELLED));
 		}
 	}
 

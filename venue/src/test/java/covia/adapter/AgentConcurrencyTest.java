@@ -205,7 +205,7 @@ public class AgentConcurrencyTest {
 	}
 
 	@Test
-	public void testDeliberateStopSurvivesLateFaultAndCancellationDoesNotUndoResume() {
+	public void testDeliberateStopSurvivesLateFaultAndAStoppedCycleDoesNotUndoResume() {
 		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
 			.ensureAgent("stop-race", Maps.empty(), null);
 		agent.suspend(ALICE_DID, Strings.create("review"));
@@ -214,9 +214,9 @@ public class AgentConcurrencyTest {
 		assertEquals(stop, agent.getRecord().get(AgentState.KEY_SUSPENSION));
 		assertNull(agent.getError());
 		assertTrue(agent.tryResume());
-		assertNull(agent.finishSuspendedCycle(Maps.of(Fields.CANCELLED, true), null));
+		agent.recordStoppedCycle(Maps.of(Fields.CANCELLED, true));
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertTrue(agent.getTimeline().isEmpty());
+		assertEquals(1, agent.getTimeline().count(), "the stopped cycle is recorded");
 		agent.suspend(Strings.create("new fault after resume"));
 		assertNull(agent.getRecord().get(AgentState.KEY_SUSPENSION));
 		assertEquals(Strings.create("new fault after resume"), agent.getError());
