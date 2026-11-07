@@ -738,7 +738,8 @@ agent's full nested identity. It accepts no subject, claims, capabilities or
 signing key from input. The caller must be the venue's signing `did:key` or a
 valid identity nested below it. An unrelated external key identity, a
 `did:web` identity, and anonymous/public callers are refused; an embedder
-holding a different installation key uses `VenueAuth.namedKeyPair` instead.
+holding a different installation key uses `VenueAuth.namedKeyPair` instead
+([HELD_KEYS.md](./HELD_KEYS.md) designs the venue holding such keys).
 The caller must also be acting under its own authority or as a sub-principal.
 A restricted scope on a principal acting as itself bounds what the request may
 do, and a bearer for that identity would carry it beyond the bound, so the
