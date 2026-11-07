@@ -19,12 +19,13 @@ import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.NoSuchPathException;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
+import covia.lattice.Entry;
 import covia.lattice.Namespace;
-import covia.lattice.Position;
 
 /** A path into an agent's record reaches the agent, its workspace and its sessions' workspaces. */
 public class AgentPathTest {
@@ -48,13 +49,13 @@ public class AgentPathTest {
 		session = "g/" + AGENT + "/sessions/" + sid.toHexString();
 	}
 
-	private Position resolve(String path) {
-		return user.locate(CoviaPath.parse(path));
+	private ACoviaComponent<?> resolve(String path) {
+		return user.resolve(CoviaPath.parse(path));
 	}
 
 	/** Writes at the entry a path resolves to. */
 	private void write(String path, ACell value) {
-		resolve(path).entry().write(value);
+		Entry.of(resolve(path)).write(value);
 	}
 
 	@Test
@@ -63,14 +64,14 @@ public class AgentPathTest {
 		write(notes, CVMLong.ONE);
 		Path path = CoviaPath.parse(notes);
 
-		Position record = user.locate(path.slice(0, 2));
+		ACoviaComponent<?> record = user.resolve(path.slice(0, 2));
 		assertEquals(agent.getRecord(), record.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, record::entry).getMessage());
+			assertThrows(AuthException.class, () -> Entry.of(record)).getMessage());
 
-		Position area = user.locate(path.slice(0, 3));
+		ACoviaComponent<?> area = user.resolve(path.slice(0, 3));
 		assertEquals(Maps.of("notes", CVMLong.ONE), area.read());
-		assertTrue(area.entry().write(Maps.of("notes", CVMLong.create(2))), "the area is the agent's workspace");
+		assertTrue(Entry.of(area).write(Maps.of("notes", CVMLong.create(2))), "the area is the agent's workspace");
 		assertEquals(CVMLong.create(2), resolve(notes).read());
 	}
 
@@ -102,32 +103,32 @@ public class AgentPathTest {
 
 	@Test
 	public void testTheRestOfTheRecordIsReadOnly() {
-		Position status = resolve("g/" + AGENT + "/status");
+		ACoviaComponent<?> status = resolve("g/" + AGENT + "/status");
 		assertEquals(AgentState.SLEEPING, status.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, status::entry).getMessage());
+			assertThrows(AuthException.class, () -> Entry.of(status)).getMessage());
 
-		Position meta = resolve(session + "/meta");
+		ACoviaComponent<?> meta = resolve(session + "/meta");
 		assertEquals(RT.getIn(agent.getSession(sid), "meta"), meta.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, meta::entry).getMessage());
+			assertThrows(AuthException.class, () -> Entry.of(meta)).getMessage());
 	}
 
 	@Test
 	public void testAMissingAgentOrSessionIsAbsentAndTakesNoChange() {
 		String missingSession = "g/" + AGENT + "/sessions/" + Blob.fromHex("ff").toHexString();
 		for (String path : new String[] {"g/nobody", missingSession}) {
-			Position record = resolve(path);
+			ACoviaComponent<?> record = resolve(path);
 			assertNull(record.read(), path);
 			assertFalse(record.exists(), path);
 			assertEquals(ACoviaComponent.READ_ONLY,
-				assertThrows(AuthException.class, record::entry, path).getMessage());
+				assertThrows(AuthException.class, () -> Entry.of(record), path).getMessage());
 		}
 		for (String path : new String[] {"g/nobody/n/notes", missingSession + "/c/draft"}) {
-			Position entry = resolve(path);
+			ACoviaComponent<?> entry = resolve(path);
 			assertNull(entry.read(), path);
 			assertFalse(entry.exists(), path);
-			assertThrows(InvalidInputException.class, () -> entry.entry().write(CVMLong.ONE), path);
+			assertThrows(InvalidInputException.class, () -> Entry.of(entry).write(CVMLong.ONE), path);
 		}
 		assertNull(user.agent("nobody"), "resolving a path creates no agent");
 		assertNull(agent.getSession(Blob.fromHex("ff")), "resolving a path creates no session");
@@ -135,23 +136,21 @@ public class AgentPathTest {
 
 	@Test
 	public void testASessionIdThatIsNotHexNamesNoSession() {
-		Position position = resolve("g/" + AGENT + "/sessions/not-hex/c/draft");
-		assertFalse(position.isValid());
+		NoSuchPathException e = assertThrows(NoSuchPathException.class,
+			() -> resolve("g/" + AGENT + "/sessions/not-hex/c/draft"));
 		String path = "/g/" + AGENT + "/sessions/not-hex";
 		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, path + "/c/draft", path),
-			assertThrows(InvalidInputException.class, position::read).getMessage(),
-			"the refusal says where the path stops naming a place");
+			ACoviaComponent.noSuchPath(e), "the refusal says where the path stops naming a place");
 	}
 
 	@Test
-	public void testAPositionSeesAnAgentItsTransactionCreates() {
+	public void testAPathSeesAnAgentItsTransactionCreates() {
 		AString later = Strings.intern("later-agent");
 		user.execute(draft -> {
-			Position notes = draft.locate(CoviaPath.parse("g/" + later + "/n/notes"));
-			assertTrue(notes.isValid());
+			ACoviaComponent<?> notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
 			assertFalse(notes.exists(), "the agent does not exist yet");
 			draft.ensureAgent(later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);
-			assertTrue(notes.exists(), "the position sees the agent the draft created");
+			assertTrue(notes.exists(), "the resolved entry sees the agent the draft created");
 			assertEquals(CVMLong.ONE, notes.read());
 		});
 		assertEquals(CVMLong.ONE, resolve("g/" + later + "/n/notes").read());

@@ -12,7 +12,6 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
-import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -20,13 +19,13 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
+import convex.lattice.NoSuchPathException;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
-import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
 import covia.api.Fields;
@@ -372,22 +371,21 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * policy covers whatever no session claims.
 	 */
 	@Override
-	public Position locate(Path path) {
-		Route route = route(path);
-		if (route != null) return route.child().locate(path.slice(route.taken()));
-		if (!path.isEmpty()) {
-			AString segment = path.get(0);
-			if (K_N.equals(segment)) return workspace().locate(path.slice(1));
-			if (K_SESSIONS.equals(segment) && path.count() > 1) return Position.invalid(path.slice(1));
-		}
-		return super.locate(path);
+	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+		if (start == end) return this;
+		Route route = route(segments, start, end);
+		if (route != null) return route.child().resolve(segments, start + route.taken(), end);
+		AString segment = segments[start];
+		if (K_N.equals(segment)) return workspace().resolve(segments, start + 1, end);
+		if (K_SESSIONS.equals(segment) && end - start > 1) throw new NoSuchPathException(segments, start + 1, end);
+		return super.resolve(segments, start, end);
 	}
 
 	/** A session ({@code sessions/<id>}), named by its id in hex, whether or not it exists. */
 	@Override
-	public Route route(Path path) {
-		if (path.count() < 2 || !K_SESSIONS.equals(path.get(0))) return null;
-		Blob sid = ValuePath.blobKey(path.get(1));
+	public Route route(AString[] segments, int start, int end) {
+		if (end - start < 2 || !K_SESSIONS.equals(segments[start])) return null;
+		Blob sid = ValuePath.blobKey(segments[start + 1]);
 		return (sid == null) ? null : new Route(session(sid), 2);
 	}
 

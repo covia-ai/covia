@@ -19,14 +19,14 @@ import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.NoSuchPathException;
 import covia.exception.AuthException;
-import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
+import covia.lattice.Entry;
 import covia.lattice.Namespace;
-import covia.lattice.Position;
 
 /** A path from the venue starts with its owner's DID and reaches that user's data. */
 public class VenuePathTest {
@@ -44,13 +44,13 @@ public class VenuePathTest {
 		did = TestEngine.uniqueDID(info);
 	}
 
-	private Position resolve(String path) {
-		return venue.locate(CoviaPath.parse(did + "/" + path));
+	private ACoviaComponent<?> resolve(String path) {
+		return venue.resolve(CoviaPath.parse(did + "/" + path));
 	}
 
-	private static String noSuchPath(Position position) {
-		assertNotNull(position.reasonInvalid(), "the position names no place");
-		return position.reasonInvalid();
+	/** The refusal for a path below the user that names no place. */
+	private String noSuchPath(String path) {
+		return ACoviaComponent.noSuchPath(assertThrows(NoSuchPathException.class, () -> resolve(path), path));
 	}
 
 	@Test
@@ -59,7 +59,7 @@ public class VenuePathTest {
 		user.workspace().write(NOTES, CVMLong.ONE);
 		assertEquals(CVMLong.ONE, resolve("w/notes").read());
 
-		assertTrue(resolve("w/notes").entry().write(CVMLong.create(2)));
+		assertTrue(Entry.of(resolve("w/notes")).write(CVMLong.create(2)));
 		assertEquals(CVMLong.create(2), user.workspace().read(NOTES), "the change is in the user's workspace");
 
 		AgentState agent = user.ensureAgent(AGENT, Maps.empty(), null);
@@ -69,12 +69,11 @@ public class VenuePathTest {
 
 	@Test
 	public void testADIDWithNoUserReadsAsAbsentAndTakesNoChange() {
-		Position position = resolve("w/notes");
-		assertTrue(position.isValid());
-		assertNull(position.read());
-		assertFalse(position.exists());
+		ACoviaComponent<?> notes = resolve("w/notes");
+		assertNull(notes.read());
+		assertFalse(notes.exists());
 		assertEquals(VenueState.UNKNOWN_USER,
-			assertThrows(NotFoundException.class, () -> position.entry().write(CVMLong.ONE)).getMessage());
+			assertThrows(NotFoundException.class, () -> Entry.of(notes).write(CVMLong.ONE)).getMessage());
 		assertNull(venue.users().get(did), "resolving and the refused change create no record");
 	}
 
@@ -85,13 +84,11 @@ public class VenuePathTest {
 
 		assertNull(resolve("w/notes").read());
 		assertFalse(resolve("w/notes").exists());
-		Position tombstone = resolve(Covia.K_DELETED.toString());
-		assertFalse(tombstone.isValid(), "the tombstone is not user data");
 		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + did + "/" + Covia.K_DELETED, "/" + did + "/" + Covia.K_DELETED),
-			assertThrows(InvalidInputException.class, tombstone::read).getMessage());
+			noSuchPath(Covia.K_DELETED.toString()), "the tombstone is not user data");
 
 		assertEquals(Users.ACCOUNT_DELETED,
-			assertThrows(AuthException.class, () -> resolve("w/notes").entry().write(CVMLong.create(2))).getMessage());
+			assertThrows(AuthException.class, () -> Entry.of(resolve("w/notes")).write(CVMLong.create(2))).getMessage());
 		assertNotNull(venue.users().tombstone(did));
 		assertNull(RT.getIn(venue.users().cursor().get(), did, Namespace.W), "nothing is written into the tombstone");
 	}
@@ -99,14 +96,14 @@ public class VenuePathTest {
 	@Test
 	public void testAPathResolvedBeforeAnAccountIsReplacedReachesNoLaterAccount() {
 		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
-		Position notes = resolve("w/notes");
+		ACoviaComponent<?> notes = resolve("w/notes");
 		venue.deleteUser(did, did);
 		venue.users().finishDeletion(did);
 		assertTrue(venue.users().create(did));
 
 		assertEquals(Users.ACCOUNT_DELETED, assertThrows(AuthException.class, notes::read).getMessage());
 		assertEquals(Users.ACCOUNT_DELETED,
-			assertThrows(AuthException.class, () -> notes.entry().write(CVMLong.create(2))).getMessage());
+			assertThrows(AuthException.class, () -> Entry.of(notes).write(CVMLong.create(2))).getMessage());
 		assertNull(venue.users().get(did).workspace().read(NOTES), "the new account is untouched");
 	}
 
@@ -114,10 +111,9 @@ public class VenuePathTest {
 	public void testTheVenuesBookkeepingIsNoUserData() {
 		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
 		for (String slot : new String[] {"meta", "generation", "deleting", "deleted", "n/notes", "foo"}) {
-			Position position = resolve(slot);
-			assertFalse(position.isValid(), slot);
-			assertEquals(noSuchPath(position), assertThrows(InvalidInputException.class, position::read).getMessage());
-			assertEquals(noSuchPath(position), assertThrows(InvalidInputException.class, position::exists).getMessage());
+			String first = slot.split("/")[0];
+			assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + did + "/" + slot, "/" + did + "/" + first),
+				noSuchPath(slot), slot);
 		}
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> record = (AMap<AString, ACell>) resolve("").read();
@@ -127,16 +123,17 @@ public class VenuePathTest {
 
 	@Test
 	public void testAFirstSegmentThatIsNotADIDNamesNoUser() {
-		Position position = venue.locate(CoviaPath.parse("not-a-did/w/notes"));
-		assertFalse(position.isValid());
-		assertEquals(noSuchPath(position), assertThrows(InvalidInputException.class, position::read).getMessage());
+		NoSuchPathException e = assertThrows(NoSuchPathException.class,
+			() -> venue.resolve(CoviaPath.parse("not-a-did/w/notes")));
+		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/not-a-did/w/notes", "/not-a-did"),
+			ACoviaComponent.noSuchPath(e));
 	}
 
 	@Test
 	public void testAWalkFromADraftStaysInTheDraft() {
 		venue.users().ensure(did);
 		venue.execute(draft -> {
-			assertFalse(draft.locate(CoviaPath.parse(did + "/w/notes")).entry().write(CVMLong.ONE), "nothing was there");
+			assertFalse(Entry.of(draft.resolve(CoviaPath.parse(did + "/w/notes"))).write(CVMLong.ONE), "nothing was there");
 			assertNull(resolve("w/notes").read(), "the live venue does not see the draft");
 		});
 		assertEquals(CVMLong.ONE, resolve("w/notes").read());
@@ -145,7 +142,7 @@ public class VenuePathTest {
 	@Test
 	public void testAPositionSeesAnAccountItsTransactionCreates() {
 		venue.execute(draft -> {
-			Position notes = draft.locate(CoviaPath.parse(did + "/w/notes"));
+			ACoviaComponent<?> notes = draft.resolve(CoviaPath.parse(did + "/w/notes"));
 			assertFalse(notes.exists(), "there is no account yet");
 			draft.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
 			assertTrue(notes.exists(), "the position sees the account the draft created");

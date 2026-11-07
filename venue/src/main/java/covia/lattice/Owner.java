@@ -10,7 +10,7 @@ import covia.venue.RequestContext;
  * the data below it that no owner nearer the data claims.
  *
  * <p>An owner names the owners below it with one {@link #route routing step},
- * used both to locate a path and to decide who may use it, so the two always
+ * used both to resolve a path and to decide who may use it, so the two always
  * agree on which owner a path reaches and how many segments that takes.
  * {@link #decide} walks the steps from an owner a request starts at.</p>
  */
@@ -20,17 +20,16 @@ public interface Owner {
 	AccessPolicy policy();
 
 	/**
-	 * The owner nearer the data that the first segments of {@code path} name,
-	 * whether or not it exists, or null when the path stays with this owner.
-	 *
-	 * @param path The stretch of the caller's path below this owner
+	 * The owner nearer the data that the first of segments {@code [start, end)}
+	 * name, whether or not it exists, or null when they stay with this owner.
+	 * The segments are the caller's, lent as for resolution.
 	 */
-	default Route route(Path path) {
+	default Route route(AString[] segments, int start, int end) {
 		return null;
 	}
 
-	/** Where {@code path}, the stretch of the caller's path below this owner, ends. */
-	Position locate(Path path);
+	/** The component segments {@code [start, end)} name below this owner, as Convex's resolution hook. */
+	ACoviaComponent<?> resolve(AString[] segments, int start, int end);
 
 	/**
 	 * A step from an owner into a child owner.
@@ -45,13 +44,16 @@ public interface Owner {
 	 * owner on the way that has a policy, with the stretch of the path below it.
 	 */
 	static Ownership decide(Owner start, Path path) {
+		Path request = path.request();
+		AString[] segments = request.toArray(new AString[0]);
+		int at = path.position();
+		int end = at + Math.toIntExact(path.count());
 		Ownership decided = new Ownership(start.policy(), path);
 		Owner owner = start;
-		Path rest = path;
-		for (Route route = owner.route(rest); route != null; route = owner.route(rest)) {
+		for (Route route = owner.route(segments, at, end); route != null; route = owner.route(segments, at, end)) {
 			owner = route.child();
-			rest = rest.slice(route.taken());
-			if (owner.policy() != null) decided = new Ownership(owner.policy(), rest);
+			at += route.taken();
+			if (owner.policy() != null) decided = new Ownership(owner.policy(), request.slice(at, end));
 		}
 		return decided;
 	}

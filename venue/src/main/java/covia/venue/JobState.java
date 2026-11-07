@@ -21,7 +21,6 @@ import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
-import covia.lattice.Position;
 import covia.lattice.Workspace;
 
 /** Primary record of an existing venue job. Updates never create a missing row.
@@ -33,7 +32,7 @@ public final class JobState extends ACoviaComponent<ACell>
 	private final AForkableCursor<ACell> edits;
 	private final AString owner;
 	private final Blob id;
-	/** Who may use this job's data: see {@link #locate}. */
+	/** Who may use this job's data: see {@link #resolve(AString[], int, int)}. */
 	private final AccessPolicy policy;
 
 	/**
@@ -92,12 +91,12 @@ public final class JobState extends ACoviaComponent<ACell>
 	 * and anything else needs authority over {@code <owner>/j/<id>/<path>}.
 	 */
 	@Override
-	public Position locate(Path path) {
-		return (!path.isEmpty() && Fields.TEMP.equals(path.get(0)))
-			? workspace().locate(path.slice(1)) : super.locate(path);
+	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+		return (start < end && Fields.TEMP.equals(segments[start]))
+			? workspace().resolve(segments, start + 1, end) : super.resolve(segments, start, end);
 	}
 
-	/** See {@link #locate}; none outside any user. */
+	/** See {@link #resolve(AString[], int, int)}; none outside any user. */
 	@Override
 	public AccessPolicy policy() {
 		return policy;

@@ -64,7 +64,7 @@ public class PathWriteAuthorityTest {
 	}
 
 	private ACell aliceRead(String path) {
-		return engine.getVenueState().users().get(alice).locate(CoviaPath.parse(path)).read();
+		return engine.getVenueState().users().get(alice).resolve(CoviaPath.parse(path)).read();
 	}
 
 	@Test

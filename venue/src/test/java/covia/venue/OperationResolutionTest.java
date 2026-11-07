@@ -607,7 +607,7 @@ public class OperationResolutionTest {
 	public void testVenueGlobalsAreAViewOfTheVenueUsersPath() {
 		writeVenueGlobal("test-scalar", Strings.create("leaf"));
 		User venue = engine.getVenueState().users().get(engine.getDIDString());
-		assertEquals(Strings.create("leaf"), venue.locate(CoviaPath.parse("w/global/test-scalar")).read());
+		assertEquals(Strings.create("leaf"), venue.resolve(CoviaPath.parse("w/global/test-scalar")).read());
 		assertEquals(Strings.create("leaf"), engine.resolvePath(Strings.create("v/test-scalar"), alice));
 		assertNull(engine.resolvePath(Strings.create("v/test-scalar/below"), alice), "nothing is below a scalar");
 	}

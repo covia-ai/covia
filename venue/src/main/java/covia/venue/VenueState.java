@@ -36,7 +36,6 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
-import covia.lattice.Position;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
@@ -258,8 +257,8 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * ({@code <DID>/<namespace>/<path>}), and {@link Users} resolves it.
 	 */
 	@Override
-	public Position locate(Path path) {
-		return path.isEmpty() ? super.locate(path) : users().locate(path);
+	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+		return (start == end) ? this : users().resolve(segments, start, end);
 	}
 
 	/** Atomically provisions account state and its login directory row. */

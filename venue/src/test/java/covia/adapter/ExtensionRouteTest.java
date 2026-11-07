@@ -23,6 +23,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.NoSuchPathException;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
@@ -30,6 +31,7 @@ import covia.adapter.agent.ContextLoader;
 import covia.exception.AuthException;
 import covia.lattice.AdapterView;
 import covia.lattice.CoviaPath;
+import covia.lattice.Entry;
 import covia.lattice.Workspace;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -91,6 +93,12 @@ class ExtensionRouteTest {
 		return RT.getIn(run("read", Maps.of(Fields.PATH, path), ctx), Fields.VALUE);
 	}
 	private static String path(String suffix) { return "x/extension-test" + suffix; }
+
+	/** The entry an x/ path names in alice's view, held for writing as alice. */
+	private Entry viewEntry(String path) {
+		Path full = CoviaPath.parse(path);
+		return Entry.of(AdapterView.view(alice, covia, aliceDID, full, Capability.CRUD_WRITE).resolve(AdapterView.inView(full)));
+	}
 	private void write(String path, ACell value, RequestContext ctx) {
 		run("write", Maps.of(Fields.PATH, path, Fields.VALUE, value), ctx);
 	}
@@ -104,7 +112,8 @@ class ExtensionRouteTest {
 		assertEquals(Strings.create("alice"), engine.resolvePath(Strings.create("/" + path("/label")), alice));
 		assertEquals(Strings.create("alice"), read(aliceDID + "/" + path("/label"), alice));
 		assertEquals("alice", new ContextLoader(engine).resolveValue(Strings.create(path("/label")), alice).content());
-		assertFalse(engine.getVenueState().users().get(aliceDID).locate(CoviaPath.parse(path(""))).isValid(),
+		assertThrows(NoSuchPathException.class,
+			() -> engine.getVenueState().users().get(aliceDID).resolve(CoviaPath.parse(path(""))),
 			"a user's own data has no x: only the adapter's view does");
 		assertEquals(before, engine.getVenueState().get(), "reading a view does not materialise user storage");
 	}
@@ -185,12 +194,12 @@ class ExtensionRouteTest {
 		Workspace record = new Workspace(engine.getVenueState().users().get(aliceDID).cursor());
 		record.createPath(CoviaPath.parent(shadow));
 		record.write(shadow, Strings.create("shadow"));
-		var retained = AdapterView.resolve(alice, covia, aliceDID, CoviaPath.parse(path("/label")), Capability.CRUD_WRITE);
+		var retained = viewEntry(path("/label"));
 		engine.disableAdapter(probe.getName());
 		assertNull(read(path("/label"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/label"), Strings.create("no"), alice));
 		assertThrows(AuthException.class,
-			() -> retained.entry().write(Strings.create("late")));
+			() -> retained.write(Strings.create("late")));
 		engine.enableAdapter(probe.getName());
 		assertEquals(Strings.create("alice"), read(path("/label"), alice));
 		engine.removeAdapter(probe.getName());
@@ -205,7 +214,7 @@ class ExtensionRouteTest {
 		assertEquals(Strings.create("projected"), read(path("/1"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/1"), Strings.create("no"), alice));
 		var view = covia.locate(alice, Strings.create(path("")));
-		assertThrows(AuthException.class, () -> view.entry().write(Maps.empty()));
+		assertThrows(AuthException.class, () -> Entry.of(view).write(Maps.empty()));
 	}
 
 	@Test void arbitraryRootValuesAndConcurrentUpdatesUseTheVenueAtomicState() {
@@ -221,9 +230,9 @@ class ExtensionRouteTest {
 		assertEquals(20, result.count());
 		write(path("/0"), CVMLong.create(99), alice);
 		assertEquals(CVMLong.create(99), read(path("/0"), alice));
-		var target = AdapterView.resolve(alice, covia, aliceDID, CoviaPath.parse(path("/0")), Capability.CRUD_WRITE);
+		var target = viewEntry(path("/0"));
 		ACell before = engine.getVenueState().get();
-		assertThrows(IllegalArgumentException.class, () -> target.entry().execute(draft -> {
+		assertThrows(IllegalArgumentException.class, () -> target.execute(draft -> {
 			draft.write(CVMLong.ZERO);
 			throw new IllegalArgumentException("test rollback");
 		}));
@@ -307,7 +316,7 @@ class ExtensionRouteTest {
 		assertEquals(delegated.getSessionId(), RT.getIn(RT.getIn(context, "execution"), Fields.SESSION_ID));
 		write(resource + "/scratch", Strings.create("alice scratch"), delegated);
 		write("x/test/scratch", Strings.create("bob scratch"), bob);
-		var retained = AdapterView.resolve(alice, covia, aliceDID, CoviaPath.parse("x/test/scratch"), Capability.CRUD_WRITE);
+		var retained = viewEntry("x/test/scratch");
 		engine.disableAdapter("test");
 		engine.deleteUser(engine.venueContext(), aliceDID);
 		assertNull(engine.adapterState("test").read("users/" + aliceDID));
@@ -316,6 +325,6 @@ class ExtensionRouteTest {
 		assertNull(read("x/test/scratch", alice));
 		assertEquals(Strings.create("bob scratch"), read("x/test/scratch", bob));
 		assertThrows(AuthException.class,
-			() -> retained.entry().write(Strings.create("late")));
+			() -> retained.write(Strings.create("late")));
 	}
 }

@@ -31,6 +31,8 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
+import convex.lattice.NoSuchPathException;
+import covia.lattice.ACoviaComponent;
 import covia.lattice.Access;
 import covia.lattice.AccessPolicy;
 import covia.lattice.AdapterView;
@@ -38,8 +40,9 @@ import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
-import covia.lattice.Position;
+import covia.lattice.RecordData;
 import covia.lattice.ValuePath;
+import covia.lattice.Workspace;
 import covia.venue.Engine;
 import covia.venue.JobState;
 import covia.venue.RequestContext;
@@ -249,7 +252,7 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * <p>The path's string segments are resolved through the components they
 	 * reach, each mapping a segment to its lattice key
-	 * ({@link covia.lattice.ACoviaComponent#locate}), and the value where they
+	 * ({@link covia.lattice.ACoviaComponent#resolve(AString[], int, int)}), and the value where they
 	 * end is read.</p>
 	 *
 	 * <p>Response always includes {@code exists} (boolean) and {@code value}:</p>
@@ -746,9 +749,10 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		Access target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
-		Path path = target.path();
-		if (target.component(Capability.CRUD_DELETE) instanceof SecretStore secrets && path.count() == 1) {
-			AString name = path.get(0);
+		// A whole secret (s/<name>) is removed by its store; nothing else of it changes by path
+		if (target.component(Capability.CRUD_DELETE) instanceof RecordData data
+				&& data.parent() instanceof SecretStore secrets && data.path().count() == 1) {
+			AString name = data.path().get(0);
 			boolean deleted = secrets.deleteIfPresent(name);
 			if (deleted) {
 				// The name only, never the value — the same trail as secret:set.
@@ -1206,17 +1210,17 @@ public class CoviaAdapter extends AAdapter {
 
 	/** The access a request has to where a path ends, checked by its owner's policy. */
 	private Access access(RequestContext ctx, Located located) {
-		return new Access(ctx, located.position(), located.ownership(), (c, address, ability) -> {
+		return new Access(ctx, located.start(), located.path(), located.ownership(), (c, address, ability) -> {
 			if (address == null) engine.requireStanding(c);
 			else engine.requireLocalAccess(c, address, ability);
 		});
 	}
 
 	/**
-	 * Where a path a request names ends, <b>with no access check</b>: for venue
-	 * code acting for itself, which reads or changes the position directly. Code
-	 * acting for a request uses {@link #resolve}. The request chooses the
-	 * component the path starts at, and that component resolves it:
+	 * The component a path a request names resolves to, <b>with no access
+	 * check</b>: for venue code acting for itself, which reads or changes it
+	 * directly. Code acting for a request uses {@link #resolve}. The request
+	 * chooses the component the path starts at, and that component resolves it:
 	 * <ul>
 	 *   <li>a path that starts with a DID: the venue;</li>
 	 *   <li>{@code n/}: the request's agent;</li>
@@ -1228,32 +1232,37 @@ public class CoviaAdapter extends AAdapter {
 	 * </ul>
 	 * Resolution checks no authority and changes nothing, except that an
 	 * {@code x/} view checks its own. It follows the path's shape, not the
-	 * data: a path into a user, agent, session or job that does not exist ends
-	 * at a position that reads as absent, and a path that names no place data
-	 * could be ends at an invalid one ({@link Position#isValid}). Who may use
-	 * the data there is for {@link #resolve} to decide.
+	 * data: a path into a user, agent, session or job that does not exist
+	 * resolves to a component that reads as absent. Who may use the data there
+	 * is for {@link #resolve} to decide.
 	 *
 	 * @param path The path as the caller gave it: a string, with an optional
 	 *        leading slash and owner DID, or a vector of segments
-	 * @return Where the path ends, never null
+	 * @return The component there, or null when the path names no place data could be
 	 * @throws WrongScopeException if {@code n/}, {@code c/} or {@code t/} is used
 	 *         outside its scope, or a path without an owner DID in a request with no user
 	 */
-	public Position locate(RequestContext ctx, ACell path) {
-		return located(engine.getVenueState(), ctx, path, Capability.CRUD_READ).position();
+	public ACoviaComponent<?> locate(RequestContext ctx, ACell path) {
+		Located located = located(engine.getVenueState(), ctx, path, Capability.CRUD_READ);
+		try {
+			return located.start().resolve(located.path());
+		} catch (NoSuchPathException e) {
+			return null;
+		}
 	}
 
 	/**
-	 * Where a path ends, and who decides on the data there.
+	 * Where a path starts, and who decides on the data it names.
 	 *
-	 * @param position Where the path ends
+	 * @param start The component the path is resolved from
+	 * @param path The caller's path below {@code start}
 	 * @param ownership The innermost owner's policy, or for {@code v/} and
 	 *        {@code x/} that of the view
 	 */
-	private record Located(Position position, Owner.Ownership ownership) {
-		/** Where {@code path} ends below {@code owner}, decided by the owners it crosses. */
-		static Located below(Owner owner, Path path) {
-			return new Located(owner.locate(path), Owner.decide(owner, path));
+	private record Located(ACoviaComponent<?> start, Path path, Owner.Ownership ownership) {
+		/** {@code path} below {@code owner}, decided by the owners it crosses. */
+		static <O extends ACoviaComponent<?> & Owner> Located below(O owner, Path path) {
+			return new Located(owner, path, Owner.decide(owner, path));
 		}
 	}
 
@@ -1267,8 +1276,8 @@ public class CoviaAdapter extends AAdapter {
 		if (did != null) {
 			Engine.UserPathTarget target = engine.resolveUserPath(ctx, did, false);
 			if (isExtensionPath(target.path())) {
-				return new Located(AdapterView.resolve(ctx, this, target.ownerDID(), target.path(), ability),
-					AdapterView.ownership(target.ownerDID(), target.path()));
+				return new Located(AdapterView.view(ctx, this, target.ownerDID(), target.path(), ability),
+					AdapterView.inView(target.path()), AdapterView.ownership(target.ownerDID(), target.path()));
 			}
 			// A stretch of the whole path, so a refusal names the path with its DID
 			Path below = CoviaPath.segments(target.ownerDID()).concat(target.path()).slice(1);
@@ -1278,13 +1287,12 @@ public class CoviaAdapter extends AAdapter {
 		AString namespace = segments.isEmpty() ? null : segments.get(0);
 		if (Namespace.X.equals(namespace)) {
 			AString owner = (ctx == null) ? null : ctx.getUserDID();
-			Position position = AdapterView.resolve(ctx, this, owner, segments, ability);
-			return new Located(position, AdapterView.ownership(owner, segments));
+			Workspace view = AdapterView.view(ctx, this, owner, segments, ability);
+			return new Located(view, AdapterView.inView(segments), AdapterView.ownership(owner, segments));
 		}
 		if (V.equals(namespace)) {
-			Path global = venueGlobals(segments);
-			Position position = state.users().at(engine.getDIDString()).workspace().locate(global.slice(1));
-			return new Located(position, new Owner.Ownership(VIEW_POLICY, segments));
+			Workspace global = state.users().at(engine.getDIDString()).workspace();
+			return new Located(global, venueGlobals(segments).slice(1), new Owner.Ownership(VIEW_POLICY, segments));
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
@@ -1299,7 +1307,7 @@ public class CoviaAdapter extends AAdapter {
 		if (T.equals(namespace)) {
 			JobState job = requestUser(state, ctx).jobs().at(scopedJob(ctx));
 			Path rest = segments.slice(1);
-			return new Located(job.workspace().locate(rest), Owner.decide(job, JobState.inScratch(rest)));
+			return new Located(job.workspace(), rest, Owner.decide(job, JobState.inScratch(rest)));
 		}
 		return Located.below(requestUser(state, ctx), segments);
 	}
@@ -1326,7 +1334,7 @@ public class CoviaAdapter extends AAdapter {
 			AString did = didPath(path);
 			Path segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
 			if (isExtensionPath(segments)) return true;
-			return locate(ctx, path).isValid();
+			return locate(ctx, path) != null;
 		} catch (WrongScopeException e) {
 			return true;
 		} catch (InvalidInputException e) {

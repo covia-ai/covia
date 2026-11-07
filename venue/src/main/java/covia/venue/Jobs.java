@@ -5,7 +5,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
-import convex.core.data.Path;
+import convex.lattice.NoSuchPathException;
 import convex.core.lang.RT;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -14,7 +14,6 @@ import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
-import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
 
@@ -33,7 +32,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 
 	private final VenueContext context;
 	private final AString owner;
-	/** Who may use the list of jobs: see {@link #locate}. */
+	/** Who may use the list of jobs: see {@link #resolve(AString[], int, int)}. */
 	private final AccessPolicy policy;
 
 	/**
@@ -166,20 +165,21 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 * a segment naming no job, need authority over {@code <owner>/j/<path>}.
 	 */
 	@Override
-	public Position locate(Path path) {
-		if (path.isEmpty()) return super.locate(path);
-		Route route = route(path);
-		return (route == null) ? Position.invalid(path) : route.child().locate(path.slice(route.taken()));
+	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+		if (start == end) return this;
+		Route route = route(segments, start, end);
+		if (route == null) throw new NoSuchPathException(segments, start, end);
+		return route.child().resolve(segments, start + route.taken(), end);
 	}
 
 	/** A job, named by its id in hex, whether or not it exists. */
 	@Override
-	public Route route(Path path) {
-		Blob id = path.isEmpty() ? null : ValuePath.blobKey(path.get(0));
+	public Route route(AString[] segments, int start, int end) {
+		Blob id = (start == end) ? null : ValuePath.blobKey(segments[start]);
 		return (id == null) ? null : new Route(at(id), 1);
 	}
 
-	/** See {@link #locate}; none outside any user. */
+	/** See {@link #resolve(AString[], int, int)}; none outside any user. */
 	@Override
 	public AccessPolicy policy() {
 		return policy;

@@ -1,5 +1,6 @@
 package covia.lattice;
 
+import java.util.Arrays;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -16,7 +17,8 @@ import covia.exception.InvalidInputException;
  * {@code temp}. Its owner binds the cursor at the area's root, with the owner's
  * stamping, and decides whether the root may be created.
  *
- * <p>A path resolves to the {@link Entry} it names, whose keys are fixed then,
+ * <p>A path resolves to the {@link Entry} it names, whose keys are fixed then
+ * ({@link #resolve(AString[], int, int)}),
  * and every change is an entry's. The area's own operations, for its owner's
  * code, take the stretch of a path that is the area's own and act through the
  * entry it resolves to. An absent root counts as empty. No operation but
@@ -53,10 +55,16 @@ public final class Workspace extends ACoviaComponent<ACell>
 		return new Workspace(draft);
 	}
 
-	/** Where {@code path} ends in this area: the {@link Entry} there. */
+	/**
+	 * The {@link Entry} segments {@code [start, end)} name in this area; the
+	 * area itself for none ({@link Entry#of} gives its root entry). The entry
+	 * keeps a copy of the request up to {@code end}, so its refusals name the
+	 * path as the caller wrote it.
+	 */
 	@Override
-	public Position locate(Path path) {
-		return new Position(entry(path), path.slice(path.count()));
+	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+		if (start == end) return this;
+		return entry(Path.of(Arrays.copyOf(segments, end)).slice(start));
 	}
 
 	/** The entry at {@code path} in this area, its keys fixed now by the values the path meets. */

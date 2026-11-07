@@ -2134,7 +2134,7 @@ public class Engine {
 	private ACell readLatticePath(AString ref, RequestContext ctx) {
 		CoviaAdapter covia = (CoviaAdapter) getAdapter("covia");
 		if (covia == null) return null;
-		covia.lattice.Position target;
+		covia.lattice.ACoviaComponent<?> target;
 		try {
 			target = covia.locate(ctx, ref);
 		} catch (WrongScopeException e) {
@@ -2145,7 +2145,7 @@ public class Engine {
 			// not absence and propagates rather than being masked as "not found" (#175).
 			return null;
 		}
-		return target.isValid() ? target.read() : null;
+		return (target == null) ? null : target.read();
 	}
 
 	/**

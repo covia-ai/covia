@@ -9,7 +9,6 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
-import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
@@ -22,7 +21,6 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.adapter.agent.GoalTreeContext;
-import covia.lattice.Position;
 import covia.lattice.Workspace;
 import static covia.venue.AgentState.*;
 
@@ -38,7 +36,7 @@ public final class SessionState extends ACoviaComponent<ACell>
 	private final AString owner;
 	private final AString agentId;
 	private final Blob id;
-	/** Who may use this session's data: see {@link #locate}. */
+	/** Who may use this session's data: see {@link #resolve(AString[], int, int)}. */
 	private final AccessPolicy policy;
 
 	/**
@@ -91,12 +89,12 @@ public final class SessionState extends ACoviaComponent<ACell>
 	 * {@code <owner>/g/<agent>/sessions/<id>/<path>}.
 	 */
 	@Override
-	public Position locate(Path path) {
-		return (!path.isEmpty() && K_C.equals(path.get(0)))
-			? workspace().locate(path.slice(1)) : super.locate(path);
+	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+		return (start < end && K_C.equals(segments[start]))
+			? workspace().resolve(segments, start + 1, end) : super.resolve(segments, start, end);
 	}
 
-	/** See {@link #locate}; none outside any user. */
+	/** See {@link #resolve(AString[], int, int)}; none outside any user. */
 	@Override
 	public AccessPolicy policy() {
 		return policy;

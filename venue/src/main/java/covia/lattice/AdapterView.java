@@ -29,14 +29,15 @@ public final class AdapterView {
 	private AdapterView() {}
 
 	/**
-	 * Where an {@code x/} path ends in {@code owner}'s view. Authority is checked
-	 * on the addressed owner's path; the adapter's view and write policy receive
-	 * that user's context.
+	 * The workspace an {@code x/} path reaches in {@code owner}'s view, over the
+	 * adapter's view and kept to its write policy; the path inside it is
+	 * {@link #inView}. Authority is checked on the addressed owner's path; the
+	 * adapter's view and write policy receive that user's context.
 	 *
 	 * @param fullPath The path from {@code x} on
 	 * @param ability The ability the caller will use, read or a change
 	 */
-	public static Position resolve(RequestContext ctx, CoviaAdapter covia,
+	public static Workspace view(RequestContext ctx, CoviaAdapter covia,
 			AString owner, Path fullPath, AString ability) {
 		if (ctx == null || ctx.getCallerDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
 		for (AString segment : fullPath) {
@@ -52,7 +53,7 @@ public final class AdapterView {
 		AAdapter adapter = name == null ? null : covia.engine.getAdapter(name);
 		RequestContext scoped = owner.equals(ctx.getUserDID()) ? ctx : ctx.onBehalfOf(owner);
 		// The adapter's write policy takes the path inside its view, without x/<adapter>
-		Path path = fullPath.slice(Math.min(2, fullPath.count()));
+		Path path = inView(fullPath);
 		boolean mutation = Capability.CRUD_WRITE.equals(ability) || Capability.CRUD_DELETE.equals(ability);
 		if (mutation) requireWritable(adapter, scoped, path);
 		AForkableCursor<ACell> exposed = adapter == null ? null : adapter.latticeView(scoped);
@@ -73,12 +74,17 @@ public final class AdapterView {
 				return value;
 			}
 		};
-		return new Workspace(guarded).locate(path);
+		return new Workspace(guarded);
+	}
+
+	/** The path inside an adapter's view, without {@code x/<adapter>}. */
+	public static Path inView(Path fullPath) {
+		return fullPath.slice(Math.min(2, fullPath.count()));
 	}
 
 	/**
 	 * Who decides on an {@code x/} path in {@code owner}'s view: the owner, so an
-	 * access to the view needs what {@link #resolve} checked, on the same address.
+	 * access to the view needs what {@link #view} checked, on the same address.
 	 *
 	 * @param fullPath The path from {@code x} on
 	 */

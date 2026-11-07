@@ -57,7 +57,7 @@ public class EntryTest {
 
 		assertFalse(entry.write(null));
 		assertTrue(entry.exists());
-		assertTrue(area.locate(path("a")).exists());
+		assertTrue(area.resolve(path("a")).exists());
 		assertNull(entry.read());
 		assertTrue(entry.write(null), "a stored null counts as present");
 

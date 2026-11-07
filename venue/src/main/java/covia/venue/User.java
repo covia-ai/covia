@@ -14,9 +14,10 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.lattice.Entry;
 import covia.lattice.Owner;
-import covia.lattice.Position;
 import covia.lattice.ValuePath;
+import convex.lattice.NoSuchPathException;
 import covia.lattice.Workspace;
 import convex.lattice.cursor.StampedCursor;
 
@@ -64,7 +65,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Framework-internal read of a path in this user's record. */
 	ACell readInternalPath(Path path) {
-		return locate(path).read();
+		return resolve(path).read();
 	}
 
 	/**
@@ -72,7 +73,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * above it; authority is possession of this user cursor.
 	 */
 	void writeInternalPath(Path path, ACell value) {
-		locate(path).entry().execute(draft -> {
+		Entry.of(resolve(path)).execute(draft -> {
 			draft.createLevels();
 			draft.write(value);
 		});
@@ -80,7 +81,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
 	boolean deleteInternalPath(Path path) {
-		return locate(path).entry().delete();
+		return Entry.of(resolve(path)).delete();
 	}
 
 	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
@@ -293,11 +294,11 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** The user's jobs ({@code j}), and an agent ({@code g/<id>}) whether or not it exists. */
 	@Override
-	public Route route(Path path) {
-		if (path.isEmpty()) return null;
-		AString segment = path.get(0);
+	public Route route(AString[] segments, int start, int end) {
+		if (start == end) return null;
+		AString segment = segments[start];
 		if (Namespace.J.equals(segment)) return new Route(jobs(), 1);
-		if (Namespace.G.equals(segment) && path.count() > 1) return new Route(agentAt(path.get(1)), 2);
+		if (Namespace.G.equals(segment) && end - start > 1) return new Route(agentAt(segments[start + 1]), 2);
 		return null;
 	}
 
@@ -309,18 +310,18 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * The user's policy covers whatever no owner below claims.
 	 */
 	@Override
-	public Position locate(Path path) {
-		if (path.isEmpty()) return super.locate(path);
-		Route route = route(path);
-		if (route != null) return route.child().locate(path.slice(route.taken()));
-		AString segment = path.get(0);
-		if (Namespace.W.equals(segment)) return workspace().locate(path.slice(1));
-		if (Namespace.O.equals(segment)) return operations().locate(path.slice(1));
-		if (Namespace.H.equals(segment)) return inbox().locate(path.slice(1));
-		if (Namespace.S.equals(segment)) return secrets().locate(path.slice(1));
-		if (Namespace.A.equals(segment)) return assets().locate(path.slice(1));
-		if (Namespace.G.equals(segment)) return super.locate(path);
-		return Position.invalid(path);
+	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+		if (start == end) return this;
+		Route route = route(segments, start, end);
+		if (route != null) return route.child().resolve(segments, start + route.taken(), end);
+		AString segment = segments[start];
+		if (Namespace.W.equals(segment)) return workspace().resolve(segments, start + 1, end);
+		if (Namespace.O.equals(segment)) return operations().resolve(segments, start + 1, end);
+		if (Namespace.H.equals(segment)) return inbox().resolve(segments, start + 1, end);
+		if (Namespace.S.equals(segment)) return secrets().resolve(segments, start + 1, end);
+		if (Namespace.A.equals(segment)) return assets().resolve(segments, start + 1, end);
+		if (Namespace.G.equals(segment)) return super.resolve(segments, start, end);
+		throw new NoSuchPathException(segments, start, end);
 	}
 
 	/** The user's data as callers see it, its jobs included, without the venue's bookkeeping. */

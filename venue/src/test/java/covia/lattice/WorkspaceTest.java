@@ -166,14 +166,14 @@ public class WorkspaceTest {
 	public void testOnlyAWorkspaceIsChangedByPath() {
 		var cursor = Cursors.<ACell>root(Maps.of("list", Vectors.of(CVMLong.ONE, CVMLong.create(2))));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		Position position = component.locate(path("list/1"));
-		assertSame(component, position.component());
-		assertEquals(CVMLong.create(2), position.read());
+		RecordData data = (RecordData) component.resolve(path("list/1"));
+		assertSame(component, data.parent());
+		assertEquals(CVMLong.create(2), data.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
-			assertThrows(AuthException.class, position::entry).getMessage());
+			assertThrows(AuthException.class, () -> Entry.of(data)).getMessage());
 
 		Workspace area = new Workspace(cursor);
-		assertTrue(area.locate(path("list/1")).entry().write(CVMLong.create(3)));
+		assertTrue(Entry.of(area.resolve(path("list/1"))).write(CVMLong.create(3)));
 		assertEquals(CVMLong.create(3), area.read(path("list/1")));
 	}
 
@@ -206,19 +206,20 @@ public class WorkspaceTest {
 	}
 
 	@Test
-	public void testAPositionIsWhereItsStretchEnds() {
+	public void testRecordDataIsWhereItsPathEnds() {
 		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE)));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
 		Path path = path("a/b");
 
-		Position whole = component.locate(path);
+		RecordData whole = (RecordData) component.resolve(path);
 		assertEquals(path, whole.path());
 		assertEquals(CVMLong.ONE, whole.read());
 
-		Position parent = component.locate(CoviaPath.parent(path));
+		RecordData parent = (RecordData) component.resolve(CoviaPath.parent(path));
 		assertEquals(Maps.of("b", CVMLong.ONE), parent.read());
 		assertTrue(parent.exists());
 		assertEquals("/a", CoviaPath.address(parent.path()));
+		assertSame(component, component.resolve(CoviaPath.EMPTY), "an empty path is the component itself");
 	}
 
 	@Test

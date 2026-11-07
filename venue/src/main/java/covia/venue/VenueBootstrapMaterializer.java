@@ -339,7 +339,7 @@ final class VenueBootstrapMaterializer {
 
 	/** Writes to the draft, creating the levels above, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
-		Entry entry = venue.locate(venuePath(virtualPath)).entry();
+		Entry entry = Entry.of(venue.resolve(venuePath(virtualPath)));
 		entry.createLevels();
 		entry.write(value);
 		ACell actual = readVenuePath(virtualPath);
@@ -350,12 +350,12 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return venue.locate(venuePath(virtualPath)).read();
+		return venue.resolve(venuePath(virtualPath)).read();
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
-		venue.locate(venuePath(virtualPath)).entry().delete();
+		Entry.of(venue.resolve(venuePath(virtualPath))).delete();
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);

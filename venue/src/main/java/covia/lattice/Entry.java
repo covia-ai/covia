@@ -13,6 +13,7 @@ import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.cursor.AForkableCursor;
+import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 
@@ -50,6 +51,19 @@ public final class Entry extends ACoviaComponent<ACell> {
 		this.resolved = resolved;
 		this.keys = resolved.keys();
 		this.above = keys.length == 0 ? null : area.cursor().path(Arrays.copyOf(keys, keys.length - 1));
+	}
+
+	/**
+	 * The entry to change where a path ends: the entry itself, or a workspace's
+	 * root for the workspace. Anything else only its component's operations
+	 * change.
+	 *
+	 * @throws AuthException with {@link ACoviaComponent#READ_ONLY} for anything but a workspace or its entry
+	 */
+	public static Entry of(ACoviaComponent<?> destination) {
+		if (destination instanceof Entry entry) return entry;
+		if (destination instanceof Workspace area) return area.entry(CoviaPath.EMPTY);
+		throw new AuthException(READ_ONLY);
 	}
 
 	/** The stretch of the caller's path the workspace read; it formats as the whole address. */
