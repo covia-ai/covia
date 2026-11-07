@@ -293,6 +293,32 @@ class DomainTransactionTest {
 	}
 
 	@Test
+	void concurrentFirstKeysCannotBothBeInstalled() throws Exception {
+		var auth = VenueState.create(AKeyPair.generate()).auth();
+		var alice = Strings.create("alice");
+		auth.ensureManagedUser(alice, DID);
+		var first = convex.auth.ucan.UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		var second = convex.auth.ucan.UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		var entered = new CountDownLatch(1);
+		var resume = new CountDownLatch(1);
+		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			var pending = executor.submit(() -> auth.transact(draft -> {
+				boolean installed = draft.installFirstAuthenticationKeys(alice, convex.core.data.Vectors.of(first), DID);
+				entered.countDown();
+				await(resume);
+				return installed;
+			}));
+			try {
+				assertTrue(entered.await(10, TimeUnit.SECONDS));
+				assertTrue(auth.installFirstAuthenticationKeys(alice, convex.core.data.Vectors.of(second), DID));
+			} finally { resume.countDown(); }
+			assertFalse(pending.get(10, TimeUnit.SECONDS), "the user had authenticator history by the time it committed");
+		}
+		assertFalse(auth.isAuthenticationKeyActive(alice, first));
+		assertTrue(auth.isAuthenticationKeyActive(alice, second));
+	}
+
+	@Test
 	void agentRecordHasOneStampPolicyIncludingReplacementAndNoOps() {
 		var clockReads = new AtomicInteger();
 		var ticks = new AtomicLong(100);

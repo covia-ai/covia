@@ -226,6 +226,12 @@ public class Auth {
 		return state().addAuthenticationKeys(id, keys, actor);
 	}
 
+	/** As {@link AuthState#installFirstAuthenticationKeys}, for a live user. */
+	public synchronized boolean installFirstAuthenticationKeys(AString id, AVector<ACell> keys, AString actor) {
+		requireLiveUser(id);
+		return state().installFirstAuthenticationKeys(id, keys, actor);
+	}
+
 	public synchronized boolean revokeAuthenticationKey(AString id, AString key, AString actor, boolean allowLast) {
 		requireLiveUser(id);
 		return state().revokeAuthenticationKey(id, key, actor, allowLast);

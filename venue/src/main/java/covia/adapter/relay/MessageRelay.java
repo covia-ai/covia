@@ -163,44 +163,65 @@ public final class MessageRelay {
 
 	/** The principal a sender is linked to, or null. */
 	public AString principalFor(String sender) {
-		return RT.ensureString(map(state.read(linkPath(sender))).get(K_PRINCIPAL));
+		return principalIn(state, sender);
 	}
 
 	/** The sender a principal is linked to, or null. */
 	public String senderFor(AString principal) {
-		AString sender = RT.ensureString(map(state.read(principalPath(principal))).get(K_SENDER));
+		return senderIn(state, principal);
+	}
+
+	private AString principalIn(AdapterState links, String sender) {
+		return RT.ensureString(map(links.read(linkPath(sender))).get(K_PRINCIPAL));
+	}
+
+	private String senderIn(AdapterState links, AString principal) {
+		AString sender = RT.ensureString(map(links.read(principalPath(principal))).get(K_SENDER));
 		return sender == null ? null : sender.toString();
 	}
 
+	/*
+	 * A link is two records, links/<sender> and principals/<principal>, kept
+	 * in step: each change below is one transaction, so a reader never sees
+	 * one without the other, and a change that fails leaves neither changed.
+	 */
+
 	/** Link a sender to a principal, replacing either side's earlier link. */
 	public synchronized void link(String sender, AString principal) {
-		String oldSender = senderFor(principal);
-		if (oldSender != null) state.delete(linkPath(oldSender));
-		AString oldPrincipal = principalFor(sender);
-		if (oldPrincipal != null) state.delete(principalPath(oldPrincipal));
-		state.write(linkPath(sender), Maps.of(K_SENDER, Strings.create(sender), K_PRINCIPAL, principal,
-			K_LINKED_AT, CVMLong.create(clock.getAsLong())));
-		state.write(principalPath(principal), Maps.of(K_SENDER, Strings.create(sender)));
+		CVMLong linkedAt = CVMLong.create(clock.getAsLong());
+		state.execute(draft -> {
+			String oldSender = senderIn(draft, principal);
+			if (oldSender != null) draft.delete(linkPath(oldSender));
+			AString oldPrincipal = principalIn(draft, sender);
+			if (oldPrincipal != null) draft.delete(principalPath(oldPrincipal));
+			draft.write(linkPath(sender), Maps.of(K_SENDER, Strings.create(sender), K_PRINCIPAL, principal,
+				K_LINKED_AT, linkedAt));
+			draft.write(principalPath(principal), Maps.of(K_SENDER, Strings.create(sender)));
+		});
 		wake(principal);
 	}
 
 	/** Remove a principal's link; the sender it held, or null. */
 	public synchronized String unlinkPrincipal(AString principal) {
-		String sender = senderFor(principal);
-		state.delete(principalPath(principal));
-		if (sender != null) state.delete(linkPath(sender));
+		String sender = state.transact(draft -> {
+			String linked = senderIn(draft, principal);
+			draft.delete(principalPath(principal));
+			if (linked != null) draft.delete(linkPath(linked));
+			return linked;
+		});
 		clear(principal);
 		return sender;
 	}
 
 	/** Remove a sender's link; the principal it was linked to, or null. */
 	public synchronized AString unlinkSender(String sender) {
-		AString principal = principalFor(sender);
-		state.delete(linkPath(sender));
-		if (principal != null) {
-			state.delete(principalPath(principal));
-			clear(principal);
-		}
+		AString principal = state.transact(draft -> {
+			AString linked = principalIn(draft, sender);
+			draft.delete(linkPath(sender));
+			if (linked != null) draft.delete(principalPath(linked));
+			return linked;
+		});
+		if (principal != null) clear(principal);
 		return principal;
 	}
 

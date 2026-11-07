@@ -368,12 +368,24 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		}
 		runner.stop();
 		principals.remove(runtimeKey(owner, name));
-		state(owner).delete(userStatePath(owner, "bots/" + name));
-		state(owner).delete(userStatePath(owner, "sessions/" + name));
-		deleteRuntimeState(ctx, name);
+		// The bot's records in the adapter's state go together, or none of them do
+		state(owner).execute(draft -> {
+			draft.delete(userStatePath(owner, "bots/" + name));
+			draft.delete(userStatePath(owner, "sessions/" + name));
+			deleteRuntimeState(draft, owner, name);
+		});
+		deleteLegacyState(ctx, name);
 		return Maps.of(Fields.NAME, nameCell, K_DELETED, CVMBool.TRUE);
 	}
 
-	/** Remove provider-specific state and legacy records alongside the shared state. */
-	protected void deleteRuntimeState(RequestContext ctx, String name) { }
+	/**
+	 * Removes a deleted bot's provider-specific records in the adapter's state,
+	 * in the transaction that removes its shared ones.
+	 *
+	 * @param draft The adapter's state in that transaction
+	 */
+	protected void deleteRuntimeState(AdapterState draft, AString owner, String name) { }
+
+	/** Removes records an earlier venue kept for a deleted bot outside the adapter's state, after its own go. */
+	protected void deleteLegacyState(RequestContext ctx, String name) { }
 }

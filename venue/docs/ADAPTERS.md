@@ -825,7 +825,8 @@ committed with the inbox. This is not an exactly-once guarantee. Claims coordina
 one Engine, not multiple independently running replicas. Memory/temp venues
 retain their normal ephemeral durability. `pruneCompleted(cutoff)` removes only
 completed receipts; the provider chooses retention beyond its retry window and
-must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`.
+must clean binding-owned inbox/checkpoint data in `deleteRuntimeState`, which
+runs in the transaction that removes the bot's shared records.
 
 ### HTTP messaging workers
 

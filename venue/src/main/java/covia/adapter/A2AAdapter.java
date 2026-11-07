@@ -704,8 +704,8 @@ public class A2AAdapter extends ARemoteAgentAdapter<RemoteInteraction> {
 		String rpcUrl = target.rpcUrl();
 		RequestAuth auth = target.auth();
 		if (target.assetId() != null) {
-			job.updateData(job.getData().assoc(K_AGENT_ASSET,
-				Strings.create(target.assetId().toHexString())));
+			AString assetId = Strings.create(target.assetId().toHexString());
+			job.update(data -> data.assoc(K_AGENT_ASSET, assetId));
 		}
 
 		ACell messageRaw = RT.getIn(input, Fields.MESSAGE);

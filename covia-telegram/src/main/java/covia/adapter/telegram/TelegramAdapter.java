@@ -25,6 +25,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 /**
@@ -404,10 +405,14 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	}
 
 	@Override
-	protected void deleteRuntimeState(RequestContext ctx, String name) {
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "resolved/" + name));
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "files/" + name));
+	protected void deleteRuntimeState(AdapterState draft, AString owner, String name) {
+		draft.delete(userStatePath(owner, "resolved/" + name));
+		draft.delete(userStatePath(owner, "inbox/" + name));
+		draft.delete(userStatePath(owner, "files/" + name));
+	}
+
+	@Override
+	protected void deleteLegacyState(RequestContext ctx, String name) {
 		deleteLegacyPath(ctx, LEGACY_REGISTRY_PATH + "/" + name);
 		deleteLegacyPath(ctx, BotRunner.legacySessionsPath(name));
 	}

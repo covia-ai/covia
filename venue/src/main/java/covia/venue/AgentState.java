@@ -163,7 +163,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Identity of a schedulable thread within an agent — a session or a task.
 	 *  Selects which index {@link #setThreadWakeTime} writes the wakeTime into. */
 	public enum ThreadKind { SESSION, TASK }
-	/** Result of an atomic session intake mutation. */
+	/** Result of an atomic session intake mutation; MISSING when the agent, or the session, is not there to take it. */
 	public enum SessionIntake { APPLIED, MISSING, LOADS_ON_EXISTING }
 
 	private final AString owner;
@@ -466,12 +466,16 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 			draft -> draft.session(sid).appendPending(envelope));
 	}
 
-	/** Session admission and the associated agent change observe one atomic snapshot. */
+	/**
+	 * Session admission and the associated agent change observe one atomic
+	 * snapshot. A terminated agent takes nothing: its work was given back when
+	 * it terminated ({@link #terminate}).
+	 */
 	private SessionIntake intakeSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, boolean create,
 			java.util.function.Consumer<AgentState> change) {
 		return transact(draft -> {
-			if (!draft.exists()) return SessionIntake.MISSING;
+			if (!draft.exists() || TERMINATED.equals(draft.getStatus())) return SessionIntake.MISSING;
 			ACell raw = draft.getSessions().get(sid);
 			if (raw != null && initialLoads != null) return SessionIntake.LOADS_ON_EXISTING;
 			if (raw == null) {
@@ -595,6 +599,17 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	public void setStatus(AString status) {
 		update(r -> r.assoc(K_STATUS, status));
+	}
+
+	/**
+	 * Terminates the agent in one write, returning its record from just
+	 * before. Intake refuses a terminated agent, so the tasks that record holds
+	 * are all the work the agent will ever have to give back.
+	 *
+	 * @return The record before termination, or null when there is no agent
+	 */
+	public AMap<AString, ACell> terminate() {
+		return getAndUpdate(r -> r.assoc(K_STATUS, TERMINATED));
 	}
 
 	public void setError(AString error) {

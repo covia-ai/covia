@@ -22,6 +22,7 @@ import covia.adapter.webhook.WebhookResponse;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
+import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
 /**
@@ -120,9 +121,9 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 		String template = "/agent-templates/" + getName() + ".json";
 		if (getClass().getResource(template) != null) installAgentTemplate(getName(), template);
 	}
-	@Override protected final void deleteRuntimeState(RequestContext ctx, String name) {
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "inbox/" + name));
-		state(ctx.getUserDID()).delete(userStatePath(ctx.getUserDID(), "relay/" + name));
+	@Override protected final void deleteRuntimeState(AdapterState draft, AString owner, String name) {
+		draft.delete(userStatePath(owner, "inbox/" + name));
+		draft.delete(userStatePath(owner, "relay/" + name));
 	}
 	@Override public final CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		requireInvoke(ctx);

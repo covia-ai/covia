@@ -695,8 +695,7 @@ public class Engine {
 				RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS));
 			venueState.users().ensure(did);
 			auth.ensureManagedUser(id, did);
-			if (!auth.getAuthenticationKeys(id).isEmpty()) continue;
-			auth.addAuthenticationKeys(id, keys, getDIDString());
+			auth.installFirstAuthenticationKeys(id, keys, getDIDString());
 		}
 	}
 

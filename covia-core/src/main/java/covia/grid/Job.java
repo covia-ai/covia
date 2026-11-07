@@ -211,7 +211,9 @@ public class Job {
 	}
 
 	/**
-	 * Updates the job data atomically. No effect if job is already finished.
+	 * Replaces the job data atomically. No effect if job is already finished.
+	 * It replaces the whole record, so a change made since {@code newData} was
+	 * read is lost: to change part of the record, use {@link #update}.
 	 *
 	 * <p>The pure {@link #processUpdate} runs inside the atomic backing-record
 	 * update. Hooks and future completion run only if the update took effect.</p>

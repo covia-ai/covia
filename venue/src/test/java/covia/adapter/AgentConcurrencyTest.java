@@ -168,6 +168,28 @@ public class AgentConcurrencyTest {
 	}
 
 	@Test
+	public void testATaskRacingTerminationIsGivenBackOrRefused() throws Exception {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("terminate-intake", Maps.empty(), null);
+		Blob sid = Blob.fromHex("99990003999900039999000399990003");
+		Blob task = Blob.fromHex("1003");
+		List<Object> raced = Rendezvous.all(
+			() -> agent.terminate(),
+			() -> agent.addTaskInSession(sid, ALICE_DID, null, task, Maps.of("input", "work")));
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> before = (AMap<AString, ACell>) raced.get(0);
+		boolean givenBack = RT.getIn(before, AgentState.KEY_TASKS, task) != null;
+		boolean refused = raced.get(1) == AgentState.SessionIntake.MISSING;
+		assertTrue(givenBack != refused, "the task is in the record termination gives back, or intake refused it");
+		assertEquals(AgentState.SessionIntake.MISSING,
+			agent.addTaskInSession(sid, ALICE_DID, null, Blob.fromHex("1004"), Maps.of("input", "late")),
+			"a terminated agent takes no task");
+		assertEquals(AgentState.SessionIntake.MISSING,
+			agent.appendSessionPending(sid, ALICE_DID, null, Maps.of("content", "late"), true),
+			"nor a message");
+	}
+
+	@Test
 	public void testMediatedDeliveryUsesStrictAtomicSessionIntake() {
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		AgentState agent = user.ensureAgent("mediated-intake", Maps.empty(), null);

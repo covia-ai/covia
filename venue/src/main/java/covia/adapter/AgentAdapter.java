@@ -1309,8 +1309,9 @@ public class AgentAdapter extends AAdapter {
 			return false;
 		}
 
-		failAllPendingForAgent(ownerDID, agentId, pendingError);
-		agent.setStatus(AgentState.TERMINATED);
+		// Terminate first: intake then refuses the agent, so the work its record
+		// held at that moment is all there is to give back
+		failHeldWork(key, agent.terminate(), pendingError);
 		engine.agentEvents().status(ownerDID, agentId, AgentState.TERMINATED, null);
 		cancelActiveTransition(key);
 		if (oldLoop != null && !oldLoop.isDone()) {
@@ -1607,7 +1608,7 @@ public class AgentAdapter extends AAdapter {
 		// Record the session on the task Job so consumers can recover it for the
 		// task's whole lifecycle (the A2A layer maps A2A contextId = session).
 		// Job.completeWith preserves existing fields, so this survives completion.
-		job.updateData(job.getData()
+		job.update(data -> data
 			.assoc(Fields.AGENT_ID, agentId)
 			.assoc(Fields.ADDRESS, target.address())
 			.assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())));
@@ -1792,7 +1793,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.MESSAGE,    messageContent,
 			Fields.JOB_ID,     jobIdHex), ctx);
 		// Local delivery includes provenance in the admission transaction below.
-		if (ctx.getSessionDelivery() == null) job.updateData(job.getData().assoc(Fields.AGENT_ID, agentId)
+		if (ctx.getSessionDelivery() == null) job.update(data -> data.assoc(Fields.AGENT_ID, agentId)
 			.assoc(Fields.ADDRESS, target.address()).assoc(Fields.SESSION_ID, sidHex));
 		AgentState.SessionIntake intake;
 		try {
@@ -3006,6 +3007,10 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
+		// Remove the session first: a chat then either registered before the
+		// waiters are failed below, or finds no session for its message.
+		agent.removeSession(sid);
+
 		// Fail every chat awaiting on this session so each caller unblocks with
 		// a clean error (scoped analogue of failAllPendingForAgent).
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats =
@@ -3018,8 +3023,6 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 		}
-
-		agent.removeSession(sid);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(identify(target, Maps.of(
@@ -5225,7 +5228,7 @@ public class AgentAdapter extends AAdapter {
 	private static void attachTokens(Job job, AMap<AString, ACell> tokens) {
 		if (job == null || job.isFinished()) return;
 		try {
-			job.updateData(job.getData().assoc(Fields.TOKENS, tokens));
+			job.update(data -> data.assoc(Fields.TOKENS, tokens));
 		} catch (Exception e) {
 			log.debug("Could not attach token usage to job {}: {}", job.getID(), e.toString());
 		}
@@ -5258,13 +5261,21 @@ public class AgentAdapter extends AAdapter {
 	 * </ul>
 	 * Each surviving Job is failed with {@code error}.
 	 */
-	@SuppressWarnings("unchecked")
 	private void failAllPendingForAgent(AString callerDID, AString agentId, String error) {
-		final AgentKey key = new AgentKey(callerDID, agentId);
 		AgentState agent = getAgent(callerDID, agentId);
-		if (agent != null) {
-			failQueuedTasks(agent.getTasks(), error);
-			failQueuedTasks(agent.getResolved(), error);
+		failHeldWork(new AgentKey(callerDID, agentId), (agent == null) ? null : agent.getRecord(), error);
+	}
+
+	/**
+	 * Fails the tasks an agent's record holds, queued or resolved, and every
+	 * chat awaiting the agent, as {@link #failAllPendingForAgent} does.
+	 *
+	 * @param record The agent's record, or null when there is none
+	 */
+	@SuppressWarnings("unchecked")
+	private void failHeldWork(AgentKey key, AMap<AString, ACell> record, String error) {
+		for (AString held : new AString[] {AgentState.KEY_TASKS, AgentState.KEY_RESOLVED}) {
+			if (RT.getIn(record, held) instanceof Index<?, ?> tasks) failQueuedTasks((Index<Blob, ACell>) tasks, error);
 		}
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.remove(key);
 		if (agentChats != null) {

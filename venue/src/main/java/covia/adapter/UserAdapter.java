@@ -59,7 +59,10 @@ public class UserAdapter extends AAdapter {
 	private static final AString ACCOUNT_KEY = Strings.intern("accountKey");
 	private static final AString SECRETS = Strings.intern("secrets");
 
-	public static final String EXPORT_DIRECT_ONLY = "User export requires a direct run with no recorded job, agent or session context";
+	/** Refusal of user:create's keys for a named user who already has others. */
+	public static final String AUTHENTICATOR_HISTORY =
+		"Named user already has authenticator history; use user:authentication-add for rotation";
+	public static final String EXPORT_DIRECT_ONLY ="User export requires a direct run with no recorded job, agent or session context";
 	public static final String EXPORT_DEFINITION_REQUIRED = "User export requires the published operation definition";
 	public static final String INVALID_ACCOUNT_KEY = "accountKey must be a 32-byte Ed25519 public key";
 	public static final String INVALID_SECRETS = "secrets must be a boolean";
@@ -185,22 +188,14 @@ public class UserAdapter extends AAdapter {
 		boolean created = engine.getVenueState().users().create(did);
 		if (username != null) {
 			engine.getAuth().ensureManagedUser(username, did);
-			if (authenticationKeys != null) {
-				AMap<AString, ACell> existing =
-					engine.getAuth().getAuthenticationKeys(username);
-				if (existing.isEmpty()) {
-					engine.getAuth().addAuthenticationKeys(
-						username, authenticationKeys, ctx.getCallerDID());
-				} else {
-					// Preserve create's idempotency: a repeated identical request
-					// is harmless, but rotation uses the explicit add operation.
-					for (long i = 0; i < authenticationKeys.count(); i++) {
-						AString key = RT.ensureString(authenticationKeys.get(i));
-						if (!engine.getAuth().isAuthenticationKeyActive(username, key)) {
-							throw new ConflictException(
-								"Named user already has authenticator history; "
-								+ "use user:authentication-add for rotation");
-						}
+			if (authenticationKeys != null && !engine.getAuth().installFirstAuthenticationKeys(
+					username, authenticationKeys, ctx.getCallerDID())) {
+				// Preserve create's idempotency: a repeated identical request
+				// is harmless, but rotation uses the explicit add operation.
+				for (long i = 0; i < authenticationKeys.count(); i++) {
+					AString key = RT.ensureString(authenticationKeys.get(i));
+					if (!engine.getAuth().isAuthenticationKeyActive(username, key)) {
+						throw new ConflictException(AUTHENTICATOR_HISTORY);
 					}
 				}
 			}

@@ -301,6 +301,21 @@ public final class AuthState extends ACoviaComponent<AMap<AString, AMap<AString,
 		return transact(draft -> draft.installKeys(id, keyDIDs, actorDID, null));
 	}
 
+	/**
+	 * Installs a named user's first authenticators, in one transaction with the
+	 * check that the user has none, active or revoked.
+	 *
+	 * @return Whether the keys were installed; false, changing nothing, when the
+	 *         user already has authenticator history
+	 */
+	public boolean installFirstAuthenticationKeys(AString id, AVector<ACell> keyDIDs, AString actorDID) {
+		return transact(draft -> {
+			if (!draft.getAuthenticationKeys(id).isEmpty()) return false;
+			draft.installKeys(id, keyDIDs, actorDID, null);
+			return true;
+		});
+	}
+
 	/** Atomic directory mutation, including cross-user key constraints. */
 	public boolean revokeAuthenticationKey(AString id, AString keyDID, AString actorDID, boolean allowLast) {
 		return transact(draft -> draft.revokeAuthenticationKeyInDraft(id, keyDID, actorDID, allowLast));
