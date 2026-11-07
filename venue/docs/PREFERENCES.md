@@ -25,8 +25,8 @@ in `memory` instead: a list at a path the caller names, such as `n/memory`.
 
 ## Shape and limits
 
-- A map of any structure. Values are any value except null; a null is never
-  stored. Map keys are non-empty text without `/`.
+- A map of any structure. Values are any JSON value except null; a null is
+  never stored. Map keys are non-empty text without `/`.
 - One user's preferences may hold at most the configured number of bytes,
   measured as `Cells.storageSize` of the map, which is cached on each cell. An
   edit that would go over the limit is refused, unless it makes the

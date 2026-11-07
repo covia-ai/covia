@@ -9,8 +9,9 @@ import convex.core.data.Strings;
  * <p>Each constant is an interned AString matching the single-letter
  * namespace prefix from the Grid addressing scheme (§4.1 of
  * GRID_LATTICE_DESIGN.md): the key of that namespace in a user's record. What
- * a namespace holds is up to the component that owns it; workspaces and
- * adapter views take any lattice data.</p>
+ * a namespace holds is up to the component that owns it. Structurally,
+ * workspaces and adapter views take any lattice data; an owner may still give
+ * an area a shape of its own, such as JSON values.</p>
  */
 public final class Namespace {
 
