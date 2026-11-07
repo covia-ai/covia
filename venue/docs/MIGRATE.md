@@ -10,6 +10,9 @@ calls an embedder makes in [EMBEDDING.md](EMBEDDING.md).
 
 - A build reads a store written by any older release and brings it to its own
   schema.
+- The only stores at a version no release has are the dev venues', which CI
+  deploys from `develop` ([AGENTS.md](../../AGENTS.md#branches-and-deploys)).
+  No other store runs an unreleased build, so migration supports no other.
 - A build refuses stored state newer than it supports, Covia's or an
   adapter's, and writes nothing.
 - A failed migration leaves the store as it was.
