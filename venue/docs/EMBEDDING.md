@@ -132,10 +132,10 @@ as the installation, then delete the secret. The venue then signs identity
 tokens for the installation and every identity nested below it. To get a
 user's token, invoke `auth:identity-token` as that user
 (`engine.context(userDID)`): the token names that user and is stored in their
-secret store. An application that keeps the key itself signs with
-`VenueAuth.namedKeyPair`. See AUTH.md, "Nested installation identities below a
-did:key" and "Minting an identity token through an operation", and
-HELD_KEYS.md.
+secret store, where `secrets().decrypt` reads it (see Secrets above). An
+application that keeps the key itself signs with `VenueAuth.namedKeyPair`. See
+AUTH.md, "Nested installation identities below a did:key" and "Minting an
+identity token through an operation", and HELD_KEYS.md.
 
 ## Upgrading from 0.10.0
 
