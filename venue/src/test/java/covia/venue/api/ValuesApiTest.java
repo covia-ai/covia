@@ -109,7 +109,7 @@ public class ValuesApiTest {
 
 		// Seed all three execution-scoped stores without creating extra Jobs.
 		// In particular, task scratch is backed by the existing task Job record.
-		User scopedUser = TestServer.ENGINE.getVenueState().users().get(callerDID);
+		User scopedUser = TestServer.ENGINE.getVenueState().users().user(callerDID);
 		scopedUser.ensureAgent(scopedAgentId, Maps.empty(), null)
 			.ensureSession(scopedSessionId, callerDID);
 		RequestContext base = RequestContext.of(callerDID).withAgentId(scopedAgentId);
@@ -177,7 +177,7 @@ public class ValuesApiTest {
 	}
 
 	private long jobCount() {
-		User u = TestServer.ENGINE.getVenueState().users().get(callerDID);
+		User u = TestServer.ENGINE.getVenueState().users().user(callerDID);
 		return (u == null) ? 0 : u.jobs().count();
 	}
 

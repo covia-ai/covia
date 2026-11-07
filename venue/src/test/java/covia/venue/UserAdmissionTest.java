@@ -53,7 +53,7 @@ class UserAdmissionTest {
 			HttpResponse<?> response = assertInstanceOf(HttpResponse.class, refused.response);
 			assertTrue(String.valueOf(response.body()).contains("user:create"));
 			assertFalse(refused.getMessage().contains("user:create"));
-			assertNull(server.getEngine().getVenueState().users().get(did));
+			assertNull(server.getEngine().getVenueState().users().user(did));
 		} finally {
 			server.close();
 		}
@@ -92,7 +92,7 @@ class UserAdmissionTest {
 				assertTrue(response.body().contains(did.toString()), response.body());
 			}
 
-			assertNull(server.getEngine().getVenueState().users().get(did));
+			assertNull(server.getEngine().getVenueState().users().user(did));
 		} finally {
 			server.close();
 		}
@@ -108,7 +108,7 @@ class UserAdmissionTest {
 					RequestContext.of(did)).get(5, TimeUnit.SECONDS));
 			assertInstanceOf(AuthException.class, failure.getCause());
 			assertTrue(failure.getCause().getMessage().contains("user:create"));
-			assertNull(engine.getVenueState().users().get(did));
+			assertNull(engine.getVenueState().users().user(did));
 		} finally {
 			engine.close();
 		}
@@ -134,10 +134,10 @@ class UserAdmissionTest {
 		Engine engine = configuredEngine(true);
 		try {
 			AString did = newDID();
-			assertNull(engine.getVenueState().users().get(did));
+			assertNull(engine.getVenueState().users().user(did));
 			engine.jobs().invokeInternal("v/test/ops/echo", Maps.of(),
 				RequestContext.of(did)).get(5, TimeUnit.SECONDS);
-			assertNotNull(engine.getVenueState().users().get(did));
+			assertNotNull(engine.getVenueState().users().user(did));
 		} finally {
 			engine.close();
 		}
@@ -157,7 +157,7 @@ class UserAdmissionTest {
 			AString impostor = Principals.agentDID(owner, Strings.create("pwn"));
 
 			assertThrows(AuthException.class, () -> engine.admitUser(impostor));
-			assertNull(engine.getVenueState().users().get(impostor),
+			assertNull(engine.getVenueState().users().user(impostor),
 				"an agent-shaped DID must never gain a user record");
 
 			// The name alone is its own namespace. The venue builds an agent's
@@ -175,8 +175,8 @@ class UserAdmissionTest {
 	void frameworkPrincipalsAreBootstrappedWithoutAutoCreate() {
 		Engine engine = configuredEngine(false);
 		try {
-			assertNotNull(engine.getVenueState().users().get(engine.getDIDString()));
-			assertNotNull(engine.getVenueState().users().get(
+			assertNotNull(engine.getVenueState().users().user(engine.getDIDString()));
+			assertNotNull(engine.getVenueState().users().user(
 				engine.getDIDString().toString() + ":public"));
 		} finally {
 			engine.close();

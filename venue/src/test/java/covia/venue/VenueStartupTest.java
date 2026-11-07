@@ -125,7 +125,7 @@ public class VenueStartupTest {
 			assertEquals("hook", engine.resolveSecret("s/bootstrap", engine.venueContext()),
 				"configured secrets must not overwrite application setup afterwards");
 			assertEquals(Strings.create("new"), RT.getIn(engine.getVenueState().users()
-				.get(engine.getDIDString()).agent("mina").getConfig(), "release"));
+				.user(engine.getDIDString()).agent("mina").getConfig(), "release"));
 		} finally {
 			server.close();
 		}
@@ -197,7 +197,7 @@ public class VenueStartupTest {
 			assertEquals(0, adapter.starts.get());
 			assertEquals(0, adapter.calls.get());
 			assertEquals(1, engine.gridScheduler().list(engine.venueContext()).count());
-			assertEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
+			assertEquals(Status.STARTED, engine.getVenueState().users().user(engine.getDIDString())
 				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			// The reserved port prevents accidental early HTTP publication.
 			reserved.close();
@@ -209,7 +209,7 @@ public class VenueStartupTest {
 			assertEquals(Strings.create("due"), adapter.fired.get(5, TimeUnit.SECONDS));
 			assertEquals(1, adapter.calls.get());
 			assertEquals(0, engine.gridScheduler().list(engine.venueContext()).count());
-			assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
+			assertEquals(Status.COMPLETE, engine.getVenueState().users().user(engine.getDIDString())
 				.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 		} finally {
 			if (server != null) server.close();
@@ -250,7 +250,7 @@ public class VenueStartupTest {
 		CompletableFuture<VenueServer> launch = VenueServer.launchAsync(cfg, store,
 			List.of(), engine -> {
 				AString owner = engine.getDIDString();
-				AgentState agent = engine.getVenueState().users().get(owner).agent("startup-agent");
+				AgentState agent = engine.getVenueState().users().user(owner).agent("startup-agent");
 				engine.registerAdapter(adapter);
 				engine.jobs().invokeOperation("v/ops/covia/write",
 					Maps.of(Fields.PATH, "w/mina/skills/release", Fields.VALUE, "new skills"), engine.venueContext())
@@ -419,7 +419,7 @@ public class VenueStartupTest {
 				assertSame(engine, ready.get(10, TimeUnit.SECONDS));
 				assertTrue(adapter.recovered);
 				assertEquals(Strings.create("embedded due"), adapter.fired.get(5, TimeUnit.SECONDS));
-				assertEquals(Status.COMPLETE, engine.getVenueState().users().get(engine.getDIDString())
+				assertEquals(Status.COMPLETE, engine.getVenueState().users().user(engine.getDIDString())
 					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			} finally {
 				engine.close();
@@ -486,7 +486,7 @@ public class VenueStartupTest {
 				assertEquals(1, suspended.get());
 				assertEquals(0, adapter.closed.getCount());
 				assertTrue(engine.isClosing());
-				assertNotEquals(Status.STARTED, engine.getVenueState().users().get(engine.getDIDString())
+				assertNotEquals(Status.STARTED, engine.getVenueState().users().user(engine.getDIDString())
 					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));
 			} finally {
 				engine.close();

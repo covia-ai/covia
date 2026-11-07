@@ -457,7 +457,7 @@ public class OAuthAdapterTest {
 				connectFake(engine, fake, alice);
 
 				// Not in the user's secret store, where secret operations would reach it.
-				User user = engine.getVenueState().users().get(aliceDID);
+				User user = engine.getVenueState().users().user(aliceDID);
 				assertFalse(user.secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 				assertEquals(0, RT.ensureVector(RT.getIn(ok(run(engine, "v/ops/secret/list", Maps.empty(), alice)),
 					"names")).count());
@@ -570,7 +570,7 @@ public class OAuthAdapterTest {
 				AVector<ACell> moved = connections(engine, alice);
 				assertEquals(1, moved.count(), moved.toString());
 				assertEquals(CVMBool.TRUE, RT.getIn(moved.get(0), "refreshable"));
-				User user = engine.getVenueState().users().get(aliceDID);
+				User user = engine.getVenueState().users().user(aliceDID);
 				assertFalse(user.secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 				ACell stored = engine.adapterState("oauth").read("users/" + aliceDID + "/fake");
 				assertFalse(stored.toString().contains("legacy-access"), stored.toString());
@@ -585,14 +585,14 @@ public class OAuthAdapterTest {
 				String bobToken = RT.getIn(ok(run(engine, "v/ops/http/get",
 					Maps.of("url", fake.base() + "/api/me", "bearerSecret", "oauth/fake"), bob)), "body").toString();
 				assertNotEquals("Bearer legacy-access", bobToken);
-				assertFalse(engine.getVenueState().users().get(bobDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
+				assertFalse(engine.getVenueState().users().user(bobDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 
 				// A grant that cannot be read is refused with a reason, and left where it was.
 				AString carolDID = Strings.create("did:test:oauth:carol");
 				storeLegacyGrant(engine, carolDID, "fake", "not a grant");
 				assertTrue(failed(run(engine, "v/ops/oauth/status", Maps.empty(), RequestContext.of(carolDID)))
 					.contains(OAuthAdapter.UNREADABLE_LEGACY_GRANT));
-				assertTrue(engine.getVenueState().users().get(carolDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
+				assertTrue(engine.getVenueState().users().user(carolDID).secrets().exists(OAuthAdapter.LEGACY_GRANT_PREFIX + "fake"));
 			} finally {
 				engine.close();
 			}

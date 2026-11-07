@@ -28,7 +28,7 @@ class AgentFacetTest {
     private void create() throws Exception {
         run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "facetprobe")));
     }
-    private AgentState agent(String id) { return engine.getVenueState().users().get(ctx.getUserDID()).agent(Strings.create(id)); }
+    private AgentState agent(String id) { return engine.getVenueState().users().user(ctx.getUserDID()).agent(Strings.create(id)); }
 
     static class Probe extends ARemoteAgentAdapter<RemoteInteraction> {
         final AtomicInteger starts = new AtomicInteger(), cancels = new AtomicInteger();

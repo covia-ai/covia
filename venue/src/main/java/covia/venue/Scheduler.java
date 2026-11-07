@@ -138,7 +138,7 @@ public class Scheduler {
 	/** Commit wake intent and the event together, then arm from committed state. */
 	public void setThreadWakeTime(AString owner, AgentState agent,
 			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
-		User user = engine.getVenueState().users().get(owner);
+		User user = engine.getVenueState().users().user(owner);
 		if (user == null) throw new AuthException(Users.ACCOUNT_DELETED);
 		ACell generation = RT.getIn(user.get(), Users.GENERATION);
 		// Validate the retained agent after reading the generation. A run loop

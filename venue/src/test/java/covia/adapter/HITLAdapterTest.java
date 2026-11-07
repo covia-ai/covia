@@ -130,7 +130,7 @@ public class HITLAdapterTest {
 
 		Job job = request(delegate, Hitl.request("For the owner").ask(Hitl.approval("ok", "OK?").required()).build());
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());
-		AMap<AString, ACell> record = engine.getVenueState().users().get(owner).inbox()
+		AMap<AString, ACell> record = engine.getVenueState().users().user(owner).inbox()
 			.get(Strings.create(job.getID().toHexString()));
 		assertEquals(BOB_DID, record.get(Hitl.CALLER));
 		assertEquals(owner, record.get(Hitl.OWNER), "the delegate asked in the owner's namespace");
@@ -185,7 +185,7 @@ public class HITLAdapterTest {
 				"llmOperation", "v/test/ops/llm",
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/hitl/request")))),
 			ALICE).awaitResult(5000);
-		User owner = engine.getVenueState().users().get(ALICE_DID);
+		User owner = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = owner.agent("hitl-agent");
 		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
 		agent.ensureSession(sid, ALICE_DID);
@@ -254,15 +254,15 @@ public class HITLAdapterTest {
 			e.registerAdapter(new AgentAdapter() {
 				@Override public boolean appendSessionMessage(covia.venue.Users draft, AString user, AString agent, Blob session,
 						AString caller, AString job, ACell message) {
-					assertEquals(Status.COMPLETE, draft.get(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS),
+					assertEquals(Status.COMPLETE, draft.user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS),
 						"the final Job result must be part of the same draft as the inbox and session");
 					if (failAppend.get()) {
-						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().get(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS));
-						assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
-						assertTrue(e.getVenueState().users().get(owner).agent("asker").getSessionPending(sid).isEmpty());
+						assertEquals(Status.INPUT_REQUIRED, e.getVenueState().users().user(owner).jobs().getRecord(Blob.fromHex(requestId.get().toString())).get(Fields.STATUS));
+						assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
+						assertTrue(e.getVenueState().users().user(owner).agent("asker").getSessionPending(sid).isEmpty());
 					}
 					boolean appended = super.appendSessionMessage(draft,user,agent,session,caller,job,message);
-					assertFalse(draft.get(owner).agent("asker").getPending().containsKey(Blob.fromHex(requestId.get().toString())),
+					assertFalse(draft.user(owner).agent("asker").getPending().containsKey(Blob.fromHex(requestId.get().toString())),
 						"the draft must clear the completed wait before post-commit notifications");
 					if (failAppend.get()) throw new IllegalStateException("injected delivery failure");
 					return appended;
@@ -274,7 +274,7 @@ public class HITLAdapterTest {
 			var ctx = RequestContext.of(owner);
 			e.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "asker", Fields.CONFIG,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")), ctx).awaitResult(5000);
-			var agent = e.getVenueState().users().get(owner).agent("asker");
+			var agent = e.getVenueState().users().user(owner).agent("asker");
 			agent.ensureSession(sid, owner);
 			Job ask = e.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Atomic answer")
 				.ask(Hitl.approval("yes", "Continue?").required()).build(), RequestContext.ofAgent(owner, Strings.create("asker")).withSessionId(sid));
@@ -282,7 +282,7 @@ public class HITLAdapterTest {
 			requestId.set(Strings.create(ask.getID().toHexString()));
 			var answer = Hitl.answer(requestId.get().toString()).answer("yes", true).build();
 			assertThrows(JobFailedException.class, () -> e.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000));
-			assertEquals(Hitl.OPEN, e.getVenueState().users().get(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
+			assertEquals(Hitl.OPEN, e.getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 			assertTrue(agent.getSessionPending(sid).isEmpty());
 			assertEquals(Status.INPUT_REQUIRED, ask.getStatus());
 			assertTrue(agent.getPending().containsKey(ask.getID()), "a rolled-back resolution must retain its wait");
@@ -304,13 +304,13 @@ public class HITLAdapterTest {
 		} finally { first.close(); }
 		var second = covia.venue.server.VenueServer.launch(config);
 		try {
-			var agent = second.getEngine().getVenueState().users().get(owner).agent("asker");
+			var agent = second.getEngine().getVenueState().users().user(owner).agent("asker");
 			// The restarted venue wakes the agent as it boots: the cycle may already have run.
 			try (AgentWatch watch = AgentWatch.open(second.getEngine(), owner, "asker")) {
 				watch.awaitState("a timeline entry", () -> agent.getTimeline() != null && agent.getTimeline().count() >= 1);
 			}
 			assertTrue(agent.getSession(sid).toString().contains(requestId.get().toString()), "the resolved answer must survive restart before wake");
-			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().get(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
+			assertEquals(Hitl.ANSWERED, second.getEngine().getVenueState().users().user(owner).inbox().get(requestId.get()).get(Hitl.STATUS));
 		} finally { second.close(); }
 	}
 
@@ -353,7 +353,7 @@ public class HITLAdapterTest {
 				first.interruptCompletion = true;
 				Job answering = first.jobs().invokeOperation("v/ops/hitl/respond", tokenAnswer(answered.toHexString(), token), BOB);
 				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
-				User owner = first.getVenueState().users().get(BOB_DID);
+				User owner = first.getVenueState().users().user(BOB_DID);
 				AString expiryId = Strings.create(expired.toHexString());
 				owner.inbox().put(expiryId, owner.inbox().get(expiryId).assoc(Hitl.EXPIRES, CVMLong.ZERO));
 				var expiring = java.util.concurrent.CompletableFuture.runAsync(() ->
@@ -669,7 +669,7 @@ public class HITLAdapterTest {
 					.grant("w/x", "crud/read", (Long) null)).build(),
 				ctx));
 			assertTrue(permanent.getMessage().contains("requests no expiry"));
-			assertEquals(0, limited.getVenueState().users().get(user).inbox().getAll().count(),
+			assertEquals(0, limited.getVenueState().users().user(user).inbox().getAll().count(),
 				"invalid offers must be rejected before entering the human's inbox");
 		} finally {
 			limited.close();
@@ -796,7 +796,7 @@ public class HITLAdapterTest {
 				agents.agentInfo(RequestContext.of(ALICE_DID), agentId).get(Fields.AWAITING));
 			restored.cancel();
 			assertFalse(agent.getPending().containsKey(restored.getID()));
-			assertEquals(Hitl.CANCELLED, isolated.getVenueState().users().get(ALICE_DID)
+			assertEquals(Hitl.CANCELLED, isolated.getVenueState().users().user(ALICE_DID)
 				.inbox().get(Strings.create(restored.getID().toHexString())).get(Hitl.STATUS));
 		} finally {
 			isolated.close();

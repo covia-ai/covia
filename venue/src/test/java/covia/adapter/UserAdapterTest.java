@@ -76,7 +76,7 @@ class UserAdapterTest {
 		ACell first = create(Maps.of(Fields.DID, did));
 		assertEquals(did, RT.getIn(first, Fields.DID));
 		assertEquals(CVMBool.TRUE, RT.getIn(first, Fields.CREATED));
-		assertNotNull(engine.getVenueState().users().get(did));
+		assertNotNull(engine.getVenueState().users().user(did));
 
 		ACell second = create(Maps.of(Fields.DID, did));
 		assertEquals(CVMBool.FALSE, RT.getIn(second, Fields.CREATED));
@@ -90,7 +90,7 @@ class UserAdapterTest {
 		ACell managed = create(Maps.of("username", "alice"));
 		AString expected = Strings.create("did:web:venue.example.com:u:alice");
 		assertEquals(expected, RT.getIn(managed, Fields.DID));
-		assertNotNull(engine.getVenueState().users().get(expected));
+		assertNotNull(engine.getVenueState().users().user(expected));
 		assertEquals(expected,
 			engine.getAuth().getUser(Strings.create("alice")).get(Fields.DID));
 	}
@@ -99,7 +99,7 @@ class UserAdapterTest {
 	void managedAccountCreationDoesNotMintAUserIdentityKey() throws Exception {
 		ACell created = create(Maps.of("username", "no-user-key"));
 		AString did = RT.ensureString(RT.getIn(created, Fields.DID));
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 
 		assertNotNull(user);
 		assertEquals(Maps.empty(), user.get(),
@@ -178,7 +178,7 @@ class UserAdapterTest {
 				.get(5, TimeUnit.SECONDS));
 		assertInstanceOf(AuthException.class, denied.getCause());
 		assertTrue(denied.getCause().getMessage().contains("venue-issued delegation"));
-		assertEquals(null, engine.getVenueState().users().get(target));
+		assertEquals(null, engine.getVenueState().users().user(target));
 	}
 
 	@Test
@@ -204,7 +204,7 @@ class UserAdapterTest {
 		RequestContext self = RequestContext.of(did);
 		assertEquals(0, stored(self, "drives"), "a user with no drives stores none");
 
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		long empty = stored(self, "workspace");
 		user.workspace().write(CoviaPath.parse("notes"), Strings.create("w".repeat(10_000)));
 		long withNotes = stored(self, "workspace");
@@ -269,7 +269,7 @@ class UserAdapterTest {
 			"a venue-managed username account reports managed:true");
 
 		// The venue's activity times are bookkeeping for operators, not the user's data.
-		engine.getVenueState().users().get(selfSovereign).workspace().write(CoviaPath.parse("seen"), CVMBool.TRUE);
+		engine.getVenueState().users().user(selfSovereign).workspace().write(CoviaPath.parse("seen"), CVMBool.TRUE);
 		assertNull(RT.getIn(adapter.info(RequestContext.of(selfSovereign), Maps.empty()), Covia.K_META),
 			"a user does not see the venue's bookkeeping");
 		assertNotNull(RT.getIn(adapter.info(engine.venueContext(), Maps.of(Fields.DID, selfSovereign)), Covia.K_META),

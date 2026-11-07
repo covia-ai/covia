@@ -210,7 +210,7 @@ public class EngineTest {
 			User user = engine.getVenueState().users().ensure(did);
 			user.jobs().create(jobId, Maps.of(
 				Fields.STATUS, Status.PENDING, Fields.UPDATED, CVMLong.create(1_000L)));
-			user.jobs().get(jobId).update(job -> job.assoc(Fields.STATUS, Status.STARTED));
+			user.jobs().job(jobId).update(job -> job.assoc(Fields.STATUS, Status.STARTED));
 
 			engine.syncState();
 			assertNotNull(RT.getIn(cursor.get(),
@@ -755,7 +755,7 @@ public class EngineTest {
 		assertNotNull(result);
 		assertEquals(Strings.create("MY_KEY"), RT.getIn(result, "name"));
 
-		User alice = venue.getVenueState().users().get(ALICE_DID);
+		User alice = venue.getVenueState().users().user(ALICE_DID);
 		SecretStore.Keys encKey = SecretStore.keys(venue.getKeyPair());
 		assertEquals("my-secret-value", alice.secrets().decrypt("MY_KEY", encKey).toString());
 

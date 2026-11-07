@@ -45,7 +45,7 @@ public class TaskYieldTest {
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config);
 		if (state != null) input = input.assoc(AgentState.KEY_STATE, state);
 		engine.jobs().invokeOperation("v/ops/agent/create", input, owner).awaitResult(5000);
-		return engine.getVenueState().users().get(owner.getUserDID()).agent(agentId);
+		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 	}
 
 	private Job request(RequestContext owner, String agentId, String ask) {

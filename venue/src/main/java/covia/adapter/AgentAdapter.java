@@ -1838,7 +1838,7 @@ public class AgentAdapter extends AAdapter {
 		ChatIntake taken;
 		try {
 			taken = engine.getVenueState().transact(draft -> {
-				var owner = draft.users().get(target.ownerDID());
+				var owner = draft.users().user(target.ownerDID());
 				var current = owner == null ? null : owner.agent(target.agentId());
 				if (current == null || AgentState.SUSPENDED.equals(current.getStatus())
 						|| AgentState.TERMINATED.equals(current.getStatus())) {
@@ -2314,7 +2314,7 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> listAgents(RequestContext ctx, boolean includeTerminated, boolean annotated) {
 		engine.requireResourceAccess(ctx, AGENT_RECORDS, Capability.CRUD_READ);
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
 
 		AVector<ACell> agents = Vectors.empty();
 		if (user != null) {
@@ -2517,7 +2517,7 @@ public class AgentAdapter extends AAdapter {
 			throw new InvalidInputException(
 				"Past-session operations require an agent execution context");
 		}
-		User user = engine.getVenueState().users().get(owner);
+		User user = engine.getVenueState().users().user(owner);
 		AgentState agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null || !agent.exists()) {
 			throw new NotFoundException("Current agent was not found", agentId.toString());
@@ -3353,7 +3353,7 @@ public class AgentAdapter extends AAdapter {
 
 	/** The agent as a venue transaction's draft holds it, or null when it is gone. */
 	private static AgentState agentIn(VenueState draft, AString ownerDID, AString agentId) {
-		User owner = draft.users().get(ownerDID);
+		User owner = draft.users().user(ownerDID);
 		return (owner == null) ? null : owner.agent(agentId);
 	}
 
@@ -3930,7 +3930,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private boolean deliverToWaiter(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
 			Blob taskId, AString caller, AString messageId, ACell message, AString source) {
-		var owner = users.get(ownerDID);
+		var owner = users.user(ownerDID);
 		AgentState agent = (owner == null) ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
 		if (taskId != null) {
@@ -3951,7 +3951,7 @@ public class AgentAdapter extends AAdapter {
 	 * transaction draft. The caller owns authorization and flush/wake after commit. */
 	public boolean appendSessionMessage(covia.venue.Users users, AString ownerDID, AString agentId, Blob sessionId,
 			AString caller, AString jobId, ACell message) {
-		var owner = users.get(ownerDID);
+		var owner = users.user(ownerDID);
 		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || externalAgents().isExternal(agent)) return false;
 		return appendSessionEnvelope(agent, sessionId, caller, sessionEnvelope(sessionId, caller, jobId, message));
@@ -4041,7 +4041,7 @@ public class AgentAdapter extends AAdapter {
 	private boolean deliverCallOutcome(AString ownerDID, AString agentId, Blob jobId, AMap<AString, ACell> record) {
 		// Null when the call was not tracked, or its entry has gone
 		CallDelivery delivery = engine.getVenueState().users().transact(draft -> {
-			User owner = draft.get(ownerDID);
+			User owner = draft.user(ownerDID);
 			AgentState agent = (owner == null) ? null : owner.agent(agentId);
 			if (agent == null || agent.getRecord() == null) return null;
 			ACell entry = agent.getPending().get(jobId);
@@ -5327,7 +5327,7 @@ public class AgentAdapter extends AAdapter {
 
 	private AgentState getAgent(AString callerDID, AString agentId) {
 		Users users = engine.getVenueState().users();
-		User user = users.get(callerDID);
+		User user = users.user(callerDID);
 		if (user == null) return null;
 		AgentState agent = user.agent(agentId);
 		if (agent == null) return null;
@@ -5386,7 +5386,7 @@ public class AgentAdapter extends AAdapter {
 		for (var userEntry : all.entrySet()) {
 			AString did = RT.ensureString(userEntry.getKey());
 			if (did == null) continue;
-			covia.venue.User user = engine.getVenueState().users().get(did);
+			covia.venue.User user = engine.getVenueState().users().user(did);
 			if (user == null) continue;
 			AMap<AString, ACell> agents = user.getAgents();
 			if (agents == null) continue;

@@ -181,7 +181,7 @@ public class CoviaCrossUserWriteTest {
 		assertThrows(Exception.class, () -> write.awaitResult(5000));
 		assertTrue(write.getErrorMessage().contains(covia.venue.VenueState.UNKNOWN_USER),
 			write.getErrorMessage());
-		assertNull(engine.getVenueState().users().get(ALICE_DID));
+		assertNull(engine.getVenueState().users().user(ALICE_DID));
 	}
 
 	// ========== Cross-user append (authorised) ==========

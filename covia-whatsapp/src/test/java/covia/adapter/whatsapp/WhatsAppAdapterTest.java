@@ -184,7 +184,7 @@ class WhatsAppAdapterTest {
 			assertEquals(sid, f.bot().inbox().get("local-second").get(Fields.SESSION_ID));
 			assertFalse(response.isDone());
 			assertTrue(f.api.sends.isEmpty());
-			var agent = f.engine.getVenueState().users().get(OWNER).agent("local-agent");
+			var agent = f.engine.getVenueState().users().user(OWNER).agent("local-agent");
 			var before = agent.getRecord();
 			assertEquals(200, f.webhook(payload(message("local-second"))).status());
 			assertEquals(before, agent.getRecord(), "duplicate callbacks must not append input");

@@ -53,8 +53,8 @@ class VenueMigrationTest {
 		assertEquals(DID, RT.getIn(venue.get(), Covia.DID));
 		assertEquals(VenueState.CURRENT_VERSION, venue.version());
 		assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
-		assertNull(venue.users().get(DID).readInternalPath(OLD_QUEUE));
-		assertEquals(Vectors.of("opaque", 42L), venue.users().get(DID).readInternalPath(OLD_ADAPTER));
+		assertNull(venue.users().user(DID).readInternalPath(OLD_QUEUE));
+		assertEquals(Vectors.of("opaque", 42L), venue.users().user(DID).readInternalPath(OLD_ADAPTER));
 		assertNull(RT.getIn(venue.get(), Covia.ADAPTERS), "migration must not scan adapter records");
 		ACell before = venue.get();
 		venue.migrate(NO_SECRETS);
@@ -108,13 +108,13 @@ class VenueMigrationTest {
 			}));
 			assertTrue(staged.await(5, TimeUnit.SECONDS));
 			assertEquals(0, venue.version(), "staged version is not yet visible");
-			venue.users().get(DID).writeInternalPath(OLD_QUEUE, latest);
+			venue.users().user(DID).writeInternalPath(OLD_QUEUE, latest);
 			release.countDown();
 			migration.get(5, TimeUnit.SECONDS);
 			assertTrue(attempts.get() >= 2);
 			assertEquals(VenueState.CURRENT_VERSION, venue.version());
 			assertEquals(latest, RT.getIn(venue.get(), Covia.USER_DELETIONS));
-			assertNull(venue.users().get(DID).readInternalPath(OLD_QUEUE));
+			assertNull(venue.users().user(DID).readInternalPath(OLD_QUEUE));
 		} finally { release.countDown(); }
 	}
 

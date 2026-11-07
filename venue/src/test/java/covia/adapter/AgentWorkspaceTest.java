@@ -66,7 +66,7 @@ public class AgentWorkspaceTest {
 
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "workspace-agent")) {
 			// Run 1: agent writes knowledge, appends to log, reads back
-			AgentState wsAgent = engine.getVenueState().users().get(ALICE_DID)
+			AgentState wsAgent = engine.getVenueState().users().user(ALICE_DID)
 				.agent("workspace-agent");
 			Blob wsSid = Blob.fromHex("55550001555500015555000155550001");
 			wsAgent.ensureSession(wsSid, ALICE_DID);
@@ -80,7 +80,7 @@ public class AgentWorkspaceTest {
 			watch.awaitRest(1);
 
 			// Verify: agent is sleeping, workspace has data
-			AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+			AgentState agent = engine.getVenueState().users().user(ALICE_DID)
 				.agent("workspace-agent");
 			assertEquals(AgentState.SLEEPING, agent.getStatus());
 			assertEquals(1, agent.getTimeline().count());
@@ -113,7 +113,7 @@ public class AgentWorkspaceTest {
 			assertEquals(2, log2.count(), "Log should accumulate across agent runs");
 
 			// Timeline has two entries
-			agent = engine.getVenueState().users().get(ALICE_DID)
+			agent = engine.getVenueState().users().user(ALICE_DID)
 				.agent("workspace-agent");
 			assertEquals(2, agent.getTimeline().count());
 			assertEquals(AgentState.SLEEPING, agent.getStatus());

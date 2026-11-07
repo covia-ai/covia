@@ -965,7 +965,7 @@ public class JobManager {
 					}
 					draft.jobIndex().admit(jobID, admitted);
 				});
-				record = account.jobs().get(jobID);
+				record = account.jobs().job(jobID);
 			}
 			VenueJob job = new VenueJob(record, status, rules, ownerDID, this, !memoryOnly, directRun);
 			job.setPreserveFailureCause(preserveFailureCause);
@@ -1201,7 +1201,7 @@ public class JobManager {
 		// the explicit DID-URL path (covia:read did:<owner>/j/<id>).
 		AString did = ctx.getUserDID();
 		if (did == null) return null;
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		if (user == null) return null;
 		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
 		if (record != null) requireReadable(ctx, jobID, record);
@@ -1291,7 +1291,7 @@ public class JobManager {
 		// Fall back to user's lattice
 		AString did = ctx.getUserDID();
 		if (did == null) return null;
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		if (user == null) return null;
 		AMap<AString, ACell> record = user.jobs().getRecord(jobID);
 		if (record == null) return null;
@@ -1313,7 +1313,7 @@ public class JobManager {
 		AString did = ctx.getUserDID();
 		if (did == null) return Index.none();
 		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		if (user == null) return Index.none();
 		return user.jobs().getAll();
 	}
@@ -1328,7 +1328,7 @@ public class JobManager {
 		AString did = ctx.getUserDID();
 		if (did == null) return 0;
 		engine.requireResourceAccess(ctx, JOB_RECORDS, Capability.CRUD_READ);
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		return user == null ? 0 : user.jobs().count();
 	}
 
@@ -1418,7 +1418,7 @@ public class JobManager {
 		requireJobOwner(ctx, id, data); // mutation: owner-only
 		AString ownerDID = Attribution.owner(data);
 		boolean removed = ownerDID != null && venue().transact(draft -> {
-			User user = draft.users().get(ownerDID);
+			User user = draft.users().user(ownerDID);
 			if (user == null || !user.jobs().remove(id)) return false;
 			draft.jobIndex().remove(id);
 			return true;
@@ -1520,8 +1520,8 @@ public class JobManager {
 	public void appendToHistory(Blob jobID, AString ownerDID, AMap<AString, ACell> record) {
 		Job live = activeJobs.get(jobID);
 		User user = live instanceof VenueJob job ? job.account()
-			: engine.getVenueState().users().get(ownerDID);
-		JobState state = (user == null) ? null : user.jobs().get(jobID);
+			: engine.getVenueState().users().user(ownerDID);
+		JobState state = (user == null) ? null : user.jobs().job(jobID);
 		if (state != null && state.appendHistory(record) && live instanceof VenueJob job) {
 			job.historyUpdated();
 		}
@@ -1549,8 +1549,8 @@ public class JobManager {
 			if (activeJobs.containsKey(jobID)) continue; // already live
 			AMap<AString, ACell> entry = RT.ensureMap(e.getValue());
 			AString ownerDID = RT.ensureString(RT.getIn(entry, JobIndex.OWNER));
-			User user = (ownerDID == null) ? null : venue().users().get(ownerDID);
-			JobState state = (user == null) ? null : user.jobs().get(jobID);
+			User user = (ownerDID == null) ? null : venue().users().user(ownerDID);
+			JobState state = (user == null) ? null : user.jobs().job(jobID);
 			// An entry goes with its record and with the update that finishes it.
 			AMap<AString, ACell> record = (state == null) ? null : state.getRecord();
 			if (record == null || Job.isFinished(record)) continue;

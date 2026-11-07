@@ -55,9 +55,9 @@ public class AgentOutputPathFederationTest {
 		assertThrows(JobFailedException.class, () -> request.awaitResult(10_000));
 		assertTrue(request.getErrorMessage().contains("identity credential"),
 			"A remote output write must explicitly authenticate as its caller");
-		assertNull(TwoVenueTestServer.ENGINE_A.getVenueState().users().get(remoteOwner),
+		assertNull(TwoVenueTestServer.ENGINE_A.getVenueState().users().user(remoteOwner),
 			"Foreign did:web owner must not be materialised as a local shadow user");
-		assertNull(TwoVenueTestServer.ENGINE_B.getVenueState().users().get(remoteOwner),
+		assertNull(TwoVenueTestServer.ENGINE_B.getVenueState().users().user(remoteOwner),
 			"Denied remote write must not materialise the destination owner either");
 
 		// Missing authentication fails before dispatch and cannot create a remote

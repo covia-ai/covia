@@ -239,7 +239,7 @@ public class VenueStateTest {
 
 		assertNull(user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.FAILED)),
 			"an existing job is not created again");
-		user.jobs().get(jobID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE));
+		user.jobs().job(jobID).update(job -> job.assoc(Fields.STATUS, Status.COMPLETE));
 
 		assertEquals(1, user.jobs().count(), "Should still be one job");
 		assertEquals(Status.COMPLETE, user.jobs().getRecord(jobID).get(Fields.STATUS));
@@ -251,7 +251,7 @@ public class VenueStateTest {
 		User user = vs.users().ensure("did:key:zConditionalJobUpdate");
 		Blob jobID = Blob.parse("0x0001");
 		AString marker = Strings.intern("marker");
-		assertNull(user.jobs().get(jobID), "there is no job before it is created");
+		assertNull(user.jobs().job(jobID), "there is no job before it is created");
 
 		JobState job = user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.PENDING));
 		assertNotNull(job.update(record -> record.assoc(marker, Strings.create("present"))));
@@ -267,7 +267,7 @@ public class VenueStateTest {
 			"delete and update must linearise without resurrection");
 		assertNull(job.update(record -> record.assoc(marker, Strings.create("late"))));
 		assertNull(job.getRecord());
-		assertNull(user.jobs().get(jobID), "an update to a removed job must not create a row");
+		assertNull(user.jobs().job(jobID), "an update to a removed job must not create a row");
 	}
 
 	@Test
@@ -276,7 +276,7 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure("did:key:zAlice");
 
-		assertNull(user.jobs().get(Blob.parse("0xFFFF")));
+		assertNull(user.jobs().job(Blob.parse("0xFFFF")));
 		assertNull(user.jobs().getRecord(Blob.parse("0xFFFF")));
 	}
 
@@ -398,7 +398,7 @@ public class VenueStateTest {
 		// Verify changes visible through the connected VenueState
 		assertNotNull(connected.assets().getRecord(assetId),
 			"Asset should be visible through connected cursor after sync");
-		User connectedAlice = connected.users().get("did:key:zAlice");
+		User connectedAlice = connected.users().user("did:key:zAlice");
 		assertNotNull(connectedAlice,
 			"User should be visible through connected cursor after sync");
 		assertNotNull(connectedAlice.jobs().getRecord(Blob.parse("0x0001")),
@@ -434,7 +434,7 @@ public class VenueStateTest {
 
 		assertEquals(3, connected.assets().count(),
 			"All 3 assets should be visible after single sync");
-		User connectedAlice = connected.users().get("did:key:zAlice");
+		User connectedAlice = connected.users().user("did:key:zAlice");
 		assertEquals(2, connectedAlice.jobs().count(),
 			"All 2 jobs should be visible after single sync");
 	}
@@ -446,7 +446,7 @@ public class VenueStateTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		assertNull(vs.users().get("did:key:zUnknown"),
+		assertNull(vs.users().user("did:key:zUnknown"),
 			"user() should return null when no data exists for that DID");
 	}
 
@@ -463,7 +463,7 @@ public class VenueStateTest {
 		assertNotNull(alice.get(), "User state should be initialised");
 
 		// Subsequent user() call should also return non-null
-		User aliceAgain = vs.users().get(did);
+		User aliceAgain = vs.users().user(did);
 		assertNotNull(aliceAgain, "user() should return non-null after ensureUser");
 	}
 
@@ -575,7 +575,7 @@ public class VenueStateTest {
 			"ensure writers did not finish in time");
 		assertTrue(errors.isEmpty(), "writer errors: " + errors);
 
-		User finalUser = vs.users().get(did);
+		User finalUser = vs.users().user(did);
 		assertNotNull(finalUser, "user should exist after concurrent ensure");
 		assertEquals(writers, finalUser.jobs().count(),
 			"all jobs from concurrent ensure() callers must survive");

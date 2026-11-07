@@ -218,7 +218,7 @@ public class EtchGcOnStartTest {
 		VenueServer collected = VenueServer.launch(gcConfig);
 		File live;
 		try {
-			assertNull(collected.getEngine().getVenueState().users().get(did));
+			assertNull(collected.getEngine().getVenueState().users().user(did));
 			assertNull(collected.getEngine().getAuth().getUser(id));
 			assertThrows(covia.exception.AuthException.class, () -> collected.getEngine().admitUser(did));
 			live = ((EtchStore) collected.getStore()).getFile();
@@ -233,7 +233,7 @@ public class EtchGcOnStartTest {
 		} finally { recreated.close(); }
 		VenueServer restarted = VenueServer.launch(cfg);
 		try {
-			assertNotNull(restarted.getEngine().getVenueState().users().get(did));
+			assertNotNull(restarted.getEngine().getVenueState().users().user(did));
 			assertFalse(restarted.getEngine().getAuth().isAuthenticationKeyActive(id, key),
 				"an old bootstrap declaration cannot reinstall the erased account's key");
 		} finally { restarted.close(); }

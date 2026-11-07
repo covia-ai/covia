@@ -84,11 +84,11 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	 * @param did User DID string
 	 * @return User wrapping the per-user cursor, or null
 	 */
-	public User get(String did) {
-		return get(Strings.create(did));
+	public User user(String did) {
+		return user(Strings.create(did));
 	}
 
-	public User get(AString did) {
+	public User user(AString did) {
 		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
 		ACell current = userCursor.getOrDefault(null);
 		if (current == null || RT.getIn(current, Covia.K_DELETED) != null) return null;
@@ -171,7 +171,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 	boolean restore(AString did, AMap<AString, ACell> state) {
 		AMap<AString, ACell> incoming = withoutSlots(state);
 		boolean created = create(did);
-		User user = get(did);
+		User user = user(did);
 		if (user == null) throw new AuthException(ACCOUNT_DELETED);
 		user.cursor().updateAndGet(current -> {
 			AMap<AString, ACell> record = RT.ensureMap(current);
@@ -193,7 +193,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> implements Tr
 
 	/**
 	 * The account a path names by its DID, whether or not it is live, bound to
-	 * this cursor or transaction draft. Unlike {@link #get}, it is bound however
+	 * this cursor or transaction draft. Unlike {@link #user}, it is bound however
 	 * the record stands: a record that is not live, never registered or a
 	 * deleted account's, reads as absent and takes no change, and an account
 	 * created later in the same draft is seen. {@link User#exists} says which.

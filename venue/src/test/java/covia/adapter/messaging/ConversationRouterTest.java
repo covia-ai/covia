@@ -99,9 +99,9 @@ class ConversationRouterTest {
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "atomic",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")));
 			inbox.accept("1", Strings.create("input"));
-			var agent = engine.getVenueState().users().get(owner).agent("atomic");
+			var agent = engine.getVenueState().users().user(owner).agent("atomic");
 			assertThrows(JobFailedException.class, () -> router.deliver("chat", Strings.create("input"), LISTED, (draft, sid, jid) -> {
-				assertEquals(1, draft.users().get(owner).agent("atomic").getSessionPending(convex.core.data.Blob.fromHex(sid.toString())).count());
+				assertEquals(1, draft.users().user(owner).agent("atomic").getSessionPending(convex.core.data.Blob.fromHex(sid.toString())).count());
 				assertTrue(agent.getSessions().isEmpty(), "the live input must remain invisible until commit");
 				assertTrue(inbox.deliver(draft, "1", sid, jid));
 				assertEquals(covia.adapter.webhook.WebhookInbox.PENDING, inbox.get("1").get(Fields.STATUS));
@@ -198,7 +198,7 @@ class ConversationRouterTest {
 			Job job = delivery.get(5, TimeUnit.SECONDS);
 			assertTrue(attempts.get() >= 2);
 			assertEquals(1, wakes.get());
-			var agent = engine.getVenueState().users().get(owner).agent("atomic");
+			var agent = engine.getVenueState().users().user(owner).agent("atomic");
 			assertEquals(1, agent.getSessions().count());
 			assertEquals(1, agent.getSessionPending(convex.core.data.Blob.fromHex(sessions.get("chat"))).count());
 			assertEquals(covia.adapter.webhook.WebhookInbox.COMPLETE, inbox.get("1").get(Fields.STATUS));
@@ -343,7 +343,7 @@ class ConversationRouterTest {
 			assertEquals(0, wakes.get(), "do not execute before the durability barrier succeeds");
 			var jid = convex.core.data.Blob.fromHex(inbox.get("1").get(Fields.JOB_ID).toString());
 			assertFalse(engine.jobs().getJob(jid).isFinished(), "a failed flush must not fail accepted input");
-			assertEquals(1, engine.getVenueState().users().get(owner).agent("flush")
+			assertEquals(1, engine.getVenueState().users().user(owner).agent("flush")
 				.getSessionPending(convex.core.data.Blob.fromHex(sessions.get("chat"))).count());
 		} finally { engine.failFlush = false; engine.close(); }
 	}
@@ -393,7 +393,7 @@ class ConversationRouterTest {
 				"anonymous senders stay distinct in provenance");
 
 			// The agent's history keeps who asked and how, beside each turn.
-			var sessions = engine.getVenueState().users().get(owner).agent("lender").getSessions();
+			var sessions = engine.getVenueState().users().user(owner).agent("lender").getSessions();
 			assertEquals(2, sessions.count());
 			for (long i = 0; i < sessions.count(); i++) {
 				var frames = RT.ensureVector(RT.getIn(sessions.entryAt(i).getValue(), Fields.FRAMES));

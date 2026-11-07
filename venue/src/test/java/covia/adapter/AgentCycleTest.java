@@ -66,7 +66,7 @@ public class AgentCycleTest {
 	private AgentState create(RequestContext owner, String agentId, AMap<AString, ACell> config) {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config), owner).awaitResult(5000);
-		return engine.getVenueState().users().get(owner.getUserDID()).agent(agentId);
+		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 	}
 
 	private AgentState stepAgent(RequestContext owner, String agentId) {

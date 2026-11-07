@@ -76,7 +76,7 @@ public class LLMAgentOllamaIT {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver directly to avoid auto-wake race
-		User ollamaUser = engine.getVenueState().users().get(ALICE_DID);
+		User ollamaUser = engine.getVenueState().users().user(ALICE_DID);
 		AgentState ollamaAgent = ollamaUser.agent("ollama-agent");
 		Blob ollamaSid = Blob.fromHex("44440001444400014444000144440001");
 		ollamaAgent.ensureSession(ollamaSid, ALICE_DID);
@@ -93,7 +93,7 @@ public class LLMAgentOllamaIT {
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("ollama-agent");
 
 		AVector<ACell> timeline = agent.getTimeline();

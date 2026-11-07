@@ -204,7 +204,7 @@ public class AgentStateThreadWakeTest {
 		venue.deleteUser(userDid, userDid);
 		venue.users().finishDeletion(userDid);
 		venue.users().create(userDid);
-		var replacement = venue.users().get(userDid).ensureAgent(agent.getAgentId(), Maps.empty(), null);
+		var replacement = venue.users().user(userDid).ensureAgent(agent.getAgentId(), Maps.empty(), null);
 		replacement.ensureSession(sid, userDid);
 		var failure = assertThrows(AuthException.class, () -> sched().setThreadWakeTime(
 			userDid, agent, ThreadKind.SESSION, sid, System.currentTimeMillis() + FAR));

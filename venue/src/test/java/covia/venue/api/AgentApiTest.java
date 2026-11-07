@@ -104,7 +104,7 @@ public class AgentApiTest {
 	}
 
 	private long jobCount() {
-		User u = TestServer.ENGINE.getVenueState().users().get(callerDID);
+		User u = TestServer.ENGINE.getVenueState().users().user(callerDID);
 		return (u == null) ? 0 : u.jobs().count();
 	}
 
@@ -273,8 +273,8 @@ public class AgentApiTest {
 			"the explicit sudo wrapper remains the authenticated delegate's job");
 		assertNull(RT.getIn(created.getData(), Fields.OWNER),
 			"authentication is unchanged; the wrapper belongs to the delegate that made it");
-		assertNotNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("delegated-agent"));
-		User delegateUser = TestServer.ENGINE.getVenueState().users().get(delegate);
+		assertNotNull(TestServer.ENGINE.getVenueState().users().user(owner).agent("delegated-agent"));
+		User delegateUser = TestServer.ENGINE.getVenueState().users().user(delegate);
 		assertTrue(delegateUser == null || delegateUser.agent("delegated-agent") == null,
 			"an implicit agent id must never land in the intermediary's namespace");
 
@@ -291,7 +291,7 @@ public class AgentApiTest {
 			Fields.INPUT, Maps.of(Fields.AGENT_ID, "not-authorised")));
 		assertEquals(Status.FAILED, denied.getStatus());
 		assertTrue(denied.getErrorMessage().contains("agent/create"), denied.getErrorMessage());
-		assertNull(TestServer.ENGINE.getVenueState().users().get(owner).agent("not-authorised"),
+		assertNull(TestServer.ENGINE.getVenueState().users().user(owner).agent("not-authorised"),
 			"namespace selection must not bypass the signed capability limit");
 	}
 }

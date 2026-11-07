@@ -53,7 +53,7 @@ public class AgentSelfChatTest {
 					"llmOperation", "v/test/ops/selfchat")),
 			ctx).awaitResult(5000);
 
-		AgentState agent = engine.getVenueState().users().get(did)
+		AgentState agent = engine.getVenueState().users().user(did)
 			.agent("selfchat-agent");
 		Blob sid = Blob.fromHex("abababababababababababababababab");
 		agent.ensureSession(sid, did);

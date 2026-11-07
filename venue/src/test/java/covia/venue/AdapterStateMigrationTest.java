@@ -104,14 +104,14 @@ class AdapterStateMigrationTest {
 		try {
 			VenueState venue = engine.getVenueState();
 			Path legacyPath =CoviaPath.parse("w/adapters/" + NAME);
-			venue.users().get(engine.getDIDString()).writeInternalPath(legacyPath, Vectors.of("a", "b"));
+			venue.users().user(engine.getDIDString()).writeInternalPath(legacyPath, Vectors.of("a", "b"));
 
 			Versioned adapter = new Versioned(NAME, 2);
 			engine.registerAdapter(adapter);
 			assertEquals(2, adapter.steps.get());
 			assertEquals(Maps.of("items", Vectors.of("a", "b")).assoc(SCHEMA, CVMLong.create(2)), venue.adapterState(NAME).get());
 			assertEquals(2, venue.adapterVersion(NAME));
-			assertNull(venue.users().get(engine.getDIDString()).readInternalPath(legacyPath), "the legacy route moves first");
+			assertNull(venue.users().user(engine.getDIDString()).readInternalPath(legacyPath), "the legacy route moves first");
 			assertSame(adapter, engine.getAdapter(NAME));
 
 			ACell state = venue.adapterState(NAME).get();

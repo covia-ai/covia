@@ -389,7 +389,7 @@ public class CapabilityGateTest {
 			watch.awaitRest(1);
 		}
 
-		covia.venue.User user = engine.getVenueState().users().get(ALICE_DID);
+		covia.venue.User user = engine.getVenueState().users().user(ALICE_DID);
 		covia.venue.AgentState agent = user.agent("gated-agent");
 		assertEquals(covia.venue.AgentState.SLEEPING, agent.getStatus(),
 			"a handled gate denial is not an agent failure");

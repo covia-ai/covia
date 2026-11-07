@@ -95,7 +95,7 @@ public class LateToolResultTest {
 		createAgent(engine, owner, "late-step", "v/test/ops/llm", AbstractLLMAdapter.K_MODEL_PROFILE,
 			Maps.of(AbstractLLMAdapter.K_OPTIONS, Maps.of(AbstractLLMAdapter.OPT_LATE_TOOL_RESULTS,
 				AbstractLLMAdapter.LATE_RESULTS_TOOL)));
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		AgentState agent = user.agent("late-step");
 		Blob sid = Blob.fromHex("1a7e00001a7e00001a7e00001a7e0000");
 		agent.ensureSession(sid, did);
@@ -224,7 +224,7 @@ public class LateToolResultTest {
 		createAgent(engine, owner, "unrecorded", "v/test/ops/llm");
 		Blob sid = Blob.fromHex("5e55000000000000000000000000beef");
 		for (String agentId : new String[] {"recording", "unrecorded"}) {
-			engine.getVenueState().users().get(did).agent(agentId).ensureSession(sid, did);
+			engine.getVenueState().users().user(did).agent(agentId).ensureSession(sid, did);
 			engine.jobs().invokeOperation("v/ops/agent/step", Maps.of(
 				Fields.AGENT_ID, agentId,
 				Fields.SESSION_ID, sid.toHexString(),
@@ -266,7 +266,7 @@ public class LateToolResultTest {
 				Fields.AGENT_ID, agentId,
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
 			watch.awaitRest(1);
-			AgentState agent = first.getVenueState().users().get(RESTART_OWNER).agent(agentId);
+			AgentState agent = first.getVenueState().users().user(RESTART_OWNER).agent(agentId);
 			assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())));
 			assertEquals(1, agent.getPending().count(), "the late call waits in the pending index");
 			first.syncState();
@@ -289,7 +289,7 @@ public class LateToolResultTest {
 		Crashed crashed = crashWhileACallRuns("late-restart");
 		Engine second = restart(crashed);
 		try {
-			AgentState agent = second.getVenueState().users().get(RESTART_OWNER).agent("late-restart");
+			AgentState agent = second.getVenueState().users().user(RESTART_OWNER).agent("late-restart");
 			try (AgentWatch watch = AgentWatch.open(second, RESTART_OWNER, "late-restart")) {
 				second.jobs().recoverJobs();
 				((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
@@ -312,7 +312,7 @@ public class LateToolResultTest {
 		Crashed crashed = crashWhileACallRuns("late-deleted");
 		Engine second = restart(crashed);
 		try {
-			User user = second.getVenueState().users().get(RESTART_OWNER);
+			User user = second.getVenueState().users().user(RESTART_OWNER);
 			assertTrue(user.jobs().remove(crashed.mirrorId()), "the late call's job is deleted before the restart");
 			second.jobs().recoverJobs();
 			((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
@@ -332,7 +332,7 @@ public class LateToolResultTest {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
 		createAgent(engine, owner, "late-orphan", "v/test/ops/toolllm");
-		AgentState agent = engine.getVenueState().users().get(did).agent("late-orphan");
+		AgentState agent = engine.getVenueState().users().user(did).agent("late-orphan");
 		String gateName = "late-orphan-" + did;
 		Job job;
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
@@ -357,7 +357,7 @@ public class LateToolResultTest {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
 		createAgent(engine, owner, "late-task", "v/test/ops/toolllm");
-		AgentState agent = engine.getVenueState().users().get(did).agent("late-task");
+		AgentState agent = engine.getVenueState().users().user(did).agent("late-task");
 
 		String gateName = "late-task-" + did;
 		Job job;
@@ -420,7 +420,7 @@ public class LateToolResultTest {
 		RequestContext owner = RequestContext.of(did);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "late-pair",
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")), owner).awaitResult(5000);
-		AgentState agent = engine.getVenueState().users().get(did).agent("late-pair");
+		AgentState agent = engine.getVenueState().users().user(did).agent("late-pair");
 		String older = "late-older-" + did;
 		String newer = "late-newer-" + did;
 		try (TestAdapter.TestGate olderCycle = TestAdapter.createGate(older);

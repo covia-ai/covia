@@ -157,7 +157,7 @@ public final class ExternalAgents {
 	public boolean recover(Job job) {
 		if (!owns(job)) return false;
 		AString owner = owner(job);
-		User user = owner == null ? null : engine.getVenueState().users().get(owner);
+		User user = owner == null ? null : engine.getVenueState().users().user(owner);
 		AgentState agent = user == null ? null : user.agent(RT.ensureString(job.getData().get(Fields.AGENT_ID)));
 		ACell childId = kept(job, CHILD);
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));

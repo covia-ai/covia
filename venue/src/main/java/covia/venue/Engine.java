@@ -1834,7 +1834,7 @@ public class Engine {
 		if (userDID.equals(getDIDString())) return venueState.assets().getRecord(assetID);
 		AString webDID = config.getWebDID();
 		if (webDID != null && userDID.equals(webDID)) return venueState.assets().getRecord(assetID);
-		User user = getVenueState().users().get(userDID);
+		User user = getVenueState().users().user(userDID);
 		return (user != null) ? user.assets().getRecord(assetID) : null;
 	}
 
@@ -1997,7 +1997,7 @@ public class Engine {
 
 	private UserPathTarget locateUserPath(ParsedUserPath parsed, boolean create) {
 		Users users = venueState.users();
-		User user = create ? users.ensure(parsed.ownerDID()) : users.get(parsed.ownerDID());
+		User user = create ? users.ensure(parsed.ownerDID()) : users.user(parsed.ownerDID());
 		return new UserPathTarget(parsed.ownerDID(), user, parsed.path(), parsed.resource());
 	}
 
@@ -3347,7 +3347,7 @@ public class Engine {
 		if (did == null) throw new AuthException("Authentication required");
 		requireNotSubPrincipal(did);
 		Users users = venueState.users();
-		User user = users.get(did);
+		User user = users.user(did);
 		if (user != null) return user;
 		if (config.isUserAutoCreate()) {
 			users.create(did);
@@ -3568,7 +3568,7 @@ public class Engine {
 	public AgentState getAgent(AString callerDID, AString agentId) {
 		if (callerDID == null || agentId == null) return null;
 		Users users = venueState.users();
-		User user = users.get(callerDID);
+		User user = users.user(callerDID);
 		if (user == null) return null;
 		AgentState agent = user.agent(agentId);
 		if (agent == null) return null;
@@ -3623,7 +3623,7 @@ public class Engine {
 		if (userData == null) return 0;
 		long total = 0;
 		for (var entry : userData.entrySet()) {
-			User user = getVenueState().users().get((AString) entry.getKey());
+			User user = getVenueState().users().user((AString) entry.getKey());
 			if (user != null) total += user.jobs().count();
 		}
 		return total;
@@ -3680,7 +3680,7 @@ public class Engine {
 		int count = 0;
 		for (var userEntry : userData.entrySet()) {
 			AString userDid = (AString) userEntry.getKey();
-			User user = venueState.users().get(userDid);
+			User user = venueState.users().user(userDid);
 			if (user == null) continue;
 			AMap<AString, ACell> agents = user.getAgents();
 			if (agents == null || agents.isEmpty()) continue;
@@ -3773,7 +3773,7 @@ public class Engine {
 		if (!rest.startsWith("/g/")) return false;
 		String agentId = rest.substring(3);
 		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return false;
-		User user = venueState.users().get(owner);
+		User user = venueState.users().user(owner);
 		AgentState agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null) return false;
 		return Admission.admits(Admission.policy(agent.getConfig()), caller,
@@ -4015,7 +4015,7 @@ public class Engine {
 	public boolean isLocalDIDResource(AString resource) {
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
-		if (venueState.users().get(owner) != null) return true;
+		if (venueState.users().user(owner) != null) return true;
 
 		String value = owner.toString();
 		String venue = getDIDString().toString();
@@ -4591,7 +4591,7 @@ public class Engine {
 	/** One user's secret of one name, decrypted; null when the user or the secret
 	 *  is absent. The venue's own secrets also come from its process environment. */
 	private String decryptSecret(AString userDID, String name) {
-		User user = venueState.users().get(userDID);
+		User user = venueState.users().user(userDID);
 		if (user == null) return isVenuePrincipal(userDID) ? environmentSecret(name) : null;
 		AString value;
 		try {

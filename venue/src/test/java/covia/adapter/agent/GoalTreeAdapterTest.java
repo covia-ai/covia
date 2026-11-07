@@ -262,7 +262,7 @@ public class GoalTreeAdapterTest {
 			assertNotNull(result, "the task's result reaches the requester");
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("task-tools-goal");
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("task-tools-goal");
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
 		assertEquals(1, inferences.count(), "complete_task is terminal: no closing inference: " + inferences);
@@ -291,7 +291,7 @@ public class GoalTreeAdapterTest {
 			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-record");
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-record");
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
@@ -345,7 +345,7 @@ public class GoalTreeAdapterTest {
 			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-deep");
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-deep");
 
 		// Each subgoal's child rides under its call; the deepest frame's call ran none.
 		ACell call = RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
@@ -392,7 +392,7 @@ public class GoalTreeAdapterTest {
 	/** The root's subgoal call in the agent's first timeline entry, once its cycle has merged. */
 	private ACell rootSubgoalCall(String agentId, AgentWatch watch) {
 		watch.awaitCycles(1);
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 		return RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
 			.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
 	}
@@ -453,7 +453,7 @@ public class GoalTreeAdapterTest {
 			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString(), "the parent carried on");
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("subgoal-fails");
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-fails");
 		AMap<AString, ACell> session = agent.getSession(
 			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count(), "the failed child was popped");
@@ -877,7 +877,7 @@ public class GoalTreeAdapterTest {
 			watch.awaitCycles(1);
 		}
 
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("strict-goal-schema-agent");
 		assertEquals(0, agent.getTasks().count());
 		ACell taskResults = RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS);

@@ -282,7 +282,7 @@ public class AgentEventsTest {
 		assertEquals(0, num(cycleEnd, AgentState.KEY_TIMELINE));
 		assertNull(cycleEnd.data().get(Fields.DETAIL),
 			"frame-owning runtimes do not duplicate already-persisted turns in cycle:end");
-		AgentState agent = engine.getVenueState().users().get(did).agent(id);
+		AgentState agent = engine.getVenueState().users().user(did).agent(id);
 		AVector<ACell> turns = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(
 			agent.getSession(Blob.fromHex(sid.toString())), Fields.FRAMES,
 			CVMLong.ZERO)));

@@ -78,7 +78,7 @@ public class GoalTreeLatticeFramesTest {
 	}
 
 	private AgentState agent(String agentId) {
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		return user.agent(agentId);
 	}
 

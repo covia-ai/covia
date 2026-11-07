@@ -198,16 +198,16 @@ class VenueMigrationEndToEndTest {
 			VenueState venue = engine.getVenueState();
 			assertEquals(VenueState.CURRENT_VERSION, venue.version());
 			assertEquals(PENDING, RT.getIn(venue.get(), Covia.USER_DELETIONS));
-			assertNull(venue.users().get(venueDID).readInternalPath(OLD_DELETIONS));
+			assertNull(venue.users().user(venueDID).readInternalPath(OLD_DELETIONS));
 			Map<String, Long> versions = new TreeMap<>();
 			for (var entry : BundledAdapterMigrationTest.STATES.entrySet()) {
 				List<ACell> states = entry.getValue();
 				versions.put(entry.getKey(), (long) states.size() - 1);
 				assertEquals(states.get(states.size() - 1), venue.adapterState(entry.getKey()).get(), entry.getKey());
-				assertNull(venue.users().get(venueDID).readInternalPath(adapterPath(entry.getKey())), entry.getKey());
+				assertNull(venue.users().user(venueDID).readInternalPath(adapterPath(entry.getKey())), entry.getKey());
 			}
 			assertEquals(versions, venue.adapterVersions());
-			User migrated = venue.users().get(USER);
+			User migrated = venue.users().user(USER);
 			assertEquals(Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, Status.COMPLETE, Fields.CALLER, agentDID, Fields.OWNER, USER),
 				migrated.jobs().getRecord(AGENT_JOB).dissoc(Fields.UPDATED));
 			assertEquals(Maps.of(Hitl.ID, REQUEST, Hitl.CALLER, agentDID, Hitl.OWNER, USER, Hitl.STATUS, Hitl.OPEN),
@@ -231,16 +231,16 @@ class VenueMigrationEndToEndTest {
 				"a local call keeps no connection, and no caller context");
 			assertEquals(Maps.of(RemoteJobs.REMOTE_ID, LOCAL_TASK, RemoteJobs.REMOTE_STATUS, Status.STARTED),
 				RT.getIn(migrated.jobs().getRecord(LOCAL_CALL), RemoteJobs.DELEGATION));
-			assertFalse(venue.users().get(venueDID).secrets().exists(remoteRef));
+			assertFalse(venue.users().user(venueDID).secrets().exists(remoteRef));
 			assertEquals(4, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
-			assertEquals(job, venue.users().get(USER).cursor().path(Namespace.J, JOB).get(), "the history chain is gone");
+			assertEquals(job, venue.users().user(USER).cursor().path(Namespace.J, JOB).get(), "the history chain is gone");
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
-			assertTrue(venue.users().get(USER).secrets().exists(LEGACY_GRANT));
+			assertTrue(venue.users().user(USER).secrets().exists(LEGACY_GRANT));
 
 			engine.launch();
 			RequestContext ctx = RequestContext.of(USER);
-			user = venue.users().get(USER);
+			user = venue.users().user(USER);
 
 			// The running job is recovered from its entry, as any job is after a restart.
 			assertEquals(Status.FAILED, RT.getIn(engine.jobs().getJobData(RUNNING_JOB, ctx), Fields.STATUS));
@@ -258,7 +258,7 @@ class VenueMigrationEndToEndTest {
 
 			// An unversioned adapter's state moves when it is first used.
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());
-			assertNull(venue.users().get(venueDID).readInternalPath(adapterPath("unloaded")));
+			assertNull(venue.users().user(venueDID).readInternalPath(adapterPath("unloaded")));
 
 			assertEquals(job, engine.jobs().getJobData(JOB, ctx));
 

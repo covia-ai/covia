@@ -103,7 +103,7 @@ public class EnginePersistenceTest {
 		server = VenueServer.launch(config);
 		try {
 			Engine engine = server.getEngine();
-			User host = engine.getVenueState().users().get(engine.getDIDString());
+			User host = engine.getVenueState().users().user(engine.getDIDString());
 			assertEquals(value, host.readInternalPath(oldPath), "startup leaves unloaded adapter state alone");
 			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
 			assertNull(RT.getIn(engine.getVenueState().get(), Covia.ADAPTERS, Strings.create("unloaded-test")));
@@ -116,7 +116,7 @@ public class EnginePersistenceTest {
 			Engine engine = server.getEngine();
 			assertEquals(value, engine.adapterState("unloaded-test").get(), "exact migrated value survives reopening");
 			assertEquals(VenueState.CURRENT_VERSION, engine.getVenueState().version());
-			assertNull(engine.getVenueState().users().get(engine.getDIDString()).readInternalPath(oldPath));
+			assertNull(engine.getVenueState().users().user(engine.getDIDString()).readInternalPath(oldPath));
 			engine.adapterState("unloaded-test").set(null);
 		} finally { server.close(); }
 
@@ -149,7 +149,7 @@ public class EnginePersistenceTest {
 		try {
 			Engine engine = server.getEngine();
 			VenueState venue = engine.getVenueState();
-			User host = venue.users().get(engine.getDIDString());
+			User host = venue.users().user(engine.getDIDString());
 			assertEquals(value, host.readInternalPath(oldState));
 			assertEquals(VenueState.CURRENT_VERSION, venue.version());
 			assertNull(host.readInternalPath(oldQueue), "recovery moves the pending index, without scanning adapter values");

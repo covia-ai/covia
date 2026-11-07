@@ -141,7 +141,7 @@ class EmbedderContractTest {
 		try {
 			Engine engine = again.getEngine();
 			assertEquals(venueKey, engine.getAccountKey());
-			assertEquals(RECORD, engine.getVenueState().users().get(ALICE).workspace().read(RECORD_PATH));
+			assertEquals(RECORD, engine.getVenueState().users().user(ALICE).workspace().read(RECORD_PATH));
 			assertTrue(engine.getVenueState().users().isDeleted(BOB));
 		} finally {
 			again.close();

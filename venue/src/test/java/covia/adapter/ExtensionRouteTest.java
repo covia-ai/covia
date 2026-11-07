@@ -113,7 +113,7 @@ class ExtensionRouteTest {
 		assertEquals(Strings.create("alice"), read(aliceDID + "/" + path("/label"), alice));
 		assertEquals("alice", new ContextLoader(engine).resolveValue(Strings.create(path("/label")), alice).content());
 		assertThrows(NoSuchPathException.class,
-			() -> engine.getVenueState().users().get(aliceDID).resolve(CoviaPath.parse(path(""))),
+			() -> engine.getVenueState().users().user(aliceDID).resolve(CoviaPath.parse(path(""))),
 			"a user's own data has no x: only the adapter's view does");
 		assertEquals(before, engine.getVenueState().get(), "reading a view does not materialise user storage");
 	}
@@ -191,7 +191,7 @@ class ExtensionRouteTest {
 
 	@Test void absentDisabledAndUnloadedRoutesNeverFallThroughToUserStorage() {
 		Path shadow = CoviaPath.parse(path("/label"));
-		Workspace record = new Workspace(engine.getVenueState().users().get(aliceDID).cursor());
+		Workspace record = new Workspace(engine.getVenueState().users().user(aliceDID).cursor());
 		record.createPath(CoviaPath.parent(shadow));
 		record.write(shadow, Strings.create("shadow"));
 		var retained = viewEntry(path("/label"));

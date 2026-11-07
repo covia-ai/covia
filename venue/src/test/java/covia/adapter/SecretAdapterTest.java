@@ -148,7 +148,7 @@ class SecretAdapterTest {
 			assertEquals(Strings.create(VALUE), RT.getIn(run("extract", Maps.of("name", "KEY"), scope("s/KEY", Abilities.SECRET_EXTRACT)).join(), "value"));
 			assertEquals(before, engine.jobs().getJobs(owner));
 			assertTrue(events.isEmpty());
-			assertFalse(engine.getVenueState().users().get(owner.getUserDID()).get().toString().contains(VALUE));
+			assertFalse(engine.getVenueState().users().user(owner.getUserDID()).get().toString().contains(VALUE));
 		} finally { engine.jobs().removeJobUpdateListener(listener); }
 	}
 
@@ -268,7 +268,7 @@ class SecretAdapterTest {
 	}
 
 	@Test void missingAndUnreadableSecretsHaveDistinctSanitizedFailures() {
-		var user = engine.getVenueState().users().get(owner.getUserDID());
+		var user = engine.getVenueState().users().user(owner.getUserDID());
 		user.secrets().store("CORRUPT", VALUE, SecretStore.keys(AKeyPair.generate()));
 		put("UNKNOWN_VERSION", VALUE);
 		user.cursor().path(Namespace.S, Strings.create("UNKNOWN_VERSION"), Strings.create("keyVersion")).set(CVMLong.create(7));

@@ -923,12 +923,12 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	 * addresses those names: secret names hold no {@code /}.
 	 */
 	private void moveLegacyGrants(AString userDID, AdapterState state) {
-		User user = engine.getVenueState().users().get(userDID);
+		User user = engine.getVenueState().users().user(userDID);
 		if (user == null || !hasLegacyGrant(RT.ensureMap(user.secrets().cursor().getOrDefault(null)))) return;
 		SecretStore.Keys keys = keys();
 		String path = state.userPath(userDID, "");
 		engine.getVenueState().execute(draft -> {
-			User owner = draft.users().get(userDID);
+			User owner = draft.users().user(userDID);
 			if (owner == null) return;
 			AdapterState mine = state.inVenue(draft);
 			AMap<AString, ACell> secrets = RT.ensureMap(owner.secrets().cursor().getOrDefault(null));

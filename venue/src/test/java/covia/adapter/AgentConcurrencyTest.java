@@ -336,7 +336,7 @@ public class AgentConcurrencyTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver message directly to avoid auto-wake
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState concAgent = user.agent("conc-trig");
 		Blob concSid = Blob.fromHex("77770001777700017777000177770001");
 		concAgent.ensureSession(concSid, ALICE_DID);
@@ -387,7 +387,7 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("rapid");
 		Blob rapidSid = Blob.fromHex("88880001888800018888000188880001");
 		agent.ensureSession(rapidSid, ALICE_DID);
@@ -435,7 +435,7 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("barrage");
 		Blob barrageSid = Blob.fromHex("99990001999900019999000199990001");
 		agent.ensureSession(barrageSid, ALICE_DID);
@@ -481,7 +481,7 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState overlapAgent = user.agent("overlap");
 		Blob overlapSid = Blob.fromHex("aabb0001aabb0001aabb0001aabb0001");
 		overlapAgent.ensureSession(overlapSid, ALICE_DID);
@@ -539,7 +539,7 @@ public class AgentConcurrencyTest {
 		fTrig.join();
 
 		// Agent should be SLEEPING, message processed
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("msg-trig");
 		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
@@ -560,7 +560,7 @@ public class AgentConcurrencyTest {
 
 		engine.syncState();
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("sync-create");
 		assertNotNull(agent, "Agent should exist after syncState");
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
@@ -581,7 +581,7 @@ public class AgentConcurrencyTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState syncRunAgent = user.agent("sync-run");
 		Blob syncSid = Blob.fromHex("bbcc0001bbcc0001bbcc0001bbcc0001");
 		syncRunAgent.ensureSession(syncSid, ALICE_DID);
@@ -643,7 +643,7 @@ public class AgentConcurrencyTest {
 		// transitions the agent back to SLEEPING asynchronously after the
 		// awaited task jobs complete — wait deterministically for that
 		// transition via awaitFinished() (the run-loop completion future).
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("conc-req");
 		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
@@ -662,7 +662,7 @@ public class AgentConcurrencyTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver messages directly (no auto-wake since agent isn't SLEEPING for wakeAgent)
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("resume-wake");
 		Blob resumeSid = Blob.fromHex("ccdd0001ccdd0001ccdd0001ccdd0001");
 		agent.ensureSession(resumeSid, ALICE_DID);

@@ -105,7 +105,7 @@ public class GoalTreeCrashResumeTest {
 	}
 
 	private static AgentState agent(Engine engine, String agentId) {
-		User user = engine.getVenueState().users().get(ALICE);
+		User user = engine.getVenueState().users().user(ALICE);
 		return (user != null) ? user.agent(agentId) : null;
 	}
 

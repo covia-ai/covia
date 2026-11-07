@@ -89,7 +89,7 @@ public class AgentQueryTest {
 		for (var e : extra.entrySet()) config = config.assoc(e.getKey(), e.getValue());
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, AGENT, Fields.CONFIG, config), owner).awaitResult(5000);
-		return engine.getVenueState().users().get(owner.getUserDID()).agent(AGENT);
+		return engine.getVenueState().users().user(owner.getUserDID()).agent(AGENT);
 	}
 
 	private Job query(Object message) {
@@ -723,7 +723,7 @@ public class AgentQueryTest {
 				owner = engine.venueContext();
 				model = new QueryModel();
 				engine.registerAdapter(model);
-				AgentState agent = engine.getVenueState().users().get(owner.getUserDID()).agent(AGENT);
+				AgentState agent = engine.getVenueState().users().user(owner.getUserDID()).agent(AGENT);
 				assertEquals(expected, savedSummary(agent));
 				assertEquals(expected, engine.jobs().getJob(jobId, owner).getOutput());
 				assertEquals(includeSteps, savedSummary(agent).containsKey(Fields.STEPS));

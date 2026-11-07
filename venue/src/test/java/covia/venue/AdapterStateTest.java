@@ -40,7 +40,7 @@ class AdapterStateTest {
 		venue.users().ensure(HOST).writeInternalPath(CoviaPath.parse("w/adapters/" + name), value);
 	}
 	private static ACell legacy(VenueState venue, String name) {
-		User host = venue.users().get(HOST);
+		User host = venue.users().user(HOST);
 		return host == null ? null : host.readInternalPath(CoviaPath.parse("w/adapters/" + name));
 	}
 

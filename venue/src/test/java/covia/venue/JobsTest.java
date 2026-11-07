@@ -54,7 +54,7 @@ public class JobsTest {
 	public void testCreateAdmitsAJobOnce() {
 		Jobs jobs = user().jobs();
 		assertEquals(0, jobs.count());
-		assertNull(jobs.get(ID));
+		assertNull(jobs.job(ID));
 		assertNull(jobs.getRecord(ID));
 
 		JobState job = jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
@@ -62,11 +62,11 @@ public class JobsTest {
 		assertNull(jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.FAILED)));
 		assertEquals(1, jobs.count());
 		assertEquals(Status.STARTED, jobs.getRecord(ID).get(Fields.STATUS));
-		assertEquals(job.getRecord(), jobs.get(ID).getRecord());
+		assertEquals(job.getRecord(), jobs.job(ID).getRecord());
 
 		assertTrue(jobs.remove(ID));
 		assertFalse(jobs.remove(ID));
-		assertNull(jobs.get(ID));
+		assertNull(jobs.job(ID));
 		assertNull(job.getRecord(), "a job removed while held reads as null");
 		assertNull(job.update(record -> record.assoc(Fields.STATUS, Status.COMPLETE)),
 			"an update to a removed job must not recreate it");
@@ -95,10 +95,10 @@ public class JobsTest {
 			JobState admitted = draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
 			assertTrue(admitted.appendHistory(message));
 			assertTrue(draft.remove(other));
-			assertNull(jobs.get(ID), "the draft is private until it commits");
+			assertNull(jobs.job(ID), "the draft is private until it commits");
 		});
 		assertEquals(Vectors.of(message), jobs.getRecord(ID).get(Fields.HISTORY));
-		assertNull(jobs.get(other));
+		assertNull(jobs.job(other));
 		assertEquals(CVMLong.create(200), RT.getIn(user.get(), Covia.K_META, Fields.UPDATED),
 			"the commit stamps the user like any other write");
 	}

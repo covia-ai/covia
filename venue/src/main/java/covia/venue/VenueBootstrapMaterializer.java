@@ -67,7 +67,7 @@ final class VenueBootstrapMaterializer {
 
 	private static void materialise(Engine engine, Consumer<VenueBootstrapMaterializer> action) {
 		AString did = engine.getDIDString();
-		User venue = did == null ? null : engine.getVenueState().users().get(did);
+		User venue = did == null ? null : engine.getVenueState().users().user(did);
 		if (venue == null) throw new IllegalStateException(NO_VENUE_USER);
 		var names = engine.getAdapterNamesInRegistrationOrder();
 		long started = System.currentTimeMillis();

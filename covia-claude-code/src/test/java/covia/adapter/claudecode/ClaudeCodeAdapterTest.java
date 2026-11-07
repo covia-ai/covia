@@ -124,7 +124,7 @@ public class ClaudeCodeAdapterTest {
 			"coding-facet", Fields.MESSAGE, "second facade turn", Fields.SESSION_ID, sid), OWNER_CTX).awaitResult(10000);
 		assertEquals(sid, RT.getIn(next, Fields.SESSION_ID));
 		assertTrue(RT.getIn(next, Fields.RESPONSE).toString().contains("second facade turn"));
-		var state = engine.getVenueState().users().get(OWNER).agent(Strings.create("coding-facet"));
+		var state = engine.getVenueState().users().user(OWNER).agent(Strings.create("coding-facet"));
 		ACell providerId = RT.getIn(state.getSession(Job.parseID(sid)), "external", Fields.SESSION_ID);
 		assertNotNull(providerId);
 		assertNotEquals(sid, providerId);

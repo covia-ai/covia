@@ -90,7 +90,7 @@ class JobIndexTest {
 		try {
 			Engine.addDemoAssets(second);
 			// The path now names an operation that declares neither.
-			second.getVenueState().users().get(alice.getUserDID()).writeInternalPath(OP,
+			second.getVenueState().users().user(alice.getUserDID()).writeInternalPath(OP,
 				Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "test:never")));
 			second.jobs().recoverJobs();
 

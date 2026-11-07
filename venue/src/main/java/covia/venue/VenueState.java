@@ -283,7 +283,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public void setAgentThreadWakeTime(AString owner, AString agentId,
 			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
-		User user = users().get(owner);
+		User user = users().user(owner);
 		if (user == null) return;
 		setAgentThreadWakeTime(owner, agentId, kind, threadId, wakeTime, RT.getIn(user.get(), Users.GENERATION));
 	}
@@ -292,7 +292,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	void setAgentThreadWakeTime(AString owner, AString agentId,
 			AgentState.ThreadKind kind, Blob threadId, long wakeTime, ACell generation) {
 		execute(draft -> {
-			User user = draft.users().get(owner);
+			User user = draft.users().user(owner);
 			if (user == null || !Objects.equals(generation, RT.getIn(user.get(), Users.GENERATION))) {
 				throw new AuthException(Users.ACCOUNT_DELETED);
 			}
@@ -306,7 +306,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	/** Rebuilds the event from existing wake intent, atomically with its handle. */
 	public boolean rescheduleAgentWake(AString owner, AString agentId) {
 		return transact(draft -> {
-			User user = draft.users().get(owner);
+			User user = draft.users().user(owner);
 			AgentState agent = user == null ? null : user.agent(agentId);
 			return agent != null && draft.reconcileAgentWake(owner, agent);
 		});
@@ -362,7 +362,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	private User venueUser() {
 		AString did = RT.ensureString(RT.getIn(get(), Covia.DID));
-		return did == null ? null : users().get(did);
+		return did == null ? null : users().user(did);
 	}
 
 	private ACell legacyState(String path) {

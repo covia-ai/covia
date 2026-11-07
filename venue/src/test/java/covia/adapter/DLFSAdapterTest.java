@@ -377,7 +377,7 @@ public class DLFSAdapterTest {
 			root.set(base);
 			Files.writeString(drive.getPath("/right.txt"), "right");
 			// The owner signs the merged map, retaining both independently edited files.
-			AKeyPair dlfsKey = AKeyPair.create(convex.core.data.Blob.fromHex(isolated.getVenueState().users().get(ALICE_DID).secrets()
+			AKeyPair dlfsKey = AKeyPair.create(convex.core.data.Blob.fromHex(isolated.getVenueState().users().user(ALICE_DID).secrets()
 				.decrypt("DLFS_KEY", covia.venue.SecretStore.keys(isolated.getKeyPair())).toString()));
 			convex.dlfs.DLFSRegion.connect(root.path(Covia.DLFS), null,
 				dlfsKey::signData, isolated.getVenueState().getContext()::currentTimestamp)
@@ -590,7 +590,7 @@ public class DLFSAdapterTest {
 		assertTrue(failure("v/ops/dlfs/write", Maps.of("drive", "docs", "path", "a.txt", "content", "x"), alice)
 			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
 		run("v/ops/dlfs/delete-drive", Maps.of("name", "docs"));
-		var user = engine.getVenueState().users().get(ALICE_DID);
+		var user = engine.getVenueState().users().user(ALICE_DID);
 		assertTrue(user == null || user.secrets().list().longIndexOf(
 			Strings.create(DLFSAdapter.DLFS_KEY_SECRET)) < 0, "no DLFS key");
 	}

@@ -127,20 +127,20 @@ class UserExportsTest {
 			"an export keeps the calls the user made");
 		String plaintextHex = Blob.wrap(SECRET.getBytes(StandardCharsets.UTF_8)).toHexString();
 		assertFalse(hex.toString().contains(plaintextHex), "secrets travel sealed");
-		assertNotNull(RT.getIn(users().get(source).get(), Covia.K_META), "the source has activity times");
+		assertNotNull(RT.getIn(users().user(source).get(), Covia.K_META), "the source has activity times");
 		assertNull(RT.getIn(UserExports.decode(Blobs.parse(hex)), Covia.K_META), "an export carries no venue bookkeeping");
 
 		// As a JSON caller sends it back: hex, through a recorded job.
 		Job job = engine.jobs().invokeOperation("v/ops/user/import", Maps.of(Fields.DID, target,
 			EXPORT, hex, Fields.SEED, seedRef(seal)), venue);
 		assertEquals(CVMBool.TRUE, RT.getIn(job.awaitResult(10_000), Fields.CREATED));
-		AMap<AString, ACell> record = engine.getVenueState().users().get(engine.getDIDString()).jobs().getRecord(job.getID());
+		AMap<AString, ACell> record = engine.getVenueState().users().user(engine.getDIDString()).jobs().getRecord(job.getID());
 		assertEquals(Fields.HIDDEN, RT.getIn(record, Fields.INPUT, EXPORT), "the export never reaches a job record");
 
 		Users users = engine.getVenueState().users();
 		assertEquals(users.content(source).dissoc(Namespace.S).dissoc(Namespace.J), users.content(target).dissoc(Namespace.S),
 			"an import holds everything but the calls, which the account it fills has not made");
-		User imported = users.get(target);
+		User imported = users.user(target);
 		assertEquals(SECRET, imported.secrets().decrypt("API_KEY", KEYS).toString());
 		assertNotNull(RT.getIn(imported.get(), Covia.K_META, Covia.K_CREATED), "the import is the account's first activity");
 	}
@@ -152,7 +152,7 @@ class UserExportsTest {
 		Users users = engine.getVenueState().users();
 		users.create(target);
 		users.ensure(target).writeInternalPath(CoviaPath.parse("w/old"), Strings.create("gone"));
-		User old = users.get(target);
+		User old = users.user(target);
 		engine.deleteUser(venue, target);
 		assertEquals(CVMBool.TRUE, RT.getIn(run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue), Fields.CREATED));
 		assertEquals(users.content(source).dissoc(Namespace.S).dissoc(Namespace.J), users.content(target));
@@ -185,7 +185,7 @@ class UserExportsTest {
 		assertEquals(UserExports.SECRETS_NEED_KEY, failure(start("export", Maps.of(Fields.DID, source), venue)));
 		ABlob blob = export(source, SECRETS, CVMBool.FALSE);
 		run("import", Maps.of(Fields.DID, target, EXPORT, blob), venue);
-		assertTrue(engine.getVenueState().users().get(target).secrets().list().isEmpty());
+		assertTrue(engine.getVenueState().users().user(target).secrets().list().isEmpty());
 		assertNotNull(engine.getVenueState().users().content(target).get(Namespace.W));
 	}
 
@@ -200,7 +200,7 @@ class UserExportsTest {
 			Maps.of(Fields.DID, target, EXPORT, blob, Fields.SEED, seedRef(AKeyPair.generate())), venue)));
 		assertEquals(UserAdapter.SEED_REF_REQUIRED, failure(start("import",
 			Maps.of(Fields.DID, target, EXPORT, blob, Fields.SEED, seal.getSeed().toHexString()), venue)));
-		assertNull(engine.getVenueState().users().get(target), "a refused import registers nothing");
+		assertNull(engine.getVenueState().users().user(target), "a refused import registers nothing");
 	}
 
 	@Test
@@ -235,7 +235,7 @@ class UserExportsTest {
 		ABlob foreign = Format.encodeMultiCell(Maps.of(UserExports.K_FORMAT, "something-else"), true);
 		assertEquals(UserExports.NOT_AN_EXPORT, failure(start("import", Maps.of(Fields.DID, target, EXPORT, foreign), venue)));
 		assertEquals(UserExports.NOT_AN_EXPORT, failure(start("import", Maps.of(Fields.DID, target, EXPORT, "0x00ff"), venue)));
-		assertNull(engine.getVenueState().users().get(target));
+		assertNull(engine.getVenueState().users().user(target));
 	}
 
 	@Test
@@ -256,7 +256,7 @@ class UserExportsTest {
 				Namespace.H, Maps.of(Covia.WORKSPACE_DATA, Maps.of("req-agent", fromAgent, "req-user", fromUser)))), true);
 		run("import", Maps.of(Fields.DID, target, EXPORT, older), venue);
 
-		User imported = users().get(target);
+		User imported = users().user(target);
 		assertEquals(Maps.of(Hitl.ID, "req-agent", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, asker, Hitl.OWNER, source),
 			imported.inbox().get(Strings.create("req-agent")));
 		assertEquals(Maps.of(Hitl.ID, "req-user", Hitl.STATUS, Hitl.OPEN, Hitl.CALLER, stranger),
@@ -271,7 +271,7 @@ class UserExportsTest {
 		AKeyPair seal = AKeyPair.generate();
 		ABlob blob = export(source, ACCOUNT_KEY, seal.getAccountKey());
 		run("import", Maps.of(Fields.DID, target, EXPORT, blob, Fields.SEED, seedRef(seal)), venue);
-		User imported = engine.getVenueState().users().get(target);
+		User imported = engine.getVenueState().users().user(target);
 		assertEquals(CVMLong.create(SecretStore.CURRENT_KEY_VERSION), RT.getIn(imported.get(), Namespace.S, "OLD_KEY", "keyVersion"));
 		assertEquals(SECRET, imported.secrets().decrypt("OLD_KEY", KEYS).toString());
 	}
@@ -287,7 +287,7 @@ class UserExportsTest {
 			assertEquals(CVMBool.TRUE, RT.getIn(run("clone", Maps.of(Fields.FROM, source, Fields.TO, target), venue), Fields.CREATED));
 			assertNull(users().content(target).get(Namespace.J));
 		} finally {
-			user.jobs().get(running).update(job -> job.assoc(Fields.STATUS, Status.CANCELLED));
+			user.jobs().job(running).update(job -> job.assoc(Fields.STATUS, Status.CANCELLED));
 		}
 		// An outstanding agent task is unfinished work, wherever its job is recorded.
 		assertEquals(UserExports.BUSY, UserExports.unfinishedWork(Maps.of(Namespace.G,
@@ -312,7 +312,7 @@ class UserExportsTest {
 		AMap<AString, ACell> copy = users.content(target);
 		assertEquals(original.dissoc(Namespace.G).dissoc(Namespace.J), copy.dissoc(Namespace.G),
 			"a clone holds everything but the calls, which the account it fills has not made");
-		User clone = users.get(target);
+		User clone = users.user(target);
 		assertEquals(SECRET, clone.secrets().decrypt("API_KEY", KEYS).toString());
 		AgentState agent = clone.agent(HELPER);
 		assertEquals(user.agent(HELPER).getSession(sid), agent.getSession(sid));

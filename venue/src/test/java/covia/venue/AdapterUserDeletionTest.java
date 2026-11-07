@@ -117,7 +117,7 @@ class AdapterUserDeletionTest {
 			engine.registerAdapter(adapter);
 			assertNull(adapter.engine);
 			AdapterState state = seed(engine);
-			engine.getVenueState().users().get(OWNER).ensureAgent("old", Maps.empty(), VALUE);
+			engine.getVenueState().users().user(OWNER).ensureAgent("old", Maps.empty(), VALUE);
 			engine.deleteUser(engine.venueContext(), OWNER);
 			assertEquals(1, adapter.stopped);
 			assertNull(state.read("custom/" + OWNER));
@@ -155,7 +155,7 @@ class AdapterUserDeletionTest {
 			AdapterState state = seed(engine);
 			adapter.duringState = draft -> { throw new IllegalStateException("test rollback"); };
 			assertThrows(IllegalStateException.class, () -> engine.deleteUser(engine.venueContext(), OWNER));
-			assertNotNull(engine.getVenueState().users().get(OWNER));
+			assertNotNull(engine.getVenueState().users().user(OWNER));
 			assertEquals(VALUE, state.read(state.userPath(OWNER, "bots/old")));
 			assertEquals(VALUE, state.read("custom/" + OWNER));
 			assertTrue(engine.getVenueState().pendingUserDeletions(NAME).isEmpty());

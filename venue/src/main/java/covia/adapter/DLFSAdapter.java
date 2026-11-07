@@ -212,7 +212,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) throw new AuthException("Authentication required for DLFS access");
 
-		User user = engine.getVenueState().users().get(callerDID);
+		User user = engine.getVenueState().users().user(callerDID);
 		if (user == null) return null;
 		AString existing = user.secrets().decrypt(DLFS_KEY_SECRET, SecretStore.keys(engine.getKeyPair()));
 		return (existing == null) ? null : AKeyPair.create(Blob.fromHex(existing.toString()));

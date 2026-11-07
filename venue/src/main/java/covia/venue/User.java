@@ -27,7 +27,7 @@ import convex.lattice.cursor.StampedCursor;
  *
  * <p>Wraps a lattice cursor at {@code :user-data → <did>} within the
  * venue state. Provides typed accessors for per-user data. Created by
- * {@link Users#get(AString)} (returns null if the user doesn't exist),
+ * {@link Users#user(AString)} (returns null if the user doesn't exist),
  * {@link Users#ensure(AString)} (creates if needed) or, for a path,
  * {@link Users#at(AString)} (whether or not the account is live).</p>
  *

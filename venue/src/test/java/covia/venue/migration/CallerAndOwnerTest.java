@@ -90,7 +90,7 @@ class CallerAndOwnerTest {
 	}
 
 	@Test void jobsNameTheirCallerAndOwner() {
-		User alice = read(STEP.apply(legacy())).users().get(ALICE);
+		User alice = read(STEP.apply(legacy())).users().user(ALICE);
 		assertEquals(Maps.of(Fields.ID, AGENT_JOB, Fields.STATUS, "COMPLETE", Fields.CALLER, WORKER, Fields.OWNER, ALICE),
 			alice.jobs().getRecord(AGENT_JOB));
 		assertEquals(Maps.of(Fields.ID, OWN_JOB, Fields.STATUS, "COMPLETE", Fields.CALLER, ALICE),
@@ -108,7 +108,7 @@ class CallerAndOwnerTest {
 	}
 
 	@Test void hitlRequestsNameTheirCallerAndOwner() {
-		User alice = read(STEP.apply(legacy())).users().get(ALICE);
+		User alice = read(STEP.apply(legacy())).users().user(ALICE);
 		assertEquals(Maps.of(Hitl.ID, "agent", Hitl.CALLER, WORKER, Hitl.OWNER, ALICE),
 			alice.inbox().get(Strings.create("agent")));
 		assertEquals(Maps.of(Hitl.ID, "legacy-agent", Hitl.CALLER, WORKER, Hitl.OWNER, ALICE),
@@ -122,7 +122,7 @@ class CallerAndOwnerTest {
 	}
 
 	@Test void outputSnapshotsNameTheirOwner() {
-		AgentState worker = read(STEP.apply(legacy())).users().get(ALICE).agent("worker");
+		AgentState worker = read(STEP.apply(legacy())).users().user(ALICE).agent("worker");
 		assertEquals(Maps.of(Fields.CALLER, WORKER, Fields.OWNER, ALICE),
 			RT.getIn(worker.getTasks().get(TASK), OUTPUT_CONTEXT), "and keeps no copy of its caller's caps");
 		assertEquals(Maps.of(Fields.CALLER, WORKER, Fields.OWNER, ALICE),

@@ -307,7 +307,7 @@ public class A2A extends ACoviaAPI {
 
 	/** Resolve the addressed agent in its owner's namespace (from the URL), or null. */
 	private AgentState resolveAgentByOwner(A2ACodec.AgentRef ref) {
-		User user = engine().getVenueState().users().get(ref.ownerDid());
+		User user = engine().getVenueState().users().user(ref.ownerDid());
 		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
 		return (agent != null && agent.exists()) ? agent : null;
 	}
@@ -787,7 +787,7 @@ public class A2A extends ACoviaAPI {
 		if (ids == null || ids.isEmpty()) return List.of();
 
 		String ownerDid = rctx.getCallerDID().toString();
-		User user = engine().getVenueState().users().get(rctx.getCallerDID());
+		User user = engine().getVenueState().users().user(rctx.getCallerDID());
 		List<AgentSkill> skills = new ArrayList<>((int) ids.count());
 		for (long i = 0; i < ids.count(); i++) {
 			AString agentId = RT.ensureString(ids.get(i));

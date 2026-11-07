@@ -436,7 +436,7 @@ whether data is there now, a stored null counting. A user, agent, session or job
 exist reads as absent, and a workspace in it refuses changes. An account is
 reached through `Users.at`, which reads a record that is not live (never
 registered, or a deleted account's tombstone) as absent, refuses changes to
-it, and fences off a later account with the same DID as `Users.get` does.
+it, and fences off a later account with the same DID as `Users.user` does.
 
 A segment that names no place data could be throws Convex's
 `NoSuchPathException` at that segment's position in the request: a name a

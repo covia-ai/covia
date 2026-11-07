@@ -134,7 +134,7 @@ class AuthResultTest {
 			AString user = Strings.create(did + ":u:" + name);
 			AString token = Strings.create(VenueAuth.namedKeyPair(key, user.toString(), 300)
 				.mintToken(engine.getDIDString().toString()));
-			assertNull(engine.getVenueState().users().get(user));
+			assertNull(engine.getVenueState().users().user(user));
 			AuthResult result = auth.verify(token);
 			assertEquals(user, result.userDID());
 			assertEquals(did, result.authenticatedIdentity());
@@ -147,7 +147,7 @@ class AuthResultTest {
 			assertEquals(user, auth.authenticatedUser(ctx));
 			assertEquals(user, AuthMiddleware.callerContext(ctx).getCallerDID());
 			assertEquals(user, AuthMiddleware.callerContext(ctx).getUserDID());
-			assertNull(engine.getVenueState().users().get(user), "authentication does not admit users");
+			assertNull(engine.getVenueState().users().user(user), "authentication does not admit users");
 		}
 	}
 
@@ -183,7 +183,7 @@ class AuthResultTest {
 			assertEquals(subject, auth.authenticatedUser(ctx));
 			assertEquals(did, auth.authenticatedIdentity(ctx));
 			assertEquals(subject, AuthMiddleware.callerContext(ctx).getCallerDID());
-			assertNull(engine.getVenueState().users().get(subject));
+			assertNull(engine.getVenueState().users().user(subject));
 			assertUnknownEvidence(auth.authenticationResult(ctx));
 			assertKeyRejected(JWT.signPublic(claims().assoc(Fields.SUB, subject), AKeyPair.generate()),
 				VenueAuthenticator.Reason.WRONG_KEY_FOR_SUBJECT);

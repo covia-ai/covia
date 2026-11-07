@@ -148,7 +148,7 @@ public class AgentRestartTest {
 						Fields.INPUT, Strings.create("complete hold:" + gateName),
 						Fields.OUTPUT_PATH, path), alice);
 				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the cycle never reached its test gate");
-				AgentState worker = first.getVenueState().users().get(ALICE).agent(agentId);
+				AgentState worker = first.getVenueState().users().user(ALICE).agent(agentId);
 				assertNotNull(worker.getResolved().get(request.getID()), "the resolution is stored before the merge");
 				assertNull(worker.getTasks().get(request.getID()));
 				first.syncState();
@@ -174,7 +174,7 @@ public class AgentRestartTest {
 				Maps.of(Fields.PATH, path), alice).awaitResult(5000), Fields.VALUE);
 			assertEquals(Strings.create("complete hold:" + gateName), RT.getIn(written, Fields.INPUT),
 				"the output the agent resolved its task with is written");
-			assertTrue(second.getVenueState().users().get(ALICE).agent(agentId).getResolved().isEmpty());
+			assertTrue(second.getVenueState().users().user(ALICE).agent(agentId).getResolved().isEmpty());
 		} finally {
 			second.close();
 		}
@@ -215,7 +215,7 @@ public class AgentRestartTest {
 				wakingWatch.awaitRest(1);
 				orphanWatch.awaitRest(1);
 			}
-			AgentState orphan = first.getVenueState().users().get(ALICE).agent("parked-orphan");
+			AgentState orphan = first.getVenueState().users().user(ALICE).agent("parked-orphan");
 			assertTrue(AgentState.isParked(orphan.getTasks().get(orphaned.getID())));
 			orphan.setThreadWakeTime(AgentState.ThreadKind.TASK, orphaned.getID(), 0);
 			first.syncState();
@@ -238,12 +238,12 @@ public class AgentRestartTest {
 			Job kept = second.jobs().getJob(waking.getID(), alice);
 			assertNotNull(kept);
 			assertFalse(kept.isFinished(), "a task waiting on its wake time stays queued");
-			assertTrue(AgentState.isParked(second.getVenueState().users().get(ALICE)
+			assertTrue(AgentState.isParked(second.getVenueState().users().user(ALICE)
 				.agent("parked-waking").getTasks().get(waking.getID())));
 
 			// A recovered request still leaves the queue when its caller cancels it.
 			kept.cancel();
-			assertNull(second.getVenueState().users().get(ALICE).agent("parked-waking")
+			assertNull(second.getVenueState().users().user(ALICE).agent("parked-waking")
 				.getTasks().get(waking.getID()), "a cancelled request is not left for the agent to run");
 		} finally {
 			second.close();

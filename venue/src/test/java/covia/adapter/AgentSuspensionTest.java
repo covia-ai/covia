@@ -46,7 +46,7 @@ public class AgentSuspensionTest {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
 				"llmOperation", "v/test/ops/failllm", "model", model)), owner).awaitResult(5000);
-		return engine.getVenueState().users().get(owner.getUserDID()).agent(agentId);
+		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 	}
 
 	private Job request(RequestContext owner, String agentId, String ask) {

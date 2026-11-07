@@ -96,7 +96,7 @@ class BundledAdapterMigrationTest {
 				if (states == null) continue;
 				expected.put(adapter.getName(), adapter.stateVersion());
 				assertEquals(states.get(states.size() - 1), venue.adapterState(adapter.getName()).get(), adapter.getName());
-				assertNull(venue.users().get(engine.getDIDString())
+				assertNull(venue.users().user(engine.getDIDString())
 					.readInternalPath(CoviaPath.parse("w/adapters/" + adapter.getName())));
 			}
 			assertEquals(expected, venue.adapterVersions(), "unversioned adapters record nothing");

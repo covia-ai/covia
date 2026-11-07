@@ -305,7 +305,7 @@ public class DLFSCrossUserTest {
 		assertTrue(failure("v/ops/dlfs/stat",
 			Maps.of("drive", CAROL_DID + "/docs", "path", "a.txt"), bob)
 			.contains(DLFSAdapter.DRIVE_NOT_FOUND));
-		assertNull(engine.getVenueState().users().get(CAROL_DID));
+		assertNull(engine.getVenueState().users().user(CAROL_DID));
 	}
 
 	@Test

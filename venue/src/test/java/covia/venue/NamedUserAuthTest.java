@@ -90,7 +90,7 @@ public class NamedUserAuthTest {
 	@Test
 	void bootstrapCreatesNamedAccountsAndAuthenticatorRecords() {
 		Engine engine = server.getEngine();
-		assertNotNull(engine.getVenueState().users().get(aliceDID));
+		assertNotNull(engine.getVenueState().users().user(aliceDID));
 		assertEquals(aliceDID, engine.getAuth().getUser(Strings.create("alice")).get(Fields.DID));
 		assertTrue(engine.getAuth().isAuthenticationKeyActive(
 			Strings.create("alice"), aliceKeyDID));

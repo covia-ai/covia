@@ -45,7 +45,7 @@ class UserDeletionsRegionTest {
 	@Test void theIndexMovesExactlyToItsRegion() {
 		ACell migrated = STEP.apply(legacy());
 		assertEquals(PENDING, RT.getIn(migrated, Covia.USER_DELETIONS));
-		Workspace workspace = read(migrated).users().get(DID).workspace();
+		Workspace workspace = read(migrated).users().user(DID).workspace();
 		assertNull(workspace.read(LEGACY));
 		assertEquals(Strings.create("kept"), workspace.read(NOTES), "the rest of the workspace stays");
 		assertSame(migrated, STEP.apply(migrated), "migrating again changes nothing");
@@ -63,7 +63,7 @@ class UserDeletionsRegionTest {
 		ACell both = RT.assocIn(legacy(), PENDING, Covia.USER_DELETIONS);
 		ACell migrated = STEP.apply(both);
 		assertEquals(PENDING, RT.getIn(migrated, Covia.USER_DELETIONS));
-		assertNull(read(migrated).users().get(DID).workspace().read(LEGACY));
+		assertNull(read(migrated).users().user(DID).workspace().read(LEGACY));
 	}
 
 	@Test void aDifferentCopyInTheRegionIsRefused() {

@@ -187,7 +187,7 @@ public class HITLAdapter extends AAdapter {
 			RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs, timeoutSecs);
 
 		final AString targetDID = target;
-		User targetUser = engine.getVenueState().users().get(targetDID);
+		User targetUser = engine.getVenueState().users().user(targetDID);
 		if (targetUser == null) {
 			throw new NotFoundException("HITL target user is not registered at this venue: "
 				+ targetDID, targetDID.toString());
@@ -210,7 +210,7 @@ public class HITLAdapter extends AAdapter {
 	private void trackPending(Job job, Blob taskId) {
 		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
 		if (agentId == null) return;
-		User owner = engine.getVenueState().users().get(job.getOwner());
+		User owner = engine.getVenueState().users().user(job.getOwner());
 		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return;
 		if (taskId != null) {
@@ -239,7 +239,7 @@ public class HITLAdapter extends AAdapter {
 		if (target == null) target = job.getOwner();
 		AString targetDID = target;
 		AString id = Strings.create(job.getID().toHexString());
-		User user = engine.getVenueState().users().get(target);
+		User user = engine.getVenueState().users().user(target);
 		AMap<AString, ACell> record = user == null ? null : user.inbox().get(id);
 		if (record != null && !Hitl.OPEN.equals(record.get(Hitl.STATUS))) {
 			// Older records lack a prepared result. Never reissue a grant or pretend
@@ -334,7 +334,7 @@ public class HITLAdapter extends AAdapter {
 		}
 
 		// Structural authorisation: respond reads the CALLER's own inbox only.
-		User user = engine.getVenueState().users().get(caller);
+		User user = engine.getVenueState().users().user(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
 		AMap<AString, ACell> record = user.inbox().get(id);
 		if (record == null) {
@@ -608,7 +608,7 @@ public class HITLAdapter extends AAdapter {
 		if (caller == null) throw new AuthException("Authentication required");
 		engine.requireResourceAccess(ctx, INBOX, Capability.CRUD_READ);
 		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
-		User user = engine.getVenueState().users().get(caller);
+		User user = engine.getVenueState().users().user(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
 		AMap<AString, ACell> all = user.inbox().getAll();
 		AVector<ACell> items = Vectors.empty();
@@ -666,13 +666,13 @@ public class HITLAdapter extends AAdapter {
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
 		AString requester = job == null ? null : job.getOwner();
 		AString requestingAgent = job == null ? null : Engine.agentIdIn(requester, job.getCaller());
-		User requesterAccount = requester == null ? null : engine.getVenueState().users().get(requester);
+		User requesterAccount = requester == null ? null : engine.getVenueState().users().user(requester);
 		// Null when the request was not open to resolve
 		Resolution resolution = engine.getVenueState().transact(venue -> {
 			var draft = venue.users();
 			Runnable notification = null;
 			Blob waitingTask = null;
-			User target = draft.get(targetDID);
+			User target = draft.user(targetDID);
 			AMap<AString, ACell> record = target == null ? null : target.inbox().get(id);
 			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return null;
 			AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
@@ -688,7 +688,7 @@ public class HITLAdapter extends AAdapter {
 				notification = changed;
 				// Terminal jobs are skipped at restart: no live cleanup listener will
 				// survive to remove this wait, so settle it with the result itself.
-				User owner = draft.get(requester);
+				User owner = draft.user(requester);
 				AgentState askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
 				if (askingAgent != null && askingAgent.getRecord() != null) {
 					AString taskHex = RT.ensureString(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));
@@ -749,7 +749,7 @@ public class HITLAdapter extends AAdapter {
 		for (long u = 0; u < all.count(); u++) {
 			AString did = RT.ensureString(all.entryAt(u).getKey());
 			if (did == null) continue;
-			User user = engine.getVenueState().users().get(did);
+			User user = engine.getVenueState().users().user(did);
 			if (user == null) continue;
 			AMap<AString, ACell> reqs = user.inbox().getAll();
 			for (long i = 0; i < reqs.count(); i++) {

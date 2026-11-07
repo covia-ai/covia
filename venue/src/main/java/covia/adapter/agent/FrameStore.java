@@ -79,7 +79,7 @@ interface FrameStore {
 
 	private static AgentState resolveAgentState(Engine engine, RequestContext ctx, AString agentId) {
 		if (agentId == null || ctx.getUserDID() == null) return null;
-		covia.venue.User user = engine.getVenueState().users().get(ctx.getUserDID());
+		covia.venue.User user = engine.getVenueState().users().user(ctx.getUserDID());
 		return (user != null) ? user.agent(agentId.toString()) : null;
 	}
 

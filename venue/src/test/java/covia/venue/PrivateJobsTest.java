@@ -44,7 +44,7 @@ public class PrivateJobsTest {
 	}
 
 	private long jobCount() {
-		User u = engine.getVenueState().users().get(ALICE);
+		User u = engine.getVenueState().users().user(ALICE);
 		if (u == null) return 0;
 		Index<Blob, ACell> jobs = u.jobs().getAll();
 		return (jobs == null) ? 0 : jobs.count();

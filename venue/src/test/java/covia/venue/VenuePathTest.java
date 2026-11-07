@@ -77,7 +77,7 @@ public class VenuePathTest {
 		assertFalse(notes.exists());
 		assertEquals(VenueState.UNKNOWN_USER,
 			assertThrows(NotFoundException.class, () -> Entry.of(notes).write(CVMLong.ONE)).getMessage());
-		assertNull(venue.users().get(did), "resolving and the refused change create no record");
+		assertNull(venue.users().user(did), "resolving and the refused change create no record");
 	}
 
 	@Test
@@ -109,7 +109,7 @@ public class VenuePathTest {
 		assertEquals(Users.ACCOUNT_DELETED, assertThrows(AuthException.class, () -> read(notes)).getMessage());
 		assertEquals(Users.ACCOUNT_DELETED,
 			assertThrows(AuthException.class, () -> Entry.of(notes).write(CVMLong.create(2))).getMessage());
-		assertNull(venue.users().get(did).workspace().read(NOTES), "the new account is untouched");
+		assertNull(venue.users().user(did).workspace().read(NOTES), "the new account is untouched");
 	}
 
 	@Test
@@ -125,7 +125,7 @@ public class VenuePathTest {
 	@Test
 	public void testAPathToTheAccountReadsItsRecordAsStored() {
 		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
-		assertEquals(venue.users().get(did).get(), read(resolve("")));
+		assertEquals(venue.users().user(did).get(), read(resolve("")));
 	}
 
 	@Test

@@ -356,7 +356,7 @@ public class LLMAgentAdapterTest {
 		createTestAgent("e2e-agent");
 
 		// Deliver directly to avoid auto-wake race
-		User e2eUser = engine.getVenueState().users().get(ALICE_DID);
+		User e2eUser = engine.getVenueState().users().user(ALICE_DID);
 		AgentState e2eAgent = e2eUser.agent("e2e-agent");
 		Blob e2eSid = Blob.fromHex("e2e10001e2e10001e2e10001e2e10001");
 		e2eAgent.ensureSession(e2eSid, ALICE_DID);
@@ -370,7 +370,7 @@ public class LLMAgentAdapterTest {
 		runJob.awaitResult(5000);
 		AgentWatch.awaitTimeline(engine, ALICE_DID, e2eAgent, 1);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("e2e-agent");
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertFalse(agent.hasSessionPending());
@@ -387,7 +387,7 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testEndToEndMultiTrigger() {
 		createTestAgent("multi-run-agent");
-		User multiUser = engine.getVenueState().users().get(ALICE_DID);
+		User multiUser = engine.getVenueState().users().user(ALICE_DID);
 		AgentState multiAgent = multiUser.agent("multi-run-agent");
 		Blob multiSid = Blob.fromHex("11110001111100011111000111110001");
 		multiAgent.ensureSession(multiSid, ALICE_DID);
@@ -413,7 +413,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		AgentWatch.awaitTimeline(engine, ALICE_DID, multiAgent, 2);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("multi-run-agent");
 
 		assertEquals(2, agent.getTimeline().count());
@@ -428,7 +428,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver directly to avoid auto-wake
-		User echoUser = engine.getVenueState().users().get(ALICE_DID);
+		User echoUser = engine.getVenueState().users().user(ALICE_DID);
 		AgentState echoRegAgent = echoUser.agent("echo-regression");
 		Blob echoRegSid = Blob.fromHex("22220001222200012222000122220001");
 		echoRegAgent.ensureSession(echoRegSid, ALICE_DID);
@@ -498,7 +498,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver directly to avoid auto-wake
-		User toolUser = engine.getVenueState().users().get(ALICE_DID);
+		User toolUser = engine.getVenueState().users().user(ALICE_DID);
 		AgentState toolAgent = toolUser.agent("tool-agent");
 		Blob toolSid = Blob.fromHex("33330001333300013333000133330001");
 		toolAgent.ensureSession(toolSid, ALICE_DID);
@@ -512,7 +512,7 @@ public class LLMAgentAdapterTest {
 		runJob.awaitResult(5000);
 		AgentWatch.awaitTimeline(engine, ALICE_DID, toolAgent, 1);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("tool-agent");
 
 		AVector<ACell> timeline = agent.getTimeline();
@@ -535,7 +535,7 @@ public class LLMAgentAdapterTest {
 				AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/badargsllm")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("bad-args-agent");
 		Blob sid = Blob.fromHex("44440001444400014444000144440001");
 		agent.ensureSession(sid, ALICE_DID);
@@ -693,7 +693,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGE, "issue-334-read"), ctx).awaitResult(10000);
 		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
 		assertNotNull(sid);
-		AgentState persistedAgent = engine.getVenueState().users().get(ALICE_DID)
+		AgentState persistedAgent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("issue-334-persist-agent");
 		AMap<AString, ACell> session = persistedAgent.getSession(Blob.fromHex(sid.toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
@@ -720,7 +720,7 @@ public class LLMAgentAdapterTest {
 
 		assertEquals("", RT.getIn(chatResult, Fields.RESPONSE).toString(), "a turn that said nothing, not a failure");
 		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
-		AMap<AString, ACell> session = engine.getVenueState().users().get(ALICE_DID)
+		AMap<AString, ACell> session = engine.getVenueState().users().user(ALICE_DID)
 			.agent("no-reply-agent").getSession(Blob.fromHex(sid.toString()));
 		AVector<ACell> conversation = GoalTreeContext.activeConversation(
 			RT.ensureMap(RT.ensureVector(RT.getIn(session, Fields.FRAMES)).get(0)));
@@ -1149,7 +1149,7 @@ public class LLMAgentAdapterTest {
 					"skillsets", Vectors.of(Strings.create("w/skills")))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("skill-e2e-agent");
 		Blob sid = Blob.fromHex("44440001444400014444000144440001");
 		agent.ensureSession(sid, ALICE_DID);
@@ -1311,7 +1311,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Add task directly and trigger — avoid agent:request's async wake
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("task-agent");
 
 		// Tasks are pure lattice data — use a generated Blob ID, not a Job
@@ -1353,7 +1353,7 @@ public class LLMAgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("text-complete-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of("task", "review the poems"));
@@ -1399,7 +1399,7 @@ public class LLMAgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("strict-schema-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of(
@@ -1437,7 +1437,7 @@ public class LLMAgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("advisory-schema-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of(
@@ -1488,7 +1488,7 @@ public class LLMAgentAdapterTest {
 				RequestContext.of(ALICE_DID));
 			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the task's cycle runs");
 
-			User user = engine.getVenueState().users().get(ALICE_DID);
+			User user = engine.getVenueState().users().user(ALICE_DID);
 			AgentState agent = user.agent("schema-request-agent");
 			assertEquals(1, agent.getTasks().count(), "task must be queued");
 			ACell record = agent.getTasks().entryAt(0).getValue();
@@ -1566,7 +1566,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell taskResult = taskJob.awaitResult(10000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("parallel-task-agent");
 		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 		assertEquals(Status.COMPLETE, taskJob.getStatus());
@@ -1630,7 +1630,7 @@ public class LLMAgentAdapterTest {
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent(agentId.toString());
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of("task", "fail deliberately"));
@@ -1728,7 +1728,7 @@ public class LLMAgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("capped-task-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of("question", "What is 2+2?"));
@@ -1794,7 +1794,7 @@ public class LLMAgentAdapterTest {
 		AString sid = RT.ensureString(RT.getIn(r1, Fields.SESSION_ID));
 		assertNotNull(sid);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("tokens-agent");
 		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
@@ -1976,7 +1976,7 @@ public class LLMAgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("textctl-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of("task", "Pay invoice AR-2214"));
@@ -2027,7 +2027,7 @@ public class LLMAgentAdapterTest {
 		assertEquals(covia.adapter.AgentAdapter.TASK_YIELDED_IDLE, reqJob.getErrorMessage());
 
 		// One cycle ran; the task is gone; the agent is not poisoned
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("stubborn-agent");
 		assertEquals(0, agent.getTasks().count(), "the yielded task must be removed");
 		AgentWatch.awaitIdle(engine, ALICE_DID, agent);
@@ -2096,7 +2096,7 @@ public class LLMAgentAdapterTest {
 		assertTrue(response.contains("v/test/ops/echo"),
 			"the denial must name the blocked op: " + response);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("scoped-deny-agent");
 		AgentWatch.awaitStatus(engine, ALICE_DID, agent, AgentState.SLEEPING);
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
@@ -2167,7 +2167,7 @@ public class LLMAgentAdapterTest {
 
 		// The limit bounds this task's cost and fails this task: the agent can
 		// still take its next one, so it is not suspended (AGENT_LOOP.md §3.4).
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("loop-agent");
 		AgentWatch.awaitIdle(engine, ALICE_DID, agent);
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
@@ -2187,7 +2187,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent(agentId);
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of("question", "test?"));
 		RequestContext ctx = RequestContext.of(ALICE_DID).withAgentId(agentId);
@@ -2228,7 +2228,7 @@ public class LLMAgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("direct-task-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.addTask(taskId, Maps.of("question", "test?"));
@@ -2302,7 +2302,7 @@ public class LLMAgentAdapterTest {
 		// Use test:toolllm-style mock that calls message_agent — but we can test
 		// the built-in directly by checking the tool dispatch
 		// For now, verify the agent exists and can receive messages
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState receiver = user.agent("receiver-agent");
 		assertFalse(receiver.hasSessionPending());
 

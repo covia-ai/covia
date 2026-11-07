@@ -73,7 +73,7 @@ public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 	 * @return The job, bound to this cursor or transaction draft, or null if
 	 *         there is no such job
 	 */
-	public JobState get(Blob id) {
+	public JobState job(Blob id) {
 		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
 		return (jobs != null && jobs.containsKey(id)) ? at(id) : null;
 	}
@@ -118,7 +118,7 @@ public final class Jobs extends ALatticeComponent<Index<Blob, ACell>>
 	/**
 	 * The job at {@code id}, whether or not its record exists, as a path names
 	 * it: a missing job reads as absent and takes no change. Domain callers use
-	 * {@link #get}, which is null for a missing job.
+	 * {@link #job}, which is null for a missing job.
 	 */
 	public JobState at(Blob id) {
 		return new JobState(context, cursor().withDefault(Index.none()).path(id), owner, id);

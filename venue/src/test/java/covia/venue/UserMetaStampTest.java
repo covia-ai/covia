@@ -114,7 +114,7 @@ public class UserMetaStampTest {
 		// A frame write four levels down the subtree still refreshes the
 		// user-level stamp (StampedCursor deep-write re-stamp). Fresh wrapper
 		// after the clock advance, as real per-access derivation gives.
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("frame-agent");
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("frame-agent");
 		assertTrue(agent.session(sid).updateFrames(null,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("x")))));
 		assertTrue(metaField("updated") > before,
@@ -130,7 +130,7 @@ public class UserMetaStampTest {
 		agent.getRecord();
 		agent.getTasks();
 		user.getAgents();
-		engine.getVenueState().users().get(ALICE_DID).cursor().get();
+		engine.getVenueState().users().user(ALICE_DID).cursor().get();
 
 		assertEquals(before, metaField("updated"), "reads must not bump meta.updated");
 	}

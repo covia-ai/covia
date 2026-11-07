@@ -185,7 +185,7 @@ public final class AgentWatch implements AutoCloseable {
 			}
 		}
 		sb.append(']');
-		User user = engine.getVenueState().users().get(ownerDID);
+		User user = engine.getVenueState().users().user(ownerDID);
 		AgentState agent = (user == null) ? null : user.agent(agentId);
 		if (agent != null) {
 			AVector<?> timeline = agent.getTimeline();

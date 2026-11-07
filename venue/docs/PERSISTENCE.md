@@ -128,7 +128,7 @@ execution after the outer commit. A commit is not an exactly-once external effec
 crash-sensitive dispatch still needs its existing durable claim/recovery protocol.
 Do not introduce I/O or runtime service calls inside retryable callbacks.
 
-A recorded venue job's `JobState` (`user.jobs().get(id)`, null when there is no
+A recorded venue job's `JobState` (`user.jobs().job(id)`, null when there is no
 such job) is its primary record. Admission creates it explicitly; updates only
 edit an existing row, and a job removed while a caller holds its `JobState` reads
 as null. `VenueJob` reads and mutates
@@ -399,7 +399,7 @@ Every lattice component:
 Every adapter:
 
 1. **Receives** `RequestContext`, resolved metadata, input.
-2. **Resolves the calling user** via `engine.getVenueState().users().get(ctx.getCallerDID())`.
+2. **Resolves the calling user** via `engine.getVenueState().users().user(ctx.getCallerDID())`.
 3. **Calls component methods only.** No `cursor.set`, no `cursor.updateAndGet`, no `cursor.path(…).set(…)`, no `engine.syncState()`.
 4. **Returns a result.** That's it.
 

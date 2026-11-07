@@ -404,7 +404,7 @@ public class AssetAdapter extends AAdapter {
 		// List the caller's own pinned assets — the per-user a/ namespace.
 		// Venue-level assets (the operation catalog) are discovered via
 		// covia:functions / covia:adapters / covia:inspect, not here.
-		covia.venue.User user = engine.getVenueState().users().get(ctx.getUserDID());
+		covia.venue.User user = engine.getVenueState().users().user(ctx.getUserDID());
 		AMap<ABlob, AVector<?>> userAssets = (user != null) ? user.assets().getAll() : null;
 		long rawTotal = (userAssets != null) ? userAssets.count() : 0;
 

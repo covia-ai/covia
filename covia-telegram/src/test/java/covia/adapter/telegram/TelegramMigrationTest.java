@@ -59,7 +59,7 @@ class TelegramMigrationTest {
 		Engine engine = new Engine(Maps.empty(), CoviaApplication.create(key), key).prepare();
 		try {
 			// 0.9.11 kept adapter state in the venue user's workspace.
-			User host = engine.getVenueState().users().get(engine.getDIDString());
+			User host = engine.getVenueState().users().user(engine.getDIDString());
 			Workspace workspace = host.workspace();
 			Path legacy =CoviaPath.parse("adapters/telegram");
 			workspace.createPath(CoviaPath.parent(legacy));

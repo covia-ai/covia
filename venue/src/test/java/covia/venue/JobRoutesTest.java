@@ -319,7 +319,7 @@ public class JobRoutesTest {
 		String id = invoke("v/test/ops/echo");
 		awaitHttpStatus(id, "COMPLETE");
 		var jobId = Job.parseID(id);
-		var user = TestServer.ENGINE.getVenueState().users().get(TestServer.ENGINE.getDIDString() + ":public");
+		var user = TestServer.ENGINE.getVenueState().users().user(TestServer.ENGINE.getDIDString() + ":public");
 		var current = user.jobs().getRecord(jobId);
 		HttpResponse<String> status = http.send(
 			HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),

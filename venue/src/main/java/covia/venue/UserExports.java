@@ -108,7 +108,7 @@ public final class UserExports {
 	 */
 	public Blob exportUser(AString did, AccountKey recipient, boolean includeSecrets) {
 		requireOrdinary(did);
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		ACell record = (user == null) ? null : user.get();
 		AMap<AString, ACell> state = Users.content(record);
 		if (state == null) throw new NotFoundException(VenueState.UNKNOWN_USER, did.toString());

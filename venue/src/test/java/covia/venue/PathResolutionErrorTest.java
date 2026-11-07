@@ -94,7 +94,7 @@ public class PathResolutionErrorTest {
 			Maps.of(Fields.PATH, own + "/n/notes", Fields.VALUE, CVMLong.ONE), ctx);
 		assertThrows(Exception.class, () -> write.awaitResult(5000));
 		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, "/" + own + "/n/notes", "/" + own + "/n"), write.getErrorMessage());
-		assertNull(RT.getIn(engine.getVenueState().users().get(own).get(), "n"), "no stray field is written");
+		assertNull(RT.getIn(engine.getVenueState().users().user(own).get(), "n"), "no stray field is written");
 	}
 
 	@Test

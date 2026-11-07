@@ -438,7 +438,7 @@ public class A2AAgentCardTest {
 			// Provenance in the agent's own books: while held, the task row names
 			// the public principal as its caller, not the owner.
 			AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
-			AgentState agentState = TestServer.ENGINE.getVenueState().users().get(ownerDid).agent(agentId);
+			AgentState agentState = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent(agentId);
 			assertEquals(publicDid, RT.getIn(agentState.getTasks().get(Blob.fromHex(held.id())), Fields.CALLER));
 
 			// Foreign to the public caller: the unrelated job, and the owner's own
@@ -554,7 +554,7 @@ public class A2AAgentCardTest {
 			Task completed = awaitTask(endpoint, initial.id(), jwt, TaskState.TASK_STATE_COMPLETED);
 			assertEquals(3, completed.history().size(),
 				"retrying the same messageId must not duplicate Task history");
-			AgentState continued = TestServer.ENGINE.getVenueState().users().get(ownerDid)
+			AgentState continued = TestServer.ENGINE.getVenueState().users().user(ownerDid)
 				.agent("Continuer");
 			assertEquals(3, continued.getTimeline().count(),
 				"the stale cycle and both distinct continuations each run exactly once");
@@ -623,7 +623,7 @@ public class A2AAgentCardTest {
 
 			// Two contextId sends overlapping in one session are two tasks, two
 			// cycles and two replies — never one shared chat reply (#416).
-			AgentState agentState = TestServer.ENGINE.getVenueState().users().get(ownerDid).agent("Continuer");
+			AgentState agentState = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent("Continuer");
 			String queuedGateName = "queued-" + UUID.randomUUID();
 			try (TestAdapter.TestGate queuedGate = TestAdapter.createGate(queuedGateName)) {
 				agentState.updateConfigAndState(
@@ -804,7 +804,7 @@ public class A2AAgentCardTest {
 
 	private Object agentDiagnostics(String endpoint) {
 		String[] address = endpoint.substring("/a2a/".length()).split("/g/", 2);
-		var user = TestServer.ENGINE.getVenueState().users().get(Strings.create(address[0]));
+		var user = TestServer.ENGINE.getVenueState().users().user(Strings.create(address[0]));
 		var agent = user == null ? null : user.agent(address[1]);
 		return agent == null ? null : agent.getRecord();
 	}

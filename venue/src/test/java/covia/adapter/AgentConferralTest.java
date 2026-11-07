@@ -78,7 +78,7 @@ public class AgentConferralTest {
 	}
 
 	private AgentState agent(AString owner, String id) {
-		var user = engine.getVenueState().users().get(owner);
+		var user = engine.getVenueState().users().user(owner);
 		return (user == null) ? null : user.agent(id);
 	}
 

@@ -282,7 +282,7 @@ public class UserAdapter extends AAdapter {
 		if (!operator && !did.equals(ctx.getCallerDID())) {
 			requireVenueUserAuthority(ctx, Abilities.USER_READ);
 		}
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		if (user == null) {
 			throw new NotFoundException(VenueState.UNKNOWN_USER + ": " + did, did.toString());
 		}
@@ -298,7 +298,7 @@ public class UserAdapter extends AAdapter {
 		AVector<ACell> result = Vectors.empty();
 		if (all != null) {
 			for (var entry : all.entrySet()) {
-				User user = store.get(entry.getKey());
+				User user = store.user(entry.getKey());
 				if (user != null) result = result.conj(summary(user, true));
 			}
 		}
@@ -348,7 +348,7 @@ public class UserAdapter extends AAdapter {
 		// A registered external DID authenticates with its own key, so the venue
 		// holds no authenticators for it: the answer is empty, not an error, and
 		// clients list every user's authenticators uniformly (#524).
-		if (engine.getVenueState().users().get(did) == null) {
+		if (engine.getVenueState().users().user(did) == null) {
 			throw new NotFoundException(VenueState.UNKNOWN_USER + ": " + did, did.toString());
 		}
 		return Maps.of(

@@ -174,7 +174,7 @@ class DiscordAdapterTest {
 			var sink=gateway.sinks.get("agent-token"); assertNotNull(sink);
 			sink.accept(message("first","agent-channel","alice","first input",true,false));
 			assertTrue(entered.await(10,TimeUnit.SECONDS));
-			var agent=engine.getVenueState().users().get(OWNER).agent("discord-agent");
+			var agent=engine.getVenueState().users().user(OWNER).agent("discord-agent");
 			var sid=agent.getSessions().entryAt(0).getKey();
 			sink.accept(message("second","agent-channel","alice","second input",true,false));
 			long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);

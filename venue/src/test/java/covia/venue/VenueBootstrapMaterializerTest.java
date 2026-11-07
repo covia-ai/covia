@@ -122,7 +122,7 @@ public class VenueBootstrapMaterializerTest {
 			Blob jobId = Blob.parse("0x0102");
 			User user = engine.getVenueState().users().ensure(did);
 			user.jobs().create(jobId, Maps.of(Fields.STATUS, covia.grid.Status.PENDING));
-			engine.getVenueState().users().get(engine.getDIDString()).writeInternalPath(
+			engine.getVenueState().users().user(engine.getDIDString()).writeInternalPath(
 				CoviaPath.parse("w/global/concurrent"),
 				Strings.create("keep"));
 

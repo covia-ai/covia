@@ -96,7 +96,7 @@ class VenueUpgradeIT {
 				}
 
 				// The release's private test adapter value moved, exactly, in the start-up transaction.
-				User host = venue.users().get(engine.getDIDString());
+				User host = venue.users().user(engine.getDIDString());
 				assertNull(host.readInternalPath(CoviaPath.parse("w/adapters/test")));
 				AVector<ACell> users = RT.ensureVector(manifest.get(Strings.create("users")));
 				String alice = text(users.get(0), "did");
@@ -126,7 +126,7 @@ class VenueUpgradeIT {
 		String name = text(entry, "name");
 		AString did = Strings.create(text(entry, "did"));
 		RequestContext ctx = RequestContext.of(did);
-		User user = engine.getVenueState().users().get(did);
+		User user = engine.getVenueState().users().user(did);
 		assertEquals(Strings.create(name), RT.getIn(user.readInternalPath(CoviaPath.parse("w/profile")), "name"));
 
 		// A job written with its prev chain reads as its current state.

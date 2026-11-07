@@ -159,10 +159,10 @@ public class VenueJob extends Job {
 	 * @throws AuthException when the account was deleted and made again since
 	 */
 	private JobState recordIn(VenueState draft) {
-		User owner = draft.users().get(account.getDID());
+		User owner = draft.users().user(account.getDID());
 		if (owner == null) return null;
 		Users.requireCurrent(owner.get(), convex.core.lang.RT.getIn(account.get(), Users.GENERATION));
-		return owner.jobs().get(getID());
+		return owner.jobs().job(getID());
 	}
 
 	/** Edits the record in the draft; an edit that finishes the Job removes its entry with it. */

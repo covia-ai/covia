@@ -118,7 +118,7 @@ class EmbedderRoutePolicyTest {
 		assertResponse(200, "anonymous", get(strictServer, RAW, "not-a-jwt"));
 		assertResponse(200, "product",
 			get(strictServer, PRODUCT_ROLE, "not-a-jwt"));
-		assertNull(strictServer.getEngine().getVenueState().users().get(did));
+		assertNull(strictServer.getEngine().getVenueState().users().user(did));
 
 		assertEquals(401, get(strictServer, IDENTITY, null).statusCode());
 		assertEquals(401,
@@ -128,11 +128,11 @@ class EmbedderRoutePolicyTest {
 				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()).toString())).statusCode());
 
 		assertResponse(200, did.toString(), get(strictServer, IDENTITY, token));
-		assertNull(strictServer.getEngine().getVenueState().users().get(did),
+		assertNull(strictServer.getEngine().getVenueState().users().user(did),
 			"identity verification alone must not provision venue state");
 
 		assertEquals(403, get(strictServer, USER, token).statusCode());
-		assertNull(strictServer.getEngine().getVenueState().users().get(did));
+		assertNull(strictServer.getEngine().getVenueState().users().user(did));
 
 		strictServer.getEngine().getVenueState().users().create(did);
 		assertResponse(200, did.toString(), get(strictServer, USER, token));
@@ -157,7 +157,7 @@ class EmbedderRoutePolicyTest {
 		String token = VenueAuth.namedKeyPair(key, subject.toString(), 300)
 			.mintToken(strictServer.getEngine().getDIDString().toString());
 		assertResponse(200, root + "|" + subject, get(strictServer, IDENTITIES, token));
-		assertNull(strictServer.getEngine().getVenueState().users().get(subject));
+		assertNull(strictServer.getEngine().getVenueState().users().user(subject));
 		// Neither a known installation nor a known owner grants native user admission.
 		strictServer.getEngine().getVenueState().users().create(root);
 		strictServer.getEngine().getVenueState().users().create(Strings.create(root + ":u:alice"));
@@ -177,7 +177,7 @@ class EmbedderRoutePolicyTest {
 		assertResponse(200, authenticatedIdentity + "|" + venueUser,
 			getWithIdentityHeaders(strictServer, CUSTOM_AUTH,
 				authenticatedIdentity, venueUser));
-		assertNull(strictServer.getEngine().getVenueState().users().get(venueUser),
+		assertNull(strictServer.getEngine().getVenueState().users().user(venueUser),
 			"publishing extender-owned auth context must not admit a venue user");
 		assertEquals(401,
 			get(strictServer, CUSTOM_AUTH, null).statusCode());
@@ -206,7 +206,7 @@ class EmbedderRoutePolicyTest {
 		assertEquals(403,
 			post(strictServer, "/mcp", token, "{}").statusCode(),
 			"native MCP must still reject an unknown authenticated DID");
-		assertNull(strictServer.getEngine().getVenueState().users().get(did));
+		assertNull(strictServer.getEngine().getVenueState().users().user(did));
 	}
 
 	/**

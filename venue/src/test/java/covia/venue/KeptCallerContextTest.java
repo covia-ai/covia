@@ -67,7 +67,7 @@ class KeptCallerContextTest {
 		try {
 			assertEquals(Maps.of(Fields.PROOFS, proofs, Fields.SESSION_ID, session, Fields.TASK_ID, task),
 				index.entry(job.getID()).get(JobIndex.CONTEXT), "the job's entry keeps them while its work can continue");
-			ACell stored = RT.getIn(engine.getVenueState().users().get(alice).cursor().path(Namespace.J).get(), job.getID());
+			ACell stored = RT.getIn(engine.getVenueState().users().user(alice).cursor().path(Namespace.J).get(), job.getID());
 			assertFalse(RT.ensureMap(stored).containsKey(Fields.PROOFS), "the record never holds them");
 			assertNull(RT.getIn(read("j/" + id, own), Fields.VALUE, Fields.PROOFS));
 
@@ -183,7 +183,7 @@ class KeptCallerContextTest {
 			assertEquals(proofs, RT.getIn(engine.getVenueState().jobIndex().entry(request.getID()), JobIndex.CONTEXT, Fields.PROOFS),
 				"the request's job keeps them for the write");
 			assertEquals(proofs, engine.jobs().callerContext(request).getProofs(), "the write presents them again");
-			AMap<AString, ACell> task = RT.ensureMap(engine.getVenueState().users().get(alice).agent("writer")
+			AMap<AString, ACell> task = RT.ensureMap(engine.getVenueState().users().user(alice).agent("writer")
 				.getTasks().get(request.getID()));
 			assertNotNull(task);
 			assertFalse(task.containsKey(Fields.OUTPUT_PATH), "the request's input names the path");

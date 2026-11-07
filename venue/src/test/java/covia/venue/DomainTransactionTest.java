@@ -51,8 +51,8 @@ class DomainTransactionTest {
 		var retained = new AtomicReference<JobState>();
 		ACell before = venue.get();
 		assertThrows(IllegalStateException.class, () -> user.execute(draft -> {
-			retained.set(draft.jobs().get(id));
-			assertTrue(draft.jobs().get(id).appendHistory(message));
+			retained.set(draft.jobs().job(id));
+			assertTrue(draft.jobs().job(id).appendHistory(message));
 			draft.workspace().write(path("w/received"), CVMLong.ONE);
 			throw new IllegalStateException();
 		}));
@@ -60,12 +60,12 @@ class DomainTransactionTest {
 		retained.get().appendHistory(Maps.of(Fields.MESSAGE_ID, "late"));
 		assertEquals(before, venue.get());
 		user.execute(draft -> {
-			assertTrue(draft.jobs().get(id).appendHistory(message));
+			assertTrue(draft.jobs().job(id).appendHistory(message));
 			draft.workspace().write(path("w/received"), CVMLong.ONE);
 		});
 		assertEquals(convex.core.data.Vectors.of(message), user.jobs().getRecord(id).get(Fields.HISTORY));
 		assertEquals(CVMLong.ONE, user.workspace().read(path("w/received")));
-		assertFalse(user.jobs().get(id).appendHistory(message));
+		assertFalse(user.jobs().job(id).appendHistory(message));
 	}
 
 	@Test
@@ -77,7 +77,7 @@ class DomainTransactionTest {
 		var resume = new CountDownLatch(1);
 		var appended = new AtomicBoolean();
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-			var pending = executor.submit(() -> user.jobs().get(id).execute(draft -> {
+			var pending = executor.submit(() -> user.jobs().job(id).execute(draft -> {
 				appended.set(draft.appendHistory(Maps.of(Fields.MESSAGE_ID, "raced")));
 				entered.countDown();
 				await(resume);
@@ -89,7 +89,7 @@ class DomainTransactionTest {
 			pending.get(10, TimeUnit.SECONDS);
 		}
 		assertFalse(appended.get());
-		assertNull(user.jobs().get(id));
+		assertNull(user.jobs().job(id));
 		assertTrue(user.jobs().getAll().isEmpty());
 	}
 
@@ -355,7 +355,7 @@ class DomainTransactionTest {
 		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			draft.setAgentThreadWakeTime(DID, agentId, AgentState.ThreadKind.SESSION, sid, 1000);
 			assertEquals(before, venue.get());
-			assertNotNull(draft.users().get(DID).agent(agentId).wakeHandle());
+			assertNotNull(draft.users().user(DID).agent(agentId).wakeHandle());
 			throw new IllegalStateException();
 		}));
 		assertEquals(before, venue.get(), "aborted wake must leave no event or handle");
@@ -415,7 +415,7 @@ class DomainTransactionTest {
 		ACell before = venue.get();
 		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			draft.provisionLogin(id, DID, profile);
-			assertNull(venue.users().get(DID));
+			assertNull(venue.users().user(DID));
 			throw new IllegalStateException();
 		}));
 		assertEquals(before, venue.get());
@@ -423,7 +423,7 @@ class DomainTransactionTest {
 		assertEquals(0, signatures.get(), "provisioning commits to the unsigned copy");
 		venue.sync();
 		assertEquals(1, signatures.get());
-		assertNotNull(venue.users().get(DID));
+		assertNotNull(venue.users().user(DID));
 		assertEquals(result, convex.core.lang.RT.getIn(venue.get(), Covia.USERS, id));
 		assertEquals(DID, result.get(Fields.DID));
 	}
@@ -441,7 +441,7 @@ class DomainTransactionTest {
 			user.secrets().store("token", "private", keys);
 			user.workspace().write(path("w/ready"), CVMLong.ONE);
 			draft.assets().store(Strings.create("{\"name\":\"private\"}"), null);
-			assertNull(venue.users().get(DID));
+			assertNull(venue.users().user(DID));
 			assertEquals(0, venue.assets().count());
 			throw failure;
 		})));
@@ -453,7 +453,7 @@ class DomainTransactionTest {
 			user.secrets().store("token", "committed", keys);
 			user.workspace().write(path("w/ready"), CVMLong.ONE);
 		});
-		var user = venue.users().get(DID);
+		var user = venue.users().user(DID);
 		assertNotNull(user.agent("assistant"));
 		assertEquals(Strings.create("committed"), user.secrets().decrypt("token", keys));
 		assertEquals(CVMLong.ONE, user.workspace().read(path("w/ready")));
@@ -496,7 +496,7 @@ class DomainTransactionTest {
 		var attempts = new AtomicInteger();
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
 			var pending = executor.submit(() -> venue.execute(draft -> {
-				draft.users().get(DID).workspace().write(path("w/transaction"), CVMLong.ONE);
+				draft.users().user(DID).workspace().write(path("w/transaction"), CVMLong.ONE);
 				if (attempts.incrementAndGet() == 1) {
 					entered.countDown();
 					await(resume);
@@ -536,7 +536,7 @@ class DomainTransactionTest {
 			assertInstanceOf(AuthException.class, failure.getCause());
 			assertEquals(Users.ACCOUNT_DELETED, failure.getCause().getMessage());
 		}
-		assertNull(venue.users().get(DID).workspace().read(path("w/stale")));
+		assertNull(venue.users().user(DID).workspace().read(path("w/stale")));
 	}
 
 	@Test
@@ -545,7 +545,7 @@ class DomainTransactionTest {
 		var user = venue.users().ensure(DID);
 		var id = Blob.fromHex("01");
 		user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED));
-		var job = user.jobs().get(id);
+		var job = user.jobs().job(id);
 		var entered = new CountDownLatch(1);
 		var resume = new CountDownLatch(1);
 		try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -559,7 +559,7 @@ class DomainTransactionTest {
 				venue.deleteUser(DID, DID);
 				venue.users().finishDeletion(DID);
 				assertTrue(venue.users().create(DID));
-				venue.users().get(DID).jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.PENDING));
+				venue.users().user(DID).jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.PENDING));
 			} finally { resume.countDown(); }
 			var failure = assertThrows(java.util.concurrent.ExecutionException.class,
 				() -> pending.get(10, TimeUnit.SECONDS));
@@ -567,7 +567,7 @@ class DomainTransactionTest {
 			assertEquals(Users.ACCOUNT_DELETED, failure.getCause().getMessage());
 		}
 		assertEquals(covia.grid.Status.PENDING,
-			venue.users().get(DID).jobs().getRecord(id).get(Fields.STATUS), "the new account's job is untouched");
+			venue.users().user(DID).jobs().getRecord(id).get(Fields.STATUS), "the new account's job is untouched");
 	}
 
 	@Test
@@ -582,7 +582,7 @@ class DomainTransactionTest {
 			staged.set(draft.get());
 		});
 		assertEquals(staged.get(), venue.get());
-		var user = venue.users().get(DID);
+		var user = venue.users().user(DID);
 		user.execute(draft -> {
 			draft.workspace().write(path("w/value"), CVMLong.ONE);
 			staged.set(draft.cursor().get());
@@ -613,7 +613,7 @@ class DomainTransactionTest {
 			user.workspace().write(path("w/a"), CVMLong.ONE);
 			user.workspace().write(path("w/b"), CVMLong.ONE);
 		});
-		venue.users().get(DID).workspace().write(path("w/c"), CVMLong.ONE);
+		venue.users().user(DID).workspace().write(path("w/c"), CVMLong.ONE);
 		assertEquals(0, signatures.get(), "edits and transactions do not sign");
 		venue.sync();
 		assertEquals(1, signatures.get(), "sync signs the whole batch once");
@@ -622,10 +622,10 @@ class DomainTransactionTest {
 
 		ACell published = root.get();
 		fail.set(true);
-		venue.users().get(DID).workspace().write(path("w/d"), CVMLong.ONE);
+		venue.users().user(DID).workspace().write(path("w/d"), CVMLong.ONE);
 		assertThrows(IllegalStateException.class, venue::sync);
 		assertEquals(published, root.get(), "a failed signing publishes nothing");
-		assertEquals(CVMLong.ONE, venue.users().get(DID).workspace().read(path("w/d")),
+		assertEquals(CVMLong.ONE, venue.users().user(DID).workspace().read(path("w/d")),
 			"and the edit stays in the copy for the next sync");
 		fail.set(false);
 		venue.sync();
@@ -642,7 +642,7 @@ class DomainTransactionTest {
 			draft.ensure(DID);
 			throw new IllegalStateException();
 		}));
-		assertNull(users.get(DID));
+		assertNull(users.user(DID));
 		var user = users.ensure(DID);
 		var keys = SecretStore.keys(key);
 		ACell before = venue.get();

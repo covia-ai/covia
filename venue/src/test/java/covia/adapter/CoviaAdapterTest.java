@@ -175,7 +175,7 @@ public class CoviaAdapterTest {
 				assertEquals(refusal, job.getErrorMessage(), op);
 			}
 		});
-		assertNull(engine.getVenueState().users().get(ALICE_DID).workspace().read(CoviaPath.parse("items")),
+		assertNull(engine.getVenueState().users().user(ALICE_DID).workspace().read(CoviaPath.parse("items")),
 			"a refused path writes nothing");
 	}
 
@@ -646,7 +646,7 @@ public class CoviaAdapterTest {
 	public void testListVector() {
 		// Agent timeline is a vector — should report type and count, no keys
 		// First, deliver a message and trigger to create a timeline entry
-		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("test-agent");
+		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("test-agent");
 		assertNotNull(agent);
 		AVector<ACell> timeline = agent.getTimeline();
 		assertNotNull(timeline);
@@ -1022,7 +1022,7 @@ public class CoviaAdapterTest {
 		engine.jobs().invokeOperation("v/ops/secret/set",
 			Maps.of(Fields.NAME, "doomed-key", Fields.VALUE, Strings.create("sk-123")),
 			ALICE).awaitResult(5000);
-		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("doomed-key"),
+		assertTrue(engine.getVenueState().users().user(ALICE_DID).secrets().exists("doomed-key"),
 			"secret stored before deletion");
 
 		// ... remove via covia:delete s/NAME (whole record)
@@ -1030,7 +1030,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "s/doomed-key"), ALICE).awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"), "the secret was present and removed");
 
-		assertFalse(engine.getVenueState().users().get(ALICE_DID).secrets().exists("doomed-key"),
+		assertFalse(engine.getVenueState().users().user(ALICE_DID).secrets().exists("doomed-key"),
 			"secret removed from the caller's store");
 	}
 
@@ -1125,7 +1125,7 @@ public class CoviaAdapterTest {
 		engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "s/shared-name"), BOB).awaitResult(5000);
 
-		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("shared-name"),
+		assertTrue(engine.getVenueState().users().user(ALICE_DID).secrets().exists("shared-name"),
 			"another user's delete must not touch Alice's secret");
 	}
 
@@ -1141,7 +1141,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.NAME, "cycled", Fields.VALUE, Strings.create("v2")),
 			ALICE).awaitResult(5000);
 
-		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("cycled"),
+		assertTrue(engine.getVenueState().users().user(ALICE_DID).secrets().exists("cycled"),
 			"secret re-created after deletion");
 	}
 
@@ -1181,7 +1181,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.NAME, "nested/key", Fields.VALUE, Strings.create("value")),
 			ALICE);
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertFalse(engine.getVenueState().users().get(ALICE_DID).secrets().exists("nested/key"));
+		assertFalse(engine.getVenueState().users().user(ALICE_DID).secrets().exists("nested/key"));
 	}
 
 	// ========== covia:write/read — isolation ==========
@@ -1551,7 +1551,7 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testDeleteMissingWrappedPathDoesNotMaterialiseNamespace() {
-		User user = engine.getVenueState().users().get(ALICE_DID);
+		User user = engine.getVenueState().users().user(ALICE_DID);
 		assertFalse(((AMap<?, ?>) user.cursor().get()).containsKey(Strings.intern("w")));
 
 		ACell result = engine.jobs().invokeOperation("v/ops/covia/delete",
@@ -2084,7 +2084,7 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testAgentWorkspaceWriteRefreshesAgentTimestamp() {
-		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		AString agentId = Strings.create("test-agent");
 		AgentState agent = user.agent(agentId);
 		user.cursor().path(Strings.intern("g"), agentId).updateAndGet(current ->
@@ -2471,7 +2471,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testTempWriteRefreshesJobTimestamp() {
 		Blob jobId = newJob();
-		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		// No job operation sets a stale stamp, so write it into storage.
 		user.cursor().path(Namespace.J, jobId, Fields.UPDATED).set(CVMLong.ZERO);
 		assertEquals(CVMLong.ZERO, user.jobs().getRecord(jobId).get(Fields.UPDATED));
@@ -2698,13 +2698,13 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "c/x", Fields.VALUE, Strings.create("nope")), ctx);
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
 
-		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		assertNull(user.agent("no-such-agent"), "no phantom agent or session may be created");
 	}
 
 	@Test
 	public void testSessionScratchRequiresSessionRecordNotExistingScratchSlot() {
-		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		AgentState agent = user.agent("test-agent");
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd45");
 		agent.ensureSession(sessionId, ALICE_DID, Maps.empty());
@@ -2727,7 +2727,7 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testSessionScratchWriteRefreshesAgentTimestamp() {
-		User user = engine.getVenueState().users().get(ALICE.getUserDID());
+		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		AString agentId = Strings.create("test-agent");
 		AgentState agent = user.agent(agentId);
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd46");
@@ -2758,7 +2758,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/wrap-probe", Fields.VALUE, Strings.create("one")),
 			ctx).awaitResult(5000);
 
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
 		ACell container = user.cursor().path(Strings.create("w")).get();
 		assertInstanceOf(AMap.class, container, "w must be stored as a container");
 		AMap<AString, ACell> m = (AMap<AString, ACell>) container;
@@ -2782,7 +2782,7 @@ public class CoviaAdapterTest {
 		var refused = assertThrows(InvalidInputException.class,
 			() -> Entry.of(target).write(CVMLong.ONE));
 		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
-		assertNull(engine.getVenueState().users().get(ALICE_DID).agent(agentId).getSession(sessionId),
+		assertNull(engine.getVenueState().users().user(ALICE_DID).agent(agentId).getSession(sessionId),
 			"scoped scratch must never mint a phantom session");
 	}
 
@@ -2795,7 +2795,7 @@ public class CoviaAdapterTest {
 		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("n/draft"));
 		Entry.of(target).write(Strings.create("note"));
 
-		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().get(ALICE_DID)
+		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().user(ALICE_DID)
 			.agent(agentId).getRecord(), "n", "draft"));
 	}
 
@@ -2824,7 +2824,7 @@ public class CoviaAdapterTest {
 				Maps.of(Fields.PATH, "n/draft", Fields.VALUE, "no phantom"),
 				agentCtx).awaitResult(5000));
 
-		assertNull(engine.getVenueState().users().get(ALICE_DID).agent(missing));
+		assertNull(engine.getVenueState().users().user(ALICE_DID).agent(missing));
 	}
 
 	@Test
@@ -2835,7 +2835,7 @@ public class CoviaAdapterTest {
 		Blob taskId = newJob();
 		RequestContext ctx = ALICE.withAgentId(agentId).withTaskId(taskId)
 			.withJobId(Blob.fromHex("ffeeddcc"));
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("t/draft"));
@@ -2844,7 +2844,7 @@ public class CoviaAdapterTest {
 		// The scratch must be the FOCUSED TASK's Job record, not the transition Job's.
 		assertEquals(Strings.create("task note"), RT.getIn(user.jobs().getRecord(taskId), Fields.TEMP, "draft"),
 			"t/ must resolve to the focused task Job");
-		assertNull(user.jobs().get(ctx.getJobId()), "the transition Job is not created");
+		assertNull(user.jobs().job(ctx.getJobId()), "the transition Job is not created");
 	}
 
 	@Test
@@ -2853,7 +2853,7 @@ public class CoviaAdapterTest {
 		// targets that Job record and rewrites the t/ prefix to its temp slot.
 		Blob jobId = newJob();
 		RequestContext ctx = ALICE.withJobId(jobId);
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("t/draft"));
@@ -2873,7 +2873,7 @@ public class CoviaAdapterTest {
 				Maps.of(Fields.PATH, "t/draft", Fields.VALUE, "no phantom"),
 				jobCtx).awaitResult(5000));
 
-		assertNull(engine.getVenueState().users().get(ALICE_DID).jobs().get(missing));
+		assertNull(engine.getVenueState().users().user(ALICE_DID).jobs().job(missing));
 	}
 
 	// Regression: concurrent appends to the same vector path used to lose

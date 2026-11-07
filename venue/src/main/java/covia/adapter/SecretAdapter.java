@@ -129,7 +129,7 @@ public class SecretAdapter extends AAdapter {
 	 */
 	public AVector<AString> listNames(RequestContext ctx) {
 		engine.requireResourceAccess(ctx, Strings.create("s/"), Capability.CRUD_READ);
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
 		return user == null ? Vectors.empty() : user.secrets().list();
 	}
 
@@ -162,7 +162,7 @@ public class SecretAdapter extends AAdapter {
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		AString name = name(input);
 		engine.requireResourceAccess(ctx, resource(name), Capability.CRUD_DELETE);
-		User user = engine.getVenueState().users().get(ctx.getUserDID());
+		User user = engine.getVenueState().users().user(ctx.getUserDID());
 		boolean deleted = user != null && user.secrets().deleteIfPresent(name);
 		if (deleted) engine.audit().event(Audit.SECRET_DELETE, Audit.K_DID, ctx.getCallerDID(),
 			Audit.K_NAME, name, Audit.K_TARGET, ctx.getUserDID());
@@ -184,7 +184,7 @@ public class SecretAdapter extends AAdapter {
 			if (!getOperations().get(EXTRACT).get(Fields.OPERATION).equals(meta.get(Fields.OPERATION))) {
 				throw new AuthException(EXTRACT_DEFINITION_REQUIRED);
 			}
-			User user = engine.getVenueState().users().get(ctx.getUserDID());
+			User user = engine.getVenueState().users().user(ctx.getUserDID());
 			AString value;
 			try {
 				value = user == null ? null : user.secrets().decrypt(name, SecretStore.keys(engine.getKeyPair()));

@@ -313,7 +313,7 @@ class RemoteAgentAdapterTest {
 			assertEquals(Status.CANCELLED, waiting.getStatus(), "cancelling the call reaches its task");
 
 			// Public access is off now, so the anonymous caller cannot act, nor read its job
-			AMap<AString, ACell> ended = second.getVenueState().users().get(second.publicPrincipal()).jobs().getRecord(anonymous.getID());
+			AMap<AString, ACell> ended = second.getVenueState().users().user(second.publicPrincipal()).jobs().getRecord(anonymous.getID());
 			assertEquals(Status.FAILED, ended.get(Fields.STATUS));
 			assertEquals(Strings.create(RemoteAgentAdapter.CALLER_CANNOT_ACT.formatted(Engine.PUBLIC_ACCESS_OFF,
 				taskOf(anonymous).toHexString())), ended.get(Fields.ERROR));
@@ -356,7 +356,7 @@ class RemoteAgentAdapterTest {
 
 	/** Answers the one open ask of {@code ctx}'s agent {@code id}. */
 	private static void answer(Engine engine, RequestContext ctx, String id, String answer) {
-		AgentState agent = engine.getVenueState().users().get(ctx.getUserDID()).agent(id);
+		AgentState agent = engine.getVenueState().users().user(ctx.getUserDID()).agent(id);
 		assertEquals(1, agent.getPending().count(), "the agent has one open ask");
 		String ask = agent.getPending().entrySet().iterator().next().getKey().toHexString();
 		engine.jobs().invokeOperation("v/ops/hitl/respond",

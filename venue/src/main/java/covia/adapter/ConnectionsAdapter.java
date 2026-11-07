@@ -288,7 +288,7 @@ public class ConnectionsAdapter extends AAdapter {
 		if (name == null) return CredentialPresence.missing();
 
 		// A credential reference resolves in the caller's own store only.
-		User user = engine.getVenueState().users().get(userDID);
+		User user = engine.getVenueState().users().user(userDID);
 		return (user != null && user.secrets().exists(name))
 			? new CredentialPresence(true, "user") : CredentialPresence.missing();
 	}
