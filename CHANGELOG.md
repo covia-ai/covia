@@ -155,7 +155,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
 - An agent's pinned context and skills index show only what its caps cover.
-- Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>/` that job's record and `t/` (#617).
+- Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>` that job's record and `t/` (#617).
 
 ### Migration
 
