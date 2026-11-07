@@ -1652,7 +1652,7 @@ keyring copy should be the only one. `generate-key {"keyring":true}` makes a
 key there whose private half nobody ever sees. Name a held key by its
 `did:key`, multibase key or `0x` account key, as in
 `sign {"key":"did:key:z6Mk…","data":"0x…"}`, or another holder's as
-`<did>/keys/<key>`. Each use needs its `key/…` ability on the key by the
+`<did>/x/crypto/keys/<key>`. Each use needs its `key/…` ability on the key by the
 standard capability rules: your own authority covers your keyring, and caps,
 `user/sudo` and grants work as for any resource, so a grant of `*` over a
 namespace includes its keys. A phrase kept with

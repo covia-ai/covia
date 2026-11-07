@@ -93,7 +93,7 @@ class HeldKeysTest {
 		return text(run("generate-key", Maps.of("keyring", true, "label", "hot")), "did");
 	}
 	private String resource(String did) {
-		return ctx.getUserDID() + "/keys/" + Multikey.encodePublicKey(UCAN.fromDIDKey(Strings.create(did)));
+		return ctx.getUserDID() + "/x/crypto/keys/" + Multikey.encodePublicKey(UCAN.fromDIDKey(Strings.create(did)));
 	}
 	private RequestContext grantee(AKeyPair grantee, AVector<ACell> caps) {
 		UCAN grant = UCAN.create(identity, grantee.getAccountKey(), System.currentTimeMillis() / 1000 + 3600,
@@ -159,7 +159,7 @@ class HeldKeysTest {
 		ctx = owner.withCaps(Vectors.of(invoke));
 		failure("sign", Maps.of("key", did, "data", "0x00"));
 		// A bare path in caps names the namespace the request acts in.
-		ctx = owner.withCaps(Vectors.of(invoke, Capability.create(Strings.create("keys/"), Abilities.KEY_SIGN_RAW)));
+		ctx = owner.withCaps(Vectors.of(invoke, Capability.create(Strings.create("x/crypto/keys/"), Abilities.KEY_SIGN_RAW)));
 		run("sign", Maps.of("key", did, "data", "0x00"));
 		failure("decrypt", Maps.of("key", did, "ciphertext",
 			ECIES.encrypt(UCAN.fromDIDKey(Strings.create(did)), Blob.wrap(new byte[] {1}))));

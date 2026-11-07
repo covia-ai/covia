@@ -10,7 +10,7 @@
       "properties": {
         "did": {
           "type": "string",
-          "description": "Whose keyring; omitted means yours. Another's needs crud/read on <did>/keys/ and <did>/mnemonics/."
+          "description": "Whose keyring; omitted means yours. Another's needs crud/read on <did>/x/crypto/keys/ and <did>/x/crypto/mnemonics/."
         },
         "offset": {
           "type": "integer",

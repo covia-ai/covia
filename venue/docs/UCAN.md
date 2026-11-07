@@ -103,6 +103,7 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 | `did:key:zAlice.../g/helper` | Specific agent |
 | `did:key:zAlice.../s/api-key` | Specific secret |
 | `did:key:zAlice.../x/oauth/google` | Alice's connected Google account (`x/oauth/` for all of them) |
+| `did:key:zAlice.../x/crypto/keys/z6Mk...` | A key in Alice's keyring (`x/crypto/keys/` for all of them) |
 | `did:key:zAlice.../dlfs/docs/` | All files on Alice's `docs` DLFS drive |
 | `did:key:zAlice.../dlfs/docs/reports/q1.md` | Specific file on that drive |
 
@@ -153,7 +154,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `oauth/use` | — | Send a connected account's token in a request without seeing it; bindable to a destination with `nb.url` |
 | `oauth/connect` | — | Connect an account: start a connect, and complete one the provider approved, for the account that started it |
 | `oauth/disconnect` | — | Disconnect an account, revoking its grant at the provider |
-| `key` | every `key/*` | All use of held keys and phrases (`<did>/keys/<key>`, `<did>/mnemonics/<id>`; [HELD_KEYS.md](./HELD_KEYS.md)) |
+| `key` | every `key/*` | All use of held keys and phrases (`<did>/x/crypto/keys/<key>`, `<did>/x/crypto/mnemonics/<id>`; [HELD_KEYS.md](./HELD_KEYS.md)) |
 | `key/add` | — | Put a key or phrase into a keyring, or generate or derive one there |
 | `key/remove` | — | Remove a key or phrase from a keyring |
 | `key/sign` | every `key/sign/*` | Sign anything with a held key |

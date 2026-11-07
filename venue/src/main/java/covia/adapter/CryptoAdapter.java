@@ -97,8 +97,8 @@ public class CryptoAdapter extends AAdapter {
 	public static final String KEY_OR_SEED = "Give either seed or key, not both";
 	public static final String SEED_OR_MNEMONIC = "Give exactly one of seed or mnemonic";
 	public static final String KEY_OR_MNEMONIC = "Give exactly one of key or mnemonic";
-	public static final String INVALID_HELD_KEY = "Expected a held key: a did:key, a multibase public key, a 32-byte account key, or <did>/keys/<key>";
-	public static final String INVALID_HELD_MNEMONIC = "Expected a held mnemonic: its ID as a did:key, multibase key or 32-byte account key, or <did>/mnemonics/<id>";
+	public static final String INVALID_HELD_KEY = "Expected a held key: a did:key, a multibase public key, a 32-byte account key, or <did>/x/crypto/keys/<key>";
+	public static final String INVALID_HELD_MNEMONIC = "Expected a held mnemonic: its ID as a did:key, multibase key or 32-byte account key, or <did>/x/crypto/mnemonics/<id>";
 	public static final String KEY_NOT_HELD = "No such key is held in that keyring";
 	public static final String MNEMONIC_NOT_HELD = "No such mnemonic is held in that keyring";
 	public static final String NO_KEYRING = "Only an authenticated identity has a keyring";
@@ -420,8 +420,9 @@ public class CryptoAdapter extends AAdapter {
 	/** A held key or mnemonic: whose keyring, and its identifier. */
 	record Held(AString holder, Blob id) {}
 
-	private static final AString KEYS_SEGMENT = Strings.intern("/keys/");
-	private static final AString MNEMONICS_SEGMENT = Strings.intern("/mnemonics/");
+	/** Keyrings are resources in the adapter's own {@code x/} space: {@code <did>/x/crypto/keys/<key>}. */
+	private static final AString KEYS_SEGMENT = Strings.intern("/x/crypto/keys/");
+	private static final AString MNEMONICS_SEGMENT = Strings.intern("/x/crypto/mnemonics/");
 	private static final AString NEXT_OFFSET = Strings.intern("nextOffset");
 
 	/**
@@ -430,7 +431,7 @@ public class CryptoAdapter extends AAdapter {
 	 * the use; the key pair must not outlive the call it serves.
 	 *
 	 * @param key a held key: a did:key, multibase key or account key in the
-	 *            keyring of the namespace the request acts in, or {@code <did>/keys/<key>}
+	 *            keyring of the namespace the request acts in, or {@code <did>/x/crypto/keys/<key>}
 	 * @throws AuthException when the request's authority does not cover the use
 	 * @throws NotFoundException when no such key is held
 	 */

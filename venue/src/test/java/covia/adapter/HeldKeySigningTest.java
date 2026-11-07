@@ -88,7 +88,7 @@ class HeldKeySigningTest {
 			.contains(UCANAdapter.KEY_GRANTS_OWN_ONLY));
 		// Another identity cannot sign with it.
 		RequestContext other = user(AKeyPair.generate());
-		failure("v/ops/ucan/issue", Maps.of("aud", bob, "key", ctx.getUserDID() + "/keys/" + did.toString().substring(8),
+		failure("v/ops/ucan/issue", Maps.of("aud", bob, "key", ctx.getUserDID() + "/x/crypto/keys/" + did.toString().substring(8),
 			"att", Vectors.of(Capability.create(Strings.create("w/x"), Capability.CRUD_READ))), other);
 	}
 

@@ -170,9 +170,9 @@ A held key is named by its public key, in any of the forms results already
 use: its `did:key`, its multibase string (`z6Mk…`), or for Ed25519 its 32-byte
 account key. A bare key names a key in the keyring of the namespace the
 request acts in, as a bare `s/NAME` names a secret there, and
-`<did>/keys/<key>` names one in another holder's keyring. A held mnemonic is
-named the same way by its ID, the master node's public key, or as
-`<did>/mnemonics/<id>`.
+`<did>/x/crypto/keys/<key>` names one in another holder's keyring. A held
+mnemonic is named the same way by its ID, the master node's public key, or as
+`<did>/x/crypto/mnemonics/<id>`.
 
 ## Operations
 
@@ -227,14 +227,15 @@ its `message` is UTF-8 by default, where `crypto:sign` reads hex unless given
 
 ## Abilities
 
-A keyring is the resource `<did>/keys/`, one key is `<did>/keys/<key>` with
-the key in multibase form, and held mnemonics are `<did>/mnemonics/` and
-`<did>/mnemonics/<id>`. Like `<did>/oauth/<provider>`, they name resources for
-capability checks, not lattice paths.
+A keyring is a resource in the adapter's own `x/` space, as every adapter's
+data is addressed (ADAPTERS.md, "User-visible extension routes"):
+`<did>/x/crypto/keys/`, one key `<did>/x/crypto/keys/<key>` with the key in
+multibase form, and held mnemonics `<did>/x/crypto/mnemonics/` and
+`<did>/x/crypto/mnemonics/<id>`.
 
 | Ability | On | Allows |
 |---------|----|--------|
-| `crud/read` | `<did>/keys/`, `<did>/mnemonics/` | Listing them: public keys, labels and when each was added |
+| `crud/read` | `<did>/x/crypto/keys/`, `<did>/x/crypto/mnemonics/` | Listing them: public keys, labels and when each was added |
 | `key/add` | a key or mnemonic | Adding it, or generating or deriving it into the keyring |
 | `key/remove` | a key or mnemonic | Removing it |
 | `key/sign` | a key | Signing anything with it; covers every `key/sign/…` |
@@ -257,7 +258,7 @@ for keys:
 
 - A user's own authority covers its own keyring.
 - An agent with no caps acts with its owner's authority, and so uses its
-  owner's keys. An agent with caps uses what they cover: a bare `keys/` in its
+  owner's keys. An agent with caps uses what they cover: a bare `x/crypto/keys/` in its
   caps names its owner's keyring.
 - A request under `user/sudo` acts with the target's authority, keys
   included.

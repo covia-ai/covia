@@ -34,8 +34,8 @@ public final class Abilities {
 	/** Disconnect an account, revoking its grant at the provider
 	 *  ({@code <did>/x/oauth/<provider>}). */
 	public static final AString OAUTH_DISCONNECT = Strings.intern("oauth/disconnect");
-	/** Every use of a held key or mnemonic ({@code <did>/keys/<key>},
-	 *  {@code <did>/mnemonics/<id>}); covers each {@code key/…} ability. */
+	/** Every use of a held key or mnemonic ({@code <did>/x/crypto/keys/<key>},
+	 *  {@code <did>/x/crypto/mnemonics/<id>}); covers each {@code key/…} ability. */
 	public static final AString KEY           = Strings.intern("key");
 	/** Put a key or mnemonic into a keyring, or generate or derive one there. */
 	public static final AString KEY_ADD       = Strings.intern("key/add");

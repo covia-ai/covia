@@ -10,7 +10,7 @@
       "properties": {
         "mnemonic": {
           "type": "string",
-          "description": "Secret reference holding an English BIP39 phrase. Full words required; case and whitespace are normalised. Never pass the phrase inline. Or a held mnemonic, by its ID or as <did>/mnemonics/<id>, which needs crud/read on it."
+          "description": "Secret reference holding an English BIP39 phrase. Full words required; case and whitespace are normalised. Never pass the phrase inline. Or a held mnemonic, by its ID or as <did>/x/crypto/mnemonics/<id>, which needs crud/read on it."
         }
       },
       "required": [

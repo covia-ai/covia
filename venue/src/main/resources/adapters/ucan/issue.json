@@ -35,7 +35,7 @@
 				},
 				"key": {
 					"type": "string",
-					"description": "Optional held key to sign with instead of the venue's key: its did:key, multibase public key or 0x account key in your keyring, or <did>/keys/<key> in another holder's. The grant's issuer is that key's did:key, bare paths are under it, and it may name only that key's own resources. Needs key/sign/grant on it."
+					"description": "Optional held key to sign with instead of the venue's key: its did:key, multibase public key or 0x account key in your keyring, or <did>/x/crypto/keys/<key> in another holder's. The grant's issuer is that key's did:key, bare paths are under it, and it may name only that key's own resources. Needs key/sign/grant on it."
 				}
 			},
 			"required": ["aud", "att"]
