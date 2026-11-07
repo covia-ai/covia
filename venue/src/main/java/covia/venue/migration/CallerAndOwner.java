@@ -17,7 +17,7 @@ import covia.lattice.Namespace;
 import covia.venue.AgentState;
 
 /**
- * Venue version 1 to 2: a record of a call names the principal that made it
+ * Part of venue version 1 to 2: a record of a call names the principal that made it
  * as {@code caller} and the namespace it belongs to as {@code owner}, written
  * only when that differs ({@link Attribution}). Each older shape is told apart
  * from the current one by a field only it has:

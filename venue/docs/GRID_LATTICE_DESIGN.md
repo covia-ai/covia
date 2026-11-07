@@ -163,8 +163,7 @@ Execution records, created by `invoke()`. A job answers the caller's question
 `AUTH_REQUIRED` (resume to `STARTED`).
 
 A job is one current-state record at `/j/<id>`. Updates replace it without
-keeping earlier versions; legacy top-level `prev` links are ignored on reads
-and removed on the next write. The update path refuses to leave a terminal
+keeping earlier versions. The update path refuses to leave a terminal
 state, so a terminal record's `output` and `error` never change; the record
 can still be deleted, and secrets are redacted on every durable write.
 [JOBS.md](JOBS.md) defines the record.
@@ -392,8 +391,7 @@ caller's request; the array is the caller's, lent for the call, and anything
 kept is copied. Resolution sees no request, takes as many segments per step as
 the component's rules cover (as cursor paths do), and builds each child only
 from its own cursor, so a walk from a draft root stays in the draft. `read()`
-returns the value as callers see it: a job reads as its current state.
-Resolution returns Convex's `ALatticeComponent`, so a path may end at a
+returns the value as callers see it. Resolution returns Convex's `ALatticeComponent`, so a path may end at a
 component that is not Covia's; `ACoviaComponent.read(component)` reads either
 kind, and `exists()` is Convex's own.
 
@@ -403,7 +401,7 @@ kind, and `exists()` is Convex's own.
 | `Users` | a user's DID to their `User` (`Users.at`) |
 | `User` | its namespaces: `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
 | `Jobs` | a job id, in hex, to its `JobState` |
-| `JobState` | `temp` to the job's `Workspace`; the rest of the job read in its current state |
+| `JobState` | `temp` to the job's `Workspace`; the rest of the job is read-only |
 | `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
 | `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState` |
 | `SessionState` | `c` to the session's `Workspace` |
@@ -418,9 +416,7 @@ name the path as the caller wrote it; segments below an entry continue it.
 Below any other component the path ends at a `CoviaValue`: Convex's generic
 `ValueComponent` over a read-only `PathCursor` at the keys the segments name,
 taken the same way, so resolving it further keeps Covia's rules at any depth.
-A component whose callers see its data differently hands over that view
-instead: a job's fields read in its current state. A stored null counts as
-present.
+A stored null counts as present.
 
 **Resolution follows the path's shape, not the data.** A component chooses a
 child by its key whether or not the child exists, because children come and

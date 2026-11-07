@@ -25,7 +25,7 @@ import covia.venue.AgentState;
 import covia.venue.User;
 import covia.venue.VenueState;
 
-/** Venue step 1 → 2 as a function of the venue value. */
+/** The {@link CallerAndOwner} part of venue step 1 → 2 as a function of the venue value. */
 class CallerAndOwnerTest {
 	private static final AString VENUE = Strings.create("did:test:venue");
 	private static final AString ALICE = Strings.create("did:test:alice");
@@ -53,7 +53,7 @@ class CallerAndOwnerTest {
 	private static final Blob OLD_TASK = Blob.fromHex("07".repeat(16));
 	private static final Blob OWN_TASK = Blob.fromHex("08".repeat(16));
 
-	/** A version 1 venue value holding every older shape the step converts. */
+	/** A version 1 venue value holding every older shape the part converts. */
 	private static ACell legacy() {
 		VenueState venue = VenueState.create(AKeyPair.generate());
 		venue.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, VENUE).assoc(Covia.VERSION, CVMLong.ONE));

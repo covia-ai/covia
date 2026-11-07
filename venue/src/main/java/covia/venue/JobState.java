@@ -14,15 +14,11 @@ import covia.lattice.ACoviaComponent;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
-import convex.lattice.cursor.ATransformCursor;
-import convex.lattice.cursor.ReadOnlyCursorException;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
-import covia.grid.Job;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
-import covia.lattice.CoviaValue;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
 import covia.lattice.Workspace;
@@ -49,8 +45,7 @@ public final class JobState extends ACoviaComponent<ACell>
 		this.owner = owner;
 		this.id = id;
 		this.policy = (owner == null || id == null) ? null : jobPolicy(owner, id);
-		this.edits = StampedCursor.create(storage, context::currentTimestamp,
-			(value, ts) -> Covia.stampUpdated(Job.currentState(RT.ensureMap(value)), ts));
+		this.edits = StampedCursor.create(storage, context::currentTimestamp, Covia::stampUpdated);
 	}
 
 	@Override public AForkableCursor<ACell> cursor() { return edits; }
@@ -78,11 +73,8 @@ public final class JobState extends ACoviaComponent<ACell>
 		return request != null && id.equals(request);
 	}
 
-	/** The job's record: its current state, which is what callers see. */
-	public AMap<AString, ACell> getRecord() { return Job.currentState(RT.ensureMap(cursor().getOrDefault(null))); }
-
-	/** The job as callers see it: its current state. */
-	@Override public ACell read() { return getRecord(); }
+	/** The job's record, or null when there is no such job. */
+	public AMap<AString, ACell> getRecord() { return RT.ensureMap(cursor().getOrDefault(null)); }
 
 	/** The job's scratch area ({@code temp}); a change to it needs the job. */
 	public Workspace workspace() {
@@ -90,23 +82,15 @@ public final class JobState extends ACoviaComponent<ACell>
 	}
 
 	/**
-	 * {@code temp} is the job's workspace; the rest of the job is read in its
-	 * current state. Work running in the job reaches its {@code temp} of right,
-	 * and anything else needs authority over {@code <owner>/j/<id>/<path>}.
+	 * {@code temp} is the job's workspace; the rest of the job is its record,
+	 * read-only. Work running in the job reaches its {@code temp} of right, and
+	 * anything else needs authority over {@code <owner>/j/<id>/<path>}.
 	 */
 	@Override
 	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
 		if (Fields.TEMP.equals(segments[start])) return workspace().resolve(segments, start + 1, end);
-		return new CoviaValue<>(currentState()).resolve(segments, start, end);
-	}
-
-	/** The job's record in its current state ({@link Job#currentState}), read-only. */
-	private AForkableCursor<ACell> currentState() {
-		return new ATransformCursor<ACell, ACell>(cursor().readOnly()) {
-			@Override protected ACell view(ACell stored) { return Job.currentState(RT.ensureMap(stored)); }
-			@Override protected ACell write(ACell current, ACell value) { throw new ReadOnlyCursorException(); }
-		};
+		return super.resolve(segments, start, end);
 	}
 
 	/** See {@link #resolve(AString[], int, int)}; none outside any user. */
@@ -132,7 +116,7 @@ public final class JobState extends ACoviaComponent<ACell>
 			AMap<AString, ACell> current = draft.getRecord();
 			AMap<AString, ACell> next = current == null ? null : action.apply(current);
 			if (next == null) return null;
-			return RT.ensureMap(draft.cursor().updateAndGet(value -> Job.currentState(next)));
+			return RT.ensureMap(draft.cursor().updateAndGet(value -> next));
 		});
 	}
 

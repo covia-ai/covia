@@ -24,7 +24,7 @@ import covia.venue.JobIndex;
 import covia.venue.OutputRules;
 import covia.venue.SecretStore;
 
-/** Venue step 2 → 3 as a function of the venue value. */
+/** The {@link JobEntries} part of venue step 1 → 2 as a function of the venue value. */
 class JobEntriesTest {
 	private static final AString ALICE = Strings.create("did:test:alice");
 	private static final AString GONE = Strings.create("did:test:gone");
@@ -41,8 +41,8 @@ class JobEntriesTest {
 		return Maps.of(Fields.ID, id, Fields.STATUS, status, Fields.CALLER, ALICE);
 	}
 
-	/** A version 2 venue: one user's jobs in three states, and a deleted account's unfinished job. */
-	private static ACell version2() {
+	/** A venue as the parts before this one leave it: one user's jobs in three states, and a deleted account's unfinished job. */
+	private static ACell seeded() {
 		Index<Blob, ACell> jobs = Index.<Blob, ACell>none()
 			.assoc(RUNNING, job(RUNNING, Status.STARTED))
 			.assoc(PAUSED, job(PAUSED, Status.INPUT_REQUIRED))
@@ -54,7 +54,7 @@ class JobEntriesTest {
 	}
 
 	@Test void eachUnfinishedJobOfALiveAccountGetsAnEntryNamingItsOwner() {
-		ACell migrated = STEP.apply(version2());
+		ACell migrated = STEP.apply(seeded());
 		Index<?, ?> entries = (Index<?, ?>) RT.getIn(migrated, Covia.JOBS);
 		assertEquals(2, entries.count());
 		assertEquals(Maps.of(JobIndex.OWNER, ALICE), entries.get(RUNNING));
@@ -66,7 +66,7 @@ class JobEntriesTest {
 
 	@Test void proofsARecordKeptMoveToItsEntry() {
 		ACell proofs = Vectors.of(Maps.of("iss", "did:test:grantor"));
-		ACell value = RT.assocIn(version2(), job(RUNNING, Status.STARTED).assoc(Fields.PROOFS, proofs),
+		ACell value = RT.assocIn(seeded(), job(RUNNING, Status.STARTED).assoc(Fields.PROOFS, proofs),
 			Covia.USER_DATA, ALICE, Namespace.J, RUNNING);
 		ACell migrated = STEP.apply(value);
 		assertEquals(Maps.of(JobIndex.OWNER, ALICE, JobIndex.CONTEXT, Maps.of(Fields.PROOFS, proofs)),
@@ -78,7 +78,7 @@ class JobEntriesTest {
 
 	@Test void anEntryAlreadyMadeIsKept() {
 		AMap<AString, ACell> kept = Maps.of(JobIndex.OWNER, ALICE, JobIndex.RULES, Maps.empty());
-		ACell value = RT.assocIn(version2(), Index.of(RUNNING, kept), Covia.JOBS);
+		ACell value = RT.assocIn(seeded(), Index.of(RUNNING, kept), Covia.JOBS);
 		assertEquals(kept, RT.getIn(STEP.apply(value), Covia.JOBS, RUNNING));
 	}
 
@@ -90,7 +90,7 @@ class JobEntriesTest {
 			Maps.of(ALICE, Maps.of(Namespace.J, Index.of(DONE, job(DONE, Status.COMPLETE)))));
 		assertSame(finished, STEP.apply(finished));
 	}
-	/** A remote job as version 2 kept it: its record names a secret of the venue's, which holds {@code kept}. */
+	/** A remote job as version 1 kept it: its record names a secret of the venue's, which holds {@code kept}. */
 	private static ACell withRemoteJob(ACell venue, Blob id, AMap<AString, ACell> kept) {
 		AString ref = Strings.create("remote-job-" + id.toHexString());
 		AMap<AString, ACell> record = job(id, Status.STARTED).assoc(Strings.create("delegation"),
@@ -106,7 +106,7 @@ class JobEntriesTest {
 		Blob callerHop = Blob.fromHex("11");
 		Blob a2a = Blob.fromHex("12");
 		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(Strings.create("secretFields"), Vectors.of(TOKEN)));
-		ACell value = withRemoteJob(version2(), venueHop, Maps.of("authenticateAs", "venue", "venue", "did:web:peer.test",
+		ACell value = withRemoteJob(seeded(), venueHop, Maps.of("authenticateAs", "venue", "venue", "did:web:peer.test",
 			"ucans", Vectors.of("grant.jwt"), "operationMetadata", meta));
 		// As 0.10.0 kept them: a caller's sign-in credential, and an A2A send's literal header value
 		value = withRemoteJob(value, callerHop, Maps.of("authenticateAs", "caller", "bearerToken", "sign-in.jwt",
@@ -140,7 +140,7 @@ class JobEntriesTest {
 		AMap<AString, ACell> record = job(RUNNING, Status.STARTED).assoc(Fields.AGENT_ID, Strings.create("helper"));
 		AMap<AString, ACell> kept = record;
 		for (var field : fields.entrySet()) kept = kept.assoc(field.getKey(), field.getValue());
-		ACell value = RT.assocIn(version2(), kept, Covia.USER_DATA, ALICE, Namespace.J, RUNNING);
+		ACell value = RT.assocIn(seeded(), kept, Covia.USER_DATA, ALICE, Namespace.J, RUNNING);
 		ACell migrated = STEP.apply(value);
 		assertEquals(fields, RT.getIn(migrated, Covia.JOBS, RUNNING, JobIndex.ADAPTER_DATA));
 		assertEquals(record, RT.getIn(migrated, Covia.USER_DATA, ALICE, Namespace.J, RUNNING), "the record keeps what its caller sees");
@@ -152,7 +152,7 @@ class JobEntriesTest {
 		Blob session = Blob.fromHex("5e");
 		Blob other = Blob.fromHex("05");
 		AString outputContext = Strings.create("outputContext");
-		// As version 2 kept it: the requester's context and the path on the worker's task
+		// As version 1 kept it: the requester's context and the path on the worker's task
 		AMap<AString, ACell> pending = Maps.of(Fields.INPUT, "write",
 			"outputPath", "w/out",
 			outputContext, Maps.of("caller", ALICE, "owner", ALICE, "proofs", proofs, "sessionId", session));
@@ -161,7 +161,7 @@ class JobEntriesTest {
 			.assoc(RUNNING, pending)
 			.assoc(DONE, pending)
 			.assoc(other, plain);
-		ACell value = RT.assocIn(version2(), Maps.of(Namespace.G, Maps.of("worker", Maps.of("tasks", tasks))),
+		ACell value = RT.assocIn(seeded(), Maps.of(Namespace.G, Maps.of("worker", Maps.of("tasks", tasks))),
 			Covia.USER_DATA, bob);
 
 		ACell migrated = STEP.apply(value);

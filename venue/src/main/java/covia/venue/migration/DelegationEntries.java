@@ -13,7 +13,7 @@ import covia.lattice.Namespace;
 import covia.venue.JobIndex;
 
 /**
- * Venue version 3 to 4: a remote job's record shows its caller only what the
+ * Part of venue version 1 to 2, after {@link JobEntries}: a remote job's record shows its caller only what the
  * caller can follow of its remote work, and how the venue follows it is the
  * venue's own, in the job's entry.
  *

@@ -22,7 +22,7 @@ import covia.lattice.Namespace;
 import covia.venue.JobIndex;
 import covia.venue.RemoteJobs;
 
-/** Venue step 3 → 4 as a function of the venue value. */
+/** The {@link DelegationEntries} part of venue step 1 → 2 as a function of the venue value. */
 class DelegationEntriesTest {
 	private static final AString ALICE = Strings.create("did:test:alice");
 	private static final Blob RUNNING = Blob.fromHex("01");
@@ -40,10 +40,11 @@ class DelegationEntriesTest {
 	}
 
 	/**
-	 * A version 3 venue: a remote job being followed, one whose acceptance was
-	 * lost, a finished one, and a local job; the unfinished ones have entries.
+	 * A venue as the parts before this one leave it: a remote job being
+	 * followed, one whose acceptance was lost, a finished one, and a local
+	 * job; the unfinished ones have entries.
 	 */
-	private static ACell version3() {
+	private static ACell seeded() {
 		Index<Blob, ACell> jobs = Index.<Blob, ACell>none()
 			.assoc(RUNNING, job(RUNNING, Status.STARTED, Maps.of("protocol", "covia", "target", TARGET,
 				"ownsRemote", CVMBool.TRUE, "remoteId", "r1", "remoteStatus", Status.STARTED,
@@ -71,7 +72,7 @@ class DelegationEntriesTest {
 	}
 
 	@Test void aRecordKeepsOnlyWhatItsCallerCanFollow() {
-		ACell before = version3();
+		ACell before = seeded();
 		ACell migrated = STEP.apply(before);
 		assertEquals(job(RUNNING, Status.STARTED, Maps.of("remoteId", "r1", "remoteStatus", Status.STARTED)),
 			record(migrated, RUNNING));
@@ -83,7 +84,7 @@ class DelegationEntriesTest {
 	}
 
 	@Test void howTheVenueFollowsAnUnfinishedJobJoinsItsEntry() {
-		ACell migrated = STEP.apply(version3());
+		ACell migrated = STEP.apply(seeded());
 		assertEquals(Maps.of(JobIndex.OWNER, ALICE, JobIndex.ADAPTER_DATA, CONNECTION.assoc(RemoteJobs.PROTOCOL, Strings.create("covia"))
 				.assoc(RemoteJobs.TARGET, TARGET).assoc(RemoteJobs.OWNS_REMOTE, CVMBool.TRUE)),
 			entry(migrated, RUNNING), "beside its connection; its health is left behind");
@@ -93,28 +94,8 @@ class DelegationEntriesTest {
 		assertNull(entry(migrated, DONE), "a finished job has no entry");
 	}
 
-	/**
-	 * A 0.9 record still carrying its history chain: the current state is
-	 * converted and the chain left as it is, never walked, as reads leave it
-	 * ({@link covia.grid.Job#currentState}).
-	 */
-	@Test void aLegacyHistoryChainIsLeftAsItIs() {
-		AString prev = Strings.create("prev");
-		AMap<AString, ACell> older = job(RUNNING, Status.PENDING, Maps.of("protocol", "covia", "target", TARGET,
-			"observation", "submitting"));
-		AMap<AString, ACell> chained = job(RUNNING, Status.STARTED, Maps.of("protocol", "covia", "target", TARGET,
-			"ownsRemote", CVMBool.TRUE, "remoteId", "r1", "observation", "healthy")).assoc(prev, older);
-		ACell before = Index.<Keyword, ACell>none()
-			.assoc(Covia.USER_DATA, Maps.of(ALICE, Maps.of(Namespace.J, Index.<Blob, ACell>none().assoc(RUNNING, chained))))
-			.assoc(Covia.JOBS, Index.<Blob, ACell>none().assoc(RUNNING, Maps.of(JobIndex.OWNER, ALICE)));
-		ACell migrated = STEP.apply(before);
-		assertEquals(job(RUNNING, Status.STARTED, Maps.of("remoteId", "r1")).assoc(prev, older), record(migrated, RUNNING));
-		assertEquals(Maps.of(JobIndex.OWNER, ALICE, JobIndex.ADAPTER_DATA, Maps.of(RemoteJobs.PROTOCOL, "covia",
-			RemoteJobs.TARGET, TARGET, RemoteJobs.OWNS_REMOTE, CVMBool.TRUE)), entry(migrated, RUNNING));
-	}
-
 	@Test void aCurrentVenueComesBackAsTheSameCell() {
-		ACell migrated = STEP.apply(version3());
+		ACell migrated = STEP.apply(seeded());
 		assertSame(migrated, STEP.apply(migrated));
 		ACell empty = Index.<Keyword, ACell>none();
 		assertSame(empty, STEP.apply(empty));

@@ -290,13 +290,8 @@ inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
   Runtime mutations edit the existing record and hide the job's
   `secretFields` inside the same atomic update, before storage. Both `input`
   and `output` are redacted.
-- Legacy records are normalised lazily: reads ignore only the top-level `prev`
-  link, without traversing the chain or writing to storage. The next accepted
-  record or scratch update drops that link atomically. Imports also drop it.
-  No startup migration scan is needed. Current fields, including payload fields
-  named `prev`, remain intact. A read does not change timestamps or activity.
-  Untouched legacy records retain their old storage references until edited or
-  deleted; normal store collection can then reclaim unreachable versions.
+- A read changes nothing: not the record, its timestamps or the user's
+  activity.
 - History appends use one component operation for both active and completed
   jobs. Late cancellation evidence edits the latest record and cannot overwrite
   independent history or scratch updates.

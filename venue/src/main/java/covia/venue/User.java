@@ -328,10 +328,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	/** The user's data as callers see it, its jobs included, without the venue's bookkeeping. */
 	@Override
 	public ACell read() {
-		AMap<AString, ACell> record = Users.content(cursor().getOrDefault(null));
-		if (record == null) return null;
-		if (record.containsKey(Namespace.J)) record = record.assoc(Namespace.J, jobs().read());
-		return record;
+		return Users.content(cursor().getOrDefault(null));
 	}
 
 }

@@ -230,7 +230,7 @@ shutdown, detachment, and reattachment invalidate old callbacks. Serial polling
 avoids overlapping snapshots. If SSE is added later, use a remote revision/event
 cursor and snapshot reconciliation; timestamp comparison alone cannot order
 updates across clocks. Publish genuine status/health changes, not every unchanged
-heartbeat: the `prev` history must not grow on every successful poll forever.
+heartbeat.
 Persist retry scheduling with bounded checkpoint frequency; exact retry timing
 need not survive a crash because repeating a status read is safe.
 

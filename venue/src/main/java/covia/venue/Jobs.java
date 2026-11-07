@@ -10,7 +10,6 @@ import convex.lattice.NoSuchPathException;
 import convex.core.lang.RT;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
-import covia.grid.Job;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Namespace;
@@ -22,8 +21,7 @@ import covia.lattice.Workspace;
  * A user's jobs ({@code j/}): job records keyed by job id, each the
  * {@link JobState} of one job.
  *
- * <p>Only the venue admits jobs, through {@link #create}, and every record is
- * read in its current state. Callers name a job by its hex id, which this
+ * <p>Only the venue admits jobs, through {@link #create}. Callers name a job by its hex id, which this
  * component turns into the stored key. Transactions compose admissions,
  * removals and job edits; execution and notifications belong to the runtime
  * after the transaction commits.</p>
@@ -56,22 +54,10 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		return new Jobs(context, draft, owner);
 	}
 
-	/** Every job in its current state, keyed by job id; empty when there are none. */
+	/** Every job's record, keyed by job id; empty when there are none. */
 	public Index<Blob, ACell> getAll() {
 		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
-		return (jobs == null) ? Index.none() : current(jobs);
-	}
-
-	/** Each job in its current state ({@link Job#currentState}), without writing to storage. */
-	private static Index<Blob, ACell> current(Index<Blob, ACell> records) {
-		Index<Blob, ACell> result = records;
-		for (var entry : records.entrySet()) {
-			AMap<AString, ACell> record = RT.ensureMap(entry.getValue());
-			if (record == null) continue;
-			AMap<AString, ACell> current = Job.currentState(record);
-			if (current != record) result = result.assoc(entry.getKey(), current);
-		}
-		return result;
+		return (jobs == null) ? Index.none() : jobs;
 	}
 
 	/** Counts the jobs without reading their records. */
@@ -94,14 +80,14 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	}
 
 	/**
-	 * One job's record in its current state.
+	 * One job's record.
 	 *
 	 * @param id Job id
 	 * @return The record, or null if there is no such job
 	 */
 	public AMap<AString, ACell> getRecord(Blob id) {
 		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
-		return (jobs == null) ? null : Job.currentState(RT.ensureMap(jobs.get(id)));
+		return (jobs == null) ? null : RT.ensureMap(jobs.get(id));
 	}
 
 	/**
@@ -112,10 +98,9 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 * @return The new job, or null if the job already existed
 	 */
 	JobState create(Blob id, AMap<AString, ACell> record) {
-		AMap<AString, ACell> current = Job.currentState(record);
 		Index<Blob, ACell> before = cursor().getAndUpdate(jobs -> {
-			if (jobs == null) return Index.<Blob, ACell>none().assoc(id, current);
-			return jobs.containsKey(id) ? jobs : jobs.assoc(id, current);
+			if (jobs == null) return Index.<Blob, ACell>none().assoc(id, record);
+			return jobs.containsKey(id) ? jobs : jobs.assoc(id, record);
 		});
 		return (before == null || !before.containsKey(id)) ? at(id) : null;
 	}
@@ -151,13 +136,6 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	public boolean remove(Blob id) {
 		Index<Blob, ACell> before = cursor().getAndUpdate(jobs -> (jobs == null) ? null : jobs.dissoc(id));
 		return before != null && before.containsKey(id);
-	}
-
-	/** The jobs in their current state; null when there are none. */
-	@Override
-	public ACell read() {
-		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
-		return (jobs == null) ? null : current(jobs);
 	}
 
 	/**

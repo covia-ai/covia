@@ -61,70 +61,55 @@ import covia.test.Rendezvous;
  */
 @Isolated("silences the AAdapter and JobManager loggers")
 public class JobManagerTest {
+	/**
+	 * Every route that reads a job leaves it as it was: neither its record nor
+	 * the user's activity stamp changes, and a failed transaction writes
+	 * nothing.
+	 */
 	@Test
-	public void legacyJobReadsArePureAndNextWriteDropsOnlyTheChain() {
+	public void jobReadsArePure() {
 		User user = engine.getVenueState().users().ensure(did);
 		Blob id = Blob.fromHex("61106110611061106110611061106110");
-		AString prev = Strings.intern("prev");
-		AString temp = Strings.intern("temp");
-		AMap<AString, ACell> payload = Maps.of(prev, "payload field stays");
-		AMap<AString, ACell> current = Maps.of(Fields.ID, id, Fields.CALLER, did,
-			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, payload, Fields.UPDATED, 123L,
-			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")), temp, payload);
-		AMap<AString, ACell> legacy = current.assoc(prev, Maps.of(Fields.STATUS, Status.STARTED,
-			prev, Maps.of(Fields.STATUS, Status.PENDING)));
-		// Simulate an old store or a legacy snapshot arriving after startup.
-		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, legacy));
+		AMap<AString, ACell> output = Maps.of(Strings.create("answer"), 42L);
+		AMap<AString, ACell> record = Maps.of(Fields.ID, id, Fields.CALLER, did,
+			Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output, Fields.UPDATED, 123L,
+			Fields.HISTORY, Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing")));
+		user.cursor().path(covia.lattice.Namespace.J).set(convex.core.data.Index.<Blob, ACell>none().assoc(id, record));
 		var storage = user.cursor().path(covia.lattice.Namespace.J, id);
 		ACell before = user.get();
 		String path = "j/" + id.toHexString();
-		assertEquals(current, user.jobs().getRecord(id));
-		assertEquals(current, engine.jobs().getJobData(id, ctx));
-		assertEquals(current, engine.jobs().getJobs(ctx).get(id));
+		assertEquals(record, user.jobs().getRecord(id));
+		assertEquals(record, engine.jobs().getJobData(id, ctx));
+		assertEquals(record, engine.jobs().getJobs(ctx).get(id));
 		assertEquals(1, engine.jobs().countJobs(ctx));
-		assertEquals(payload, engine.jobs().getJob(id, ctx).awaitResult());
-		assertEquals(current, engine.resolvePath(Strings.create(path), ctx));
-		assertEquals(current, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
-		assertEquals(current, RT.getIn(user.read(), covia.lattice.Namespace.J, id));
-		assertNull(engine.resolvePath(Strings.create(path + "/prev"), ctx));
+		assertEquals(output, engine.jobs().getJob(id, ctx).awaitResult());
+		assertEquals(record, engine.resolvePath(Strings.create(path), ctx));
+		assertEquals(record, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
+		assertEquals(record, RT.getIn(user.read(), covia.lattice.Namespace.J, id));
 		var adapter = (covia.adapter.CoviaAdapter) engine.getAdapter("covia");
-		assertEquals(current, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
-		assertEquals(CVMBool.FALSE,
-			RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path + "/prev")), "exists"));
+		assertEquals(record, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
 		// Equal, not identical: the shared engine's background sync may swap in
 		// persisted references for the same value (LatticeHost.sync).
 		assertEquals(before, user.get(), "reads must neither rewrite records nor stamp user activity");
-		assertEquals(legacy, storage.get());
 
-		// A failed transaction must not migrate the record either.
 		assertThrows(IllegalStateException.class, () -> user.execute(draft -> {
 			draft.jobs().get(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
 			throw new IllegalStateException("rollback");
 		}));
-		assertEquals(legacy, storage.get());
+		assertEquals(record, storage.get());
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "new");
 		assertTrue(user.jobs().get(id).appendHistory(message));
-		AMap<AString, ACell> migrated = user.jobs().getRecord(id);
-		assertEquals(migrated, storage.get(), "the next edit physically removes the legacy link");
-		assertFalse(migrated.containsKey(prev));
-		assertEquals(current.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY),
-			migrated.dissoc(Fields.UPDATED).dissoc(Fields.HISTORY));
-		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), migrated.get(Fields.HISTORY));
+		assertEquals(Vectors.of(Maps.of(Fields.MESSAGE_ID, "existing"), message), RT.getIn(storage.get(), Fields.HISTORY));
 		ACell after = storage.get();
 		assertFalse(user.jobs().get(id).appendHistory(message));
 		assertEquals(after, storage.get(), "repeat edits remain idempotent");
-
-		storage.set(legacy);
-		user.jobs().scratch(id).write(CoviaPath.parse("scratch"), CVMLong.ONE);
-		assertNull(RT.getIn(storage.get(), prev), "scratch edits also discard the obsolete link");
-		assertEquals(payload.assoc(Strings.create("scratch"), CVMLong.ONE), RT.getIn(storage.get(), temp));
 	}
 
 	/**
-	 * Jobs an older build left unfinished, their earlier states chained under
-	 * prev, recover at start in their current shape: an interrupted job fails
-	 * without the chain, and a paused job is restored live and drops the chain
-	 * on its next write.
+	 * Jobs a venue before 0.10.0 left unfinished, their earlier states chained
+	 * under prev, recover at start without the chain, which the venue's
+	 * migration drops: an interrupted job fails, and a paused job is restored
+	 * live.
 	 */
 	@Test
 	public void legacyUnfinishedJobsRecoverInTheirCurrentShape() throws Exception {

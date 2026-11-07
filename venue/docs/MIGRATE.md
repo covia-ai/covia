@@ -44,12 +44,15 @@ Each part of the schema has one owner, which defines its migrations.
   newer shape, with no I/O and no clock; anything else it needs, such as the
   venue's keys, is passed in. A part already current comes back as the same
   cell. An unrecognised shape is refused with a reason.
-- **Each version step is a class.** A step is a `MigrationStep`
-  (`covia.venue.migration`) with its own tests. Covia's are listed in order in
+- **One version step per release.** A step is a `MigrationStep`
+  (`covia.venue.migration`). Covia's are listed in order in
   `VenueMigrations.steps(keys)` and an adapter's in its `stateSteps()`; step `i`
-  takes version `i` to `i + 1`, so a version is the number of steps. A schema
-  change adds a step at the end, and a released step never changes.
-  `VenueState` only runs them.
+  takes version `i` to `i + 1`, so a version is the number of steps. A release
+  moves a schema one version at most. Its step is made of that release's
+  changes, each a part with its own tests, applied in order
+  (`MigrationStep.of`). A change before the release adds a part to its step;
+  a released step never changes, and the next release's change starts a new
+  step at the end. `VenueState` only runs them.
 - **A full scan is a versioned step.** Converting every stored record of a
   kind visits the whole store, so it happens once, in a venue or adapter step,
   never on a routine start-up. Readers keep no fallback for a shape a step has
@@ -82,16 +85,19 @@ Open questions for #624:
 
 ## Migrations in this build
 
-The venue is at version 4.
+The venue is at version 2.
 
 ### Venue steps
+
+A step's parts apply in the order listed.
 
 | Step | Change | Code |
 |------|--------|------|
 | 0 → 1 | `w/user-deletions` in the venue user's workspace moves to the `:user-deletions` region | `UserDeletionsRegion` |
+| 1 → 2 | A job record holds only its current state: the `prev` chain of earlier states that a venue before 0.10.0 wrote goes from every job of every account, without walking the chain | `CurrentJobRecords` |
 | 1 → 2 | Records of calls name `caller` and `owner` (COG-8): a job's `actor` becomes its `caller` and its old `caller` its `owner`; a scheduled event's `actor` (else `owner`) becomes its `caller` and `by` goes; a HITL request's `from` and `requesterUser` become `caller` and `owner`; an agent output snapshot's `user` becomes `owner` and its `caps` copy goes. A HITL request or snapshot naming only its caller takes its owner's namespace when the caller is an existing agent of this venue, else its own | `CallerAndOwner` |
-| 2 → 3 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner. Proofs its record kept move to the entry's caller context. A remote job's connection, kept encrypted in the venue's `remote-job-<id>` secret that `delegation.authRef` named, moves to the entry's adapter data without any sign-in credential (only the mode of a caller-signed hop), and its pinned definition gives the entry's output rules; `authRef` and every `remote-job-*` secret go. An external agent's job moves `agentOwner`, `agentInteraction` and `agentBackendJob` to the entry's adapter data. A pending agent `outputPath` write's context moves from the worker's task (`outputContext`) to the request job's entry, and the task keeps neither `outputContext` nor `outputPath`. Any other job's entry has no output rules: a step cannot resolve an operation. Built with the venue's secret keys | `JobEntries` |
-| 3 → 4 | A remote job's record keeps only what its caller can follow: every record's `delegation` keeps its `remoteId` and `remoteStatus`, and goes when it holds neither. An unfinished job's `protocol`, `target` and `ownsRemote` are copied into its entry's adapter data; anything else, observation health among it, is left behind | `DelegationEntries` |
+| 1 → 2 | Each unfinished job of a live account gets an entry in `:jobs` naming its owner. Proofs its record kept move to the entry's caller context. A remote job's connection, kept encrypted in the venue's `remote-job-<id>` secret that `delegation.authRef` named, moves to the entry's adapter data without any sign-in credential (only the mode of a caller-signed hop), and its pinned definition gives the entry's output rules; `authRef` and every `remote-job-*` secret go. An external agent's job moves `agentOwner`, `agentInteraction` and `agentBackendJob` to the entry's adapter data. A pending agent `outputPath` write's context moves from the worker's task (`outputContext`) to the request job's entry, and the task keeps neither `outputContext` nor `outputPath`. Any other job's entry has no output rules: a step cannot resolve an operation. Built with the venue's secret keys | `JobEntries` |
+| 1 → 2 | A remote job's record keeps only what its caller can follow: every record's `delegation` keeps its `remoteId` and `remoteStatus`, and goes when it holds neither. An unfinished job's `protocol`, `target` and `ownsRemote` are copied into its entry's adapter data; anything else, observation health among it, is left behind | `DelegationEntries` |
 
 ### Adapter steps
 
@@ -106,7 +112,6 @@ The venue is at version 4.
 | Older shape | Owner | Converted | Code |
 |-------------|-------|-----------|------|
 | Adapter state at `w/adapters/<name>` → `:adapters/<name>` | Covia | Before a versioned adapter's steps; otherwise when the adapter's state is first read | `VenueState.moveLegacyAdapterState` |
-| Job with a `prev` chain | Covia | Read without the chain; dropped on the job's next write | `Job.currentState` |
 | Agent frame with `conversation` or `items` → `history` | Covia | When a session cycle begins | `GoalTreeContext.migrateFrames` |
 | Session `loads` → the root frame's `loads` | Covia | When a session cycle begins | `SessionState.migrateLegacySessionLoads` |
 | Secret at key version 1 | Covia | Read with the version 1 key; re-encrypted under the current key on its next write | `SecretStore` |
@@ -123,7 +128,8 @@ The venue is at version 4.
   shapes, as `TelegramMigrationTest` does.
 - **End to end.** `VenueMigrationEndToEndTest` builds a venue at version 0
   holding every shape above that Covia and the bundled adapters convert, which
-  leaves out the two read as they are and the messaging adapters' shapes. Each
+  leaves out the one read as it is (a public agent's `a2a.caps`) and the
+  messaging adapters' shapes. Each
   versioned bundled adapter starts at its oldest state. The test migrates the
   venue in process. A new venue step or older shape is seeded there; raising
   `CURRENT_VERSION` fails the test until the new step's shapes are.

@@ -321,9 +321,6 @@ public class JobRoutesTest {
 		var jobId = Job.parseID(id);
 		var user = TestServer.ENGINE.getVenueState().users().get(TestServer.ENGINE.getDIDString() + ":public");
 		var current = user.jobs().getRecord(jobId);
-		var storage = user.cursor().path(covia.lattice.Namespace.J, jobId);
-		var legacy = current.assoc(Strings.intern("prev"), Maps.of(Fields.STATUS, "STARTED"));
-		storage.set(legacy);
 		HttpResponse<String> status = http.send(
 			HttpRequest.newBuilder().uri(URI.create(base + "/api/v1/jobs/" + id)).GET().build(),
 			HttpResponse.BodyHandlers.ofString());
@@ -343,7 +340,7 @@ public class JobRoutesTest {
 			assertTrue(frames.stream().anyMatch(l -> l.contains("COMPLETE")),
 				"terminal record must be delivered to a late subscriber: " + frames);
 		}
-		assertEquals(legacy, storage.get(), "REST and SSE reads must not rewrite an old record");
+		assertEquals(current, user.jobs().getRecord(jobId), "REST and SSE reads must not rewrite the record");
 	}
 
 	/** The REST error body (COG-21): RFC 9457 problem details whose {@code detail} is the reason. */

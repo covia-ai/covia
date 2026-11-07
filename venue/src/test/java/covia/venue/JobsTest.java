@@ -36,7 +36,6 @@ public class JobsTest {
 	private static final CVMLong NOW = CVMLong.create(100);
 	private static final Blob ID = Blob.fromHex("61106110611061106110611061106110");
 	private static final AString HEX = Strings.create(ID.toHexString());
-	private static final AString PREV = Strings.intern("prev");
 
 	private static User user() {
 		return user(() -> NOW);
@@ -101,21 +100,20 @@ public class JobsTest {
 	}
 
 	@Test
-	public void testPathThroughTheUserReadsJobsInTheirCurrentState() {
+	public void testPathThroughTheUserReadsJobRecords() {
 		User user = user();
-		AMap<AString, ACell> output = Maps.of(PREV, "payload field stays");
-		AMap<AString, ACell> current = Maps.of(Fields.ID, ID, Fields.STATUS, Status.COMPLETE,
+		AString answer = Strings.create("answer");
+		AMap<AString, ACell> output = Maps.of(answer, 42L);
+		AMap<AString, ACell> record = Maps.of(Fields.ID, ID, Fields.STATUS, Status.COMPLETE,
 			Fields.OUTPUT, output);
-		// A record an older build wrote, its earlier state chained under prev.
-		user.cursor().path(Namespace.J).set(Index.<Blob, ACell>none()
-			.assoc(ID, current.assoc(PREV, Maps.of(Fields.STATUS, Status.STARTED))));
+		user.cursor().path(Namespace.J).set(Index.<Blob, ACell>none().assoc(ID, record));
 
-		assertEquals(current, user.jobs().getAll().get(ID));
+		assertEquals(record, user.jobs().getAll().get(ID));
 		assertEquals(user.jobs().getAll(), ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J))));
-		assertEquals(current, ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX))));
+		assertEquals(record, ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX))));
 		assertEquals(output, ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT))));
-		assertEquals(output.get(PREV), ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT, PREV))));
-		assertNull(ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, PREV))));
+		assertEquals(CVMLong.create(42), ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT, answer))));
+		assertNull(ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.ERROR))));
 		assertThrows(NoSuchPathException.class,
 			() -> user.resolve(CoviaPath.segments(Namespace.J, Strings.create("not-a-job"))),
 			"a job id that is not hex names no job");

@@ -46,7 +46,7 @@ class VenueMigrationEndToEndTest {
 	 * The venue version this test seeds shapes for. A new venue version needs
 	 * the shapes its step converts seeded here, and fails until it has them.
 	 */
-	private static final long SEEDED_THROUGH = 4;
+	private static final long SEEDED_THROUGH = 2;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
 	private static final Path OLD_DELETIONS =CoviaPath.parse("w/user-deletions");
@@ -67,12 +67,12 @@ class VenueMigrationEndToEndTest {
 	private static final AString REQUEST = Strings.create("e2e-request");
 	private static final String PARKED = "migration-e2e-parked";
 	private static final Blob PARKED_TASK = Blob.fromHex("e2e4e2e4e2e4e2e4e2e4e2e4e2e4e2e4");
-	/** A job still running when a version 2 venue stopped, with no entry: that version kept none. */
+	/** A job still running when a version 1 venue stopped, with no entry: that version kept none. */
 	private static final Blob RUNNING_JOB = Blob.fromHex("e2e5e2e5e2e5e2e5e2e5e2e5e2e5e2e5");
 	/** A grid hop that signed in as its caller, with the sign-in credential 0.10.0 kept in a venue secret. */
 	private static final Blob REMOTE_JOB = Blob.fromHex("e2e6e2e6e2e6e2e6e2e6e2e6e2e6e2e6");
 	private static final String REMOTE_TARGET = "https://peer.migration.test";
-	/** A finished grid hop whose record showed how the venue followed it, as version 3 did. */
+	/** A finished grid hop whose record showed how the venue followed it, as version 1 did. */
 	private static final Blob FINISHED_REMOTE_JOB = Blob.fromHex("e2e7e2e7e2e7e2e7e2e7e2e7e2e7e2e7");
 	/** A running grid hop whose connection secret is gone: nothing reaches its remote job again. */
 	private static final Blob LOST_REMOTE_JOB = Blob.fromHex("e2e8e2e8e2e8e2e8e2e8e2e8e2e8e2e8");
@@ -233,9 +233,9 @@ class VenueMigrationEndToEndTest {
 				RT.getIn(migrated.jobs().getRecord(LOCAL_CALL), RemoteJobs.DELEGATION));
 			assertFalse(venue.users().get(venueDID).secrets().exists(remoteRef));
 			assertEquals(4, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
+			assertEquals(job, venue.users().get(USER).cursor().path(Namespace.J, JOB).get(), "the history chain is gone");
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
-			assertEquals(legacyJob, venue.users().get(USER).cursor().path(Namespace.J, JOB).get());
 			assertTrue(venue.users().get(USER).secrets().exists(LEGACY_GRANT));
 
 			engine.launch();
@@ -260,11 +260,7 @@ class VenueMigrationEndToEndTest {
 			assertEquals(UNLOADED, venue.adapterState("unloaded").get());
 			assertNull(venue.users().get(venueDID).readInternalPath(adapterPath("unloaded")));
 
-			// A job reads as its current state, and its next write drops the chain.
 			assertEquals(job, engine.jobs().getJobData(JOB, ctx));
-			assertTrue(user.jobs().get(JOB).appendHistory(Maps.of(Fields.MESSAGE_ID, "after migration")));
-			assertFalse(user.jobs().getRecord(JOB).containsKey(PREV));
-			assertEquals(user.jobs().getRecord(JOB), user.cursor().path(Namespace.J, JOB).get());
 
 			// A version 1 secret decrypts, and its next write takes the current key version.
 			SecretStore.Keys keys = SecretStore.keys(engine.getKeyPair());

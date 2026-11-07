@@ -21,7 +21,7 @@ import covia.venue.OutputRules;
 import covia.venue.SecretStore;
 
 /**
- * Venue version 2 to 3: the venue keeps an entry for each unfinished job in
+ * Part of venue version 1 to 2: the venue keeps an entry for each unfinished job in
  * {@code :jobs} ({@link JobIndex}), and a restart recovers jobs from those
  * entries alone. Each unfinished job record of a live account gets one naming
  * its owner, and what the record or the venue kept for the venue's own use
@@ -30,7 +30,7 @@ import covia.venue.SecretStore;
  * <ul>
  *   <li>Proofs a record kept for work that continues become the entry's
  *       caller context.</li>
- *   <li>A remote job's connection, which version 2 kept encrypted in the
+ *   <li>A remote job's connection, which version 1 kept encrypted in the
  *       venue user's secret {@code remote-job-<id>} named by the record's
  *       {@code delegation.authRef}, becomes the entry's adapter data, and the
  *       definition pinned with it gives the entry's output rules. Only the
@@ -103,8 +103,7 @@ public final class JobEntries implements MigrationStep {
 				if (entries.containsKey(id) || !(job.getValue() instanceof AMap<?, ?> m)) continue;
 				@SuppressWarnings("unchecked")
 				AMap<AString, ACell> jobRecord = (AMap<AString, ACell>) m;
-				AMap<AString, ACell> current = Job.currentState(jobRecord);
-				if (current == null || Job.isFinished(current)) continue;
+				if (Job.isFinished(jobRecord)) continue;
 				AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, did);
 				AMap<AString, ACell> rest = jobRecord;
 
@@ -190,7 +189,7 @@ public final class JobEntries implements MigrationStep {
 		return (host == null) ? null : RT.ensureMap(RT.getIn(venue, Covia.USER_DATA, host, Namespace.S));
 	}
 
-	/** What version 2 kept for a remote job, decrypted; null when its secret is gone. */
+	/** What version 1 kept for a remote job, decrypted; null when its secret is gone. */
 	private AMap<AString, ACell> kept(AMap<AString, ACell> secrets, AString ref) {
 		ACell sealed = (secrets == null) ? null : secrets.get(ref);
 		AString plaintext = SecretStore.unseal(sealed, keys);
