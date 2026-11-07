@@ -13,9 +13,11 @@ import covia.venue.RequestContext;
 /**
  * A request's access to the data at a path: the {@link Position} the path ends
  * at, reached only after the owner's {@link AccessPolicy} allows the request.
- * Each read or change first asks the policy what the request needs and checks
- * it: nothing when the request acts of right, otherwise the request's authority
- * over the address the owner names, through the venue's shared check.
+ * The owner is the innermost one the path crosses that has a policy
+ * ({@link Owner#decide}). Each read or change first asks the policy what the
+ * request needs and checks it: nothing when the request acts of right,
+ * otherwise the request's authority over the address the owner names, through
+ * the venue's shared check.
  *
  * <p>The covia adapter makes these for the paths requests name
  * ({@link covia.adapter.CoviaAdapter#resolve}). An access never hands out its
@@ -41,11 +43,17 @@ public final class Access {
 
 	private final RequestContext ctx;
 	private final Position position;
+	private final Owner.Ownership ownership;
 	private final Authority authority;
 
-	public Access(RequestContext ctx, Position position, Authority authority) {
+	/**
+	 * @param position Where the path ends
+	 * @param ownership Who decides on the data there
+	 */
+	public Access(RequestContext ctx, Position position, Owner.Ownership ownership, Authority authority) {
 		this.ctx = ctx;
 		this.position = Objects.requireNonNull(position, "position");
+		this.ownership = Objects.requireNonNull(ownership, "ownership");
 		this.authority = Objects.requireNonNull(authority, "authority");
 	}
 
@@ -145,7 +153,7 @@ public final class Access {
 	 */
 	private void require(AString ability, int levels) {
 		if (!position.isValid()) return;
-		AccessPolicy.Need need = position.need(ctx, ability, levels);
+		AccessPolicy.Need need = ownership.need(ctx, ability, levels);
 		if (need == null) throw new IllegalStateException(String.format(NO_OWNER, CoviaPath.address(position.path())));
 		if (need.refusal() != null) throw new AuthException(need.refusal());
 		authority.require(ctx, need.address(), ability);

@@ -14,6 +14,7 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.lattice.Owner;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
@@ -42,7 +43,7 @@ import convex.lattice.cursor.StampedCursor;
  * Merge is whole-value at the venue {@code :value}; these namespaces are
  * navigation structure only.
  */
-public class User extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, User> {
+public class User extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, User>, Owner {
 	@Override
 	public User withCursor(AForkableCursor<ACell> draft) {
 		return new User(context, draft, did);
@@ -284,32 +285,41 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		return new Jobs(context, cursor().withDefault(Maps.empty()).path(Namespace.J), did);
 	}
 
+	/** Whoever holds authority over {@code <did>/<path>}; none outside any user. */
+	@Override
+	public AccessPolicy policy() {
+		return policy;
+	}
+
+	/** The user's jobs ({@code j}), and an agent ({@code g/<id>}) whether or not it exists. */
+	@Override
+	public Route route(Path path) {
+		if (path.isEmpty()) return null;
+		AString segment = path.get(0);
+		if (Namespace.J.equals(segment)) return new Route(jobs(), 1);
+		if (Namespace.G.equals(segment) && path.count() > 1) return new Route(agentAt(path.get(1)), 2);
+		return null;
+	}
+
 	/**
 	 * A user's namespaces ({@code w}, {@code o}, {@code h}, {@code j},
 	 * {@code s}, {@code a}, {@code g}) are each resolved by their component, and
 	 * {@code g/<id>} by that agent whether or not it exists. Any other name,
 	 * the venue's own bookkeeping in the record among them, names no data.
-	 * The user's policy covers whatever no component below claims: a request
-	 * needs authority over {@code <did>/<path>}.
+	 * The user's policy covers whatever no owner below claims.
 	 */
 	@Override
 	public Position locate(Path path) {
-		Position position = within(path);
-		return (did == null) ? position : position.ownedBy(policy, path);
-	}
-
-	private Position within(Path path) {
 		if (path.isEmpty()) return super.locate(path);
+		Route route = route(path);
+		if (route != null) return route.child().locate(path.slice(route.taken()));
 		AString segment = path.get(0);
 		if (Namespace.W.equals(segment)) return workspace().locate(path.slice(1));
 		if (Namespace.O.equals(segment)) return operations().locate(path.slice(1));
 		if (Namespace.H.equals(segment)) return inbox().locate(path.slice(1));
-		if (Namespace.J.equals(segment)) return jobs().locate(path.slice(1));
 		if (Namespace.S.equals(segment)) return secrets().locate(path.slice(1));
 		if (Namespace.A.equals(segment)) return assets().locate(path.slice(1));
-		if (Namespace.G.equals(segment)) {
-			return (path.count() > 1) ? agentAt(path.get(1)).locate(path.slice(2)) : super.locate(path);
-		}
+		if (Namespace.G.equals(segment)) return super.locate(path);
 		return Position.invalid(path);
 	}
 

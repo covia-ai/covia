@@ -20,6 +20,7 @@ import covia.lattice.AccessPolicy;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
+import covia.lattice.Owner;
 import covia.lattice.Position;
 import covia.lattice.Workspace;
 
@@ -27,7 +28,7 @@ import covia.lattice.Workspace;
  * Transactions compose data changes only; execution and notifications belong
  * to the runtime after the enclosing transaction commits. */
 public final class JobState extends ACoviaComponent<ACell>
-		implements TransactionalComponent<ACell, JobState> {
+		implements TransactionalComponent<ACell, JobState>, Owner {
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 	private final AString owner;
@@ -92,19 +93,22 @@ public final class JobState extends ACoviaComponent<ACell>
 	 */
 	@Override
 	public Position locate(Path path) {
-		Position position = (!path.isEmpty() && Fields.TEMP.equals(path.get(0)))
+		return (!path.isEmpty() && Fields.TEMP.equals(path.get(0)))
 			? workspace().locate(path.slice(1)) : super.locate(path);
-		return (policy == null) ? position : position.ownedBy(policy, path);
+	}
+
+	/** See {@link #locate}; none outside any user. */
+	@Override
+	public AccessPolicy policy() {
+		return policy;
 	}
 
 	/**
-	 * Where {@code path} ends in the job's scratch area, as a request's
-	 * {@code t/} names it: {@code path} is the stretch below the area, and the
-	 * job's policy reads it as {@code temp/<path>}.
+	 * The path in the job of a stretch of its scratch area, as a request's
+	 * {@code t/} names one: {@code temp/<path>}, which the job's policy reads.
 	 */
-	public Position locateScratch(Path path) {
-		Position position = workspace().locate(path);
-		return (policy == null) ? position : position.ownedBy(policy, SCRATCH.concat(path));
+	public static Path inScratch(Path path) {
+		return SCRATCH.concat(path);
 	}
 
 	private static final Path SCRATCH = CoviaPath.segments(Fields.TEMP);

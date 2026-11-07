@@ -37,9 +37,11 @@ import covia.lattice.AdapterView;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
+import covia.lattice.Owner;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.venue.Engine;
+import covia.venue.JobState;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -808,7 +810,7 @@ public class CoviaAdapter extends AAdapter {
 		AString did = didPath(path);
 		Engine.UserPathTarget target = (did == null) ? null : engine.resolveUserPath(ctx, did, false);
 		Path segments = (target == null) ? CoviaPath.of(path) : target.path();
-		Access access = access(ctx, locate(state, ctx, path, ability));
+		Access access = access(ctx, located(state, ctx, path, ability));
 		// A path that names no place is refused as such before anything else
 		String invalid = access.reasonInvalid();
 		if (invalid != null) throw new InvalidInputException(invalid);
@@ -1199,12 +1201,12 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws WrongScopeException as for {@link #locate}
 	 */
 	public Access resolve(RequestContext ctx, ACell path) {
-		return access(ctx, locate(ctx, path));
+		return access(ctx, located(engine.getVenueState(), ctx, path, Capability.CRUD_READ));
 	}
 
-	/** The access a request has to {@code position}, checked by its owner's policy. */
-	private Access access(RequestContext ctx, Position position) {
-		return new Access(ctx, position, (c, address, ability) -> {
+	/** The access a request has to where a path ends, checked by its owner's policy. */
+	private Access access(RequestContext ctx, Located located) {
+		return new Access(ctx, located.position(), located.ownership(), (c, address, ability) -> {
 			if (address == null) engine.requireStanding(c);
 			else engine.requireLocalAccess(c, address, ability);
 		});
@@ -1228,9 +1230,8 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code x/} view checks its own. It follows the path's shape, not the
 	 * data: a path into a user, agent, session or job that does not exist ends
 	 * at a position that reads as absent, and a path that names no place data
-	 * could be ends at an invalid one ({@link Position#isValid}). The position
-	 * carries the policy of the innermost component that owns the data, and a
-	 * {@code v/} path that of the view ({@link #VIEW_POLICY}).
+	 * could be ends at an invalid one ({@link Position#isValid}). Who may use
+	 * the data there is for {@link #resolve} to decide.
 	 *
 	 * @param path The path as the caller gave it: a string, with an optional
 	 *        leading slash and owner DID, or a vector of segments
@@ -1239,49 +1240,68 @@ public class CoviaAdapter extends AAdapter {
 	 *         outside its scope, or a path without an owner DID in a request with no user
 	 */
 	public Position locate(RequestContext ctx, ACell path) {
-		return locate(ctx, path, Capability.CRUD_READ);
+		return located(engine.getVenueState(), ctx, path, Capability.CRUD_READ).position();
 	}
 
-	/** As {@link #locate(RequestContext, ACell)}; {@code ability} is for an {@code x/} view's write policy. */
-	private Position locate(RequestContext ctx, ACell path, AString ability) {
-		return locate(engine.getVenueState(), ctx, path, ability);
+	/**
+	 * Where a path ends, and who decides on the data there.
+	 *
+	 * @param position Where the path ends
+	 * @param ownership The innermost owner's policy, or for {@code v/} and
+	 *        {@code x/} that of the view
+	 */
+	private record Located(Position position, Owner.Ownership ownership) {
+		/** Where {@code path} ends below {@code owner}, decided by the owners it crosses. */
+		static Located below(Owner owner, Path path) {
+			return new Located(owner.locate(path), Owner.decide(owner, path));
+		}
 	}
 
-	/** As {@link #locate(RequestContext, ACell, AString)}, in {@code state}: the venue's, or a transaction's draft of it. */
-	private Position locate(VenueState state, RequestContext ctx, ACell path, AString ability) {
+	/**
+	 * As {@link #locate(RequestContext, ACell)}, in {@code state}: the venue's,
+	 * or a transaction's draft of it; {@code ability} is for an {@code x/}
+	 * view's write policy.
+	 */
+	private Located located(VenueState state, RequestContext ctx, ACell path, AString ability) {
 		AString did = didPath(path);
 		if (did != null) {
 			Engine.UserPathTarget target = engine.resolveUserPath(ctx, did, false);
 			if (isExtensionPath(target.path())) {
-				return AdapterView.resolve(ctx, this, target.ownerDID(), target.path(), ability);
+				return new Located(AdapterView.resolve(ctx, this, target.ownerDID(), target.path(), ability),
+					AdapterView.ownership(target.ownerDID(), target.path()));
 			}
-			return state.locate(CoviaPath.segments(target.ownerDID()).concat(target.path()));
+			// A stretch of the whole path, so a refusal names the path with its DID
+			Path below = CoviaPath.segments(target.ownerDID()).concat(target.path()).slice(1);
+			return Located.below(state.users().at(target.ownerDID()), below);
 		}
 		Path segments = CoviaPath.of(path);
 		AString namespace = segments.isEmpty() ? null : segments.get(0);
 		if (Namespace.X.equals(namespace)) {
-			return AdapterView.resolve(ctx, this, (ctx == null) ? null : ctx.getUserDID(), segments, ability);
+			AString owner = (ctx == null) ? null : ctx.getUserDID();
+			Position position = AdapterView.resolve(ctx, this, owner, segments, ability);
+			return new Located(position, AdapterView.ownership(owner, segments));
 		}
 		if (V.equals(namespace)) {
 			Path global = venueGlobals(segments);
-			return state.users().at(engine.getDIDString()).workspace().locate(global.slice(1))
-				.ownedBy(VIEW_POLICY, segments);
+			Position position = state.users().at(engine.getDIDString()).workspace().locate(global.slice(1));
+			return new Located(position, new Owner.Ownership(VIEW_POLICY, segments));
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
 			if (agentId == null) throw new WrongScopeException(NO_AGENT_SCOPE);
-			return requestUser(state, ctx).agentAt(agentId).locate(segments);
+			return Located.below(requestUser(state, ctx).agentAt(agentId), segments);
 		}
 		if (C.equals(namespace)) {
 			Blob sessionId = (ctx == null) ? null : ctx.getSessionId();
 			if (agentId == null || sessionId == null) throw new WrongScopeException(NO_SESSION_SCOPE);
-			return requestUser(state, ctx).agentAt(agentId).session(sessionId).locate(segments);
+			return Located.below(requestUser(state, ctx).agentAt(agentId).session(sessionId), segments);
 		}
 		if (T.equals(namespace)) {
-			Blob jobId = scopedJob(ctx);
-			return requestUser(state, ctx).jobs().at(jobId).locateScratch(segments.slice(1));
+			JobState job = requestUser(state, ctx).jobs().at(scopedJob(ctx));
+			Path rest = segments.slice(1);
+			return new Located(job.workspace().locate(rest), Owner.decide(job, JobState.inScratch(rest)));
 		}
-		return requestUser(state, ctx).locate(segments);
+		return Located.below(requestUser(state, ctx), segments);
 	}
 
 	/**

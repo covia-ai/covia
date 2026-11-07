@@ -13,6 +13,7 @@ import covia.grid.Job;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Namespace;
+import covia.lattice.Owner;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
@@ -28,10 +29,12 @@ import covia.lattice.Workspace;
  * after the transaction commits.</p>
  */
 public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
-		implements TransactionalComponent<Index<Blob, ACell>, Jobs> {
+		implements TransactionalComponent<Index<Blob, ACell>, Jobs>, Owner {
 
 	private final VenueContext context;
 	private final AString owner;
+	/** Who may use the list of jobs: see {@link #locate}. */
+	private final AccessPolicy policy;
 
 	/**
 	 * @param owner DID of the user whose jobs these are, or null outside any user
@@ -40,6 +43,12 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 		super(cursor);
 		this.context = context;
 		this.owner = owner;
+		this.policy = (owner == null) ? null : jobsPolicy(owner);
+	}
+
+	private static AccessPolicy jobsPolicy(AString owner) {
+		String base = owner + "/" + Namespace.J;
+		return (ctx, ability, path) -> AccessPolicy.Need.authorityOver(AccessPolicy.address(base, path));
 	}
 
 	@Override
@@ -158,16 +167,21 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 */
 	@Override
 	public Position locate(Path path) {
-		Position position;
-		if (path.isEmpty()) {
-			position = super.locate(path);
-		} else {
-			Blob id = ValuePath.blobKey(path.get(0));
-			position = (id == null) ? Position.invalid(path) : at(id).locate(path.slice(1));
-		}
-		if (owner == null) return position;
-		String base = owner + "/" + Namespace.J;
-		return position.ownedBy((ctx, ability, below) ->
-			AccessPolicy.Need.authorityOver(AccessPolicy.address(base, below)), path);
+		if (path.isEmpty()) return super.locate(path);
+		Route route = route(path);
+		return (route == null) ? Position.invalid(path) : route.child().locate(path.slice(route.taken()));
+	}
+
+	/** A job, named by its id in hex, whether or not it exists. */
+	@Override
+	public Route route(Path path) {
+		Blob id = path.isEmpty() ? null : ValuePath.blobKey(path.get(0));
+		return (id == null) ? null : new Route(at(id), 1);
+	}
+
+	/** See {@link #locate}; none outside any user. */
+	@Override
+	public AccessPolicy policy() {
+		return policy;
 	}
 }

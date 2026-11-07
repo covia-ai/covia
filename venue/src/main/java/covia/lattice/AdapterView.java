@@ -73,8 +73,17 @@ public final class AdapterView {
 				return value;
 			}
 		};
-		// An access to the view needs what was checked above, on the same address
-		return new Workspace(guarded).locate(path).ownedBy(AccessPolicy.principal(owner), fullPath);
+		return new Workspace(guarded).locate(path);
+	}
+
+	/**
+	 * Who decides on an {@code x/} path in {@code owner}'s view: the owner, so an
+	 * access to the view needs what {@link #resolve} checked, on the same address.
+	 *
+	 * @param fullPath The path from {@code x} on
+	 */
+	public static Owner.Ownership ownership(AString owner, Path fullPath) {
+		return new Owner.Ownership(AccessPolicy.principal(owner), fullPath);
 	}
 
 	private static void requireWritable(AAdapter adapter, RequestContext ctx, Path path) {

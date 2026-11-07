@@ -459,10 +459,13 @@ level that exists: it is checked before the transaction, and again inside it
 only when more levels are missing by then.
 
 **Owners decide who may use their data.** A component that owns a kind of data
-knows whose it is and says who may use it, through an `AccessPolicy` it
-attaches to the positions it resolves. A position keeps the innermost owner's
-policy, so the rule holds however the path was written or where resolution
-started:
+is an `Owner`: it knows whose the data is and says who may use it, through its
+`AccessPolicy`. An owner names the owners below it with one routing step
+(`route`: the child owner the path's first segments name, and how many
+segments that takes), which both its `locate` and `Owner.decide` use, so the
+two agree. `decide` walks those steps from the owner a request starts at, and
+the innermost owner on the way that has a policy decides, so the rule holds
+however the path was written or where resolution started:
 
 | Owner | Data | Who may use it |
 |-------|------|----------------|

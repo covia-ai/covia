@@ -17,6 +17,7 @@ import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Namespace;
+import covia.lattice.Owner;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -32,7 +33,7 @@ import static covia.venue.AgentState.*;
  * Transactions compose session changes without runtime services or external I/O.
  */
 public final class SessionState extends ACoviaComponent<ACell>
-		implements TransactionalComponent<ACell, SessionState> {
+		implements TransactionalComponent<ACell, SessionState>, Owner {
 	private final VenueContext context;
 	private final AString owner;
 	private final AString agentId;
@@ -91,9 +92,14 @@ public final class SessionState extends ACoviaComponent<ACell>
 	 */
 	@Override
 	public Position locate(Path path) {
-		Position position = (!path.isEmpty() && K_C.equals(path.get(0)))
+		return (!path.isEmpty() && K_C.equals(path.get(0)))
 			? workspace().locate(path.slice(1)) : super.locate(path);
-		return (policy == null) ? position : position.ownedBy(policy, path);
+	}
+
+	/** See {@link #locate}; none outside any user. */
+	@Override
+	public AccessPolicy policy() {
+		return policy;
 	}
 
 	/** Null from the operation means rejection, as does a missing session;

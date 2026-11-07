@@ -8,10 +8,9 @@ import convex.core.data.Strings;
 import covia.venue.RequestContext;
 
 /**
- * Who may use the data a component owns. A component that owns a kind of
- * data has a policy built from its own identity, and attaches it to the
- * positions its {@link ACoviaComponent#locate} returns; a position keeps the
- * innermost owner's policy, so the rule holds however resolution started.
+ * Who may use the data a component owns. An {@link Owner} has a policy built
+ * from its own identity, and the innermost owner a path crosses that has one
+ * decides ({@link Owner#decide}), so the rule holds however the path started.
  *
  * <p>A policy reads only the request and the stretch of the path below its
  * owner, never the data, and checks nothing itself: it says what the request
