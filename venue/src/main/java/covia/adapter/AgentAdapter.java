@@ -4408,6 +4408,11 @@ public class AgentAdapter extends AAdapter {
 						cycleCtx.withCancellation(cancellation).withCycle(cycle));
 				ActiveStep step = new ActiveStep(cancellation, transitionFuture);
 				activeSteps.put(key, step);
+				// A stop revokes the claim, then stops the registered step. One
+				// that came before this registration found no step, so the step
+				// stops itself here: either the stop sees the step or this sees
+				// the revoked claim.
+				if (!agent.holdsClaim(claim)) step.stop();
 
 				ACell transitionResult;
 				boolean cannotContinue = false;

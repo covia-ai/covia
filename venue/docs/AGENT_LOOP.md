@@ -346,8 +346,10 @@ may repeat them.
 
 Stopping promptly is separate from being correct. After its write, a stop also
 cancels the step's Job and its request context's cancellation, so a step that
-watches them ends early. A step the stop does not reach ends at its next
-refused write or when it returns, and its merge records it as stopped.
+watches them ends early. A stop that comes before the step has started finds
+no Job to cancel, so the step, once started, checks its claim and cancels
+itself if it is gone. A step the stop does not reach ends at its next refused
+write or when it returns, and its merge records it as stopped.
 
 ### 2.6 Live events
 
