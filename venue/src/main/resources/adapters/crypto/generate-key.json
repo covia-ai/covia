@@ -17,11 +17,19 @@
           "type": "boolean",
           "default": false,
           "description": "Explicitly replace an existing destination secret. Otherwise collisions fail atomically."
+        },
+        "keyring": {
+          "type": "boolean",
+          "default": false,
+          "description": "Store the new key in your keyring instead of a secret (give this or name): its private key is born in the venue and can never be read."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Your own name for the key in the keyring."
         }
       },
-      "required": [
-        "name"
-      ],
+      "required": [],
       "additionalProperties": false
     },
     "output": {
@@ -29,7 +37,7 @@
       "properties": {
         "secret": {
           "type": "string",
-          "description": "Secret reference; private material is never returned."
+          "description": "Secret reference; private material is never returned. Absent for a key stored in the keyring."
         },
         "accountKey": {
           "type": "string",
@@ -42,7 +50,6 @@
         }
       },
       "required": [
-        "secret",
         "accountKey",
         "did"
       ],

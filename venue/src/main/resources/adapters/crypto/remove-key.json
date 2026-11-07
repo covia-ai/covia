@@ -1,0 +1,37 @@
+{
+  "name": "Remove a key from a keyring",
+  "description": "Remove a held key or phrase. The venue signs nothing new with it; tokens and signatures it already made stay valid.",
+  "operation": {
+    "adapter": "crypto:remove-key",
+    "readOnly": false,
+    "activityLabel": "Remove a key from a keyring",
+    "input": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "A held key: its did:key, multibase public key or 0x account key in your keyring, or <did>/keys/<key> in another holder's. Give this or mnemonic."
+        },
+        "mnemonic": {
+          "type": "string",
+          "description": "A held phrase: its ID in your keyring, or <did>/mnemonics/<id> in another holder's. Give this or key."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "removed": {
+          "type": "boolean",
+          "description": "Whether it was held."
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

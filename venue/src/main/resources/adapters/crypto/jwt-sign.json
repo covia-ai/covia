@@ -10,7 +10,11 @@
       "properties": {
         "seed": {
           "type": "string",
-          "description": "Secret reference to a 32-byte hexadecimal Ed25519 private seed. Never pass raw key material."
+          "description": "Secret reference to a 32-byte hexadecimal Ed25519 private seed. Never pass raw key material. Give this or key."
+        },
+        "key": {
+          "type": "string",
+          "description": "A held key to sign with instead of seed: its did:key, multibase public key or 0x account key in your keyring, or <did>/keys/<key> in another holder's. Needs key/sign/raw on it, since the claims are free."
         },
         "claims": {
           "type": "object",
@@ -32,7 +36,6 @@
         }
       },
       "required": [
-        "seed",
         "claims"
       ],
       "additionalProperties": false
