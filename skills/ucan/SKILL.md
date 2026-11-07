@@ -65,7 +65,7 @@ ucan_issue
   exp: <unix-timestamp>
 ```
 
-Returns a signed UCAN token that the audience can present with future requests.
+Returns a signed UCAN token that the audience can present with future requests. The venue signs it, and it is valid at this venue only; it covers what the caller may grant (its own resources, those of an identity it signs in as, its agents', or another's under a presented `grant/<can>` right), and no more than the caller holds. With `key`, a key from a keyring signs it instead, valid anywhere.
 
 ### `verify` — Verify and explain a token
 
@@ -79,7 +79,7 @@ ucan_verify
   aud: "<audience-DID>"     # optional — defaults to the caller
 ```
 
-Reports validity (with a diagnosable reason when invalid — expired, bad signature, unparseable), issuer/audience, delegation chain depth and root issuer, and a per-capability root-authority verdict: `owner` (self-sovereign — signed by the resource owner), `venue` (this venue's grant), or `refused`. Use it whenever a token is rejected and the enforcement error isn't enough.
+Reports validity (with a diagnosable reason when invalid — expired, bad signature, unparseable), issuer/audience, delegation chain depth and root issuer, and a per-capability root-authority verdict: `owner` (an identity root — signed by the resource owner or an identity that signs in as it), `venue` (this venue's grant, valid here only), or `refused`. Use it whenever a token is rejected and the enforcement error isn't enough.
 
 ### `explain` — Explain the UCAN model
 

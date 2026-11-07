@@ -287,6 +287,18 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Remove what this adapter holds for an agent's own DID
+	 * ({@code <owner>:g:<id>}) when the agent is deleted, in the transaction
+	 * that runs it ({@link Engine#deleteAgentState}). The same rules as
+	 * {@link #deleteUserState}: only the supplied draft component, no I/O, and
+	 * idempotent, since every deletion of the agent calls it. State an adapter
+	 * keeps for the agent under its owner's DID goes with the owner instead.
+	 */
+	public void deleteAgentState(AString agentDID, AdapterState state) {
+		// Default for adapters with no agent-associated state.
+	}
+
+	/**
 	 * Stop user-owned workers and release external resources after deletion commits.
 	 * Must be idempotent; failures retain a durable retry marker and bar account
 	 * recreation. Previous user state is supplied on first deletion only, and is

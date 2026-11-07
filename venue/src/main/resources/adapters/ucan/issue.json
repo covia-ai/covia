@@ -1,6 +1,6 @@
 {
 	"name": "Issue UCAN Token",
-	"description": "Creates a venue-signed UCAN capability token for resources controlled by this venue or one of its managed custodial users. The venue is the issuer. Self-sovereign DID owners must sign UCANs with their own key using a client SDK. The token grants the audience (aud) the specified capabilities (att). Set exp to a future Unix timestamp for a finite lifetime; omitted exp or explicit exp:null mints a genuinely non-expiring token with an explicit null claim. With prf, the venue itself passes on part of grants made to it: the token carries them as proof, every att entry must be covered by one of them, and exp cannot outlive it.",
+	"description": "Creates a UCAN capability token granting the audience (aud) the specified capabilities (att). By default the venue signs it, valid at this venue only, over resources of identities it hosts that you may grant: your own, those of an identity you sign in as, your agents', or any covered by a grant/<can> right you present. You confer only what you hold. With key, a key in a keyring signs it instead, valid anywhere. Set exp to a future Unix timestamp for a finite lifetime; omitted exp or explicit exp:null mints a genuinely non-expiring token with an explicit null claim. With prf, the venue itself passes on part of grants made to it: the token carries them as proof, every att entry must be covered by one of them, and exp cannot outlive it.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "ucan:issue",
@@ -15,11 +15,11 @@
 				},
 				"att": {
 					"type": "array",
-					"description": "Attenuations — array of {with, can} capability pairs for venue-controlled resources",
+					"description": "Attenuations — array of {with, can} capability pairs",
 					"items": {
 						"type": "object",
 						"properties": {
-							"with": { "type": "string", "description": "Resource path (e.g. /w/, /w/projects/)" },
+							"with": { "type": "string", "description": "Resource: a bare path in the namespace you act in (e.g. w/projects/) or a DID URL (e.g. did:key:z6Mk…/w/)" },
 							"can": { "type": "string", "description": "Ability (e.g. crud/read, crud/write, *)" }
 						},
 						"required": ["with", "can"]
@@ -35,7 +35,7 @@
 				},
 				"key": {
 					"type": "string",
-					"description": "Optional held key to sign with instead of the venue's key: its did:key, multibase public key or 0x account key in your keyring, or <did>/x/crypto/keys/<key> in another holder's. The grant's issuer is that key's did:key, bare paths are under it, and it may name only that key's own resources. Needs key/sign/grant on it."
+					"description": "Optional held key to sign with instead of the venue's key: its did:key, multibase public key or 0x account key in your keyring, or <did>/x/crypto/keys/<key> in another holder's. The grant's issuer is that key's did:key, bare paths are under it, and it may name only resources that did:key is root of: its own and those of identities nested below it. Needs key/sign/grant on it."
 				}
 			},
 			"required": ["aud", "att"]

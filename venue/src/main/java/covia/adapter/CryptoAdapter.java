@@ -165,6 +165,11 @@ public class CryptoAdapter extends AAdapter {
 		CryptoKeyring.deleteHolder(state, did);
 	}
 
+	/** A deleted agent's own keyring goes with it. */
+	@Override public void deleteAgentState(AString agentDID, AdapterState state) {
+		CryptoKeyring.deleteAgent(state, agentDID);
+	}
+
 	@Override protected void installAssets() {
 		for (String op : new String[] {"hash", "generate-key", "public-key", "sign", "verify",
 				"encrypt", "decrypt", "generate-mnemonic", "validate-mnemonic", "derive-key",
@@ -431,7 +436,7 @@ public class CryptoAdapter extends AAdapter {
 	 * the use; the key pair must not outlive the call it serves.
 	 *
 	 * @param key a held key: a did:key, multibase key or account key in the
-	 *            keyring of the namespace the request acts in, or {@code <did>/x/crypto/keys/<key>}
+	 *            keyring of the principal that acts, or {@code <did>/x/crypto/keys/<key>}
 	 * @throws AuthException when the request's authority does not cover the use
 	 * @throws NotFoundException when no such key is held
 	 */
@@ -595,9 +600,9 @@ public class CryptoAdapter extends AAdapter {
 		return s;
 	}
 
-	/** The keyring of the namespace the request acts in, as a bare {@code s/NAME} names a secret there. */
+	/** The keyring of the principal that acts: a user's own, an agent's own (not its owner's). */
 	private AString ownHolder(RequestContext ctx) {
-		AString holder = (ctx == null) ? null : ctx.getUserDID();
+		AString holder = (ctx == null) ? null : ctx.getCallerDID();
 		requireKeyring(holder);
 		return holder;
 	}
@@ -625,7 +630,7 @@ public class CryptoAdapter extends AAdapter {
 
 	/**
 	 * Reads a held key or mnemonic reference: {@code <did><segment><key>}, or
-	 * a bare key in the namespace the request acts in. Null for a value that is
+	 * a bare key in the keyring of the principal that acts. Null for a value that is
 	 * no such reference, such as a secret reference or a phrase.
 	 */
 	private Held heldRef(RequestContext ctx, ACell value, AString segment, String invalid) {

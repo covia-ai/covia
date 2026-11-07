@@ -1,6 +1,6 @@
 {
 	"name": "Verify UCAN Token",
-	"description": "Verifies a UCAN capability token against this venue's trust policy and explains the verdict — the diagnostic counterpart to enforcement. Reports validity (signature at every chain hop, temporal bounds), the parsed claims, the delegation chain depth and root issuer, and a per-capability root-authority verdict: 'owner' (self-sovereign — the chain root is signed by the resource owner), 'venue' (rooted by this venue), or 'refused'. Optionally checks whether the token would authorise a specific request here; caveated paths report false because this diagnostic has no concrete invocation in which to run their policy gates. Read-only: no signing, no side effects.",
+	"description": "Verifies a UCAN capability token against this venue's trust policy and explains the verdict — the diagnostic counterpart to enforcement. Reports validity (signature at every chain hop, temporal bounds), the parsed claims, the delegation chain depth and root issuer, and a per-capability root-authority verdict: 'owner' (an identity root — the chain root is signed by the resource owner or an identity that signs in as it), 'venue' (rooted by this venue, valid here only), or 'refused'. Optionally checks whether the token would authorise a specific request here; caveated paths report false because this diagnostic has no concrete invocation in which to run their policy gates. Read-only: no signing, no side effects.",
 	"dateCreated": "2026-07-09T00:00:00Z",
 	"operation": {
 		"adapter": "ucan:verify",

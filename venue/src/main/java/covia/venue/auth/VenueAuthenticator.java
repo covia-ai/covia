@@ -482,7 +482,7 @@ public final class VenueAuthenticator {
 			// Only the subject becomes the caller; it inherits no signer authority.
 			KeyRef key = signingKeyOf(parsed, sub);
 			if (key.reason() != null) return Verdict.fail(key.reason());
-			if (!sub.equals(key.did()) && !isNestedIdentity(sub, key.did())) {
+			if (!signsInAs(key.did(), sub)) {
 				return Verdict.fail("kid names key " + key.did() + " " + Reason.WRONG_KEY_FOR_SUBJECT + sub
 					+ Reason.WRONG_KEY_HINT);
 			}
@@ -608,6 +608,20 @@ public final class VenueAuthenticator {
 	// ------------------------------------------------------------- the checks
 	// Each returns null when it passes and the reason when it does not, the
 	// convention CapabilityChecker.allows and UcanJwtValidator.Validation use.
+
+	/** A bare did:key: one multibase Ed25519 key, nothing nested. */
+	private static final Pattern BARE_DID_KEY = Pattern.compile("did:key:z[1-9A-HJ-NP-Za-km-z]+");
+
+	/**
+	 * Whether this venue accepts a token signed by {@code signer} as signing in
+	 * as {@code subject}: a bare {@code did:key} signs in as itself and as every
+	 * identity nested below it. The one rule that authentication and grant roots
+	 * ({@code Engine.rootAuthorityPolicy}) share; it grants no permission.
+	 */
+	public static boolean signsInAs(AString signer, AString subject) {
+		if (signer == null || subject == null || !BARE_DID_KEY.matcher(signer.toString()).matches()) return false;
+		return subject.equals(signer) || isNestedIdentity(subject, signer);
+	}
 
 	/** Whether a subject uses valid nested segments below the exact signing identity.
 	 * Shared by authentication and issuance; this establishes no permissions. */

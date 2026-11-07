@@ -2739,6 +2739,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = user.agent(agentId);
 		if (agent == null || !agent.exists()) {
 			if (remove && emptyEntry(user, agentId)) {
+				engine.deleteAgentState(Principals.agentDID(target.ownerDID(), agentId));
 				user.removeAgent(agentId);
 				return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));
 			}
@@ -2755,8 +2756,11 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (externalAgents().isExternal(agent)) externalAgents().cancelAll(agent);
 		// Nothing the agent scheduled outlives it.
+		AString agentDID = Principals.agentDID(target.ownerDID(), agentId);
 		Scheduler scheduler = engine.gridScheduler();
-		if (scheduler != null) scheduler.cancelCaller(Principals.agentDID(target.ownerDID(), agentId));
+		if (scheduler != null) scheduler.cancelCaller(agentDID);
+		// Nor anything adapters hold for it, its keyring among them.
+		engine.deleteAgentState(agentDID);
 		if (remove) {
 			user.removeAgent(agentId);
 			return identify(target, Maps.of(Fields.REMOVED, CVMBool.TRUE));

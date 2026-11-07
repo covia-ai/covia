@@ -209,12 +209,21 @@ final class CryptoKeyring {
 	 * is a user of its own, deleted on its own.
 	 */
 	static void deleteHolder(AdapterState state, AString did) {
+		deleteHolders(state, holder -> holder.equals(did)
+			|| (Principals.isAgentDID(holder) && did.equals(Principals.userOf(holder))));
+	}
+
+	/** Removes a deleted agent's own keyring ({@code agentDID} exactly). */
+	static void deleteAgent(AdapterState state, AString agentDID) {
+		deleteHolders(state, agentDID::equals);
+	}
+
+	private static void deleteHolders(AdapterState state, java.util.function.Predicate<AString> deleted) {
 		state.update(current -> {
 			Index<AString, ACell> holders = holders(current);
 			AtomicReference<Index<AString, ACell>> rest = new AtomicReference<>(holders);
 			holders.forEach((holder, ring) -> {
-				boolean agent = Principals.isAgentDID(holder) && did.equals(Principals.userOf(holder));
-				if (holder.equals(did) || agent) rest.set(rest.get().dissoc(holder));
+				if (deleted.test(holder)) rest.set(rest.get().dissoc(holder));
 			});
 			return (rest.get() == holders) ? current : layout(current).assoc(HOLDERS, rest.get());
 		});

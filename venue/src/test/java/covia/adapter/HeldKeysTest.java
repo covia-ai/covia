@@ -28,7 +28,9 @@ import convex.core.lang.RT;
 import convex.core.json.schema.JsonSchema;
 import convex.core.util.JSON;
 import covia.api.Abilities;
+import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
@@ -208,6 +210,35 @@ class HeldKeysTest {
 		assertNotNull(failure("list-keys", Maps.of("did", alice.toString())));
 		ctx = RequestContext.of(alice);
 		assertEquals(1, ((AVector<?>) RT.getIn(run("list-keys", Maps.empty()), "keys")).count());
+	}
+
+	/** An agent is a principal of its own: its keys are its own, its owner
+	 *  grants their use on its behalf, and they go when the agent does. */
+	@Test void anAgentHoldsItsOwnKeysWhichGoWithIt() {
+		RequestContext owner = ctx;
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "helper", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			owner).awaitResult(5000);
+		AString agentDID = Principals.agentDID(owner.getUserDID(), Strings.create("helper"));
+		ctx = RequestContext.ofAgent(owner.getUserDID(), Strings.create("helper"));
+		String did = heldKey();
+		run("sign", Maps.of("key", did, "data", "0x00"));
+		assertEquals(1, ((AVector<?>) RT.getIn(run("list-keys", Maps.empty()), "keys")).count());
+		ctx = owner;
+		assertEquals(0, ((AVector<?>) RT.getIn(run("list-keys", Maps.empty()), "keys")).count(),
+			"the agent's keyring is not its owner's");
+
+		// Bob signs with it under a grant the owner had the venue make.
+		String key = agentDID + "/x/crypto/keys/" + Multikey.encodePublicKey(UCAN.fromDIDKey(Strings.create(did)));
+		AKeyPair bob = AKeyPair.generate();
+		AString token = RT.ensureString(RT.getIn(engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, UCAN.toDIDKey(bob.getAccountKey()), UCAN.ATT,
+				Vectors.of(Capability.create(Strings.create(key), Abilities.KEY_SIGN))), owner).awaitResult(5000), "token"));
+		ctx = user(bob).withProofs(Vectors.of(UCAN.fromJWT(token).toMap()));
+		assertTrue(verifies(run("sign", Maps.of("key", key, "data", "0x00")), "00", UCAN.fromDIDKey(Strings.create(did))));
+
+		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "helper"), owner).awaitResult(5000);
+		assertTrue(failure("sign", Maps.of("key", key, "data", "0x00")).contains(CryptoAdapter.KEY_NOT_HELD));
 	}
 
 	@Test void pagingCountsKeysThenPhrases() {
