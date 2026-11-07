@@ -139,10 +139,51 @@ The adapter's operations (names open):
 - **List** the caller's own keys: public key, label and when it was added.
 - **Sign** a payload with one of the caller's keys.
 
+## Abilities
+
+A keyring is the resource `<holder DID>/keys/`, and one key is
+`<holder DID>/keys/<public key>`, the key in multibase form. Like
+`<did>/oauth/<provider>`, they name resources for capability checks, not
+lattice paths.
+
+| Ability | On | Allows |
+|---------|----|--------|
+| `crud/read` | `<did>/keys/` | Listing the keyring: public keys, labels and when each was added |
+| `key/add` | `<did>/keys/<pk>` | Adding that key |
+| `key/remove` | `<did>/keys/<pk>` | Removing it |
+| `key/sign` | `<did>/keys/<pk>` | Signing anything with it; covers every `key/sign/…` |
+| `key/sign/token` | `<did>/keys/<pk>` | Signing identity tokens |
+| `key/sign/grant` | `<did>/keys/<pk>` | Signing UCAN grants |
+| `key/sign/convex` | `<did>/keys/<pk>` | Signing Convex transactions and values |
+| `key/sign/raw` | `<did>/keys/<pk>` | Signing arbitrary bytes, which can produce any of the above |
+
+`key` covers every `key/…` ability. The kinds of signing let a capability
+scope narrow what a key may sign: an agent can hold `key/sign/token` on its
+own key without being able to sign transactions.
+
+A check has two steps, in order:
+
+1. **The caller is the holder.** The keyring's DID must equal the caller's
+   DID; nothing else counts, not a presented grant, an admission policy or
+   `user/sudo`. That is what makes these rights undelegable, and it keeps an
+   agent with no caps, whose base is its owner's authority, away from its
+   owner's keys.
+2. **The caller's own base covers the ability.** A user holds them all over
+   its own keyring. An agent needs caps naming its own keyring by DID URL,
+   since a bare path in caps names its owner's namespace. An `nb.gate` on such
+   a cap can make signing wait for an approval.
+
+A nested identity signing as itself with its root's key does so only through
+`auth:identity-token`, under that operation's rules, and holds no `key/…`
+right over its root's keyring. The venue's own key is the venue's keyring
+entry under the same two steps, so only the venue acting as itself, in trusted
+code, signs with it; a grant from the venue never confers that.
+
 ## Open questions
 
-1. The abilities that add, remove, list and sign, and the resource each names.
-2. What the signing operation accepts: raw bytes, JWT claims, Convex values.
+1. What the signing operation accepts: raw bytes, JWT claims, Convex values.
+2. Whether a root must opt in before identities nested below it have its key
+   sign their identity tokens.
 3. Signing the venue's outbound calls made as a held identity, per call.
 4. Whether the sign operation and the HITL `sign` request (#293) share one
    path.
