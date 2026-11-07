@@ -137,11 +137,10 @@ another allowance its holder holds still covers it.
   allowances over its users' resources, because the power is its own. For
   example, it can give a Brightside god an allowance over one folder of one
   user's workspace.
-- **Signing.** The venue signs only for identities whose keys it holds.
-  Venue-rooted grants stay limited to its own resources and its custodial
-  users (`Engine.rootAuthorityPolicy`), and the venue never authenticates as a
-  self-sovereign user. Its power over a self-sovereign user works through
-  activation within this venue, never through a signed grant.
+- **Signing.** The venue signs as an owner's custodian only for identities
+  whose keys it holds, and never authenticates as a self-sovereign user. COG-17
+  names its power over what it hosts as the host root, which holds only at
+  this venue, so that power never reaches another venue.
 - **Change from today.** The venue cannot act as a self-sovereign user today,
   because `user/sudo` needs that user's own grant. Under this design it can,
   after activation.
@@ -202,12 +201,10 @@ provisioning services hold allowances the venue issued.
    operation and input the request will run.
 4. Where allowances are stored, how they are listed, who may revoke one
    (issuer, holder, venue), and whether revoking ends activations in progress.
-5. Whether allowances must expire. COG-17 forbids issuing grants with no
-   expiry, and the venue's power over its users has none.
-6. COG-17 says no granting surface can create authority beyond ownership and
-   granting rights. The venue's power over the users it hosts is a source it
-   does not name: COG-17 needs a change, or allowances must be defined outside
-   its grants.
+5. Whether an allowance may have no expiry, as a grant may (COG-17).
+6. Whether the venue honours grants it signs as host over self-sovereign
+   users' resources. COG-17 allows them at the host; today's root rule
+   (`Engine.rootAuthorityPolicy`) refuses them.
 7. Deferred work keeps presented grants but not the base. Agents are safe
    because their caps are read again; any other context with a scope would
    lose it.
