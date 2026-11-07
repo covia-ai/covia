@@ -1,69 +1,115 @@
 # Held Keys (design)
 
-How a venue holds the private key of an identity in its custody, and signs
-as that identity. This is a design; none of it is implemented yet.
+How a venue keeps signing keys for the identities it hosts, and signs with
+them on their behalf. This is a design; none of it is implemented yet.
 
 Tracked by covia#637.
 
 ## What a held key is
 
-A held key is custody of an identity, not a piece of data. Whoever holds a
-`did:key`'s private key is that identity, at every venue. Held keys therefore
-follow the rules of identity, not those of secrets: a secret is data its
-owner can read (`secret/extract`) and lend (`secret/use`), and a held key
-allows neither.
+Every identity on the venue has a keyring: the signing keys it has given the
+venue, of any type, indexed by public key. A key may be the key of a
+`did:key` identity, in which case holding it is custody of that identity, or
+any other key its holder signs with, such as a Convex account key.
+
+A held key follows the rules of identity, not those of secrets. A secret is
+data its owner can read (`secret/extract`) and lend (`secret/use`); a held
+key allows neither, because whoever can sign with a key acts as whatever that
+key identifies.
 
 Today `auth:identity-token` signs only with the venue's own key, for the
-venue's `did:key` and identities nested below it ([AUTH.md](./AUTH.md) §5.2).
-An embedder whose installation has its own `did:key` keeps that key in its
-own code and signs with `VenueAuth.namedKeyPair` itself.
+venue's `did:key` and identities nested below it ([AUTH.md](./AUTH.md) §5.2),
+and `ucan:issue` signs every grant with the venue's key. An embedder whose
+installation has its own `did:key` keeps that key in its own code and signs
+with `VenueAuth.namedKeyPair` itself.
 
 ## Principles
 
-1. **Giving the key is the consent.** The venue checks that the key is the
-   identity's: a `did:key` is its public key, so nothing else is needed. From
-   then on the venue custodies that identity, the condition COG-17 sets for
-   signing as an owner's custodian.
-2. **It signs only for its own identity.** A held key signs only for a request
-   whose caller is its identity or an identity nested below it, authenticated
-   as itself or acting as itself in trusted in-process code. Acting on an
-   identity's behalf never signs as it: not through `user/sudo`, an activated
-   allowance, or the venue's power over its users
+1. **Any identity may hold keys.** An authenticated identity adds a key to its
+   own keyring, given the capability to do so. The venue checks that the
+   private key yields the public key; nothing else is needed.
+2. **Only the holder uses its keys.** A key signs only for a request whose
+   caller is its holder, authenticated as itself or acting as itself in
+   trusted in-process code. Only the holder lists its keys. These rights cannot
+   be delegated: a grant of them would let another principal sign as the
+   holder. A capability scope can narrow them, as an agent's caps do.
+3. **Acting on an identity's behalf never signs as it:** not through
+   `user/sudo`, an activated allowance, or the venue's power over its users
    ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md)). A signature travels to other
-   venues, and the host root holds only at its own venue. The same rule
-   covers the venue's own key and the custodial users it signs for.
-3. **It signs only what its identity could sign itself,** under the same
-   consent and no-amplification rules as any issuance (COG-17).
-4. **It is never readable.** No operation returns, exports or lends it, as for
-   the venue's own key.
-5. **It is named by its DID.** A `did:key` is its public key, so an identity
-   has exactly one key and needs no key names or identifiers. A `did:key`
-   cannot rotate: a new key is a new identity.
-6. **Custody can end.** Removing the key, or deleting its identity, ends it.
-   The venue then signs nothing new for the identity; tokens already issued
-   last until they expire.
-7. **It signs at the point of use.** With the key held, the venue mints
-   short-lived tokens when they are needed, so no long-lived bearer has to be
-   stored.
-8. **Every signing is audited,** naming the identity whose key signed and the
+   venues, and the host root holds only at its own venue.
+4. **Nested identities sign only as themselves.** An identity nested below a
+   root (`<root>:u:alice`) may have its root's key sign as the nested identity,
+   such as its own identity token, and never as the root. Agents are
+   identities with keyrings of their own, and cannot use their owner's keys.
+5. **Keys are never readable.** No operation returns, exports or lends a
+   private key, as for the venue's own key.
+6. **Signing is generic.** One signing function serves identity tokens,
+   UCAN grants, Convex transactions and raw payloads, under the same consent
+   and no-amplification rules as any issuance (COG-17).
+7. **It signs at the point of use.** The venue mints short-lived tokens when
+   they are needed, so no long-lived bearer has to be stored.
+8. **Custody can end.** Removing a key, or deleting its holder, ends it. The
+   venue then signs nothing new with it; tokens already issued last until they
+   expire.
+9. **Every signing is audited,** naming the holder, the public key and the
    principal that asked.
 
-## Storage
+## Store format
 
-- Held keys belong to their own adapter and live in its state
-  (`:adapters/<name>`, [ADAPTERS.md](./ADAPTERS.md)). Each is the identity's
-  Ed25519 seed, stored under its `did:key` and sealed with `SecretStore.seal`
-  under keys derived from the venue's seed, as the OAuth adapter seals
-  provider tokens.
-- **Versioned.** The adapter's state layout is versioned from its first
-  release: each change is a migration step, and the venue records the version
-  reached in `:adapter-versions` (ADAPTERS.md, "Versioned state and
-  migration"). Each sealed record also carries the version of the key that
-  sealed it, so records can be re-encrypted when the venue's key rotates
-  (#535), independently of the layout version.
-- **Deleted with its identity.** Deleting a user runs every adapter's
+Held keys are their own adapter's state, at `:adapters/<name>`
+([ADAPTERS.md](./ADAPTERS.md)):
+
+```
+{
+  "version": 0,
+  "holders": Index<AString, Index<Blob, key record>>
+}
+```
+
+- **`version`** (`CVMLong`) is the layout version. Each layout change is a
+  migration step, and the step writes the new version here as the framework
+  records it in `:adapter-versions` (ADAPTERS.md, "Versioned state and
+  migration"), so the value states its own version. The first release has no
+  steps and is version 0.
+- **`holders`** is an `Index` keyed by the holder's DID, as an `AString`. An
+  `Index` keeps holders in order, so an identity and every identity nested
+  below it (`<did>:…`) are adjacent, and deleting a user removes that range.
+- **Each keyring** is an `Index` keyed by public key, as a `Blob`: the
+  multicodec-prefixed key bytes, `0xed01` followed by the 32-byte key for
+  Ed25519. The prefix names the key type, so other types fit without a layout
+  change. The multibase string (`z6Mk…`) appears only where an operation
+  shows a key.
+
+A key record is a map:
+
+```
+{
+  "sealed": { "encrypted": <Blob>, "keyVersion": <CVMLong> },
+  "added":  <CVMLong, unix ms>,
+  "label":  <AString, optional>
+}
+```
+
+- **`sealed`** is the `SecretStore.seal` record: AES-256-GCM ciphertext and
+  the version of the key that sealed it, so records can be re-encrypted when
+  the venue's key rotates (#535).
+- **The sealed plaintext** is a JSON string naming the holder DID, the public
+  key and the private key, both keys in multikey form (`Multikey` in Convex).
+  On opening, the venue checks that the holder and public key match the
+  record's place and that the private key yields the public key, so a record
+  opens only where it was written.
+- **The sealing key** is derived from the venue's seed under a label of its
+  own, apart from the secret store's, so a sealed key cannot be read as a
+  secret.
+- **`label`** is the holder's own name for the key, if it gave one.
+
+Signing writes nothing to the store; the audit log records it.
+
+## Storage rules
+
+- **Deleted with its holder.** Deleting a user runs every adapter's
   `deleteUserState` in the deletion transaction, disabled adapters included,
-  so an identity's key goes with it.
+  and this adapter removes the user's holder entry and those nested below it.
 - **Disabling the adapter** leaves the keys sealed in its state, and nothing
   signs with them until it is enabled again.
 - **The venue's own key stays where it is,** loaded from `seed`, `keystore` or
@@ -71,31 +117,33 @@ own code and signs with `VenueAuth.namedKeyPair` itself.
   every sealed record depends on, so it cannot live in state it unlocks, and
   signing with it does not depend on the adapter.
 
+## Signing
+
+An Ed25519 key becomes a Convex `AKeyPair` in memory for one signing call
+only. The existing signers then serve every use: `JWT.signPublic` for identity
+tokens and UCAN grants, `AKeyPair.signData` for Convex transactions, and
+`AKeyPair.sign` for raw payloads. `auth:identity-token` and `ucan:issue` both
+sign with an `AKeyPair` today, so choosing the venue's key or a held one,
+after checking that the caller is the holder, is the one change to them.
+Other key types need signers of their own; Convex 0.8.18 provides Ed25519
+only.
+
 ## Operations
 
 The adapter's operations (names open):
 
-- **Add** a key for an identity, refused unless it matches the DID. The key
-  is a secret field of the operation (`operation.secretFields`), so job
-  records keep it redacted.
-- **Remove** a key, ending custody.
-- **List** the identities whose keys the venue holds, by DID only.
-
-`auth:identity-token` signs with a held key when the caller's identity, or the
-`did:key` it is nested below, is held, as it signs with the venue's key today.
+- **Add** a key, refused unless the private key yields the public key. The
+  private key is a secret field of the operation (`operation.secretFields`),
+  so job records keep it redacted.
+- **Remove** a key.
+- **List** the caller's own keys: public key, label and when it was added.
+- **Sign** a payload with one of the caller's keys.
 
 ## Open questions
 
-1. Who may add a key: only a caller authenticated as that identity, or also
-   trusted code or the operator for identities the venue manages, such as an
-   embedder's installation. Whether the identity must be a venue user.
-2. Whether a root may ask for a token for an identity nested below it, which
-   `auth:identity-token` refuses today by taking no subject from input.
-3. Whether a held key also signs grants as its identity, which verify
-   anywhere without the venue's attestation.
-4. Signing the venue's outbound calls made as a held identity, per call.
-5. A general signing operation, for payloads such as Convex transactions,
-   beside the HITL `sign` request (#293).
-6. Who may list held keys.
-7. Identities other than `did:key`.
-8. The adapter's and operations' names.
+1. The abilities that add, remove, list and sign, and the resource each names.
+2. What the signing operation accepts: raw bytes, JWT claims, Convex values.
+3. Signing the venue's outbound calls made as a held identity, per call.
+4. Whether the sign operation and the HITL `sign` request (#293) share one
+   path.
+5. The adapter's and operations' names.
