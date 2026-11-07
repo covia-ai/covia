@@ -738,8 +738,12 @@ Call `v/ops/auth/identity-token` on the signing venue:
 
 The operation derives `sub` and `iss` from the exact caller, including an
 agent's full nested identity. It accepts no subject, claims, capabilities or
-signing key from input. The token is signed by the caller's root: the venue's
-key for the venue's signing `did:key` and the identities nested below it, or,
+signing key from input, so an identity's token goes only to that identity: no
+other caller can obtain it, a root included. Code running in the venue gets a
+user's token by invoking the operation as that user (`Engine.context`).
+
+The token is signed by the caller's root: the venue's key for the venue's
+signing `did:key` and the identities nested below it, or,
 for a `did:key` that holds its own key in its own keyring
 ([HELD_KEYS.md](./HELD_KEYS.md)), that held key, for the `did:key` itself and
 the identities nested below it. Minting a token for oneself is not a use of

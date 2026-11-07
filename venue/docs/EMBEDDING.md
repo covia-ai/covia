@@ -126,9 +126,16 @@ so the application decides who reaches them.
 ## Identity
 
 A `did:key` installation can sign for identities nested below it, such as
-`<did:key>:u:<name>`. It issues them with `VenueAuth.namedKeyPair`, and a
-caller can mint a token for itself with `auth:identity-token`. See AUTH.md,
-"Nested installation identities below a did:key".
+`<did:key>:u:<name>`. To keep its private key inside the venue, store the seed
+as one of the installation's secrets, run `crypto:add-key {"seed":"s/<name>"}`
+as the installation, then delete the secret. The venue then signs identity
+tokens for the installation and every identity nested below it. To get a
+user's token, invoke `auth:identity-token` as that user
+(`engine.context(userDID)`): the token names that user and is stored in their
+secret store. An application that keeps the key itself signs with
+`VenueAuth.namedKeyPair`. See AUTH.md, "Nested installation identities below a
+did:key" and "Minting an identity token through an operation", and
+HELD_KEYS.md.
 
 ## Upgrading from 0.10.0
 
