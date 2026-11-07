@@ -26,10 +26,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `crypto:sign`, `jwt-sign`, `decrypt`, `convex:transact` and `ucan:issue` take a held `key`; `crypto:generate-key`, `derive-key` and `generate-mnemonic` take `keyring: true` (#637).
 - `auth:identity-token` signs for a `did:key` that holds its own key, and the identities nested below it (#637).
 - `ucan:issue` results name their issuer as `iss`.
+- Agents hold keyrings of their own, removed when the agent is deleted (#637).
+- Agents can issue grants over their own resources, and owners over their agents'.
 - Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
 
 ### Changed
 
+- A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only; `ucan:issue` signs them for a caller that is root of the resource or holds a `grant/` right, within the caller's scope.
+- A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
+- `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
 - Scheduled events name `caller` and `owner`; `scheduler:list` shows them in place of `by`.
 - HITL requests name the asker as `caller`, not `from`, and a delegate's or agent's namespace as `owner`; `hitl:list` shows `caller`.

@@ -1655,7 +1655,8 @@ key there whose private half nobody ever sees. Name a held key by its
 `<did>/x/crypto/keys/<key>`. Each use needs its `key/…` ability on the key by the
 standard capability rules: your own authority covers your keyring, and caps,
 `user/sudo` and grants work as for any resource, so a grant of `*` over a
-namespace includes its keys. A phrase kept with
+namespace includes its keys. An agent has a keyring of its own, under its own
+DID, which goes when the agent is deleted. A phrase kept with
 `generate-mnemonic {"keyring":true}` derives keys only into its holder's
 keyring. A did:key that holds its own key signs `auth:identity-token` for
 itself and the identities nested below it; `ucan:issue` and `convex:transact`

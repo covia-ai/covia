@@ -115,9 +115,9 @@ This aligns with `DIDURL` from convex-core — the DID is the authority, the pat
 
 **Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above; a **bare** lattice path is shorthand whose owner is implied by context, always the same principal: **the authority whose grant it is**.
 
-- **Agent caps (config scopes)**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
+- **Agent caps (config scopes)**: a bare `w/projects/foo` is in the namespace the request acts in, an agent's owner's; enforcement canonicalises it to `<ownerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths. An agent's own DID is named explicitly (`<ownerDID>:g:<id>/x/crypto/keys/`).
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
-- **Custodial issuance** (`ucan:issue`): the venue signs for its own resources or a locally managed `did:web:<host>:u:<user>`, so its `iss` is not the caller — bare paths are absolutised to the *caller's* DID before signing (§4.1). Self-sovereign owners sign client-side. Tokens minted by the venue always carry the canonical form.
+- **Venue issuance** (`ucan:issue`): the venue signs, so its `iss` is not the caller — bare paths are absolutised to the namespace the request acts in before signing (§4.1). Tokens minted by the venue always carry the canonical form.
 
 Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged; scheme forms are not issuable.
 
@@ -280,8 +280,7 @@ path outside the prefix on the covered host.
 
 ### 4.1 Issuing
 
-For a venue-managed custodial identity, the venue creates and signs a UCAN
-token using `ucan:issue`:
+A caller has the venue create and sign a UCAN token with `ucan:issue`:
 
 ```json
 ucan:issue {
@@ -309,33 +308,43 @@ Defaults are applied only after the signature over the original JWT bytes has
 been verified.
 
 The venue signs the token with the **venue key pair** (the venue is the
-issuer — custodial attestation on the authenticated caller's instruction)
-and returns the complete signed token. A self-sovereign owner (`did:key`, or
-an externally controlled DID) instead signs with their own key using the
-client SDK; registering that DID at a venue does not make the venue its
-controller.
+issuer, acting on the authenticated caller's instruction) and returns the
+complete signed token with its `iss`. The venue is the root of such a token,
+so it is valid only at this venue (§5.6, "Roots"). An identity that signs its
+own grants, with its own key or a held one (`key`, [HELD_KEYS.md](./HELD_KEYS.md)),
+makes a root that is valid anywhere.
 
 Resource rules at issuance (`UCANAdapter.handleIssue`):
 
-- A **bare** path (`/w/`, `w/projects/`) is absolutised to the *caller's*
-  DID before signing — in a venue-signed token a stored-bare path would
-  denote the venue's own namespace (§3.1). Empty paths and scheme forms
-  are rejected.
-- A DID URL in the **caller's own namespace** is issuable by this operation
-  only when the caller is a locally managed custodial user. A self-sovereign
-  caller must sign client-side.
-- A DID URL in **another principal's namespace** is issuable as a root only
-  under a held **granting right** (COG-17), or passed on by the venue itself
-  with `prf` (below). For a root, the caller's transport-presented
-  proofs must cover `grant/<can>` on the resource (proofs travel in the
-  proof channel, never in operation input), and the minted `exp` must not
-  outlive the enabling right (coverage is re-evaluated at the minted
-  expiry — so a non-expiring mint requires a non-expiring enabling
-  right), and the resource must still be controlled by this venue (the
-  venue's own DID or a local custodial user). A granting right cannot turn
-  the venue into root authority for an external DID. This makes `ucan:issue`
-  a *granting surface* — the `grant/…` rule binds token production; chain
-  resolution stays grant-agnostic.
+- A **bare** path (`/w/`, `w/projects/`) names a resource in the namespace
+  the request acts in, as everywhere else, and is absolutised before signing:
+  in a venue-signed token a stored-bare path would denote the venue's own
+  namespace (§3.1). For an agent that is its owner's namespace, which it may
+  not grant. Empty paths and scheme forms are rejected.
+- Issuance is a *granting surface*, so it asks who is asking (the caller's
+  DID), never whose namespace the request acts in. A caller may grant what it
+  is root of:
+  - its own resources, an agent's own DID included;
+  - those of an identity it signs in as (a `did:key` and the identities
+    nested below it);
+  - those of its own agents, since an agent is its owner's.
+
+  It confers only what it holds, as wherever authority is handed on: a caller
+  whose scope is restricted grants only what that scope covers.
+- Any other resource is issuable only under a held **granting right**
+  (COG-17), or passed on by the venue itself with `prf` (below). The caller's
+  transport-presented proofs must cover `grant/<can>` on the resource (proofs
+  travel in the proof channel, never in operation input), and the minted
+  `exp` must not outlive the enabling right (coverage is re-evaluated at the
+  minted expiry, so a non-expiring mint requires a non-expiring enabling
+  right). The `grant/…` rule binds token production; chain resolution stays
+  grant-agnostic.
+- Whatever the caller's right, the venue signs a root only over identities it
+  hosts. A granting right cannot make it the root of an identity it does not
+  host; that identity signs its own grants.
+- With `key`, a held key signs the token as its own `did:key`. Bare paths are
+  under that `did:key`, every entry must be a resource it is root of, and the
+  caller needs `key/sign/grant` on the key.
 
 **Passing on a held grant.** With `prf`, the issuance operation of COG-17
 signs the next link of a chain instead of a root: the venue passes on part of
@@ -826,6 +835,13 @@ every grant's `with`, so agent `config.caps` written as `w/decisions/` keep
 their meaning. The proof path is unaffected: a bare `with` in a token binds to
 that token's signed `iss`.
 
+An agent's own DID is its own as well: what is held under it, its keyring at
+`<agentDID>/x/crypto/keys/`, it reaches under its own scope
+(`Engine.requireLocalAccess`), and it may grant (§4.1). A scope names it
+explicitly, since a bare path is the owner's. Its owner grants on its behalf,
+the agent being its owner's; to use what the agent holds, the owner, like
+anyone else, presents a grant.
+
 The namespace is never parsed from a name: `Authority.of(did)` makes every DID
 its own namespace, agent-shaped or not. Only the venue puts a principal in
 another namespace, from a relationship it holds — running its own agent
@@ -957,9 +973,11 @@ data under the config, not a separate slot.
 #### Model B: Independent Agent (Own DID) — not implemented
 
 > **Status: design only.** `agent:create` has no `identity` option and mints no
-> keys. Agents today are Model A sub-principals: a distinct DID, no key of their
-> own. Model B is what a *key* would add — the ability to sign, to be delegated
-> to by other users, and to survive migration to another venue.
+> keys. Agents today are Model A sub-principals: a distinct DID that is not a
+> key. An agent may hold keys in its own keyring and sign with them
+> ([HELD_KEYS.md](./HELD_KEYS.md)), but its identity is not one of them. Model B
+> is what an identity that *is* a key would add — being delegated to by other
+> users as that key, and surviving migration to another venue.
 
 The agent has its own **cryptographic identity** — its own Ed25519 keypair and
 DID. It can sign UCANs, receive delegations from multiple users, and act
@@ -1129,17 +1147,36 @@ are shared public metadata and do not need an additional read grant.
 
 Every delegation chain terminates in a **root** — a token whose `prf` is
 empty. The single question that makes verification federatable is: *who is
-allowed to sign that root?* The answer is uniform and derives entirely from
-the resource being accessed, never from the identity of the verifying venue.
+allowed to sign that root?*
 
-**The trust anchor is the authority over the resource owner.** A resource URI
-names its owner (§3.1: `did:…/w/notes` is owned by `did:…`). The root of any
-chain granting access to it must be signed by that owner's controlling
-authority — which is read directly off the owner's DID:
+**Roots.** A venue accepts two kinds of root and no others
+(`Engine.rootAuthorityPolicy`):
+
+- **An identity**, for its own resources and those of every identity a venue
+  accepts it as signing in as: a `did:key` and the identities nested below it
+  (`did:key:zKim:g:bot`, `did:key:zKim:u:bob`), by the rule authentication uses
+  (`VenueAuthenticator.signsInAs`). A `did:web` signs in as nothing below it,
+  since its colons are URL path segments. These roots are self-certifying and
+  count at every venue.
+- **The hosting venue**, for everything it hosts (`Engine.isHosted`): its
+  users, self-sovereign or not, their agents, and its own namespaces. A venue
+  has authority over the users it hosts and must sometimes act for them. Its
+  roots count only at itself; whether another venue accepts a venue's
+  attestation for its custodial users is the trust question below (Phase C3b).
+
+Being a root confers nothing by itself: a root reaches another identity's
+resources only through a grant it signs. Owners are compared as written, as
+users are keyed and grants matched, so a differently encoded DID names nothing
+hosted.
+
+**Across venues, the trust anchor is the authority over the resource owner.**
+A resource URI names its owner (§3.1: `did:…/w/notes` is owned by `did:…`).
+The root of any chain granting access to it at another venue must be signed by
+that owner's controlling authority — which is read directly off the owner's DID:
 
 | Owner DID form | Identity class | Controlling authority | Root signer | Trusted because |
 |----------------|----------------|-----------------------|-------------|-----------------|
-| `did:key:z…` | **Self-sovereign** | the owner themselves | the owner (owner-signed) | `did:key` is self-certifying — the key *is* the DID |
+| `did:key:z…` | **Self-sovereign** | the owner, or a `did:key` it is nested below | that identity (identity-signed) | `did:key` is self-certifying — the key *is* the DID |
 | `did:web:host` | **Self-sovereign** | the owner themselves | the owner (owner-signed) | resolved from `https://host/.well-known/did.json` |
 | `<venueDID>:u:<user>` | **Venue-custodial** | the controlling venue (`<venueDID>`) | that venue (venue-**attested**) | the verifier's trust policy accepts that venue |
 
@@ -1163,15 +1200,13 @@ This is not the venue claiming authority over arbitrary data — it is scoped to
 the namespaces of the users it controls. A verifying venue accepts such a root
 only if its **trust policy** accepts the attesting venue (Phase C3).
 
-**The verifier's own identity is irrelevant.** A venue verifying a request
-asks only: does the chain root in the resource owner's controlling authority,
-and (for a custodial root) do I trust that authority? It never requires the
-root to be its *own* signature. The current implementation's Phase C1 check —
-root `iss` must equal the verifying venue — is the **degenerate case** where
-the controlling authority happens to be the verifying venue itself (a local
-custodial user). Generalising it from "iss == this venue" to "iss == the
-owner's controlling authority, and trusted" is backward-compatible for local
-users and is precisely what unblocks federation (#100).
+**The verifier's own identity matters only for what it hosts.** A venue
+verifying a request asks: does the chain root in the resource owner's
+controlling authority, and (for a custodial root) do I trust that authority?
+It never requires the root to be its *own* signature. Its own root over what
+it hosts is the **degenerate case** where the controlling authority is the
+verifying venue itself. Accepting "iss == the owner's controlling authority,
+and trusted" as well is what unblocks federation (#100).
 
 #### Trust policy for attesting venues (Phase C3)
 
@@ -1294,8 +1329,8 @@ the authentication channel. The three concerns never infer one another:
 ### Phase C1: Signed UCAN Tokens ✓
 
 - `Capability.covers()` in convex-core for attenuation matching
-- `ucan:issue` creates venue-signed roots only for venue-controlled resources;
-  self-sovereign owners sign client-side
+- `ucan:issue` creates venue-signed roots, valid at that venue, over the
+  identities it hosts (§4.1)
 - `ucan:verify` operation verifies a token against the venue's trust policy and explains the verdict (validity, chain depth, root issuer, per-capability root-authority, optional would-it-authorise check)
 - Tokens presented per-request in `RequestContext.proofs`
 - Signature verification on every capability check
@@ -1306,10 +1341,10 @@ the authentication channel. The three concerns never infer one another:
 
 - Bare `with` in signed tokens resolves against the token's `iss` at
   evaluation (`normaliseProofs` in `proofsCover`, per chain hop)
-- `ucan:issue` absolutises bare paths to the caller DID before signing;
-  mints over another locally controlled principal's resource only under a
-  presented `grant/<can>` granting right, with `exp` capped by the right's
-  validity; external DID roots are never venue-minted
+- `ucan:issue` absolutises bare paths in the namespace the request acts in
+  before signing; mints over a resource the caller is not root of only under
+  a presented `grant/<can>` granting right, with `exp` capped by the right's
+  validity; the venue roots no identity it does not host
 - `ucan:verify` canonicalises bare queried resources against the audience
   so diagnostics match enforcement
 - Verification remains grant-agnostic — `grant/…` binds production only
@@ -1347,8 +1382,9 @@ land together, in order of dependency:
 **C3a — Self-sovereign** (current behaviour).
 - *Verify:* root authority follows the §4.4 rule — the chain root must be signed
   by the resource owner's controlling authority (self-sovereign owners verify
-  offline via `RootAuthorityPolicy.SELF_SOVEREIGN`), or by this venue only for
-  its locally managed custodial users. The generic primitive
+  offline via `RootAuthorityPolicy.SELF_SOVEREIGN`, a `did:key` also for the
+  identities nested below it), or by this venue for the identities it hosts
+  (§5.6, "Roots"). The generic primitive
   (chain walk + root-authority policy + pluggable DID verification) is
   convex-core `UCANValidator` (Convex-Dev/convex#635); covia's `proofsCover`
   composes the policy.

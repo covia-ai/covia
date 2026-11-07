@@ -29,6 +29,7 @@ import convex.core.json.schema.JsonSchema;
 import convex.core.util.JSON;
 import covia.api.Abilities;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.venue.Engine;
@@ -239,6 +240,21 @@ class HeldKeysTest {
 
 		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "helper"), owner).awaitResult(5000);
 		assertTrue(failure("sign", Maps.of("key", key, "data", "0x00")).contains(CryptoAdapter.KEY_NOT_HELD));
+	}
+
+	/** A request under user/sudo is bounded by the grants it presents: it
+	 *  reaches the target's key by naming it, and a bare key is the delegate's
+	 *  own, as for any principal that acts. */
+	@Test void underSudoATargetsKeyIsNamedAndGranted() {
+		String did = heldKey();
+		String key = resource(did);
+		AString target = ctx.getUserDID();
+		RequestContext sudo = grantee(AKeyPair.generate(),
+			Vectors.of(Capability.create(Strings.create(target + "/"), Strings.create("*")))).onBehalfOf(target);
+		CryptoAdapter crypto = CryptoAdapter.of(engine);
+		assertEquals(UCAN.fromDIDKey(Strings.create(did)),
+			crypto.heldKeyPair(sudo, Strings.create(key), Abilities.KEY_SIGN_RAW).getAccountKey());
+		assertThrows(AuthException.class, () -> crypto.heldKeyPair(sudo, Strings.create(did), Abilities.KEY_SIGN_RAW));
 	}
 
 	@Test void pagingCountsKeysThenPhrases() {

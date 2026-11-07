@@ -698,8 +698,11 @@ VenueAuth.namedKeyPair(installKey, installDID + ":u:alice:g:worker", 300).mintTo
 The signing key must match the exact base DID. Existing signature, audience,
 expiry and not-before checks still apply. As for a bare `did:key`, the
 `iss` claim does not confer authority. No subject register is needed for
-authentication at the receiving venue. This does not extend UCAN issuer
-resolution or grant an installation authority over descendant resources.
+authentication at the receiving venue. The same rule (`VenueAuthenticator.signsInAs`)
+makes the installation's `did:key` the root of grants over the nested
+identities' resources ([UCAN.md](./UCAN.md) §5.6, "Roots"): it can sign grants
+over them, and reaches them only under such a grant. Signing in confers no
+authority over them.
 
 `VenueAuthenticator.authenticatedIdentity(context)` returns the installation's
 `did:key`; `authenticatedUser(context)` and `AuthResult.userDID()` retain the
