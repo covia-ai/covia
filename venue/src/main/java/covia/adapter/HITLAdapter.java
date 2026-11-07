@@ -309,11 +309,11 @@ public class HITLAdapter extends AAdapter {
 		// Answering is a GRANTING SURFACE (COG-17): an approved ask mints a
 		// venue-signed UCAN under the responder's authority. The responder is the
 		// inbox owner, so an agent reaching here would answer its OWN request and
-		// grant itself authority as its owner — authority ucan:issue never gives
-		// an agent, which grants only what it is root of, laundered through the
-		// one surface that exists to put a human in the loop. A capability scope
-		// is no defence: an agent trusted with a null (unrestricted) scope is
-		// exactly the one that could do it. So the gate is on identity, not on scope.
+		// grant itself authority as its owner, with the owner's whole authority
+		// rather than the agent's own caps, laundered through the one surface
+		// that exists to put a human in the loop. A capability scope is no
+		// defence: the grant is issued under the owner's context, whatever the
+		// agent's scope. So the gate is on identity, not on scope.
 		if (ctx.isSubPrincipal()) {
 			throw new AuthException("Agents cannot answer HITL requests: "
 				+ ctx.getCallerDID() + " would be responding on behalf of "
