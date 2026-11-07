@@ -180,7 +180,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Capability scopes bound job and scheduled-event access in every context.
 - Chat bindings authenticate each sender; unlisted senders are anonymous.
 - REST secret listing, operation lookup, job streams and agent lookup check the caller.
-- `auth:identity-token` refuses restricted self-tokens and the public principal.
+- `auth:identity-token` refuses restricted self-tokens and the public principal, and checks its invoke grant before it uses a key.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
 - An agent's pinned context and skills index show only what its caps cover.
