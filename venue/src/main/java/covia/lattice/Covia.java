@@ -7,26 +7,24 @@ import convex.core.data.Keyword;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALattice;
-import convex.lattice.generic.CASLattice;
 import convex.lattice.generic.JSONLattice;
 import convex.lattice.generic.IndexLattice;
 import convex.lattice.generic.KeyedLattice;
 import convex.lattice.generic.LWWLattice;
 import convex.lattice.generic.MapLattice;
-import convex.lattice.generic.OwnerLattice;
 import convex.lattice.generic.StringKeyedLattice;
-import convex.lattice.fs.DLFSLattice;
 import covia.api.Fields;
 
 
 /**
- * Stored shapes and merge rules for the Covia root.
+ * Names and stored shapes of Covia's state, and the merge rule of a venue record.
  *
- * <p>The root contains {@code :grid/:venues}, signed by each venue owner,
- * shared content-addressed {@code :grid/:meta}, and independently signed
- * {@code :dlfs} owner regions. Each venue payload is a whole-value LWW register:
- * a newer {@code :timestamp} wins, an external tie retains the local value,
- * and deletions survive reconciliation.</p>
+ * <p>{@code covia.venue.CoviaApplication} composes the root from components:
+ * {@code :grid/:venues}, signed by each venue owner, shared content-addressed
+ * {@code :grid/:meta}, and independently signed {@code :dlfs} owner regions.
+ * Each venue payload is a whole-value LWW register: a newer {@code :timestamp}
+ * wins, an external tie retains the local value, and deletions survive
+ * reconciliation.</p>
  *
  * <p>A venue is an atomically updated running application instance. LWW is
  * snapshot selection for backup, replication and failover, not an algorithm
@@ -296,30 +294,6 @@ public final class Covia {
 	 */
 	public static final ALattice<ACell> VENUE =
 		LWWLattice.create(INTERIOR, Covia::venueTimestamp);
-
-	/**
-	 * Per-user DLFS drives lattice. Each user (AccountKey) signs their own drive
-	 * map. Drives are keyed by name, each a DLFSLattice tree with rsync-like CRDT
-	 * merge semantics.
-	 */
-	public static final OwnerLattice<?> DLFS_USERS = OwnerLattice.create(
-		MapLattice.create(DLFSLattice.INSTANCE)    // drive-name → DLFS tree
-	);
-
-	/**
-	 * Root lattice for Covia state. Two sibling regions: {@code :grid} (venue
-	 * state, signed by the venue's key) and {@code :dlfs} (per-user DLFS drives,
-	 * each signed by the user's own key).
-	 */
-	public static final OwnerLattice<ACell> VENUE_OWNERS = OwnerLattice.create(VENUE);
-
-	public static final KeyedLattice ROOT = KeyedLattice.create(
-		GRID, KeyedLattice.create(
-			VENUES, VENUE_OWNERS,
-			META, CASLattice.create()
-		),
-		DLFS, DLFS_USERS
-	);
 
 	private Covia() {
 		// Prevent instantiation

@@ -19,7 +19,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.store.MemoryStore;
-import convex.lattice.LatticeContext;
 import convex.lattice.LatticeHost;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
@@ -66,8 +65,7 @@ public class VenueStateTest {
 		try (MemoryStore store = new MemoryStore()) {
 			LatticeHost<Index<convex.core.data.Keyword, ACell>> root =
 				LatticeHost.create(Index.none(), store);
-			CoviaApplication application = CoviaApplication.connect(root);
-			application.setContext(LatticeContext.create(null, kp));
+			CoviaApplication application = CoviaApplication.connect(root, VenueContext.SYSTEM.withSigner(kp));
 			VenueState venue = application.venue(kp.getAccountKey());
 
 			venue.initialise(Strings.create("did:key:test"), NO_SECRETS);

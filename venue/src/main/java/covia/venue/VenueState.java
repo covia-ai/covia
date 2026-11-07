@@ -30,9 +30,8 @@ import convex.core.store.AStore;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.LatticeComponent;
-import convex.lattice.LatticeContext;
+import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
-import convex.lattice.cursor.SignedCursor;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
@@ -125,40 +124,42 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	}
 
 	/**
-	 * Connects a venue component beneath a containing Covia application.
-	 * The component signs with the application's signing policy as it stands
-	 * now and shares the application's {@link VenueContext}. Publication
-	 * belongs to the host.
+	 * Connects a venue component beneath a containing Covia application. The
+	 * component signs with the context's signer and shares the context with its
+	 * children. Publication belongs to the host.
 	 */
 	public static VenueState connect(CoviaApplication parent,
-			AccountKey ownerKey) {
+			AccountKey ownerKey, VenueContext context) {
 		if (parent == null) {
 			throw new IllegalArgumentException("Parent component must not be null");
 		}
 		if (ownerKey == null) {
 			throw new IllegalArgumentException("Venue owner key must not be null");
 		}
-		LatticeContext signing = parent.getContext();
-		return fromRoot(parent.cursor(), ownerKey, value -> signing.sign(ownerKey, value), parent.venueContext());
+		return connect(parent.venues(), ownerKey, context::sign, context);
 	}
 
 	/**
-	 * Connects to an existing root lattice cursor by navigating to the
-	 * venue level. The root cursor is typically held by Engine.
+	 * Connects to the venue records under a Covia container, such as a root
+	 * cursor held by a test or a store snapshot.
 	 *
-	 * @param root Root lattice cursor
+	 * @param root Cursor at the container holding {@code :grid}
 	 * @param ownerKey Venue owner's account key
 	 * @param signer Signs a venue value as the owner, or returns null when it
 	 *        cannot; the owner's signing rule checks each result
 	 * @param context Policy shared by the venue's components
 	 * @return VenueState connected to the root cursor
 	 */
+	@SuppressWarnings("unchecked")
 	public static VenueState fromRoot(AForkableCursor<?> root, AccountKey ownerKey,
 			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
-		var owners = LatticeComponent.resolve(root, Covia.ROOT, Covia.GRID, Covia.VENUES);
-		var signing = Covia.VENUE_OWNERS.signingFor(ownerKey);
-		var signed = SignedCursor.<ACell>create(LatticeComponent.resolve(owners, Covia.VENUE_OWNERS, ownerKey), value -> signing.sign(value, signer));
-		return new VenueState(signed, ownerKey, context);
+		var venues = CoviaApplication.venueRecords((AForkableCursor<Index<Keyword, ACell>>) root);
+		return connect(venues, ownerKey, signer, context);
+	}
+
+	private static VenueState connect(OwnedMap<ACell, ACell> venues, AccountKey ownerKey,
+			Function<ACell, SignedData<ACell>> signer, VenueContext context) {
+		return new VenueState(venues.authoringCursor(ownerKey, signer), ownerKey, context);
 	}
 
 	/**
@@ -175,9 +176,9 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	@SuppressWarnings("unchecked")
 	public static Set<AccountKey> peekVenueKeys(AStore store) throws IOException {
 		ACell root = Objects.requireNonNull(store, "store").getRootData();
-		if (root == null) return Set.of();
+		if (!(root instanceof Index<?, ?> index)) return Set.of();
 
-		ACell value = RT.getIn(root, Covia.GRID, Covia.VENUES);
+		ACell value = CoviaApplication.venueRecords(Cursors.root((Index<Keyword, ACell>) index)).cursor().getOrDefault(null);
 		if (!(value instanceof AMap<?, ?> venues) || venues.isEmpty()) return Set.of();
 
 		LinkedHashSet<AccountKey> keys = new LinkedHashSet<>();
@@ -220,7 +221,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 */
 	public static Optional<StoredVersions> peekVersions(AStore store, AccountKey ownerKey) throws IOException {
 		ACell root = Objects.requireNonNull(store, "store").getRootData();
-		if (root == null) return Optional.empty();
+		if (!(root instanceof Index<?, ?>)) return Optional.empty();
 		VenueState venue = fromRoot(Cursors.root(root), Objects.requireNonNull(ownerKey, "ownerKey"),
 			value -> null, VenueContext.SYSTEM);
 		if (venue.get() == null) return Optional.empty();

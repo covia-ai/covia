@@ -43,8 +43,8 @@ public class UserMetaStampTest {
 	@BeforeAll
 	public static void launch() throws IOException {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
-		application.setVenueContext(VenueContext.create(() -> CVMLong.create(CLOCK.get())));
+		CoviaApplication application = CoviaApplication.create(
+			VenueContext.create(() -> CVMLong.create(CLOCK.get())).withSigner(key));
 		engine = new Engine(new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))),
 			application, key).start();
 		Engine.addDemoAssets(engine);

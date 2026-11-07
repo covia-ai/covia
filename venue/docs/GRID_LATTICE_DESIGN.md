@@ -743,8 +743,12 @@ Exceptions discard the attempt. Bootstrap uses this over the venue's
 `w/global`. Request duration and persistence cadence are not transaction
 boundaries.
 
-`CoviaApplication` hosts `Covia.ROOT` through upstream `LatticeApplication`,
-sharing its host's live cursor. `VenueState` holds the venue value as a Convex
+`CoviaApplication`, an upstream `ALatticeApplication` sharing its host's live
+cursor, composes `:grid` from standard components: a `Regions` holding
+`:venues` (an `OwnedMap` of signed venue records) and `:meta` (a
+`LatticeComponent` over `CASLattice`). Incoming state goes to those components,
+and other regions are left alone. `:dlfs` is a `DLFSRegion` that the host's
+service registers beside it and hands to it. `VenueState` holds the venue value as a Convex
 `Timestamped` record: local edits stamp it, and incoming merges keep the newest
 without re-stamping. `Users` gives lifecycle-guarded user views, and DLFS uses
 upstream `DLFSRegion` and `DLFSDrives`.
@@ -833,8 +837,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
-| `LatticeContext` | Application policy for clock, signing and owner verification, used by the root merge; installed once on `CoviaApplication`, which also signs the venue record with it |
-| `VenueContext` (Covia) | Policy shared by every Covia component, built once by `CoviaApplication` and passed down unchanged; holds the write clock (the application's) |
+| `VenueContext` (Covia) | Policy shared by every Covia component and passed down unchanged: the write clock and the venue's signer |
 | `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the stretch of it that the component reads (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
@@ -844,13 +847,14 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 
 ### Covia Definitions
 
-`covia.lattice.Covia` defines the hierarchy from standard convex-core types:
+The hierarchy, built from standard convex-core types (`covia.lattice.Covia`
+names its levels):
 
 | Definition | Type | Purpose |
 |------------|------|---------|
-| `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
+| `CoviaApplication` | `Regions` | Root — `:grid`, a `Regions` of `:venues` and `:meta`; `:dlfs` is a sibling region its service registers |
 | `Covia.VENUE` | `StampedCursor` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
-| `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
+| `:grid → :venues` | `OwnedMap` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
 | Venue interior | `KeyedLattice` (structural children) | `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:jobs`, `:user-data` — navigated structurally; merged only at `:value` |
 | `:schedule` | `StampedCursor` → `StringKeyedLattice` | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
 | `:user-data → <DID>` | `MapLattice` → `StampedCursor` → `StringKeyedLattice` | Per-user record; every deep write refreshes `meta.updated` |
@@ -858,5 +862,5 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `g` / each agent | `MapLattice` → `StampedCursor` → `JSONLattice` | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
 | `s` / `a` | `JSONLattice` | Plain structural navigation |
 | `w` / `o` / `h` | `StringKeyedLattice` (`Covia.WORKSPACE_RECORD`) | Existing `{updated, data}` container; `User` presents its `data` through a `StampedCursor` on the container |
-| `:grid → :meta` | `CASLattice` | Shared content-addressed metadata (multi-writer union) |
-| `:dlfs` | `OwnerLattice` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |
+| `:grid → :meta` | `LatticeComponent` → `CASLattice` | Shared content-addressed metadata (multi-writer union) |
+| `:dlfs` | `DLFSRegion` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |

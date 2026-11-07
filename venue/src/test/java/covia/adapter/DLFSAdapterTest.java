@@ -29,7 +29,8 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.lattice.LatticeContext;
+import convex.core.data.AHashMap;
+import convex.core.data.SignedData;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.exception.InvalidInputException;
@@ -41,6 +42,7 @@ import covia.venue.Engine;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.VenueContext;
 
 public class DLFSAdapterTest {
 
@@ -328,15 +330,12 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
 	public void testDriveDeletionWinsOlderSnapshot() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
 		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
-		application.setContext(new LatticeContext() {
-			@Override public convex.core.data.prim.CVMLong getTimestamp() {
-				return convex.core.data.prim.CVMLong.create(time.get());
-			}
-		}.withSigningKey(key));
+		var application = CoviaApplication.create(
+			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())).withSigner(key));
 		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
 		try {
 			Engine.addDemoAssets(isolated);
@@ -352,7 +351,9 @@ public class DLFSAdapterTest {
 			isolated.jobs().invokeOperation("v/ops/dlfs/delete-drive", Maps.of("name", "legacy"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 			var deleted = root.get();
-			assertEquals(deleted.get(Covia.DLFS), Covia.ROOT.merge(application.getContext(), legacy, deleted).get(Covia.DLFS));
+			assertEquals(deleted.get(Covia.DLFS), application.dlfs().getLattice().merge(
+				(AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>) legacy.get(Covia.DLFS),
+				(AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>) deleted.get(Covia.DLFS)));
 			application.merge(legacy);
 			assertFalse(convex.lattice.fs.DLFSNode.isDirectory(drive.getCursor().get()));
 		} finally {
@@ -687,12 +688,8 @@ public class DLFSAdapterTest {
 	public void testLongLivedDriveUsesCurrentVenueClockAndOwnerKey() throws Exception {
 		AKeyPair venueKey = AKeyPair.generate();
 		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
-		CoviaApplication application = CoviaApplication.create(venueKey);
-		application.setContext(new LatticeContext() {
-			@Override public convex.core.data.prim.CVMLong getTimestamp() {
-				return convex.core.data.prim.CVMLong.create(time.get());
-			}
-		}.withSigningKey(venueKey));
+		CoviaApplication application = CoviaApplication.create(
+			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())).withSigner(venueKey));
 		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, venueKey).start();
 		try {
 			Engine.addDemoAssets(isolated);

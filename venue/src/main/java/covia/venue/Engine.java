@@ -42,7 +42,6 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.cvm.Keywords;
 import convex.core.data.Keyword;
-import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.Strings;
@@ -120,9 +119,9 @@ public class Engine {
 	protected AStorage contentStorage;
 
 	/**
-	 * Venue lattice using Covia.ROOT structure see COG-004.
+	 * The application's state, laid out as COG-004's root lattice.
 	 * Components supply merge policy; the cursor supplies atomic updates and sync.
- 	 */
+	 */
 	protected AForkableCursor<Index<Keyword,ACell>> lattice;
 
 	/** Venue state wrapper providing typed access to assets, jobs, and child cursors */
@@ -588,10 +587,6 @@ public class Engine {
 		}
 		lifecycle = Lifecycle.STARTING;
 		try {
-			// Set signing context only when active startup begins.
-			// Preserve application owner verification and clock policy, overriding
-			// only Covia's signing capability.
-			application.setContext(application.getContext().withSigningKey(this.keyPair));
 			// Authentication also serves manually assembled engines without a
 			// public operation catalogue. Its availability follows normal lifecycle.
 			AuthAdapter auth = new AuthAdapter();
@@ -798,7 +793,8 @@ public class Engine {
 		// Keep the Engine's authoritative state connected to the application.
 		// Writes cross the signed owner boundary immediately; explicit forks are
 		// reserved for bounded component transactions.
-		VenueState connected = application.venue(getAccountKey());
+		VenueState connected = VenueState.connect(application, getAccountKey(),
+			application.venueContext().withSigner(keyPair));
 		// Version validation and every start-up migration, the venue's and its
 		// adapters', precede every bootstrap write and worker, in one transaction.
 		connected.initialise(getDIDString(), SecretStore.keys(getKeyPair()), migrationsOf(adapters));
@@ -821,17 +817,15 @@ public class Engine {
 	 * {@code :venues}, a first boot on a pre-replicated store would need this
 	 * check refined (our-entry-absent would no longer imply a wrong key).</p>
 	 */
-	@SuppressWarnings("unchecked")
 	private void requireKeyMatchesStore() {
-		// The :venues level is an OwnerLattice: AHashMap<AccountKey, SignedData>.
-		ACell venuesVal = lattice.path(Covia.GRID, Covia.VENUES).getOrDefault(null);
-		if (!(venuesVal instanceof AMap<?, ?> venues) || venues.isEmpty()) return;   // fresh store
-		AMap<ACell, ACell> vs = (AMap<ACell, ACell>) venues;
-		if (vs.containsKey(getAccountKey())) return;                                  // normal restart
+		var venues = application.venues();
+		var vs = venues.cursor().getOrDefault(null);
+		if (vs == null || vs.isEmpty()) return;                                  // fresh store
+		if (venues.get(getAccountKey()) != null) return;                         // normal restart
 
 		StringBuilder sb = new StringBuilder();
 		for (long i = 0; i < vs.count(); i++) {
-			MapEntry<ACell, ACell> e = vs.entryAt(i);
+			var e = vs.entryAt(i);
 			if (i > 0) sb.append(", ");
 			ACell did = RT.getIn(e.getValue(), Keywords.VALUE, Covia.DID);
 			sb.append(did != null ? did : "key " + e.getKey());
@@ -3591,8 +3585,9 @@ public class Engine {
 	 * <p>Hosts without a store retain heap-backed behaviour.</p>
 	 */
 	public convex.dlfs.DLFSDrives getDLFSDrives(AKeyPair ownerKey) {
-		var region = convex.dlfs.DLFSRegion.connect(
-			convex.lattice.LatticeComponent.resolve(lattice, Covia.ROOT, Covia.DLFS),
+		// Authored over the shared region's cursor with this owner's key; the
+		// region the host delivers to holds no signer.
+		var region = convex.dlfs.DLFSRegion.connect(application.dlfs().cursor(),
 			application.hostStore(), ownerKey::signData,
 			application.venueContext()::currentTimestamp);
 		return region.drives(ownerKey.getAccountKey());

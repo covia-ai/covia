@@ -190,8 +190,8 @@ class VenueMigrationTest {
 		CoviaApplication application = CoviaApplication.create(key);
 		VenueState local = application.venue(key.getAccountKey());
 		AKeyPair peerKey = AKeyPair.generate();
-		application.setContext(application.getContext().withSigningKey(peerKey));
-		VenueState peer = application.venue(peerKey.getAccountKey());
+		VenueState peer = VenueState.connect(application, peerKey.getAccountKey(),
+			application.venueContext().withSigner(peerKey));
 		peer.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.VERSION, CVMLong.create(99)));
 		ACell peerBefore = peer.get();
 		Keyword extension = Keyword.intern("extension");
