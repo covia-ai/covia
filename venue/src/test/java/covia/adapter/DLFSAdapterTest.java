@@ -557,6 +557,35 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	public void testDriveOperationsCheckTheDrivesTheyActOn() {
+		// deleteDrive acts on the drive and listDrives on every drive, so each
+		// checks that, whatever path or drive its input names: a grant over part
+		// of a drive deletes no drive and lists none.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "shared"));
+		run("v/ops/dlfs/mkdir", Maps.of("drive", "shared", "path", "tmp"));
+		run("v/ops/dlfs/write", Maps.of("drive", "shared", "path", "tmp/a.txt", "content", "a"));
+		RequestContext tmpCleaner = RequestContext.ofAgent(ALICE_DID, Strings.create("cleaner"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/shared/tmp"), Capability.CRUD_DELETE)));
+		failure("v/ops/dlfs/delete-drive", Maps.of("drive", "shared", "path", "tmp"), tmpCleaner);
+		assertEquals(Vectors.of("shared"), driveNames());
+
+		RequestContext oneDrive = RequestContext.ofAgent(ALICE_DID, Strings.create("one-drive"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/shared"), Capability.CRUD_READ)));
+		failure("v/ops/dlfs/list-drives", Maps.of("drive", "shared"), oneDrive);
+		failure("v/ops/dlfs/list-drives", Maps.of("path", "shared"), oneDrive);
+		RequestContext allDrives = RequestContext.ofAgent(ALICE_DID, Strings.create("all-drives"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs"), Capability.CRUD_READ)));
+		assertEquals(Vectors.of("shared"), RT.getIn(engine.jobs().invokeOperation("v/ops/dlfs/list-drives",
+			Maps.of("drive", "shared"), allDrives).awaitResult(5000), "drives"));
+
+		RequestContext dropper = RequestContext.ofAgent(ALICE_DID, Strings.create("dropper"))
+			.withCaps(Vectors.of(Capability.create(Strings.create("dlfs/shared"), Capability.CRUD_DELETE)));
+		engine.jobs().invokeOperation("v/ops/dlfs/delete-drive",
+			Maps.of("drive", "shared", "path", "tmp"), dropper).awaitResult(5000);
+		assertEquals(0, driveNames().count());
+	}
+
+	@Test
 	public void testReadOnlyAgentCannotCreateDrives() {
 		// An agent whose caps allow only crud/read on its owner's drives reads
 		// them, but brings no drive into being, new or deleted.

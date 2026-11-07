@@ -471,8 +471,22 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		AString ability = abilityFor(subOp);
 		if (ability == null) return;
 		AString drive = RT.ensureString(RT.getIn(input, FIELD_DRIVE));
-		String resource = dlfsResource(null, drive, RT.ensureString(RT.getIn(input, FIELD_PATH)));
+		String resource = opResource(null, subOp, drive, RT.ensureString(RT.getIn(input, FIELD_PATH)));
 		engine.requireAuthority(ctx, Strings.create(resource), ability);
+	}
+
+	/**
+	 * The resource {@code subOp} acts on, which its check names: every drive for
+	 * {@code listDrives}, the drive itself for {@code createDrive} and
+	 * {@code deleteDrive}, and otherwise the path in the drive. A drive operation
+	 * ignores any {@code path} or {@code drive} its input carries beyond these.
+	 */
+	private static String opResource(AString ownerDID, String subOp, AString drive, AString path) {
+		return switch (subOp) {
+			case "listDrives" -> dlfsResource(ownerDID, null, null);
+			case "createDrive", "deleteDrive" -> dlfsResource(ownerDID, drive, null);
+			default -> dlfsResource(ownerDID, drive, path);
+		};
 	}
 
 	/**
@@ -757,7 +771,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 				"Cross-user DLFS access is not permitted for '" + subOp + "' on another user's drive");
 		}
 		AString pathCell = RT.ensureString(RT.getIn(input, FIELD_PATH));
-		String resource = dlfsResource(target.ownerDID(), Strings.create(target.driveName()), pathCell);
+		String resource = opResource(target.ownerDID(), subOp, Strings.create(target.driveName()), pathCell);
 		boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
 		if (!ok) throw new AuthException(
 			"Access denied: no " + ability + " capability for " + resource);

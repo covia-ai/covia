@@ -342,6 +342,18 @@ public class DLFSCrossUserTest {
 	}
 
 	@Test
+	public void testCrossUserGrantOverPartOfADriveDeletesNoDrive() {
+		// A grant over a folder is checked against the drive deleteDrive acts on,
+		// whatever path the input names.
+		RequestContext folder = withProofs(BOB,
+			ownerToken(ALICE_KP, BOB_DID, ALICE_DID + "/dlfs/docs/shared", "crud/delete", 3600));
+		failure("v/ops/dlfs/delete-drive", Maps.of("drive", aliceDocs, "path", "shared"), folder);
+		assertEquals(Vectors.of("docs"), aliceDrives());
+		assertEquals("quarterly numbers", RT.getIn(run("v/ops/dlfs/read",
+			Maps.of("drive", "docs", "path", "shared/report.md"), ALICE), "content").toString());
+	}
+
+	@Test
 	public void testCrossUserWriteNeedsTheDrive() {
 		// A write grant writes into Alice's drives, but does not create one.
 		RequestContext bob = withProofs(BOB,

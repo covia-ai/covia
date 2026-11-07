@@ -183,6 +183,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `auth:identity-token` refuses restricted self-tokens and the public principal, and checks its invoke grant before it uses a key.
 - Errors never quote a remote service's response body, free text or full URL, nor an unexpected failure's message.
 - `covia:inspect` and `GET /values/inspect` check read access as `covia:read` does.
+- `dlfs:deleteDrive` and `listDrives` check the drives they act on, whatever `path` the input names.
 - An agent's pinned context and skills index show only what its caps cover.
 - Every route to data at a path checks it as the data's owner decides, by its DID address: a grant on `<owner>/g/<agent>/n/` covers that agent's `n/`, and one on `<owner>/j/<job>` that job's record and `t/` (#617).
 
