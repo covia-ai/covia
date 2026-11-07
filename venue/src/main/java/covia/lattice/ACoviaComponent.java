@@ -24,6 +24,12 @@ import convex.lattice.cursor.AForkableCursor;
  * {@link Entry}, whose operations change it; elsewhere the component's own
  * operations are the only way to change it.</p>
  *
+ * <p>A component that owns a kind of data, such as a user, an agent, a session
+ * or a job, knows whose it is and attaches its {@link AccessPolicy} to the
+ * positions it returns, unless a component below it already did. A request
+ * reaches a position only through an {@link Access}, which asks that policy;
+ * the component itself checks nothing.</p>
+ *
  * @param <V> Value type of this component's cursor
  */
 public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent<V> {

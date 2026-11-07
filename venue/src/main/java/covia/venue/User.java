@@ -8,6 +8,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.AccessPolicy;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
@@ -57,6 +58,9 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	private final AString did;
 
+	/** Who may use this user's data: whoever holds authority over {@code <did>/<path>}. */
+	private final AccessPolicy policy;
+
 	/** Framework-internal read of a path in this user's record. */
 	ACell readInternalPath(CoviaPath path) {
 		return resolve(path).read();
@@ -82,6 +86,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		super(cursor);
 		this.context = context;
 		this.did = did;
+		this.policy = (did == null) ? null : AccessPolicy.principal(did);
 		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampUserMeta);
 	}
 
@@ -133,7 +138,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * agent.
 	 */
 	public AgentState agentAt(AString agentId) {
-		return new AgentState(context, agentStorage(agentId), agentId);
+		return new AgentState(context, agentStorage(agentId), did, agentId);
 	}
 
 	private AForkableCursor<ACell> agentStorage(ACell id) {
@@ -177,7 +182,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	public AgentState agent(AString agentId) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
 		if (c.get() == null) return null;
-		return new AgentState(context, c, agentId);
+		return new AgentState(context, c, did, agentId);
 	}
 
 	/**
@@ -194,7 +199,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState state = new AgentState(context, c, agentId);
+		AgentState state = new AgentState(context, c, did, agentId);
 		state.initialiseIfAbsent(config, initialState);
 		return state;
 	}
@@ -212,7 +217,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState state = new AgentState(context, c, agentId);
+		AgentState state = new AgentState(context, c, did, agentId);
 		return state.initialiseIfAbsent(config, initialState, definition) ? state : null;
 	}
 
@@ -230,7 +235,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState fork = new AgentState(context, c, agentId);
+		AgentState fork = new AgentState(context, c, did, agentId);
 		return fork.initialiseFromForkIfAbsent(config, state, timeline) ? fork : null;
 	}
 
@@ -275,7 +280,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** This user's jobs ({@code j/}), bound to this user or transaction draft. */
 	public Jobs jobs() {
-		return new Jobs(context, convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J));
+		return new Jobs(context, convex.lattice.LatticeComponent.resolve(cursor(), Covia.USER_RECORD, Namespace.J), did);
 	}
 
 	/**
@@ -283,9 +288,16 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * ({@link Covia#USER_RECORD}), each resolved by its component, and
 	 * {@code g/<id>} by that agent whether or not it exists. Any other name,
 	 * the venue's own bookkeeping in the record among them, names no data.
+	 * The user's policy covers whatever no component below claims: a request
+	 * needs authority over {@code <did>/<path>}.
 	 */
 	@Override
 	public Position resolve(CoviaPath path) {
+		Position position = within(path);
+		return (did == null) ? position : position.ownedBy(policy, path);
+	}
+
+	private Position within(CoviaPath path) {
 		if (path.isEmpty()) return super.resolve(path);
 		AString segment = path.first();
 		if (Covia.USER_RECORD.path(segment) == null) return Position.invalid(path);

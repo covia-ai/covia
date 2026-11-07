@@ -33,6 +33,8 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
+import covia.lattice.Access;
+import covia.lattice.AccessPolicy;
 import covia.lattice.AdapterView;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
@@ -284,7 +286,7 @@ public class CoviaAdapter extends AAdapter {
 
 		// Then the lattice path itself: a stored null, an absent value, an
 		// invalid path, or a vector path form.
-		Position target = resolve(ctx, RT.getIn(input, Fields.PATH));
+		Position target = locate(ctx, RT.getIn(input, Fields.PATH));
 		ACell value = target.read();
 		// A stored null reads back as present (exists:true, value:null), distinct
 		// from an absent path (exists:false) — decided by key presence in the parent.
@@ -305,7 +307,7 @@ public class CoviaAdapter extends AAdapter {
 	public ACell readContextValue(RequestContext ctx, AString path) {
 		if (path == null) return null;
 		engine.requireResourceAccess(ctx, path, Capability.CRUD_READ);
-		if (isContextDependent(CoviaPath.parse(path.toString()))) return resolve(ctx, path).read();
+		if (isContextDependent(CoviaPath.parse(path.toString()))) return locate(ctx, path).read();
 
 		// Physical namespaces and universal asset/op references.
 		return engine.resolvePathUnchecked(path, ctx);
@@ -442,7 +444,7 @@ public class CoviaAdapter extends AAdapter {
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
 		AString path = Strings.create(pathStr);
 		requireCap(ctx, Maps.of(Fields.PATH, path), Capability.CRUD_READ);
-		ACell value = resolve(ctx, path).read();
+		ACell value = locate(ctx, path).read();
 		if (value == null) return "null /* not found: " + pathStr + " */";
 
 		CellExplorer explorer = new CellExplorer(budget, compact);
@@ -854,7 +856,7 @@ public class CoviaAdapter extends AAdapter {
 		AString did = didPath(path);
 		Engine.UserPathTarget target = (did == null) ? null : engine.resolveUserPath(ctx, did, false);
 		CoviaPath segments = (target == null) ? CoviaPath.of(path) : target.path();
-		if (isExtensionPath(segments)) return resolve(state, ctx, path, ability);
+		if (isExtensionPath(segments)) return locate(state, ctx, path, ability);
 		requireChangeable(ctx, segments, delete);
 		if (!delete) {
 			if (target == null) {
@@ -870,7 +872,7 @@ public class CoviaAdapter extends AAdapter {
 				state.users().ensure(target.ownerDID());
 			}
 		}
-		return resolve(state, ctx, path, ability);
+		return locate(state, ctx, path, ability);
 	}
 
 	/**
@@ -907,7 +909,7 @@ public class CoviaAdapter extends AAdapter {
 	 * Reads the literal value targeted by an accessor input.
 	 */
 	private ACell readInputValue(RequestContext ctx, ACell input) {
-		return resolve(ctx, RT.getIn(input, Fields.PATH)).read();
+		return locate(ctx, RT.getIn(input, Fields.PATH)).read();
 	}
 
 	/**
@@ -1226,8 +1228,33 @@ public class CoviaAdapter extends AAdapter {
 	private static final AString DID_PREFIX = Strings.intern("did:");
 
 	/**
-	 * Where a path a request names ends. The request chooses the component the
-	 * path starts at, and that component resolves it:
+	 * A request's access to the data at the path it names: where the path ends
+	 * ({@link #locate}), reached only once the policy of the component that owns
+	 * the data allows each read or change ({@link Access}). The policy names the
+	 * place the data lives, however the path was written, and the venue checks
+	 * the request's authority over it ({@link Engine#requireLocalAccess}).
+	 *
+	 * @param path The path as the caller gave it, as for {@link #locate}
+	 * @return The request's access, never null
+	 * @throws WrongScopeException as for {@link #locate}
+	 */
+	public Access resolve(RequestContext ctx, ACell path) {
+		return access(ctx, locate(ctx, path));
+	}
+
+	/** The access a request has to {@code position}, checked by its owner's policy. */
+	private Access access(RequestContext ctx, Position position) {
+		return new Access(ctx, position, (c, address, ability) -> {
+			if (address == null) engine.requireStanding(c);
+			else engine.requireLocalAccess(c, address, ability);
+		});
+	}
+
+	/**
+	 * Where a path a request names ends, <b>with no access check</b>: for venue
+	 * code acting for itself, which reads or changes the position directly. Code
+	 * acting for a request uses {@link #resolve}. The request chooses the
+	 * component the path starts at, and that component resolves it:
 	 * <ul>
 	 *   <li>a path that starts with a DID: the venue;</li>
 	 *   <li>{@code n/}: the request's agent;</li>
@@ -1241,7 +1268,9 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code x/} view checks its own. It follows the path's shape, not the
 	 * data: a path into a user, agent, session or job that does not exist ends
 	 * at a position that reads as absent, and a path that names no place data
-	 * could be ends at an invalid one ({@link Position#isValid}).
+	 * could be ends at an invalid one ({@link Position#isValid}). The position
+	 * carries the policy of the innermost component that owns the data, and a
+	 * {@code v/} path that of the view ({@link #viewPolicy}).
 	 *
 	 * @param path The path as the caller gave it: a string, with an optional
 	 *        leading slash and owner DID, or a vector of segments
@@ -1249,17 +1278,17 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws WrongScopeException if {@code n/}, {@code c/} or {@code t/} is used
 	 *         outside its scope, or a path without an owner DID in a request with no user
 	 */
-	public Position resolve(RequestContext ctx, ACell path) {
-		return resolve(ctx, path, Capability.CRUD_READ);
+	public Position locate(RequestContext ctx, ACell path) {
+		return locate(ctx, path, Capability.CRUD_READ);
 	}
 
-	/** As {@link #resolve(RequestContext, ACell)}; {@code ability} is for an {@code x/} view's write policy. */
-	private Position resolve(RequestContext ctx, ACell path, AString ability) {
-		return resolve(engine.getVenueState(), ctx, path, ability);
+	/** As {@link #locate(RequestContext, ACell)}; {@code ability} is for an {@code x/} view's write policy. */
+	private Position locate(RequestContext ctx, ACell path, AString ability) {
+		return locate(engine.getVenueState(), ctx, path, ability);
 	}
 
-	/** As {@link #resolve(RequestContext, ACell, AString)}, in {@code state}: the venue's, or a transaction's draft of it. */
-	private Position resolve(VenueState state, RequestContext ctx, ACell path, AString ability) {
+	/** As {@link #locate(RequestContext, ACell, AString)}, in {@code state}: the venue's, or a transaction's draft of it. */
+	private Position locate(VenueState state, RequestContext ctx, ACell path, AString ability) {
 		AString did = didPath(path);
 		if (did != null) {
 			Engine.UserPathTarget target = engine.resolveUserPath(ctx, did, false);
@@ -1274,7 +1303,9 @@ public class CoviaAdapter extends AAdapter {
 			return AdapterView.resolve(ctx, this, (ctx == null) ? null : ctx.getUserDID(), segments, ability);
 		}
 		if (V.equals(namespace)) {
-			return state.users().at(engine.getDIDString()).resolve(venueGlobals(segments));
+			CoviaPath global = venueGlobals(segments);
+			return state.users().at(engine.getDIDString()).workspace().resolve(global.rest())
+				.ownedBy(viewPolicy(), segments);
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
@@ -1288,9 +1319,23 @@ public class CoviaAdapter extends AAdapter {
 		}
 		if (T.equals(namespace)) {
 			Blob jobId = scopedJob(ctx);
-			return requestUser(state, ctx).jobs().scratch(jobId).resolve(segments.rest());
+			return requestUser(state, ctx).jobs().at(jobId).resolveScratch(segments.rest());
 		}
 		return requestUser(state, ctx).resolve(segments);
+	}
+
+	/**
+	 * The policy of {@code v/}, the venue's public view, which belongs to no
+	 * principal: any principal reads it within its own scope, so a read needs
+	 * only the request's own authority over the {@code v/} path. A change needs
+	 * the venue's authority over the place in its {@code w/global} that the view
+	 * shows.
+	 */
+	private AccessPolicy viewPolicy() {
+		String venueGlobal = engine.getDIDString() + VENUE_GLOBALS.toString();
+		return (ctx, ability, path) -> Capability.CRUD_READ.equals(ability)
+			? AccessPolicy.Need.authorityOver(AccessPolicy.address("", path))
+			: AccessPolicy.Need.authorityOver(AccessPolicy.address(venueGlobal, path.rest()));
 	}
 
 	/**
@@ -1306,7 +1351,7 @@ public class CoviaAdapter extends AAdapter {
 			AString did = didPath(path);
 			CoviaPath segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
 			if (isExtensionPath(segments)) return true;
-			return resolve(ctx, path).isValid();
+			return locate(ctx, path).isValid();
 		} catch (WrongScopeException e) {
 			return true;
 		} catch (InvalidInputException e) {

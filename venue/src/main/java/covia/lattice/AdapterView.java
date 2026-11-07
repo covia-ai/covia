@@ -72,7 +72,8 @@ public final class AdapterView {
 				return value;
 			}
 		};
-		return new Workspace(guarded).resolve(path);
+		// An access to the view needs what was checked above, on the same address
+		return new Workspace(guarded).resolve(path).ownedBy(AccessPolicy.principal(owner), fullPath);
 	}
 
 	private static void requireWritable(AAdapter adapter, RequestContext ctx, CoviaPath path) {

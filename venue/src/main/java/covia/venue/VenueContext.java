@@ -13,8 +13,9 @@ import convex.core.util.Utils;
  *
  * <p>Components take their policy from here rather than from a
  * {@code LatticeContext}, which only the application's root merge uses. It
- * holds no access check: components trust their caller, and the operation
- * acting for a request checks its authority.</p>
+ * holds no access check: a component that owns data says who may use it
+ * ({@link covia.lattice.AccessPolicy}) and checks nothing itself, and a request
+ * reaches the data through an {@link covia.lattice.Access}, which checks.</p>
  */
 public final class VenueContext {
 

@@ -14,7 +14,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.AccessPolicy;
 import covia.lattice.CoviaPath;
+import covia.lattice.Namespace;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -32,16 +34,45 @@ import static covia.venue.AgentState.*;
 public final class SessionState extends ACoviaComponent<ACell>
 		implements TransactionalComponent<ACell, SessionState> {
 	private final VenueContext context;
+	private final AString owner;
+	private final AString agentId;
 	private final Blob id;
+	/** Who may use this session's data: see {@link #resolve}. */
+	private final AccessPolicy policy;
 
-	SessionState(VenueContext context, AForkableCursor<ACell> cursor, Blob id) {
+	/**
+	 * @param owner DID of the user whose agent holds the session, or null outside any user
+	 * @param agentId The agent that holds the session
+	 * @param id The session's id
+	 */
+	SessionState(VenueContext context, AForkableCursor<ACell> cursor, AString owner, AString agentId, Blob id) {
 		super(cursor);
 		this.context = context;
+		this.owner = owner;
+		this.agentId = agentId;
 		this.id = id;
+		this.policy = (owner == null) ? null : sessionPolicy(owner, agentId, id);
 	}
 
 	@Override public SessionState withCursor(AForkableCursor<ACell> draft) {
-		return new SessionState(context, draft, id);
+		return new SessionState(context, draft, owner, agentId, id);
+	}
+
+	/**
+	 * The agent serving a session reaches its {@code c} of right; anything else
+	 * in the session needs authority over
+	 * {@code <owner>/g/<agent>/sessions/<id>/<path>}.
+	 */
+	private static AccessPolicy sessionPolicy(AString owner, AString agentId, Blob id) {
+		String base = owner + "/" + Namespace.G + "/" + agentId + "/" + K_SESSIONS + "/" + id.toHexString();
+		return (ctx, ability, path) -> {
+			if (!path.isEmpty() && K_C.equals(path.first()) && ctx != null
+					&& owner.equals(ctx.getUserDID()) && agentId.equals(ctx.getAgentId())
+					&& JobState.isId(id, ctx.getSessionId())) {
+				return AccessPolicy.Need.OF_RIGHT;
+			}
+			return AccessPolicy.Need.authorityOver(AccessPolicy.address(base, path));
+		};
 	}
 
 	public Blob getID() { return id; }
@@ -52,11 +83,17 @@ public final class SessionState extends ACoviaComponent<ACell>
 		return Workspace.inRecord(cursor(), K_C);
 	}
 
-	/** {@code c} is the session's workspace; the rest of the session is read as stored. */
+	/**
+	 * {@code c} is the session's workspace; the rest of the session is read as
+	 * stored. The agent serving the session reaches its {@code c} of right, and
+	 * anything else needs authority over
+	 * {@code <owner>/g/<agent>/sessions/<id>/<path>}.
+	 */
 	@Override
 	public Position resolve(CoviaPath path) {
-		if (!path.isEmpty() && K_C.equals(path.first())) return workspace().resolve(path.rest());
-		return super.resolve(path);
+		Position position = (!path.isEmpty() && K_C.equals(path.first()))
+			? workspace().resolve(path.rest()) : super.resolve(path);
+		return (policy == null) ? position : position.ownedBy(policy, path);
 	}
 
 	/** Null from the operation means rejection; unchanged records still count as accepted.

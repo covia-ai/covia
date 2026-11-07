@@ -1,8 +1,10 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
+import covia.venue.RequestContext;
 
 /**
  * Where a Covia path ends: the component that owns that position, and the
@@ -16,19 +18,53 @@ import covia.exception.InvalidInputException;
  * {@link #exists} only while a value is there, which can change as the data
  * it is bound to does, also within a transaction.</p>
  *
+ * <p>A position also carries the {@link AccessPolicy} of the innermost
+ * component that owns the data, with the stretch of the path below that
+ * owner, so that an {@link Access} can say what a request needs to use it.
+ * Reading or changing a position directly checks nothing: that is for venue
+ * code, and a request goes through an {@link Access}.</p>
+ *
  * @param component The component that owns the position, or null when the path is invalid
  * @param path The stretch of the caller's path the component reads; it formats as the whole address
+ * @param policy The policy of the innermost owner of the data, or null when no owner set one
+ * @param below The stretch of the path below that owner, or null with no policy
  */
-public record Position(ACoviaComponent<?> component, CoviaPath path) {
+public record Position(ACoviaComponent<?> component, CoviaPath path, AccessPolicy policy, CoviaPath below) {
+
+	/** A position no owner has set a policy on yet. */
+	public Position(ACoviaComponent<?> component, CoviaPath path) {
+		this(component, path, null, null);
+	}
 
 	/** The position for a path that names no place data could be. */
 	public static Position invalid(CoviaPath path) {
 		return new Position(null, path);
 	}
 
+	/**
+	 * This position as owned under {@code policy}, for the data at {@code below}
+	 * beneath the owner, unless an owner nearer the data already set its own.
+	 */
+	public Position ownedBy(AccessPolicy policy, CoviaPath below) {
+		return (this.policy != null) ? this : new Position(component, path, policy, below);
+	}
+
 	/** Whether the path names a place that could hold data, whether or not anything is there. */
 	public boolean isValid() {
 		return component != null;
+	}
+
+	/**
+	 * What {@code ctx} needs to use {@code ability} here, as the owner's policy
+	 * says, or at a level above here: {@code levels} levels up, never above the
+	 * first segment below the owner.
+	 *
+	 * @return The need, or null when no owner set a policy
+	 */
+	public AccessPolicy.Need need(RequestContext ctx, AString ability, int levels) {
+		if (policy == null) return null;
+		int keep = Math.max(Math.min(1, below.length()), below.length() - levels);
+		return policy.need(ctx, ability, below.prefix(keep));
 	}
 
 	/** The value here as callers see it, or null when absent. */

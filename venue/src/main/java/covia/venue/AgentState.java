@@ -18,11 +18,13 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
+import covia.lattice.AccessPolicy;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
+import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
@@ -38,7 +40,7 @@ import covia.api.Fields;
 public class AgentState extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, AgentState> {
 	@Override
 	public AgentState withCursor(AForkableCursor<ACell> draft) {
-		return new AgentState(context, draft, agentId);
+		return new AgentState(context, draft, owner, agentId);
 	}
 
 	private final VenueContext context;
@@ -65,7 +67,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
 	private static final AString K_RESOLVED = Strings.intern("resolved");
-	private static final AString K_SESSIONS = Strings.intern("sessions");
+	static final AString K_SESSIONS = Strings.intern("sessions");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
@@ -164,17 +166,35 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Result of an atomic session intake mutation. */
 	public enum SessionIntake { APPLIED, MISSING, LOADS_ON_EXISTING }
 
+	private final AString owner;
 	private final AString agentId;
 
+	/** Who may use this agent's data: whoever holds authority over {@code <owner>/g/<id>/<path>}. */
+	private final AccessPolicy policy;
+
+	/**
+	 * @param owner DID of the user whose agent this is, or null for a record outside any user
+	 * @param agentId The agent's id in its owner's {@code g/}
+	 */
 	AgentState(VenueContext context, AForkableCursor<ACell> cursor,
-			AString agentId) {
+			AString owner, AString agentId) {
 		super(cursor);
 		this.context = context;
+		this.owner = owner;
 		this.agentId = agentId;
+		this.policy = (owner == null) ? null : agentPolicy(owner, agentId);
 		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampAgent);
 	}
 
+	private static AccessPolicy agentPolicy(AString owner, AString agentId) {
+		String base = owner + "/" + Namespace.G + "/" + agentId;
+		return (ctx, ability, path) -> AccessPolicy.Need.authorityOver(AccessPolicy.address(base, path));
+	}
+
 	public AString getAgentId() { return agentId; }
+
+	/** DID of the user whose agent this is. */
+	public AString getOwner() { return owner; }
 
 	// ========== Record access ==========
 
@@ -336,7 +356,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Session view bound to this agent (including when this agent is a draft).
 	 * Missing sessions read as null; mutations never create or resurrect them. */
 	public SessionState session(Blob sid) {
-		return new SessionState(getContext(), cursor().path(K_SESSIONS, sid), sid);
+		return new SessionState(getContext(), cursor().path(K_SESSIONS, sid), owner, agentId, sid);
 	}
 
 	/** The agent's own workspace ({@code n}); a change to it needs the agent. */
@@ -347,10 +367,17 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	/**
 	 * {@code n} is the agent's workspace and {@code sessions/<id>} a session,
 	 * named by its id in hex, whether or not it exists; an id that is not hex
-	 * names no session. The rest of the record is read as stored.
+	 * names no session. The rest of the record is read as stored. The agent's
+	 * policy covers whatever no session claims: a request needs authority over
+	 * {@code <owner>/g/<id>/<path>}.
 	 */
 	@Override
 	public Position resolve(CoviaPath path) {
+		Position position = within(path);
+		return (policy == null) ? position : position.ownedBy(policy, path);
+	}
+
+	private Position within(CoviaPath path) {
 		if (!path.isEmpty()) {
 			AString segment = path.first();
 			if (K_N.equals(segment)) return workspace().resolve(path.rest());

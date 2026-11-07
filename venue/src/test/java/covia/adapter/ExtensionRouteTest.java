@@ -201,7 +201,7 @@ class ExtensionRouteTest {
 		assertEquals(Vectors.of(aliceDID, "projected"), read(path(""), alice));
 		assertEquals(Strings.create("projected"), read(path("/1"), alice));
 		assertThrows(CompletionException.class, () -> write(path("/1"), Strings.create("no"), alice));
-		var view = covia.resolve(alice, Strings.create(path("")));
+		var view = covia.locate(alice, Strings.create(path("")));
 		assertThrows(AuthException.class, () -> view.entry().write(Maps.empty()));
 	}
 

@@ -2126,7 +2126,7 @@ public class Engine {
 		if (covia == null) return null;
 		covia.lattice.Position target;
 		try {
-			target = covia.resolve(ctx, ref);
+			target = covia.locate(ctx, ref);
 		} catch (WrongScopeException e) {
 			// The one resolution failure that is an absence for a read: the path
 			// starts in a scope (an agent, session, job or user) this request does
@@ -4245,14 +4245,25 @@ public class Engine {
 
 	/** As above for a use that sends a value to {@code destination}. */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
-		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
-		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
+		requireStanding(ctx);
 		if (authorityCovers(ctx, resource, ability, destination)) return;
 		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability, destination) : null;
 		throw new covia.exception.AuthException(denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
+	}
+
+	/**
+	 * What every request must still have, even where it acts of right: an
+	 * account that has not been deleted, and, for work in a job, the job's
+	 * account as it was when the job began.
+	 *
+	 * @throws AuthException when the request's account is gone
+	 */
+	public void requireStanding(RequestContext ctx) {
+		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
+		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
 	}
 
 	/**

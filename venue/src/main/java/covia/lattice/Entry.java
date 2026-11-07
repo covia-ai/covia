@@ -26,7 +26,8 @@ import covia.exception.NotFoundException;
  * its key was resolved against; otherwise it is refused and nothing is written.
  * Only {@link #createLevels} creates missing levels, as maps, and an absent
  * workspace root counts as an empty map. An entry makes no authority checks:
- * they belong to the code asking for the change.</p>
+ * a request reaches it through an {@link Access}, which asks the owner's
+ * policy first.</p>
  */
 public final class Entry extends ACoviaComponent<ACell> {
 
