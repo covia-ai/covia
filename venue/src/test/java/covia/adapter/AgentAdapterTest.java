@@ -1406,6 +1406,41 @@ public class AgentAdapterTest {
 		assertTrue(timeline == null || CVMLong.create(0).equals(timeline), "no cycle ran: " + timeline);
 	}
 
+	/** A deleted agent is not there to step or inspect: no tool call runs under its authority. */
+	@Test
+	public void testStepAndContextRefuseADeletedAgent() {
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		RequestContext bob = RequestContext.of(BOB_DID);
+		AString address = RT.ensureString(RT.getIn(engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "stepped-after-delete",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", "You step.",
+					Fields.ACCEPTS, Vectors.of(BOB_DID),
+					Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/write")))),
+			alice).awaitResult(5000), Fields.ADDRESS));
+		java.util.function.Function<String, AMap<AString, ACell>> stepWriting = path -> Maps.of(
+			Fields.AGENT_ID, address, Fields.MESSAGE, "Write",
+			"assistant", Maps.of("toolCalls", Vectors.of(Maps.of("name", "covia_write",
+				"arguments", Maps.of(Fields.PATH, path, Fields.VALUE, 1L)))));
+		java.util.function.Function<String, ACell> aliceReads = path -> RT.getIn(engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path), alice).awaitResult(5000), Fields.VALUE);
+
+		// While the agent lives, Bob's step runs its tool call as the agent.
+		engine.jobs().invokeOperation("v/ops/agent/step", stepWriting.apply("w/before"), bob).awaitResult(5000);
+		assertEquals(CVMLong.create(1), aliceReads.apply("w/before"));
+
+		engine.jobs().invokeOperation("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "stepped-after-delete"), alice)
+			.awaitResult(5000);
+		Job step = engine.jobs().invokeOperation("v/ops/agent/step", stepWriting.apply("w/after"), bob);
+		assertThrows(covia.exception.JobFailedException.class, () -> step.awaitResult(5000));
+		assertNull(aliceReads.apply("w/after"));
+		Job context = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "stepped-after-delete"), alice);
+		assertThrows(covia.exception.JobFailedException.class, () -> context.awaitResult(5000));
+	}
+
 	/** The timeline entry records every inference of a cycle (#392): the
 	 *  standing context once, each call's reply and tool batch, nothing twice. */
 	@Test

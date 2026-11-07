@@ -2237,11 +2237,9 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private Inspectable inspectable(Job job, ACell input, RequestContext ctx, AString ability) {
 		AgentTarget agentTarget = resolveAgentTarget(ctx, input, Fields.AGENT_ID, ability, false);
-		AString agentId = agentTarget.agentId();
-		User user = agentTarget.user();
-		if (user == null) { job.fail("User not found"); return null; }
-		AgentState agent = user.agent(agentId);
-		if (agent == null) { job.fail("Agent not found: " + agentId); return null; }
+		// A deleted agent is not there to inspect or step, as for every other operation.
+		AgentState agent = lookupAgent(job, agentTarget);
+		if (agent == null) return null;
 
 		requireNative(agent, "context/step");
 		AMap<AString, ACell> record = agent.getRecord();
