@@ -138,6 +138,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A path starting with a `did:web` DID that encodes its port as `%3A` names that DID's data (#617).
 - `agent:cancelTask` with a task id that is not hex fails as invalid input.
 - Waiting on a cancelled job fails with the reason it was cancelled.
+- `agent:suspend` or `agent:delete` that lands as a transition ends stops the cycle instead of failing its task.
 
 ### Security
 

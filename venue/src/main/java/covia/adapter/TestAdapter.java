@@ -141,12 +141,13 @@ public class TestAdapter extends AAdapter {
 	}
 
     /**
-     * Test-only sink: the {@code capturectx} op records the {@link RequestContext}
-     * it was invoked under, keyed by the <b>user</b> DID whose namespace it ran in
-     * ({@code ctx.getUserDID()}) — for an agent transition, its owner. Lets tests
-     * assert deterministically which identity / namespace / proofs / caps a
-     * transition actually ran with — including that two same-named agents owned
-     * by different users run under their own identities (see #91).
+     * Test-only sink: the {@code capturectx} and {@code step} ops record the
+     * {@link RequestContext} they were invoked under, keyed by the <b>user</b>
+     * DID whose namespace they ran in ({@code ctx.getUserDID()}) — for an agent
+     * transition, its owner. Lets tests assert deterministically which identity /
+     * namespace / proofs / caps a transition actually ran with — including that
+     * two same-named agents owned by different users run under their own
+     * identities (see #91) — and reach a held step's cancellation token.
      */
     public static final java.util.concurrent.ConcurrentHashMap<AString, RequestContext> CAPTURED_CTX
         = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1829,6 +1830,7 @@ public class TestAdapter extends AAdapter {
      * what it saw: {@code {saw: [message text...], input?: task input}}.
      */
     private ACell handleStep(RequestContext ctx, ACell input) {
+        if (ctx.getUserDID() != null) CAPTURED_CTX.put(ctx.getUserDID(), ctx);
         AVector<ACell> messages = AgentAdapter.effectiveMessages(input);
         AVector<ACell> saw = Vectors.empty();
         for (long i = 0; i < messages.count(); i++) saw = saw.conj(RT.getIn(messages.get(i), Fields.MESSAGE));

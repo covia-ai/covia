@@ -18,6 +18,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.agent.AbstractLLMAdapter;
@@ -455,6 +456,34 @@ public class AgentCycleTest {
 			assertEquals(Status.COMPLETE, task.getStatus(), "it runs again from its conversation");
 			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
 			assertEquals(1, userTurns(agent, sid, script).count(), "its input is still presented once");
+		}
+	}
+
+	/**
+	 * A stop can race the end of the transition it stops: agent:suspend sets
+	 * the cycle's cancellation token, and the transition sees it and ends its
+	 * own Job before the stop cancels the future the run loop awaits. The cycle
+	 * is still stopped, not failed: the agent keeps its task for its resume.
+	 */
+	@Test
+	public void aStopThatRacesTheTransitionsEndStillStopsTheCycle(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("raced-stop");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			AgentState agent = stepAgent(owner, "raced-stop");
+			Job task = request(owner, "raced-stop", "hold:" + gateName + " complete");
+			awaitGate(gate);
+			// What agent:suspend does before it cancels the future: the record,
+			// then the token. The future is left for the transition to end.
+			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("raced stop")));
+			TestAdapter.CAPTURED_CTX.get(owner.getUserDID()).getCancellation().set(true);
+			gate.release(); // the step sees its token and ends its own Job cancelled
+
+			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
+			assertFalse(task.isFinished(), "a stopped cycle keeps its task: " + task.getErrorMessage());
+			AVector<ACell> timeline = agent.getTimeline();
+			assertEquals(CVMBool.TRUE, RT.getIn(timeline.get(timeline.count() - 1), Fields.CANCELLED),
+				"the cycle is recorded as stopped, not failed");
 		}
 	}
 

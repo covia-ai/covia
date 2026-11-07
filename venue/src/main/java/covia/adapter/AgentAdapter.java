@@ -4373,8 +4373,9 @@ public class AgentAdapter extends AAdapter {
 				// work the transition enqueues on the lattice (e.g. a nested
 				// agent:chat that wakes this same agent) is naturally visible
 				// to the next iteration via hasWork(). A failed future becomes
-				// an error-shaped transitionResult for the merge; a cancelled one
-				// is handled apart from it. The cancellation token rides
+				// an error-shaped transitionResult for the merge; a cancelled one,
+				// or one that ends after its token was set, is handled apart from
+				// it. The cancellation token rides
 				// the cycle ctx: cancel(true) does not stop the transition
 				// thread, so long transitions poll the token to stop promptly.
 				java.util.concurrent.atomic.AtomicBoolean cancelToken =
@@ -4411,23 +4412,16 @@ public class AgentAdapter extends AAdapter {
 					transitionCancelled = true;
 					transitionResult = null; // handled separately from transition failures below
 				} catch (java.util.concurrent.CompletionException e) {
-					Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-					// A failure that carries its cycle record (#392) still
-					// writes the entry, with the inferences that ran before it.
-					CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
-					Throwable reason = (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
-					cannotContinue = agentCannotContinue(reason);
-					// A fault's report says the transition failed and where
-					String failure = covia.exception.FaultException.isFault(reason) ? reason.getMessage()
-						: TRANSITION_FAILED + describeFailure(reason);
-					AMap<AString, ACell> failed = Maps.of(Fields.ERROR, Strings.create(failure));
-					if (carried != null) {
-						failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
-						if (carried.result().tokens() != null) {
-							failed = failed.assoc(Fields.TOKENS, carried.result().tokens());
-						}
+					if (cancelToken.get()) {
+						// Stopped, not failed: agent:suspend or agent:delete set the
+						// token, and the transition saw it and ended its own Job
+						// before the stop could cancel the future
+						transitionCancelled = true;
+						transitionResult = null;
+					} else {
+						transitionResult = failedTransition(e);
+						cannotContinue = agentCannotContinue(transitionFailure(e));
 					}
-					transitionResult = failed;
 				} finally {
 					activeTransitions.remove(key, transitionFuture);
 					activeCancellations.remove(key, cancelToken);
@@ -4830,6 +4824,32 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private static boolean agentCannotContinue(Throwable failure) {
 		return CannotContinueException.find(failure) != null || !isExpectedFailure(failure);
+	}
+
+	/** What a transition failed with, taken out of the carrier that holds its cycle record (#392). */
+	private static Throwable transitionFailure(java.util.concurrent.CompletionException e) {
+		Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+		CycleRecord.Failure carried = CycleRecord.Failure.find(cause);
+		return (carried != null && carried.getCause() != null) ? carried.getCause() : cause;
+	}
+
+	/**
+	 * A failed transition as the merge records it: its error, and, from a
+	 * failure that carries its cycle record (#392), the inferences that ran
+	 * before it. A fault's report says itself that the transition failed and
+	 * where.
+	 */
+	private AMap<AString, ACell> failedTransition(java.util.concurrent.CompletionException e) {
+		Throwable reason = transitionFailure(e);
+		String failure = covia.exception.FaultException.isFault(reason) ? reason.getMessage()
+			: TRANSITION_FAILED + describeFailure(reason);
+		AMap<AString, ACell> failed = Maps.of(Fields.ERROR, Strings.create(failure));
+		CycleRecord.Failure carried = CycleRecord.Failure.find((e.getCause() != null) ? e.getCause() : e);
+		if (carried != null) {
+			failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
+			if (carried.result().tokens() != null) failed = failed.assoc(Fields.TOKENS, carried.result().tokens());
+		}
+		return failed;
 	}
 
 	/**
