@@ -8,9 +8,10 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-Covia builds against Convex 0.8.18, from Maven Central. The upstream
-cursor/component/DLFS checks can be run in a Convex checkout of the `0.8.18` tag
-(use `mvnw.cmd` on Windows) with:
+Covia builds against the Convex release that `convex.version` in the root
+`pom.xml` names, from Maven Central. The upstream cursor/component/DLFS checks
+can be run in a Convex checkout of that release's tag (use `mvnw.cmd` on
+Windows) with:
 
 ```sh
 ./mvnw test -pl convex-core,convex-dlfs -am '-Dtest=*CursorTest,*ComponentTest,*ApplicationTest,*HostTest,DLFS*Test' '-Dsurefire.failIfNoSpecifiedTests=false'
