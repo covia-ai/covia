@@ -13,13 +13,16 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.AccountKey;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.store.MemoryStore;
+import covia.exception.ConfigurationException;
 import convex.lattice.LatticeHost;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
@@ -58,6 +61,34 @@ public class VenueStateTest {
 
 		assertNotNull(vs);
 		assertEquals(kp.getAccountKey(), vs.getOwnerKey());
+	}
+
+	@Test
+	public void testApplicationHoldsOneCopyOfEachVenueItSignsAs() {
+		AKeyPair kp = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(kp);
+		VenueState venue = application.venue(kp.getAccountKey());
+		assertSame(venue, application.venue(kp.getAccountKey()), "every caller shares the venue's one copy");
+
+		AccountKey other = AKeyPair.generate().getAccountKey();
+		ConfigurationException refused = assertThrows(ConfigurationException.class, () -> application.venue(other));
+		assertEquals(String.format(CoviaApplication.CANNOT_SIGN, other), refused.getMessage());
+	}
+
+	@Test
+	public void testApplicationSyncSignsTheVenueIntoItsRecord() {
+		AKeyPair kp = AKeyPair.generate();
+		CoviaApplication application = CoviaApplication.create(kp);
+		VenueState venue = application.venue(kp.getAccountKey());
+		venue.assets().store(Strings.create("{\"name\":\"Published\"}"), null);
+		assertNull(RT.getIn(application.cursor().get(), Covia.GRID, Covia.VENUES, kp.getAccountKey()),
+			"an edit stays in the venue's copy until the application syncs");
+
+		application.sync();
+		ACell record = RT.getIn(application.cursor().get(), Covia.GRID, Covia.VENUES, kp.getAccountKey());
+		assertInstanceOf(SignedData.class, record);
+		assertEquals(venue.get(), ((SignedData<?>) record).getValue());
+		assertTrue(((SignedData<?>) record).checkSignature(), "the record is signed by the venue's key");
 	}
 
 	@Test
