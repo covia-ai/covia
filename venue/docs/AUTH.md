@@ -735,11 +735,15 @@ Call `v/ops/auth/identity-token` on the signing venue:
 
 The operation derives `sub` and `iss` from the exact caller, including an
 agent's full nested identity. It accepts no subject, claims, capabilities or
-signing key from input. The caller must be the venue's signing `did:key` or a
-valid identity nested below it. An unrelated external key identity, a
-`did:web` identity, and anonymous/public callers are refused; an embedder
-holding a different installation key uses `VenueAuth.namedKeyPair` instead
-([HELD_KEYS.md](./HELD_KEYS.md) designs the venue holding such keys).
+signing key from input. The token is signed by the caller's root: the venue's
+key for the venue's signing `did:key` and the identities nested below it, or,
+for a `did:key` that holds its own key in its own keyring
+([HELD_KEYS.md](./HELD_KEYS.md)), that held key, for the `did:key` itself and
+the identities nested below it. Minting a token for oneself is not a use of
+the root's key, so it needs no `key/…` ability. Any other external key
+identity, a `did:web` identity, and anonymous/public callers are refused; an
+embedder holding a key outside the venue uses `VenueAuth.namedKeyPair`
+instead.
 The caller must also be acting under its own authority or as a sub-principal.
 A restricted scope on a principal acting as itself bounds what the request may
 do, and a bearer for that identity would carry it beyond the bound, so the

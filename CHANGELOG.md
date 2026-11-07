@@ -22,6 +22,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `recordToolCalls`, per agent with a venue default, records an agent's tool calls as jobs from the start.
 - An MCP read-only tool call past its ceiling names a job that `grid_job_status` and `grid_job_result` can find.
 - Per-user preferences at `x/preferences`, edited with the `preferences` tool and pinned by the standard and chat-bot agent templates (`adapters.preferences.maxBytes`).
+- Keyrings: the venue holds keys and recovery phrases that can be used but never read, with `crypto:add-key`, `crypto:remove-key`, `crypto:list-keys` and the `key/…` abilities (#637).
+- `crypto:sign`, `jwt-sign`, `decrypt`, `convex:transact` and `ucan:issue` take a held `key`; `crypto:generate-key`, `derive-key` and `generate-mnemonic` take `keyring: true` (#637).
+- `auth:identity-token` signs for a `did:key` that holds its own key, and the identities nested below it (#637).
+- `ucan:issue` results name their issuer as `iss`.
+- Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
+
+### Deprecated
+
+- `convex:sign` and `convex:generate-key`: use `crypto:sign` (with `encoding: utf8` for text) and `crypto:generate-key`.
 
 ### Changed
 

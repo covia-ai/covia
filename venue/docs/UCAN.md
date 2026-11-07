@@ -153,6 +153,15 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `oauth/use` | — | Send a connected account's token in a request without seeing it; bindable to a destination with `nb.url` |
 | `oauth/connect` | — | Connect an account: start a connect, and complete one the provider approved, for the account that started it |
 | `oauth/disconnect` | — | Disconnect an account, revoking its grant at the provider |
+| `key` | every `key/*` | All use of held keys and phrases (`<did>/keys/<key>`, `<did>/mnemonics/<id>`; [HELD_KEYS.md](./HELD_KEYS.md)) |
+| `key/add` | — | Put a key or phrase into a keyring, or generate or derive one there |
+| `key/remove` | — | Remove a key or phrase from a keyring |
+| `key/sign` | every `key/sign/*` | Sign anything with a held key |
+| `key/sign/grant` | — | Sign UCAN grants with it (`ucan:issue`) |
+| `key/sign/convex` | — | Sign Convex transactions with it (`convex:transact`) |
+| `key/sign/raw` | — | Sign content the caller chooses (`crypto:sign`, `crypto:jwt-sign`), which can produce any other signature |
+| `key/decrypt` | — | Decrypt with a held key (`crypto:decrypt`) |
+| `key/derive` | — | Derive keys from a held phrase into its holder's keyring (`crypto:derive-key`) |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
 
