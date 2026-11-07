@@ -55,7 +55,7 @@ public class AgentPathTest {
 	}
 
 	private static ACell read(ALatticeComponent<?> component) {
-		return ACoviaComponent.read(component);
+		return component.cursor().getOrDefault(null);
 	}
 
 	/** Writes at the entry a path resolves to. */

@@ -38,6 +38,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The venue migrates to version 2, renaming those fields in stored records once.
 - User exports are at version 2; `user:import` converts older ones, and `user:import` and `user:clone` leave out the user's jobs.
 - A `covia` path given as an array takes strings only, none containing `/`, a list position written in digits as in a string path; any other element is refused (#617).
+- The covia read operations and `/values` return the value at a path as stored; a path to a whole account reads its record with the venue's bookkeeping, whose layout may change.
 - The covia read operations and `/values` refuse a path that names no place data could be, such as `wrok/notes` or a job id that is not hex, naming the part of it where nothing can be, where they returned nothing (#617).
 - A DID starts a path only as its first element: `/did:…` and `<did>/n/`, `c/`, `t/` or `v/` name no place, and an array whose first element is a DID is that DID URL (#617).
 - `v/` is the venue's public read-only view: any principal reads it, whatever its caps, and nothing changes through it (#617).

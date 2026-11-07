@@ -85,7 +85,7 @@ public class JobManagerTest {
 		assertEquals(output, engine.jobs().getJob(id, ctx).awaitResult());
 		assertEquals(record, engine.resolvePath(Strings.create(path), ctx));
 		assertEquals(record, RT.getIn(engine.resolvePath(Strings.create("j/"), ctx), id));
-		assertEquals(record, RT.getIn(user.read(), covia.lattice.Namespace.J, id));
+		assertEquals(record, RT.getIn(user.cursor().getOrDefault(null), covia.lattice.Namespace.J, id));
 		var adapter = (covia.adapter.CoviaAdapter) engine.getAdapter("covia");
 		assertEquals(record, RT.getIn(adapter.handleRead(ctx, Maps.of(Fields.PATH, path)), "value"));
 		// Equal, not identical: the shared engine's background sync may swap in

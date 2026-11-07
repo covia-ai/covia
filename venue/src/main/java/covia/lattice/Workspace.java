@@ -70,12 +70,12 @@ public final class Workspace extends ACoviaComponent<ACell>
 
 	/** The entry at {@code path} in this area, its keys fixed now by the values the path meets. */
 	public Entry entry(Path path) {
-		return new Entry(this, path, ValuePath.keys(read(), path));
+		return new Entry(this, path, ValuePath.keys(cursor().getOrDefault(null), path));
 	}
 
-	/** The value at {@code path} in this area, or null when absent, as its {@link Entry} reads it. */
+	/** The value at {@code path} in this area, or null when absent, as its {@link Entry}'s cursor holds it. */
 	public ACell read(Path path) {
-		return entry(path).read();
+		return entry(path).cursor().getOrDefault(null);
 	}
 
 	/** Whether a value is at {@code path} in this area, a stored null counting, as {@link Entry#exists}. */

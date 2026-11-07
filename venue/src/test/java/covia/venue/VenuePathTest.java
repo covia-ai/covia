@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
-import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Path;
@@ -50,7 +49,7 @@ public class VenuePathTest {
 	}
 
 	private static ACell read(ALatticeComponent<?> component) {
-		return ACoviaComponent.read(component);
+		return component.cursor().getOrDefault(null);
 	}
 
 	/** The refusal for a path below the user that names no place. */
@@ -113,17 +112,19 @@ public class VenuePathTest {
 	}
 
 	@Test
-	public void testTheVenuesBookkeepingIsNoUserData() {
+	public void testNoPathNamesTheVenuesBookkeeping() {
 		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
 		for (String slot : new String[] {"meta", "generation", "deleting", "deleted", "n/notes", "foo"}) {
 			String first = slot.split("/")[0];
 			assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + did + "/" + slot, "/" + did + "/" + first),
 				noSuchPath(slot), slot);
 		}
-		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> record = (AMap<AString, ACell>) read(resolve(""));
-		assertNotNull(record.get(Namespace.W));
-		assertFalse(record.containsKey(Covia.K_META), "the whole record leaves out the venue's bookkeeping");
+	}
+
+	@Test
+	public void testAPathToTheAccountReadsItsRecordAsStored() {
+		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
+		assertEquals(venue.users().get(did).get(), read(resolve("")));
 	}
 
 	@Test

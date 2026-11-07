@@ -50,7 +50,7 @@ public class WorkspaceTest {
 	@Test
 	public void testChangesBelowAMissingLevelAreRefused() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.empty()));
-		ACell before = area.read();
+		ACell before = area.cursor().getOrDefault(null);
 		String missing = String.format(ValuePath.NO_LEVEL, "/a");
 
 		assertEquals(missing, assertThrows(NotFoundException.class,
@@ -59,14 +59,14 @@ public class WorkspaceTest {
 			() -> area.append(path("a/b"), CVMLong.ONE)).getMessage());
 		assertEquals(missing, assertThrows(NotFoundException.class,
 			() -> area.update(path("a/b"), value -> CVMLong.ONE)).getMessage());
-		assertSame(before, area.read(), "a refused change writes nothing");
+		assertSame(before, area.cursor().getOrDefault(null), "a refused change writes nothing");
 	}
 
 	@Test
 	public void testCreatePathMakesOnlyTheMissingLevels() {
 		Workspace area = empty();
 		assertEquals(2, area.createPath(path("a/b")));
-		assertEquals(Maps.of("a", Maps.of("b", Maps.empty())), area.read());
+		assertEquals(Maps.of("a", Maps.of("b", Maps.empty())), area.cursor().getOrDefault(null));
 		area.write(path("a/b/c"), CVMLong.ONE);
 
 		assertEquals(1, area.createPath(path("a/x")));
@@ -78,7 +78,7 @@ public class WorkspaceTest {
 	public void testCreatePathRefusesALevelThatIsNotAContainer() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("n", CVMLong.ONE,
 			"list", Vectors.of(CVMLong.ONE))));
-		ACell before = area.read();
+		ACell before = area.cursor().getOrDefault(null);
 
 		assertEquals(String.format(ValuePath.NOT_A_MAP, "x", "/n"), assertThrows(InvalidInputException.class,
 			() -> area.createPath(path("n/x"))).getMessage());
@@ -86,7 +86,7 @@ public class WorkspaceTest {
 			assertThrows(InvalidInputException.class, () -> area.createPath(path("list/3"))).getMessage());
 		assertEquals(String.format(ValuePath.NOT_AN_INDEX, "/list", 1L, "x"),
 			assertThrows(InvalidInputException.class, () -> area.createPath(path("list/x"))).getMessage());
-		assertSame(before, area.read());
+		assertSame(before, area.cursor().getOrDefault(null));
 	}
 
 	@Test
@@ -112,9 +112,9 @@ public class WorkspaceTest {
 
 		assertTrue(area.delete(path("a")));
 		assertFalse(area.contains(path("a")));
-		ACell before = area.read();
+		ACell before = area.cursor().getOrDefault(null);
 		assertFalse(area.delete(path("a")));
-		assertSame(before, area.read(), "deleting an absent value writes nothing");
+		assertSame(before, area.cursor().getOrDefault(null), "deleting an absent value writes nothing");
 	}
 
 	@Test
@@ -188,7 +188,7 @@ public class WorkspaceTest {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("a", Maps.empty())));
 
 		assertFalse(area.write(own, CVMLong.ONE));
-		assertEquals(Maps.of("a", Maps.of("b", CVMLong.ONE)), area.read());
+		assertEquals(Maps.of("a", Maps.of("b", CVMLong.ONE)), area.cursor().getOrDefault(null));
 		assertEquals(CVMLong.ONE, area.read(own));
 		assertTrue(area.contains(own));
 		assertFalse(area.contains(whole.slice(1)));

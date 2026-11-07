@@ -40,13 +40,13 @@ public class EntryTest {
 
 		assertFalse(entry.exists());
 		assertFalse(entry.write(ONE), "the first write creates the entry");
-		assertEquals(Maps.of("a", Maps.of("b", ONE)), area.read());
+		assertEquals(Maps.of("a", Maps.of("b", ONE)), area.cursor().getOrDefault(null));
 		assertTrue(entry.write(TWO));
 		assertEquals(CVMLong.create(3), entry.update(value -> CVMLong.create(((CVMLong) value).longValue() + 1)));
 		assertEquals(CVMLong.create(3), area.read(path("a/b")));
 
 		assertTrue(entry.delete());
-		assertEquals(Maps.of("a", Maps.empty()), area.read());
+		assertEquals(Maps.of("a", Maps.empty()), area.cursor().getOrDefault(null));
 		assertFalse(entry.delete(), "deleting an absent entry writes nothing");
 	}
 
@@ -58,12 +58,12 @@ public class EntryTest {
 		assertFalse(entry.write(null));
 		assertTrue(entry.exists());
 		assertTrue(area.resolve(path("a")).exists());
-		assertNull(entry.read());
+		assertNull(entry.cursor().getOrDefault(null));
 		assertTrue(entry.write(null), "a stored null counts as present");
 
 		assertTrue(entry.delete());
 		assertFalse(entry.exists());
-		assertEquals(Maps.empty(), area.read());
+		assertEquals(Maps.empty(), area.cursor().getOrDefault(null));
 	}
 
 	@Test
@@ -83,7 +83,7 @@ public class EntryTest {
 		String missing = String.format(ValuePath.NO_LEVEL, "/a");
 		assertEquals(missing, assertThrows(NotFoundException.class, () -> entry.write(TWO)).getMessage());
 		assertEquals(missing, assertThrows(NotFoundException.class, () -> entry.append(TWO)).getMessage());
-		assertEquals(Maps.empty(), area.read(), "a refused change writes nothing");
+		assertEquals(Maps.empty(), area.cursor().getOrDefault(null), "a refused change writes nothing");
 	}
 
 	@Test
@@ -94,7 +94,7 @@ public class EntryTest {
 
 		assertEquals(String.format(ValuePath.INDEX_OUT_OF_RANGE, "/list", 2, 1),
 			assertThrows(InvalidInputException.class, () -> entry.write(TWO)).getMessage());
-		assertEquals(Maps.of("list", Vectors.of(1)), area.read());
+		assertEquals(Maps.of("list", Vectors.of(1)), area.cursor().getOrDefault(null));
 	}
 
 	@Test
@@ -106,7 +106,7 @@ public class EntryTest {
 
 		assertEquals(String.format(Entry.CHANGED, "/x"),
 			assertThrows(InvalidInputException.class, () -> entry.write(TWO)).getMessage());
-		assertEquals(Maps.of("x", Maps.empty()), area.read());
+		assertEquals(Maps.of("x", Maps.empty()), area.cursor().getOrDefault(null));
 	}
 
 	@Test
@@ -115,14 +115,14 @@ public class EntryTest {
 		Workspace area = area(before);
 		Entry inList = area.entry(path("list/x"));
 
-		assertNull(inList.read());
+		assertNull(inList.cursor().getOrDefault(null));
 		assertFalse(inList.exists());
 		assertFalse(inList.delete());
 		assertEquals(String.format(ValuePath.NOT_AN_INDEX, "/list", 1, "x"),
 			assertThrows(InvalidInputException.class, () -> inList.write(ONE)).getMessage());
 		assertEquals(String.format(ValuePath.NOT_A_MAP, "b", "/text"),
 			assertThrows(InvalidInputException.class, () -> area.entry(path("text/b")).write(ONE)).getMessage());
-		assertEquals(before, area.read());
+		assertEquals(before, area.cursor().getOrDefault(null));
 	}
 
 	@Test
@@ -133,13 +133,13 @@ public class EntryTest {
 		assertEquals(3, entry.missingLevels());
 		assertEquals(String.format(ValuePath.NO_LEVEL, "/a"),
 			assertThrows(NotFoundException.class, () -> entry.write(ONE)).getMessage());
-		assertNull(area.read());
+		assertNull(area.cursor().getOrDefault(null));
 
 		entry.execute(draft -> {
 			assertEquals(2, draft.createLevels());
 			draft.write(ONE);
 		});
-		assertEquals(Maps.of("a", Maps.of("b", Maps.of("c", ONE))), area.read());
+		assertEquals(Maps.of("a", Maps.of("b", Maps.of("c", ONE))), area.cursor().getOrDefault(null));
 		assertEquals(0, entry.missingLevels());
 		assertEquals(0, entry.createLevels(), "existing levels are kept");
 	}
@@ -153,14 +153,14 @@ public class EntryTest {
 			draft.write(ONE);
 			throw new IllegalStateException("rollback");
 		}));
-		assertEquals(Maps.empty(), area.read());
+		assertEquals(Maps.empty(), area.cursor().getOrDefault(null));
 	}
 
 	@Test
 	public void testAnAbsentRootCountsAsEmpty() {
 		Workspace area = area(null);
 		assertFalse(area.entry(path("a")).write(ONE));
-		assertEquals(Maps.of("a", ONE), area.read());
+		assertEquals(Maps.of("a", ONE), area.cursor().getOrDefault(null));
 	}
 
 	@Test
@@ -169,7 +169,7 @@ public class EntryTest {
 		Workspace area = area(Maps.of("jobs", Index.of(id, ONE)));
 		Entry entry = area.entry(path("jobs/" + id.toHexString()));
 
-		assertEquals(ONE, entry.read());
+		assertEquals(ONE, entry.cursor().getOrDefault(null));
 		assertTrue(entry.write(TWO));
 		assertEquals(Index.of(id, TWO), area.read(path("jobs")));
 	}
@@ -182,8 +182,8 @@ public class EntryTest {
 		assertFalse(root.exists());
 		assertFalse(root.write(Maps.of("a", ONE)));
 		assertTrue(root.exists());
-		assertEquals(Maps.of("a", ONE), area.read());
+		assertEquals(Maps.of("a", ONE), area.cursor().getOrDefault(null));
 		assertTrue(root.delete());
-		assertNull(area.read());
+		assertNull(area.cursor().getOrDefault(null));
 	}
 }

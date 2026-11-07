@@ -118,8 +118,8 @@ section.
 | `dlfs/<drive>/` | DLFS drives | The owner's drive in the separate `:dlfs` region | The `dlfs` and `file` operations |
 
 A user's record also holds the venue's bookkeeping, its activity times
-(Appendix A, *User meta record*) and its account lifecycle, which no path
-reaches.
+(Appendix A, *User meta record*) and its account lifecycle. No path names
+them, and a read of the whole account returns them with the rest (§4.6).
 
 `n/`, `c/`, `t/` and `v/` are context-rooted (§4.5). An `x/` route is the
 adapter's own view, which it presents per principal under its own rules, and
@@ -390,10 +390,17 @@ component reads the segments it owns and hands the rest to its child as
 caller's request; the array is the caller's, lent for the call, and anything
 kept is copied. Resolution sees no request, takes as many segments per step as
 the component's rules cover (as cursor paths do), and builds each child only
-from its own cursor, so a walk from a draft root stays in the draft. `read()`
-returns the value as callers see it. Resolution returns Convex's `ALatticeComponent`, so a path may end at a
-component that is not Covia's; `ACoviaComponent.read(component)` reads either
-kind, and `exists()` is Convex's own.
+from its own cursor, so a walk from a draft root stays in the draft.
+Resolution returns Convex's `ALatticeComponent`, so a path may end at a
+component that is not Covia's.
+
+**A read returns the value as stored.** Reading a path gives the value at the
+cursor of the component it resolves to, exactly as that cursor holds it, and
+the reader interprets it; no component filters or reshapes what a read
+returns. A path to a whole account reads its record, the venue's bookkeeping
+included. That record's layout is internal and may move: a caller reads what
+it needs by the paths and operations that name it, not by its place in a
+larger value.
 
 | Component | Routes |
 |-----------|--------|
@@ -737,8 +744,9 @@ would use: an identity's idle time is `now - meta.updated`. Job-free reads do
 not count, by design. Deleting a user (`user:delete`) removes their subtree,
 so store GC can reclaim its cells.
 
-`meta` is the venue's bookkeeping, not the user's data, so no path reaches it
-(§4.6) and users cannot forge their activity. Operators see it in `user:info`
+`meta` is the venue's bookkeeping, not the user's data, so no path names it
+and no change by path reaches it (§4.6): users cannot forge their activity. A
+read of the whole account returns it with the rest of the record. Operators see it in `user:info`
 and `user:list`; it is not part of a user's export. New per-identity
 fields belong in `meta`, not as further top-level keys.
 

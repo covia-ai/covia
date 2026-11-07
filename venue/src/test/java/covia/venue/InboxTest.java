@@ -11,10 +11,10 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.hitl.Hitl;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 
@@ -27,6 +27,10 @@ public class InboxTest {
 	private static User user() {
 		return new User(VenueContext.create(() -> NOW), Cursors.<ACell>root(Maps.empty()),
 			Strings.create("did:key:inbox"));
+	}
+
+	private static ACell read(ALatticeComponent<?> component) {
+		return component.cursor().getOrDefault(null);
 	}
 
 	@Test
@@ -48,7 +52,7 @@ public class InboxTest {
 		User user = user();
 		user.inbox().put(ID, Maps.of(Hitl.STATUS, Hitl.OPEN));
 
-		assertEquals(user.inbox().getAll(), ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.H))));
-		assertEquals(Hitl.OPEN, RT.getIn(ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.H, ID))), Hitl.STATUS));
+		assertEquals(user.inbox().getAll(), read(user.resolve(CoviaPath.segments(Namespace.H))));
+		assertEquals(Hitl.OPEN, RT.getIn(read(user.resolve(CoviaPath.segments(Namespace.H, ID))), Hitl.STATUS));
 	}
 }

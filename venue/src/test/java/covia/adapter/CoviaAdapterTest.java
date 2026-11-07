@@ -24,7 +24,6 @@ import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import convex.lattice.ALatticeComponent;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 import covia.lattice.Entry;
 import covia.lattice.Namespace;
@@ -2779,7 +2778,7 @@ public class CoviaAdapterTest {
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
 		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("c/draft"));
-		assertNull(ACoviaComponent.read(target));
+		assertNull(target.cursor().getOrDefault(null));
 		var refused = assertThrows(InvalidInputException.class,
 			() -> Entry.of(target).write(CVMLong.ONE));
 		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
@@ -2807,7 +2806,7 @@ public class CoviaAdapterTest {
 		AString path = Strings.create(ALICE_DID + "/w/private");
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		assertEquals(Strings.create("alice only"), ACoviaComponent.read(covia.locate(BOB, path)),
+		assertEquals(Strings.create("alice only"), covia.locate(BOB, path).cursor().getOrDefault(null),
 			"locating finds the place whoever asks");
 		assertThrows(AuthException.class, () -> covia.resolve(BOB, path).read(),
 			"a request's access asks the owner first");

@@ -17,7 +17,6 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import java.util.function.Consumer;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 import covia.lattice.Entry;
 import covia.adapter.AAdapter;
@@ -351,7 +350,7 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return ACoviaComponent.read(venue.resolve(venuePath(virtualPath)));
+		return venue.resolve(venuePath(virtualPath)).cursor().getOrDefault(null);
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */

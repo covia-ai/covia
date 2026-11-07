@@ -205,12 +205,6 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 
-	/** The agent as callers see it: its record. */
-	@Override
-	public ACell read() {
-		return getRecord();
-	}
-
 	/** Replaces the entire record. Use for initialisation only. */
 	public void putRecord(AMap<AString, ACell> record) {
 		// Preserve the previous version floor when replacing the whole record;

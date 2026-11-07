@@ -86,7 +86,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	/** Whether a value is here; a stored null counts. */
 	@Override
 	public boolean exists() {
-		if (keys.length == 0) return read() != null;
+		if (keys.length == 0) return cursor().getOrDefault(null) != null;
 		return resolved.refusal() == null && holds(above.getOrDefault(null), last());
 	}
 
@@ -148,7 +148,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 * after {@link #createLevels} makes exactly these.
 	 */
 	public int missingLevels() {
-		ACell node = area.read();
+		ACell node = area.cursor().getOrDefault(null);
 		for (int i = 0; i < keys.length; i++) {
 			if (!holds(node, i)) return keys.length - i;
 			node = valueIn(node, i);

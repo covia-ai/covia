@@ -82,17 +82,4 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 	public boolean exists() {
 		return cursor().getOrDefault(null) != null;
 	}
-
-	/** This component's value as callers see it. */
-	public ACell read() {
-		return cursor().getOrDefault(null);
-	}
-
-	/**
-	 * A component's value as callers see it: a Covia component's {@link #read},
-	 * or the value at any other component's location; null when absent.
-	 */
-	public static ACell read(ALatticeComponent<?> component) {
-		return (component instanceof ACoviaComponent<?> covia) ? covia.read() : component.cursor().getOrDefault(null);
-	}
 }

@@ -87,10 +87,13 @@ public final class Access {
 		return invalid;
 	}
 
-	/** The value here as callers see it, or null when absent, once the request may read it. */
+	/**
+	 * The value stored here, exactly as the component's cursor holds it, or null
+	 * when absent, once the request may read it. The reader interprets it.
+	 */
 	public ACell read() {
 		require(Capability.CRUD_READ);
-		return ACoviaComponent.read(valid());
+		return valid().cursor().getOrDefault(null);
 	}
 
 	/** Whether a value is here now, once the request may read it; a stored null counts. */

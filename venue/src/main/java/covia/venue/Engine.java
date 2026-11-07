@@ -94,7 +94,6 @@ import covia.grid.Operation;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
-import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
@@ -2150,7 +2149,7 @@ public class Engine {
 			// not absence and propagates rather than being masked as "not found" (#175).
 			return null;
 		}
-		return (target == null) ? null : ACoviaComponent.read(target);
+		return (target == null) ? null : target.cursor().getOrDefault(null);
 	}
 
 	/**

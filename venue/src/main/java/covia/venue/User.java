@@ -66,7 +66,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Framework-internal read of a path in this user's record. */
 	ACell readInternalPath(Path path) {
-		return ACoviaComponent.read(resolve(path));
+		return resolve(path).cursor().getOrDefault(null);
 	}
 
 	/**
@@ -323,12 +323,6 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		if (Namespace.A.equals(segment)) return assets().resolve(segments, start + 1, end);
 		if (Namespace.G.equals(segment)) return super.resolve(segments, start, end);
 		throw new NoSuchPathException(segments, start, end);
-	}
-
-	/** The user's data as callers see it, its jobs included, without the venue's bookkeeping. */
-	@Override
-	public ACell read() {
-		return Users.content(cursor().getOrDefault(null));
 	}
 
 }
