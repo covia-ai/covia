@@ -32,13 +32,21 @@
 					"type": "array",
 					"description": "Optional proofs: UCAN JWTs granting this venue the capabilities it passes on. Only the venue itself may supply them. Omitted or empty mints a root.",
 					"items": { "type": "string" }
+				},
+				"key": {
+					"type": "string",
+					"description": "Optional held key to sign with instead of the venue's key: its did:key, multibase public key or 0x account key in your keyring, or <did>/keys/<key> in another holder's. The grant's issuer is that key's did:key, bare paths are under it, and it may name only that key's own resources. Needs key/sign/grant on it."
 				}
 			},
 			"required": ["aud", "att"]
 		},
 		"output": {
 			"type": "object",
-			"description": "Complete signed UCAN token (header, payload, sig)"
+			"description": "Complete signed UCAN token (header, payload, sig)",
+			"properties": {
+				"token": { "type": "string", "description": "The signed UCAN JWT." },
+				"iss": { "type": "string", "description": "Its issuer: the venue's DID, or the did:key of the held key that signed it." }
+			}
 		}
 	}
 }

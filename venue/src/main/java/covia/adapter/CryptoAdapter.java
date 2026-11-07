@@ -446,6 +446,18 @@ public class CryptoAdapter extends AAdapter {
 	}
 
 	/**
+	 * The public key a held key reference names, without using it: what a
+	 * caller needs to know before it asks {@link #heldKeyPair} to sign.
+	 *
+	 * @throws InvalidInputException when {@code key} names no key
+	 */
+	public AccountKey heldPublicKey(RequestContext ctx, ACell key) {
+		Held held = heldRef(ctx, key, KEYS_SEGMENT, INVALID_HELD_KEY);
+		if (held == null) throw new InvalidInputException(INVALID_HELD_KEY);
+		return CryptoKeyring.accountKey(held.id());
+	}
+
+	/**
 	 * The key a root identity holds for itself, to sign identity tokens for it
 	 * and the identities nested below it (HELD_KEYS.md, principle 4): its own
 	 * did:key's private key, in its own keyring. Null when it holds none.

@@ -17,6 +17,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
@@ -42,6 +43,8 @@ public class UCANAdapter extends AAdapter {
 
 	/** Refusal of {@code prf} from any caller but the venue itself. */
 	public static final String PRF_VENUE_ONLY = "Only the venue itself may pass on a grant it holds (prf)";
+	public static final String KEY_OR_PRF = "A grant signed with a held key is a root: give key or prf, not both";
+	public static final String KEY_GRANTS_OWN_ONLY = "a grant signed with a held key covers only that key's own resources";
 	/** Refusal of a {@code prf} entry that does not verify. */
 	public static final String PRF_INVALID = "A prf entry is not a valid UCAN";
 	/** Refusal of a {@code prf} entry addressed to someone other than this venue. */
@@ -138,6 +141,13 @@ public class UCANAdapter extends AAdapter {
 			throw new AuthException(PRF_VENUE_ONLY + ", not " + ctx.getCallerDID());
 		}
 
+		// A held key signs the grant as itself: its did:key is the issuer and the
+		// root of everything the grant names (HELD_KEYS.md).
+		ACell keyRef = RT.getIn(input, Fields.KEY);
+		if (keyRef != null && prf != null) throw new InvalidInputException(KEY_OR_PRF);
+		AString keyIssuer = (keyRef != null)
+			? UCAN.toDIDKey(CryptoAdapter.of(engine).heldPublicKey(ctx, keyRef)) : null;
+
 		AMap<AString, ACell> inputMap = RT.castMap(input);
 		ACell expValue = inputMap.get(UCAN.EXP);
 		CVMLong expCell = RT.ensureLong(expValue);
@@ -168,7 +178,7 @@ public class UCANAdapter extends AAdapter {
 		// surface — the grant/ rule binds token production, never resolution.
 		// Proofs travel in the transport proof channel (COG-15), never in
 		// operation input (input is persisted in job records).
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = (keyIssuer != null) ? keyIssuer : ctx.getCallerDID();
 		String callerPrefix = callerDID.toString() + "/";
 		AVector<ACell> canonAtt = Vectors.empty();
 		for (long i = 0; i < att.count(); i++) {
@@ -186,6 +196,9 @@ public class UCANAdapter extends AAdapter {
 			}
 			if (w.startsWith("did:")) {
 				// With prf, held grants authorise the entry instead (requireHeld)
+				if (keyIssuer != null && !w.startsWith(callerPrefix)) {
+					throw new InvalidInputException("att[" + i + "]: " + KEY_GRANTS_OWN_ONLY + " (" + callerPrefix + ")");
+				}
 				if (prf == null && !w.startsWith(callerPrefix)) {
 					// Held granting right: minting over another principal's resource
 					// requires proofs covering grant/<can> on it — and the minted
@@ -232,7 +245,9 @@ public class UCANAdapter extends AAdapter {
 		// their own key client-side; a held use/grant proof cannot turn the venue
 		// into the root authority for an unrelated DID.
 		AString venueDID = engine.getDIDString();
-		if (prf != null) {
+		if (keyIssuer != null) {
+			// Every entry is under the key's own namespace, checked above.
+		} else if (prf != null) {
 			requireHeld(prf, att, now, exp);
 		} else {
 			for (long i = 0; i < att.count(); i++) {
@@ -256,7 +271,10 @@ public class UCANAdapter extends AAdapter {
 		} catch (RuntimeException e) {
 			throw new InvalidInputException("aud must be a valid audience DID: " + audDID);
 		}
-		AKeyPair venueKP = engine.getKeyPair();
+		AKeyPair signer = (keyIssuer != null)
+			? CryptoAdapter.of(engine).heldKeyPair(ctx, keyRef, Abilities.KEY_SIGN_GRANT)
+			: engine.getKeyPair();
+		AString issuer = (keyIssuer != null) ? keyIssuer : venueDID;
 		// Mint the Convex UCAN JWT profile (0.8.11): the ucv claim and an
 		// explicit exp key (null = non-expiring) are required for the token to
 		// parse; JWT.signPublic supplies the typ header and kid. Claims are
@@ -264,18 +282,18 @@ public class UCANAdapter extends AAdapter {
 		// declared identity, which may be did:web (covia#343) — the profile
 		// accepts any DID-shaped issuer.
 		AMap<AString, ACell> claims = Maps.of(
-			UCAN.ISS, venueDID,
+			UCAN.ISS, issuer,
 			UCAN.AUD, audDID,
 			UCAN.UCV, UCAN.VERSION,
 			UCAN.ATT, att,
 			UCAN.PRF, (prf != null) ? prf : Vectors.empty());
 		claims = claims.assoc(UCAN.EXP, (exp == null) ? null : CVMLong.create(exp));
-		AString token = JWT.signPublic(claims, venueKP);
+		AString token = JWT.signPublic(claims, signer);
 		engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "ucan",
 			covia.venue.Audit.K_DID, ctx.getCallerDID(), covia.venue.Audit.K_SUBJECT, audDID,
 			covia.venue.Audit.K_EXP, (exp == null) ? "never" : exp);
 
-		return Maps.of("token", token);
+		return Maps.of("token", token, UCAN.ISS, issuer);
 	}
 
 	/**
