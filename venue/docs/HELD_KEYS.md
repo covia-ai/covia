@@ -52,22 +52,28 @@ Today keys live elsewhere:
    venue's power over its users ([VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md))
    never sign as the identity. A signature travels to other venues, and the
    host root holds only at its own venue.
-4. **A grant of key use is the holder's own.** It counts only when its chain
+4. **An identity token for oneself is not key use.** A nested identity may
+   always obtain an identity token naming itself, signed by its root's key,
+   whether the root is the venue or an identity whose key the venue holds. The
+   token attests only the identity the root's nesting already established, so
+   it is authentication, under `auth:identity-token`'s own rules, and needs no
+   right over the root's keys.
+5. **A grant of key use is the holder's own.** It counts only when its chain
    starts with the holder: signed by the holder, or attested on the holder's
    instruction by the venue custodying its identity (COG-17). A grant rooted in
    the host root never confers key use, so the venue cannot grant itself, or
    anyone, the use of a key it holds for someone else.
-5. **Keys are never readable.** No operation returns, exports or lends a
+6. **Keys are never readable.** No operation returns, exports or lends a
    private key, as for the venue's own key.
-6. **One signing function** serves identity tokens, UCAN grants, Convex
+7. **One signing function** serves identity tokens, UCAN grants, Convex
    transactions and raw payloads, under the same consent and no-amplification
    rules as any issuance (COG-17).
-7. **It signs at the point of use.** The venue mints short-lived tokens when
+8. **It signs at the point of use.** The venue mints short-lived tokens when
    they are needed, so no long-lived bearer has to be stored.
-8. **Custody can end.** Removing a key, or deleting its holder, ends it. The
+9. **Custody can end.** Removing a key, or deleting its holder, ends it. The
    venue then signs nothing new with it; tokens already issued last until they
    expire.
-9. **Every use is audited,** naming the holder, the public key and the
+10. **Every use is audited,** naming the holder, the public key and the
    principal that asked.
 
 ## Store format
@@ -234,18 +240,21 @@ A check passes in one of two ways, and in no other:
    since a bare path in caps names its owner's namespace. An `nb.gate` on such
    a cap can make signing wait for an approval.
 2. **The caller presents a grant of the ability on that key whose chain starts
-   with the holder** (principle 4). The grant bounds the use as any grant does:
+   with the holder** (principle 5). The grant bounds the use as any grant does:
    to the key, the kind of signing, an expiry, and any `nb.gate`.
 
 Admission, nesting, ownership, `user/sudo` and grants rooted in the host root
 never pass. An agent with no caps, whose base is its owner's authority, still
 cannot use its owner's keys, because its DID is not its owner's.
 
-A nested identity whose identity token is to be signed by its root's key
-needs a grant of `key/sign/token` on that key from the root. The venue's own
-key is the venue's keyring entry under the same rules: the venue acting as
-itself, in trusted code, uses it, and anyone else only under an explicit grant
-from the venue.
+An identity token naming the caller, signed by its root's key, is not a use
+of that key (principle 4): `auth:identity-token` issues it to an identity
+nested below the root under that operation's own rules, as it does today for
+identities nested below the venue's `did:key` ([AUTH.md](./AUTH.md) §5.2).
+Any other use of the root's key needs a grant. The venue's own key is the
+venue's keyring entry under the same rules: the venue acting as itself, in
+trusted code, uses it, and anyone else only under an explicit grant from the
+venue.
 
 ## Security
 
@@ -271,10 +280,6 @@ from the venue.
 
 1. When the deprecated Convex signing operations are removed, and how an owner
    moves an existing seed or phrase from the secret store into their keyring.
-2. Identities nested below the venue's own `did:key` mint identity tokens with
-   the venue's key today without any grant ([AUTH.md](./AUTH.md) §5.2). Under
-   these rules they need one: whether the venue grants it to them standing, or
-   that use ends.
-3. Signing the venue's outbound calls made as a held identity, per call.
-4. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
-5. The new operations' names.
+2. Signing the venue's outbound calls made as a held identity, per call.
+3. Whether `crypto:sign` and the HITL `sign` request (#293) share one path.
+4. The new operations' names.
