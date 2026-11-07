@@ -18,7 +18,7 @@ normative specs are the COGs in covia-docs (`docs/protocol/cogs/`);
 | `deploy/` | Operator guide, Caddyfile, Docker and cloud deployment |
 | `dev/` | Gitignored personal configs and scratch files |
 
-Dependency versions are in the root `pom.xml` (`convex.version` is 0.8.18).
+Dependency versions are in the root `pom.xml`.
 
 ## Build and run
 

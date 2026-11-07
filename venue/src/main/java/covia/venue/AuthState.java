@@ -294,7 +294,7 @@ public final class AuthState extends ACoviaComponent<AMap<AString, AMap<AString,
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, AMap<AString, ACell>> getUsers() {
-		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(cursor().get());
+		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(cursor().getOrDefault(null));
 	}
 
 	/** Atomic directory mutation, including cross-user key constraints. */

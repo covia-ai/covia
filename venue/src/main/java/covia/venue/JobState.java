@@ -74,7 +74,7 @@ public final class JobState extends ACoviaComponent<ACell>
 	}
 
 	/** The job's record: its current state, which is what callers see. */
-	public AMap<AString, ACell> getRecord() { return Job.currentState(RT.ensureMap(cursor().get())); }
+	public AMap<AString, ACell> getRecord() { return Job.currentState(RT.ensureMap(cursor().getOrDefault(null))); }
 
 	/** The job as callers see it: its current state. */
 	@Override public ACell read() { return getRecord(); }

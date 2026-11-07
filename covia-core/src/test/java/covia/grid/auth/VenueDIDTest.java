@@ -33,9 +33,12 @@ public class VenueDIDTest {
 		// alsoKnownAs is no rebinding: a venue presenting its did:key is not its did:web.
 		assertRefused(VenueDID.PRESENTS_OTHER, remote, KEY_DID, WEB_DID);
 		assertRefused(VenueDID.PRESENTS_OTHER, URI.create("http://localhost:8080/"), WEB_DID, KEY_DID);
-		// The same DID however its identifier is percent-encoded.
-		assertNull(VenueDID.refusal(URI.create("http://127.0.0.1:8080/"),
-			"did:web:127.0.0.1:8080", "did:web:127.0.0.1%3A8080"));
+		// The same DID however its percent-encodings are written (CAD043)...
+		URI local = URI.create("http://127.0.0.1:8080/");
+		assertNull(VenueDID.refusal(local, "did:web:127.0.0.1%3a8080", "did:web:127.0.0.1%3A8080"));
+		assertNull(VenueDID.refusal(local, "did:web:venue%2Dexample.com", "did:web:venue-example.com"));
+		// ...but an encoded ":" (a port) is not a raw one (a path).
+		assertRefused(VenueDID.PRESENTS_OTHER, local, "did:web:127.0.0.1:8080", "did:web:127.0.0.1%3A8080");
 	}
 
 	@Test

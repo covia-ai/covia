@@ -87,7 +87,7 @@ public class AssetStore extends ACoviaComponent<Index<AString, AVector<ACell>>> 
 	 * @return Map of all assets, or null if uninitialised
 	 */
 	public AMap<ABlob, AVector<?>> getAll() {
-		return RT.castMap(cursor().get());
+		return RT.castMap(cursor().getOrDefault(null));
 	}
 
 	/**

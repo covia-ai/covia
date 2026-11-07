@@ -374,7 +374,7 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 	 * @return Vector of secret names, or empty vector if none
 	 */
 	public AVector<AString> list() {
-		AMap<AString, ACell> all = cursor().get();
+		AMap<AString, ACell> all = cursor().getOrDefault(null);
 		if (all == null || all.isEmpty()) return Vectors.empty();
 		return all.getKeys();
 
@@ -408,7 +408,7 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 	 */
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> getRecord(AString name) {
-		AMap<AString, ACell> all = cursor().get();
+		AMap<AString, ACell> all = cursor().getOrDefault(null);
 		if (all == null) return null;
 		ACell value = all.get(name);
 		if (!(value instanceof AMap)) {

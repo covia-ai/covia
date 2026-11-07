@@ -9,9 +9,10 @@ import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.store.AStore;
 import convex.core.store.MemoryStore;
-import convex.lattice.LatticeApplication;
+import convex.lattice.ALatticeApplication;
 import convex.lattice.LatticeContext;
 import convex.lattice.LatticeHost;
+import convex.lattice.LatticeOps;
 import covia.lattice.Covia;
 
 /**
@@ -26,7 +27,10 @@ import covia.lattice.Covia;
  * reconcile the state or external effects of independently running forks.</p>
  */
 public final class CoviaApplication
-		extends LatticeApplication<Index<Keyword, ACell>> {
+		extends ALatticeApplication<Index<Keyword, ACell>> {
+
+	/** Signing key, clock and owner verification for merges of the root. */
+	private volatile LatticeContext context = LatticeContext.EMPTY;
 
 	private final boolean ephemeral;
 	private final LatticeHost<Index<Keyword, ACell>> host;
@@ -37,10 +41,36 @@ public final class CoviaApplication
 			boolean ephemeral) {
 		// Use the live-cursor constructor. The host-based constructor creates a
 		// private working copy, which would split Engine's authoritative state.
-		super(Covia.ROOT, host.cursor());
+		super(host.cursor());
 		this.host = host;
 		this.ephemeral = ephemeral;
 		host.addApplication(this);
+	}
+
+	/** The policy merges of the root use. */
+	public LatticeContext getContext() {
+		return context;
+	}
+
+	/** Replaces the policy merges of the root use; null means none. */
+	public void setContext(LatticeContext context) {
+		this.context = (context == null) ? LatticeContext.EMPTY : context;
+	}
+
+	@Override
+	public Index<Keyword, ACell> merge(Index<Keyword, ACell> incoming) {
+		return cursor().updateAndGet(own -> Covia.ROOT.merge(context, own, incoming));
+	}
+
+	@Override
+	protected Index<Keyword, ACell> mergePublication(Index<Keyword, ACell> own, Index<Keyword, ACell> other) {
+		return LatticeOps.mergePublication(Covia.ROOT, context, own, other);
+	}
+
+	@Override
+	protected Index<Keyword, ACell> mergeAtPath(ACell value, ACell... path) {
+		Index<Keyword, ACell> reduced = LatticeOps.reduce(Covia.ROOT, value, path);
+		return (reduced == null) ? cursor().getOrDefault(null) : merge(reduced);
 	}
 
 	/** Connects Covia to an existing local or NodeServer-hosted root. */

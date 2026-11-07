@@ -64,12 +64,12 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 
 	/** Whether this component's data is there now, read from its own cursor, so in a draft as the draft stands. */
 	public boolean exists() {
-		return cursor().get() != null;
+		return cursor().getOrDefault(null) != null;
 	}
 
 	/** This component's value as callers see it. */
 	public ACell read() {
-		return cursor().get();
+		return cursor().getOrDefault(null);
 	}
 
 	/** The value at {@code path} below this component, as callers see it, or null when absent. */

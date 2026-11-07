@@ -200,7 +200,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getRecord() {
-		ACell v = cursor().get();
+		ACell v = cursor().getOrDefault(null);
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 

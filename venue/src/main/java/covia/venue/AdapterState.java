@@ -52,7 +52,7 @@ public final class AdapterState extends ACoviaComponent<ACell>
 
 	/** The account check encloses the adapter path, so it also runs at transaction commit. */
 	static AdapterState bind(VenueState venue, String name, AString owner) {
-		ACell generation = owner == null ? null : RT.getIn(venue.cursor().get(), Covia.USER_DATA, owner, Users.GENERATION);
+		ACell generation = owner == null ? null : RT.getIn(venue.cursor().getOrDefault(null), Covia.USER_DATA, owner, Users.GENERATION);
 		return bind(venue, name, owner, generation);
 	}
 
@@ -71,7 +71,7 @@ public final class AdapterState extends ACoviaComponent<ACell>
 				}
 				@Override protected ACell prepareWrite(ACell value) { return value; }
 			};
-			base.get(); // reject a tombstoned owner before handing out the view
+			base.getOrDefault(null); // reject a tombstoned owner before handing out the view
 		}
 		return new AdapterState(venue.getContext(),
 			base.path(Covia.ADAPTERS).withDefault(Maps.empty()).path(Strings.create(name)), name, owner, generation);
@@ -79,10 +79,10 @@ public final class AdapterState extends ACoviaComponent<ACell>
 
 	public VenueContext getContext() { return context; }
 	public String adapterName() { return name; }
-	public ACell get() { return cursor().get(); }
+	public ACell get() { return cursor().getOrDefault(null); }
 	public void set(ACell value) { cursor().set(value); }
 	public ACell update(UnaryOperator<ACell> action) { return cursor().updateAndGet(action); }
-	public void requireCurrentUser() { cursor().get(); }
+	public void requireCurrentUser() { cursor().getOrDefault(null); }
 
 	/** Diagnostic location, not a caller-accessible workspace path. */
 	public String rootPath() { return ":adapters/" + name; }

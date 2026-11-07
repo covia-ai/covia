@@ -47,7 +47,7 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 
 	@SuppressWarnings("unchecked")
 	public Index<Blob, ACell> events() {
-		ACell value = cursor().path(K_EVENTS).get();
+		ACell value = cursor().path(K_EVENTS).getOrDefault(null);
 		return value instanceof Index<?, ?> ? (Index<Blob, ACell>) value : Index.none();
 	}
 
@@ -60,7 +60,7 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 	/** The keys of the events {@code caller} made for another namespace, from the reverse index. */
 	@SuppressWarnings("unchecked")
 	public ASet<Blob> scheduledBy(AString caller) {
-		ACell keys = RT.getIn(cursor().path(K_BY_ACTOR).get(), caller);
+		ACell keys = RT.getIn(cursor().path(K_BY_ACTOR).getOrDefault(null), caller);
 		return (keys instanceof ASet<?> s) ? (ASet<Blob>) s : Sets.empty();
 	}
 

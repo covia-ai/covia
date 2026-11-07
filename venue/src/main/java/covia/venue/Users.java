@@ -49,11 +49,11 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 	}
 
 	boolean isDeleting(AString did) {
-		return RT.getIn(cursor().get(), did, DELETING) != null;
+		return RT.getIn(cursor().getOrDefault(null), did, DELETING) != null;
 	}
 
 	public ACell tombstone(AString did) {
-		return did == null ? null : RT.getIn(cursor().get(), did, Covia.K_DELETED);
+		return did == null ? null : RT.getIn(cursor().getOrDefault(null), did, Covia.K_DELETED);
 	}
 
 	public void requireNotDeleted(AString did) {
@@ -91,7 +91,7 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 
 	public User get(AString did) {
 		AForkableCursor<ACell> userCursor = cursor().withDefault(Maps.empty()).path(did);
-		ACell current = userCursor.get();
+		ACell current = userCursor.getOrDefault(null);
 		if (current == null || RT.getIn(current, Covia.K_DELETED) != null) return null;
 		return new User(context, new AccountCursor(userCursor), did);
 	}
@@ -158,7 +158,7 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 
 	/** A registered user's state without its framework slots, or null if not registered. */
 	public AMap<AString, ACell> content(AString did) {
-		AMap<AString, ACell> all = cursor().get();
+		AMap<AString, ACell> all = cursor().getOrDefault(null);
 		return all == null ? null : content(all.get(did));
 	}
 
@@ -228,7 +228,7 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 	 * @return Map of DID string to user state, or null if none
 	 */
 	public AMap<AString, ACell> getAll() {
-		AMap<AString, ACell> all = cursor().get();
+		AMap<AString, ACell> all = cursor().getOrDefault(null);
 		if (all == null) return null;
 		for (var entry : all.entrySet()) {
 			if (RT.getIn(entry.getValue(), Covia.K_DELETED) != null) all = all.dissoc(entry.getKey());

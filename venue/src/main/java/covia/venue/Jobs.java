@@ -54,7 +54,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 
 	/** Every job in its current state, keyed by job id; empty when there are none. */
 	public Index<Blob, ACell> getAll() {
-		Index<Blob, ACell> jobs = cursor().get();
+		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
 		return (jobs == null) ? Index.none() : current(jobs);
 	}
 
@@ -72,7 +72,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 
 	/** Counts the jobs without reading their records. */
 	public long count() {
-		Index<Blob, ACell> jobs = cursor().get();
+		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
 		return (jobs == null) ? 0 : jobs.count();
 	}
 
@@ -85,7 +85,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 *         there is no such job
 	 */
 	public JobState get(Blob id) {
-		Index<Blob, ACell> jobs = cursor().get();
+		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
 		return (jobs != null && jobs.containsKey(id)) ? at(id) : null;
 	}
 
@@ -96,7 +96,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 * @return The record, or null if there is no such job
 	 */
 	public AMap<AString, ACell> getRecord(Blob id) {
-		Index<Blob, ACell> jobs = cursor().get();
+		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
 		return (jobs == null) ? null : Job.currentState(RT.ensureMap(jobs.get(id)));
 	}
 
@@ -152,7 +152,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	/** The jobs in their current state; null when there are none. */
 	@Override
 	public ACell read() {
-		Index<Blob, ACell> jobs = cursor().get();
+		Index<Blob, ACell> jobs = cursor().getOrDefault(null);
 		return (jobs == null) ? null : current(jobs);
 	}
 

@@ -76,7 +76,7 @@ public final class SessionState extends ACoviaComponent<ACell>
 	}
 
 	public Blob getID() { return id; }
-	public AMap<AString, ACell> getRecord() { return RT.ensureMap(cursor().get()); }
+	public AMap<AString, ACell> getRecord() { return RT.ensureMap(cursor().getOrDefault(null)); }
 
 	/** The session's workspace ({@code c}); a change to it needs the session. */
 	public Workspace workspace() {

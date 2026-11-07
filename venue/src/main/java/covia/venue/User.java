@@ -104,12 +104,12 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * @return Bytes, zero for a user with no workspace data
 	 */
 	public long workspaceSize() {
-		long size = storedSize(cursor().path(Namespace.W).get());
+		long size = storedSize(cursor().path(Namespace.W).getOrDefault(null));
 		AMap<AString, ACell> agents = getAgents();
 		if (agents != null) {
 			for (AString agentId : agents.keySet()) {
 				AgentState agent = agent(agentId);
-				if (agent != null) size += storedSize(agent.workspace().cursor().get());
+				if (agent != null) size += storedSize(agent.workspace().cursor().getOrDefault(null));
 			}
 		}
 		return size;
@@ -181,7 +181,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	public AgentState agent(AString agentId) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		if (c.get() == null) return null;
+		if (c.getOrDefault(null) == null) return null;
 		return new AgentState(context, c, did, agentId);
 	}
 
@@ -260,7 +260,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getAgents() {
-		ACell value = cursor().path(Namespace.G).get();
+		ACell value = cursor().path(Namespace.G).getOrDefault(null);
 		return (value instanceof AMap) ? (AMap<AString, ACell>) value : null;
 	}
 
@@ -270,7 +270,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * @return User state, or null if uninitialised
 	 */
 	public ACell get() {
-		return cursor().get();
+		return cursor().getOrDefault(null);
 	}
 
 	/** This user's HITL inbox ({@code h/}). */
@@ -314,7 +314,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	/** The user's data as callers see it, its jobs included, without the venue's bookkeeping. */
 	@Override
 	public ACell read() {
-		AMap<AString, ACell> record = Users.content(cursor().get());
+		AMap<AString, ACell> record = Users.content(cursor().getOrDefault(null));
 		if (record == null) return null;
 		if (record.containsKey(Namespace.J)) record = record.assoc(Namespace.J, jobs().read());
 		return record;
@@ -323,12 +323,12 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	/** Data no namespace component claims is read from the record as stored. */
 	@Override
 	public ACell read(CoviaPath path) {
-		return path.isEmpty() ? read() : ValuePath.get(cursor().get(), path);
+		return path.isEmpty() ? read() : ValuePath.get(cursor().getOrDefault(null), path);
 	}
 
 	@Override
 	public boolean contains(CoviaPath path) {
-		return ValuePath.contains(cursor().get(), path);
+		return ValuePath.contains(cursor().getOrDefault(null), path);
 	}
 
 }

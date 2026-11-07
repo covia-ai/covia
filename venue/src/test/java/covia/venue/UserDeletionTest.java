@@ -106,7 +106,7 @@ class UserDeletionTest {
 		assertThrows(AuthException.class, () -> retained.cursor().path(Strings.create("w")).set(Maps.of("late", true)));
 		pending.updateData(pending.getData().assoc(Fields.OUTPUT, Strings.create("late-output")));
 		assertTrue(fresh.jobs().getAll().isEmpty());
-		assertNull(fresh.cursor().path(Strings.create("w")).get());
+		assertFalse(fresh.cursor().path(Strings.create("w")).exists());
 	}
 
 	@Test void automaticAdmissionCanRecreateAnEmptyAccount() throws Exception {
@@ -131,7 +131,7 @@ class UserDeletionTest {
 			delete(did);
 			engine.getVenueState().users().create(did);
 			assertEquals(Status.CANCELLED, prepared.start().getStatus());
-			assertNull(engine.getVenueState().users().get(did).cursor().path(Strings.create("w")).get());
+			assertFalse(engine.getVenueState().users().get(did).cursor().path(Strings.create("w")).exists());
 		}
 	}
 

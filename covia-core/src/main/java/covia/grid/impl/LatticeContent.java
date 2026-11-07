@@ -38,7 +38,7 @@ public class LatticeContent extends AContent {
 
 	@Override
 	public ABlob getBlob() throws IOException {
-		ACell data=cursor.get(Keywords.DATA, hash);
+		ACell data=cursor.getOrDefault(null, Keywords.DATA, hash);
 		if (data instanceof ABlob b) {
 			return b;
 		} else {

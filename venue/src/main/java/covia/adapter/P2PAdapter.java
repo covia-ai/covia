@@ -486,7 +486,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	@SuppressWarnings("unchecked")
 	private static AHashMap<ACell, SignedData<ACell>> owners(P2PNode node, Keyword... path) {
-		ACell value = node.getCursor().get(path);
+		ACell value = node.getCursor().getOrDefault(null, path);
 		return (value instanceof AHashMap<?, ?> map) ? (AHashMap<ACell, SignedData<ACell>>) map : null;
 	}
 

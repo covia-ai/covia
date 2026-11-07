@@ -824,7 +824,7 @@ public class Engine {
 	@SuppressWarnings("unchecked")
 	private void requireKeyMatchesStore() {
 		// The :venues level is an OwnerLattice: AHashMap<AccountKey, SignedData>.
-		ACell venuesVal = lattice.path(Covia.GRID, Covia.VENUES).get();
+		ACell venuesVal = lattice.path(Covia.GRID, Covia.VENUES).getOrDefault(null);
 		if (!(venuesVal instanceof AMap<?, ?> venues) || venues.isEmpty()) return;   // fresh store
 		AMap<ACell, ACell> vs = (AMap<ACell, ACell>) venues;
 		if (vs.containsKey(getAccountKey())) return;                                  // normal restart

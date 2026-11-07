@@ -11,7 +11,7 @@ final class AccountCursor extends AUpdateCursor<ACell, ACell> {
 
 	AccountCursor(AForkableCursor<ACell> base) {
 		super(base);
-		generation = RT.getIn(base.get(), Users.GENERATION);
+		generation = RT.getIn(base.getOrDefault(null), Users.GENERATION);
 	}
 
 	@Override

@@ -62,7 +62,7 @@ public final class JobIndex extends ACoviaComponent<Index<Blob, ACell>>
 
 	/** Every entry, by job id; empty when no job is unfinished. */
 	public Index<Blob, ACell> all() {
-		Index<Blob, ACell> entries = cursor().get();
+		Index<Blob, ACell> entries = cursor().getOrDefault(null);
 		return (entries == null) ? Index.none() : entries;
 	}
 

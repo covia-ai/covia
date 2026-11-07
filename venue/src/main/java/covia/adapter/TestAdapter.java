@@ -114,8 +114,9 @@ public class TestAdapter extends AAdapter {
 			Fields.CALLER, ctx.getCallerDID(), K_USER, ctx.getUserDID(), K_VENUE, engine.getDIDString(),
 			K_EXECUTION, Maps.of("owner", scope.ownerDID(), Fields.AGENT_ID, scope.agentId(),
 				Fields.SESSION_ID, scope.sessionId(), Fields.JOB_ID, scope.jobId(), Fields.TASK_ID, scope.taskId()));
+		// The diagnostics are computed, so the view has a value before any scratch is stored.
 		AForkableCursor<ACell> scratch = adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
-			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID());
+			.path(K_USERS).withDefault(Maps.empty()).path(ctx.getUserDID()).withDefault(Maps.empty());
 		return new ATransformCursor<ACell, ACell>(scratch) {
 			@Override protected ACell view(ACell stored) {
 				AMap<AString, ACell> result = Maps.of(K_CONTEXT, context, K_SAMPLES, SAMPLES);

@@ -23,7 +23,7 @@ final class PathAccountCursor extends ATransformCursor<ACell, ACell> {
 	PathAccountCursor(AForkableCursor<ACell> base, AString did) {
 		super(base);
 		this.did = did;
-		this.generation = RT.getIn(base.get(), Users.GENERATION);
+		this.generation = RT.getIn(base.getOrDefault(null), Users.GENERATION);
 	}
 
 	@Override

@@ -925,14 +925,14 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	 */
 	private void moveLegacyGrants(AString userDID, AdapterState state) {
 		User user = engine.getVenueState().users().get(userDID);
-		if (user == null || !hasLegacyGrant(RT.ensureMap(user.secrets().cursor().get()))) return;
+		if (user == null || !hasLegacyGrant(RT.ensureMap(user.secrets().cursor().getOrDefault(null)))) return;
 		SecretStore.Keys keys = keys();
 		String path = state.userPath(userDID, "");
 		engine.getVenueState().transact(draft -> {
 			User owner = draft.users().get(userDID);
 			if (owner == null) return;
 			AdapterState mine = state.inVenue(draft);
-			AMap<AString, ACell> secrets = RT.ensureMap(owner.secrets().cursor().get());
+			AMap<AString, ACell> secrets = RT.ensureMap(owner.secrets().cursor().getOrDefault(null));
 			AMap<AString, ACell> connections = RT.ensureMap(mine.read(path));
 			LegacyMove move;
 			try {

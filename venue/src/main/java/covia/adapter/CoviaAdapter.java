@@ -23,7 +23,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.lattice.ALattice;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
@@ -61,9 +60,9 @@ import covia.venue.VenueState;
  * value it meets: a map key, an Index key as the string or as a hex Blob, or a
  * vector index.</p>
  *
- * <p>For the reverse direction (listing keys back to the caller),
- * {@link ALattice#toJSONKey(ACell)} converts CVM keys to JSON-friendly
- * form: Keywords → name strings, Blobs → hex strings, etc.</p>
+ * <p>A listing names each key as the JSON rendering of the value shows it
+ * ({@link #keyName}): a string as itself, a keyword by its name, and a blob in
+ * {@code 0x} hex.</p>
  *
  * <h3>User namespace structure</h3>
  * <pre>
@@ -512,7 +511,7 @@ public class CoviaAdapter extends AAdapter {
 				if (idx >= end) break;
 				if (idx >= offset) {
 					page = page.conj(Maps.of(
-						Strings.intern("key"), ALattice.toJSONKey(entry.getKey()),
+						Strings.intern("key"), keyName(entry.getKey()),
 						K_VALUE, entry.getValue()));
 				}
 				idx++;
@@ -527,7 +526,7 @@ public class CoviaAdapter extends AAdapter {
 			for (ACell elem : set) {
 				if (idx >= end) break;
 				if (idx >= offset) {
-					page = page.conj(ALattice.toJSONKey(elem));
+					page = page.conj(elem);
 				}
 				idx++;
 			}
@@ -873,7 +872,7 @@ public class CoviaAdapter extends AAdapter {
 	 * <p>Returns a structured description of whatever value lives at the path:</p>
 	 * <ul>
 	 *   <li><b>Maps:</b> {@code {type: "map", count: 5, keys: ["status", "config", ...]}}
-	 *       — keys converted to JSON-friendly form via {@link ALattice#toJSONKey}</li>
+	 *       — keys named as the value's JSON rendering shows them ({@link #keyName})</li>
 	 *   <li><b>Vectors/sequences:</b> {@code {type: "vector", count: 42}} — no keys,
 	 *       use integer indices with {@code covia:read} to access elements</li>
 	 *   <li><b>Scalars:</b> {@code {type: "string"}} or {@code {type: "long"}} etc.</li>
@@ -1108,9 +1107,17 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private static AString groupKey(ACell fieldVal) {
 		if (fieldVal == null) return Strings.intern("null");
-		if (fieldVal instanceof AString s) return s;
-		ACell jk = ALattice.toJSONKey(fieldVal);
-		return (jk instanceof AString s) ? s : Strings.create(String.valueOf(jk));
+		return keyName(fieldVal);
+	}
+
+	/**
+	 * A key named as the JSON rendering of its value shows it: a string
+	 * as itself, a keyword or symbol by its name, and anything else in its printed
+	 * form, such as a blob in {@code 0x} hex.
+	 */
+	static AString keyName(ACell key) {
+		if (key instanceof AString s) return s;
+		return Strings.create(JSON.jsonKey(key));
 	}
 
 	/**
@@ -1139,7 +1146,7 @@ public class CoviaAdapter extends AAdapter {
 			// Extract all keys, converting to JSON-friendly form
 			AVector<ACell> allKeys = Vectors.empty();
 			for (var entry : m.entrySet()) {
-				allKeys = allKeys.conj(ALattice.toJSONKey(entry.getKey()));
+				allKeys = allKeys.conj(keyName(entry.getKey()));
 			}
 
 			// Pagination — same window the fields projection uses (page-then-project).

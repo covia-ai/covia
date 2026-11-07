@@ -59,7 +59,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	@Override
 	public boolean exists() {
 		if (keys.length == 0) return read() != null;
-		return resolved.refusal() == null && holds(above.get(), last());
+		return resolved.refusal() == null && holds(above.getOrDefault(null), last());
 	}
 
 	@Override

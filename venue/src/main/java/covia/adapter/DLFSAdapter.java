@@ -357,7 +357,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	public long storageSize(AString userDID) {
 		AKeyPair dlfsKey = existingUserKeyPair(RequestContext.of(userDID));
 		if (dlfsKey == null) return 0;
-		ACell drives = engine.getDLFSDrives(dlfsKey).cursor().get();
+		ACell drives = engine.getDLFSDrives(dlfsKey).cursor().getOrDefault(null);
 		return (drives == null) ? 0 : Cells.storageSize(drives);
 	}
 

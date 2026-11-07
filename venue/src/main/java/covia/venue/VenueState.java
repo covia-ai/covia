@@ -480,7 +480,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * @return Map-shaped venue value, or null if uninitialised
 	 */
 	public ACell get() {
-		return cursor().get();
+		return cursor().getOrDefault(null);
 	}
 
 	/** Stored format version. An absent field (or a fresh venue) is legacy version 0. */

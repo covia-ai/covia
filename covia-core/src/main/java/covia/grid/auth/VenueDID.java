@@ -104,7 +104,7 @@ public final class VenueDID {
 		return UNPROVEN + presented + " at " + origin;
 	}
 
-	/** Equality as {@link DID} defines it, which reads a percent-encoded identifier decoded. */
+	/** Equality as {@link DID} defines it, on identifiers normalised as CAD043 specifies. */
 	private static boolean sameDID(String a, String b) {
 		try {
 			return DID.fromString(a).equals(DID.fromString(b));

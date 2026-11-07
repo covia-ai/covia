@@ -24,7 +24,7 @@ public final class Inbox extends ACoviaComponent<ACell> {
 	/** Every request record, keyed by request id; empty when there are none. */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getAll() {
-		ACell v = cursor().get();
+		ACell v = cursor().getOrDefault(null);
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : Maps.empty();
 	}
 

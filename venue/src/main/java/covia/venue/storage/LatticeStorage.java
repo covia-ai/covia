@@ -195,7 +195,7 @@ public class LatticeStorage extends AStorage {
 	 * @return Current state as an Index
 	 */
 	public Index<ABlob, ABlob> getState() {
-		Index<ABlob, ABlob> state = cursor.get();
+		Index<ABlob, ABlob> state = cursor.getOrDefault(null);
 		return (state != null) ? state : Index.none();
 	}
 

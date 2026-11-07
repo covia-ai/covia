@@ -111,6 +111,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A secret or connected account the venue cannot decrypt is refused with how to fix it; a use of one is logged for the operator.
 - SQL failures quote no database text: callers get the SQLState and vendor code, or convex-db's parse and validation message; the venue logs the rest.
 - Error pages outside the REST API show a venue error's type and request id, never its message, and a refusal answers 400 (#540).
+- `covia:list`, `covia:slice` and `covia:aggregate` name a blob key in `0x` hex, as a value's JSON shows it.
+- A connection opened for a `did:web` DID compares it as did:web writes it: a port is `%3A8080`, while `:8080` names a path.
 
 ### Removed
 
