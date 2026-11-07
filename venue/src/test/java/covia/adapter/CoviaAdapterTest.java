@@ -1532,7 +1532,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeletePreservesSiblings() {
 		ACell root = Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2));
-		ACell result = ValuePath.remove(root, CoviaPath.parse("w/entry/x").rest(2));
+		ACell result = ValuePath.remove(root, CoviaPath.parse("w/entry/x").slice(2));
 
 		// y should remain, x should be gone
 		assertNotNull(result);
@@ -1543,7 +1543,7 @@ public class CoviaAdapterTest {
 	@Test
 	public void testDeepDeleteMissingBranchIsExactNoOp() {
 		ACell root = Maps.of("present", Maps.of("value", CVMLong.ONE));
-		ACell result = ValuePath.remove(root, CoviaPath.parse("w/missing/leaf").rest());
+		ACell result = ValuePath.remove(root, CoviaPath.parse("w/missing/leaf").slice(1));
 
 		assertSame(root, result, "delete must not materialise a missing branch as null");
 	}

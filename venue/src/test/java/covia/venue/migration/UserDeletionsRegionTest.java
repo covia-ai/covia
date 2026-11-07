@@ -10,6 +10,7 @@ import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -23,8 +24,8 @@ import covia.venue.VenueState;
 class UserDeletionsRegionTest {
 	private static final AString DID = Strings.create("did:test:venue");
 	/** Stretches inside the workspace, below {@code w}. */
-	private static final CoviaPath LEGACY = CoviaPath.parse("w/user-deletions").rest();
-	private static final CoviaPath NOTES = CoviaPath.parse("w/notes").rest();
+	private static final Path LEGACY = CoviaPath.parse("w/user-deletions").slice(1);
+	private static final Path NOTES = CoviaPath.parse("w/notes").slice(1);
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 	private static final MigrationStep STEP = new UserDeletionsRegion();
 

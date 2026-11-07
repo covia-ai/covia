@@ -20,6 +20,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Index;
+import convex.core.data.Path;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.cursor.AForkableCursor;
@@ -27,7 +28,6 @@ import covia.api.Fields;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.CoviaPath;
 import covia.venue.Engine;
 import covia.venue.AdapterState;
 import covia.venue.RequestContext;
@@ -57,7 +57,7 @@ public abstract class AAdapter {
 	 * null to allow, or a refusal reason that reaches the caller unchanged. The
 	 * adapter also owns value validation in its cursor write transformation.
 	 */
-	public String latticeWriteDenial(RequestContext ctx, CoviaPath path) {
+	public String latticeWriteDenial(RequestContext ctx, Path path) {
 		return LATTICE_READ_ONLY;
 	}
 

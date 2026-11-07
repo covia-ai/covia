@@ -9,13 +9,13 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
-import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -37,7 +37,7 @@ public final class SessionState extends ACoviaComponent<ACell>
 	private final AString owner;
 	private final AString agentId;
 	private final Blob id;
-	/** Who may use this session's data: see {@link #resolve}. */
+	/** Who may use this session's data: see {@link #locate}. */
 	private final AccessPolicy policy;
 
 	/**
@@ -66,7 +66,7 @@ public final class SessionState extends ACoviaComponent<ACell>
 	private static AccessPolicy sessionPolicy(AString owner, AString agentId, Blob id) {
 		String base = owner + "/" + Namespace.G + "/" + agentId + "/" + K_SESSIONS + "/" + id.toHexString();
 		return (ctx, ability, path) -> {
-			if (!path.isEmpty() && K_C.equals(path.first()) && ctx != null
+			if (!path.isEmpty() && K_C.equals(path.get(0)) && ctx != null
 					&& owner.equals(ctx.getUserDID()) && agentId.equals(ctx.getAgentId())
 					&& JobState.isId(id, ctx.getSessionId())) {
 				return AccessPolicy.Need.OF_RIGHT;
@@ -90,9 +90,9 @@ public final class SessionState extends ACoviaComponent<ACell>
 	 * {@code <owner>/g/<agent>/sessions/<id>/<path>}.
 	 */
 	@Override
-	public Position resolve(CoviaPath path) {
-		Position position = (!path.isEmpty() && K_C.equals(path.first()))
-			? workspace().resolve(path.rest()) : super.resolve(path);
+	public Position locate(Path path) {
+		Position position = (!path.isEmpty() && K_C.equals(path.get(0)))
+			? workspace().locate(path.slice(1)) : super.locate(path);
 		return (policy == null) ? position : position.ownedBy(policy, path);
 	}
 

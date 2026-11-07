@@ -17,6 +17,7 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
@@ -48,7 +49,7 @@ class VenueMigrationEndToEndTest {
 	private static final long SEEDED_THROUGH = 4;
 
 	private static final AString USER = Strings.create("did:test:migration-e2e");
-	private static final CoviaPath OLD_DELETIONS = CoviaPath.parse("w/user-deletions");
+	private static final Path OLD_DELETIONS =CoviaPath.parse("w/user-deletions");
 	/** Keyed by an adapter that never registers, so start-up leaves the deletion pending. */
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 	private static final ACell UNLOADED = Maps.of("note", "an unversioned adapter's state");
@@ -86,7 +87,7 @@ class VenueMigrationEndToEndTest {
 			RemoteJobs.REMOTE_ID, remoteId, RemoteJobs.REMOTE_STATUS, Status.STARTED);
 	}
 
-	private static CoviaPath adapterPath(String name) {
+	private static Path adapterPath(String name) {
 		return CoviaPath.parse("w/adapters/" + name);
 	}
 

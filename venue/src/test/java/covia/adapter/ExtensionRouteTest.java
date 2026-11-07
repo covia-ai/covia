@@ -17,6 +17,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -58,8 +59,8 @@ class ExtensionRouteTest {
 			return adapterState(ctx.getUserDID()).cursor().withDefault(Maps.empty())
 				.path(Strings.create("accounts")).withDefault(Maps.empty()).path(ctx.getUserDID());
 		}
-		@Override public String latticeWriteDenial(RequestContext ctx, CoviaPath path) {
-			return writable && !projection && (path.isEmpty() || !Strings.create("fixed").equals(path.first())) ? null : LATTICE_READ_ONLY;
+		@Override public String latticeWriteDenial(RequestContext ctx, Path path) {
+			return writable && !projection && (path.isEmpty() || !Strings.create("fixed").equals(path.get(0))) ? null : LATTICE_READ_ONLY;
 		}
 	}
 
@@ -103,7 +104,7 @@ class ExtensionRouteTest {
 		assertEquals(Strings.create("alice"), engine.resolvePath(Strings.create("/" + path("/label")), alice));
 		assertEquals(Strings.create("alice"), read(aliceDID + "/" + path("/label"), alice));
 		assertEquals("alice", new ContextLoader(engine).resolveValue(Strings.create(path("/label")), alice).content());
-		assertFalse(engine.getVenueState().users().get(aliceDID).resolve(CoviaPath.parse(path(""))).isValid(),
+		assertFalse(engine.getVenueState().users().get(aliceDID).locate(CoviaPath.parse(path(""))).isValid(),
 			"a user's own data has no x: only the adapter's view does");
 		assertEquals(before, engine.getVenueState().get(), "reading a view does not materialise user storage");
 	}
@@ -180,9 +181,9 @@ class ExtensionRouteTest {
 	}
 
 	@Test void absentDisabledAndUnloadedRoutesNeverFallThroughToUserStorage() {
-		CoviaPath shadow = CoviaPath.parse(path("/label"));
+		Path shadow = CoviaPath.parse(path("/label"));
 		Workspace record = new Workspace(engine.getVenueState().users().get(aliceDID).cursor());
-		record.createPath(shadow.parent());
+		record.createPath(CoviaPath.parent(shadow));
 		record.write(shadow, Strings.create("shadow"));
 		var retained = AdapterView.resolve(alice, covia, aliceDID, CoviaPath.parse(path("/label")), Capability.CRUD_WRITE);
 		engine.disableAdapter(probe.getName());

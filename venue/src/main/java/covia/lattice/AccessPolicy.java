@@ -3,13 +3,14 @@ package covia.lattice;
 import java.util.Objects;
 
 import convex.core.data.AString;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import covia.venue.RequestContext;
 
 /**
  * Who may use the data a component owns. A component that owns a kind of
  * data has a policy built from its own identity, and attaches it to the
- * positions its {@link ACoviaComponent#resolve} returns; a position keeps the
+ * positions its {@link ACoviaComponent#locate} returns; a position keeps the
  * innermost owner's policy, so the rule holds however resolution started.
  *
  * <p>A policy reads only the request and the stretch of the path below its
@@ -26,7 +27,7 @@ public interface AccessPolicy {
 	 *
 	 * @param path The stretch of the path below the owner, possibly empty
 	 */
-	Need need(RequestContext ctx, AString ability, CoviaPath path);
+	Need need(RequestContext ctx, AString ability, Path path);
 
 	/**
 	 * What a request needs: nothing when it acts of right; authority over an
@@ -58,9 +59,9 @@ public interface AccessPolicy {
 	 * segment of the stretch. An empty base gives the bare path, such as
 	 * {@code v/ops}, which a capability reads in the request's own namespace.
 	 */
-	static AString address(String base, CoviaPath path) {
+	static AString address(String base, Path path) {
 		StringBuilder sb = new StringBuilder(base);
-		for (int i = 0; i < path.length(); i++) {
+		for (long i = 0; i < path.count(); i++) {
 			if (sb.length() > 0) sb.append('/');
 			sb.append(path.get(i));
 		}

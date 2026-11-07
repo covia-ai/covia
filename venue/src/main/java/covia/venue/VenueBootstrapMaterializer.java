@@ -10,6 +10,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -338,7 +339,7 @@ final class VenueBootstrapMaterializer {
 
 	/** Writes to the draft, creating the levels above, then verifies the staged view immediately. */
 	private void writeAndValidateVenuePath(String virtualPath, ACell value) {
-		Entry entry = venue.resolve(venuePath(virtualPath)).entry();
+		Entry entry = venue.locate(venuePath(virtualPath)).entry();
 		entry.createLevels();
 		entry.write(value);
 		ACell actual = readVenuePath(virtualPath);
@@ -349,12 +350,12 @@ final class VenueBootstrapMaterializer {
 	}
 
 	private ACell readVenuePath(String virtualPath) {
-		return venue.resolve(venuePath(virtualPath)).read();
+		return venue.locate(venuePath(virtualPath)).read();
 	}
 
 	/** Deletes from the draft, then verifies the path is gone. */
 	private void deleteVenuePath(String virtualPath) {
-		venue.resolve(venuePath(virtualPath)).entry().delete();
+		venue.locate(venuePath(virtualPath)).entry().delete();
 		if (readVenuePath(virtualPath) != null) {
 			throw new IllegalStateException(
 				"Bootstrap lattice delete validation failed at /" + virtualPath);
@@ -362,9 +363,9 @@ final class VenueBootstrapMaterializer {
 	}
 
 	/** The venue user's path that the caller-visible path {@code v/x} stands for. */
-	private static CoviaPath venuePath(String virtualPath) {
-		CoviaPath path = CoviaPath.parse(virtualPath);
-		if (path.length() < 2 || !"v".equals(path.first().toString())) {
+	private static Path venuePath(String virtualPath) {
+		Path path = CoviaPath.parse(virtualPath);
+		if (path.count() < 2 || !"v".equals(path.get(0).toString())) {
 			throw new IllegalArgumentException("Venue bootstrap path must start with v/: " + virtualPath);
 		}
 		return CoviaAdapter.venueGlobals(path);

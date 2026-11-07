@@ -326,8 +326,8 @@ public class AgentAdapter extends AAdapter {
 		AString path = (value.startsWith("did:") || value.startsWith("g/") || value.startsWith("/g/"))
 			? ref : Strings.create("g/" + value);
 		Engine.UserPathTarget resolved = engine.requireUserPath(ctx, path, ability, createOwner);
-		covia.lattice.CoviaPath agentPath = resolved.path();
-		if (agentPath.length() != 2 || !covia.lattice.Namespace.G.equals(agentPath.first())) {
+		convex.core.data.Path agentPath = resolved.path();
+		if (agentPath.count() != 2 || !covia.lattice.Namespace.G.equals(agentPath.get(0))) {
 			throw new InvalidInputException("Agent reference must resolve to g/<agentId>: " + ref);
 		}
 		AString agentId = agentPath.get(1);

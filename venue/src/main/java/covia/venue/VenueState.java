@@ -22,6 +22,7 @@ import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.MapEntry;
+import convex.core.data.Path;
 import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
@@ -257,8 +258,8 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * ({@code <DID>/<namespace>/<path>}), and {@link Users} resolves it.
 	 */
 	@Override
-	public Position resolve(CoviaPath path) {
-		return path.isEmpty() ? super.resolve(path) : users().resolve(path);
+	public Position locate(Path path) {
+		return path.isEmpty() ? super.locate(path) : users().locate(path);
 	}
 
 	/** Atomically provisions account state and its login directory row. */
@@ -369,7 +370,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 
 	private ACell legacyState(String path) {
 		User host = venueUser();
-		return host == null ? null : host.readInternalPath(covia.lattice.CoviaPath.parse(path));
+		return host == null ? null : host.readInternalPath(CoviaPath.parse(path));
 	}
 
 	public static final String LEGACY_STATE_CONFLICT = "Conflicting legacy venue state at ";
@@ -394,7 +395,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 				throw new IllegalStateException(LEGACY_STATE_CONFLICT + path);
 			}
 			if (!present) draft.cursor().path(Covia.ADAPTERS).withDefault(Maps.empty()).path(key).set(legacy);
-			draft.venueUser().deleteInternalPath(covia.lattice.CoviaPath.parse(path));
+			draft.venueUser().deleteInternalPath(CoviaPath.parse(path));
 		});
 	}
 

@@ -4,9 +4,9 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import covia.lattice.ACoviaComponent;
-import covia.lattice.CoviaPath;
 import covia.lattice.Position;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -213,11 +213,11 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 	 * first segment that is not a DID names no user.
 	 */
 	@Override
-	public Position resolve(CoviaPath path) {
-		if (path.isEmpty()) return super.resolve(path);
-		AString did = path.first();
+	public Position locate(Path path) {
+		if (path.isEmpty()) return super.locate(path);
+		AString did = path.get(0);
 		if (!did.startsWith(DID_PREFIX)) return Position.invalid(path);
-		return at(did).resolve(path.rest());
+		return at(did).locate(path.slice(1));
 	}
 
 	private static final AString DID_PREFIX = Strings.intern("did:");

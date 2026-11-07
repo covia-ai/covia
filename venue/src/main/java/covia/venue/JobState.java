@@ -7,6 +7,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Path;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
@@ -31,7 +32,7 @@ public final class JobState extends ACoviaComponent<ACell>
 	private final AForkableCursor<ACell> edits;
 	private final AString owner;
 	private final Blob id;
-	/** Who may use this job's data: see {@link #resolve}. */
+	/** Who may use this job's data: see {@link #locate}. */
 	private final AccessPolicy policy;
 
 	/**
@@ -60,7 +61,7 @@ public final class JobState extends ACoviaComponent<ACell>
 	private static AccessPolicy jobPolicy(AString owner, Blob id) {
 		String base = owner + "/" + Namespace.J + "/" + id.toHexString();
 		return (ctx, ability, path) -> {
-			if (!path.isEmpty() && Fields.TEMP.equals(path.first()) && ctx != null
+			if (!path.isEmpty() && Fields.TEMP.equals(path.get(0)) && ctx != null
 					&& owner.equals(ctx.getUserDID()) && (isId(id, ctx.getTaskId()) || isId(id, ctx.getJobId()))) {
 				return AccessPolicy.Need.OF_RIGHT;
 			}
@@ -90,9 +91,9 @@ public final class JobState extends ACoviaComponent<ACell>
 	 * and anything else needs authority over {@code <owner>/j/<id>/<path>}.
 	 */
 	@Override
-	public Position resolve(CoviaPath path) {
-		Position position = (!path.isEmpty() && Fields.TEMP.equals(path.first()))
-			? workspace().resolve(path.rest()) : super.resolve(path);
+	public Position locate(Path path) {
+		Position position = (!path.isEmpty() && Fields.TEMP.equals(path.get(0)))
+			? workspace().locate(path.slice(1)) : super.locate(path);
 		return (policy == null) ? position : position.ownedBy(policy, path);
 	}
 
@@ -101,12 +102,12 @@ public final class JobState extends ACoviaComponent<ACell>
 	 * {@code t/} names it: {@code path} is the stretch below the area, and the
 	 * job's policy reads it as {@code temp/<path>}.
 	 */
-	public Position resolveScratch(CoviaPath path) {
-		Position position = workspace().resolve(path);
-		return (policy == null) ? position : position.ownedBy(policy, SCRATCH.append(path));
+	public Position locateScratch(Path path) {
+		Position position = workspace().locate(path);
+		return (policy == null) ? position : position.ownedBy(policy, SCRATCH.concat(path));
 	}
 
-	private static final CoviaPath SCRATCH = CoviaPath.segments(Fields.TEMP);
+	private static final Path SCRATCH = CoviaPath.segments(Fields.TEMP);
 
 	/** Pure record edit; null rejects the edit. Returns the committed record,
 	 * or null for a rejected/missing row. */

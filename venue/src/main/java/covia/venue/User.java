@@ -5,6 +5,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Cells;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
@@ -12,7 +13,6 @@ import covia.lattice.AccessPolicy;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
-import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
@@ -62,24 +62,24 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	private final AccessPolicy policy;
 
 	/** Framework-internal read of a path in this user's record. */
-	ACell readInternalPath(CoviaPath path) {
-		return resolve(path).read();
+	ACell readInternalPath(Path path) {
+		return locate(path).read();
 	}
 
 	/**
 	 * Framework-internal atomic write to a workspace path, creating the levels
 	 * above it; authority is possession of this user cursor.
 	 */
-	void writeInternalPath(CoviaPath path, ACell value) {
-		resolve(path).entry().execute(draft -> {
+	void writeInternalPath(Path path, ACell value) {
+		locate(path).entry().execute(draft -> {
 			draft.createLevels();
 			draft.write(value);
 		});
 	}
 
 	/** Framework-internal atomic delete of a workspace path; authority is possession of this user cursor. */
-	boolean deleteInternalPath(CoviaPath path) {
-		return resolve(path).entry().delete();
+	boolean deleteInternalPath(Path path) {
+		return locate(path).entry().delete();
 	}
 
 	User(VenueContext context, AForkableCursor<ACell> cursor, AString did) {
@@ -293,22 +293,22 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * needs authority over {@code <did>/<path>}.
 	 */
 	@Override
-	public Position resolve(CoviaPath path) {
+	public Position locate(Path path) {
 		Position position = within(path);
 		return (did == null) ? position : position.ownedBy(policy, path);
 	}
 
-	private Position within(CoviaPath path) {
-		if (path.isEmpty()) return super.resolve(path);
-		AString segment = path.first();
-		if (Namespace.W.equals(segment)) return workspace().resolve(path.rest());
-		if (Namespace.O.equals(segment)) return operations().resolve(path.rest());
-		if (Namespace.H.equals(segment)) return inbox().resolve(path.rest());
-		if (Namespace.J.equals(segment)) return jobs().resolve(path.rest());
-		if (Namespace.S.equals(segment)) return secrets().resolve(path.rest());
-		if (Namespace.A.equals(segment)) return assets().resolve(path.rest());
+	private Position within(Path path) {
+		if (path.isEmpty()) return super.locate(path);
+		AString segment = path.get(0);
+		if (Namespace.W.equals(segment)) return workspace().locate(path.slice(1));
+		if (Namespace.O.equals(segment)) return operations().locate(path.slice(1));
+		if (Namespace.H.equals(segment)) return inbox().locate(path.slice(1));
+		if (Namespace.J.equals(segment)) return jobs().locate(path.slice(1));
+		if (Namespace.S.equals(segment)) return secrets().locate(path.slice(1));
+		if (Namespace.A.equals(segment)) return assets().locate(path.slice(1));
 		if (Namespace.G.equals(segment)) {
-			return (path.length() > 1) ? agentAt(path.get(1)).resolve(path.rest(2)) : super.resolve(path);
+			return (path.count() > 1) ? agentAt(path.get(1)).locate(path.slice(2)) : super.locate(path);
 		}
 		return Position.invalid(path);
 	}
@@ -324,12 +324,12 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Data no namespace component claims is read from the record as stored. */
 	@Override
-	public ACell read(CoviaPath path) {
+	public ACell read(Path path) {
 		return path.isEmpty() ? read() : ValuePath.get(cursor().getOrDefault(null), path);
 	}
 
 	@Override
-	public boolean contains(CoviaPath path) {
+	public boolean contains(Path path) {
 		return ValuePath.contains(cursor().getOrDefault(null), path);
 	}
 

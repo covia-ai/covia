@@ -1923,9 +1923,9 @@ public class Engine {
 	 * A physical path in a user's local namespace. Relative paths belong to the
 	 * caller; DID URL paths name their owner explicitly.
 	 */
-	public record UserPathTarget(AString ownerDID, User user, CoviaPath path, AString resource) {}
+	public record UserPathTarget(AString ownerDID, User user, convex.core.data.Path path, AString resource) {}
 
-	private record ParsedUserPath(AString ownerDID, CoviaPath path, AString resource) {}
+	private record ParsedUserPath(AString ownerDID, convex.core.data.Path path, AString resource) {}
 
 	/**
 	 * Resolves a physical user path without applying an access policy. This is
@@ -1965,7 +1965,7 @@ public class Engine {
 		}
 
 		AString ownerDID;
-		CoviaPath path;
+		convex.core.data.Path path;
 		if (ref.startsWith(NS_DID)) {
 			DIDURL didURL;
 			try {
@@ -1988,7 +1988,7 @@ public class Engine {
 		if (path.isEmpty()) {
 			throw new InvalidInputException(USER_PATH_NO_NAMESPACE);
 		}
-		return new ParsedUserPath(ownerDID, path, Strings.create(ownerDID + path.toString()));
+		return new ParsedUserPath(ownerDID, path, Strings.create(ownerDID + CoviaPath.address(path)));
 	}
 
 	private UserPathTarget locateUserPath(ParsedUserPath parsed, boolean create) {

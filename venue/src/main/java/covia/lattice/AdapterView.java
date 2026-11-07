@@ -3,6 +3,7 @@ package covia.lattice;
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.ATransformCursor;
@@ -36,22 +37,22 @@ public final class AdapterView {
 	 * @param ability The ability the caller will use, read or a change
 	 */
 	public static Position resolve(RequestContext ctx, CoviaAdapter covia,
-			AString owner, CoviaPath fullPath, AString ability) {
+			AString owner, Path fullPath, AString ability) {
 		if (ctx == null || ctx.getCallerDID() == null || owner == null) throw new AuthException(AUTHENTICATION_REQUIRED);
-		for (int i = 0; i < fullPath.length(); i++) {
-			String s = fullPath.get(i).toString();
+		for (AString segment : fullPath) {
+			String s = segment.toString();
 			if (s.isEmpty() || s.contains("\\") || s.equals(".") || s.equals("..")
 					|| s.chars().anyMatch(Character::isISOControl)) {
 				throw new InvalidInputException(INVALID_PATH);
 			}
 		}
-		AString resource = Strings.create(owner + fullPath.toString());
+		AString resource = Strings.create(owner + CoviaPath.address(fullPath));
 		covia.engine.requireLocalAccess(ctx, resource, ability);
-		String name = fullPath.length() < 2 ? null : fullPath.get(1).toString();
+		String name = fullPath.count() < 2 ? null : fullPath.get(1).toString();
 		AAdapter adapter = name == null ? null : covia.engine.getAdapter(name);
 		RequestContext scoped = owner.equals(ctx.getUserDID()) ? ctx : ctx.onBehalfOf(owner);
 		// The adapter's write policy takes the path inside its view, without x/<adapter>
-		CoviaPath path = fullPath.rest(Math.min(2, fullPath.length()));
+		Path path = fullPath.slice(Math.min(2, fullPath.count()));
 		boolean mutation = Capability.CRUD_WRITE.equals(ability) || Capability.CRUD_DELETE.equals(ability);
 		if (mutation) requireWritable(adapter, scoped, path);
 		AForkableCursor<ACell> exposed = adapter == null ? null : adapter.latticeView(scoped);
@@ -73,10 +74,10 @@ public final class AdapterView {
 			}
 		};
 		// An access to the view needs what was checked above, on the same address
-		return new Workspace(guarded).resolve(path).ownedBy(AccessPolicy.principal(owner), fullPath);
+		return new Workspace(guarded).locate(path).ownedBy(AccessPolicy.principal(owner), fullPath);
 	}
 
-	private static void requireWritable(AAdapter adapter, RequestContext ctx, CoviaPath path) {
+	private static void requireWritable(AAdapter adapter, RequestContext ctx, Path path) {
 		String denial = adapter == null ? READ_ONLY : adapter.latticeWriteDenial(ctx, path);
 		if (denial != null) throw new AuthException(denial);
 	}

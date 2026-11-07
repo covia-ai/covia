@@ -15,6 +15,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -32,7 +33,7 @@ public class VenuePathTest {
 
 	private static final Engine engine = TestEngine.ENGINE;
 	private static final AString AGENT = Strings.intern("venue-path-agent");
-	private static final CoviaPath NOTES = CoviaPath.parse("notes");
+	private static final Path NOTES =CoviaPath.parse("notes");
 
 	private VenueState venue;
 	private AString did;
@@ -44,7 +45,7 @@ public class VenuePathTest {
 	}
 
 	private Position resolve(String path) {
-		return venue.resolve(CoviaPath.parse(did + "/" + path));
+		return venue.locate(CoviaPath.parse(did + "/" + path));
 	}
 
 	private static String noSuchPath(Position position) {
@@ -126,7 +127,7 @@ public class VenuePathTest {
 
 	@Test
 	public void testAFirstSegmentThatIsNotADIDNamesNoUser() {
-		Position position = venue.resolve(CoviaPath.parse("not-a-did/w/notes"));
+		Position position = venue.locate(CoviaPath.parse("not-a-did/w/notes"));
 		assertFalse(position.isValid());
 		assertEquals(noSuchPath(position), assertThrows(InvalidInputException.class, position::read).getMessage());
 	}
@@ -135,7 +136,7 @@ public class VenuePathTest {
 	public void testAWalkFromADraftStaysInTheDraft() {
 		venue.users().ensure(did);
 		venue.execute(draft -> {
-			assertFalse(draft.resolve(CoviaPath.parse(did + "/w/notes")).entry().write(CVMLong.ONE), "nothing was there");
+			assertFalse(draft.locate(CoviaPath.parse(did + "/w/notes")).entry().write(CVMLong.ONE), "nothing was there");
 			assertNull(resolve("w/notes").read(), "the live venue does not see the draft");
 		});
 		assertEquals(CVMLong.ONE, resolve("w/notes").read());
@@ -144,7 +145,7 @@ public class VenuePathTest {
 	@Test
 	public void testAPositionSeesAnAccountItsTransactionCreates() {
 		venue.execute(draft -> {
-			Position notes = draft.resolve(CoviaPath.parse(did + "/w/notes"));
+			Position notes = draft.locate(CoviaPath.parse(did + "/w/notes"));
 			assertFalse(notes.exists(), "there is no account yet");
 			draft.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
 			assertTrue(notes.exists(), "the position sees the account the draft created");

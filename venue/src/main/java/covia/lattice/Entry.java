@@ -10,6 +10,7 @@ import convex.core.data.ADataStructure;
 import convex.core.data.AMap;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.cursor.AForkableCursor;
 import covia.exception.InvalidInputException;
@@ -36,13 +37,13 @@ public final class Entry extends ACoviaComponent<ACell> {
 	public static final String CHANGED = "The value at '%s' changed while this path was in use";
 
 	private final Workspace area;
-	private final CoviaPath path;
+	private final Path path;
 	private final ValuePath.Keys resolved;
 	private final ACell[] keys;
 	/** The level above the entry, or null for the workspace's root. */
 	private final AForkableCursor<ACell> above;
 
-	Entry(Workspace area, CoviaPath path, ValuePath.Keys resolved) {
+	Entry(Workspace area, Path path, ValuePath.Keys resolved) {
 		super(area.cursor().path(resolved.keys()));
 		this.area = area;
 		this.path = path;
@@ -52,7 +53,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	}
 
 	/** The stretch of the caller's path the workspace read; it formats as the whole address. */
-	public CoviaPath path() {
+	public Path path() {
 		return path;
 	}
 
@@ -64,7 +65,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	}
 
 	@Override
-	public boolean contains(CoviaPath below) {
+	public boolean contains(Path below) {
 		return below.isEmpty() ? exists() : super.contains(below);
 	}
 
@@ -244,7 +245,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	private ACell put(ACell container, int i, ACell value) {
 		if (!fits(container, i)) {
 			String refusal = ValuePath.keyRefusal(container, path, i);
-			throw new InvalidInputException(refusal != null ? refusal : String.format(CHANGED, path.prefix(i)));
+			throw new InvalidInputException(refusal != null ? refusal : String.format(CHANGED, CoviaPath.address(path.slice(0, i))));
 		}
 		if (container instanceof AVector<?> list) {
 			return ((AVector<ACell>) list).assoc(((CVMLong) keys[i]).longValue(), value);
@@ -259,7 +260,7 @@ public final class Entry extends ACoviaComponent<ACell> {
 	/** The refusal for a change below a missing level, naming the first one missing. */
 	private NotFoundException noLevel() {
 		int first = Math.min(keys.length - missingLevels(), last() - 1);
-		String at = path.prefix(first + 1).toString();
+		String at = CoviaPath.address(path.slice(0, first + 1));
 		return new NotFoundException(String.format(ValuePath.NO_LEVEL, at), at);
 	}
 }

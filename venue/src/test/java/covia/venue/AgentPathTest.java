@@ -15,6 +15,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -48,7 +49,7 @@ public class AgentPathTest {
 	}
 
 	private Position resolve(String path) {
-		return user.resolve(CoviaPath.parse(path));
+		return user.locate(CoviaPath.parse(path));
 	}
 
 	/** Writes at the entry a path resolves to. */
@@ -60,14 +61,14 @@ public class AgentPathTest {
 	public void testAPrefixOfAPathEndsWhereThePrefixEnds() {
 		String notes = "g/" + AGENT + "/n/notes";
 		write(notes, CVMLong.ONE);
-		CoviaPath path = CoviaPath.parse(notes);
+		Path path = CoviaPath.parse(notes);
 
-		Position record = user.resolve(path.prefix(2));
+		Position record = user.locate(path.slice(0, 2));
 		assertEquals(agent.getRecord(), record.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, record::entry).getMessage());
 
-		Position area = user.resolve(path.prefix(3));
+		Position area = user.locate(path.slice(0, 3));
 		assertEquals(Maps.of("notes", CVMLong.ONE), area.read());
 		assertTrue(area.entry().write(Maps.of("notes", CVMLong.create(2))), "the area is the agent's workspace");
 		assertEquals(CVMLong.create(2), resolve(notes).read());
@@ -146,7 +147,7 @@ public class AgentPathTest {
 	public void testAPositionSeesAnAgentItsTransactionCreates() {
 		AString later = Strings.intern("later-agent");
 		user.execute(draft -> {
-			Position notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
+			Position notes = draft.locate(CoviaPath.parse("g/" + later + "/n/notes"));
 			assertTrue(notes.isValid());
 			assertFalse(notes.exists(), "the agent does not exist yet");
 			draft.ensureAgent(later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);

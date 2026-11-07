@@ -2,6 +2,7 @@ package covia.lattice;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Path;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.venue.RequestContext;
@@ -29,10 +30,10 @@ import covia.venue.RequestContext;
  * @param policy The policy of the innermost owner of the data, or null when no owner set one
  * @param below The stretch of the path below that owner, or null with no policy
  */
-public record Position(ACoviaComponent<?> component, CoviaPath path, AccessPolicy policy, CoviaPath below) {
+public record Position(ACoviaComponent<?> component, Path path, AccessPolicy policy, Path below) {
 
 	/** A position no owner has set a policy on yet. */
-	public Position(ACoviaComponent<?> component, CoviaPath path) {
+	public Position(ACoviaComponent<?> component, Path path) {
 		this(component, path, null, null);
 	}
 
@@ -42,7 +43,7 @@ public record Position(ACoviaComponent<?> component, CoviaPath path, AccessPolic
 	 * @param path The stretch of the path from the first segment that names
 	 *        nothing, so a refusal can say where the path stops naming a place
 	 */
-	public static Position invalid(CoviaPath path) {
+	public static Position invalid(Path path) {
 		return new Position(null, path);
 	}
 
@@ -53,14 +54,15 @@ public record Position(ACoviaComponent<?> component, CoviaPath path, AccessPolic
 	 */
 	public String reasonInvalid() {
 		if (component != null) return null;
-		return String.format(ACoviaComponent.NO_SUCH_PATH, path, path.prefix(Math.min(1, path.length())));
+		return String.format(ACoviaComponent.NO_SUCH_PATH, CoviaPath.address(path),
+			CoviaPath.address(path.slice(0, Math.min(1, path.count()))));
 	}
 
 	/**
 	 * This position as owned under {@code policy}, for the data at {@code below}
 	 * beneath the owner, unless an owner nearer the data already set its own.
 	 */
-	public Position ownedBy(AccessPolicy policy, CoviaPath below) {
+	public Position ownedBy(AccessPolicy policy, Path below) {
 		return (this.policy != null) ? this : new Position(component, path, policy, below);
 	}
 
@@ -78,8 +80,8 @@ public record Position(ACoviaComponent<?> component, CoviaPath path, AccessPolic
 	 */
 	public AccessPolicy.Need need(RequestContext ctx, AString ability, int levels) {
 		if (policy == null) return null;
-		int keep = Math.max(Math.min(1, below.length()), below.length() - levels);
-		return policy.need(ctx, ability, below.prefix(keep));
+		long keep = Math.max(Math.min(1, below.count()), below.count() - levels);
+		return policy.need(ctx, ability, below.slice(0, keep));
 	}
 
 	/** The value here as callers see it, or null when absent. */

@@ -12,6 +12,7 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -23,7 +24,6 @@ import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.StampedCursor;
 import covia.lattice.Covia;
-import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
@@ -372,22 +372,22 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * {@code <owner>/g/<id>/<path>}.
 	 */
 	@Override
-	public Position resolve(CoviaPath path) {
+	public Position locate(Path path) {
 		Position position = within(path);
 		return (policy == null) ? position : position.ownedBy(policy, path);
 	}
 
-	private Position within(CoviaPath path) {
+	private Position within(Path path) {
 		if (!path.isEmpty()) {
-			AString segment = path.first();
-			if (K_N.equals(segment)) return workspace().resolve(path.rest());
-			if (K_SESSIONS.equals(segment) && path.length() > 1) {
+			AString segment = path.get(0);
+			if (K_N.equals(segment)) return workspace().locate(path.slice(1));
+			if (K_SESSIONS.equals(segment) && path.count() > 1) {
 				Blob sid = ValuePath.blobKey(path.get(1));
-				if (sid == null) return Position.invalid(path.rest());
-				return session(sid).resolve(path.rest(2));
+				if (sid == null) return Position.invalid(path.slice(1));
+				return session(sid).locate(path.slice(2));
 			}
 		}
-		return super.resolve(path);
+		return super.locate(path);
 	}
 
 	/**

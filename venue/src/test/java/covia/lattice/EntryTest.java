@@ -12,6 +12,7 @@ import convex.core.data.ACell;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.cursor.Cursors;
@@ -24,7 +25,7 @@ public class EntryTest {
 	private static final CVMLong ONE = CVMLong.ONE;
 	private static final CVMLong TWO = CVMLong.create(2);
 
-	private static CoviaPath path(String path) {
+	private static Path path(String path) {
 		return CoviaPath.parse(path);
 	}
 
@@ -56,7 +57,7 @@ public class EntryTest {
 
 		assertFalse(entry.write(null));
 		assertTrue(entry.exists());
-		assertTrue(area.resolve(path("a")).exists());
+		assertTrue(area.locate(path("a")).exists());
 		assertNull(entry.read());
 		assertTrue(entry.write(null), "a stored null counts as present");
 

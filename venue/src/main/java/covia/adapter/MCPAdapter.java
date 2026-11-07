@@ -1016,7 +1016,7 @@ public class MCPAdapter extends AAdapter {
 	 */
 	private static AString storedPath(String path) {
 		if (!path.startsWith("v/")) return Strings.create(path);
-		return Strings.create(CoviaAdapter.venueGlobals(CoviaPath.parse(path)).toString().substring(1));
+		return Strings.create(CoviaPath.address(CoviaAdapter.venueGlobals(CoviaPath.parse(path))).substring(1));
 	}
 
 	private ACell readLattice(RequestContext ctx, String path) {

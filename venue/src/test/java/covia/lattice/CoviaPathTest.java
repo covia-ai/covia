@@ -1,7 +1,6 @@
 package covia.lattice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,12 +9,13 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.exception.InvalidInputException;
 
-/** A Covia path: how one is made, its stretches, and the address it names. */
+/** Covia's path syntax: how a path is made from what a caller writes, and the address a path names. */
 public class CoviaPathTest {
 
 	private static AString s(String value) {
@@ -24,18 +24,18 @@ public class CoviaPathTest {
 
 	@Test
 	public void testParseKeepsEachSegmentAsWritten() {
-		CoviaPath path = CoviaPath.parse("/g/my-agent/timeline/3/");
-		assertEquals(4, path.length());
-		assertEquals(s("g"), path.first());
+		Path path = CoviaPath.parse("/g/my-agent/timeline/3/");
+		assertEquals(4, path.count());
+		assertEquals(s("g"), path.get(0));
 		assertEquals(s("my-agent"), path.get(1));
 		// Every segment is a string; the component it reaches decides what it means
 		assertEquals(s("3"), path.get(3));
-		assertEquals("/g/my-agent/timeline/3", path.toString());
+		assertEquals("/g/my-agent/timeline/3", CoviaPath.address(path));
 
 		for (String none : new String[] {null, "", "/"}) {
 			assertSame(CoviaPath.EMPTY, CoviaPath.parse(none), String.valueOf(none));
 		}
-		assertEquals("/", CoviaPath.EMPTY.toString());
+		assertEquals("/", CoviaPath.address(CoviaPath.EMPTY));
 	}
 
 	@Test
@@ -59,9 +59,9 @@ public class CoviaPathTest {
 	@Test
 	public void testSegmentsAreCheckedAndCopied() {
 		AString[] pieces = {s("w"), s("notes")};
-		CoviaPath path = CoviaPath.segments(pieces);
+		Path path = CoviaPath.segments(pieces);
 		pieces[1] = s("changed");
-		assertEquals("/w/notes", path.toString(), "the path keeps its own segments");
+		assertEquals("/w/notes", CoviaPath.address(path), "the path keeps its own segments");
 
 		assertEquals(String.format(CoviaPath.SEGMENT_HAS_SLASH, 0),
 			assertThrows(InvalidInputException.class, () -> CoviaPath.segments(s("a/b"))).getMessage());
@@ -70,49 +70,34 @@ public class CoviaPathTest {
 	}
 
 	@Test
-	public void testAStretchNamesThePlaceAtItsEnd() {
-		CoviaPath path = CoviaPath.parse("w/a/b/c");
-		CoviaPath rest = path.rest();
-		assertEquals(3, rest.length());
-		assertEquals(s("a"), rest.first());
-		assertEquals("/w/a/b/c", rest.toString(), "a stretch formats as the whole address");
+	public void testASliceNamesThePlaceAtItsEnd() {
+		Path path = CoviaPath.parse("w/a/b/c");
+		Path rest = path.slice(1);
+		assertEquals("/w/a/b/c", CoviaPath.address(rest), "a slice formats as the address up to its end");
 
-		CoviaPath prefix = rest.prefix(2);
-		assertEquals(2, prefix.length());
-		assertEquals("/w/a/b", prefix.toString());
-		assertEquals("/w/a", prefix.parent().toString());
-		assertTrue(rest.rest(3).isEmpty());
-		assertEquals("/w/a/b/c", rest.rest(3).toString());
+		Path prefix = rest.slice(0, 2);
+		assertEquals("/w/a/b", CoviaPath.address(prefix));
+		assertEquals("/w/a", CoviaPath.address(CoviaPath.parent(prefix)));
+		assertTrue(rest.slice(3).isEmpty());
+		assertEquals("/w/a/b/c", CoviaPath.address(rest.slice(3)), "an empty slice still names the place at its end");
 
-		CoviaPath none = path.rest(4);
-		assertSame(none, none.parent(), "an empty stretch is its own parent");
-		assertThrows(IndexOutOfBoundsException.class, () -> path.rest(5));
-		assertThrows(IndexOutOfBoundsException.class, () -> rest.prefix(4));
-		assertThrows(IndexOutOfBoundsException.class, () -> rest.get(3));
-		assertThrows(IndexOutOfBoundsException.class, () -> none.first());
+		Path none = path.slice(4);
+		assertSame(none, CoviaPath.parent(none), "an empty path is its own parent");
 	}
 
 	@Test
-	public void testAppendingStretchesMakesAWholePath() {
-		CoviaPath alias = CoviaPath.parse("v/ops/echo");
-		CoviaPath joined = CoviaPath.parse("w/global").append(alias.rest());
+	public void testAJoinedPathIsAWholeAddress() {
+		Path alias = CoviaPath.parse("v/ops/echo");
+		Path joined = CoviaPath.parse("w/global").concat(alias.slice(1));
 		assertEquals(CoviaPath.parse("w/global/ops/echo"), joined);
-		assertEquals("/w/global/ops/echo", joined.toString(), "the joined path is whole, not a stretch of either");
-		assertEquals("/w/global", joined.prefix(2).toString());
-
-		assertEquals(alias, alias.append(CoviaPath.EMPTY));
-		assertEquals("/ops/echo", CoviaPath.EMPTY.append(alias.rest()).toString());
+		assertEquals("/w/global/ops/echo", CoviaPath.address(joined), "the joined path is whole, not a slice of either");
+		assertEquals("/w/global", CoviaPath.address(joined.slice(0, 2)));
+		assertEquals("/ops/echo", CoviaPath.address(CoviaPath.EMPTY.concat(alias.slice(1))));
 	}
 
 	@Test
-	public void testPathsAreEqualWhenTheyNameTheSamePlaceTheSameWay() {
-		CoviaPath path = CoviaPath.of(Vectors.of("g", "my-agent", "", "timeline", "3"));
-		assertEquals(path, CoviaPath.parse(path.toString()));
-		assertEquals(path.hashCode(), CoviaPath.parse(path.toString()).hashCode());
-
-		CoviaPath other = CoviaPath.parse("x/w/a");
-		assertEquals(CoviaPath.parse("w/a").rest(), CoviaPath.parse("w/a/b").rest().prefix(1));
-		assertNotEquals(CoviaPath.parse("w/a"), CoviaPath.parse("w/a").rest(), "a stretch starting later differs");
-		assertNotEquals(CoviaPath.parse("w/a"), other.rest(), "the same segments below another place differ");
+	public void testAnAddressParsesBackToItsPath() {
+		Path path = CoviaPath.of(Vectors.of("g", "my-agent", "", "timeline", "3"));
+		assertEquals(path, CoviaPath.parse(CoviaPath.address(path)));
 	}
 }

@@ -14,6 +14,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
@@ -27,7 +28,7 @@ public class WorkspaceTest {
 
 	private static final AString AREA = Strings.intern("temp");
 
-	private static CoviaPath path(String path) {
+	private static Path path(String path) {
 		return CoviaPath.parse(path);
 	}
 
@@ -138,9 +139,9 @@ public class WorkspaceTest {
 		Workspace area = empty();
 		String missing = String.format(ValuePath.NO_LEVEL, "/w/a");
 		assertEquals(missing, assertThrows(NotFoundException.class,
-			() -> area.write(path("w/a/b").rest(), CVMLong.ONE)).getMessage());
-		area.write(path("w/a").rest(), CVMLong.ONE);
-		assertEquals(Maps.of("a", CVMLong.ONE), area.read(path("w").rest()));
+			() -> area.write(path("w/a/b").slice(1), CVMLong.ONE)).getMessage());
+		area.write(path("w/a").slice(1), CVMLong.ONE);
+		assertEquals(Maps.of("a", CVMLong.ONE), area.read(path("w").slice(1)));
 	}
 
 	@Test
@@ -165,32 +166,32 @@ public class WorkspaceTest {
 	public void testOnlyAWorkspaceIsChangedByPath() {
 		var cursor = Cursors.<ACell>root(Maps.of("list", Vectors.of(CVMLong.ONE, CVMLong.create(2))));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		Position position = component.resolve(path("list/1"));
+		Position position = component.locate(path("list/1"));
 		assertSame(component, position.component());
 		assertEquals(CVMLong.create(2), position.read());
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, position::entry).getMessage());
 
 		Workspace area = new Workspace(cursor);
-		assertTrue(area.resolve(path("list/1")).entry().write(CVMLong.create(3)));
+		assertTrue(area.locate(path("list/1")).entry().write(CVMLong.create(3)));
 		assertEquals(CVMLong.create(3), area.read(path("list/1")));
 	}
 
 	@Test
 	public void testOnlyTheStretchOfThePathIsUsed() {
 		// The area's own segments are a/b; x and c lie outside the stretch
-		CoviaPath whole = path("x/a/b/c");
-		CoviaPath own = whole.rest().prefix(2);
+		Path whole = path("x/a/b/c");
+		Path own = whole.slice(1).slice(0, 2);
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.of("a", Maps.empty())));
 
 		assertFalse(area.write(own, CVMLong.ONE));
 		assertEquals(Maps.of("a", Maps.of("b", CVMLong.ONE)), area.read());
 		assertEquals(CVMLong.ONE, area.read(own));
 		assertTrue(area.contains(own));
-		assertFalse(area.contains(whole.rest()));
-		assertEquals(1, area.entry(whole.rest()).missingLevels());
+		assertFalse(area.contains(whole.slice(1)));
+		assertEquals(1, area.entry(whole.slice(1)).missingLevels());
 
-		assertEquals(1, area.createPath(path("x/a/d/e").rest().prefix(2)), "only levels inside the stretch are created");
+		assertEquals(1, area.createPath(path("x/a/d/e").slice(1).slice(0, 2)), "only levels inside the stretch are created");
 		assertEquals(Maps.of("b", CVMLong.ONE, "d", Maps.empty()), area.read(path("a")));
 
 		assertTrue(area.delete(own));
@@ -201,23 +202,23 @@ public class WorkspaceTest {
 	public void testARefusalInAStretchNamesThePathAsWritten() {
 		Workspace area = new Workspace(Cursors.<ACell>root(Maps.empty()));
 		assertEquals(String.format(ValuePath.NO_LEVEL, "/x/a"), assertThrows(NotFoundException.class,
-			() -> area.write(path("x/a/b/c").rest().prefix(2), CVMLong.ONE)).getMessage());
+			() -> area.write(path("x/a/b/c").slice(1).slice(0, 2), CVMLong.ONE)).getMessage());
 	}
 
 	@Test
 	public void testAPositionIsWhereItsStretchEnds() {
 		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE)));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		CoviaPath path = path("a/b");
+		Path path = path("a/b");
 
-		Position whole = component.resolve(path);
+		Position whole = component.locate(path);
 		assertEquals(path, whole.path());
 		assertEquals(CVMLong.ONE, whole.read());
 
-		Position parent = component.resolve(path.parent());
+		Position parent = component.locate(CoviaPath.parent(path));
 		assertEquals(Maps.of("b", CVMLong.ONE), parent.read());
 		assertTrue(parent.exists());
-		assertEquals("/a", parent.path().toString());
+		assertEquals("/a", CoviaPath.address(parent.path()));
 	}
 
 	@Test

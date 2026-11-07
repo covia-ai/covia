@@ -16,6 +16,7 @@ import convex.core.data.Cells;
 import convex.core.data.Hash;
 import convex.core.data.ASet;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -169,7 +170,7 @@ public class CoviaAdapter extends AAdapter {
 	private static final AString V = Strings.intern("v");
 
 	/** The venue user's path that {@code v/} stands for. */
-	public static final CoviaPath VENUE_GLOBALS = CoviaPath.parse("w/global");
+	public static final Path VENUE_GLOBALS = CoviaPath.parse("w/global");
 
 	public static final String NO_AGENT_SCOPE = "Cannot use 'n/' prefix outside agent scope";
 	public static final String NO_SESSION_SCOPE =
@@ -246,7 +247,7 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * <p>The path's string segments are resolved through the components they
 	 * reach, each mapping a segment to its lattice key
-	 * ({@link covia.lattice.ACoviaComponent#resolve}), and the value where they
+	 * ({@link covia.lattice.ACoviaComponent#locate}), and the value where they
 	 * end is read.</p>
 	 *
 	 * <p>Response always includes {@code exists} (boolean) and {@code value}:</p>
@@ -678,7 +679,7 @@ public class CoviaAdapter extends AAdapter {
 		AString remoteVenue = remoteVenueFor(path);
 		if (remoteVenue != null && !engine.isLocalDIDResource(path)) return false;
 		AString did = didPath(path);
-		CoviaPath segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
+		Path segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
 		if (isExtensionPath(segments)) return false;
 		ACell writeInput = Maps.of(Fields.PATH, path, Fields.VALUE, value);
 		handleWrite(state, ctx.withInvocation(writeInput, null), writeInput);
@@ -743,9 +744,9 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		Access target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
-		CoviaPath path = target.path();
-		if (target.component(Capability.CRUD_DELETE) instanceof SecretStore secrets && path.length() == 1) {
-			AString name = path.first();
+		Path path = target.path();
+		if (target.component(Capability.CRUD_DELETE) instanceof SecretStore secrets && path.count() == 1) {
+			AString name = path.get(0);
 			boolean deleted = secrets.deleteIfPresent(name);
 			if (deleted) {
 				// The name only, never the value — the same trail as secret:set.
@@ -806,7 +807,7 @@ public class CoviaAdapter extends AAdapter {
 		boolean delete = Capability.CRUD_DELETE.equals(ability);
 		AString did = didPath(path);
 		Engine.UserPathTarget target = (did == null) ? null : engine.resolveUserPath(ctx, did, false);
-		CoviaPath segments = (target == null) ? CoviaPath.of(path) : target.path();
+		Path segments = (target == null) ? CoviaPath.of(path) : target.path();
 		Access access = access(ctx, locate(state, ctx, path, ability));
 		// A path that names no place is refused as such before anything else
 		String invalid = access.reasonInvalid();
@@ -845,14 +846,14 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws InvalidInputException for a path without a key, or part of a secret
 	 * @throws NotSupportedException for a framework-managed namespace
 	 */
-	private static void requireChangeable(CoviaPath path, boolean delete) {
-		AString namespace = path.isEmpty() ? null : path.first();
+	private static void requireChangeable(Path path, boolean delete) {
+		AString namespace = path.isEmpty() ? null : path.get(0);
 		if (N.equals(namespace) || C.equals(namespace) || T.equals(namespace) || V.equals(namespace)) return;
 		if (delete && Namespace.S.equals(namespace)) {
-			if (path.length() != 2) throw new InvalidInputException(WHOLE_SECRET);
+			if (path.count() != 2) throw new InvalidInputException(WHOLE_SECRET);
 			return;
 		}
-		if (path.length() < 2) throw new InvalidInputException(NAMESPACE_AND_KEY);
+		if (path.count() < 2) throw new InvalidInputException(NAMESPACE_AND_KEY);
 		if (!WRITABLE_NAMESPACES.contains(namespace.toString())) {
 			throw new NotSupportedException(String.format(NOT_WRITABLE, namespace));
 		}
@@ -939,7 +940,7 @@ public class CoviaAdapter extends AAdapter {
 
 	/** One projected field = a read at the child's subpath, single-read semantics. */
 	private static ACell projectField(ACell child, AString field, ACell input) {
-		CoviaPath fieldPath = CoviaPath.parse(field.toString());
+		Path fieldPath = CoviaPath.parse(field.toString());
 		ACell fv = ValuePath.get(child, fieldPath);
 		if (fv == null) {
 			// A stored null is present; an absent subpath is exists:false —
@@ -1056,7 +1057,7 @@ public class CoviaAdapter extends AAdapter {
 
 		// Partition by the named field (which may be a relative path resolved by
 		// get into each entry). Σ(group counts) == count by construction.
-		CoviaPath fieldPath = CoviaPath.parse(groupBy.toString());
+		Path fieldPath = CoviaPath.parse(groupBy.toString());
 		AMap<AString, ACell> groups = Maps.empty();
 		for (ACell entry : level) {
 			ACell fieldVal = ValuePath.get(entry, fieldPath);
@@ -1254,33 +1255,33 @@ public class CoviaAdapter extends AAdapter {
 			if (isExtensionPath(target.path())) {
 				return AdapterView.resolve(ctx, this, target.ownerDID(), target.path(), ability);
 			}
-			return state.resolve(CoviaPath.segments(target.ownerDID()).append(target.path()));
+			return state.locate(CoviaPath.segments(target.ownerDID()).concat(target.path()));
 		}
-		CoviaPath segments = CoviaPath.of(path);
-		AString namespace = segments.isEmpty() ? null : segments.first();
+		Path segments = CoviaPath.of(path);
+		AString namespace = segments.isEmpty() ? null : segments.get(0);
 		if (Namespace.X.equals(namespace)) {
 			return AdapterView.resolve(ctx, this, (ctx == null) ? null : ctx.getUserDID(), segments, ability);
 		}
 		if (V.equals(namespace)) {
-			CoviaPath global = venueGlobals(segments);
-			return state.users().at(engine.getDIDString()).workspace().resolve(global.rest())
+			Path global = venueGlobals(segments);
+			return state.users().at(engine.getDIDString()).workspace().locate(global.slice(1))
 				.ownedBy(VIEW_POLICY, segments);
 		}
 		AString agentId = (ctx == null) ? null : ctx.getAgentId();
 		if (N.equals(namespace)) {
 			if (agentId == null) throw new WrongScopeException(NO_AGENT_SCOPE);
-			return requestUser(state, ctx).agentAt(agentId).resolve(segments);
+			return requestUser(state, ctx).agentAt(agentId).locate(segments);
 		}
 		if (C.equals(namespace)) {
 			Blob sessionId = (ctx == null) ? null : ctx.getSessionId();
 			if (agentId == null || sessionId == null) throw new WrongScopeException(NO_SESSION_SCOPE);
-			return requestUser(state, ctx).agentAt(agentId).session(sessionId).resolve(segments);
+			return requestUser(state, ctx).agentAt(agentId).session(sessionId).locate(segments);
 		}
 		if (T.equals(namespace)) {
 			Blob jobId = scopedJob(ctx);
-			return requestUser(state, ctx).jobs().at(jobId).resolveScratch(segments.rest());
+			return requestUser(state, ctx).jobs().at(jobId).locateScratch(segments.slice(1));
 		}
-		return requestUser(state, ctx).resolve(segments);
+		return requestUser(state, ctx).locate(segments);
 	}
 
 	/**
@@ -1303,7 +1304,7 @@ public class CoviaAdapter extends AAdapter {
 	public boolean isLatticePath(RequestContext ctx, ACell path) {
 		try {
 			AString did = didPath(path);
-			CoviaPath segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
+			Path segments = (did == null) ? CoviaPath.of(path) : engine.resolveUserPath(ctx, did, false).path();
 			if (isExtensionPath(segments)) return true;
 			return locate(ctx, path).isValid();
 		} catch (WrongScopeException e) {
@@ -1352,21 +1353,21 @@ public class CoviaAdapter extends AAdapter {
 		AString raw = RT.ensureString(path);
 		if (raw != null) return raw.startsWith(DID_PREFIX) ? raw : null;
 		if (!(path instanceof AVector<?>)) return null;
-		CoviaPath segments = CoviaPath.of(path);
-		if (segments.isEmpty() || !segments.first().startsWith(DID_PREFIX)) return null;
-		return Strings.create(segments.toString().substring(1));
+		Path segments = CoviaPath.of(path);
+		if (segments.isEmpty() || !segments.get(0).startsWith(DID_PREFIX)) return null;
+		return Strings.create(CoviaPath.address(segments).substring(1));
 	}
 
 
 
 	/** The venue user's path a {@code v/} path stands for: {@link #VENUE_GLOBALS} followed by the rest of the path. */
-	public static CoviaPath venueGlobals(CoviaPath path) {
-		return VENUE_GLOBALS.append(path.rest());
+	public static Path venueGlobals(Path path) {
+		return VENUE_GLOBALS.concat(path.slice(1));
 	}
 
 	/** Whether a path, after any owner DID, is an adapter's view ({@code x/}). */
-	public static boolean isExtensionPath(CoviaPath path) {
-		return !path.isEmpty() && Namespace.X.equals(path.first());
+	public static boolean isExtensionPath(Path path) {
+		return !path.isEmpty() && Namespace.X.equals(path.get(0));
 	}
 
 }

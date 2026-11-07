@@ -4,6 +4,7 @@ import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Path;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.PathCursor;
@@ -54,12 +55,12 @@ public final class Workspace extends ACoviaComponent<ACell>
 
 	/** Where {@code path} ends in this area: the {@link Entry} there. */
 	@Override
-	public Position resolve(CoviaPath path) {
-		return new Position(entry(path), path.rest(path.length()));
+	public Position locate(Path path) {
+		return new Position(entry(path), path.slice(path.count()));
 	}
 
 	/** The entry at {@code path} in this area, its keys fixed now by the values the path meets. */
-	public Entry entry(CoviaPath path) {
+	public Entry entry(Path path) {
 		return new Entry(this, path, ValuePath.keys(read(), path));
 	}
 
@@ -68,7 +69,7 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 *
 	 * @return Whether a value was there already
 	 */
-	public boolean write(CoviaPath path, ACell value) {
+	public boolean write(Path path, ACell value) {
 		return entry(path).write(value);
 	}
 
@@ -78,7 +79,7 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 *
 	 * @return The list's size afterwards
 	 */
-	public long append(CoviaPath path, ACell element) {
+	public long append(Path path, ACell element) {
 		return entry(path).append(element);
 	}
 
@@ -88,7 +89,7 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 *
 	 * @return Whether a value was removed
 	 */
-	public boolean delete(CoviaPath path) {
+	public boolean delete(Path path) {
 		return entry(path).delete();
 	}
 
@@ -99,7 +100,7 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 *
 	 * @return The new value
 	 */
-	public ACell update(CoviaPath path, UnaryOperator<ACell> change) {
+	public ACell update(Path path, UnaryOperator<ACell> change) {
 		return entry(path).update(change);
 	}
 
@@ -109,8 +110,8 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 *
 	 * @return How many levels were created
 	 */
-	public int createPath(CoviaPath path) {
-		return entry(path).createLevels(path.length());
+	public int createPath(Path path) {
+		return entry(path).createLevels(Math.toIntExact(path.count()));
 	}
 
 	/** The area at a key in a record; a change needs the record. */

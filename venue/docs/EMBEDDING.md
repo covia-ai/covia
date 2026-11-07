@@ -101,8 +101,8 @@ These components check no authority: they act for whatever code calls them,
 so the application decides who reaches them.
 
 - **Workspace.** `user.workspace()` is the user's workspace (`w`). Its
-  `read`, `write`, `append`, `update` and `delete` take a `CoviaPath` inside
-  the workspace, such as `CoviaPath.parse("app/record")`. A change creates no
+  `read`, `write`, `append`, `update` and `delete` take a path (a Convex
+  `Path`) inside the workspace, such as `CoviaPath.parse("app/record")`. A change creates no
   missing level: `createPath` makes them, and a write below a missing level is
   refused (`NotFoundException`). When several changes must land together, wrap
   them in a transaction, which applies all or nothing and is retried on a

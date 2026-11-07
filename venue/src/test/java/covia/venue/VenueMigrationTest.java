@@ -15,6 +15,7 @@ import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMDouble;
@@ -27,8 +28,8 @@ class VenueMigrationTest {
 	/** The venue's secret store keys: these venues keep no secret a migration step carries over. */
 	private static final SecretStore.Keys NO_SECRETS = SecretStore.keys(AKeyPair.generate());
 	private static final AString DID = Strings.create("did:test:migrations");
-	private static final CoviaPath OLD_QUEUE = CoviaPath.parse("w/user-deletions");
-	private static final CoviaPath OLD_ADAPTER = CoviaPath.parse("w/adapters/unloaded");
+	private static final Path OLD_QUEUE = CoviaPath.parse("w/user-deletions");
+	private static final Path OLD_ADAPTER =CoviaPath.parse("w/adapters/unloaded");
 	private static final ACell PENDING = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.ONE));
 
 	private static VenueState legacy() {

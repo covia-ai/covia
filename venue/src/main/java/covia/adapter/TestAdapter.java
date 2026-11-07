@@ -132,9 +132,9 @@ public class TestAdapter extends AAdapter {
 		};
 	}
 
-	@Override public String latticeWriteDenial(RequestContext ctx, covia.lattice.CoviaPath path) {
+	@Override public String latticeWriteDenial(RequestContext ctx, convex.core.data.Path path) {
 		// Replacing/deleting the view root could otherwise bypass read-only children.
-		return !path.isEmpty() && K_SCRATCH.equals(path.first()) ? null : SCRATCH_ONLY;
+		return !path.isEmpty() && K_SCRATCH.equals(path.get(0)) ? null : SCRATCH_ONLY;
 	}
 
 	@Override public void deleteUserState(AString did, AdapterState state) {

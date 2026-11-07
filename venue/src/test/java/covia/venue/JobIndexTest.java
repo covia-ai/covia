@@ -13,6 +13,7 @@ import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
@@ -33,7 +34,7 @@ import covia.lattice.CoviaPath;
 class JobIndexTest {
 	private static final Engine ENGINE = TestEngine.ENGINE;
 	private static final AString TOKEN = Strings.create("token");
-	private static final CoviaPath OP = CoviaPath.parse("o/declared");
+	private static final Path OP =CoviaPath.parse("o/declared");
 	/** A job that waits until it is finished from outside, with a secret field and an output schema. */
 	private static final AMap<AString, ACell> DECLARED = Maps.of(Fields.NAME, "declared", Fields.OPERATION, Maps.of(
 		Fields.ADAPTER, "test:never", Strings.create("secretFields"), Vectors.of(TOKEN),

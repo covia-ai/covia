@@ -11,6 +11,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
@@ -58,8 +59,8 @@ class DiscordMigrationTest {
 			// 0.9.11 kept adapter state in the venue user's workspace.
 			User host = engine.getVenueState().users().get(engine.getDIDString());
 			Workspace workspace = host.workspace();
-			CoviaPath legacy = CoviaPath.parse("adapters/discord");
-			workspace.createPath(legacy.parent());
+			Path legacy =CoviaPath.parse("adapters/discord");
+			workspace.createPath(CoviaPath.parent(legacy));
 			workspace.write(legacy, STATES.get(0));
 			engine.getVenueState().users().ensure(OWNER);
 

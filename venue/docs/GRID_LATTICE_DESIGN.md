@@ -341,11 +341,15 @@ writes (`w/list/0` is `"w"`, `"list"`, `"0"`), and it never holds a lattice
 key. The component a segment reaches maps it to a key: `Jobs` reads hex as a
 job's Blob id, `User` reads a namespace letter as a record field, and below the
 last component a segment means what the value it meets needs. A path is a
-`CoviaPath`, made only by its own factories: `parse` splits a string on `/`,
-`of` takes a caller's string or array, and `segments` builds one from known
-segments. Each refuses a segment that is not a string or that contains `/`
+Convex `Path`, made from what a caller writes only by `CoviaPath`, which holds
+Covia's path syntax: `parse` splits a string on `/`, `of` takes a caller's
+string or array, and `segments` builds one from known segments. Each refuses a
+segment that is not a string or that contains `/`
 (`CoviaPath.SEGMENT_NOT_STRING`, `SEGMENT_HAS_SLASH`), so a path names the same
-place as its segments joined with `/`, the address its authority is checked on.
+place as its address, its segments joined with `/` (`CoviaPath.address`), on
+which its authority is checked. A component passes the rest of a path to its
+child as a slice of the caller's path, which still formats as the caller's
+address up to its end.
 
 **Resolution starts at a component.** A path is resolved by the component it
 starts at, and the request decides only which component that is:
@@ -376,11 +380,11 @@ this way. Other venues' paths stay with federation.
 
 **Components define their namespaces.** `ACoviaComponent extends
 ALatticeComponent` is the base of every component a caller can address.
-`resolve(path)` takes the stretch of the caller's path below the component and
+`locate(path)` takes the stretch of the caller's path below the component and
 returns the `Position` where it ends: the component that owns that place and
-the stretch of the path it reads. A stretch is the segments `[start, end)` of a
-whole path, sharing them without copying; it formats as the whole address up to
-its end, so refusals name the path as the caller wrote it. `resolve` sees no
+the stretch of the path it reads. A stretch is a slice of the caller's path,
+sharing its segments without copying; it formats as the whole address up to
+its end, so refusals name the path as the caller wrote it. `locate` sees no
 request, takes as many segments per step as the component's rules cover (as
 cursor paths do) and passes the rest to the child, and builds each child only
 from its own cursor, so a walk from a draft root stays in the draft.
@@ -838,7 +842,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `VenueContext` (Covia) | Policy shared by every Covia component and passed down unchanged: the write clock and the venue's signer |
-| `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`resolve`, `read`); a position is the component that owns a path and the stretch of it that the component reads (§4.6) |
+| `ACoviaComponent`, `Position` (Covia) | Base of addressable components (`locate`, `read`); a position is the component that owns a path and the stretch of it that the component reads (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |

@@ -7,6 +7,7 @@ import java.util.regex.Pattern;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.TransactionalComponent;
@@ -107,18 +108,18 @@ public final class AdapterState extends ACoviaComponent<ACell>
 	/** Writes {@code value} at the path, creating any missing levels above it. */
 	public void write(String relative, ACell value) {
 		Objects.requireNonNull(value, "Adapter state values must be non-null; use delete()");
-		CoviaPath path = path(relative, false);
+		Path path = path(relative, false);
 		update(current -> ValuePath.set(
-			ValuePath.createPath((current == null) ? Maps.empty() : current, path.parent(), new int[1]),
+			ValuePath.createPath((current == null) ? Maps.empty() : current, CoviaPath.parent(path), new int[1]),
 			path, value));
 	}
 	public boolean delete(String relative) {
-		CoviaPath path = path(relative, false);
+		Path path = path(relative, false);
 		ACell previous = cursor().getAndUpdate(current -> ValuePath.remove(current, path));
 		return ValuePath.contains(previous, path);
 	}
 
-	private static CoviaPath path(String path, boolean allowEmpty) {
+	private static Path path(String path, boolean allowEmpty) {
 		return CoviaPath.parse(validateRelative(path, allowEmpty));
 	}
 	private static String validateRelative(String relative, boolean allowEmpty) {

@@ -6,6 +6,7 @@ import java.util.function.Function;
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Path;
 import covia.exception.AuthException;
 import covia.venue.RequestContext;
 
@@ -59,7 +60,7 @@ public final class Access {
 	}
 
 	/** The path as the caller wrote it. */
-	public CoviaPath path() {
+	public Path path() {
 		return position.path();
 	}
 
@@ -145,7 +146,7 @@ public final class Access {
 	private void require(AString ability, int levels) {
 		if (!position.isValid()) return;
 		AccessPolicy.Need need = position.need(ctx, ability, levels);
-		if (need == null) throw new IllegalStateException(String.format(NO_OWNER, position.path()));
+		if (need == null) throw new IllegalStateException(String.format(NO_OWNER, CoviaPath.address(position.path())));
 		if (need.refusal() != null) throw new AuthException(need.refusal());
 		authority.require(ctx, need.address(), ability);
 	}

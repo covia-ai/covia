@@ -47,7 +47,7 @@ public class InboxTest {
 		User user = user();
 		user.inbox().put(ID, Maps.of(Hitl.STATUS, Hitl.OPEN));
 
-		assertEquals(user.inbox().getAll(), user.resolve(CoviaPath.segments(Namespace.H)).read());
-		assertEquals(Hitl.OPEN, RT.getIn(user.resolve(CoviaPath.segments(Namespace.H, ID)).read(), Hitl.STATUS));
+		assertEquals(user.inbox().getAll(), user.locate(CoviaPath.segments(Namespace.H)).read());
+		assertEquals(Hitl.OPEN, RT.getIn(user.locate(CoviaPath.segments(Namespace.H, ID)).read(), Hitl.STATUS));
 	}
 }

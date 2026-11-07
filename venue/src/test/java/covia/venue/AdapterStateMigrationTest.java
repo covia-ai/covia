@@ -17,6 +17,7 @@ import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -102,7 +103,7 @@ class AdapterStateMigrationTest {
 		Engine engine = prepared(Maps.empty());
 		try {
 			VenueState venue = engine.getVenueState();
-			CoviaPath legacyPath = CoviaPath.parse("w/adapters/" + NAME);
+			Path legacyPath =CoviaPath.parse("w/adapters/" + NAME);
 			venue.users().get(engine.getDIDString()).writeInternalPath(legacyPath, Vectors.of("a", "b"));
 
 			Versioned adapter = new Versioned(NAME, 2);

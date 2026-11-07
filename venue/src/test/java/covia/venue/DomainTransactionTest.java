@@ -21,6 +21,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.SignedData;
 import convex.core.data.prim.CVMLong;
@@ -37,7 +38,7 @@ class DomainTransactionTest {
 
 	private static final AString DID = Strings.create("did:key:transaction-user");
 	/** The stretch of a {@code w/} path inside the user's workspace. */
-	private static CoviaPath path(String path) { return CoviaPath.parse(path).rest(); }
+	private static Path path(String path) { return CoviaPath.parse(path).slice(1); }
 
 	@Test
 	void jobHistoryComposesWithWorkspaceAndRetainedDraftsStayIsolated() {

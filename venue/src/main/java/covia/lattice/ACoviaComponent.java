@@ -1,6 +1,7 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
+import convex.core.data.Path;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.AForkableCursor;
 
@@ -9,7 +10,8 @@ import convex.lattice.cursor.AForkableCursor;
  * defines what the path's segments below it mean, routing them to the component
  * that owns them; a path ends at the last component that claims it.
  *
- * <p>A path is the caller's: a {@link CoviaPath} of string segments, as written. Mapping a segment to
+ * <p>A path is the caller's: a {@link Path} of string segments, as written and
+ * checked by {@link CoviaPath}. Mapping a segment to
  * a lattice key, such as a job id in hex to its Blob, is the business of the
  * component that meets it, and lattice keys never appear in a path.</p>
  *
@@ -58,7 +60,7 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 	 * @param path The stretch of the caller's path below this component
 	 * @return Where the path ends, never null
 	 */
-	public Position resolve(CoviaPath path) {
+	public Position locate(Path path) {
 		return new Position(this, path);
 	}
 
@@ -73,12 +75,12 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 	}
 
 	/** The value at {@code path} below this component, as callers see it, or null when absent. */
-	public ACell read(CoviaPath path) {
+	public ACell read(Path path) {
 		return ValuePath.get(read(), path);
 	}
 
 	/** Whether a value is at {@code path} below this component; a stored null counts. */
-	public boolean contains(CoviaPath path) {
+	public boolean contains(Path path) {
 		return ValuePath.contains(read(), path);
 	}
 }

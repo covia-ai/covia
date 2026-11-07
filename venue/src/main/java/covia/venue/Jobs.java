@@ -5,13 +5,13 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
+import convex.core.data.Path;
 import convex.core.lang.RT;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.grid.Job;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
-import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
@@ -157,13 +157,13 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 * a segment naming no job, need authority over {@code <owner>/j/<path>}.
 	 */
 	@Override
-	public Position resolve(CoviaPath path) {
+	public Position locate(Path path) {
 		Position position;
 		if (path.isEmpty()) {
-			position = super.resolve(path);
+			position = super.locate(path);
 		} else {
-			Blob id = ValuePath.blobKey(path.first());
-			position = (id == null) ? Position.invalid(path) : at(id).resolve(path.rest());
+			Blob id = ValuePath.blobKey(path.get(0));
+			position = (id == null) ? Position.invalid(path) : at(id).locate(path.slice(1));
 		}
 		if (owner == null) return position;
 		String base = owner + "/" + Namespace.J;
