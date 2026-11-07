@@ -18,6 +18,7 @@ import convex.core.data.Vectors;
 import covia.adapter.CoviaAdapter;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.lattice.Access;
 import covia.lattice.CoviaPath;
 
@@ -211,6 +212,37 @@ public class OwnerAccessTest {
 		assertDenied(agent(NONE), record);
 		assertDenied(BOB, record);
 		assertNotNull(read(bobGranted(record, Capability.CRUD_READ), record));
+	}
+
+	// ========== through the covia operations ==========
+
+	private Job run(String op, ACell input, RequestContext ctx) {
+		Job job;
+		try {
+			job = engine.jobs().invokeOperation(op, input, ctx);
+		} catch (RuntimeException refused) {
+			return Job.failure(String.valueOf(refused.getMessage()));
+		}
+		try { job.awaitResult(10000); } catch (Exception ignored) {}
+		return job;
+	}
+
+	@Test
+	public void testTheCoviaOperationsAskTheOwner() {
+		RequestContext serving = agent(NONE);
+		Job wrote = run("v/ops/covia/write", Maps.of("path", "c/op", "value", "c-op"), serving);
+		assertEquals(Status.COMPLETE, wrote.getStatus(), wrote.getErrorMessage());
+		assertReads("c-op", agent(null), "c/op");
+
+		String place = alice + "/g/" + AGENT + "/n/note";
+		assertEquals(Status.FAILED, run("v/ops/covia/read", Maps.of("path", "n/note"),
+			agent(caps("n/", Capability.CRUD_READ))).getStatus(), "n/ is checked where it lives");
+		Job granted = run("v/ops/covia/read", Maps.of("path", place),
+			bobGranted(alice + "/g/" + AGENT + "/n/", Capability.CRUD_READ));
+		assertEquals(Status.COMPLETE, granted.getStatus(), granted.getErrorMessage());
+
+		Job copied = run("v/ops/covia/copy", Maps.of("from", place, "to", "w/copy"), BOB);
+		assertEquals(Status.FAILED, copied.getStatus(), "copy reads its source as covia:read does");
 	}
 
 	// ========== the venue's view ==========

@@ -77,6 +77,16 @@ public final class Access {
 	}
 
 	/**
+	 * The component that owns the position, to act on it with {@code ability}
+	 * through the component's own operations, once the request may; null when
+	 * the path is invalid. {@link #path} is the stretch below it.
+	 */
+	public ACoviaComponent<?> component(AString ability) {
+		require(ability);
+		return position.component();
+	}
+
+	/**
 	 * Changes the entry here with {@code ability} in one transaction, first
 	 * creating the levels above it that hold nothing. Creating a key changes the
 	 * level that holds it, so a change that creates levels also needs
@@ -101,10 +111,18 @@ public final class Access {
 		return created[0];
 	}
 
-	/** Checks that the request may use {@code ability} here. */
+	/**
+	 * Checks that the request may use {@code ability} here. An access checks
+	 * each ability once: it is made for one request's use of one path.
+	 */
 	public void require(AString ability) {
+		if (ability.equals(allowed)) return;
 		require(ability, 0);
+		allowed = ability;
 	}
+
+	/** The ability last found allowed here, so a read or change that follows its check is not checked again. */
+	private AString allowed;
 
 	/** Checks that the request may use {@code ability} {@code levels} levels above here, never above the owner's namespace. */
 	private void require(AString ability, int levels) {

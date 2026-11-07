@@ -1,9 +1,7 @@
 package covia.adapter;
 
-import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 import convex.auth.ucan.Capability;
@@ -38,7 +36,6 @@ import covia.lattice.AccessPolicy;
 import covia.lattice.AdapterView;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
-import covia.lattice.Entry;
 import covia.lattice.Namespace;
 import covia.lattice.Position;
 import covia.lattice.ValuePath;
@@ -268,32 +265,57 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code covia:slice} to read vector elements in pages.</p>
 	 */
 	public ACell handleRead(RequestContext ctx, ACell input) {
-		requireCap(ctx, input, Capability.CRUD_READ);
-		// Try universal resolution via Engine.resolvePath. This covers every
-		// input form per OPERATIONS.md §4: bare hex hash, /a/<hash>, /o/<name>,
-		// local DID URL, virtual namespaces and workspace paths (w/, g/, o/, j/,
-		// etc.). Returns the literal value at the resolved location with no
-		// ref-following or asset interpretation.
-		AString pathStr = RT.ensureString(RT.getIn(input, Fields.PATH));
-		if (pathStr != null) {
-			ACell value = engine.resolvePathUnchecked(pathStr, ctx);   // checked by requireCap above
-			if (value != null) {
-				return sizeGuardedResult(value, input);
-			}
-			// A content hash names an asset, not a place in the lattice.
-			if (Hash.parse(pathStr) != null) return result(null);
+		ACell path = RT.getIn(input, Fields.PATH);
+		AString hash = contentHash(path);
+		if (hash != null) {
+			ACell value = readAsset(ctx, hash);
+			return (value == null) ? result(null) : sizeGuardedResult(value, input);
 		}
-
-		// Then the lattice path itself: a stored null, an absent value, an
-		// invalid path, or a vector path form.
-		Position target = locate(ctx, RT.getIn(input, Fields.PATH));
-		ACell value = target.read();
+		Access target = resolve(ctx, path);
+		ACell value = readAt(ctx, target, path);
 		// A stored null reads back as present (exists:true, value:null), distinct
 		// from an absent path (exists:false) — decided by key presence in the parent.
 		if (value == null) {
 			return result(null, target.exists());
 		}
 		return sizeGuardedResult(value, input);
+	}
+
+	/** The path as a content hash when it is one: a hash names an asset, not a place in the lattice. */
+	private static AString contentHash(ACell path) {
+		AString ref = RT.ensureString(path);
+		return (ref != null && Hash.parse(ref) != null) ? ref : null;
+	}
+
+	/**
+	 * The metadata of the asset a content hash names, once the request may read
+	 * it as an asset ({@link Engine#requireMetadataRead}): in the caller's own
+	 * store, then the venue catalog.
+	 */
+	private ACell readAsset(RequestContext ctx, AString hash) {
+		engine.requireMetadataRead(ctx, hash);
+		return engine.resolvePathUnchecked(hash, ctx);
+	}
+
+	/**
+	 * The value a covia read of {@code path} sees, once the owner of the data
+	 * there lets the request read it. Every form OPERATIONS.md §4 accepts is
+	 * read literally, with no ref-following: an asset's address
+	 * ({@code a/<hash>}, or a DID URL naming an asset) gives its metadata, and
+	 * any other path the value there.
+	 *
+	 * @return The value, or null when absent
+	 */
+	private ACell readAt(RequestContext ctx, Access target, ACell path) {
+		target.require(Capability.CRUD_READ);
+		AString ref = RT.ensureString(path);
+		if (ref != null) {
+			ACell value = engine.resolvePathUnchecked(ref, ctx);   // the owner allowed it above
+			if (value != null) return value;
+		}
+		// The lattice path itself: a stored null, an absent value, an invalid
+		// path, or a vector path form.
+		return target.read();
 	}
 
 	/**
@@ -438,13 +460,11 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves a single path and renders the value via CellExplorer, after the
-	 * same check as every other covia read ({@link #requireCap}).
+	 * Resolves a single path and renders the value via CellExplorer, through
+	 * the same access as every other covia read ({@link #resolve}).
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
-		AString path = Strings.create(pathStr);
-		requireCap(ctx, Maps.of(Fields.PATH, path), Capability.CRUD_READ);
-		ACell value = locate(ctx, path).read();
+		ACell value = resolve(ctx, Strings.create(pathStr)).read();
 		if (value == null) return "null /* not found: " + pathStr + " */";
 
 		CellExplorer explorer = new CellExplorer(budget, compact);
@@ -464,7 +484,6 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	public ACell handleSlice(RequestContext ctx, ACell input) {
-		requireCap(ctx, input, Capability.CRUD_READ);
 		ACell value = readInputValue(ctx, input);
 		if (value == null) return Maps.of(K_EXISTS, CVMBool.FALSE);
 
@@ -553,9 +572,9 @@ public class CoviaAdapter extends AAdapter {
 	 * use the standard caps enforcement of each side.</p>
 	 *
 	 * <p>Use this to snapshot a venue op into your own {@code /o/} (e.g.
-	 * {@code from=v/ops/json/merge to=o/merge}), to cache remote data
-	 * locally ({@code from=did:web:...:w/data to=w/cache/...}), or to
-	 * branch any workspace value.</p>
+	 * {@code from=v/ops/json/merge to=o/merge}), to keep a copy of data another
+	 * user on this venue lets you read ({@code from=<did>/w/data to=w/cache/...}),
+	 * or to branch any workspace value.</p>
 	 *
 	 * @return the destination write's result: {@code {pathCreated: true}} if a
 	 *         missing parent path was built, else an empty map
@@ -566,11 +585,9 @@ public class CoviaAdapter extends AAdapter {
 		if (from == null) throw new InvalidInputException("'from' is required");
 		if (to == null) throw new InvalidInputException("'to' is required");
 
-		// Reads the source (handleWrite enforces crud/write on the destination).
-		engine.requireResourceAccess(ctx, from, Capability.CRUD_READ);
-
-		// Read from source via the canonical universal resolver, checked above.
-		ACell value = engine.resolvePathUnchecked(from, ctx);
+		// Reads the source as covia:read does (handleWrite checks the destination).
+		AString hash = contentHash(from);
+		ACell value = (hash != null) ? readAsset(ctx, hash) : readAt(ctx, resolve(ctx, from), from);
 		if (value == null) {
 			throw new NotFoundException("source not found: " + from, from.toString());
 		}
@@ -580,63 +597,6 @@ public class CoviaAdapter extends AAdapter {
 		// pathCreated (whether the destination needed new hierarchy built).
 		ACell writeInput = Maps.of(Fields.PATH, to, Fields.VALUE, value);
 		return handleWrite(ctx, writeInput);
-	}
-
-	/**
-	 * Enforces the capability for a path-targeted lattice mutation at the point
-	 * it executes — the adapter pins the exact resource (the path) and ability,
-	 * so the enforced cap cannot drift from the implementation. A null grant scope
-	 * (internal/authenticated callers) is unrestricted, so this is a no-op for
-	 * them; a restricted scope (e.g. the public read-only profile) is gated.
-	 */
-	private void requireCap(RequestContext ctx, ACell input, AString ability) {
-		// One gate for every lattice op — read or mutation. requireLocalAccess is
-		// the shared local-access check (a/ governed exactly like w/): the caller's
-		// own namespace goes through the scope seam; another user's needs a proof
-		// (or public/venue-catalog policy), else a denial.
-		engine.requireLocalAccess(ctx, capResource(input), ability);
-	}
-
-	/** The resource a path-targeted op names: its path, with any owner DID. */
-	private static AString capResource(ACell input) {
-		ACell path = RT.getIn(input, Fields.PATH);
-		AString resource = RT.ensureString(path);
-		if (path instanceof AVector<?>) resource = Strings.create(CoviaPath.of(path).toString());
-		if (resource != null && resource.startsWith(SLASH)) resource = resource.slice(1);
-		return resource;
-	}
-
-	/**
-	 * Runs a change at a resolved path in one transaction, first creating the
-	 * levels above it that hold nothing. Creating a key changes the map that
-	 * holds it, so a change that creates any key of its path, the last included,
-	 * also needs write authority at the nearest level that exists.
-	 *
-	 * @param address The path as the caller named it
-	 * @param change The change, made to the entry in the transaction
-	 * @return Whether a level above the changed value was created
-	 */
-	private boolean changeCreatingLevels(RequestContext ctx, AString address, Position target,
-			Consumer<Entry> change) {
-		boolean[] created = {false};
-		target.entry().transact(draft -> {
-			int missing = draft.missingLevels();
-			if (missing > 0) engine.requireLocalAccess(ctx, ancestor(address, missing), Capability.CRUD_WRITE);
-			created[0] = draft.createLevels() > 0;
-			change.accept(draft);
-		});
-		return created[0];
-	}
-
-	/**
-	 * The address {@code levels} levels above {@code address}, never above its
-	 * namespace ({@code w}, or {@code <did>/w} for another user's).
-	 */
-	static AString ancestor(AString address, int levels) {
-		String[] segments = address.toString().split("/", -1);
-		int namespace = address.toString().startsWith("did:") ? 1 : 0;
-		int keep = Math.max(namespace + 1, segments.length - levels);
-		return Strings.create(String.join("/", Arrays.copyOf(segments, keep)));
 	}
 
 	private static AMap<AString, ACell> withPathCreated(AMap<AString, ACell> result, boolean created) {
@@ -661,7 +621,6 @@ public class CoviaAdapter extends AAdapter {
 
 	/** As {@link #handleWrite(RequestContext, ACell)}, in {@code state}: the venue's, or a transaction's draft of it. */
 	private ACell handleWrite(VenueState state, RequestContext ctx, ACell input) {
-		requireCap(ctx, input, Capability.CRUD_WRITE);
 		// A write must supply a 'value'. An absent key means the caller (often an
 		// LLM tool call) forgot the argument — fail loudly so it retries. An
 		// explicit null is a valid value: it stores a null at the path (present,
@@ -678,9 +637,9 @@ public class CoviaAdapter extends AAdapter {
 		// lives only at tool-call boundaries whose schema admits nothing else.
 		ACell value = RT.getIn(input, Fields.VALUE);
 
-		Position target = resolveForChange(state, ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
+		Access target = resolveForChange(state, ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		boolean[] existed = {false};
-		boolean created = changeCreatingLevels(ctx, capResource(input), target,
+		boolean created = target.changeCreatingLevels(Capability.CRUD_WRITE,
 			draft -> existed[0] = draft.write(value));
 		return withPathCreated(Maps.of(Fields.EXISTED, CVMBool.of(existed[0])), created);
 	}
@@ -694,11 +653,8 @@ public class CoviaAdapter extends AAdapter {
 	 * a write would lose a concurrent edit.
 	 */
 	void updatePath(RequestContext ctx, AString path, UnaryOperator<ACell> change) {
-		ACell input = Maps.of(Fields.PATH, path);
-		requireCap(ctx, input, Capability.CRUD_WRITE);
-		Position target = resolveForChange(ctx, path, Capability.CRUD_WRITE);
-		changeCreatingLevels(ctx, capResource(input), target,
-			draft -> draft.update(change));
+		Access target = resolveForChange(ctx, path, Capability.CRUD_WRITE);
+		target.changeCreatingLevels(Capability.CRUD_WRITE, draft -> draft.update(change));
 	}
 
 	/**
@@ -791,10 +747,9 @@ public class CoviaAdapter extends AAdapter {
 	 *         {@code false} if the path was already absent (idempotent no-op)
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
-		requireCap(ctx, input, Capability.CRUD_DELETE);
-		Position target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
+		Access target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
 		CoviaPath path = target.path();
-		if (target.component() instanceof SecretStore secrets && path.length() == 1) {
+		if (target.component(Capability.CRUD_DELETE) instanceof SecretStore secrets && path.length() == 1) {
 			AString name = path.first();
 			boolean deleted = secrets.deleteIfPresent(name);
 			if (deleted) {
@@ -804,7 +759,7 @@ public class CoviaAdapter extends AAdapter {
 			}
 			return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 		}
-		boolean deleted = target.entry().delete();
+		boolean deleted = target.entry(Capability.CRUD_DELETE).delete();
 		return Maps.of(Fields.DELETED, CVMBool.of(deleted));
 	}
 
@@ -822,12 +777,11 @@ public class CoviaAdapter extends AAdapter {
 	 *         append; {@code pathCreated:true} when a missing parent was built
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
-		requireCap(ctx, input, Capability.CRUD_WRITE);
-		Position target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
+		Access target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		ACell element = RT.getIn(input, Fields.VALUE);
 		boolean[] existed = {false};
 		long[] size = {0};
-		boolean created = changeCreatingLevels(ctx, capResource(input), target, draft -> {
+		boolean created = target.changeCreatingLevels(Capability.CRUD_WRITE, draft -> {
 			existed[0] = draft.exists();
 			size[0] = draft.append(element);
 		});
@@ -840,24 +794,30 @@ public class CoviaAdapter extends AAdapter {
 	// ========== Write path helpers ==========
 
 	/**
-	 * Where a path ends for a change by {@code ability} (write or delete), after
-	 * this adapter's write rules ({@link #requireChangeable}). A write creates
-	 * the caller's own record if it has none; another user's record must exist.
-	 * An {@code x/} path's view applies its adapter's write policy instead.
+	 * The request's access to a path for a change by {@code ability} (write or
+	 * delete), after this adapter's write rules ({@link #requireChangeable}) and
+	 * once the owner of the data there lets the request make it. A write then
+	 * creates the caller's own record if it has none; another user's record
+	 * must exist. An {@code x/} path's view applies its adapter's write policy
+	 * instead.
 	 *
-	 * @return Where the path ends
+	 * @return The request's access, already checked for {@code ability}
 	 */
-	private Position resolveForChange(RequestContext ctx, ACell path, AString ability) {
+	private Access resolveForChange(RequestContext ctx, ACell path, AString ability) {
 		return resolveForChange(engine.getVenueState(), ctx, path, ability);
 	}
 
-	private Position resolveForChange(VenueState state, RequestContext ctx, ACell path, AString ability) {
+	private Access resolveForChange(VenueState state, RequestContext ctx, ACell path, AString ability) {
 		boolean delete = Capability.CRUD_DELETE.equals(ability);
 		AString did = didPath(path);
 		Engine.UserPathTarget target = (did == null) ? null : engine.resolveUserPath(ctx, did, false);
 		CoviaPath segments = (target == null) ? CoviaPath.of(path) : target.path();
-		if (isExtensionPath(segments)) return locate(state, ctx, path, ability);
-		requireChangeable(ctx, segments, delete);
+		Access access = access(ctx, locate(state, ctx, path, ability));
+		// Checked before the write rules and before any record is created, so a
+		// refused change has no effect
+		access.require(ability);
+		if (isExtensionPath(segments)) return access;
+		requireChangeable(segments, delete);
 		if (!delete) {
 			if (target == null) {
 				// The USER's record, not the acting principal's: an agent sub-principal
@@ -872,29 +832,24 @@ public class CoviaAdapter extends AAdapter {
 				state.users().ensure(target.ownerDID());
 			}
 		}
-		return locate(state, ctx, path, ability);
+		return access;
 	}
 
 	/**
 	 * This adapter's write rules for a change by path, given the path after any
 	 * owner DID. {@code n/}, {@code c/} and {@code t/} take changes within their
-	 * scope, and {@code v/} only from the venue itself. A direct path changes only
-	 * {@link #WRITABLE_NAMESPACES}, and a delete may also remove a whole secret
-	 * ({@code s/<name>}): secrets are created only by {@code secret:set}, which
-	 * encrypts them, and part of a secret's record is never meaningful.
+	 * scope, and {@code v/} as its {@link #viewPolicy policy} allows. A direct
+	 * path changes only {@link #WRITABLE_NAMESPACES}, and a delete may also remove
+	 * a whole secret ({@code s/<name>}): secrets are created only by
+	 * {@code secret:set}, which encrypts them, and part of a secret's record is
+	 * never meaningful.
 	 *
-	 * @throws AuthException for a {@code v/} change by anyone but the venue
 	 * @throws InvalidInputException for a path without a key, or part of a secret
 	 * @throws NotSupportedException for a framework-managed namespace
 	 */
-	private void requireChangeable(RequestContext ctx, CoviaPath path, boolean delete) {
+	private static void requireChangeable(CoviaPath path, boolean delete) {
 		AString namespace = path.isEmpty() ? null : path.first();
-		if (N.equals(namespace) || C.equals(namespace) || T.equals(namespace)) return;
-		if (V.equals(namespace)) {
-			AString caller = (ctx == null) ? null : ctx.getCallerDID();
-			if (caller == null || !caller.equals(engine.getDIDString())) throw new AuthException(VENUE_WRITES_ONLY);
-			return;
-		}
+		if (N.equals(namespace) || C.equals(namespace) || T.equals(namespace) || V.equals(namespace)) return;
 		if (delete && Namespace.S.equals(namespace)) {
 			if (path.length() != 2) throw new InvalidInputException(WHOLE_SECRET);
 			return;
@@ -906,10 +861,10 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Reads the literal value targeted by an accessor input.
+	 * Reads the literal value targeted by an accessor input, once the request may.
 	 */
 	private ACell readInputValue(RequestContext ctx, ACell input) {
-		return locate(ctx, RT.getIn(input, Fields.PATH)).read();
+		return resolve(ctx, RT.getIn(input, Fields.PATH)).read();
 	}
 
 	/**
@@ -930,7 +885,6 @@ public class CoviaAdapter extends AAdapter {
 	 * in the response so the caller knows where to continue.</p>
 	 */
 	public ACell handleList(RequestContext ctx, ACell input) {
-		requireCap(ctx, input, Capability.CRUD_READ);
 		ACell value = readInputValue(ctx, input);
 
 		ACell desc = describeValue(value, input);
@@ -1076,7 +1030,6 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	public ACell handleAggregate(RequestContext ctx, ACell input) {
-		requireCap(ctx, input, Capability.CRUD_READ);
 		ACell value = readInputValue(ctx, input);
 
 		// exists = a countable collection is present (a scalar has nothing to
@@ -1327,15 +1280,18 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * The policy of {@code v/}, the venue's public view, which belongs to no
 	 * principal: any principal reads it within its own scope, so a read needs
-	 * only the request's own authority over the {@code v/} path. A change needs
-	 * the venue's authority over the place in its {@code w/global} that the view
-	 * shows.
+	 * only the request's own authority over the {@code v/} path. Only the venue
+	 * changes it, with authority over the place in its {@code w/global} that the
+	 * view shows.
 	 */
 	private AccessPolicy viewPolicy() {
-		String venueGlobal = engine.getDIDString() + VENUE_GLOBALS.toString();
-		return (ctx, ability, path) -> Capability.CRUD_READ.equals(ability)
-			? AccessPolicy.Need.authorityOver(AccessPolicy.address("", path))
-			: AccessPolicy.Need.authorityOver(AccessPolicy.address(venueGlobal, path.rest()));
+		AString venue = engine.getDIDString();
+		String venueGlobal = venue + VENUE_GLOBALS.toString();
+		return (ctx, ability, path) -> {
+			if (Capability.CRUD_READ.equals(ability)) return AccessPolicy.Need.authorityOver(AccessPolicy.address("", path));
+			if (ctx == null || !venue.equals(ctx.getCallerDID())) return AccessPolicy.Need.refused(VENUE_WRITES_ONLY);
+			return AccessPolicy.Need.authorityOver(AccessPolicy.address(venueGlobal, path.rest()));
+		};
 	}
 
 	/**
