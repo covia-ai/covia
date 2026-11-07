@@ -83,7 +83,7 @@ class VenueMigrationTest {
 	@Test void migrationRollsBackWithItsContainingTransaction() {
 		VenueState venue = legacy();
 		ACell before = venue.get();
-		assertThrows(IllegalArgumentException.class, () -> venue.transact(draft -> {
+		assertThrows(IllegalArgumentException.class, () -> venue.execute(draft -> {
 			draft.migrate(NO_SECRETS);
 			assertEquals(VenueState.CURRENT_VERSION, draft.version());
 			throw new IllegalArgumentException("test rollback");
@@ -97,7 +97,7 @@ class VenueMigrationTest {
 		AtomicInteger attempts = new AtomicInteger();
 		ACell latest = Maps.of("unloaded", Maps.of("did:test:deleted", CVMLong.create(2)));
 		try {
-			var migration = CompletableFuture.runAsync(() -> venue.transact(draft -> {
+			var migration = CompletableFuture.runAsync(() -> venue.execute(draft -> {
 				draft.migrate(NO_SECRETS);
 				if (attempts.incrementAndGet() == 1) {
 					staged.countDown();

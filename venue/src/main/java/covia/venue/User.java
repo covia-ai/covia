@@ -71,7 +71,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * above it; authority is possession of this user cursor.
 	 */
 	void writeInternalPath(CoviaPath path, ACell value) {
-		resolve(path).entry().transact(draft -> {
+		resolve(path).entry().execute(draft -> {
 			draft.createLevels();
 			draft.write(value);
 		});

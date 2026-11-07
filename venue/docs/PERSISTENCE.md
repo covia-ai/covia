@@ -149,7 +149,7 @@ retained account guards also apply through the child view. Stored record formats
 are unchanged, including legacy history/load migration on cycle admission.
 
 ```java
-agent.transact(draft -> {
+agent.execute(draft -> {
     if (!draft.session(sessionId).beginCycle(epoch, turns, pendingCount)) {
         throw new IllegalStateException("Session is no longer available");
     }
@@ -159,7 +159,7 @@ agent.transact(draft -> {
 ```
 
 ```java
-venue.transact(draft -> {
+venue.execute(draft -> {
     var user = draft.users().ensure(did);
     user.ensureAgent("assistant", config, null);
     user.workspace().write(CoviaPath.parse("ready"), CVMBool.TRUE);

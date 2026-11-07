@@ -47,14 +47,16 @@ import covia.venue.storage.LatticeStorage;
  * Authoritative state of a running venue application and its domain components.
  *
  * <p>Ordinary domain mutations are atomic and immediately visible locally.
- * Use {@link #transact} for compound changes: its callback receives an isolated
- * venue with the same domain API, including children bound to that draft.
- * Success commits the whole change; exceptions discard it and conflicts retry
- * the callback. Use only the supplied draft and keep external I/O outside it.
- * Local commit does not imply host publication or physical durability.</p>
+ * Use {@link #execute} for compound changes, or {@link #transact} when the
+ * change returns a result: the callback receives an isolated venue with the
+ * same domain API, including children bound to that draft. Success commits the
+ * whole change; exceptions discard it and conflicts retry the callback, so
+ * {@code transact} returns what the committed run returned. Use only the
+ * supplied draft and keep external I/O outside it. Local commit does not imply
+ * host publication or physical durability.</p>
  *
  * <pre>{@code
- * venue.transact(draft -> {
+ * venue.execute(draft -> {
  *     var user = draft.users().ensure(did);
  *     user.ensureAgent("assistant", config, null);
  *     user.workspace().write(CoviaPath.parse("assistant/ready"), value);
@@ -66,7 +68,7 @@ import covia.venue.storage.LatticeStorage;
  * invariants and external effects cannot in general be merged. One authoritative
  * running instance owns a venue; failover must fence the previous writer.
  * {@link #fork()} creates an independent snapshot, and {@link #sync()} selects
- * a snapshot rather than replaying operations. Live work uses {@code transact}.
+ * a snapshot rather than replaying operations. Live work uses transactions.
  * Children have no independent publication or merge boundary.</p>
  */
 public class VenueState extends ACoviaComponent<ACell> implements TransactionalComponent<ACell, VenueState> {
@@ -265,8 +267,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 		Objects.requireNonNull(id);
 		Objects.requireNonNull(defaultDID);
 		Objects.requireNonNull(profile);
-		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
-		transact(draft -> {
+		return transact(draft -> {
 			AMap<AString, ACell> previous = draft.auth().getUser(id);
 			AString did = previous == null ? null : RT.ensureString(previous.get(Fields.DID));
 			if (did == null) did = defaultDID;
@@ -274,9 +275,8 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 			AMap<AString, ACell> updated = previous == null ? Maps.empty() : previous;
 			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
 			draft.auth().putUser(id, updated.assoc(Fields.DID, did));
-			result.set(draft.auth().getUser(id));
+			return draft.auth().getUser(id);
 		});
-		return result.get();
 	}
 
 	/**
@@ -293,7 +293,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Runtime calls retain the generation observed before handing work to the timer. */
 	void setAgentThreadWakeTime(AString owner, AString agentId,
 			AgentState.ThreadKind kind, Blob threadId, long wakeTime, ACell generation) {
-		transact(draft -> {
+		execute(draft -> {
 			User user = draft.users().get(owner);
 			if (user == null || !Objects.equals(generation, RT.getIn(user.get(), Users.GENERATION))) {
 				throw new AuthException(Users.ACCOUNT_DELETED);
@@ -307,13 +307,11 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/** Rebuilds the event from existing wake intent, atomically with its handle. */
 	public boolean rescheduleAgentWake(AString owner, AString agentId) {
-		boolean[] armed = {false};
-		transact(draft -> {
+		return transact(draft -> {
 			User user = draft.users().get(owner);
 			AgentState agent = user == null ? null : user.agent(agentId);
-			armed[0] = agent != null && draft.reconcileAgentWake(owner, agent);
+			return agent != null && draft.reconcileAgentWake(owner, agent);
 		});
-		return armed[0];
 	}
 
 	/** Agent intent and event replacement share this private venue draft. */
@@ -385,7 +383,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 		AString key = Strings.create(name);
 		requireSupportedVersion();
 		if (legacyState(path) == null) return;
-		transact(draft -> {
+		execute(draft -> {
 			draft.requireSupportedVersion();
 			ACell legacy = draft.legacyState(path);
 			if (legacy == null) return;
@@ -408,10 +406,8 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 
 	DeletedUser beginUserDeletion(AString did, AString actor,
 			java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups) {
-		DeletedUser[] result = new DeletedUser[1];
-		transact(draft -> {
+		return transact(draft -> {
 			DeletedUser deleted = draft.deleteUser(did, actor);
-			result[0] = deleted;
 			// The user's job records go with the account, so their entries do too.
 			draft.jobIndex().removeOwner(did);
 			Set<String> names = new LinkedHashSet<>(cleanups.keySet());
@@ -427,8 +423,8 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 				draft.markUserDeletion(name, did, deleted.tombstone());
 			}
 			draft.markUserDeletion("_venue", did, deleted.tombstone());
+			return deleted;
 		});
-		return result[0];
 	}
 
 	private void markUserDeletion(String name, AString did, ACell tombstone) {
@@ -438,7 +434,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 
 	/** Acknowledge exactly this deletion, opening recreation only when all work is done. */
 	void finishUserDeletion(String name, AString did, ACell tombstone) {
-		transact(draft -> {
+		execute(draft -> {
 			AMap<AString, ACell> pending = draft.pendingUserDeletions(name);
 			if (!Objects.equals(tombstone, pending.get(did))) return;
 			pending = pending.dissoc(did);
@@ -580,7 +576,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 */
 	public void migrateAdapter(AdapterMigration migration) {
 		if (adapterVersion(migration.name()) == migration.supported()) return;
-		transact(draft -> draft.migrateAdapterInPlace(migration));
+		execute(draft -> draft.migrateAdapterInPlace(migration));
 	}
 
 	/**
@@ -634,7 +630,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 *         state, is at a newer version than supported
 	 */
 	public void migrate(SecretStore.Keys keys, List<AdapterMigration> adapters) {
-		transact(draft -> draft.migrateInPlace(keys, adapters));
+		execute(draft -> draft.migrateInPlace(keys, adapters));
 	}
 
 	/** Only called on a transaction draft: the venue's steps, then each adapter's. */
@@ -682,7 +678,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * @param adapters Migration rules of the adapters starting with the venue
 	 */
 	public void initialise(ACell did, SecretStore.Keys keys, List<AdapterMigration> adapters) {
-		transact(draft -> {
+		execute(draft -> {
 			draft.migrateInPlace(keys, adapters);
 			@SuppressWarnings("unchecked")
 			Index<Keyword, ACell> value = (Index<Keyword, ACell>) draft.get();
@@ -702,7 +698,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	/**
 	 * Creates independent working state. Sync reconciles it with the destination
 	 * using whole-venue LWW, which may select one complete concurrent version.
-	 * For compound local edits with conflict retry, use {@link #transact}.
+	 * For compound local edits with conflict retry, use {@link #execute} or {@link #transact}.
 	 */
 	@Override
 	public VenueState fork() {

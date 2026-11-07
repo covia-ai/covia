@@ -755,7 +755,7 @@ upstream `DLFSRegion` and `DLFSDrives`.
 
 `VenueState.fork().sync()` selects a snapshot; it is not a way to commit
 concurrent work, because cross-component invariants and external outputs have
-no general conflict-free merge. Live operations use `transact`. Interior
+no general conflict-free merge. Live operations use transactions. Interior
 components, adapters included, have no publication policy of their own.
 
 ### A.4 Signing

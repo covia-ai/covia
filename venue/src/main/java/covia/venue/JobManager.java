@@ -959,7 +959,7 @@ public class JobManager {
 				AMap<AString, ACell> kept = rules.toCell();
 				if (kept != null) entry = entry.assoc(JobIndex.RULES, kept);
 				AMap<AString, ACell> admitted = entry;
-				venue().transact(draft -> {
+				venue().execute(draft -> {
 					if (draft.users().ensure(ownerDID).jobs().create(jobID, status) == null) {
 						throw new IllegalStateException(JOB_ID_EXISTS + jobID);
 					}
@@ -1417,17 +1417,15 @@ public class JobManager {
 		if (data == null) return false;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
 		AString ownerDID = Attribution.owner(data);
-		AtomicBoolean removed = new AtomicBoolean();
-		if (ownerDID != null) {
-			venue().transact(draft -> {
-				User user = draft.users().get(ownerDID);
-				removed.set(user != null && user.jobs().remove(id));
-				if (removed.get()) draft.jobIndex().remove(id);
-			});
-		}
+		boolean removed = ownerDID != null && venue().transact(draft -> {
+			User user = draft.users().get(ownerDID);
+			if (user == null || !user.jobs().remove(id)) return false;
+			draft.jobIndex().remove(id);
+			return true;
+		});
 		// Remove from active cache if present (may already be evicted for terminal jobs)
 		deleteJob(id);
-		return removed.get();
+		return removed;
 	}
 
 	public boolean deleteJob(Blob id) {

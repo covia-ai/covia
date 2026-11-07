@@ -84,7 +84,7 @@ class EmbedderContractTest {
 			// Writes that must land together go in one user transaction; a
 			// workspace write creates no missing levels, so they are made first.
 			User alice = engine.getVenueState().users().ensure(ALICE);
-			alice.transact(draft -> {
+			alice.execute(draft -> {
 				Workspace workspace = draft.workspace();
 				workspace.createPath(AREA);
 				workspace.write(RECORD_PATH, RECORD);

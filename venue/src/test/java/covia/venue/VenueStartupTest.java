@@ -82,7 +82,7 @@ public class VenueStartupTest {
 	/** A job a previous run left STARTED: its record and the venue's entry for it, as admission writes them. */
 	private static void leaveStarted(Engine engine) {
 		AString owner = engine.getDIDString();
-		engine.getVenueState().transact(draft -> {
+		engine.getVenueState().execute(draft -> {
 			draft.users().ensure(owner).jobs().create(RECOVERED_JOB, Maps.of(Fields.ID, RECOVERED_JOB, Fields.OP, OP,
 				Fields.STATUS, Status.STARTED, Fields.CALLER, owner, Fields.INPUT, Maps.empty()));
 			draft.jobIndex().admit(RECOVERED_JOB, Maps.of(JobIndex.OWNER, owner));

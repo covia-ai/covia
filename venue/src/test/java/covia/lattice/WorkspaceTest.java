@@ -153,7 +153,7 @@ public class WorkspaceTest {
 		assertEquals(missing, assertThrows(InvalidInputException.class,
 			() -> area.write(path("x"), CVMLong.ONE)).getMessage());
 		assertEquals(missing, assertThrows(InvalidInputException.class,
-			() -> area.transact(draft -> draft.write(path("x"), CVMLong.ONE))).getMessage());
+			() -> area.execute(draft -> draft.write(path("x"), CVMLong.ONE))).getMessage());
 		assertNull(record.get(), "a refused change never creates the record");
 
 		record.set(Maps.of("status", "STARTED"));
@@ -226,14 +226,14 @@ public class WorkspaceTest {
 		Workspace area = new Workspace(root);
 		ACell before = root.get();
 
-		assertThrows(IllegalStateException.class, () -> area.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> area.execute(draft -> {
 			draft.createPath(path("a/b"));
 			draft.write(path("a/b/c"), CVMLong.ONE);
 			throw new IllegalStateException("rollback");
 		}));
 		assertSame(before, root.get(), "a failed transaction changes nothing");
 
-		area.transact(draft -> {
+		area.execute(draft -> {
 			assertEquals(2, draft.createPath(path("a/b")));
 			draft.write(path("a/b/c"), CVMLong.ONE);
 		});

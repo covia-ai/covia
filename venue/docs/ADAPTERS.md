@@ -380,17 +380,18 @@ The value may be any CAD3 cell: there is no mandatory map, user prefix,
 workspace envelope or per-adapter merge rule. An adapter owns its schema and
 may wrap the component's cursor in its own typed domain components. For simple
 map/vector records, `read`, `write` and `delete` offer type-aware relative paths;
-`get`, `set`, `update` and `transact` operate on the complete value. `rootPath`
-and `path` are diagnostic locations, not workspace API addresses.
+`get`, `set`, `update`, `execute` and `transact` operate on the complete value;
+`transact` returns what its callback returned in the run that committed.
+`rootPath` and `path` are diagnostic locations, not workspace API addresses.
 
 ```java
 AdapterState state = adapterState();
-state.transact(draft -> {
+state.execute(draft -> {
     draft.write("settings/theme", Strings.create("dark"));
     draft.write("settings/version", CVMLong.ONE);
 });
 
-engine.getVenueState().transact(draft -> {
+engine.getVenueState().execute(draft -> {
     draft.adapterState("telegram").write("settings/enabled", CVMBool.TRUE);
     draft.adapterState("slack").write("settings/enabled", CVMBool.FALSE);
     // User, schedule and other domain operations can join this same commit.

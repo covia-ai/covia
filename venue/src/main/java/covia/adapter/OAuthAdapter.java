@@ -19,7 +19,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -643,13 +642,13 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		AdapterState state = connections(userDID);
 		String path = state.userPath(userDID, provider);
 		// Taken in one step, so a refresh finishing meanwhile cannot write the grant back
-		AtomicReference<AMap<AString, ACell>> taken = new AtomicReference<>();
-		state.transact(draft -> {
-			taken.set(RT.ensureMap(draft.read(path)));
-			if (taken.get() != null) draft.delete(path);
+		AMap<AString, ACell> taken = state.transact(draft -> {
+			AMap<AString, ACell> grant = RT.ensureMap(draft.read(path));
+			if (grant != null) draft.delete(path);
+			return grant;
 		});
-		if (taken.get() == null) throw new NotFoundException(NOT_CONNECTED + provider, provider);
-		boolean revoked = revokeSealed(providers.get(provider), taken.get().get(C_TOKENS));
+		if (taken == null) throw new NotFoundException(NOT_CONNECTED + provider, provider);
+		boolean revoked = revokeSealed(providers.get(provider), taken.get(C_TOKENS));
 		return Maps.of(
 			K_PROVIDER, Strings.create(provider),
 			K_DISCONNECTED, CVMBool.TRUE,
@@ -701,13 +700,13 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			AMap<AString, ACell> updated = withTokens(current, fresh)
 				.assoc(G_EXPIRES_AT, CVMLong.create(expiresAt(refreshed)));
 			// Written back only over the connection it refreshed: a disconnect or a new connect meanwhile wins
-			AtomicReference<ACell> seen = new AtomicReference<>();
-			state.transact(draft -> {
-				seen.set(draft.read(path));
-				if (current.equals(seen.get())) draft.write(path, updated);
+			ACell seen = state.transact(draft -> {
+				ACell stored = draft.read(path);
+				if (current.equals(stored)) draft.write(path, updated);
+				return stored;
 			});
-			if (current.equals(seen.get())) return str(fresh, G_ACCESS_TOKEN);
-			AMap<AString, ACell> replaced = RT.ensureMap(seen.get());
+			if (current.equals(seen)) return str(fresh, G_ACCESS_TOKEN);
+			AMap<AString, ACell> replaced = RT.ensureMap(seen);
 			if (replaced == null) throw notConnected(provider);
 			return str(tokens(replaced), G_ACCESS_TOKEN);
 		}
@@ -928,7 +927,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		if (user == null || !hasLegacyGrant(RT.ensureMap(user.secrets().cursor().getOrDefault(null)))) return;
 		SecretStore.Keys keys = keys();
 		String path = state.userPath(userDID, "");
-		engine.getVenueState().transact(draft -> {
+		engine.getVenueState().execute(draft -> {
 			User owner = draft.users().get(userDID);
 			if (owner == null) return;
 			AdapterState mine = state.inVenue(draft);
@@ -1036,15 +1035,15 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	@Override
 	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
 		if (engine == null) return;
-		AtomicReference<AMap<AString, ACell>> taken = new AtomicReference<>();
-		adapterState().transact(draft -> {
+		AMap<AString, ACell> taken = adapterState().transact(draft -> {
 			AMap<AString, ACell> all = RT.ensureMap(draft.read(REVOCATIONS));
-			taken.set((all != null) ? RT.ensureMap(all.get(did)) : null);
-			if (taken.get() == null) return;
+			AMap<AString, ACell> grants = (all != null) ? RT.ensureMap(all.get(did)) : null;
+			if (grants == null) return null;
 			AMap<AString, ACell> rest = all.dissoc(did);
 			if (rest.isEmpty()) draft.delete(REVOCATIONS); else draft.write(REVOCATIONS, rest);
+			return grants;
 		});
-		if (taken.get() != null) for (var entry : taken.get().entrySet()) {
+		if (taken != null) for (var entry : taken.entrySet()) {
 			try {
 				revokeSealed(providers.get(entry.getKey().toString()), entry.getValue());
 			} catch (RuntimeException e) {

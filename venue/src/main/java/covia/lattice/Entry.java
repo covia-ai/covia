@@ -2,6 +2,7 @@ package covia.lattice;
 
 import java.util.Arrays;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -186,8 +187,16 @@ public final class Entry extends ACoviaComponent<ACell> {
 	 * Runs {@code action} in one transaction over the workspace, on an entry
 	 * with this one's keys, so that levels it creates commit with its change.
 	 */
-	public void transact(Consumer<? super Entry> action) {
-		area.transact(draft -> action.accept(new Entry(draft, path, resolved)));
+	public void execute(Consumer<? super Entry> action) {
+		area.execute(draft -> action.accept(new Entry(draft, path, resolved)));
+	}
+
+	/**
+	 * As {@link #execute}, returning what {@code action} returned in the run
+	 * that committed.
+	 */
+	public <R> R transact(Function<? super Entry, ? extends R> action) {
+		return area.transact(draft -> action.apply(new Entry(draft, path, resolved)));
 	}
 
 	// ========== Levels ==========

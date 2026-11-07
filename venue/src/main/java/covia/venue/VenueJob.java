@@ -120,19 +120,17 @@ public class VenueJob extends Job {
 	@Override protected State updateState(UnaryOperator<AMap<AString, ACell>> updater, Throwable failure) {
 		if (hasLocalRecord()) return super.updateState(updater, failure);
 		var original = new AtomicReference<AMap<AString, ACell>>();
-		var result = new AtomicReference<AMap<AString, ACell>>();
 		AMap<AString, ACell> committed;
 		try {
-			manager.venue().transact(draft -> {
+			committed = manager.venue().transact(draft -> {
 				JobState current = recordIn(draft);
 				if (current == null) throw new AuthException(Users.ACCOUNT_DELETED);
-				result.set(edit(draft, current, data -> {
+				return edit(draft, current, data -> {
 					AMap<AString, ACell> next = updater.apply(data);
 					original.set(next);
 					return next == null ? null : rules.redactJob(next);
-				}));
+				});
 			});
-			committed = result.get();
 		} catch (AuthException erased) {
 			if (primaryRecord() != null) throw erased; // an updater rejection is not erasure
 			committed = null;

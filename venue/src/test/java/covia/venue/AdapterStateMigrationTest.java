@@ -255,7 +255,7 @@ class AdapterStateMigrationTest {
 			assertFalse(engine.hasAdapter("parked"));
 			// State in an older shape arriving after installation, as a restore,
 			// an import or another writer can bring it.
-			venue.transact(draft -> {
+			venue.execute(draft -> {
 				draft.adapterState(NAME).set(Vectors.of("a"));
 				draft.setAdapterVersion(NAME, 0);
 				draft.adapterState("parked").set(Vectors.of("b"));

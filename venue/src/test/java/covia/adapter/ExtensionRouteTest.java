@@ -222,7 +222,7 @@ class ExtensionRouteTest {
 		assertEquals(CVMLong.create(99), read(path("/0"), alice));
 		var target = AdapterView.resolve(alice, covia, aliceDID, CoviaPath.parse(path("/0")), Capability.CRUD_WRITE);
 		ACell before = engine.getVenueState().get();
-		assertThrows(IllegalArgumentException.class, () -> target.entry().transact(draft -> {
+		assertThrows(IllegalArgumentException.class, () -> target.entry().execute(draft -> {
 			draft.write(CVMLong.ZERO);
 			throw new IllegalArgumentException("test rollback");
 		}));

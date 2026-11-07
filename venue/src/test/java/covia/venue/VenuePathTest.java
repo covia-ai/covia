@@ -134,7 +134,7 @@ public class VenuePathTest {
 	@Test
 	public void testAWalkFromADraftStaysInTheDraft() {
 		venue.users().ensure(did);
-		venue.transact(draft -> {
+		venue.execute(draft -> {
 			assertFalse(draft.resolve(CoviaPath.parse(did + "/w/notes")).entry().write(CVMLong.ONE), "nothing was there");
 			assertNull(resolve("w/notes").read(), "the live venue does not see the draft");
 		});
@@ -143,7 +143,7 @@ public class VenuePathTest {
 
 	@Test
 	public void testAPositionSeesAnAccountItsTransactionCreates() {
-		venue.transact(draft -> {
+		venue.execute(draft -> {
 			Position notes = draft.resolve(CoviaPath.parse(did + "/w/notes"));
 			assertFalse(notes.exists(), "there is no account yet");
 			draft.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);

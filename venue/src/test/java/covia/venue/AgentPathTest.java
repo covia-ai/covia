@@ -145,7 +145,7 @@ public class AgentPathTest {
 	@Test
 	public void testAPositionSeesAnAgentItsTransactionCreates() {
 		AString later = Strings.intern("later-agent");
-		user.transact(draft -> {
+		user.execute(draft -> {
 			Position notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
 			assertTrue(notes.isValid());
 			assertFalse(notes.exists(), "the agent does not exist yet");

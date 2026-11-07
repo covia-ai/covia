@@ -106,9 +106,10 @@ so the application decides who reaches them.
   missing level: `createPath` makes them, and a write below a missing level is
   refused (`NotFoundException`). When several changes must land together, wrap
   them in a transaction, which applies all or nothing and is retried on a
-  conflict:
+  conflict (`transact` in place of `execute` returns what the body returned in
+  the run that committed):
   ```java
-  user.transact(draft -> {
+  user.execute(draft -> {
       Workspace workspace = draft.workspace();
       workspace.createPath(CoviaPath.parse("app"));
       workspace.write(CoviaPath.parse("app/record"), record);

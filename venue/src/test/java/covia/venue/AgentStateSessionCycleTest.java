@@ -110,7 +110,7 @@ public class AgentStateSessionCycleTest {
 		ACell claimed = agent.getRecord();
 		agent.session(sid).finishExternalTurn(other, null, Strings.create("wrong job"));
 		assertEquals(claimed, agent.getRecord());
-		assertThrows(IllegalStateException.class, () -> agent.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> agent.execute(draft -> {
 			draft.session(sid).finishExternalTurn(job, Strings.create("remote"), Strings.create("response"));
 			draft.setStatus(AgentState.SUSPENDED);
 			throw new IllegalStateException();

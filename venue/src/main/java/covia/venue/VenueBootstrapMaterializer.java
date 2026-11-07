@@ -70,7 +70,7 @@ final class VenueBootstrapMaterializer {
 		if (venue == null) throw new IllegalStateException(NO_VENUE_USER);
 		var names = engine.getAdapterNamesInRegistrationOrder();
 		long started = System.currentTimeMillis();
-		venue.transact(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
+		venue.execute(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
 	}
 
 	/** Materialises catalog and venue information, then commits them together. */

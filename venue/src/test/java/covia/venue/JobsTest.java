@@ -78,7 +78,7 @@ public class JobsTest {
 		ACell before = user.get();
 		clock.set(200);
 
-		assertThrows(IllegalStateException.class, () -> jobs.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> jobs.execute(draft -> {
 			draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
 			draft.remove(other);
 			throw new IllegalStateException("rollback");
@@ -86,7 +86,7 @@ public class JobsTest {
 		assertEquals(before, user.get(), "a failed transaction changes nothing");
 
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "first");
-		jobs.transact(draft -> {
+		jobs.execute(draft -> {
 			JobState admitted = draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
 			assertTrue(admitted.appendHistory(message));
 			assertTrue(draft.remove(other));

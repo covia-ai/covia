@@ -400,13 +400,10 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> saveSessionSummary(Blob sid, AMap<AString, ACell> expectedSession,
 			AString instruction, AMap<AString, ACell> summary) {
-		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
-		transact(draft -> {
-			result.set(null);
-			if (!draft.exists() || SUSPENDED.equals(draft.getStatus()) || TERMINATED.equals(draft.getStatus())) return;
-			result.set(draft.session(sid).saveSummary(expectedSession, instruction, summary));
+		return transact(draft -> {
+			if (!draft.exists() || SUSPENDED.equals(draft.getStatus()) || TERMINATED.equals(draft.getStatus())) return null;
+			return draft.session(sid).saveSummary(expectedSession, instruction, summary);
 		});
-		return result.get();
 	}
 
 	/**
@@ -444,14 +441,11 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	/** Claim one external turn per session. A retained claim after restart prevents blind replay. */
 	@SuppressWarnings("unchecked")
 	public boolean claimExternalTurn(Blob sid, Blob jobId, AString caller, ACell content, boolean create) {
-		boolean[] accepted = {false};
-		transact(draft -> {
-			accepted[0] = false;
-			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return;
+		return transact(draft -> {
+			if (!draft.exists() || TERMINATED.equals(draft.getStatus()) || SUSPENDED.equals(draft.getStatus())) return false;
 			if (create) draft.ensureSession(sid, caller);
-			accepted[0] = draft.session(sid).claimExternalTurn(jobId, content);
+			return draft.session(sid).claimExternalTurn(jobId, content);
 		});
-		return accepted[0];
 	}
 
 	/**
@@ -476,24 +470,18 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	private SessionIntake intakeSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, boolean create,
 			java.util.function.Consumer<AgentState> change) {
-		SessionIntake[] result = {SessionIntake.MISSING};
-		transact(draft -> {
-			result[0] = SessionIntake.MISSING;
-			if (!draft.exists()) return;
+		return transact(draft -> {
+			if (!draft.exists()) return SessionIntake.MISSING;
 			ACell raw = draft.getSessions().get(sid);
-			if (raw != null && initialLoads != null) {
-				result[0] = SessionIntake.LOADS_ON_EXISTING;
-				return;
-			}
+			if (raw != null && initialLoads != null) return SessionIntake.LOADS_ON_EXISTING;
 			if (raw == null) {
-				if (!create) return;
+				if (!create) return SessionIntake.MISSING;
 				raw = draft.ensureSession(sid, caller, initialLoads);
 			}
-			if (!(raw instanceof AMap<?, ?>)) return;
+			if (!(raw instanceof AMap<?, ?>)) return SessionIntake.MISSING;
 			change.accept(draft);
-			result[0] = SessionIntake.APPLIED;
+			return SessionIntake.APPLIED;
 		});
-		return result[0];
 	}
 
 	@SuppressWarnings("unchecked")
@@ -758,12 +746,10 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	@SuppressWarnings("unchecked")
 	public CycleStart beginCycle(Blob taskId, ACell pickedTask, Blob sid, ACell epoch,
 			AVector<ACell> turns, long drainCount) {
-		CycleStart[] result = {CycleStart.MOVED};
-		transact(draft -> {
-			result[0] = CycleStart.MOVED;
+		return transact(draft -> {
 			if (taskId != null) {
 				ACell current = draft.getTasks().get(taskId);
-				if (current == null || !current.equals(pickedTask)) return;
+				if (current == null || !current.equals(pickedTask)) return CycleStart.MOVED;
 				AMap<AString, ACell> task = ((AMap<AString, ACell>) current).dissoc(K_PARKED);
 				if (hasUnpresentedTaskInputs(task)) {
 					long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
@@ -772,10 +758,9 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 				AMap<AString, ACell> claimed = task;
 				draft.update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, claimed)));
 			}
-			result[0] = (sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount))
+			return (sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount))
 				? CycleStart.SESSION : CycleStart.NO_SESSION;
 		});
-		return result[0];
 	}
 
 	/**
@@ -1035,12 +1020,9 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * suspended.
 	 */
 	public AMap<AString, ACell> finishSuspendedCycle(AMap<AString, ACell> entry, Blob sid) {
-		var before = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
-		transact(draft -> {
-			before.set(null);
+		return transact(draft -> {
 			AMap<AString, ACell> r = draft.getRecord();
-			if (r == null || !SUSPENDED.equals(r.get(K_STATUS))) return;
-			before.set(r);
+			if (r == null || !SUSPENDED.equals(r.get(K_STATUS))) return null;
 			AMap<AString, ACell> stopped = entry;
 			ACell suspension = r.get(KEY_SUSPENSION);
 			if (suspension != null) stopped = stopped.assoc(KEY_SUSPENSION, suspension)
@@ -1048,8 +1030,8 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 			AMap<AString, ACell> recorded = stopped;
 			draft.clearSessionCycle(sid);
 			draft.update(current -> current.assoc(K_TIMELINE, extractTimeline(current).conj(recorded)));
+			return r;
 		});
-		return before.get();
 	}
 
 	/**
@@ -1185,17 +1167,15 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 			Blob historySid,
 			AVector<ACell> turnsToAppend,
 			AMap<AString, ACell> cycleTokens) {
-		var result = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
-		transact(draft -> {
+		return transact(draft -> {
 			draft.update(r -> r
 				.assoc(K_STATE, applyStateChange(r.get(K_STATE), snapshotState, newState))
 				.assoc(K_TASKS, removeCompletedTasks(extractTasks(r), taskResults))
 				.assoc(K_TIMELINE, extractTimeline(r).conj(timelineEntry))
 				.dissoc(K_ERROR));
 			if (historySid != null) draft.session(historySid).finishCycle(turnsToAppend, cycleTokens);
-			result.set(draft.getRecord());
+			return draft.getRecord();
 		});
-		return result.get();
 	}
 
 	// ========== Private helpers ==========

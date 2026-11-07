@@ -134,7 +134,7 @@ public class EntryTest {
 			assertThrows(NotFoundException.class, () -> entry.write(ONE)).getMessage());
 		assertNull(area.read());
 
-		entry.transact(draft -> {
+		entry.execute(draft -> {
 			assertEquals(2, draft.createLevels());
 			draft.write(ONE);
 		});
@@ -147,7 +147,7 @@ public class EntryTest {
 	public void testAFailedTransactionWritesNothing() {
 		Workspace area = area(Maps.empty());
 		Entry entry = area.entry(path("a/b"));
-		assertThrows(IllegalStateException.class, () -> entry.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> entry.execute(draft -> {
 			draft.createLevels();
 			draft.write(ONE);
 			throw new IllegalStateException("rollback");

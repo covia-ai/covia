@@ -664,7 +664,7 @@ public class HITLAdapter extends AAdapter {
 		AString requestingAgent = job == null ? null : Engine.agentIdIn(requester, job.getCaller());
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().get(requester);
 		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
-		engine.getVenueState().transact(venue -> {
+		engine.getVenueState().execute(venue -> {
 			var draft = venue.users();
 			resolved.set(false);
 			notification.set(null);

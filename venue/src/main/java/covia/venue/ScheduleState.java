@@ -108,25 +108,24 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 		if (repeat != null) rec = rec.assoc(K_REPEAT, validateRepeat(repeat));
 		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
 		var record = rec;
-		transact(draft -> draft.put(key, record));
+		execute(draft -> draft.put(key, record));
 		return key;
 	}
 
-	void remove(Blob key) { transact(draft -> draft.drop(key)); }
+	void remove(Blob key) { execute(draft -> draft.drop(key)); }
 
 	/** Removes the event a handle names; false when it names none. */
 	public boolean cancel(Blob handle) {
-		boolean[] cancelled = {false};
-		transact(draft -> {
+		return transact(draft -> {
 			Entry entry = draft.find(handle);
-			cancelled[0] = entry != null;
-			if (entry != null) draft.drop(entry.key());
+			if (entry == null) return false;
+			draft.drop(entry.key());
+			return true;
 		});
-		return cancelled[0];
 	}
 
 	void cancelUser(AString owner) {
-		transact(draft -> {
+		execute(draft -> {
 			for (var entry : draft.events().entrySet()) {
 				if (entry.getValue() instanceof AMap<?, ?> rec && owner.equals(Attribution.owner(asMap(rec)))) {
 					draft.drop(entry.getKey());
@@ -137,7 +136,7 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 
 	/** Removes every event {@code caller} made for another namespace, through the reverse index. */
 	void cancelCaller(AString caller) {
-		transact(draft -> {
+		execute(draft -> {
 			for (Blob key : draft.scheduledBy(caller)) draft.drop(key);
 		});
 	}
@@ -157,7 +156,7 @@ public final class ScheduleState extends ACoviaComponent<ACell>
 		}
 		var key = nextKey;
 		var record = next;
-		transact(draft -> {
+		execute(draft -> {
 			draft.drop(entry.key());
 			draft.put(key, record);
 		});

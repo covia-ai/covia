@@ -296,23 +296,17 @@ public final class AuthState extends ACoviaComponent<AMap<AString, AMap<AString,
 
 	/** Atomic directory mutation, including cross-user key constraints. */
 	public boolean addAuthenticationKey(AString id, AString keyDID, AString actorDID, AString label) {
-		var result = new AtomicBoolean();
-		transact(draft -> result.set(draft.addAuthenticationKeyInDraft(id, keyDID, actorDID, label)));
-		return result.get();
+		return transact(draft -> draft.addAuthenticationKeyInDraft(id, keyDID, actorDID, label));
 	}
 
 	/** Atomic directory mutation, including cross-user key constraints. */
 	public long addAuthenticationKeys(AString id, AVector<ACell> keyDIDs, AString actorDID) {
-		var result = new java.util.concurrent.atomic.AtomicLong();
-		transact(draft -> result.set(draft.installKeys(id, keyDIDs, actorDID, null)));
-		return result.get();
+		return transact(draft -> draft.installKeys(id, keyDIDs, actorDID, null));
 	}
 
 	/** Atomic directory mutation, including cross-user key constraints. */
 	public boolean revokeAuthenticationKey(AString id, AString keyDID, AString actorDID, boolean allowLast) {
-		var result = new AtomicBoolean();
-		transact(draft -> result.set(draft.revokeAuthenticationKeyInDraft(id, keyDID, actorDID, allowLast)));
-		return result.get();
+		return transact(draft -> draft.revokeAuthenticationKeyInDraft(id, keyDID, actorDID, allowLast));
 	}
 	/** Erase profile aliases while retaining public authenticator revocations. */
 	static AMap<AString, ACell> eraseUser(AMap<AString, ACell> directory, AString did, AString actor, CVMLong now) {

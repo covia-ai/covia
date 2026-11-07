@@ -106,14 +106,13 @@ public final class Access {
 		Entry live = entry(ability);
 		int checked = live.missingLevels();
 		if (checked > 0) require(Capability.CRUD_WRITE, checked);
-		boolean[] created = {false};
-		live.transact(draft -> {
+		return live.transact(draft -> {
 			int missing = draft.missingLevels();
 			if (missing > checked) require(Capability.CRUD_WRITE, missing);
-			created[0] = draft.createLevels() > 0;
+			boolean created = draft.createLevels() > 0;
 			change.accept(draft);
+			return created;
 		});
-		return created[0];
 	}
 
 	/**

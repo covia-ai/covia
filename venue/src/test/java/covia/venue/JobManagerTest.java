@@ -97,7 +97,7 @@ public class JobManagerTest {
 		assertEquals(legacy, storage.get());
 
 		// A failed transaction must not migrate the record either.
-		assertThrows(IllegalStateException.class, () -> user.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> user.execute(draft -> {
 			draft.jobs().get(id).appendHistory(Maps.of(Fields.MESSAGE_ID, "rollback"));
 			throw new IllegalStateException("rollback");
 		}));
@@ -754,7 +754,7 @@ public class JobManagerTest {
 		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
 		User user = engine.getVenueState().users().get(did);
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "component-edit");
-		user.transact(draft -> {
+		user.execute(draft -> {
 			draft.jobs().get(job.getID()).appendHistory(message);
 			draft.jobs().get(job.getID()).update(data -> data.assoc(Strings.intern("temp"), Maps.of("kept", true)));
 		});
@@ -793,9 +793,8 @@ public class JobManagerTest {
 		job.subscribe(ignored -> notifications.incrementAndGet());
 		var future = job.future();
 		var output = Maps.of(token, "private-test-value");
-		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
 		var venue = engine.getVenueState();
-		assertThrows(IllegalStateException.class, () -> venue.transact(draft -> {
+		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
 			assertNotNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output)));
 			assertNull(draft.jobIndex().entry(job.getID()), "the update that finishes the job removes its entry");
 			assertFalse(job.isFinished());
@@ -805,17 +804,17 @@ public class JobManagerTest {
 		assertFalse(future.isDone());
 		assertEquals(0, notifications.get());
 		assertNotNull(venue.jobIndex().entry(job.getID()), "a rolled back finish keeps the entry");
-		venue.transact(draft -> notification.set(job.updateIn(draft,
-			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output))));
+		Runnable notification = venue.transact(draft -> job.updateIn(draft,
+			data -> data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, output)));
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertNull(venue.jobIndex().entry(job.getID()));
 		assertEquals(Fields.HIDDEN, RT.getIn(venue.users().get(did).jobs().getRecord(job.getID()), Fields.OUTPUT, token));
 		assertFalse(future.isDone(), "draft edits cannot notify live waiters");
-		notification.get().run();
-		notification.get().run();
+		notification.run();
+		notification.run();
 		assertEquals(output, future.get(5, TimeUnit.SECONDS));
 		assertEquals(1, notifications.get(), "terminal lifecycle notifications run once");
-		venue.transact(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
+		venue.execute(draft -> assertNull(job.updateIn(draft, data -> data.assoc(Fields.STATUS, Status.FAILED))));
 	}
 
 	/** Settling jobs in a venue transaction: waiters wake only on the notification, and a refused result fails its job there. */
@@ -839,13 +838,10 @@ public class JobManagerTest {
 			VenueJob completed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
 			VenueJob refused = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
 			VenueJob failed = (VenueJob) eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
-			java.util.List<Runnable> after = new java.util.ArrayList<>();
-			eng.getVenueState().transact(draft -> {
-				after.clear();
-				after.add(completed.completeIn(draft, Maps.of("ok", "yes")));
-				after.add(refused.completeIn(draft, Strings.create("not an object")));
-				after.add(failed.failIn(draft, "gave up"));
-			});
+			java.util.List<Runnable> after = eng.getVenueState().transact(draft -> java.util.List.of(
+				completed.completeIn(draft, Maps.of("ok", "yes")),
+				refused.completeIn(draft, Strings.create("not an object")),
+				failed.failIn(draft, "gave up")));
 			assertEquals(Status.COMPLETE, completed.getStatus());
 			assertFalse(completed.future().isDone(), "waiters wake only when the notification runs");
 			after.forEach(Runnable::run);
@@ -854,7 +850,7 @@ public class JobManagerTest {
 			assertTrue(refused.getErrorMessage().startsWith(JobManager.OUTPUT_SCHEMA_VIOLATION));
 			assertEquals(Status.FAILED, failed.getStatus());
 			assertEquals("gave up", failed.getErrorMessage());
-			eng.getVenueState().transact(draft -> assertNull(completed.failIn(draft, "late"), "a finished job is left as it is"));
+			eng.getVenueState().execute(draft -> assertNull(completed.failIn(draft, "late"), "a finished job is left as it is"));
 		} finally {
 			eng.close();
 		}

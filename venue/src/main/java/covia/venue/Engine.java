@@ -3433,7 +3433,7 @@ public class Engine {
 			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
 			for (var entry : pending.entrySet()) {
 				AString did = entry.getKey();
-				venueState.transact(draft -> adapter.deleteUserState(did, draft.adapterState(name)));
+				venueState.execute(draft -> adapter.deleteUserState(did, draft.adapterState(name)));
 				flush();
 				adapter.onUserDeleted(did, null);
 				venueState.finishUserDeletion(name, did, entry.getValue());

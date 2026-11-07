@@ -1837,7 +1837,7 @@ public class AgentAdapter extends AAdapter {
 		var result = new java.util.concurrent.atomic.AtomicReference<AgentState.SessionIntake>();
 		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
 		try {
-			engine.getVenueState().transact(draft -> {
+			engine.getVenueState().execute(draft -> {
 				notification.set(null);
 				var owner = draft.users().get(target.ownerDID());
 				var current = owner == null ? null : owner.agent(target.agentId());
@@ -2935,16 +2935,16 @@ public class AgentAdapter extends AAdapter {
 		AString reasonCell = RT.ensureString(RT.getIn(input, Fields.REASON));
 		String reason = (reasonCell != null) ? reasonCell.toString() : null;
 		Job pending = engine.jobs().getJob(taskId);
-		boolean[] taken = {false};
-		List<Runnable> after = new ArrayList<>();
-		engine.getVenueState().transact(draft -> {
-			after.clear();
+		// The work to run after commit, or null when the task was not there to take
+		List<Runnable> after = engine.getVenueState().transact(draft -> {
 			AgentState current = agentIn(draft, target.ownerDID(), agentId);
-			taken[0] = current != null && current.takeTask(taskId) != null;
-			if (taken[0]) settle(draft, pending, after, recorded -> recorded.cancelIn(draft, reason),
+			if (current == null || current.takeTask(taskId) == null) return null;
+			List<Runnable> work = new ArrayList<>();
+			settle(draft, pending, work, recorded -> recorded.cancelIn(draft, reason),
 				live -> live.cancel(reason));
+			return work;
 		});
-		if (!taken[0]) {
+		if (after == null) {
 			job.fail("Task not found: " + taskIdHex);
 			return;
 		}
@@ -3388,7 +3388,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent == null || agent.getResolved().isEmpty()) return;
 		Handback handback = new Handback(ownerDID, agentId);
-		engine.getVenueState().transact(draft -> {
+		engine.getVenueState().execute(draft -> {
 			handback.reset();
 			AgentState current = agentIn(draft, ownerDID, agentId);
 			if (current != null) handback.settleAll(draft, current);
@@ -3520,7 +3520,7 @@ public class AgentAdapter extends AAdapter {
 			boolean[] local = {true};
 			try {
 				// The write and the request's completion commit together, or neither does
-				draft.transact(inner -> {
+				draft.execute(inner -> {
 					notification[0] = null;
 					local[0] = covia.writeIn(inner, context.ctx(), outputPath, output);
 					if (!local[0] || !request.isRecorded()) return;
@@ -3573,18 +3573,18 @@ public class AgentAdapter extends AAdapter {
 				try {
 					String error = (failure == null) ? null
 						: "Output handoff failed for '" + w.path() + "': " + describeFailure(failure);
-					List<Runnable> released = new ArrayList<>();
-					engine.getVenueState().transact(draft -> {
-						released.clear();
+					List<Runnable> released = engine.getVenueState().transact(draft -> {
+						List<Runnable> work = new ArrayList<>();
 						AgentState agent = agentIn(draft, ownerDID, agentId);
 						if (agent != null) agent.removeTask(w.taskId());
 						if (error == null) {
-							AgentAdapter.settle(draft, w.request(), released,
+							AgentAdapter.settle(draft, w.request(), work,
 								recorded -> recorded.completeIn(draft, w.receipt()), live -> live.completeWith(w.receipt()));
 						} else {
-							AgentAdapter.settle(draft, w.request(), released,
+							AgentAdapter.settle(draft, w.request(), work,
 								recorded -> recorded.failIn(draft, error), live -> live.fail(error));
 						}
+						return work;
 					});
 					outputContexts.remove(w.taskId());
 					released.forEach(Runnable::run);
@@ -4041,7 +4041,7 @@ public class AgentAdapter extends AAdapter {
 		var delivered = new java.util.concurrent.atomic.AtomicBoolean();
 		var tracked = new java.util.concurrent.atomic.AtomicBoolean();
 		var waitingTask = new java.util.concurrent.atomic.AtomicReference<AString>();
-		engine.getVenueState().users().transact(draft -> {
+		engine.getVenueState().users().execute(draft -> {
 			delivered.set(false);
 			tracked.set(false);
 			User owner = draft.get(ownerDID);
@@ -4662,7 +4662,7 @@ public class AgentAdapter extends AAdapter {
 		var mergedRecord = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
 		AMap<AString, ACell> cycleEntry = timelineEntry;
 		AVector<ACell> cycleTurns = turnsToAppend;
-		engine.getVenueState().transact(draft -> {
+		engine.getVenueState().execute(draft -> {
 			handback.reset();
 			AgentState current = draft.users().at(callerDID).agentAt(agentId);
 			if (failsPickedTask) current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
@@ -5202,12 +5202,12 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private void failTask(AString ownerDID, AString agentId, Blob taskId, String reason) {
 		Job pending = engine.jobs().getJob(taskId);
-		List<Runnable> after = new ArrayList<>();
-		engine.getVenueState().transact(draft -> {
-			after.clear();
+		List<Runnable> after = engine.getVenueState().transact(draft -> {
+			List<Runnable> work = new ArrayList<>();
 			AgentState agent = agentIn(draft, ownerDID, agentId);
 			if (agent != null) agent.removeTask(taskId);
-			settle(draft, pending, after, recorded -> recorded.failIn(draft, reason), live -> live.fail(reason));
+			settle(draft, pending, work, recorded -> recorded.failIn(draft, reason), live -> live.fail(reason));
+			return work;
 		});
 		outputContexts.remove(taskId);
 		after.forEach(Runnable::run);

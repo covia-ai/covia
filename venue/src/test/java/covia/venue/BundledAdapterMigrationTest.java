@@ -142,7 +142,7 @@ class BundledAdapterMigrationTest {
 
 			// State at an older version, as a restore can bring it, runs only the
 			// steps from that version on the next call.
-			second.getVenueState().transact(draft -> {
+			second.getVenueState().execute(draft -> {
 				draft.adapterState("test").set(states.get(2));
 				draft.setAdapterVersion("test", 2);
 			});
@@ -181,7 +181,7 @@ class BundledAdapterMigrationTest {
 		assertSame(before, venue.get(), "the refused start wrote nothing");
 
 		// With no stored state there is nothing to misread: the adapter's own version takes over.
-		venue.transact(draft -> draft.adapterState("test").set(null));
+		venue.execute(draft -> draft.adapterState("test").set(null));
 		Engine taken = new Engine(Maps.empty(), application, key);
 		try {
 			taken.prepareLaunch();
