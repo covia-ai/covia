@@ -35,6 +35,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only.
 - `ucan:issue` and an agent's `caps` and `accepts` hand on only what their author could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry. A right to use something no longer lets you give it to an agent, and an agent's caps, which do not expire, need a presented right that does not either.
 - A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
+- `auth:identity-token` takes any `lifetime` the caller chooses, no longer capped at an hour.
 - `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
 - Scheduled events name `caller` and `owner`; `scheduler:list` shows them in place of `by`.

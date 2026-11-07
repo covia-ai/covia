@@ -766,10 +766,11 @@ use `s/RELAY_TOKEN` as a model relay `apiKey`, subject to its separate
 the raw bearer can use `v/ops/secret/extract` under that operation's stricter
 rules.
 
-The audience is required. Lifetime defaults to 300 seconds and must be an
-integer from 1 to 3600. Refresh by invoking again with `overwrite:true` before
-expiry; there is no automatic refresh. The receiver still applies its own
-audience, lifetime and admission policies. The token conveys identity only:
+The audience is required. The caller chooses the lifetime, in whole seconds
+(default 300); the receiver applies its own limit when the token is presented
+(`auth.maxTokenLifetime` on a venue). Refresh by invoking again with
+`overwrite:true` before expiry; there is no automatic refresh. The receiver
+also applies its own audience and admission policies. The token conveys identity only:
 it contains no UCAN grants or proofs and adds no permissions.
 
 ### 5.3 Channel methods (messaging bindings)

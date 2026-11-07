@@ -48,7 +48,6 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	/** Seconds for which a challenge proof is reused for the same target and DID. */
 	public static final long CHALLENGE_REUSE = 120;
 	public static final long DEFAULT_IDENTITY_LIFETIME = 300;
-	public static final long MAX_IDENTITY_LIFETIME = 3600;
 	public static final String IDENTITY_AUTH_REQUIRED = "An authenticated non-public caller is required";
 	public static final String IDENTITY_DIRECT_ONLY = "The caller must act under its own authority, or as a sub-principal; "
 		+ "a principal acting as itself under a restricted scope cannot mint its identity";
@@ -56,7 +55,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		+ "a did:key whose key it holds in its own keyring, or nested beneath one of these";
 	public static final String IDENTITY_INPUT = "Expected an object containing only aud, name, lifetime and overwrite";
 	public static final String IDENTITY_AUDIENCE = "aud must be a target venue DID without a path, query or fragment";
-	public static final String IDENTITY_LIFETIME = "lifetime must be an integer from 1 to 3600 seconds";
+	public static final String IDENTITY_LIFETIME = "lifetime must be a whole number of seconds, at least 1, with an expiry time that can be represented";
 	public static final String IDENTITY_OVERWRITE = "overwrite must be a boolean";
 	private static final AString IDENTITY_OP = Strings.intern("v/ops/auth/identity-token");
 	private static final AString LIFETIME = Strings.intern("lifetime");
@@ -205,10 +204,12 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		if (!(audienceValue instanceof AString audience) || !DID.isCanonicalBase(audience)) {
 			throw new InvalidInputException(IDENTITY_AUDIENCE);
 		}
+		// The caller chooses how long its token lasts; the receiver applies its
+		// own limit when it is presented (auth.maxTokenLifetime on a venue).
 		long lifetime = DEFAULT_IDENTITY_LIFETIME;
 		if (params.containsKey(LIFETIME)) {
-			if (!(params.get(LIFETIME) instanceof CVMLong seconds)
-					|| seconds.longValue() < 1 || seconds.longValue() > MAX_IDENTITY_LIFETIME) {
+			if (!(params.get(LIFETIME) instanceof CVMLong seconds) || seconds.longValue() < 1
+					|| seconds.longValue() > Long.MAX_VALUE - System.currentTimeMillis() / 1000) {
 				throw new InvalidInputException(IDENTITY_LIFETIME);
 			}
 			lifetime = seconds.longValue();
