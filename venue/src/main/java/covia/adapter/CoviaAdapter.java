@@ -48,8 +48,9 @@ import covia.venue.VenueState;
  * Adapter for native Covia venue operations.
  *
  * <p>Provides generic lattice read/list access to the authenticated user's
- * namespace. Callers supply a JSON-friendly path (e.g. {@code "g/my-agent/state"})
- * and this adapter navigates the lattice to read or list values.</p>
+ * namespace. Callers supply a path of string segments (e.g. {@code "g/my-agent/state"})
+ * and this adapter navigates the lattice to read or list values, which may be
+ * any lattice data.</p>
  *
  * <h3>Paths</h3>
  *

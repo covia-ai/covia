@@ -8,13 +8,9 @@ import convex.core.data.Strings;
  *
  * <p>Each constant is an interned AString matching the single-letter
  * namespace prefix from the Grid addressing scheme (§4.1 of
- * GRID_LATTICE_DESIGN.md). Using AString keys keeps the user lattice
- * JSON-compliant throughout.</p>
- *
- * <p>{@link convex.lattice.generic.KeyedLattice} uses blob-based
- * comparison, so these AString keys resolve to the same child lattice
- * as the corresponding Keyword (e.g. {@code "j"} and {@code :j} are
- * equivalent for path navigation).</p>
+ * GRID_LATTICE_DESIGN.md): the key of that namespace in a user's record. What
+ * a namespace holds is up to the component that owns it; workspaces and
+ * adapter views take any lattice data.</p>
  */
 public final class Namespace {
 

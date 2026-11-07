@@ -52,7 +52,7 @@ For large values, use `covia_slice` with offset/limit for pagination.
 ### `write <path> <value>` — Write a value
 
 ```
-covia_write  path=w/<key>  value=<json>
+covia_write  path=w/<key>  value=<value>
 ```
 
 `w/` and `o/` are writable; scoped virtual paths and `x/<adapter>/` views
