@@ -651,29 +651,30 @@ public class HITLAdapter extends AAdapter {
 
 	private record SessionWake(AString owner, AString agent) { }
 
+	/**
+	 * A resolved request: the notification its job's update runs after commit,
+	 * or null; the asking agent to wake, or null; and whether the asking
+	 * agent's session could not take the result.
+	 */
+	private record Resolution(Runnable notification, SessionWake wake, boolean unavailable) { }
+
 	/** Resolve once and deliver to the asking task or session in the same native transaction.
 	 * Tokens have already been prepared; no signing, I/O or live Job mutation is
 	 * allowed inside the retryable draft callback. */
 	private boolean resolveRequest(AString targetDID, AString id, AString status,
 			AMap<AString, ACell> response, AString responder, ACell result, Job job) {
-		var resolved = new java.util.concurrent.atomic.AtomicBoolean();
-		var unavailable = new java.util.concurrent.atomic.AtomicBoolean();
-		var wake = new java.util.concurrent.atomic.AtomicReference<SessionWake>();
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
 		AString requester = job == null ? null : job.getOwner();
 		AString requestingAgent = job == null ? null : Engine.agentIdIn(requester, job.getCaller());
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().get(requester);
-		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
-		engine.getVenueState().execute(venue -> {
+		// Null when the request was not open to resolve
+		Resolution resolution = engine.getVenueState().transact(venue -> {
 			var draft = venue.users();
-			resolved.set(false);
-			notification.set(null);
-			unavailable.set(false);
-			wake.set(null);
+			Runnable notification = null;
 			Blob waitingTask = null;
 			User target = draft.get(targetDID);
 			AMap<AString, ACell> record = target == null ? null : target.inbox().get(id);
-			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return;
+			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return null;
 			AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
 			if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
 			target.inbox().put(id, updated);
@@ -684,7 +685,7 @@ public class HITLAdapter extends AAdapter {
 					return data.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(error)).dissoc(Fields.ERROR_CODE);
 				});
 				if (changed == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
-				notification.set(changed);
+				notification = changed;
 				// Terminal jobs are skipped at restart: no live cleanup listener will
 				// survive to remove this wait, so settle it with the result itself.
 				User owner = draft.get(requester);
@@ -695,11 +696,10 @@ public class HITLAdapter extends AAdapter {
 					askingAgent.removePending(job.getID());
 				}
 			}
-			resolved.set(true);
-			if (result == null) return;
+			if (result == null) return new Resolution(notification, null, false);
 			AString agentId = RT.ensureString(record.get(Hitl.AGENT));
 			AString sidHex = RT.ensureString(record.get(Fields.SESSION_ID));
-			if (agentId == null || sidHex == null) return; // Human/API requester.
+			if (agentId == null || sidHex == null) return new Resolution(notification, null, false); // Human/API requester.
 			Blob sid = Blob.fromHex(sidHex.toString());
 			AString owner = Attribution.owner(record);
 			// The result carries the request ID. This is an independent message,
@@ -708,20 +708,21 @@ public class HITLAdapter extends AAdapter {
 			if (owner != null && sid != null && agents != null
 					&& agents.deliverToWaiter(draft, owner, agentId, sid, waitingTask, responder,
 						(job != null) ? Strings.create(job.getID().toHexString()) : null, result)) {
-				wake.set(new SessionWake(owner, agentId));
-			} else unavailable.set(true);
+				return new Resolution(notification, new SessionWake(owner, agentId), false);
+			}
+			return new Resolution(notification, null, true);
 		});
-		if (!resolved.get()) return false;
-		SessionWake destination = wake.get();
+		if (resolution == null) return false;
+		SessionWake destination = resolution.wake();
 		// Notify live waiters even if the durability barrier fails: the in-memory
 		// transaction is already committed. The responder still receives that error.
 		try { engine.flush(); }
-		finally { if (notification.get() != null) notification.get().run(); }
+		finally { if (resolution.notification() != null) resolution.notification().run(); }
 		if (destination != null && requesterAccount != null) synchronized (engine) {
 			requesterAccount.get(); // Fence wake against account deletion/recreation.
 			agents.wakeAgent(destination.owner(), destination.agent(), true);
 		}
-		if (unavailable.get()) log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
+		if (resolution.unavailable()) log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
 		return true;
 	}
 

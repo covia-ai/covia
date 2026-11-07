@@ -1834,41 +1834,38 @@ public class AgentAdapter extends AAdapter {
 			SessionSpec session, ACell envelope, RequestContext ctx, AString sid, AString jobId) {
 		if (ctx.getSessionDelivery() == null) return agent.appendSessionPending(session.id(),
 			ctx.getCallerDID(), session.loads(), envelope, !session.supplied());
-		var result = new java.util.concurrent.atomic.AtomicReference<AgentState.SessionIntake>();
-		var notification = new java.util.concurrent.atomic.AtomicReference<Runnable>();
+		ChatIntake taken;
 		try {
-			engine.getVenueState().execute(draft -> {
-				notification.set(null);
+			taken = engine.getVenueState().transact(draft -> {
 				var owner = draft.users().get(target.ownerDID());
 				var current = owner == null ? null : owner.agent(target.agentId());
 				if (current == null || AgentState.SUSPENDED.equals(current.getStatus())
 						|| AgentState.TERMINATED.equals(current.getStatus())) {
-					result.set(AgentState.SessionIntake.MISSING);
-					return;
+					return new ChatIntake(AgentState.SessionIntake.MISSING, null);
 				}
 				var intake = current.appendSessionPending(session.id(), ctx.getCallerDID(),
 					session.loads(), envelope, !session.supplied());
-				result.set(intake);
-				if (intake == AgentState.SessionIntake.APPLIED
-						&& !ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
-				if (intake == AgentState.SessionIntake.APPLIED) {
-					Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data ->
-						data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
-							.assoc(Fields.SESSION_ID, sid));
-					if (changed == null) throw new NotSupportedException(DELIVERY_JOB_UNAVAILABLE);
-					notification.set(changed);
-				}
+				if (intake != AgentState.SessionIntake.APPLIED) return new ChatIntake(intake, null);
+				if (!ctx.getSessionDelivery().accept(draft, sid, jobId)) throw new DuplicateSessionDelivery();
+				Runnable changed = ((covia.venue.VenueJob) job).updateIn(draft, data ->
+					data.assoc(Fields.AGENT_ID, target.agentId()).assoc(Fields.ADDRESS, target.address())
+						.assoc(Fields.SESSION_ID, sid));
+				if (changed == null) throw new NotSupportedException(DELIVERY_JOB_UNAVAILABLE);
+				return new ChatIntake(intake, changed);
 			});
 		} catch (DuplicateSessionDelivery duplicate) {
 			// Discard the private draft, including its speculative session append.
 			if (ctx.getSessionDelivery() instanceof Delivery delivery) delivery.duplicate = true;
 			return null;
 		}
-		if (notification.get() != null) notification.get().run();
-		if (result.get() == AgentState.SessionIntake.APPLIED
+		if (taken.notification() != null) taken.notification().run();
+		if (taken.intake() == AgentState.SessionIntake.APPLIED
 				&& ctx.getSessionDelivery() instanceof Delivery delivery) delivery.taken = true;
-		return result.get();
+		return taken.intake();
 	}
+
+	/** A delivered chat's intake, and the notification its job's update runs after commit, or null. */
+	private record ChatIntake(AgentState.SessionIntake intake, Runnable notification) {}
 
 	@SuppressWarnings("serial")
 	private static final class DuplicateSessionDelivery extends RuntimeException { }
@@ -3387,11 +3384,12 @@ public class AgentAdapter extends AAdapter {
 	private void handBackResolved(AString ownerDID, AString agentId) {
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent == null || agent.getResolved().isEmpty()) return;
-		Handback handback = new Handback(ownerDID, agentId);
-		engine.getVenueState().execute(draft -> {
-			handback.reset();
+		Map<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
+		Handback handback = engine.getVenueState().transact(draft -> {
+			Handback run = new Handback(ownerDID, agentId, writeContexts);
 			AgentState current = agentIn(draft, ownerDID, agentId);
-			if (current != null) handback.settleAll(draft, current);
+			if (current != null) run.settleAll(draft, current);
+			return run;
 		});
 		handback.afterCommit();
 	}
@@ -3418,6 +3416,12 @@ public class AgentAdapter extends AAdapter {
 	private record OutsideWrite(Blob taskId, Job request, AString path, RequestContext ctx,
 			ACell output, AMap<AString, ACell> receipt) {}
 
+	/**
+	 * A handback's output write: whether it was made in the venue's lattice, and
+	 * the notification its request's completion runs after commit, or null.
+	 */
+	private record LocalWrite(boolean local, Runnable notification) {}
+
 	/** Discards a handback's write: its request finished first, cancelled, so it writes nothing. */
 	@SuppressWarnings("serial")
 	private static final class RequestFinished extends RuntimeException {
@@ -3431,33 +3435,28 @@ public class AgentAdapter extends AAdapter {
 	 * its request job settles. A write to another venue or a view cannot join
 	 * the transaction: its task stays resolved, and the write and the settling
 	 * follow the commit, the task meanwhile in {@link #handbacksInFlight}. One
-	 * per transaction: {@link #reset} at the top of its body, which may run
-	 * more than once, then {@link #afterCommit} once it has committed.
+	 * per run of the transaction's body, which returns it: the body may run
+	 * more than once, and {@link #afterCommit} runs on the one that committed.
 	 */
 	private final class Handback {
 		private final AString ownerDID;
 		private final AString agentId;
 		/**
-		 * Each request's write context, kept across runs of the body: the
+		 * Each request's write context, shared by every run of the body: the
 		 * caller's standing is read once per handback, as a live request's is
 		 * once on arrival, however often a conflict makes the body run again.
 		 */
-		private final java.util.HashMap<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
+		private final Map<Blob, WriteContext> writeContexts;
 		private final List<Runnable> after = new ArrayList<>();
 		private final List<Blob> settled = new ArrayList<>();
 		private final List<OutsideWrite> outside = new ArrayList<>();
 		private AMap<AString, ACell> results;
 
-		Handback(AString ownerDID, AString agentId) {
+		/** @param writeContexts the write contexts, one map for every run of the body */
+		Handback(AString ownerDID, AString agentId, Map<Blob, WriteContext> writeContexts) {
 			this.ownerDID = ownerDID;
 			this.agentId = agentId;
-		}
-
-		void reset() {
-			after.clear();
-			settled.clear();
-			outside.clear();
-			results = null;
+			this.writeContexts = writeContexts;
 		}
 
 		/**
@@ -3516,16 +3515,15 @@ public class AgentAdapter extends AAdapter {
 			}
 			ACell output = completion.get(Fields.OUTPUT);
 			AMap<AString, ACell> receipt = buildOutputReceipt(completion, outputPath, output);
-			Runnable[] notification = {null};
-			boolean[] local = {true};
+			LocalWrite write;
 			try {
 				// The write and the request's completion commit together, or neither does
-				draft.execute(inner -> {
-					notification[0] = null;
-					local[0] = covia.writeIn(inner, context.ctx(), outputPath, output);
-					if (!local[0] || !request.isRecorded()) return;
-					notification[0] = ((VenueJob) request).completeIn(inner, receipt);
-					if (notification[0] == null) throw new RequestFinished();
+				write = draft.transact(inner -> {
+					if (!covia.writeIn(inner, context.ctx(), outputPath, output)) return new LocalWrite(false, null);
+					if (!request.isRecorded()) return new LocalWrite(true, null);
+					Runnable notification = ((VenueJob) request).completeIn(inner, receipt);
+					if (notification == null) throw new RequestFinished();
+					return new LocalWrite(true, notification);
 				});
 			} catch (RequestFinished finished) {
 				agent.removeTask(taskId);
@@ -3535,13 +3533,13 @@ public class AgentAdapter extends AAdapter {
 				end(draft, agent, taskId, request, handoff + describeFailure(refused));
 				return;
 			}
-			if (!local[0]) {
+			if (!write.local()) {
 				outside.add(new OutsideWrite(taskId, request, outputPath, context.ctx(), output, receipt));
 				return;
 			}
 			agent.removeTask(taskId);
 			settled.add(taskId);
-			after.add((notification[0] != null) ? notification[0]
+			after.add((write.notification() != null) ? write.notification()
 				: () -> { if (!request.isFinished()) request.completeWith(receipt); });
 		}
 
@@ -4038,33 +4036,32 @@ public class AgentAdapter extends AAdapter {
 	 * @return whether the outcome reached the task or the session
 	 */
 	private boolean deliverCallOutcome(AString ownerDID, AString agentId, Blob jobId, AMap<AString, ACell> record) {
-		var delivered = new java.util.concurrent.atomic.AtomicBoolean();
-		var tracked = new java.util.concurrent.atomic.AtomicBoolean();
-		var waitingTask = new java.util.concurrent.atomic.AtomicReference<AString>();
-		engine.getVenueState().users().execute(draft -> {
-			delivered.set(false);
-			tracked.set(false);
+		// Null when the call was not tracked, or its entry has gone
+		CallDelivery delivery = engine.getVenueState().users().transact(draft -> {
 			User owner = draft.get(ownerDID);
 			AgentState agent = (owner == null) ? null : owner.agent(agentId);
-			if (agent == null || agent.getRecord() == null) return;
+			if (agent == null || agent.getRecord() == null) return null;
 			ACell entry = agent.getPending().get(jobId);
 			AString sid = RT.ensureString(RT.getIn(entry, Fields.SESSION_ID));
-			if (sid == null) return;
-			tracked.set(true);
+			if (sid == null) return null;
 			AString taskHex = RT.ensureString(RT.getIn(entry, Fields.TASK_ID));
-			waitingTask.set(taskHex);
 			agent.removePending(jobId);
-			delivered.set(deliverToWaiter(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
+			boolean delivered = deliverToWaiter(draft, ownerDID, agentId, Blob.fromHex(sid.toString()),
 				(taskHex != null) ? Blob.fromHex(taskHex.toString()) : null, callMadeBy(record),
 				Strings.create(jobId.toHexString()), callOutcome(jobId, record, entry),
-				AgentState.SOURCE_TOOL_OUTCOME));
+				AgentState.SOURCE_TOOL_OUTCOME);
+			return new CallDelivery(delivered, taskHex);
 		});
-		if (tracked.get() && !delivered.get()) {
+		if (delivery == null) return false;
+		if (!delivery.delivered()) {
 			log.info("Outcome of job {} not delivered: agent {} has no such session", jobId, agentId);
-			if (waitingTask.get() != null) failIfStranded(ownerDID, agentId, Blob.fromHex(waitingTask.get().toString()));
+			if (delivery.waitingTask() != null) failIfStranded(ownerDID, agentId, Blob.fromHex(delivery.waitingTask().toString()));
 		}
-		return delivered.get();
+		return delivery.delivered();
 	}
+
+	/** Whether a tracked call's outcome reached its waiter, and the task that waited on it, or null. */
+	private record CallDelivery(boolean delivered, AString waitingTask) {}
 
 	/** Fails a parked task with nothing left to wait on or run on ({@link #yieldIsBacked}). */
 	private void failIfStranded(AString ownerDID, AString agentId, Blob taskId) {
@@ -4658,22 +4655,24 @@ public class AgentAdapter extends AAdapter {
 		// task the cycle resolved, which leaves the agent with its request's
 		// local outputPath written and its request job settled. A restart finds
 		// the cycle wholly done or not done at all.
-		Handback handback = new Handback(callerDID, agentId);
-		var mergedRecord = new java.util.concurrent.atomic.AtomicReference<AMap<AString, ACell>>();
+		record Merge(AMap<AString, ACell> record, Handback handback) {}
+		Map<Blob, WriteContext> writeContexts = new java.util.HashMap<>();
 		AMap<AString, ACell> cycleEntry = timelineEntry;
 		AVector<ACell> cycleTurns = turnsToAppend;
-		engine.getVenueState().execute(draft -> {
-			handback.reset();
+		Merge merge = engine.getVenueState().transact(draft -> {
+			Handback run = new Handback(callerDID, agentId, writeContexts);
 			AgentState current = draft.users().at(callerDID).agentAt(agentId);
 			if (failsPickedTask) current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
 				pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
-			AMap<AString, ACell> results = handback.taskResults(current);
-			mergedRecord.set(current.mergeRunResult(snapshotState, newState, results,
+			AMap<AString, ACell> results = run.taskResults(current);
+			AMap<AString, ACell> record = current.mergeRunResult(snapshotState, newState, results,
 				(results == null) ? cycleEntry : cycleEntry.assoc(Fields.TASK_RESULTS, results),
-				pickedSessionBlob, cycleTurns, cycleTokens));
-			handback.settleAll(draft, current);
+				pickedSessionBlob, cycleTurns, cycleTokens);
+			run.settleAll(draft, current);
+			return new Merge(record, run);
 		});
-		AMap<AString, ACell> merged = mergedRecord.get();
+		AMap<AString, ACell> merged = merge.record();
+		Handback handback = merge.handback();
 		AMap<AString, ACell> taskResults = handback.results();
 		// Accumulate task results across iterations
 		if (taskResults != null) {

@@ -1,7 +1,7 @@
 package covia.lattice;
 
 import java.util.Objects;
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
@@ -99,10 +99,11 @@ public final class Access {
 	 * the transaction, and again inside it only when more levels are missing by
 	 * then.
 	 *
-	 * @param change The change, made to the entry in the transaction
-	 * @return Whether a level above the changed value was created
+	 * @param change The change, made to the entry in the transaction, returning its result
+	 * @return The change's result in the run that committed, and whether a level
+	 *         above the changed value was created
 	 */
-	public boolean changeCreatingLevels(AString ability, Consumer<Entry> change) {
+	public <R> Changed<R> changeCreatingLevels(AString ability, Function<? super Entry, ? extends R> change) {
 		Entry live = entry(ability);
 		int checked = live.missingLevels();
 		if (checked > 0) require(Capability.CRUD_WRITE, checked);
@@ -110,10 +111,17 @@ public final class Access {
 			int missing = draft.missingLevels();
 			if (missing > checked) require(Capability.CRUD_WRITE, missing);
 			boolean created = draft.createLevels() > 0;
-			change.accept(draft);
-			return created;
+			return new Changed<R>(change.apply(draft), created);
 		});
 	}
+
+	/**
+	 * What {@link #changeCreatingLevels} did.
+	 *
+	 * @param result The change's own result
+	 * @param levelsCreated Whether a level above the changed value was created
+	 */
+	public record Changed<R>(R result, boolean levelsCreated) {}
 
 	/**
 	 * Checks that the request may use {@code ability} here. An access checks

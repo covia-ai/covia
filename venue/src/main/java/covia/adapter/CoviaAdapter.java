@@ -635,10 +635,8 @@ public class CoviaAdapter extends AAdapter {
 		ACell value = RT.getIn(input, Fields.VALUE);
 
 		Access target = resolveForChange(state, ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
-		boolean[] existed = {false};
-		boolean created = target.changeCreatingLevels(Capability.CRUD_WRITE,
-			draft -> existed[0] = draft.write(value));
-		return withPathCreated(Maps.of(Fields.EXISTED, CVMBool.of(existed[0])), created);
+		var written = target.changeCreatingLevels(Capability.CRUD_WRITE, draft -> draft.write(value));
+		return withPathCreated(Maps.of(Fields.EXISTED, CVMBool.of(written.result())), written.levelsCreated());
 	}
 
 	/**
@@ -776,17 +774,17 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		Access target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE);
 		ACell element = RT.getIn(input, Fields.VALUE);
-		boolean[] existed = {false};
-		long[] size = {0};
-		boolean created = target.changeCreatingLevels(Capability.CRUD_WRITE, draft -> {
-			existed[0] = draft.exists();
-			size[0] = draft.append(element);
-		});
+		var appended = target.changeCreatingLevels(Capability.CRUD_WRITE,
+			draft -> new Appended(draft.exists(), draft.append(element)));
+		long size = appended.result().size();
 		return withPathCreated(Maps.of(
-			Fields.EXISTED, CVMBool.of(existed[0]),
-			Fields.INDEX, CVMLong.create(Math.max(0, size[0] - 1)),
-			Fields.NEW_SIZE, CVMLong.create(size[0])), created);
+			Fields.EXISTED, CVMBool.of(appended.result().existed()),
+			Fields.INDEX, CVMLong.create(Math.max(0, size - 1)),
+			Fields.NEW_SIZE, CVMLong.create(size)), appended.levelsCreated());
 	}
+
+	/** What an append found: whether the list was there, and its size afterwards. */
+	private record Appended(boolean existed, long size) {}
 
 	// ========== Write path helpers ==========
 

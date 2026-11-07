@@ -155,7 +155,7 @@ public class OwnerAccessTest {
 
 		covia.resolve(ALICE, Strings.create("w/shared/deep")).entry(Capability.CRUD_WRITE).write(Maps.empty());
 		assertTrue(covia.resolve(deep, Strings.create("w/shared/deep/a/b")).changeCreatingLevels(Capability.CRUD_WRITE,
-			entry -> entry.write(Strings.create("x"))));
+			entry -> entry.write(Strings.create("x"))).levelsCreated());
 		assertReads("x", ALICE, "w/shared/deep/a/b");
 	}
 
