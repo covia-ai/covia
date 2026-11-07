@@ -14,6 +14,7 @@ import convex.core.lang.RT;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.hitl.Hitl;
+import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 
@@ -47,7 +48,7 @@ public class InboxTest {
 		User user = user();
 		user.inbox().put(ID, Maps.of(Hitl.STATUS, Hitl.OPEN));
 
-		assertEquals(user.inbox().getAll(), user.resolve(CoviaPath.segments(Namespace.H)).read());
-		assertEquals(Hitl.OPEN, RT.getIn(user.resolve(CoviaPath.segments(Namespace.H, ID)).read(), Hitl.STATUS));
+		assertEquals(user.inbox().getAll(), ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.H))));
+		assertEquals(Hitl.OPEN, RT.getIn(ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.H, ID))), Hitl.STATUS));
 	}
 }

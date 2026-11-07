@@ -94,6 +94,7 @@ import covia.grid.Operation;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
@@ -2138,7 +2139,7 @@ public class Engine {
 	private ACell readLatticePath(AString ref, RequestContext ctx) {
 		CoviaAdapter covia = (CoviaAdapter) getAdapter("covia");
 		if (covia == null) return null;
-		covia.lattice.ACoviaComponent<?> target;
+		convex.lattice.ALatticeComponent<?> target;
 		try {
 			target = covia.locate(ctx, ref);
 		} catch (WrongScopeException e) {
@@ -2149,7 +2150,7 @@ public class Engine {
 			// not absence and propagates rather than being masked as "not found" (#175).
 			return null;
 		}
-		return (target == null) ? null : target.read();
+		return (target == null) ? null : ACoviaComponent.read(target);
 	}
 
 	/**

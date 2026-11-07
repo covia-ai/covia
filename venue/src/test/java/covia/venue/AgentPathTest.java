@@ -19,6 +19,7 @@ import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
@@ -49,8 +50,12 @@ public class AgentPathTest {
 		session = "g/" + AGENT + "/sessions/" + sid.toHexString();
 	}
 
-	private ACoviaComponent<?> resolve(String path) {
+	private ALatticeComponent<?> resolve(String path) {
 		return user.resolve(CoviaPath.parse(path));
+	}
+
+	private static ACell read(ALatticeComponent<?> component) {
+		return ACoviaComponent.read(component);
 	}
 
 	/** Writes at the entry a path resolves to. */
@@ -64,15 +69,15 @@ public class AgentPathTest {
 		write(notes, CVMLong.ONE);
 		Path path = CoviaPath.parse(notes);
 
-		ACoviaComponent<?> record = user.resolve(path.slice(0, 2));
-		assertEquals(agent.getRecord(), record.read());
+		ALatticeComponent<?> record = user.resolve(path.slice(0, 2));
+		assertEquals(agent.getRecord(), read(record));
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(record)).getMessage());
 
-		ACoviaComponent<?> area = user.resolve(path.slice(0, 3));
-		assertEquals(Maps.of("notes", CVMLong.ONE), area.read());
+		ALatticeComponent<?> area = user.resolve(path.slice(0, 3));
+		assertEquals(Maps.of("notes", CVMLong.ONE), read(area));
 		assertTrue(Entry.of(area).write(Maps.of("notes", CVMLong.create(2))), "the area is the agent's workspace");
-		assertEquals(CVMLong.create(2), resolve(notes).read());
+		assertEquals(CVMLong.create(2), read(resolve(notes)));
 	}
 
 	@Test
@@ -80,7 +85,7 @@ public class AgentPathTest {
 		write("g/" + AGENT + "/n/notes", CVMLong.ONE);
 		assertEquals(Maps.of("notes", CVMLong.ONE), agent.getRecord().get(N));
 		assertEquals(CVMLong.ONE, agent.workspace().read(CoviaPath.parse("notes")));
-		assertEquals(CVMLong.ONE, resolve("g/" + AGENT + "/n/notes").read());
+		assertEquals(CVMLong.ONE, read(resolve("g/" + AGENT + "/n/notes")));
 	}
 
 	@Test
@@ -98,18 +103,18 @@ public class AgentPathTest {
 		write(session + "/c/draft", CVMLong.ONE);
 		assertEquals(Maps.of("draft", CVMLong.ONE), agent.session(sid).getRecord().get(C));
 		assertEquals(CVMLong.ONE, agent.session(sid).workspace().read(CoviaPath.parse("draft")));
-		assertEquals(CVMLong.ONE, resolve(session + "/c/draft").read());
+		assertEquals(CVMLong.ONE, read(resolve(session + "/c/draft")));
 	}
 
 	@Test
 	public void testTheRestOfTheRecordIsReadOnly() {
-		ACoviaComponent<?> status = resolve("g/" + AGENT + "/status");
-		assertEquals(AgentState.SLEEPING, status.read());
+		ALatticeComponent<?> status = resolve("g/" + AGENT + "/status");
+		assertEquals(AgentState.SLEEPING, read(status));
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(status)).getMessage());
 
-		ACoviaComponent<?> meta = resolve(session + "/meta");
-		assertEquals(RT.getIn(agent.getSession(sid), "meta"), meta.read());
+		ALatticeComponent<?> meta = resolve(session + "/meta");
+		assertEquals(RT.getIn(agent.getSession(sid), "meta"), read(meta));
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(meta)).getMessage());
 	}
@@ -118,15 +123,15 @@ public class AgentPathTest {
 	public void testAMissingAgentOrSessionIsAbsentAndTakesNoChange() {
 		String missingSession = "g/" + AGENT + "/sessions/" + Blob.fromHex("ff").toHexString();
 		for (String path : new String[] {"g/nobody", missingSession}) {
-			ACoviaComponent<?> record = resolve(path);
-			assertNull(record.read(), path);
+			ALatticeComponent<?> record = resolve(path);
+			assertNull(read(record), path);
 			assertFalse(record.exists(), path);
 			assertEquals(ACoviaComponent.READ_ONLY,
 				assertThrows(AuthException.class, () -> Entry.of(record), path).getMessage());
 		}
 		for (String path : new String[] {"g/nobody/n/notes", missingSession + "/c/draft"}) {
-			ACoviaComponent<?> entry = resolve(path);
-			assertNull(entry.read(), path);
+			ALatticeComponent<?> entry = resolve(path);
+			assertNull(read(entry), path);
 			assertFalse(entry.exists(), path);
 			assertThrows(InvalidInputException.class, () -> Entry.of(entry).write(CVMLong.ONE), path);
 		}
@@ -147,12 +152,12 @@ public class AgentPathTest {
 	public void testAPathSeesAnAgentItsTransactionCreates() {
 		AString later = Strings.intern("later-agent");
 		user.execute(draft -> {
-			ACoviaComponent<?> notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
+			ALatticeComponent<?> notes = draft.resolve(CoviaPath.parse("g/" + later + "/n/notes"));
 			assertFalse(notes.exists(), "the agent does not exist yet");
 			draft.ensureAgent(later, Maps.empty(), null).workspace().write(CoviaPath.parse("notes"), CVMLong.ONE);
 			assertTrue(notes.exists(), "the resolved entry sees the agent the draft created");
-			assertEquals(CVMLong.ONE, notes.read());
+			assertEquals(CVMLong.ONE, read(notes));
 		});
-		assertEquals(CVMLong.ONE, resolve("g/" + later + "/n/notes").read());
+		assertEquals(CVMLong.ONE, read(resolve("g/" + later + "/n/notes")));
 	}
 }

@@ -393,6 +393,9 @@ kept is copied. Resolution sees no request, takes as many segments per step as
 the component's rules cover (as cursor paths do), and builds each child only
 from its own cursor, so a walk from a draft root stays in the draft. `read()`
 returns the value as callers see it: a job reads as its current state.
+Resolution returns Convex's `ALatticeComponent`, so a path may end at a
+component that is not Covia's; `ACoviaComponent.read(component)` reads either
+kind, and `exists()` is Convex's own.
 
 | Component | Routes |
 |-----------|--------|
@@ -400,7 +403,8 @@ returns the value as callers see it: a job reads as its current state.
 | `Users` | a user's DID to their `User` (`Users.at`) |
 | `User` | its namespaces: `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
 | `Jobs` | a job id, in hex, to its `JobState` |
-| `JobState` | `temp` to the job's `Workspace` |
+| `JobState` | `temp` to the job's `Workspace`; the rest of the job read in its current state |
+| `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
 | `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState` |
 | `SessionState` | `c` to the session's `Workspace` |
 
@@ -410,10 +414,13 @@ as the string itself or, in hex, as a Blob. In a `Workspace` the path ends at
 an `Entry`, whose keys are fixed when it is resolved (`ValuePath.keys`); a
 level that does not exist yet takes the segment, the key of the map created
 there. The entry keeps a copy of the request up to its end, so its refusals
-name the path as the caller wrote it. Below any other component the path ends
-at its `RecordData`, which reads through the component as it shows that data
-(a job's fields in its current state, a user's record as stored). A stored
-null counts as present.
+name the path as the caller wrote it; segments below an entry continue it.
+Below any other component the path ends at a `CoviaValue`: Convex's generic
+`ValueComponent` over a read-only `PathCursor` at the keys the segments name,
+taken the same way, so resolving it further keeps Covia's rules at any depth.
+A component whose callers see its data differently hands over that view
+instead: a job's fields read in its current state. A stored null counts as
+present.
 
 **Resolution follows the path's shape, not the data.** A component chooses a
 child by its key whether or not the child exists, because children come and
@@ -862,7 +869,8 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `StampedCursor<V>` | Explicit editing view — applies the owning component's timestamp function on changed writes; merge remains on the component |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
 | `VenueContext` (Covia) | Policy shared by every Covia component and passed down unchanged: the write clock and the venue's signer |
-| `ACoviaComponent`, `RecordData` (Covia) | Base of addressable components (`resolve`, `read`); record data is the read-only component a path ends at below any component but a workspace, read through that component (§4.6) |
+| `ACoviaComponent` (Covia) | Base of addressable components (`resolve`, `read`) (§4.6) |
+| `CoviaValue` (Covia) | Convex's `ValueComponent` resolving segments by Covia's rules (`ValuePath.keys`); read-only where a path ends below any component but a workspace (§4.6) |
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, keyed by request id; only the venue writes them |

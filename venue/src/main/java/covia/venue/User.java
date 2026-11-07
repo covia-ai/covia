@@ -10,6 +10,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.lattice.Covia;
@@ -65,7 +66,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 
 	/** Framework-internal read of a path in this user's record. */
 	ACell readInternalPath(Path path) {
-		return resolve(path).read();
+		return ACoviaComponent.read(resolve(path));
 	}
 
 	/**
@@ -310,7 +311,7 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 	 * The user's policy covers whatever no owner below claims.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
 		Route route = route(segments, start, end);
 		if (route != null) return route.child().resolve(segments, start + route.taken(), end);
@@ -331,17 +332,6 @@ public class User extends ACoviaComponent<ACell> implements TransactionalCompone
 		if (record == null) return null;
 		if (record.containsKey(Namespace.J)) record = record.assoc(Namespace.J, jobs().read());
 		return record;
-	}
-
-	/** Data no namespace component claims is read from the record as stored. */
-	@Override
-	public ACell read(Path path) {
-		return path.isEmpty() ? read() : ValuePath.get(cursor().getOrDefault(null), path);
-	}
-
-	@Override
-	public boolean contains(Path path) {
-		return ValuePath.contains(cursor().getOrDefault(null), path);
 	}
 
 }

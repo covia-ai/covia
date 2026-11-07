@@ -29,6 +29,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import covia.lattice.ACoviaComponent;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.OwnedMap;
 import convex.lattice.Timestamped;
@@ -255,7 +256,7 @@ public class VenueState extends ACoviaComponent<ACell> implements TransactionalC
 	 * ({@code <DID>/<namespace>/<path>}), and {@link Users} resolves it.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		return (start == end) ? this : users().resolve(segments, start, end);
 	}
 

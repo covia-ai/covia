@@ -11,14 +11,18 @@ import convex.core.data.Path;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.ATransformCursor;
+import convex.lattice.cursor.ReadOnlyCursorException;
 import convex.lattice.cursor.StampedCursor;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
+import covia.lattice.CoviaValue;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
 import covia.lattice.Workspace;
@@ -91,9 +95,18 @@ public final class JobState extends ACoviaComponent<ACell>
 	 * and anything else needs authority over {@code <owner>/j/<id>/<path>}.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
-		return (start < end && Fields.TEMP.equals(segments[start]))
-			? workspace().resolve(segments, start + 1, end) : super.resolve(segments, start, end);
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+		if (start == end) return this;
+		if (Fields.TEMP.equals(segments[start])) return workspace().resolve(segments, start + 1, end);
+		return new CoviaValue<>(currentState()).resolve(segments, start, end);
+	}
+
+	/** The job's record in its current state ({@link Job#currentState}), read-only. */
+	private AForkableCursor<ACell> currentState() {
+		return new ATransformCursor<ACell, ACell>(cursor().readOnly()) {
+			@Override protected ACell view(ACell stored) { return Job.currentState(RT.ensureMap(stored)); }
+			@Override protected ACell write(ACell current, ACell value) { throw new ReadOnlyCursorException(); }
+		};
 	}
 
 	/** See {@link #resolve(AString[], int, int)}; none outside any user. */

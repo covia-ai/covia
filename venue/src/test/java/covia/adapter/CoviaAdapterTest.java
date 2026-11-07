@@ -23,6 +23,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
+import convex.lattice.ALatticeComponent;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 import covia.lattice.Entry;
@@ -2777,8 +2778,8 @@ public class CoviaAdapterTest {
 		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACoviaComponent<?> target = covia.locate(ctx, Strings.create("c/draft"));
-		assertNull(target.read());
+		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("c/draft"));
+		assertNull(ACoviaComponent.read(target));
 		var refused = assertThrows(InvalidInputException.class,
 			() -> Entry.of(target).write(CVMLong.ONE));
 		assertEquals(String.format(Workspace.NO_RECORD, "c"), refused.getMessage());
@@ -2792,7 +2793,7 @@ public class CoviaAdapterTest {
 		RequestContext ctx = ALICE.withAgentId(agentId);
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACoviaComponent<?> target = covia.locate(ctx, Strings.create("n/draft"));
+		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("n/draft"));
 		Entry.of(target).write(Strings.create("note"));
 
 		assertEquals(Strings.create("note"), RT.getIn(engine.getVenueState().users().get(ALICE_DID)
@@ -2806,7 +2807,7 @@ public class CoviaAdapterTest {
 		AString path = Strings.create(ALICE_DID + "/w/private");
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		assertEquals(Strings.create("alice only"), covia.locate(BOB, path).read(),
+		assertEquals(Strings.create("alice only"), ACoviaComponent.read(covia.locate(BOB, path)),
 			"locating finds the place whoever asks");
 		assertThrows(AuthException.class, () -> covia.resolve(BOB, path).read(),
 			"a request's access asks the owner first");
@@ -2838,7 +2839,7 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACoviaComponent<?> target = covia.locate(ctx, Strings.create("t/draft"));
+		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("t/draft"));
 		Entry.of(target).write(Strings.create("task note"));
 
 		// The scratch must be the FOCUSED TASK's Job record, not the transition Job's.
@@ -2856,7 +2857,7 @@ public class CoviaAdapterTest {
 		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
-		ACoviaComponent<?> target = covia.locate(ctx, Strings.create("t/draft"));
+		ALatticeComponent<?> target = covia.locate(ctx, Strings.create("t/draft"));
 		Entry.of(target).write(Strings.create("job note"));
 
 		assertEquals(Strings.create("job note"), RT.getIn(user.jobs().getRecord(jobId), Fields.TEMP, "draft"),

@@ -2,6 +2,7 @@ package covia.lattice;
 
 import convex.core.data.AString;
 import convex.core.data.Path;
+import convex.lattice.ALatticeComponent;
 import covia.venue.RequestContext;
 
 /**
@@ -29,7 +30,7 @@ public interface Owner {
 	}
 
 	/** The component segments {@code [start, end)} name below this owner, as Convex's resolution hook. */
-	ACoviaComponent<?> resolve(AString[] segments, int start, int end);
+	ALatticeComponent<?> resolve(AString[] segments, int start, int end);
 
 	/**
 	 * A step from an owner into a child owner.

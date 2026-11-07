@@ -5,6 +5,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import convex.core.lang.RT;
 import convex.lattice.TransactionalComponent;
@@ -165,7 +166,7 @@ public final class Jobs extends ACoviaComponent<Index<Blob, ACell>>
 	 * a segment naming no job, need authority over {@code <owner>/j/<path>}.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
 		Route route = route(segments, start, end);
 		if (route == null) throw new NoSuchPathException(segments, start, end);

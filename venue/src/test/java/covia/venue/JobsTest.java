@@ -25,6 +25,7 @@ import convex.lattice.NoSuchPathException;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
+import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
@@ -110,15 +111,15 @@ public class JobsTest {
 			.assoc(ID, current.assoc(PREV, Maps.of(Fields.STATUS, Status.STARTED))));
 
 		assertEquals(current, user.jobs().getAll().get(ID));
-		assertEquals(user.jobs().getAll(), user.resolve(CoviaPath.segments(Namespace.J)).read());
-		assertEquals(current, user.resolve(CoviaPath.segments(Namespace.J, HEX)).read());
-		assertEquals(output, user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT)).read());
-		assertEquals(output.get(PREV), user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT, PREV)).read());
-		assertNull(user.resolve(CoviaPath.segments(Namespace.J, HEX, PREV)).read());
+		assertEquals(user.jobs().getAll(), ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J))));
+		assertEquals(current, ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX))));
+		assertEquals(output, ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT))));
+		assertEquals(output.get(PREV), ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, Fields.OUTPUT, PREV))));
+		assertNull(ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, HEX, PREV))));
 		assertThrows(NoSuchPathException.class,
 			() -> user.resolve(CoviaPath.segments(Namespace.J, Strings.create("not-a-job"))),
 			"a job id that is not hex names no job");
-		assertNull(user.resolve(CoviaPath.segments(Namespace.J, Strings.create("0ffe"), Fields.STATUS)).read(),
+		assertNull(ACoviaComponent.read(user.resolve(CoviaPath.segments(Namespace.J, Strings.create("0ffe"), Fields.STATUS))),
 			"an id that names no job reads as null");
 	}
 }

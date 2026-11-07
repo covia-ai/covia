@@ -8,10 +8,12 @@ import java.util.function.UnaryOperator;
 import convex.core.data.ACell;
 import convex.core.data.ADataStructure;
 import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.prim.CVMLong;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
@@ -54,13 +56,23 @@ public final class Entry extends ACoviaComponent<ACell> {
 	}
 
 	/**
+	 * The entry further down the same workspace, its keys fixed now as the
+	 * workspace fixes them: segments below an entry continue its path.
+	 */
+	@Override
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+		if (start == end) return this;
+		return area.resolve(segments, path.isEmpty() ? start : path.position(), end);
+	}
+
+	/**
 	 * The entry to change where a path ends: the entry itself, or a workspace's
 	 * root for the workspace. Anything else only its component's operations
 	 * change.
 	 *
 	 * @throws AuthException with {@link ACoviaComponent#READ_ONLY} for anything but a workspace or its entry
 	 */
-	public static Entry of(ACoviaComponent<?> destination) {
+	public static Entry of(ALatticeComponent<?> destination) {
 		if (destination instanceof Entry entry) return entry;
 		if (destination instanceof Workspace area) return area.entry(CoviaPath.EMPTY);
 		throw new AuthException(READ_ONLY);
@@ -76,11 +88,6 @@ public final class Entry extends ACoviaComponent<ACell> {
 	public boolean exists() {
 		if (keys.length == 0) return read() != null;
 		return resolved.refusal() == null && holds(above.getOrDefault(null), last());
-	}
-
-	@Override
-	public boolean contains(Path below) {
-		return below.isEmpty() ? exists() : super.contains(below);
 	}
 
 	/**

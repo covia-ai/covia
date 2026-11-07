@@ -7,6 +7,7 @@ import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Path;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
@@ -50,7 +51,7 @@ public final class Access {
 
 	private final RequestContext ctx;
 	/** The component the path resolves to, or null when it names no place. */
-	private final ACoviaComponent<?> destination;
+	private final ALatticeComponent<?> destination;
 	/** Why the path names no place, or null when it names one. */
 	private final String invalid;
 	private final Owner.Ownership ownership;
@@ -61,11 +62,11 @@ public final class Access {
 	 * @param path The caller's path below {@code start}
 	 * @param ownership Who decides on the data there
 	 */
-	public Access(RequestContext ctx, ACoviaComponent<?> start, Path path, Owner.Ownership ownership, Authority authority) {
+	public Access(RequestContext ctx, ALatticeComponent<?> start, Path path, Owner.Ownership ownership, Authority authority) {
 		this.ctx = ctx;
 		this.ownership = Objects.requireNonNull(ownership, "ownership");
 		this.authority = Objects.requireNonNull(authority, "authority");
-		ACoviaComponent<?> found = null;
+		ALatticeComponent<?> found = null;
 		String reason = null;
 		try {
 			found = start.resolve(path);
@@ -89,13 +90,13 @@ public final class Access {
 	/** The value here as callers see it, or null when absent, once the request may read it. */
 	public ACell read() {
 		require(Capability.CRUD_READ);
-		return valid().read();
+		return ACoviaComponent.read(valid());
 	}
 
 	/** Whether a value is here now, once the request may read it; a stored null counts. */
 	public boolean exists() {
 		require(Capability.CRUD_READ);
-		return valid().contains(CoviaPath.EMPTY);
+		return valid().exists();
 	}
 
 	/** The workspace entry here, to change it with {@code ability}, once the request may ({@link Entry#of}). */
@@ -109,12 +110,12 @@ public final class Access {
 	 * through its parent's own operations, once the request may; null when the
 	 * path is invalid.
 	 */
-	public ACoviaComponent<?> component(AString ability) {
+	public ALatticeComponent<?> component(AString ability) {
 		require(ability);
 		return destination;
 	}
 
-	private ACoviaComponent<?> valid() {
+	private ALatticeComponent<?> valid() {
 		if (destination == null) throw new InvalidInputException(invalid);
 		return destination;
 	}

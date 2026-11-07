@@ -31,6 +31,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.Access;
@@ -40,7 +41,6 @@ import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
-import covia.lattice.RecordData;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
 import covia.venue.Engine;
@@ -750,10 +750,9 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		Access target = resolveForChange(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE);
 		// A whole secret (s/<name>) is removed by its store; nothing else of it changes by path
-		if (target.component(Capability.CRUD_DELETE) instanceof RecordData data
-				&& data.parent() instanceof SecretStore secrets && data.path().count() == 1) {
-			AString name = data.path().get(0);
-			boolean deleted = secrets.deleteIfPresent(name);
+		if (target.component(Capability.CRUD_DELETE) instanceof SecretStore.Record secret) {
+			AString name = secret.name();
+			boolean deleted = secret.delete();
 			if (deleted) {
 				// The name only, never the value — the same trail as secret:set.
 				engine.audit().event(covia.venue.Audit.SECRET_DELETE, covia.venue.Audit.K_DID, ctx.getCallerDID(),
@@ -1242,7 +1241,7 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws WrongScopeException if {@code n/}, {@code c/} or {@code t/} is used
 	 *         outside its scope, or a path without an owner DID in a request with no user
 	 */
-	public ACoviaComponent<?> locate(RequestContext ctx, ACell path) {
+	public ALatticeComponent<?> locate(RequestContext ctx, ACell path) {
 		Located located = located(engine.getVenueState(), ctx, path, Capability.CRUD_READ);
 		try {
 			return located.start().resolve(located.path());

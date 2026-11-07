@@ -6,6 +6,7 @@ import java.util.function.UnaryOperator;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Path;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.cursor.PathCursor;
@@ -62,7 +63,7 @@ public final class Workspace extends ACoviaComponent<ACell>
 	 * path as the caller wrote it.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
 		return entry(Path.of(Arrays.copyOf(segments, end)).slice(start));
 	}
@@ -70,6 +71,16 @@ public final class Workspace extends ACoviaComponent<ACell>
 	/** The entry at {@code path} in this area, its keys fixed now by the values the path meets. */
 	public Entry entry(Path path) {
 		return new Entry(this, path, ValuePath.keys(read(), path));
+	}
+
+	/** The value at {@code path} in this area, or null when absent, as its {@link Entry} reads it. */
+	public ACell read(Path path) {
+		return entry(path).read();
+	}
+
+	/** Whether a value is at {@code path} in this area, a stored null counting, as {@link Entry#exists}. */
+	public boolean contains(Path path) {
+		return entry(path).exists();
 	}
 
 	/**

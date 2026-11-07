@@ -19,6 +19,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.ACoviaComponent;
 import covia.lattice.CoviaPath;
 
 /**
@@ -64,7 +65,7 @@ public class PathWriteAuthorityTest {
 	}
 
 	private ACell aliceRead(String path) {
-		return engine.getVenueState().users().get(alice).resolve(CoviaPath.parse(path)).read();
+		return ACoviaComponent.read(engine.getVenueState().users().get(alice).resolve(CoviaPath.parse(path)));
 	}
 
 	@Test

@@ -19,6 +19,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
@@ -371,7 +372,7 @@ public class AgentState extends ACoviaComponent<ACell> implements TransactionalC
 	 * policy covers whatever no session claims.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
 		Route route = route(segments, start, end);
 		if (route != null) return route.child().resolve(segments, start + route.taken(), end);

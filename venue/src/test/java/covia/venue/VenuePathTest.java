@@ -19,6 +19,7 @@ import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.exception.AuthException;
 import covia.exception.NotFoundException;
@@ -44,8 +45,12 @@ public class VenuePathTest {
 		did = TestEngine.uniqueDID(info);
 	}
 
-	private ACoviaComponent<?> resolve(String path) {
+	private ALatticeComponent<?> resolve(String path) {
 		return venue.resolve(CoviaPath.parse(did + "/" + path));
+	}
+
+	private static ACell read(ALatticeComponent<?> component) {
+		return ACoviaComponent.read(component);
 	}
 
 	/** The refusal for a path below the user that names no place. */
@@ -57,20 +62,20 @@ public class VenuePathTest {
 	public void testAPathFromTheVenueReachesItsOwnersData() {
 		User user = venue.users().ensure(did);
 		user.workspace().write(NOTES, CVMLong.ONE);
-		assertEquals(CVMLong.ONE, resolve("w/notes").read());
+		assertEquals(CVMLong.ONE, read(resolve("w/notes")));
 
 		assertTrue(Entry.of(resolve("w/notes")).write(CVMLong.create(2)));
 		assertEquals(CVMLong.create(2), user.workspace().read(NOTES), "the change is in the user's workspace");
 
 		AgentState agent = user.ensureAgent(AGENT, Maps.empty(), null);
 		agent.workspace().write(NOTES, CVMLong.ONE);
-		assertEquals(CVMLong.ONE, resolve("g/" + AGENT + "/n/notes").read());
+		assertEquals(CVMLong.ONE, read(resolve("g/" + AGENT + "/n/notes")));
 	}
 
 	@Test
 	public void testADIDWithNoUserReadsAsAbsentAndTakesNoChange() {
-		ACoviaComponent<?> notes = resolve("w/notes");
-		assertNull(notes.read());
+		ALatticeComponent<?> notes = resolve("w/notes");
+		assertNull(read(notes));
 		assertFalse(notes.exists());
 		assertEquals(VenueState.UNKNOWN_USER,
 			assertThrows(NotFoundException.class, () -> Entry.of(notes).write(CVMLong.ONE)).getMessage());
@@ -82,7 +87,7 @@ public class VenuePathTest {
 		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
 		venue.deleteUser(did, did);
 
-		assertNull(resolve("w/notes").read());
+		assertNull(read(resolve("w/notes")));
 		assertFalse(resolve("w/notes").exists());
 		assertEquals(String.format(ACoviaComponent.NO_SUCH_PATH, "/" + did + "/" + Covia.K_DELETED, "/" + did + "/" + Covia.K_DELETED),
 			noSuchPath(Covia.K_DELETED.toString()), "the tombstone is not user data");
@@ -96,12 +101,12 @@ public class VenuePathTest {
 	@Test
 	public void testAPathResolvedBeforeAnAccountIsReplacedReachesNoLaterAccount() {
 		venue.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
-		ACoviaComponent<?> notes = resolve("w/notes");
+		ALatticeComponent<?> notes = resolve("w/notes");
 		venue.deleteUser(did, did);
 		venue.users().finishDeletion(did);
 		assertTrue(venue.users().create(did));
 
-		assertEquals(Users.ACCOUNT_DELETED, assertThrows(AuthException.class, notes::read).getMessage());
+		assertEquals(Users.ACCOUNT_DELETED, assertThrows(AuthException.class, () -> read(notes)).getMessage());
 		assertEquals(Users.ACCOUNT_DELETED,
 			assertThrows(AuthException.class, () -> Entry.of(notes).write(CVMLong.create(2))).getMessage());
 		assertNull(venue.users().get(did).workspace().read(NOTES), "the new account is untouched");
@@ -116,7 +121,7 @@ public class VenuePathTest {
 				noSuchPath(slot), slot);
 		}
 		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> record = (AMap<AString, ACell>) resolve("").read();
+		AMap<AString, ACell> record = (AMap<AString, ACell>) read(resolve(""));
 		assertNotNull(record.get(Namespace.W));
 		assertFalse(record.containsKey(Covia.K_META), "the whole record leaves out the venue's bookkeeping");
 	}
@@ -134,20 +139,20 @@ public class VenuePathTest {
 		venue.users().ensure(did);
 		venue.execute(draft -> {
 			assertFalse(Entry.of(draft.resolve(CoviaPath.parse(did + "/w/notes"))).write(CVMLong.ONE), "nothing was there");
-			assertNull(resolve("w/notes").read(), "the live venue does not see the draft");
+			assertNull(read(resolve("w/notes")), "the live venue does not see the draft");
 		});
-		assertEquals(CVMLong.ONE, resolve("w/notes").read());
+		assertEquals(CVMLong.ONE, read(resolve("w/notes")));
 	}
 
 	@Test
 	public void testAPositionSeesAnAccountItsTransactionCreates() {
 		venue.execute(draft -> {
-			ACoviaComponent<?> notes = draft.resolve(CoviaPath.parse(did + "/w/notes"));
+			ALatticeComponent<?> notes = draft.resolve(CoviaPath.parse(did + "/w/notes"));
 			assertFalse(notes.exists(), "there is no account yet");
 			draft.users().ensure(did).workspace().write(NOTES, CVMLong.ONE);
 			assertTrue(notes.exists(), "the position sees the account the draft created");
-			assertEquals(CVMLong.ONE, notes.read());
+			assertEquals(CVMLong.ONE, read(notes));
 		});
-		assertEquals(CVMLong.ONE, resolve("w/notes").read());
+		assertEquals(CVMLong.ONE, read(resolve("w/notes")));
 	}
 }

@@ -5,6 +5,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.NoSuchPathException;
 import covia.lattice.ACoviaComponent;
 import convex.lattice.TransactionalComponent;
@@ -212,7 +213,7 @@ public class Users extends ACoviaComponent<AMap<AString, ACell>> implements Tran
 	 * first segment that is not a DID names no user.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
 		AString did = segments[start];
 		if (!did.startsWith(DID_PREFIX)) throw new NoSuchPathException(segments, start, end);

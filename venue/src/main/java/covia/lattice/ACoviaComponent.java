@@ -1,7 +1,5 @@
 package covia.lattice;
 
-import java.util.Arrays;
-
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Path;
@@ -22,16 +20,15 @@ import convex.lattice.cursor.AForkableCursor;
  * component that meets it, and lattice keys never appear in a path.</p>
  *
  * <p>Resolution is pure: it sees no request, makes no checks and writes
- * nothing. It follows the path's shape, never the data: a child is chosen by
- * its key whether or not it exists, so a component resolved early in a
- * transaction sees the child come and go ({@link #exists}). A segment that
- * names no place data could be throws {@link NoSuchPathException}, from which
- * {@link #noSuchPath} gives the refusal. Children are built from this
- * component's own cursor, so a walk from a transaction draft stays in that
- * draft. A path into a {@link Workspace} ends at an {@link Entry}, whose
- * operations change it; below any other component it ends at its
- * {@link RecordData}, read-only, since only the component's own operations
- * change it.</p>
+ * nothing. A component chooses a child by its key whether or not it exists, so
+ * a component resolved early in a transaction sees the child come and go
+ * ({@link #exists}). A segment that names no place data could be throws
+ * {@link NoSuchPathException}, from which {@link #noSuchPath} gives the
+ * refusal. Children are built from this component's own cursor, so a walk from
+ * a transaction draft stays in that draft. A path into a {@link Workspace}
+ * ends at an {@link Entry}, whose operations change it; below any other
+ * component it ends at a read-only {@link CoviaValue}, since only the
+ * component's own operations change that data.</p>
  *
  * <p>A component that owns a kind of data, such as a user, an agent, a session
  * or a job, is an {@link Owner}: it knows whose the data is and has its
@@ -63,25 +60,15 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 	 * {@code child.resolve(segments, start + n, end)}. A component with fixed
 	 * names, or with keys of one form, throws {@link NoSuchPathException} at a
 	 * segment it cannot hold. By default the segments name data in this
-	 * component's value, as its {@link RecordData}.
+	 * component's value, reached read-only through a {@link CoviaValue}.
 	 *
 	 * @return The component there, never null; this one for an empty range
 	 * @throws NoSuchPathException If a segment names no place
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		if (start == end) return this;
-		return new RecordData(this, Path.of(Arrays.copyOfRange(segments, start, end)));
-	}
-
-	@Override
-	public ACoviaComponent<?> resolve(Path path) {
-		return (ACoviaComponent<?>) super.resolve(path);
-	}
-
-	@Override
-	public ACoviaComponent<?> resolve(AString... segments) {
-		return (ACoviaComponent<?>) super.resolve(segments);
+		return new CoviaValue<>(cursor().readOnly()).resolve(segments, start, end);
 	}
 
 	/** The refusal for a path that names no place, as {@link NoSuchPathException} reports it. */
@@ -101,13 +88,11 @@ public abstract class ACoviaComponent<V extends ACell> extends ALatticeComponent
 		return cursor().getOrDefault(null);
 	}
 
-	/** The value at {@code path} below this component, as callers see it, or null when absent. */
-	public ACell read(Path path) {
-		return ValuePath.get(read(), path);
-	}
-
-	/** Whether a value is at {@code path} below this component; a stored null counts. */
-	public boolean contains(Path path) {
-		return ValuePath.contains(read(), path);
+	/**
+	 * A component's value as callers see it: a Covia component's {@link #read},
+	 * or the value at any other component's location; null when absent.
+	 */
+	public static ACell read(ALatticeComponent<?> component) {
+		return (component instanceof ACoviaComponent<?> covia) ? covia.read() : component.cursor().getOrDefault(null);
 	}
 }

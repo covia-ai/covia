@@ -17,6 +17,7 @@ import covia.lattice.ACoviaComponent;
 import covia.lattice.AccessPolicy;
 import covia.lattice.Namespace;
 import covia.lattice.Owner;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
@@ -89,7 +90,7 @@ public final class SessionState extends ACoviaComponent<ACell>
 	 * {@code <owner>/g/<agent>/sessions/<id>/<path>}.
 	 */
 	@Override
-	public ACoviaComponent<?> resolve(AString[] segments, int start, int end) {
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
 		return (start < end && K_C.equals(segments[start]))
 			? workspace().resolve(segments, start + 1, end) : super.resolve(segments, start, end);
 	}

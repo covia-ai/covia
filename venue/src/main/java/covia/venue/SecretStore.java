@@ -18,8 +18,11 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.ACoviaComponent;
 import covia.lattice.Covia;
+import covia.lattice.CoviaValue;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.cursor.AForkableCursor;
+import convex.lattice.cursor.PathCursor;
 import covia.api.Fields;
 
 /**
@@ -50,6 +53,43 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 	private final VenueContext context;
 
 	public VenueContext getContext() { return context; }
+
+	/**
+	 * A path names one secret by its name, as its {@link Record}, and data in
+	 * that record below it; all read-only, since only this store's operations
+	 * change a secret.
+	 */
+	@Override
+	public ALatticeComponent<?> resolve(AString[] segments, int start, int end) {
+		if (end - start != 1) return super.resolve(segments, start, end);
+		return new Record(this, segments[start]);
+	}
+
+	/** One secret's stored record, as a path names it: read-only, and removed by its store. */
+	public static final class Record extends CoviaValue<ACell> {
+		private final SecretStore store;
+		private final AString name;
+
+		private Record(SecretStore store, AString name) {
+			super(new PathCursor<ACell>(store.cursor().readOnly(), name));
+			this.store = store;
+			this.name = name;
+		}
+
+		/** The secret's name. */
+		public AString name() {
+			return name;
+		}
+
+		/**
+		 * Removes the secret from its store.
+		 *
+		 * @return Whether it was there
+		 */
+		public boolean delete() {
+			return store.deleteIfPresent(name);
+		}
+	}
 
 	/** Key version 1: SHA-256 of the venue seed. Read only; nothing encrypts under it. */
 	public static final int KEY_VERSION_1 = 1;

@@ -18,7 +18,9 @@ import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.ReadOnlyCursorException;
 import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
@@ -166,11 +168,12 @@ public class WorkspaceTest {
 	public void testOnlyAWorkspaceIsChangedByPath() {
 		var cursor = Cursors.<ACell>root(Maps.of("list", Vectors.of(CVMLong.ONE, CVMLong.create(2))));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		RecordData data = (RecordData) component.resolve(path("list/1"));
-		assertSame(component, data.parent());
-		assertEquals(CVMLong.create(2), data.read());
+		ALatticeComponent<?> data = component.resolve(path("list/1"));
+		assertEquals(CVMLong.create(2), data.cursor().get());
 		assertEquals(ACoviaComponent.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(data)).getMessage());
+		assertThrows(ReadOnlyCursorException.class, () -> data.cursor().set(CVMLong.ONE),
+			"data below a component other than a workspace takes no change");
 
 		Workspace area = new Workspace(cursor);
 		assertTrue(Entry.of(area.resolve(path("list/1"))).write(CVMLong.create(3)));
@@ -206,19 +209,21 @@ public class WorkspaceTest {
 	}
 
 	@Test
-	public void testRecordDataIsWhereItsPathEnds() {
-		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE)));
+	public void testDataBelowAComponentIsAddressedByCoviasRulesAtAnyDepth() {
+		Blob id = Blob.fromHex("0a0b");
+		var cursor = Cursors.<ACell>root(Maps.of("a", Maps.of("b", CVMLong.ONE),
+			"list", Vectors.of(Strings.create("first")), "ids", Index.of(id, CVMLong.create(2))));
 		ACoviaComponent<ACell> component = new ACoviaComponent<>(cursor) {};
-		Path path = path("a/b");
 
-		RecordData whole = (RecordData) component.resolve(path);
-		assertEquals(path, whole.path());
-		assertEquals(CVMLong.ONE, whole.read());
-
-		RecordData parent = (RecordData) component.resolve(CoviaPath.parent(path));
-		assertEquals(Maps.of("b", CVMLong.ONE), parent.read());
-		assertTrue(parent.exists());
-		assertEquals("/a", CoviaPath.address(parent.path()));
+		assertEquals(CVMLong.ONE, component.resolve(path("a/b")).cursor().get());
+		assertEquals(CVMLong.ONE, component.resolve(path("a")).resolve(path("b")).cursor().get(),
+			"resolving in steps reaches the same value");
+		assertEquals(Strings.create("first"), component.resolve(path("list")).resolve(path("0")).cursor().get(),
+			"a list takes a position");
+		assertEquals(CVMLong.create(2), component.resolve(path("ids")).resolve(path(id.toHexString())).cursor().get(),
+			"an Index takes its Blob key in hex");
+		assertTrue(component.resolve(path("a")).exists());
+		assertFalse(component.resolve(path("a/z")).exists());
 		assertSame(component, component.resolve(CoviaPath.EMPTY), "an empty path is the component itself");
 	}
 
