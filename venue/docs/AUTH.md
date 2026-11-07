@@ -738,9 +738,11 @@ Call `v/ops/auth/identity-token` on the signing venue:
 
 The operation derives `sub` and `iss` from the exact caller, including an
 agent's full nested identity. It accepts no subject, claims, capabilities or
-signing key from input, so an identity's token goes only to that identity: no
-other caller can obtain it, a root included. Code running in the venue gets a
-user's token by invoking the operation as that user (`Engine.context`).
+signing key from input, so no caller can mint another identity's token, a
+root included. An agent's token is saved in its owner's secret store (below),
+where the owner, which controls its agents, can use or extract it. Code running
+in the venue gets a user's token by invoking the operation as that user
+(`Engine.context`).
 
 The token is signed by the caller's root: the venue's key for the venue's
 signing `did:key` and the identities nested below it, or,
