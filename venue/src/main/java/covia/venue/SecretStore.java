@@ -92,8 +92,12 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 		private final byte[] v2;
 
 		private Keys(byte[] seed) {
-			this.v1 = sha256Key(seed);
-			this.v2 = HKDF.derive256(seed, null, KEY_INFO_V2.getBytes(StandardCharsets.UTF_8));
+			this(sha256Key(seed), HKDF.derive256(seed, null, KEY_INFO_V2.getBytes(StandardCharsets.UTF_8)));
+		}
+
+		private Keys(byte[] v1, byte[] v2) {
+			this.v1 = v1;
+			this.v2 = v2;
 		}
 
 		/** The key of one version, or null when there is no such version. */
@@ -123,6 +127,28 @@ public class SecretStore extends ACoviaComponent<AMap<AString, ACell>> implement
 	 */
 	public static Keys keys(AKeyPair venueKeyPair) {
 		return new Keys(venueKeyPair.getSeed().getBytes());
+	}
+
+	/** Why {@link #sealingKeys} refused a label: it would derive this store's own key. */
+	public static final String SEALING_LABEL_RESERVED = "A sealing label must differ from the secret store's own";
+
+	/**
+	 * Keys for a component that seals its own records ({@link #seal}) apart
+	 * from this store: HKDF-SHA256 of the venue's seed under {@code label},
+	 * at {@link #CURRENT_KEY_VERSION}. They have no key version 1, so nothing
+	 * this store or any other label sealed opens under them.
+	 *
+	 * @param venueKeyPair Venue's key pair
+	 * @param label The component's own HKDF info label
+	 * @return Keys that open only what was sealed under the same label
+	 * @throws IllegalArgumentException for the secret store's own label
+	 */
+	public static Keys sealingKeys(AKeyPair venueKeyPair, String label) {
+		if (label == null || label.isEmpty() || KEY_INFO_V2.equals(label)) {
+			throw new IllegalArgumentException(SEALING_LABEL_RESERVED);
+		}
+		return new Keys(null, HKDF.derive256(venueKeyPair.getSeed().getBytes(), null,
+			label.getBytes(StandardCharsets.UTF_8)));
 	}
 
 	/**

@@ -38,6 +38,7 @@ import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
+import covia.venue.AdapterState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -127,6 +128,16 @@ public class CryptoAdapter extends AAdapter {
 	@Override public String getName() { return "crypto"; }
 	@Override public String getDescription() {
 		return "Hash bytes, sign and verify Ed25519 and JWTs, encrypt and decrypt Convex ECIES, and generate or derive secret-backed BIP39 keys";
+	}
+
+	/** Keyrings are this adapter's state, versioned by {@link CryptoKeyring#STATE_STEPS}. */
+	@Override public java.util.List<covia.venue.migration.MigrationStep> stateSteps() {
+		return CryptoKeyring.STATE_STEPS;
+	}
+
+	/** A deleted user's keyring goes with it, and those of the identities nested below it. */
+	@Override public void deleteUserState(AString did, AdapterState state) {
+		CryptoKeyring.deleteHolder(state, did);
 	}
 
 	@Override protected void installAssets() {

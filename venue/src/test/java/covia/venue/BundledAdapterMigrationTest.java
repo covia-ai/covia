@@ -46,6 +46,8 @@ class BundledAdapterMigrationTest {
 	 * until it has one.
 	 */
 	static final Map<String, List<ACell>> STATES = Map.of(
+		// Version 0 stored nothing; version 1 holds keyrings (HELD_KEYS.md).
+		"crypto", List.of(Maps.empty(), Maps.of("version", 1L, "holders", Index.none())),
 		"test", List.of(TEST_STATE, TEST_STATE,
 			TEST_STATE.assoc(TestAdapter.K_MIGRATIONS, Vectors.of(2L)),
 			TEST_STATE.assoc(TestAdapter.K_MIGRATIONS, Vectors.of(2L, 3L))));

@@ -34,6 +34,26 @@ public final class Abilities {
 	/** Disconnect an account, revoking its grant at the provider
 	 *  ({@code <did>/oauth/<provider>}). */
 	public static final AString OAUTH_DISCONNECT = Strings.intern("oauth/disconnect");
+	/** Every use of a held key or mnemonic ({@code <did>/keys/<key>},
+	 *  {@code <did>/mnemonics/<id>}); covers each {@code key/…} ability. */
+	public static final AString KEY           = Strings.intern("key");
+	/** Put a key or mnemonic into a keyring, or generate or derive one there. */
+	public static final AString KEY_ADD       = Strings.intern("key/add");
+	/** Remove a key or mnemonic from a keyring. */
+	public static final AString KEY_REMOVE    = Strings.intern("key/remove");
+	/** Sign anything with a held key; covers every {@code key/sign/…}. */
+	public static final AString KEY_SIGN      = Strings.intern("key/sign");
+	/** Sign UCAN grants with a held key ({@code ucan:issue}). */
+	public static final AString KEY_SIGN_GRANT  = Strings.intern("key/sign/grant");
+	/** Sign Convex transactions with a held key ({@code convex:transact}). */
+	public static final AString KEY_SIGN_CONVEX = Strings.intern("key/sign/convex");
+	/** Sign content the caller chooses with a held key ({@code crypto:sign},
+	 *  {@code crypto:jwt-sign}), which can produce any other kind of signature. */
+	public static final AString KEY_SIGN_RAW  = Strings.intern("key/sign/raw");
+	/** Decrypt with a held key ({@code crypto:decrypt}). */
+	public static final AString KEY_DECRYPT   = Strings.intern("key/decrypt");
+	/** Derive keys from a held mnemonic ({@code crypto:derive-key}). */
+	public static final AString KEY_DERIVE    = Strings.intern("key/derive");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
 	public static final AString AGENT_CREATE  = Strings.intern("agent/create");

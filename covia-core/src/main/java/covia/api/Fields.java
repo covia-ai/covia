@@ -332,6 +332,11 @@ public class Fields {
 	public static final StringShort KEY = Strings.intern("key");
 	public static final StringShort LABEL = Strings.intern("label");
 	public static final StringShort ADDED_AT = Strings.intern("addedAt");
+	/** Held keys (HELD_KEYS.md): {@code keyring: true} stores a new key or
+	 *  phrase in a keyring instead of a secret. */
+	public static final StringShort KEYRING = Strings.intern("keyring");
+	public static final StringShort KEYS = Strings.intern("keys");
+	public static final StringShort MNEMONICS = Strings.intern("mnemonics");
 	public static final StringShort ADDED_BY = Strings.intern("addedBy");
 	public static final StringShort REVOKED_AT = Strings.intern("revokedAt");
 	public static final StringShort REVOKED_BY = Strings.intern("revokedBy");
