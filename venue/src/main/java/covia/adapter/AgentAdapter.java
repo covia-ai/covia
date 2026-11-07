@@ -662,9 +662,7 @@ public class AgentAdapter extends AAdapter {
 					AMap<AString, ACell> summary = agentInfo(ctx, agentId);
 					if (summary == null) {
 						return CompletableFuture.failedFuture(
-							new NotFoundException("Agent '" + agentId
-								+ "' was not found or is terminated; use agent:list or agent:create",
-								agentId.toString()));
+							new NotFoundException(AGENT_NOT_FOUND.formatted(agentId), agentId.toString()));
 					}
 					return CompletableFuture.completedFuture(summary);
 				}
@@ -5342,10 +5340,12 @@ public class AgentAdapter extends AAdapter {
 		return agent;
 	}
 
+	/** Why an operation on an agent fails when it is absent or deleted; the agent's address fills it. */
+	public static final String AGENT_NOT_FOUND = "Agent '%s' was not found or is terminated; use agent:list or agent:create";
+
 	private AgentState lookupAgent(Job job, AgentTarget target) {
 		AgentState agent = getAgent(target.ownerDID(), target.agentId());
-		if (agent == null) job.fail("Agent '" + target.address()
-			+ "' was not found or is terminated; use agent:list or agent:create");
+		if (agent == null) job.fail(AGENT_NOT_FOUND.formatted(target.address()));
 		return agent;
 	}
 
@@ -5555,8 +5555,7 @@ public class AgentAdapter extends AAdapter {
 
 	private AgentState requireAgent(AString callerDID, AString agentId) {
 		AgentState agent = getAgent(callerDID, agentId);
-		if (agent == null) throw new NotFoundException("Agent '" + agentId
-			+ "' was not found or is terminated; use agent:list or agent:create", agentId.toString());
+		if (agent == null) throw new NotFoundException(AGENT_NOT_FOUND.formatted(agentId), agentId.toString());
 		return agent;
 	}
 

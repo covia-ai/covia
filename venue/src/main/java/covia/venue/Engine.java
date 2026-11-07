@@ -4719,9 +4719,9 @@ public class Engine {
 	 *  needs a grant like any other principal's. */
 	private boolean isOwnSecret(AString owner, RequestContext ctx) {
 		if (!owner.equals(ctx.getUserDID()) || isPublicPrincipal(owner)) return false;
-		// From the caller's DID alone: a delegate's namespace is the user's too.
-		covia.grid.Principals.Relation relation = covia.grid.Principals.relate(ctx.getCallerDID(), owner);
-		return relation == covia.grid.Principals.Relation.SELF || relation == covia.grid.Principals.Relation.OWNER;
+		// By the caller, not the namespace: a delegate's namespace is the user's too.
+		AString caller = ctx.getCallerDID();
+		return owner.equals(caller) || agentIdIn(owner, caller) != null;
 	}
 
 	/** Refusal for a stored secret the venue cannot decrypt; the secret's name follows. */

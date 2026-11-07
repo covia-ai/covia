@@ -1435,10 +1435,11 @@ public class AgentAdapterTest {
 			.awaitResult(5000);
 		Job step = engine.jobs().invokeOperation("v/ops/agent/step", stepWriting.apply("w/after"), bob);
 		assertThrows(covia.exception.JobFailedException.class, () -> step.awaitResult(5000));
+		assertEquals(AgentAdapter.AGENT_NOT_FOUND.formatted(address), step.getErrorMessage());
 		assertNull(aliceReads.apply("w/after"));
-		Job context = engine.jobs().invokeOperation("v/ops/agent/context",
-			Maps.of(Fields.AGENT_ID, "stepped-after-delete"), alice);
+		Job context = engine.jobs().invokeOperation("v/ops/agent/context", Maps.of(Fields.AGENT_ID, address), alice);
 		assertThrows(covia.exception.JobFailedException.class, () -> context.awaitResult(5000));
+		assertEquals(AgentAdapter.AGENT_NOT_FOUND.formatted(address), context.getErrorMessage());
 	}
 
 	/** The timeline entry records every inference of a cycle (#392): the

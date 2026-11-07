@@ -197,6 +197,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A private-network `did:web` identity needs its host in `adapters.http.allowedHosts`.
 - Grant `oauth/use` on `x/oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
 - A public agent's `a2a.caps` becomes `accepts: "anyone"`; beside another `accepts` it is refused.
+- A delegate that acts for a user through `user:sudo` needs that user's `secret/use` grant for each secret it uses.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
 - An open chat bot's agent needs `accepts: "anyone"`, and the public scope `invoke` on
