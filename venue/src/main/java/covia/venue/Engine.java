@@ -622,7 +622,7 @@ public class Engine {
 			for (long i = 0; i < keys.count(); i++) {
 				AString key = RT.ensureString(keys.get(i));
 				try {
-					AuthState.requireValidAuthenticationKey(key);
+					ManagedUsers.requireValidAuthenticationKey(key);
 				} catch (IllegalArgumentException e) {
 					throw new ConfigurationException(e.getMessage(), e);
 				}

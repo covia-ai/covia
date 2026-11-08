@@ -52,7 +52,7 @@ Tracked by covia#660.
   not the scope. Agents are unaffected, because their scope is read again from
   their config.
 - **Revocation.** Nothing revokes a grant; only sign-in keys can be revoked
-  (`AuthState`).
+  (`ManagedUsers`).
 
 Authority is raised above a base today by signing grants:
 

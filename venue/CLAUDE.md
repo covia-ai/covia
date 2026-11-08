@@ -18,7 +18,7 @@ venue/
 │   ├── venue/           # Core runtime
 │   │   ├── Engine.java          # Core state: adapters, assets, content, identity
 │   │   ├── JobManager.java      # Job lifecycle: submit, query, persist, recover
-│   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, auth)
+│   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, managed users)
 │   │   ├── Users.java / User.java  # Per-user lattice state (jobs, agents, workspace, h/ inbox)
 │   │   ├── AccessControl.java   # Job ownership enforcement
 │   │   ├── Auth.java            # Auth config, public capability scope, login providers

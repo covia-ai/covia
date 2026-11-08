@@ -574,7 +574,7 @@ The full proof chain travels with Carol's request.
 ### 4.6 Revocation
 
 The venue does not implement revocation: an issued token holds until its
-`exp`, and only sign-in keys can be revoked (`AuthState`). COG-17 lets a
+`exp`, and only sign-in keys can be revoked (`ManagedUsers`). COG-17 lets a
 grantor revoke any grant it made; how the venue does so is an open question in
 [VENUE_AUTHORITY.md](./VENUE_AUTHORITY.md).
 

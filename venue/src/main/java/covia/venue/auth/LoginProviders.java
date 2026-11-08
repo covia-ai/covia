@@ -308,7 +308,7 @@ public class LoginProviders {
 		Auth auth = engine.getAuth();
 		// One transaction, so two first logins for one identity cannot both pass the checks.
 		return engine.getVenueState().transact(draft -> {
-			AMap<AString, AMap<AString, ACell>> users = draft.auth().getUsers();
+			AMap<AString, AMap<AString, ACell>> users = draft.managedUsers().getUsers();
 			AString existing = findIdentity(users, identity.issuer(), identity.sub());
 			AString id = identity.toUserId();
 			if (existing != null) {

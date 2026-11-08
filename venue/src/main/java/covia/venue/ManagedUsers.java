@@ -26,21 +26,24 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 
 /**
- * Stored authentication directory and key lifecycle rules: named users' records
- * by id, which {@code get(id)} reads. No providers or runtime services.
+ * The users whose name and sign-in keys this venue manages, by account id, which
+ * {@code get(id)} reads, with the rules for those keys. {@link Users} holds every
+ * account by DID; a user who signs in with their own {@code did:key} has no record
+ * here. An erased user leaves a record keyed by DID holding only revoked keys, so
+ * those keys stay refused. No providers or runtime services.
  */
-public final class AuthState extends MapComponent<AString, AMap<AString, ACell>>
-		implements TransactionalComponent<AHashMap<AString, AMap<AString, ACell>>, AuthState> {
+public final class ManagedUsers extends MapComponent<AString, AMap<AString, ACell>>
+		implements TransactionalComponent<AHashMap<AString, AMap<AString, ACell>>, ManagedUsers> {
 	private final VenueContext context;
 
-	AuthState(VenueContext context, AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> cursor) {
+	ManagedUsers(VenueContext context, AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> cursor) {
 		super(cursor);
 		this.context = context;
 	}
 
 	@Override
-	public AuthState withCursor(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> draft) {
-		return new AuthState(context, draft);
+	public ManagedUsers withCursor(AForkableCursor<AHashMap<AString, AMap<AString, ACell>>> draft) {
+		return new ManagedUsers(context, draft);
 	}
 
 	private VenueContext getContext() { return context; }

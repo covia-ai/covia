@@ -123,7 +123,7 @@ mount their venue; restart tests unmount a venue and mount it again, or open a
 new application over the same store, as production does
 ([EMBEDDING.md](EMBEDDING.md#starting-and-stopping)).
 
-`VenueState`, `Users`, `User`, `Agent`, `Session`, `Jobs`, `JobRecord`, `AuthState`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `Agent`, `Session`, `Jobs`, `JobRecord`, `ManagedUsers`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
 `Workspace` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -380,7 +380,7 @@ This has structural problems on at least four axes:
 | `Agent` | `venue/.../Agent.java` | one agent's record (gold standard for the pattern) |
 | `AssetStore` | `venue/.../AssetStore.java` | content-addressed asset index |
 | `SecretStore` | `venue/.../SecretStore.java` | encrypted secrets |
-| `AuthState` | `venue/.../AuthState.java` | the authentication directory (`:users`): named users' records and their sign-in keys |
+| `ManagedUsers` | `venue/.../ManagedUsers.java` | the users whose name and sign-in keys the venue manages (`:users`), by account id; `Users` holds every account by DID |
 | `ContentStore` | `venue/.../ContentStore.java` | the venue's content by SHA-256 (`:storage`); refuses content that does not match its hash |
 
 **New components introduced by this design (Phase 4 — deferred):**

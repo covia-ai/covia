@@ -239,15 +239,15 @@ class DomainTransactionTest {
 		var venue = VenueState.create(AKeyPair.generate());
 		var id = Strings.create("alice");
 		ACell before = venue.get();
-		var authDraft = new AtomicReference<AuthState>();
+		var authDraft = new AtomicReference<ManagedUsers>();
 		var scheduleDraft = new AtomicReference<Schedule>();
 		assertThrows(IllegalStateException.class, () -> venue.execute(draft -> {
-			authDraft.set(draft.auth());
+			authDraft.set(draft.managedUsers());
 			scheduleDraft.set(draft.schedule());
-			draft.auth().ensureManagedUser(id, DID);
+			draft.managedUsers().ensureManagedUser(id, DID);
 			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
 				null, null, 1000, null, false, null, 100);
-			assertNull(venue.auth().get(id));
+			assertNull(venue.managedUsers().get(id));
 			assertTrue(venue.schedule().events().isEmpty());
 			throw new IllegalStateException();
 		}));
@@ -256,17 +256,17 @@ class DomainTransactionTest {
 		scheduleDraft.get().cancelUser(DID);
 		assertEquals(before, venue.get(), "retained children must not mutate the live venue");
 		venue.execute(draft -> {
-			draft.auth().ensureManagedUser(id, DID);
+			draft.managedUsers().ensureManagedUser(id, DID);
 			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
 				null, null, 1000, null, false, null, 100);
 		});
-		assertNotNull(venue.auth().get(id));
+		assertNotNull(venue.managedUsers().get(id));
 		assertEquals(1, venue.schedule().events().count());
 	}
 
 	@Test
 	void concurrentAuthDraftCannotBindTheSameKeyToTwoUsers() throws Exception {
-		var auth = VenueState.create(AKeyPair.generate()).auth();
+		var auth = VenueState.create(AKeyPair.generate()).managedUsers();
 		var alice = Strings.create("alice");
 		var bob = Strings.create("bob");
 		auth.ensureManagedUser(alice, DID);
@@ -287,7 +287,7 @@ class DomainTransactionTest {
 			var failure = assertThrows(java.util.concurrent.ExecutionException.class,
 				() -> pending.get(10, TimeUnit.SECONDS));
 			assertInstanceOf(ConflictException.class, failure.getCause());
-			assertEquals(AuthState.KEY_ALREADY_BOUND + bob, failure.getCause().getMessage());
+			assertEquals(ManagedUsers.KEY_ALREADY_BOUND + bob, failure.getCause().getMessage());
 		}
 		assertFalse(auth.isAuthenticationKeyActive(alice, key));
 		assertTrue(auth.isAuthenticationKeyActive(bob, key));
@@ -295,7 +295,7 @@ class DomainTransactionTest {
 
 	@Test
 	void concurrentFirstKeysCannotBothBeInstalled() throws Exception {
-		var auth = VenueState.create(AKeyPair.generate()).auth();
+		var auth = VenueState.create(AKeyPair.generate()).managedUsers();
 		var alice = Strings.create("alice");
 		auth.ensureManagedUser(alice, DID);
 		var first = convex.auth.ucan.UCAN.toDIDKey(AKeyPair.generate().getAccountKey());

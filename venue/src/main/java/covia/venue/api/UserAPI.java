@@ -86,8 +86,8 @@ public class UserAPI extends ACoviaAPI {
 			return;
 		}
 
-		// :user-data is the authoritative account registry. The OAuth directory
-		// stores login/provider metadata and must not decide whether a DID exists.
+		// :user-data is the authoritative account registry. ManagedUsers holds
+		// login/provider metadata and must not decide whether a DID exists.
 		User user = engine().getVenueState().users().user(did);
 		if (user == null) {
 			buildError(ctx, 404, "User not found: " + userId);

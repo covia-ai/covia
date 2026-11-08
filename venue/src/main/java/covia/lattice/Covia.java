@@ -63,7 +63,7 @@ public final class Covia {
 	/** Keyword for the venue DID string (set once at venue creation) */
 	public static final Keyword DID = Keyword.intern("did");
 
-	/** Login directory (Auth). */
+	/** Users whose name and sign-in keys the venue manages ({@code ManagedUsers}). */
 	public static final Keyword USERS = Keyword.intern("users");
 
 	/** Per-DID user state. */

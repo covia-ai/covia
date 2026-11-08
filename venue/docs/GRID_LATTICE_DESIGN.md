@@ -405,7 +405,7 @@ component.
 
 **Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
 `AssetStore`, `ContentStore` and `Tasks` extend Convex's `IndexComponent`, and
-`Users`, `AuthState`, `SecretStore` and `Inbox` its `MapComponent`, so `get`,
+`Users`, `ManagedUsers`, `SecretStore` and `Inbox` its `MapComponent`, so `get`,
 `put`, `remove` and `size` are Convex's and `get(key)` is the entry as stored. A collection binds a
 child component to one entry through `path(key)`, which reads a missing key as
 absent, under a name of its own (`Users.user`, `Jobs.job`). Its domain

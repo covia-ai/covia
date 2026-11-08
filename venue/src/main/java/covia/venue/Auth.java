@@ -19,7 +19,7 @@ import covia.venue.auth.LoginProviders;
 /**
  * Authentication and user management for a Covia venue.
  *
- * <p>Delegates stored records to {@link AuthState} and manages OAuth
+ * <p>Delegates stored records to {@link ManagedUsers} and manages OAuth
  * login providers. Users are maps keyed by stable local account ID, with
  * core fields such as "did" and "updated". External-login details live in
  * the method-owned "externalIdentity" payload; email/name are profile metadata.
@@ -56,10 +56,10 @@ import covia.venue.auth.LoginProviders;
 public class Auth {
 
 	private static final Logger log = LoggerFactory.getLogger(Auth.class);
-	public static final AString ACTIVE = AuthState.ACTIVE;
-	public static final AString REVOKED = AuthState.REVOKED;
-	public static final String CANNOT_REVOKE_FINAL_KEY = AuthState.CANNOT_REVOKE_FINAL_KEY;
-	public static final String KEY_ALREADY_BOUND = AuthState.KEY_ALREADY_BOUND;
+	public static final AString ACTIVE = ManagedUsers.ACTIVE;
+	public static final AString REVOKED = ManagedUsers.REVOKED;
+	public static final String CANNOT_REVOKE_FINAL_KEY = ManagedUsers.CANNOT_REVOKE_FINAL_KEY;
+	public static final String KEY_ALREADY_BOUND = ManagedUsers.KEY_ALREADY_BOUND;
 
 	/** Default token expiry: 24 hours in seconds */
 	public static final long DEFAULT_TOKEN_EXPIRY = 86400;
@@ -179,7 +179,7 @@ public class Auth {
 		return CapabilityChecker.readOnlyScope(publicDID);
 	}
 
-	private AuthState state() { return engine.getVenueState().auth(); }
+	private ManagedUsers state() { return engine.getVenueState().managedUsers(); }
 
 	public AMap<AString, ACell> getUser(AString id) { return state().get(id); }
 	public AMap<AString, AMap<AString, ACell>> getUsers() { return state().getUsers(); }
@@ -192,14 +192,14 @@ public class Auth {
 	public void putUser(AString id, AMap<AString, ACell> record) {
 		engine.getVenueState().execute(draft -> {
 			draft.users().requireNotDeleted(RT.ensureString(record.get(Fields.DID)));
-			draft.auth().putUser(id, record);
+			draft.managedUsers().putUser(id, record);
 		});
 	}
 
 	/** @param update Run again if the transaction conflicts, so it must be pure */
 	public AMap<AString, ACell> updateUser(AString id, UnaryOperator<AMap<AString, ACell>> update) {
 		return engine.getVenueState().transact(draft -> {
-			return draft.auth().updateUser(id, previous -> {
+			return draft.managedUsers().updateUser(id, previous -> {
 				var record = update.apply(previous);
 				if (record != null) draft.users().requireNotDeleted(RT.ensureString(record.get(Fields.DID)));
 				return record;
@@ -213,7 +213,7 @@ public class Auth {
 
 	/** As {@link #provisionLogin(AString, AMap)}, in {@code venue}, which may be a transaction's draft. */
 	public AMap<AString, ACell> provisionLogin(VenueState venue, AString id, AMap<AString, ACell> profile) {
-		AString did = RT.ensureString(RT.getIn(venue.auth().get(id), Fields.DID));
+		AString did = RT.ensureString(RT.getIn(venue.managedUsers().get(id), Fields.DID));
 		if (did == null) did = engine.managedUserDID(id);
 		return venue.provisionLogin(id, did, profile);
 	}
@@ -221,15 +221,15 @@ public class Auth {
 	public boolean ensureManagedUser(AString id, AString did) {
 		return engine.getVenueState().transact(draft -> {
 			draft.users().requireNotDeleted(did);
-			return draft.auth().ensureManagedUser(id, did);
+			return draft.managedUsers().ensureManagedUser(id, did);
 		});
 	}
 
 	/** Runs {@code change} on the directory in the transaction that checks user {@code id}'s account is live. */
-	private <T> T forLiveUser(AString id, Function<AuthState, T> change) {
+	private <T> T forLiveUser(AString id, Function<ManagedUsers, T> change) {
 		return engine.getVenueState().transact(draft -> {
-			draft.users().requireNotDeleted(RT.ensureString(RT.getIn(draft.auth().get(id), Fields.DID)));
-			return change.apply(draft.auth());
+			draft.users().requireNotDeleted(RT.ensureString(RT.getIn(draft.managedUsers().get(id), Fields.DID)));
+			return change.apply(draft.managedUsers());
 		});
 	}
 
@@ -241,7 +241,7 @@ public class Auth {
 		return forLiveUser(id, auth -> auth.addAuthenticationKeys(id, keys, actor));
 	}
 
-	/** As {@link AuthState#installFirstAuthenticationKeys}, for a live user. */
+	/** As {@link ManagedUsers#installFirstAuthenticationKeys}, for a live user. */
 	public boolean installFirstAuthenticationKeys(AString id, AVector<ACell> keys, AString actor) {
 		return forLiveUser(id, auth -> auth.installFirstAuthenticationKeys(id, keys, actor));
 	}

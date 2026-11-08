@@ -265,14 +265,14 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		Objects.requireNonNull(defaultDID);
 		Objects.requireNonNull(profile);
 		return transact(draft -> {
-			AMap<AString, ACell> previous = draft.auth().get(id);
+			AMap<AString, ACell> previous = draft.managedUsers().get(id);
 			AString did = previous == null ? null : RT.ensureString(previous.get(Fields.DID));
 			if (did == null) did = defaultDID;
 			draft.users().create(did);
 			AMap<AString, ACell> updated = previous == null ? Maps.empty() : previous;
 			for (var entry : profile.entrySet()) updated = updated.assoc(entry.getKey(), entry.getValue());
-			draft.auth().putUser(id, updated.assoc(Fields.DID, did));
-			return draft.auth().get(id);
+			draft.managedUsers().putUser(id, updated.assoc(Fields.DID, did));
+			return draft.managedUsers().get(id);
 		});
 	}
 
@@ -336,7 +336,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 			venue = venue.assoc(Covia.USER_DATA, users.assoc(did, Maps.of(Covia.K_DELETED, tombstone,
 				Users.DELETING, convex.core.data.prim.CVMBool.TRUE)));
 			AMap<AString, ACell> directory = RT.ensureMap(venue.get(Covia.USERS));
-			if (directory != null) venue = venue.assoc(Covia.USERS, AuthState.eraseUser(directory, did, actor, now));
+			if (directory != null) venue = venue.assoc(Covia.USERS, ManagedUsers.eraseUser(directory, did, actor, now));
 			return venue;
 		});
 		ACell previous = RT.getIn(before, Covia.USER_DATA, did);
@@ -448,9 +448,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	public static final String UNKNOWN_USER = "User is not registered at this venue";
 
-	/** Stored authentication directory; provider/runtime policy belongs to Auth. */
-	public AuthState auth() {
-		return new AuthState(context, level(Covia.USERS));
+	/** The users whose name and sign-in keys this venue manages; provider/runtime policy belongs to Auth. */
+	public ManagedUsers managedUsers() {
+		return new ManagedUsers(context, level(Covia.USERS));
 	}
 
 	/** The entries of unfinished jobs; the jobs themselves belong to JobManager. */
