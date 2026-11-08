@@ -635,14 +635,17 @@ disposable test data, not included in user exports.
   conflict. The adapter owns all schema-specific cleanup; the default hook is
   for adapters without user-associated state.
 - `onUserDeleted(did, previousUser)` runs after the commit is flushed. Stop
-  workers and release external resources here. It must be idempotent and throw
-  on incomplete cleanup so the venue can retry. The previous user record is
+  workers and release external resources here. It must be idempotent, including
+  when runs overlap, and throw on incomplete cleanup so the venue can retry. The previous user record is
   available only on initial deletion, never retained for recovery. Tolerate null
   on retry and an instance that was boot-disabled and never installed.
 
 An adapter needing durable external cleanup identifiers must maintain its own
 cleanup records outside the data it erases and consume them idempotently in the runtime
 hook. Recovery cannot depend on the erased namespace or an in-memory snapshot.
+
+Deletions take no lock: they may overlap each other and adapter registration,
+and each pending entry is finished against its tombstone.
 
 Both hooks apply to disabled adapters. Incomplete work is indexed privately at
 `:user-deletions/<adapter>/<did>` within the venue; `_venue` covers core

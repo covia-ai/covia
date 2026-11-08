@@ -3329,23 +3329,23 @@ public class Engine {
 	}
 
 	public static final String PROTECTED_USER = "The venue and public principals cannot be deleted";
-	private final java.util.concurrent.locks.ReentrantLock userDeletionLock = new java.util.concurrent.locks.ReentrantLock();
-	public static final String USER_DELETION_IN_PROGRESS = "User deletion is in progress; retry adapter activation";
 	public static final String USER_DELETION_PENDING = "User access revoked; cleanup is pending unavailable adapters";
 
-	/** Operator account deletion, with no implicit self-service authority. */
+	/**
+	 * Operator account deletion, with no implicit self-service authority. It
+	 * needs no lock: the deletion commits in one transaction, a repeated
+	 * deletion reuses the account's tombstone, each adapter's entry is finished
+	 * against that tombstone, and the hooks for what lies outside the lattice
+	 * are idempotent. So deletions may overlap each other and adapter
+	 * activation.
+	 */
 	public ACell deleteUser(RequestContext ctx, AString did) {
 		requireVenueAuthority(ctx, "users", Abilities.USER_DELETE);
 		requireNotSubPrincipal(did);
 		if (isVenuePrincipal(did) || Strings.create(getDIDString() + ":public").equals(did)) {
 			throw new InvalidInputException(PROTECTED_USER);
 		}
-		userDeletionLock.lock();
-		try {
-			return eraseUser(ctx, did);
-		} finally {
-			userDeletionLock.unlock();
-		}
+		return eraseUser(ctx, did);
 	}
 
 	private ACell eraseUser(RequestContext ctx, AString did) {
@@ -3415,23 +3415,29 @@ public class Engine {
 		if (!pending.isEmpty()) flush();
 	}
 
-	/** Activation holds the registry monitor: never wait for a deletion that needs it. */
+	/**
+	 * Finishes the deletions still waiting on {@code adapter}. A deletion in
+	 * progress may finish the same entry first, so each step holds only while
+	 * the entry is pending: the state is removed in a transaction that checks
+	 * it, and so can't touch an account recreated since.
+	 */
 	private void resumeAdapterUserDeletions(AAdapter adapter) {
-		if (!userDeletionLock.tryLock()) throw new UnavailableException(USER_DELETION_IN_PROGRESS);
-		try {
-			String name = adapter.getName();
-			AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
-			for (var entry : pending.entrySet()) {
-				AString did = entry.getKey();
-				venueState.execute(draft -> adapter.deleteUserState(did, draft.adapterState(name)));
-				flush();
-				adapter.onUserDeleted(did, null);
-				venueState.finishUserDeletion(name, did, entry.getValue());
-			}
-			if (!pending.isEmpty()) flush();
-		} finally {
-			userDeletionLock.unlock();
+		String name = adapter.getName();
+		AMap<AString, ACell> pending = venueState.pendingUserDeletions(name);
+		for (var entry : pending.entrySet()) {
+			AString did = entry.getKey();
+			ACell tombstone = entry.getValue();
+			venueState.execute(draft -> {
+				if (java.util.Objects.equals(tombstone, draft.pendingUserDeletions(name).get(did))) {
+					adapter.deleteUserState(did, draft.adapterState(name));
+				}
+			});
+			flush();
+			if (!venueState.pendingUserDeletions(name).containsKey(did)) continue;
+			adapter.onUserDeleted(did, null);
+			venueState.finishUserDeletion(name, did, tombstone);
 		}
+		if (!pending.isEmpty()) flush();
 	}
 
 	/**
