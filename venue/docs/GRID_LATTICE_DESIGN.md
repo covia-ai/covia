@@ -805,8 +805,9 @@ Edits and transactions sign nothing. `CoviaApplication.sync()` syncs each
 venue's copy, which reconciles it with the record and signs the result once,
 then publishes the regions; an unchanged venue does not sign. A signing failure
 publishes nothing and keeps the copy, edits included, for the next sync. The
-application builds a copy only for a key it signs as, refusing any other
-(`CoviaApplication.CANNOT_SIGN`) before an edit is made. Rebinding restores editing policies on a
+application holds a copy only for a venue mounted in it, which brought its key
+pair, refusing any other (`CoviaApplication.NOT_MOUNTED`) before an edit is
+made; unmounting signs the copy. Rebinding restores editing policies on a
 transaction draft, and commit targets bound storage, so policies are not
 applied twice.
 

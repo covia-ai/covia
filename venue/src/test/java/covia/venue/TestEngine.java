@@ -21,8 +21,8 @@ import convex.core.data.AString;
  * test gets its own user namespace, so writes don't collide.</p>
  *
  * <p><b>When NOT to use:</b> tests that exercise persistence/restart
- * (require their own EtchStore) — those should construct their own Engine
- * via the appropriate Engine constructor or {@code VenueServer.launch}.
+ * (require their own EtchStore) — those should mount their own venue
+ * ({@code CoviaApplication.mount}) or use {@code VenueServer.launch}.
  * Examples: {@link EnginePersistenceTest}, {@link VenueServerPersistenceTest},
  * {@link VenueRestartTest}, {@link DLFSPersistenceTest},
 	 * {@link EngineSchedulerRebuildTest}. Tests that need bespoke engine
@@ -67,9 +67,9 @@ public class TestEngine {
 		try {
 			STORE = TestTemp.etch("covia-test");
 			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
-			application = CoviaApplication.open(STORE, keyPair);
-			ENGINE = new Engine(new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))),
-				application, keyPair).start();
+			application = CoviaApplication.open(STORE);
+			ENGINE = application.mount(keyPair,
+				new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
 		} catch (java.io.IOException e) {
 			throw new ExceptionInInitializerError(e);
 		}
@@ -79,7 +79,7 @@ public class TestEngine {
 		host.autoSync(covia.venue.server.VenueServer.SYNC_INTERVAL, application::sync);
 		host.autoFlush(covia.venue.server.VenueServer.FLUSH_INTERVAL);
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-			ENGINE.close();
+			application.close();
 			try {
 				host.close();
 			} catch (java.io.IOException e) {

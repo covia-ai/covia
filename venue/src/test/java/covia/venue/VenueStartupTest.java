@@ -178,7 +178,7 @@ public class VenueStartupTest {
 		VenueServer server = null;
 		try (ServerSocket reserved = new ServerSocket(0)) {
 			AMap<AString, ACell> config = config(key, reserved.getLocalPort());
-			Engine seed = new Engine(config, CoviaApplication.open(store, key), key).prepare();
+			Engine seed = CoviaApplication.open(store).mount(key, config).prepare();
 			try {
 				seed.registerAdapter(new StartupAdapter());
 				seed.materialiseBootstrapState();
@@ -223,7 +223,7 @@ public class VenueStartupTest {
 		AKeyPair key = AKeyPair.generate();
 		EtchStore store = TestTemp.etch("startup-agent-config");
 		AMap<AString, ACell> cfg = config(key, 0);
-		Engine seed = new Engine(cfg, CoviaApplication.open(store, key), key).prepare();
+		Engine seed = CoviaApplication.open(store).mount(key, cfg).prepare();
 		try {
 			AString owner = seed.getDIDString();
 			AgentState agent = seed.getVenueState().users().ensure(owner).ensureAgent(
@@ -388,15 +388,15 @@ public class VenueStartupTest {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-startup")) {
 			AMap<AString, ACell> config = config(key, 0);
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine seed = new Engine(config, application, key).prepare();
+			CoviaApplication application = CoviaApplication.open(store);
+			Engine seed = application.mount(key, config).prepare();
 			seed.registerAdapter(new StartupAdapter());
 			seed.materialiseBootstrapState();
 			leaveStarted(seed);
 			seed.gridScheduler().schedule(OP, Strings.create("embedded due"), seed.venueContext(), 1L);
 			seed.close();
 
-			Engine engine = new Engine(config, application, key);
+			Engine engine = application.mount(key, config);
 			StartupAdapter adapter = new StartupAdapter();
 			CompletableFuture<Void> release = new CompletableFuture<>();
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
@@ -426,7 +426,7 @@ public class VenueStartupTest {
 			}
 			// Engine borrows the application/host/store, unlike VenueServer's adopted store.
 			application.host().flush();
-			Engine probe = new Engine(config, application, key).prepare();
+			Engine probe = application.mount(key, config).prepare();
 			try {
 				assertSame(probe, probe.launch());
 				assertNotNull(probe.resolveAsset(Strings.create("v/ops/covia/read"), probe.venueContext()));
@@ -440,8 +440,8 @@ public class VenueStartupTest {
 	public void embeddedLaunchFailureReleasesWorkersButKeepsCallerStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-failure")) {
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine engine = new Engine(config(key, 0), application, key);
+			CoviaApplication application = CoviaApplication.open(store);
+			Engine engine = application.mount(key, config(key, 0));
 			StartupAdapter adapter = new StartupAdapter();
 			IllegalStateException failure = new IllegalStateException(HOOK_FAILURE);
 			try {
@@ -463,8 +463,8 @@ public class VenueStartupTest {
 	public void failedEmbeddedActivationSuspendsRecoveredJobsBeforeClosingAdapters() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-recovered-failure")) {
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine engine = new Engine(config(key, 0), application, key);
+			CoviaApplication application = CoviaApplication.open(store);
+			Engine engine = application.mount(key, config(key, 0));
 			AtomicInteger suspended = new AtomicInteger();
 			StartupAdapter adapter = new StartupAdapter() {
 				@Override public void recoverJob(Job job) { recovered = true; }
@@ -499,8 +499,8 @@ public class VenueStartupTest {
 	public void cancellingEmbeddedLaunchReleasesHookWaitWithoutOwningHookOrStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-cancel")) {
-			CoviaApplication application = CoviaApplication.open(store, key);
-			Engine engine = new Engine(config(key, 0), application, key);
+			CoviaApplication application = CoviaApplication.open(store);
+			Engine engine = application.mount(key, config(key, 0));
 			StartupAdapter adapter = new StartupAdapter();
 			CompletableFuture<Void> hook = new CompletableFuture<>();
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
@@ -526,7 +526,7 @@ public class VenueStartupTest {
 	public void closingEmbeddedEngineReleasesPendingLaunch() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-close")) {
-			Engine engine = new Engine(config(key, 0), CoviaApplication.open(store, key), key);
+			Engine engine = CoviaApplication.open(store).mount(key, config(key, 0));
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
 			CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
 				inHook.complete(null);

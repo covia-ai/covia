@@ -83,10 +83,10 @@ public class VenueIdentityGuardTest {
 
 		// Stage 1: create the venue under key A and persist it.
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost(), kpA), kpA).start();
+			Engine engine = CoviaApplication.connect(ns.getHost()).mount(kpA, configFor(kpA)).start();
 			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			engine.flush();
@@ -95,12 +95,12 @@ public class VenueIdentityGuardTest {
 
 		// Stage 2: reopening with key B must fail, naming the store's real owner.
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
 			try {
 				ConfigurationException e = assertThrows(ConfigurationException.class,
-					() -> new Engine(configFor(kpB), CoviaApplication.connect(ns.getHost(), kpB), kpB).start());
+					() -> CoviaApplication.connect(ns.getHost()).mount(kpB, configFor(kpB)).start());
 				assertTrue(e.getMessage().contains(didFor(kpA)),
 					"error names the owning identity: " + e.getMessage());
 				assertTrue(e.getMessage().contains(didFor(kpB)),
@@ -112,10 +112,10 @@ public class VenueIdentityGuardTest {
 
 		// Stage 3: the owning key still boots normally (guard passes on match).
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store, kpA).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), CoviaApplication.connect(ns.getHost(), kpA), kpA).start();
+			Engine engine = CoviaApplication.connect(ns.getHost()).mount(kpA, configFor(kpA)).start();
 			activeEngine = engine;
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			closeActivePhase();

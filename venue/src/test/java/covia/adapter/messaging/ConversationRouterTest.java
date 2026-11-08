@@ -307,17 +307,18 @@ class ConversationRouterTest {
 	}
 
 	@Test void failedFlushReportsErrorWithoutRetryOrLostAdmission() throws Exception {
-		class FlushEngine extends Engine {
+		// A store whose durability barrier fails on request.
+		class FlushStore extends convex.core.store.MemoryStore {
 			volatile boolean failFlush;
-			FlushEngine(convex.core.crypto.AKeyPair key) throws java.io.IOException {
-				super(Maps.empty(), covia.venue.CoviaApplication.create(key), key);
-			}
 			@Override public void flush() {
 				if (failFlush) throw new IllegalStateException("injected flush failure");
 				super.flush();
 			}
 		}
-		var engine = new FlushEngine(convex.core.crypto.AKeyPair.generate());
+		var store = new FlushStore();
+		var engine = covia.venue.CoviaApplication.connect(
+				convex.lattice.LatticeHost.create(convex.core.data.Index.none(), store))
+			.mount(convex.core.crypto.AKeyPair.generate(), Maps.empty());
 		engine.start();
 		var wakes = new java.util.concurrent.atomic.AtomicInteger();
 		try {
@@ -338,7 +339,7 @@ class ConversationRouterTest {
 			router.runOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "flush", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")));
 			inbox.accept("1", Strings.create("input"));
 			wakes.set(0);
-			engine.failFlush = true;
+			store.failFlush = true;
 			assertThrows(IllegalStateException.class, () -> router.deliver("chat", Strings.create("input"), LISTED,
 				(draft, sid, jid) -> inbox.deliver(draft, "1", sid, jid)));
 			assertEquals(0, wakes.get(), "do not execute before the durability barrier succeeds");
@@ -346,7 +347,7 @@ class ConversationRouterTest {
 			assertFalse(engine.jobs().getJob(jid).isFinished(), "a failed flush must not fail accepted input");
 			assertEquals(1, engine.getVenueState().users().user(owner).agent("flush")
 				.getSessionPending(convex.core.data.Blob.fromHex(sessions.get("chat"))).count());
-		} finally { engine.failFlush = false; engine.close(); }
+		} finally { store.failFlush = false; engine.close(); }
 	}
 
 	@Test void inboundTurnsComeFromWhoTheBindingIdentifies() {

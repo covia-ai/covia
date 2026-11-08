@@ -77,8 +77,8 @@ class BundledAdapterMigrationTest {
 
 	@Test void versionedBundledAdaptersMigrateAtStartUp() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
-		Engine engine = new Engine(Maps.empty(), application, key);
+		CoviaApplication application = CoviaApplication.create();
+		Engine engine = application.mount(key, Maps.empty());
 		try {
 			// A release-era venue: no :version, each versioned adapter's version 0
 			// state at its legacy workspace route.
@@ -110,7 +110,7 @@ class BundledAdapterMigrationTest {
 	/** The general mechanics, run by the real test adapter's steps across successive starts of one venue. */
 	@Test void theTestAdapterRunsTheGeneralMechanics() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = CoviaApplication.create();
 		AMap<AString, ACell> disabled = Maps.of(Config.ADAPTERS, Maps.of("test", Maps.of(Config.ENABLED, CVMBool.FALSE)));
 		List<ACell> states = STATES.get("test");
 		ACell migrated = states.get(states.size() - 1);
@@ -118,7 +118,7 @@ class BundledAdapterMigrationTest {
 
 		// A disabled adapter migrates too: its legacy value moves, every step runs
 		// in order, and its version is recorded.
-		Engine first = new Engine(disabled, application, key);
+		Engine first = application.mount(key, disabled);
 		try {
 			VenueState seed = application.venue(key.getAccountKey());
 			seed.cursor().set(Index.<Keyword, ACell>none().assoc(Covia.DID, first.getDIDString()));
@@ -129,11 +129,11 @@ class BundledAdapterMigrationTest {
 		} finally {
 			first.close();
 		}
+		Engine second = application.mount(key, Maps.empty());
 		VenueState venue = application.venue(key.getAccountKey());
 
 		// A current state is not rewritten by the next start, nor by an explicit migrate.
 		ACell current = RT.getIn(venue.get(), Covia.ADAPTERS);
-		Engine second = new Engine(Maps.empty(), application, key);
 		try {
 			second.prepareLaunch();
 			assertSame(current, RT.getIn(second.getVenueState().get(), Covia.ADAPTERS));
@@ -155,11 +155,15 @@ class BundledAdapterMigrationTest {
 			second.close();
 		}
 
+		// Each later start mounts the venue again, with a copy drafted from its
+		// record, and edits that copy before the engine prepares.
+
 		// A start refuses state a step does not recognise, writing nothing: the
 		// current state recorded at version 1 already holds the later steps' log.
+		Engine unrecognised = application.mount(key, Maps.empty());
+		venue = application.venue(key.getAccountKey());
 		venue.setAdapterVersion("test", 1);
 		ACell mislabelled = venue.get();
-		Engine unrecognised = new Engine(Maps.empty(), application, key);
 		try {
 			IllegalStateException error = assertThrows(IllegalStateException.class, unrecognised::prepareLaunch);
 			assertEquals(TestAdapter.UNRECOGNISED_STATE.formatted(1), error.getMessage());
@@ -169,9 +173,10 @@ class BundledAdapterMigrationTest {
 		assertSame(mislabelled, venue.get(), "the refused start wrote nothing");
 
 		// A start refuses stored state newer than the adapter, writing nothing.
+		Engine refused = application.mount(key, Maps.empty());
+		venue = application.venue(key.getAccountKey());
 		venue.setAdapterVersion("test", supported + 1);
 		ACell before = venue.get();
-		Engine refused = new Engine(Maps.empty(), application, key);
 		try {
 			UnsupportedVersionException error = assertThrows(UnsupportedVersionException.class, refused::prepareLaunch);
 			assertEquals("test", error.adapter());
@@ -183,8 +188,8 @@ class BundledAdapterMigrationTest {
 		assertSame(before, venue.get(), "the refused start wrote nothing");
 
 		// With no stored state there is nothing to misread: the adapter's own version takes over.
-		venue.execute(draft -> draft.adapterState("test").set(null));
-		Engine taken = new Engine(Maps.empty(), application, key);
+		Engine taken = application.mount(key, Maps.empty());
+		application.venue(key.getAccountKey()).execute(draft -> draft.adapterState("test").set(null));
 		try {
 			taken.prepareLaunch();
 			assertEquals(supported, taken.getVenueState().adapterVersion("test"));

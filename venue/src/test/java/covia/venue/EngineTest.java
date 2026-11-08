@@ -79,21 +79,23 @@ public class EngineTest {
 		final TrackingStorage storage = new TrackingStorage();
 		final boolean failAfterSchedulerStart;
 
-		LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor,
-				boolean failAfterSchedulerStart) throws IOException {
-			this(cursor, AKeyPair.generate(), failAfterSchedulerStart);
-		}
-
-		private LifecycleTestEngine(Root<Index<Keyword, ACell>> cursor, AKeyPair key,
-				boolean failAfterSchedulerStart) throws IOException {
-			this(CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null), key), key,
-				failAfterSchedulerStart);
-		}
-
-		LifecycleTestEngine(CoviaApplication application, AKeyPair key,
-				boolean failAfterSchedulerStart) throws IOException {
-			super(new Config(null), application, key);
+		private LifecycleTestEngine(Config config, CoviaApplication application, AKeyPair key,
+				boolean failAfterSchedulerStart) {
+			super(config, application, key);
 			this.failAfterSchedulerStart = failAfterSchedulerStart;
+		}
+
+		/** Mounts a new venue on a host over {@code cursor}, with this engine as its runtime. */
+		static LifecycleTestEngine mount(Root<Index<Keyword, ACell>> cursor, boolean failAfterSchedulerStart) {
+			return mount(CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)),
+				AKeyPair.generate(), failAfterSchedulerStart);
+		}
+
+		/** Mounts the venue {@code key} in {@code application}, with this engine as its runtime. */
+		static LifecycleTestEngine mount(CoviaApplication application, AKeyPair key,
+				boolean failAfterSchedulerStart) {
+			return (LifecycleTestEngine) application.mount(key, new Config(null),
+				(config, app, keyPair) -> new LifecycleTestEngine(config, app, keyPair, failAfterSchedulerStart));
 		}
 
 		@Override
@@ -175,7 +177,7 @@ public class EngineTest {
 	@Test
 	public void testConstructionIsInertAndCloseMirrorsStart() throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
+		LifecycleTestEngine engine = LifecycleTestEngine.mount(cursor, false);
 
 		assertFalse(engine.isStarted());
 		assertNull(engine.venueState, "constructor must not initialise lattice state");
@@ -200,8 +202,8 @@ public class EngineTest {
 
 		AKeyPair key = AKeyPair.generate();
 		var application = CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null),
-			VenueContext.create(() -> CVMLong.create(1_000L)).withSigner(key));
-		LifecycleTestEngine engine = new LifecycleTestEngine(application, key, false);
+			VenueContext.create(() -> CVMLong.create(1_000L)));
+		LifecycleTestEngine engine = LifecycleTestEngine.mount(application, key, false);
 		AString did = Strings.create("did:test:connected-engine-state");
 		Blob jobId = Blob.parse("0x0001");
 
@@ -227,7 +229,7 @@ public class EngineTest {
 	@Test
 	public void testFailedStartRollsBackAcquiredResources() throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, true);
+		LifecycleTestEngine engine = LifecycleTestEngine.mount(cursor, true);
 
 		IllegalStateException failure = assertThrows(IllegalStateException.class, engine::start);
 		assertTrue(failure.getMessage().contains("injected scheduler-rebuild failure"));

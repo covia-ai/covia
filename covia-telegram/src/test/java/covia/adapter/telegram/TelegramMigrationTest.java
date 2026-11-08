@@ -56,7 +56,7 @@ class TelegramMigrationTest {
 
 	@Test void releaseStateReachesTheAdapter() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		Engine engine = new Engine(Maps.empty(), CoviaApplication.create(key), key).prepare();
+		Engine engine = CoviaApplication.create().mount(key, Maps.empty()).prepare();
 		try {
 			// 0.9.11 kept adapter state in the venue user's workspace.
 			User host = engine.getVenueState().users().user(engine.getDIDString());

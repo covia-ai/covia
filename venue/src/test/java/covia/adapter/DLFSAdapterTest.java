@@ -282,8 +282,8 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDriveDeleteSurvivesSaveInFlight() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = CoviaApplication.create();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
@@ -335,8 +335,8 @@ public class DLFSAdapterTest {
 		var key = AKeyPair.generate();
 		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
 		var application = CoviaApplication.create(
-			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())).withSigner(key));
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())));
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
@@ -364,8 +364,8 @@ public class DLFSAdapterTest {
 	@Test
 	public void testIndependentFileEditsStillMerge() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = CoviaApplication.create();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter adapter = (DLFSAdapter) isolated.getAdapter("dlfs");
@@ -640,8 +640,8 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDLFSWritesPublishThroughHost() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = CoviaApplication.create();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			DLFSAdapter dlfs = (DLFSAdapter) isolated.getAdapter("dlfs");
@@ -658,8 +658,8 @@ public class DLFSAdapterTest {
 	@Test
 	public void testRecreateSurvivesConcurrentStaleSync() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create(key);
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+		var application = CoviaApplication.create();
+		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		CountDownLatch syncEntered = new CountDownLatch(1);
 		CountDownLatch releaseSync = new CountDownLatch(1);
 		AtomicBoolean blockNextSync = new AtomicBoolean();
@@ -718,8 +718,8 @@ public class DLFSAdapterTest {
 		AKeyPair venueKey = AKeyPair.generate();
 		var time = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
 		CoviaApplication application = CoviaApplication.create(
-			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())).withSigner(venueKey));
-		Engine isolated = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, venueKey).start();
+			VenueContext.create(() -> convex.core.data.prim.CVMLong.create(time.get())));
+		Engine isolated = application.mount(venueKey, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
 			var adapter = (DLFSAdapter) isolated.getAdapter("dlfs");

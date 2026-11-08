@@ -652,9 +652,9 @@ without HTTP through `Engine.launch(...)` or `Engine.launchAsync(...)`:
 
 ```java
 // The host must restore its root before connecting the application, which
-// signs as the venue's key.
-CoviaApplication application = CoviaApplication.connect(host, keyPair);
-Engine engine = new Engine(config, application, keyPair);
+// then mounts the venue with its key pair.
+CoviaApplication application = CoviaApplication.connect(host);
+Engine engine = application.mount(keyPair, config);
 CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
     backend.bind(prepared);
     prepared.registerAdapter(new ProductAdapter(backend));

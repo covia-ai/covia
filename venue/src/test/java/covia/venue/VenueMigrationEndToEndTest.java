@@ -98,8 +98,8 @@ class VenueMigrationEndToEndTest {
 	@Test void aVersionZeroVenueReachesTheCurrentVersionWithEveryOlderShapeCurrent() throws Exception {
 		assertEquals(SEEDED_THROUGH, VenueState.CURRENT_VERSION, "seed the shapes the new venue version's step converts");
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
-		Engine engine = new Engine(Maps.empty(), application, key);
+		CoviaApplication application = CoviaApplication.create();
+		Engine engine = application.mount(key, Maps.empty());
 		try {
 			AString venueDID = engine.getDIDString();
 			VenueState seed = application.venue(key.getAccountKey());

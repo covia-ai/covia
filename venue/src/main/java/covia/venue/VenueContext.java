@@ -59,6 +59,11 @@ public final class VenueContext {
 		return signerKey != null && signerKey.equals(key);
 	}
 
+	/** Whether this policy signs as some venue. */
+	boolean hasSigner() {
+		return signerKey != null;
+	}
+
 	/** The write clock: the timestamp for a stamp or record written now. */
 	public CVMLong currentTimestamp() {
 		return clock.get();

@@ -151,9 +151,9 @@ class EmbedderContractTest {
 	@Test void anEngineOnAnEmbeddersHostLeavesClosingItToTheEmbedder() throws Exception {
 		try (EtchStore store = TestTemp.etch("own-host")) {
 			AKeyPair key = AKeyPair.create(Blob.fromHex(SEED));
-			CoviaApplication application = CoviaApplication.open(store, key);
+			CoviaApplication application = CoviaApplication.open(store);
 			var host = application.host();
-			Engine engine = new Engine(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)), application, key).start();
+			Engine engine = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 			Workspace workspace = engine.getVenueState().users().ensure(ALICE).workspace();
 			workspace.createPath(AREA);
 			workspace.write(RECORD_PATH, RECORD);

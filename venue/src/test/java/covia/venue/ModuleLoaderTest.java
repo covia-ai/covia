@@ -223,7 +223,7 @@ public class ModuleLoaderTest {
 		long builtIn = new covia.adapter.TestAdapter().stateVersion();
 		AMap<AString, ACell> migrated = Maps.of("scratch", "kept", "migrated", builtIn + 1);
 		try (EtchStore store = TestTemp.etch("module-migration")) {
-			Engine built = new Engine(Maps.empty(), CoviaApplication.open(store, key), key).launch();
+			Engine built = CoviaApplication.open(store).mount(key, Maps.empty()).launch();
 			try {
 				assertEquals(builtIn, built.getVenueState().adapterVersion("test"));
 				built.adapterState("test").write(record + "/scratch", Strings.create("kept"));
@@ -232,7 +232,7 @@ public class ModuleLoaderTest {
 				built.close();
 			}
 
-			Engine upgraded = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
+			Engine upgraded = CoviaApplication.open(store).mount(key, withModule).launch();
 			try {
 				assertTrue(upgraded.getAdapter("test").getClass().getClassLoader() instanceof ModuleClassLoader);
 				assertEquals(builtIn + 1, upgraded.getVenueState().adapterVersion("test"));
@@ -242,14 +242,14 @@ public class ModuleLoaderTest {
 				upgraded.close();
 			}
 
-			Engine restarted = new Engine(withModule, CoviaApplication.open(store, key), key).launch();
+			Engine restarted = CoviaApplication.open(store).mount(key, withModule).launch();
 			try {
 				assertEquals(builtIn + 1, restarted.getVenueState().adapterVersion("test"), "read back from the store");
 				assertEquals(migrated, restarted.adapterState("test").read(record));
 			} finally {
 				restarted.close();
 			}
-			Engine legacy = new Engine(withModule, CoviaApplication.open(store, key), key).start();
+			Engine legacy = CoviaApplication.open(store).mount(key, withModule).start();
 			try {
 				Engine.installDefaultAdapters(legacy);
 				assertTrue(legacy.getAdapter("test").getClass().getClassLoader() instanceof ModuleClassLoader);
@@ -258,7 +258,7 @@ public class ModuleLoaderTest {
 			}
 
 			ACell before = store.getRootData();
-			Engine refused = new Engine(Maps.empty(), CoviaApplication.open(store, key), key);
+			Engine refused = CoviaApplication.open(store).mount(key, Maps.empty());
 			try {
 				UnsupportedVersionException e = assertThrows(UnsupportedVersionException.class, refused::launch);
 				assertEquals("test", e.adapter());

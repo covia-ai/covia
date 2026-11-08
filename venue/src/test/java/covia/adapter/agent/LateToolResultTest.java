@@ -256,7 +256,7 @@ public class LateToolResultTest {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
 		AKeyPair keyPair = AKeyPair.generate();
 		RequestContext owner = RequestContext.of(RESTART_OWNER);
-		Engine first = new Engine(RESTART_CONFIG, CoviaApplication.connect(new LatticeHost<>(cursor, null), keyPair), keyPair).start();
+		Engine first = CoviaApplication.connect(new LatticeHost<>(cursor, null)).mount(keyPair, RESTART_CONFIG).start();
 		Engine.addDemoAssets(first);
 		createAgent(first, owner, agentId, "v/test/ops/toolllm");
 		String gateName = agentId + "-" + System.identityHashCode(first);
@@ -278,8 +278,8 @@ public class LateToolResultTest {
 	}
 
 	private static Engine restart(Crashed crashed) throws Exception {
-		Engine e = new Engine(RESTART_CONFIG, CoviaApplication.connect(new LatticeHost<>(crashed.store(), null), crashed.keyPair()),
-			crashed.keyPair()).start();
+		Engine e = CoviaApplication.connect(new LatticeHost<>(crashed.store(), null)).mount(crashed.keyPair(),
+			RESTART_CONFIG).start();
 		Engine.addDemoAssets(e);
 		return e;
 	}

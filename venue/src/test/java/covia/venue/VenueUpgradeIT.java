@@ -85,7 +85,7 @@ class VenueUpgradeIT {
 			assertEquals(RELEASE_ADAPTER_VERSIONS.get(text(manifest, "coviaVersion")), stored.adapters());
 			assertEquals(released, store.getRootData(), "peeking writes nothing");
 
-			Engine engine = new Engine(VenueStoreFixture.config(file), CoviaApplication.open(store, key), key).launch();
+			Engine engine = CoviaApplication.open(store).mount(key, VenueStoreFixture.config(file)).launch();
 			try {
 				VenueState venue = engine.getVenueState();
 				assertEquals(VenueState.CURRENT_VERSION, venue.version());

@@ -45,8 +45,8 @@ public class EngineFlushTest {
 
 	private static Engine engineWith(CountingStore store) throws Exception {
 		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair key = AKeyPair.generate();
-		return new Engine(testConfig(), CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, store), key), key).start();
+		return CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, store))
+			.mount(AKeyPair.generate(), testConfig()).start();
 	}
 
 	@Test
@@ -73,8 +73,7 @@ public class EngineFlushTest {
 
 	@Test
 	public void testInMemoryApplicationFlushes() throws Exception {
-		AKeyPair key = AKeyPair.generate();
-		Engine engine = new Engine(testConfig(), CoviaApplication.create(key), key).start();
+		Engine engine = CoviaApplication.create().mount(AKeyPair.generate(), testConfig()).start();
 		try {
 			engine.flush();
 		} finally {

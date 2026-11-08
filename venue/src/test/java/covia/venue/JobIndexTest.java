@@ -74,7 +74,7 @@ class JobIndexTest {
 		AKeyPair key = AKeyPair.generate();
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceJobIndexRules"));
 
-		Engine first = new Engine(config, CoviaApplication.connect(new LatticeHost<>(root, null), key), key).start();
+		Engine first = CoviaApplication.connect(new LatticeHost<>(root, null)).mount(key, config).start();
 		Job secret, shaped;
 		try {
 			Engine.addDemoAssets(first);
@@ -86,7 +86,7 @@ class JobIndexTest {
 			first.close();
 		}
 
-		Engine second = new Engine(config, CoviaApplication.connect(new LatticeHost<>(root, null), key), key).start();
+		Engine second = CoviaApplication.connect(new LatticeHost<>(root, null)).mount(key, config).start();
 		try {
 			Engine.addDemoAssets(second);
 			// The path now names an operation that declares neither.

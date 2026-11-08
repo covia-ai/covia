@@ -96,7 +96,7 @@ class AdapterStateMigrationTest {
 
 	private static Engine prepared(AMap<AString, ACell> config) throws IOException {
 		AKeyPair key = AKeyPair.generate();
-		return new Engine(config, CoviaApplication.create(key), key).prepare();
+		return CoviaApplication.create().mount(key, config).prepare();
 	}
 
 	@Test void legacyStateMigratesOnceInOrderWithItsVersion() throws Exception {
@@ -203,8 +203,9 @@ class AdapterStateMigrationTest {
 
 	@Test void startUpMigrationIsOneTransactionWithTheVenue() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = CoviaApplication.create();
 		try (var store = application.hostStore()) {
+			Engine refused = application.mount(key, Maps.empty());
 			// A legacy venue: no :version, old-shaped state for one adapter, and
 			// another adapter's state recorded at a version newer than its build.
 			application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
@@ -215,7 +216,6 @@ class AdapterStateMigrationTest {
 			ACell before = application.cursor().get();
 
 			Versioned versioned = new Versioned(NAME, 2);
-			Engine refused = new Engine(Maps.empty(), application, key);
 			try {
 				var error = assertThrows(UnsupportedVersionException.class,
 					() -> refused.prepare(List.of(versioned, new Versioned("newer", 1))));
@@ -229,7 +229,7 @@ class AdapterStateMigrationTest {
 			assertEquals(before, store.getRootData(), "the refused start left the store untouched");
 
 			Versioned again = new Versioned(NAME, 2);
-			Engine engine = new Engine(Maps.empty(), application, key);
+			Engine engine = application.mount(key, Maps.empty());
 			try {
 				engine.prepare(List.of(again));
 				VenueState venue = engine.getVenueState();
@@ -285,7 +285,8 @@ class AdapterStateMigrationTest {
 
 	@Test void anEmbedderMigratesAStoreWithItsAdaptersBeforeLaunch() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = CoviaApplication.create();
+		Engine engine = application.mount(key, Maps.empty());
 		VenueState venue = application.venue(key.getAccountKey());
 		venue.cursor().set(Index.<Keyword, ACell>none()
 			.assoc(Covia.ADAPTERS, Maps.of(NAME, Vectors.of("a"), "newer", Vectors.of("future")))
@@ -304,7 +305,6 @@ class AdapterStateMigrationTest {
 
 		// A later launch finds both current and runs no step.
 		Versioned launched = new Versioned(NAME, 2);
-		Engine engine = new Engine(Maps.empty(), application, key);
 		try {
 			engine.prepare(List.of(launched));
 			engine.registerAdapter(launched);
@@ -316,12 +316,12 @@ class AdapterStateMigrationTest {
 
 	@Test void anAdapterThisBuildLacksKeepsItsStateAndVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = CoviaApplication.create();
+		Engine engine = application.mount(key, Maps.empty());
 		// The state and version of an adapter from a module this venue no longer loads.
 		application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
 			.assoc(Covia.ADAPTERS, Maps.of("absent", Vectors.of("module state")))
 			.assoc(Covia.ADAPTER_VERSIONS, Maps.of("absent", 7L)));
-		Engine engine = new Engine(Maps.empty(), application, key);
 		try {
 			engine.launch();
 			VenueState venue = engine.getVenueState();
@@ -350,7 +350,7 @@ class AdapterStateMigrationTest {
 
 	@Test void registrationNeedsAPreparedEngineAndAValidVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		Engine unprepared = new Engine(Maps.empty(), CoviaApplication.create(key), key);
+		Engine unprepared = CoviaApplication.create().mount(key, Maps.empty());
 		try {
 			assertEquals(Engine.ADAPTER_BEFORE_PREPARE,
 				assertThrows(IllegalStateException.class, () -> unprepared.registerAdapter(new Versioned(NAME, 1))).getMessage());

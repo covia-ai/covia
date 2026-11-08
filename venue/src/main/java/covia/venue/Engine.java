@@ -222,13 +222,12 @@ public class Engine {
 	public static final String START_DURING_LAUNCH = "Engine activation is owned by the in-progress launch";
 
 	/**
-	 * Assembles an inert runtime over a caller-owned application. The host must
-	 * restore its root first, and the application must sign as {@code keyPair}:
-	 * build it with that key pair, or start() fails. Call launch() for a complete
-	 * venue, or start() for a manually assembled runtime. Close the engine before
-	 * its host/store.
+	 * Assembles the inert runtime of a venue mounted in {@code application}: only
+	 * {@link CoviaApplication#mount} builds one. Call launch() for a complete
+	 * venue, or start() for a manually assembled runtime. Closing the engine
+	 * unmounts its venue; close it before its host and store.
 	 */
-	public Engine(Config config, CoviaApplication application, AKeyPair keyPair) throws IOException {
+	Engine(Config config, CoviaApplication application, AKeyPair keyPair) {
 		this.config = java.util.Objects.requireNonNull(config, "config");
 		this.application = java.util.Objects.requireNonNull(application, "application");
 		this.keyPair = java.util.Objects.requireNonNull(keyPair, "keyPair");
@@ -237,11 +236,6 @@ public class Engine {
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
 		this.venueProofs = new covia.venue.auth.VenueProofs(this);
-	}
-
-	/** Accepts the external JSON configuration form. */
-	public Engine(AMap<AString, ACell> config, CoviaApplication application, AKeyPair keyPair) throws IOException {
-		this(new Config(config), application, keyPair);
 	}
 
 	/**
@@ -852,8 +846,9 @@ public class Engine {
 	}
 
 	/**
-	 * Runs a final flush and releases engine resources, leaving the host and
-	 * its store open. After close, the engine cannot be used.
+	 * Runs a final flush, releases engine resources and unmounts the venue from
+	 * its application, leaving the host and its store open. After close, the
+	 * engine cannot be used; mount the venue again for a new one.
 	 *
 	 * <p>Must be called BEFORE {@code nodeServer.close()} so final publication
 	 * and durability complete while the host is still available.
@@ -885,6 +880,8 @@ public class Engine {
 			closeStartedResources(flush, null);
 			lifecycle = Lifecycle.CLOSED;
 		}
+		// The venue leaves its application, which signs its working copy.
+		application.unmounted(this);
 	}
 
 	/** Releases resources in the reverse of {@link #start()} acquisition order. */
@@ -1708,9 +1705,7 @@ public class Engine {
 
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
-			AKeyPair keyPair = AKeyPair.generate();
-			CoviaApplication application = CoviaApplication.create(keyPair);
-			return new Engine(config, application, keyPair).start();
+			return CoviaApplication.create().mount(AKeyPair.generate(), config).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}

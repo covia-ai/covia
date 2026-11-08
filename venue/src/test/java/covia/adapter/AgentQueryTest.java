@@ -704,7 +704,7 @@ public class AgentQueryTest {
 		Blob jobId;
 		try (convex.etch.EtchStore store = covia.venue.TestTemp.etch("summarise-persist")) {
 			file = store.getFile();
-			engine = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
+			engine = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();
@@ -717,7 +717,7 @@ public class AgentQueryTest {
 			} finally { engine.close(); }
 		}
 		try (convex.etch.EtchStore store = convex.etch.EtchStore.create(file)) {
-			engine = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
+			engine = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();

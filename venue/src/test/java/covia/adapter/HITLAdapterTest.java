@@ -324,22 +324,20 @@ public class HITLAdapterTest {
 
 	private void resolutionCommitsFinalJobBeforeFlush() throws Exception {
 		var key = AKeyPair.generate();
-		var file = covia.venue.TestTemp.etchFile("hitl-resolved");
-		class BarrierEngine extends Engine {
+		// A store whose durability barrier fails just after it has saved.
+		class BarrierStore extends convex.core.store.MemoryStore {
 			volatile boolean interruptCompletion;
-			BarrierEngine(convex.etch.EtchStore store) throws java.io.IOException {
-				super(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key);
-			}
 			@Override public void flush() {
 				super.flush();
 				// Fail after saving: all domain records must already agree.
-				if (interruptCompletion && !isClosing()) throw new IllegalStateException("interrupted after persistence");
+				if (interruptCompletion) throw new IllegalStateException("interrupted after persistence");
 			}
 		}
 		Blob answered, rejected, expired;
 		String token = UcanTokens.grant(BOB_KP, BOB_DID.toString(), BOB_DID + "/w/invoices/", "crud/read", HOUR);
-		try (var store = convex.etch.EtchStore.create(file)) {
-			var first = new BarrierEngine(store);
+		var store = new BarrierStore();
+		{
+			var first = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty());
 			first.start();
 			try {
 				Engine.addDemoAssets(first);
@@ -350,7 +348,7 @@ public class HITLAdapterTest {
 				Job expire = first.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Expire me")
 					.ask(Hitl.approval("yes", "Continue?")).build(), BOB);
 				answered = answer.getID(); rejected = reject.getID(); expired = expire.getID();
-				first.interruptCompletion = true;
+				store.interruptCompletion = true;
 				Job answering = first.jobs().invokeOperation("v/ops/hitl/respond", tokenAnswer(answered.toHexString(), token), BOB);
 				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
 				User owner = first.getVenueState().users().user(BOB_DID);
@@ -367,10 +365,15 @@ public class HITLAdapterTest {
 				assertEquals(Status.COMPLETE, answer.getStatus());
 				assertEquals(Strings.create(token), RT.getIn(answer.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
 				assertFalse(owner.inbox().getAll().toString().contains(token), "h/ must never expose the signed token");
-			} finally { first.close(); }
+			} finally {
+				// The final flush on close saves normally.
+				store.interruptCompletion = false;
+				first.close();
+			}
 		}
-		try (var store = convex.etch.EtchStore.create(file)) {
-			var second = new Engine(Maps.empty(), covia.venue.CoviaApplication.open(store, key), key).start();
+		{
+			// A restart: a new application over what the store retained.
+			var second = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();

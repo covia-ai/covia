@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
@@ -12,8 +13,11 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.store.MemoryStore;
+import convex.lattice.LatticeHost;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.Config;
@@ -58,22 +62,24 @@ class WebhookInboxTest {
 	}
 
 	@Test void retriesDurabilityBarrierEvenForDuplicateReceipts() throws Exception {
-		FlushEngine engine = new FlushEngine(AKeyPair.generate());
+		FlushStore store = new FlushStore();
+		Engine engine = CoviaApplication.connect(LatticeHost.create(Index.none(), store))
+			.mount(AKeyPair.generate(), Maps.empty());
 		engine.start();
 		try {
 			WebhookInbox inbox = new WebhookInbox(engine, engine.adapterState("webhook-test"), "inbox");
-			engine.failFlush = true;
+			store.failFlush = true;
 			assertThrows(IllegalStateException.class, () -> inbox.accept("event", Maps.empty()));
 			assertNotNull(inbox.get("event"));
-			engine.failFlush = false;
-			int before = engine.flushes;
+			store.failFlush = false;
+			int before = store.flushes.get();
 			inbox.accept("event", Maps.empty());
-			assertEquals(before + 1, engine.flushes);
-			engine.failFlush = true;
+			assertEquals(before + 1, store.flushes.get());
+			store.failFlush = true;
 			assertThrows(IllegalStateException.class, () -> inbox.claim("event"));
-			engine.failFlush = false;
+			store.failFlush = false;
 			assertFalse(inbox.claim("event"), "uncertain work is never automatically replayed");
-		} finally { engine.failFlush = false; engine.close(); }
+		} finally { store.failFlush = false; engine.close(); }
 	}
 
 	@Test void malformedReceiptCannotBeAcknowledgedOrOverwrittenAsANewEvent() {
@@ -117,12 +123,12 @@ class WebhookInboxTest {
 		} finally { second.close(); }
 	}
 
-	private static final class FlushEngine extends Engine {
-		boolean failFlush;
-		int flushes;
-		FlushEngine(AKeyPair key) throws IOException { super(Maps.empty(), CoviaApplication.create(key), key); }
+	/** A store whose durability barrier counts its calls and fails on request. */
+	private static final class FlushStore extends MemoryStore {
+		volatile boolean failFlush;
+		final AtomicInteger flushes = new AtomicInteger();
 		@Override public void flush() {
-			flushes++;
+			flushes.incrementAndGet();
 			if (failFlush) throw new IllegalStateException("test durability barrier failure");
 			super.flush();
 		}

@@ -193,11 +193,11 @@ public class VenueServer {
 				this.store = createStore(this.config);
 			}
 			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
-			this.application = CoviaApplication.open(store, keyPair);
+			this.application = CoviaApplication.open(store);
 			this.host = application.host();
 			this.nodeServer = new NodeServer<>(host, NodeConfig.port(-1));
 			nodeServer.launch();
-			engine = new Engine(this.config, application, keyPair);
+			engine = application.mount(keyPair, this.config);
 			engine.setStoreControl(new StoreMaintenance());
 			// Collects the start-up adapters, so their state migrates with the venue's.
 			engine.prepareLaunch();
@@ -1452,10 +1452,11 @@ public class VenueServer {
 	}
 
 	/**
-	 * Full shutdown: stops the HTTP server, closes the engine, which runs its
-	 * final flush, then closes NodeServer, the lattice host and the store.
+	 * Full shutdown: stops the HTTP server, closes the application, which
+	 * unmounts the venue and so closes its engine with a final flush, then
+	 * closes NodeServer, the lattice host and the store.
 	 *
-	 * <p>The engine.close() must run BEFORE nodeServer.close() so its final
+	 * <p>The engine's close must run BEFORE nodeServer.close() so its final
 	 * root publication and durability barrier complete while the host remains
 	 * available. NodeServer saves nothing on close. This venue opened the host,
 	 * so it closes it after the node: closing the host stops its sync and flush
@@ -1490,10 +1491,10 @@ public class VenueServer {
 				recordCloseFailure(launchFailure, "HTTP server close failed", e);
 			}
 		}
-		Engine ownedEngine = engine;
-		if (ownedEngine != null) {
+		CoviaApplication ownedApplication = application;
+		if (ownedApplication != null) {
 			try {
-				ownedEngine.close(); // runs the final synchronous flush
+				ownedApplication.close(); // unmounts the venue: its engine's final synchronous flush
 			} catch (RuntimeException e) {
 				recordCloseFailure(launchFailure, "Engine close failed", e);
 			}

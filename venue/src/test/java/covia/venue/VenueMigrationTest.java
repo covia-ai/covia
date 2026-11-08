@@ -169,13 +169,13 @@ class VenueMigrationTest {
 
 	private static IllegalStateException assertStartupRejected(ACell record, String reason) throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = CoviaApplication.create();
 		try (var store = application.hostStore()) {
+			Engine engine = application.mount(key, Maps.empty());
 			application.venue(key.getAccountKey()).cursor().set(record);
 			application.sync();
 			application.host().sync();
 			ACell before = application.cursor().get();
-			Engine engine = new Engine(Maps.empty(), application, key);
 			IllegalStateException error;
 			try {
 				error = assertThrows(IllegalStateException.class, engine::prepare);

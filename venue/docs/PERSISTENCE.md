@@ -95,8 +95,8 @@ as converted on use.
 
 ## Snapshot implementation contract
 
-With Convex 0.8.18's lattice applications, `LatticeHost` owns publication
-and persistence. Covia registers its live `LatticeApplication` on that host;
+With Convex's lattice applications, `LatticeHost` owns publication
+and persistence. Covia registers its live `CoviaApplication` on that host;
 `NodeServer` attaches the host's publisher. Components explicitly bind their
 clock and signing policy and share storage; there is no component-parent policy
 inheritance. `application.sync()` only reconciles application working state.
@@ -116,11 +116,12 @@ last flush interval's. The engine runs no worker of its own. Each worker reports
 its first failure, which the venue logs at ERROR. Closing the host stops them,
 then syncs the application and checkpoints once more.
 
-Engine now requires a `CoviaApplication`; the raw-cursor constructors and
-`PersistenceHandler` have been removed on this experimental branch. Embedders
-connect to their existing `LatticeHost`, or open an application over their store.
-Restart tests use the same host model as production. The host API migration
-preserves record formats; the separate adapter storage migration is described below.
+The application runs the venues mounted in it: `application.mount(keyPair,
+config)` builds a venue's engine, and nothing else does. Embedders connect the
+application to their existing `LatticeHost`, or open it over their store, and
+mount their venue; restart tests unmount a venue and mount it again, or open a
+new application over the same store, as production does
+([EMBEDDING.md](EMBEDDING.md#starting-and-stopping)).
 
 `VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `Jobs`, `JobState`, `AuthState`, `ScheduleState`, `AdapterState`, `AssetStore`, `SecretStore` and
 `Workspace` implement upstream `TransactionalComponent`. Ordinary domain

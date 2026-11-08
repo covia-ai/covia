@@ -64,7 +64,7 @@ public class VenueStateTest {
 	}
 
 	@Test
-	public void testApplicationHoldsOneCopyOfEachVenueItSignsAs() {
+	public void testApplicationHoldsOneCopyOfEachMountedVenue() {
 		AKeyPair kp = AKeyPair.generate();
 		CoviaApplication application = CoviaApplication.create(kp);
 		VenueState venue = application.venue(kp.getAccountKey());
@@ -72,7 +72,7 @@ public class VenueStateTest {
 
 		AccountKey other = AKeyPair.generate().getAccountKey();
 		ConfigurationException refused = assertThrows(ConfigurationException.class, () -> application.venue(other));
-		assertEquals(String.format(CoviaApplication.CANNOT_SIGN, other), refused.getMessage());
+		assertEquals(String.format(CoviaApplication.NOT_MOUNTED, other), refused.getMessage());
 	}
 
 	@Test
@@ -97,7 +97,7 @@ public class VenueStateTest {
 		try (MemoryStore store = new MemoryStore()) {
 			LatticeHost<Index<convex.core.data.Keyword, ACell>> root =
 				LatticeHost.create(Index.none(), store);
-			CoviaApplication application = CoviaApplication.connect(root, VenueContext.SYSTEM.withSigner(kp));
+			CoviaApplication application = CoviaApplication.connect(root, kp);
 			VenueState venue = application.venue(kp.getAccountKey());
 
 			venue.initialise(Strings.create("did:key:test"), NO_SECRETS);
