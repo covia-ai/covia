@@ -28,7 +28,7 @@ import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -1229,7 +1229,7 @@ public final class ContextAssembler {
 			if (msg == null) return out;
 			if (ROLE_USER.equals(msg.get(K_ROLE)) && value instanceof AMap<?, ?> m) {
 				AMap<AString, ACell> turn = RT.ensureMap(m);
-				if (outcomesAsTools && AgentState.SOURCE_TOOL_OUTCOME.equals(turn.get(AgentState.K_SOURCE))
+				if (outcomesAsTools && Agent.SOURCE_TOOL_OUTCOME.equals(turn.get(Agent.K_SOURCE))
 						&& turn.get(K_CONTENT) != null) {
 					return (AVector<ACell>) out.concat(toolCallOutcome(turn.get(K_CONTENT)));
 				}

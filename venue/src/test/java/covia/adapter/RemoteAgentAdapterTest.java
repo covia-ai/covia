@@ -356,7 +356,7 @@ class RemoteAgentAdapterTest {
 
 	/** Answers the one open ask of {@code ctx}'s agent {@code id}. */
 	private static void answer(Engine engine, RequestContext ctx, String id, String answer) {
-		AgentState agent = engine.getVenueState().users().user(ctx.getUserDID()).agent(id);
+		Agent agent = engine.getVenueState().users().user(ctx.getUserDID()).agent(id);
 		assertEquals(1, agent.getPending().count(), "the agent has one open ask");
 		String ask = agent.getPending().entrySet().iterator().next().getKey().toHexString();
 		engine.jobs().invokeOperation("v/ops/hitl/respond",

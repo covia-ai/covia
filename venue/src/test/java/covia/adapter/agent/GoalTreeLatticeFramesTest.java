@@ -21,8 +21,8 @@ import convex.core.lang.RT;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.venue.Agent;
 import covia.venue.AgentEvents;
-import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -77,7 +77,7 @@ public class GoalTreeLatticeFramesTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 	}
 
-	private AgentState agent(String agentId) {
+	private Agent agent(String agentId) {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		return user.agent(agentId);
 	}
@@ -102,7 +102,7 @@ public class GoalTreeLatticeFramesTest {
 	private AVector<ACell> frames(String agentId, Blob sid) {
 		AMap<AString, ACell> session = agent(agentId).getSession(sid);
 		if (session == null) return null;
-		ACell fv = session.get(AgentState.KEY_FRAMES);
+		ACell fv = session.get(Agent.KEY_FRAMES);
 		return (fv instanceof AVector) ? (AVector<ACell>) fv : Vectors.empty();
 	}
 
@@ -175,18 +175,18 @@ public class GoalTreeLatticeFramesTest {
 		AVector<ACell> messages = Vectors.of(
 			(ACell) Maps.of(Strings.create("message"), Strings.create("hello lattice")));
 		ACell claim = Strings.create("test-claim");
-		assertEquals(AgentState.CycleStart.SESSION, agent("inv-agent").beginCycle(null, null, sid, claim,
+		assertEquals(Agent.CycleStart.SESSION, agent("inv-agent").beginCycle(null, null, sid, claim,
 			covia.adapter.AgentAdapter.cycleInputTurns(messages, null, null, null, 1), 0));
 
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		RequestContext ctx = RequestContext.of(ALICE_DID).withSessionId(sid);
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "inv-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo agent.")),
 			Fields.SESSION, Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
-				AgentState.KEY_IN_CYCLE, claim, AgentState.KEY_PENDING, messages));
+				Agent.KEY_IN_CYCLE, claim, Agent.KEY_PENDING, messages));
 
 		ACell output = adapter.processGoal(null, ctx, input);
 
@@ -205,7 +205,7 @@ public class GoalTreeLatticeFramesTest {
 		// Direct-invoke (no session scope) still returns frames in the output
 		ACell directOut = adapter.processGoal(null, RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "inv-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo agent.")),
 			Fields.MESSAGES, Vectors.of(
@@ -221,7 +221,7 @@ public class GoalTreeLatticeFramesTest {
 		String gateName = gateName("live-agent");
 		createAgent("live-agent", "v/test/ops/nevertoolllm", "hold:" + gateName);
 		Blob sid = mintSession("live-agent", "aa112233445566778899aabbccddee02");
-		AgentState ag = agent("live-agent");
+		Agent ag = agent("live-agent");
 
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
 				RunEnd runEnd = new RunEnd("live-agent")) {
@@ -254,9 +254,9 @@ public class GoalTreeLatticeFramesTest {
 			// (drain 0 for FramesOwning), and the run loop then processes it in a
 			// follow-up cycle — the deterministic end state is its turn in the
 			// conversation, pending empty, agent asleep.
-			assertEquals(AgentState.SLEEPING, runEnd.await(), "the run ends asleep");
+			assertEquals(Agent.SLEEPING, runEnd.await(), "the run ends asleep");
 		}
-		assertEquals(AgentState.SLEEPING, ag.getStatus());
+		assertEquals(Agent.SLEEPING, ag.getStatus());
 		assertEquals(0, ag.getSessionPending(sid).count(), "the follow-up cycle took the mid-cycle message");
 		assertNull(ag.getSessionCycleEpoch(sid), "no cycle holds the session");
 		AVector<ACell> conv = conversation(frames("live-agent", sid).get(0));
@@ -275,7 +275,7 @@ public class GoalTreeLatticeFramesTest {
 		String gateName = gateName("fail-agent");
 		createAgent("fail-agent", "v/test/ops/neverfailllm", "hold:" + gateName);
 		Blob sid = mintSession("fail-agent", "aa112233445566778899aabbccddee03");
-		AgentState ag = agent("fail-agent");
+		Agent ag = agent("fail-agent");
 
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
 				RunEnd runEnd = new RunEnd("fail-agent")) {
@@ -294,9 +294,9 @@ public class GoalTreeLatticeFramesTest {
 			gate.release();
 			assertThrows(Exception.class, () -> chatJob.awaitResult(15000),
 				"chat must fail when the transition fails");
-			assertEquals(AgentState.SUSPENDED, runEnd.await(), "transition failure suspends the agent");
+			assertEquals(Agent.SUSPENDED, runEnd.await(), "transition failure suspends the agent");
 		}
-		assertEquals(AgentState.SUSPENDED, ag.getStatus());
+		assertEquals(Agent.SUSPENDED, ag.getStatus());
 		AVector<ACell> pendingAfter = ag.getSessionPending(sid);
 		assertEquals(1, pendingAfter.count(),
 			"the mid-cycle message must survive a FAILED cycle — the framework "
@@ -363,7 +363,7 @@ public class GoalTreeLatticeFramesTest {
 		String gateName = gateName("zombie-agent");
 		createAgent("zombie-agent", "v/test/ops/nevertoolllm", "hold:" + gateName);
 		Blob sid = mintSession("zombie-agent", "aa112233445566778899aabbccddee05");
-		AgentState ag = agent("zombie-agent");
+		Agent ag = agent("zombie-agent");
 
 		// The gate stays shut until the end: the transition is still parked in
 		// its tool, a zombie, when the claim it holds is released.
@@ -384,9 +384,9 @@ public class GoalTreeLatticeFramesTest {
 				"v/ops/agent/suspend",
 				Maps.of(Fields.AGENT_ID, "zombie-agent"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
-			assertEquals(AgentState.SUSPENDED, ag.getStatus(), "agent suspended");
+			assertEquals(Agent.SUSPENDED, ag.getStatus(), "agent suspended");
 
-			assertEquals(AgentState.SUSPENDED, runEnd.await(), "the run ends suspended");
+			assertEquals(Agent.SUSPENDED, runEnd.await(), "the run ends suspended");
 			assertNull(ag.getSessionCycleEpoch(sid), "the suspension released the cycle claim");
 
 			AVector<ACell> atSuspend = frames("zombie-agent", sid);
@@ -411,7 +411,7 @@ public class GoalTreeLatticeFramesTest {
 		String gateName = gateName("delsess-agent");
 		createAgent("delsess-agent", "v/test/ops/nevertoolllm", "hold:" + gateName);
 		Blob sid = mintSession("delsess-agent", "aa112233445566778899aabbccddee06");
-		AgentState ag = agent("delsess-agent");
+		Agent ag = agent("delsess-agent");
 
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
 				RunEnd runEnd = new RunEnd("delsess-agent")) {
@@ -432,9 +432,9 @@ public class GoalTreeLatticeFramesTest {
 			assertThrows(Exception.class, () -> chatJob.awaitResult(15000));
 			assertNull(agent("delsess-agent").getSession(sid), "session stays deleted");
 			gate.release();
-			assertEquals(AgentState.SLEEPING, runEnd.await(), "the run ends asleep");
+			assertEquals(Agent.SLEEPING, runEnd.await(), "the run ends asleep");
 		}
-		assertEquals(AgentState.SLEEPING, ag.getStatus());
+		assertEquals(Agent.SLEEPING, ag.getStatus());
 		assertTrue(ag.getTimeline().count() > 0, "aborted cycle surfaces as a failed cycle in the timeline");
 		assertNull(ag.getError(), "losing a deleted session's cycle is not a fault in the agent");
 		String result = String.valueOf(RT.getIn(ag.getTimeline().get(ag.getTimeline().count() - 1), Fields.RESULT));

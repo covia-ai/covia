@@ -27,7 +27,6 @@ import convex.lattice.LatticeHost;
 import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
-import covia.venue.AgentState;
 
 /**
  * Tests for the cursor-based VenueState application API.
@@ -528,9 +527,9 @@ public class VenueStateTest {
 		assertNull(user.agent("agent-1"),
 			"User agent() should return null for non-existent agent");
 
-		// ensureAgent() creates and returns a non-null AgentState
-		AgentState agent = user.ensureAgent("agent-1", null, null);
-		assertNotNull(agent, "User ensureAgent() should return non-null AgentState");
+		// ensureAgent() creates and returns a non-null Agent
+		Agent agent = user.ensureAgent("agent-1", null, null);
+		assertNotNull(agent, "User ensureAgent() should return non-null Agent");
 		assertTrue(agent.exists(), "ensureAgent() should initialise the agent");
 	}
 

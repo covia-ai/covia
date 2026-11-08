@@ -16,7 +16,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -72,12 +72,12 @@ public class LLMAgentOllamaIT {
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ollama-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, initialState),
+				Agent.KEY_STATE, initialState),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver directly to avoid auto-wake race
 		User ollamaUser = engine.getVenueState().users().user(ALICE_DID);
-		AgentState ollamaAgent = ollamaUser.agent("ollama-agent");
+		Agent ollamaAgent = ollamaUser.agent("ollama-agent");
 		Blob ollamaSid = Blob.fromHex("44440001444400014444000144440001");
 		ollamaAgent.ensureSession(ollamaSid, ALICE_DID);
 		AString ollamaSidHex = Strings.create(ollamaSid.toHexString());
@@ -91,10 +91,10 @@ public class LLMAgentOllamaIT {
 		ACell result = runJob.awaitResult(5000);
 
 		assertNotNull(result);
-		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+		assertEquals(Agent.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("ollama-agent");
+		Agent agent = user.agent("ollama-agent");
 
 		AVector<ACell> timeline = agent.getTimeline();
 		assertEquals(1, timeline.count());

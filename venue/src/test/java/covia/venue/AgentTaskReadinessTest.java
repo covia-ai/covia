@@ -16,18 +16,18 @@ import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 
 /**
- * When a queued task is ready to run ({@link AgentState#isTaskReady}): a task
+ * When a queued task is ready to run ({@link Agent#isTaskReady}): a task
  * that is not parked always is, and a parked one only once something new is
  * there for it. Each case passes its own {@code now}, so no clock is involved.
  */
-public class AgentStateTaskReadinessTest {
+public class AgentTaskReadinessTest {
 
 	private static final Blob SID = Blob.fromHex("5e55000000000000000000000000beef");
 	private static final Blob TASK = Blob.fromHex("7a5c000000000000000000000000beef");
 	private static final long NOW = 1_000_000L;
 
 	private AString did;
-	private AgentState agent;
+	private Agent agent;
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -47,7 +47,7 @@ public class AgentStateTaskReadinessTest {
 
 	/** Starts a cycle on the task, as the run loop does: its next input is shown. */
 	private void startCycle() {
-		assertEquals(AgentState.CycleStart.NO_SESSION,
+		assertEquals(Agent.CycleStart.NO_SESSION,
 			agent.beginCycle(TASK, row(), null, Strings.create("claim"), Vectors.empty(), 0));
 	}
 
@@ -76,7 +76,7 @@ public class AgentStateTaskReadinessTest {
 	@Test
 	public void aParkedTaskIsReadyOnceItsWakeTimeComes() {
 		presentAndPark();
-		agent.setThreadWakeTime(AgentState.ThreadKind.TASK, TASK, NOW);
+		agent.setThreadWakeTime(Agent.ThreadKind.TASK, TASK, NOW);
 		assertFalse(agent.isTaskReady(row(), NOW - 1), "not before its wake time");
 		assertTrue(agent.isTaskReady(row(), NOW), "from its wake time on");
 	}

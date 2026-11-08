@@ -31,11 +31,11 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.grid.Attribution;
 import covia.grid.Job;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
-import covia.venue.AgentState;
 import covia.venue.HitlRequest;
 import covia.venue.UcanJwtValidator;
 import covia.venue.User;
@@ -249,7 +249,7 @@ public class HITLAdapter extends AAdapter {
 		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
 		if (agentId == null) return;
 		User owner = venue.users().user(job.getOwner());
-		AgentState agent = owner == null ? null : owner.agent(agentId);
+		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return;
 		if (taskId != null) {
 			agent.addPending(job.getID(), Maps.of(Fields.TASK_ID, Strings.create(taskId.toHexString())));
@@ -263,7 +263,7 @@ public class HITLAdapter extends AAdapter {
 		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
 		if (agentId == null) return;
 		User owner = venue.users().user(job.getOwner());
-		AgentState agent = owner == null ? null : owner.agent(agentId);
+		Agent agent = owner == null ? null : owner.agent(agentId);
 		if (agent != null && agent.getRecord() != null) agent.removePending(job.getID());
 	}
 
@@ -828,7 +828,7 @@ public class HITLAdapter extends AAdapter {
 			// Terminal jobs are skipped at restart, so the wait ends with the result
 			AString requestingAgent = Engine.agentIdIn(job.getOwner(), job.getCaller());
 			User owner = draft.user(job.getOwner());
-			AgentState askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
+			Agent askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
 			if (askingAgent != null && askingAgent.getRecord() != null) {
 				AString taskHex = RT.ensureString(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));
 				if (taskHex != null) waitingTask = Blob.fromHex(taskHex.toString());

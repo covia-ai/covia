@@ -11,7 +11,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
-import covia.venue.AgentState.ThreadKind;
+import covia.venue.Agent.ThreadKind;
 
 /**
  * Validates {@link Engine#rebuildSchedulerFromLattice} — on boot, each agent's
@@ -28,7 +28,7 @@ public class EngineSchedulerRebuildTest {
 	}
 
 	private static long timeOf(AVector<ACell> events, long i) {
-		return ((convex.core.data.prim.CVMLong) event(events, i).get(ScheduleState.K_TIME)).longValue();
+		return ((convex.core.data.prim.CVMLong) event(events, i).get(Schedule.K_TIME)).longValue();
 	}
 
 	@Test
@@ -38,7 +38,7 @@ public class EngineSchedulerRebuildTest {
 			AString userDid = Strings.intern("did:key:z6Mk-rebuild-test");
 			RequestContext ctx = RequestContext.of(userDid);
 			User user = engine.getVenueState().users().ensure(userDid);
-			AgentState agent = user.ensureAgent("rebuild-agent", Maps.empty(), null);
+			Agent agent = user.ensureAgent("rebuild-agent", Maps.empty(), null);
 
 			// One session + one task, each with a far-future wakeTime so
 			// nothing fires during the test. Session is the earlier of the two.
@@ -65,7 +65,7 @@ public class EngineSchedulerRebuildTest {
 			engine.rebuildSchedulerFromLattice();
 			AVector<ACell> after = engine.gridScheduler().list(ctx);
 			assertEquals(1, after.count(), "rebuild must not duplicate the wake");
-			assertEquals(AgentState.TRIGGER_OP, event(after, 0).get(ScheduleState.K_OP));
+			assertEquals(Agent.TRIGGER_OP, event(after, 0).get(Schedule.K_OP));
 			assertEquals(sessionWake, timeOf(after, 0));
 		} finally {
 			engine.close();
@@ -79,7 +79,7 @@ public class EngineSchedulerRebuildTest {
 			AString userDid = Strings.intern("did:key:z6Mk-rebuild-test-empty");
 			RequestContext ctx = RequestContext.of(userDid);
 			User user = engine.getVenueState().users().ensure(userDid);
-			AgentState agent = user.ensureAgent("no-wakes-agent", Maps.empty(), null);
+			Agent agent = user.ensureAgent("no-wakes-agent", Maps.empty(), null);
 
 			// Session + task exist but neither carries a wakeTime.
 			agent.ensureSession(Blob.fromHex("cc"), userDid);

@@ -19,7 +19,7 @@ import covia.api.Fields;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
 import covia.grid.Job;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.RequestContext;
 
 /**
@@ -522,7 +522,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
-		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
+		AMap<AString, ACell> recordConfig = (RT.getIn(input, Agent.KEY_CONFIG) instanceof AMap m) ? m : null;
 		AMap<AString, ACell> config = recordConfig;
 
 		// Resolve the configured root-frame output contract. When a schema is in
@@ -575,7 +575,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input,
 			messages, rootDescription, cycleTs);
 		if (opened.failed()) {
-			return CycleRecord.endInto(Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error()));
+			return CycleRecord.endInto(Maps.of(Agent.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error()));
 		}
 		FrameStore store = opened.store();
 		boolean tidyInterrupted = opened.interrupted();
@@ -657,7 +657,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null && !cycle.tasks().resolved()) {
 			completeTaskViaVenueOp(ctx, failed, result.value());
 		}
-		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
+		AMap<AString, ACell> output = Maps.of(Agent.KEY_STATE, newState);
 		if (store instanceof FrameStore.LocalFrameStore) {
 			output = output.assoc(Fields.FRAMES, result.frames());
 		}
@@ -1262,7 +1262,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return Maps.of(
 			K_ROLE, ROLE_ASSISTANT,
 			K_CONTENT, content,
-			AgentState.K_SOURCE, AgentState.SOURCE_TRANSITION);
+			Agent.K_SOURCE, Agent.SOURCE_TRANSITION);
 	}
 
 	/** Updates a frame at the given index in the frame stack. */

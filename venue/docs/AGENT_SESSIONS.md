@@ -374,7 +374,7 @@ can call these existing functions directly; no new REST endpoint is required.
 | Append stored turns without knowing the frame format | `GoalTreeContext.appendTurn(frame, turn)` / `appendTurns(frame, turns)` |
 | Read a session transcript through the TypeScript SDK | `(await agent.getSession(id)).conversation`, or `await agent.transcript(id)` |
 
-For example, replace a direct `frame.get(AgentState.KEY_CONVERSATION)` read with:
+For example, replace a direct `frame.get(Agent.KEY_CONVERSATION)` read with:
 
 ```java
 AVector<ACell> conversation = GoalTreeContext.archivedConversation(frame);
@@ -400,7 +400,7 @@ writes, source refresh or cached-prefix changes and imposes no archive-depth cap
 These raw accessors do not authorise reads or filter content for a recipient.
 Existing hosts retain their access checks, private-session exclusions, audience
 rules and output budgets. Do not replace a filtered agent-facing view with a
-raw accessor. `AgentState.KEY_CONVERSATION` remains available for legacy data,
+raw accessor. `Agent.KEY_CONVERSATION` remains available for legacy data,
 but new frames no longer store that field. Clients reading raw lattice paths
 must update before venue migration; the TypeScript SDK's transcript accessor
 already handles both formats. General history navigation remains tracked in

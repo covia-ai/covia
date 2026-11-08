@@ -27,20 +27,20 @@ import covia.exception.InvalidInputException;
 import covia.lattice.Covia;
 
 /** Stored schedule records and recurrence rules. No timers or job execution. */
-public final class ScheduleState extends ALatticeComponent<ACell>
-		implements TransactionalComponent<ACell, ScheduleState> {
+public final class Schedule extends ALatticeComponent<ACell>
+		implements TransactionalComponent<ACell, Schedule> {
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 
-	ScheduleState(VenueContext context, AForkableCursor<ACell> cursor) {
+	Schedule(VenueContext context, AForkableCursor<ACell> cursor) {
 		super(cursor);
 		this.context = context;
 		this.edits = StampedCursor.create(cursor, context::currentTimestamp, Covia::stampUpdated);
 	}
 
 	@Override public AForkableCursor<ACell> cursor() { return edits; }
-	@Override public ScheduleState withCursor(AForkableCursor<ACell> draft) {
-		return new ScheduleState(context, draft);
+	@Override public Schedule withCursor(AForkableCursor<ACell> draft) {
+		return new Schedule(context, draft);
 	}
 
 	public record Entry(Blob key, AMap<AString, ACell> rec) {}
@@ -173,12 +173,12 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		if (oldHandle != null) {
 			var old = find(oldHandle);
 			if (old != null && owner.equals(Attribution.owner(old.rec()))
-					&& AgentState.TRIGGER_OP.equals(old.rec().get(K_OP))
+					&& Agent.TRIGGER_OP.equals(old.rec().get(K_OP))
 					&& agentId.equals(RT.getIn(old.rec(), K_INPUT, Fields.AGENT_ID))) {
 				drop(old.key());
 			}
 		}
-		return earliest <= 0 ? null : schedule(AgentState.TRIGGER_OP,
+		return earliest <= 0 ? null : schedule(Agent.TRIGGER_OP,
 			Maps.of(Fields.AGENT_ID, agentId, Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE),
 			owner, owner, null, null, earliest, null, false, null,
 			context.currentTimestamp().longValue());

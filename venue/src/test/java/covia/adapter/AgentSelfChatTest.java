@@ -12,7 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.grid.Job;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -53,7 +53,7 @@ public class AgentSelfChatTest {
 					"llmOperation", "v/test/ops/selfchat")),
 			ctx).awaitResult(5000);
 
-		AgentState agent = engine.getVenueState().users().user(did)
+		Agent agent = engine.getVenueState().users().user(did)
 			.agent("selfchat-agent");
 		Blob sid = Blob.fromHex("abababababababababababababababab");
 		agent.ensureSession(sid, did);
@@ -72,7 +72,7 @@ public class AgentSelfChatTest {
 
 		assertEquals(2, agent.getTimeline().count(),
 			"Timeline should record both cycles (initial + self-kicked FOLLOWUP)");
-		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+		assertEquals(Agent.SLEEPING, agent.getStatus(),
 			"Agent should quiesce once both cycles are done");
 	}
 }

@@ -3554,22 +3554,22 @@ public class Engine {
 	 * Looks up an agent's lattice state by owner DID and agent ID.
 	 *
 	 * <p>Returns null if the user doesn't exist, the agent isn't initialised,
-	 * or the agent is {@link AgentState#TERMINATED}. Used by the harness to
+	 * or the agent is {@link Agent#TERMINATED}. Used by the harness to
 	 * read agent record fields (config, tasks, pending, sessions) directly
 	 * from the lattice instead of plumbing them through the step input.</p>
 	 *
 	 * @param callerDID Agent owner's DID (never null)
 	 * @param agentId   Agent identifier (never null)
-	 * @return AgentState wrapper, or null if not found / terminated
+	 * @return Agent wrapper, or null if not found / terminated
 	 */
-	public AgentState getAgent(AString callerDID, AString agentId) {
+	public Agent getAgent(AString callerDID, AString agentId) {
 		if (callerDID == null || agentId == null) return null;
 		Users users = venueState.users();
 		User user = users.user(callerDID);
 		if (user == null) return null;
-		AgentState agent = user.agent(agentId);
+		Agent agent = user.agent(agentId);
 		if (agent == null) return null;
-		if (AgentState.TERMINATED.equals(agent.getStatus())) return null;
+		if (Agent.TERMINATED.equals(agent.getStatus())) return null;
 		return agent;
 	}
 
@@ -3706,7 +3706,7 @@ public class Engine {
 			for (var agentEntry : agents.entrySet()) {
 				AString agentId = (AString) agentEntry.getKey();
 				if (!(agentEntry.getValue() instanceof AMap)) continue;
-				AgentState agent = user.agent(agentId);
+				Agent agent = user.agent(agentId);
 				if (agent == null) continue;
 				if (gridScheduler.rescheduleAgentWake(userDid, agentId)) count++;
 			}
@@ -3796,7 +3796,7 @@ public class Engine {
 		String agentId = rest.substring(3);
 		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return false;
 		User user = venueState.users().user(owner);
-		AgentState agent = (user != null) ? user.agent(agentId) : null;
+		Agent agent = (user != null) ? user.agent(agentId) : null;
 		if (agent == null) return false;
 		return Admission.admits(Admission.policy(agent.getConfig()), caller,
 			isVenuePrincipal(ctx.getUserDID()), isPublicPrincipal(caller));
@@ -4169,7 +4169,7 @@ public class Engine {
 		RequestContext agent = RequestContext.ofAgent(owner, agentId);
 		AString self = covia.grid.Principals.agentDID(owner, agentId);
 		RequestContext.ScopeSource caps = resource -> withControl(agentScope(owner, agentId), self, resource, owner);
-		AgentState state = getAgent(owner, agentId);
+		Agent state = getAgent(owner, agentId);
 		AString controller = (state == null) ? null : state.getController();
 		if (controller == null || controller.equals(owner)) return agent.readingScope(caps);
 
@@ -4197,7 +4197,7 @@ public class Engine {
 	 * without them, and none once the agent is gone or terminated.
 	 */
 	AVector<ACell> agentScope(AString owner, AString agentId) {
-		AgentState agent = getAgent(owner, agentId);
+		Agent agent = getAgent(owner, agentId);
 		return (agent == null) ? Vectors.empty()
 			: CapabilityChecker.inAgent(RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS)), agentId);
 	}
@@ -4254,7 +4254,7 @@ public class Engine {
 		AString owner = place.owner();
 		AString agentId = place.agentId();
 		while (true) {
-			AgentState state = getAgent(owner, agentId);
+			Agent state = getAgent(owner, agentId);
 			AString controller = (state == null) ? null : state.getController();
 			if (controller == null) return false;
 			if (controller.equals(principal)) return true;
@@ -4368,7 +4368,7 @@ public class Engine {
 	 */
 	public RequestContext harnessContext(AString owner, AString agentId) {
 		RequestContext harness = RequestContext.ofAgent(owner, agentId);
-		AgentState agent = getAgent(owner, agentId);
+		Agent agent = getAgent(owner, agentId);
 		AString controller = (agent == null) ? null : agent.getController();
 		if (controller == null || controller.equals(owner)) return harness;
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)

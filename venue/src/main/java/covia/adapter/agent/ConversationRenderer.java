@@ -14,7 +14,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.InvalidInputException;
-import covia.venue.AgentState;
 
 /**
  * Provider-neutral rendering policy for persisted agent conversations.

@@ -137,7 +137,7 @@ public final class AgentEvents {
 
 		/** True for the event that ends an agent's stream: status TERMINATED. */
 		public boolean isTerminal() {
-			return STATUS.equals(type) && AgentState.TERMINATED.equals(RT.getIn(data, Fields.STATUS));
+			return STATUS.equals(type) && Agent.TERMINATED.equals(RT.getIn(data, Fields.STATUS));
 		}
 	}
 

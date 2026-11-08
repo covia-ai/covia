@@ -33,10 +33,10 @@ import covia.grid.Principals;
 import covia.grid.Status;
 import covia.grid.auth.UcanTokens;
 import covia.grid.hitl.Hitl;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.Config;
-import covia.venue.AgentState;
 import covia.venue.AgentWatch;
 import covia.venue.TestEngine;
 import covia.venue.TestLogs;
@@ -187,7 +187,7 @@ public class HITLAdapterTest {
 				Fields.TOOLS, Vectors.of(Strings.create("v/ops/hitl/request")))),
 			ALICE).awaitResult(5000);
 		User owner = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = owner.agent("hitl-agent");
+		Agent agent = owner.agent("hitl-agent");
 		Blob sid = Blob.fromHex("a11ce000a11ce000a11ce000a11ce000");
 		agent.ensureSession(sid, ALICE_DID);
 
@@ -824,7 +824,7 @@ public class HITLAdapterTest {
 			Fields.AGENT_ID, agentId,
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")),
 			BOB).awaitResult(5000);
-		AgentState agent = engine.getVenueState().users().user(owner).agent(agentId);
+		Agent agent = engine.getVenueState().users().user(owner).agent(agentId);
 		Blob sid = Blob.fromHex("d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0");
 		agent.ensureSession(sid, owner);
 		Job job = request(asking(owner, agentId, ALICE_DID).withSessionId(sid), Hitl.request("May I?").to(ALICE_DID.toString())
@@ -908,7 +908,7 @@ public class HITLAdapterTest {
 		try {
 			Engine.addDemoAssets(isolated);
 			AString agentId = Strings.create("recover-hitl");
-			AgentState agent = isolated.getVenueState().users().ensure(ALICE_DID)
+			Agent agent = isolated.getVenueState().users().ensure(ALICE_DID)
 				.ensureAgent(agentId, Maps.empty(), null);
 			Job original = isolated.jobs().invokeOperation("v/ops/hitl/request",
 				Hitl.request("Recover me").ask(Hitl.approval("ok", "OK?")).build(),

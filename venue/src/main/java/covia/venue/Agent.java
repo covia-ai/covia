@@ -1,6 +1,6 @@
 package covia.venue;
 
-import static covia.venue.SessionState.*;
+import static covia.venue.Session.*;
 
 import java.util.Objects;
 import java.util.function.UnaryOperator;
@@ -37,10 +37,10 @@ import covia.api.Fields;
  * atomic cursor updates; changes spanning sessions and agent state compose
  * through upstream transactions, without external locking or I/O.</p>
  */
-public class AgentState extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, AgentState>, Owner {
+public class Agent extends ALatticeComponent<ACell> implements TransactionalComponent<ACell, Agent>, Owner {
 	@Override
-	public AgentState withCursor(AForkableCursor<ACell> draft) {
-		return new AgentState(context, draft, owner, agentId);
+	public Agent withCursor(AForkableCursor<ACell> draft) {
+		return new Agent(context, draft, owner, agentId);
 	}
 
 	private final VenueContext context;
@@ -167,7 +167,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * @param owner DID of the user whose agent this is, or null for a record outside any user
 	 * @param agentId The agent's id in its owner's {@code g/}
 	 */
-	AgentState(VenueContext context, AForkableCursor<ACell> cursor,
+	Agent(VenueContext context, AForkableCursor<ACell> cursor,
 			AString owner, AString agentId) {
 		super(cursor);
 		this.context = context;
@@ -375,8 +375,8 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Session view bound to this agent (including when this agent is a draft).
 	 * Missing sessions read as null; mutations never create or resurrect them. */
-	public SessionState session(Blob sid) {
-		return new SessionState(getContext(), cursor().path(K_SESSIONS, sid), owner, agentId, sid);
+	public Session session(Blob sid) {
+		return new Session(getContext(), cursor().path(K_SESSIONS, sid), owner, agentId, sid);
 	}
 
 	/** The agent's own workspace ({@code n}); a change to it needs the agent. */
@@ -498,7 +498,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	private SessionIntake intakeSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, boolean create,
-			java.util.function.Consumer<AgentState> change) {
+			java.util.function.Consumer<Agent> change) {
 		return transact(draft -> {
 			if (!draft.exists() || TERMINATED.equals(draft.getStatus())) return SessionIntake.MISSING;
 			ACell raw = draft.getSessions().get(sid);
@@ -661,7 +661,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Revokes the agent's cycle claim, as startup does for a cycle no executor runs. */
 	public void revokeClaim() {
-		if (RT.getIn(getRecord(), K_IN_CYCLE) != null) update(AgentState::withoutClaim);
+		if (RT.getIn(getRecord(), K_IN_CYCLE) != null) update(Agent::withoutClaim);
 	}
 
 	/**
@@ -730,7 +730,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * longer parked: it is in a cycle now, so a restart before the cycle ends
 	 * finds it interrupted rather than waiting. The picked session, when it
 	 * exists, is claimed with the same epoch and given the cycle's input
-	 * ({@link SessionState#beginCycle}); a cycle that picked only a session
+	 * ({@link Session#beginCycle}); a cycle that picked only a session
 	 * that has gone takes nothing.
 	 *
 	 * @param taskId the picked task, or null
@@ -847,7 +847,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
 		Blob sessionId = (sid == null) ? null : Blob.parse(sid.toString());
 		AMap<AString, ACell> session = (sessionId == null) ? null : getSession(sessionId);
-		return session != null && SessionState.sessionHasWork(session);
+		return session != null && Session.sessionHasWork(session);
 	}
 
 	/** Whether any queued task is ready to run ({@link #isTaskReady}). */

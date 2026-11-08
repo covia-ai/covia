@@ -29,8 +29,8 @@ import covia.exception.NotFoundException;
 import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
 import covia.grid.Attribution;
-import covia.venue.ScheduleState.Entry;
-import static covia.venue.ScheduleState.*;
+import covia.venue.Schedule.Entry;
+import static covia.venue.Schedule.*;
 
 /**
  * Per-venue scheduler for deferred grid-operation invocations. Fires any grid
@@ -92,10 +92,10 @@ public class Scheduler {
 
 	private static final Logger log = LoggerFactory.getLogger(Scheduler.class);
 
-	public static final long MIN_REPEAT_MS = ScheduleState.MIN_REPEAT_MS;
-	public static final int MAX_DESCRIPTION_CHARS = ScheduleState.MAX_DESCRIPTION_CHARS;
-	public static final String DESCRIPTION_NOT_STRING = ScheduleState.DESCRIPTION_NOT_STRING;
-	public static final String DESCRIPTION_TOO_LONG = ScheduleState.DESCRIPTION_TOO_LONG;
+	public static final long MIN_REPEAT_MS = Schedule.MIN_REPEAT_MS;
+	public static final int MAX_DESCRIPTION_CHARS = Schedule.MAX_DESCRIPTION_CHARS;
+	public static final String DESCRIPTION_NOT_STRING = Schedule.DESCRIPTION_NOT_STRING;
+	public static final String DESCRIPTION_TOO_LONG = Schedule.DESCRIPTION_TOO_LONG;
 	/** Refusal for a user reaching another user's scheduled event. */
 	public static final String NOT_OWNER = "Not the owner of this scheduled event";
 	/** Refusal for a capability-scoped agent reaching an event it did not schedule. */
@@ -137,8 +137,8 @@ public class Scheduler {
 	// ---------------------------------------------------------------- public API
 
 	/** Commit wake intent and the event together, then report the next due time. */
-	public void setThreadWakeTime(AString owner, AgentState agent,
-			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
+	public void setThreadWakeTime(AString owner, Agent agent,
+			Agent.ThreadKind kind, Blob threadId, long wakeTime) {
 		User user = engine.getVenueState().users().user(owner);
 		if (user == null) throw new AuthException(Users.ACCOUNT_DELETED);
 		ACell generation = RT.getIn(user.get(), Users.GENERATION);
@@ -496,10 +496,10 @@ public class Scheduler {
 
 	// ------------------------------------------------------------- recurrence
 
-	public static AMap<AString, ACell> validateRepeat(AMap<AString, ACell> repeat) { return ScheduleState.validateRepeat(repeat); }
-	public static AString validateDescription(ACell description) { return ScheduleState.validateDescription(description); }
-	public static long everyOf(AMap<AString, ACell> repeat) { return ScheduleState.everyOf(repeat); }
-	static long nextTime(AMap<AString, ACell> repeat, long time, long now) { return ScheduleState.nextTime(repeat, time, now); }
+	public static AMap<AString, ACell> validateRepeat(AMap<AString, ACell> repeat) { return Schedule.validateRepeat(repeat); }
+	public static AString validateDescription(ACell description) { return Schedule.validateDescription(description); }
+	public static long everyOf(AMap<AString, ACell> repeat) { return Schedule.everyOf(repeat); }
+	static long nextTime(AMap<AString, ACell> repeat, long time, long now) { return Schedule.nextTime(repeat, time, now); }
 
 	// ------------------------------------------------------- bodies under the lock
 
@@ -618,7 +618,7 @@ public class Scheduler {
 
 	// ------------------------------------------------------------------ helpers
 
-	private ScheduleState state() { return engine.getVenueState().schedule(); }
+	private Schedule state() { return engine.getVenueState().schedule(); }
 	private Index<Blob, ACell> index() { return state().events(); }
 	private long now() { return engine.currentTimestamp().longValue(); }
 

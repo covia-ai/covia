@@ -26,9 +26,9 @@ class AgentFacetTest {
     }
     private AMap<AString, ACell> target() { return Maps.of(Fields.AGENT_ID, "external"); }
     private void create() throws Exception {
-        run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "facetprobe")));
+        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "facetprobe")));
     }
-    private AgentState agent(String id) { return engine.getVenueState().users().user(ctx.getUserDID()).agent(Strings.create(id)); }
+    private Agent agent(String id) { return engine.getVenueState().users().user(ctx.getUserDID()).agent(Strings.create(id)); }
 
     static class Probe extends ARemoteAgentAdapter<RemoteInteraction> {
         final AtomicInteger starts = new AtomicInteger(), cancels = new AtomicInteger();
@@ -61,7 +61,7 @@ class AgentFacetTest {
     @Test void absentFacetPreservesNativeRecordAndTaskContract() throws Exception {
         run("create", Maps.of(Fields.AGENT_ID, "legacy", Fields.CONFIG,
             Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
-        assertFalse(agent("legacy").getRecord().containsKey(AgentState.KEY_AGENT));
+        assertFalse(agent("legacy").getRecord().containsKey(Agent.KEY_AGENT));
         ACell result = run("request", Maps.of(Fields.AGENT_ID, "legacy", Fields.INPUT, Maps.of("task", "hello")));
         assertEquals(Strings.create("hello"), RT.getIn(result, Fields.OUTPUT, "completed", "task"));
         assertEquals(0, probe.starts.get());
@@ -69,7 +69,7 @@ class AgentFacetTest {
 
     @Test void invalidFacetNeverFallsBackOrCreatesRecord() {
         for (ACell value : new ACell[]{null, Strings.create("a2a"), Maps.empty(), Maps.of(Fields.ADAPTER, "missing"), Maps.of(Fields.ADAPTER, "test")}) {
-            Job job = invoke("create", target().assoc(AgentState.KEY_AGENT, value));
+            Job job = invoke("create", target().assoc(Agent.KEY_AGENT, value));
             assertEquals(Status.FAILED, job.getStatus());
             assertNull(agent("external"));
         }
@@ -87,7 +87,7 @@ class AgentFacetTest {
         assertEquals(Strings.create("provider-session"), probe.previous);
         ACell history = run("session-read", target().assoc(Fields.SESSION_ID, sid));
         assertEquals(4, RT.ensureVector(RT.getIn(history, Fields.MESSAGES)).count());
-        assertEquals(Maps.of(Fields.ADAPTER, "facetprobe"), RT.getIn(run("info", target()), AgentState.KEY_AGENT));
+        assertEquals(Maps.of(Fields.ADAPTER, "facetprobe"), RT.getIn(run("info", target()), Agent.KEY_AGENT));
     }
 
     @Test void busySessionContinuationAndCancellationUseChildWithoutAnotherSubmission() throws Exception {
@@ -125,8 +125,8 @@ class AgentFacetTest {
         create(); probe.waiting = true;
         Job first = invoke("request", target().assoc(Fields.INPUT, Maps.of("task", "wait")));
         assertEquals(Status.INPUT_REQUIRED, first.getStatus(), first.getErrorMessage());
-        AgentState agent = agent("external");
-        agent.putRecord(agent.getRecord().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "")));
+        Agent agent = agent("external");
+        agent.putRecord(agent.getRecord().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "")));
         covia.exception.InvalidDefinitionException e = assertThrows(covia.exception.InvalidDefinitionException.class,
             () -> engine.jobs().deliverMessage(first.getID(), Maps.of(Fields.MESSAGE, Strings.create("continue")), ctx));
         assertEquals(ExternalAgents.MISCONFIGURED + ExternalAgents.INVALID, e.getMessage());
@@ -144,7 +144,7 @@ class AgentFacetTest {
     }
 
     @Test void configuredAgentCapsBoundBackendInvocation() throws Exception {
-        run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "facetprobe"))
+        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "facetprobe"))
             .assoc(Fields.CONFIG, Maps.of("caps", Vectors.empty())));
         Job denied = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("hello")));
         assertEquals(Status.FAILED, denied.getStatus());
@@ -161,7 +161,7 @@ class AgentFacetTest {
         Job next = invoke("request", target().assoc(Fields.INPUT, Maps.empty()));
         run("delete", target());
         assertEquals(Status.CANCELLED, next.getStatus());
-        assertEquals(AgentState.TERMINATED, agent("external").getStatus());
+        assertEquals(Agent.TERMINATED, agent("external").getStatus());
         assertEquals(2, probe.starts.get());
     }
 
@@ -179,9 +179,9 @@ class AgentFacetTest {
         engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(Fields.PATH, "w/external-definition",
             Fields.VALUE, Maps.of("name", "Helper", "agent", Maps.of(Fields.ADAPTER, "facetprobe"))), ctx).awaitResult(5000);
         run("create", target().assoc(Fields.DEFINITION, Strings.create("w/external-definition")));
-        assertEquals(Maps.of(Fields.ADAPTER, "facetprobe"), agent("external").getRecord().get(AgentState.KEY_AGENT));
+        assertEquals(Maps.of(Fields.ADAPTER, "facetprobe"), agent("external").getRecord().get(Agent.KEY_AGENT));
         run("create", Maps.of(Fields.AGENT_ID, "legacy-template", Fields.CONFIG, "v/agents/templates/skilled"));
-        assertFalse(agent("legacy-template").getRecord().containsKey(AgentState.KEY_AGENT));
+        assertFalse(agent("legacy-template").getRecord().containsKey(Agent.KEY_AGENT));
     }
 
     @Test void a2aFacetUsesCommonApiAndRetainsContext() throws Exception {
@@ -200,7 +200,7 @@ class AgentFacetTest {
         });
         server.start();
         try {
-            run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "a2a",
+            run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "a2a",
                 "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/rpc", "card", Maps.empty())));
             Job firstJob = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("first")));
             ACell first;
@@ -219,7 +219,7 @@ class AgentFacetTest {
 
     @Test void realNativeProxyUsesExistingAgentRequestSurface() throws Exception {
         run("create", Maps.of(Fields.AGENT_ID, "native", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")));
-        run("create", target().assoc(AgentState.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native")));
+        run("create", target().assoc(Agent.KEY_AGENT, Maps.of(Fields.ADAPTER, "remoteagent", Fields.AGENT_ID, "native")));
         ACell output = run("request", target().assoc(Fields.INPUT, Maps.of("task", "via proxy")));
         assertEquals(Strings.create("via proxy"), RT.getIn(output, Fields.OUTPUT, "completed", "task"));
     }

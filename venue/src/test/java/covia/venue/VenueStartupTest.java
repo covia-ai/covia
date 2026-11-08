@@ -226,7 +226,7 @@ public class VenueStartupTest {
 		Engine seed = CoviaApplication.open(store).mount(key, cfg).prepare();
 		try {
 			AString owner = seed.getDIDString();
-			AgentState agent = seed.getVenueState().users().ensure(owner).ensureAgent(
+			Agent agent = seed.getVenueState().users().ensure(owner).ensureAgent(
 				"startup-agent", Maps.of(Fields.OPERATION, OP, "release", "old"), null);
 			Blob sid = Blob.fromHex("05640001");
 			agent.ensureSession(sid, owner);
@@ -236,7 +236,7 @@ public class VenueStartupTest {
 			seed.close();
 		}
 		CompletableFuture<Void> release = new CompletableFuture<>();
-		CompletableFuture<AgentState> queued = new CompletableFuture<>();
+		CompletableFuture<Agent> queued = new CompletableFuture<>();
 		StartupAdapter adapter = new StartupAdapter() {
 			@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx,
 					AMap<AString, ACell> metadata, ACell input) {
@@ -250,7 +250,7 @@ public class VenueStartupTest {
 		CompletableFuture<VenueServer> launch = VenueServer.launchAsync(cfg, store,
 			List.of(), engine -> {
 				AString owner = engine.getDIDString();
-				AgentState agent = engine.getVenueState().users().user(owner).agent("startup-agent");
+				Agent agent = engine.getVenueState().users().user(owner).agent("startup-agent");
 				engine.registerAdapter(adapter);
 				engine.jobs().invokeOperation("v/ops/covia/write",
 					Maps.of(Fields.PATH, "w/mina/skills/release", Fields.VALUE, "new skills"), engine.venueContext())
@@ -263,7 +263,7 @@ public class VenueStartupTest {
 			});
 		VenueServer server = null;
 		try {
-			AgentState agent = queued.get(10, TimeUnit.SECONDS);
+			Agent agent = queued.get(10, TimeUnit.SECONDS);
 			assertTrue(agent.hasSessionPending());
 			assertFalse(adapter.fired.isDone());
 			release.complete(null);

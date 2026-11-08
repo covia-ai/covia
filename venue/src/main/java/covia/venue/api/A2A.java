@@ -47,7 +47,7 @@ import covia.exception.NotFoundException;
 import covia.grid.Attribution;
 import covia.grid.Job;
 import covia.grid.Venue;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -245,7 +245,7 @@ public class A2A extends ACoviaAPI {
 			A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(base);
 			if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
-			AgentState agent = resolveAgentByOwner(ref);
+			Agent agent = resolveAgentByOwner(ref);
 			if (agent == null) { buildError(ctx, 404, "Not found"); return; }
 
 			RequestContext rctx = askerContext(ctx);
@@ -261,7 +261,7 @@ public class A2A extends ACoviaAPI {
 	}
 
 	/** Render the per-agent Agent Card from the agent's config (#183). */
-	private AgentCard perAgentCard(Context ctx, A2ACodec.AgentRef ref, AgentState agent) {
+	private AgentCard perAgentCard(Context ctx, A2ACodec.AgentRef ref, Agent agent) {
 		AMap<AString, ACell> config = agent.getConfig();
 		String name = stringOr(config, "name", ref.agentId());
 		String description = stringOr(config, "description", "Covia agent " + ref.agentId());
@@ -312,14 +312,14 @@ public class A2A extends ACoviaAPI {
 	}
 
 	/** Resolve the addressed agent in its owner's namespace (from the URL), or null. */
-	private AgentState resolveAgentByOwner(A2ACodec.AgentRef ref) {
+	private Agent resolveAgentByOwner(A2ACodec.AgentRef ref) {
 		User user = engine().getVenueState().users().user(ref.ownerDid());
-		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
+		Agent agent = (user == null) ? null : user.agent(ref.agentId());
 		return (agent != null && agent.exists()) ? agent : null;
 	}
 
 	/** True when the agent's config opts into public A2A exposure ({@code a2a.public = true}). */
-	private static boolean isPublic(AgentState agent) {
+	private static boolean isPublic(Agent agent) {
 		AMap<AString, ACell> config = agent.getConfig();
 		return config != null
 				&& CVMBool.TRUE.equals(RT.getIn(config, Strings.intern("a2a"), Strings.intern("public")));
@@ -343,7 +343,7 @@ public class A2A extends ACoviaAPI {
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
 		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
-		AgentState agent = resolveAgentByOwner(ref);
+		Agent agent = resolveAgentByOwner(ref);
 		if (agent == null) { buildError(ctx, 404, "Not found"); return; }
 
 		RequestContext asker = askerContext(ctx);
@@ -796,7 +796,7 @@ public class A2A extends ACoviaAPI {
 		for (long i = 0; i < ids.count(); i++) {
 			AString agentId = RT.ensureString(ids.get(i));
 			if (agentId == null) continue;
-			AgentState agent = (user == null) ? null : user.agent(agentId.toString());
+			Agent agent = (user == null) ? null : user.agent(agentId.toString());
 			AMap<AString, ACell> config = (agent == null) ? null : agent.getConfig();
 			String name = stringOr(config, "name", agentId.toString());
 			String description = stringOr(config, "description", "Covia agent " + agentId);

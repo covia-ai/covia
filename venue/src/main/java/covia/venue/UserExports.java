@@ -213,9 +213,9 @@ public final class UserExports {
 		for (long i = 0; i < agents.count(); i++) {
 			var entry = agents.entryAt(i);
 			if (!(entry.getValue() instanceof AMap<?, ?> rec)) continue;
-			AString controller = RT.ensureString(rec.get(AgentState.KEY_CONTROLLER));
+			AString controller = RT.ensureString(rec.get(Agent.KEY_CONTROLLER));
 			if (controller == null || controller.equals(did) || Engine.agentIdIn(did, controller) != null) continue;
-			kept = kept.assoc(entry.getKey(), ((AMap<AString, ACell>) rec).dissoc(AgentState.KEY_CONTROLLER));
+			kept = kept.assoc(entry.getKey(), ((AMap<AString, ACell>) rec).dissoc(Agent.KEY_CONTROLLER));
 		}
 		return (kept == agents) ? state : state.assoc(Namespace.G, kept);
 	}
@@ -288,7 +288,7 @@ public final class UserExports {
 		}
 		if (state.get(Namespace.G) instanceof AMap<?, ?> agents) {
 			for (ACell agent : agents.values()) {
-				for (AString held : new AString[] {AgentState.KEY_TASKS, AgentState.KEY_RESOLVED}) {
+				for (AString held : new AString[] {Agent.KEY_TASKS, Agent.KEY_RESOLVED}) {
 					if (RT.getIn(agent, held) instanceof ADataStructure<?> tasks && tasks.count() > 0) return BUSY;
 				}
 			}

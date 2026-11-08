@@ -24,7 +24,7 @@ import covia.api.Fields;
 import convex.core.data.Blob;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -100,7 +100,7 @@ public class GoalTreeAdapterTest {
 		// goaltree:chat should resolve to an operation
 		Job job = engine.jobs().invokeOperation("v/ops/goaltree/chat",
 			Maps.of(Fields.AGENT_ID, "test-agent",
-				AgentState.KEY_CONFIG, Maps.of(
+				Agent.KEY_CONFIG, Maps.of(
 					Strings.create("llmOperation"), Strings.create("v/test/ops/llm"))),
 			ALICE);
 		// Should start without error (may fail on LLM call, but shouldn't NPE)
@@ -135,8 +135,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skill-goal-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/skillllm"),
 				Strings.create("skillsets"), Vectors.of(Strings.create("w/skills"))),
 			Fields.MESSAGES, Vectors.of(
@@ -210,8 +210,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "more-tools-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/moretoolsllm"),
 				Strings.create("tools"), Vectors.of(Strings.create("more_tools")),
 				Strings.create("caps"), Vectors.of(
@@ -287,7 +287,7 @@ public class GoalTreeAdapterTest {
 			assertNotNull(result, "the task's result reaches the requester");
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("task-tools-goal");
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("task-tools-goal");
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
 		assertEquals(1, inferences.count(), "complete_task is terminal: no closing inference: " + inferences);
@@ -316,7 +316,7 @@ public class GoalTreeAdapterTest {
 			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-record");
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-record");
 		AMap<AString, ACell> entry = RT.ensureMap(agent.getTimeline().get(0));
 
 		AVector<ACell> inferences = RT.ensureVector(entry.get(Fields.INFERENCES));
@@ -370,7 +370,7 @@ public class GoalTreeAdapterTest {
 			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString());
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-deep");
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-deep");
 
 		// Each subgoal's child rides under its call; the deepest frame's call ran none.
 		ACell call = RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
@@ -417,7 +417,7 @@ public class GoalTreeAdapterTest {
 	/** The root's subgoal call in the agent's first timeline entry, once its cycle has merged. */
 	private ACell rootSubgoalCall(String agentId, AgentWatch watch) {
 		watch.awaitCycles(1);
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 		return RT.ensureVector(RT.getIn(RT.ensureVector(RT.ensureMap(agent.getTimeline().get(0))
 			.get(Fields.INFERENCES)).get(0), Fields.CALLS)).get(0);
 	}
@@ -478,7 +478,7 @@ public class GoalTreeAdapterTest {
 			assertEquals("root done", RT.getIn(chat, Fields.RESPONSE).toString(), "the parent carried on");
 			watch.awaitCycles(1);
 		}
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-fails");
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("subgoal-fails");
 		AMap<AString, ACell> session = agent.getSession(
 			Blob.fromHex(RT.getIn(chat, Fields.SESSION_ID).toString()));
 		assertEquals(1, RT.ensureVector(RT.getIn(session, Fields.FRAMES)).count(), "the failed child was popped");
@@ -560,8 +560,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "test-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
@@ -571,7 +571,7 @@ public class GoalTreeAdapterTest {
 		assertNotNull(output);
 
 		// Should have state and result
-		assertNotNull(RT.getIn(output, AgentState.KEY_STATE));
+		assertNotNull(RT.getIn(output, Agent.KEY_STATE));
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
@@ -588,7 +588,7 @@ public class GoalTreeAdapterTest {
 
 		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "no-tool-calling-goal",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
 		ACell rendered = RT.getIn(output, Fields.FRAMES, 0,
 			GoalTreeContext.K_RENDERED_CONTEXT);
@@ -603,7 +603,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "length-retry-goal-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "length-then-answer-test"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
@@ -628,7 +628,7 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, agentId,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"systemPrompt", "Test root history."),
 			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
@@ -658,8 +658,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "tokens-goal-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
@@ -681,8 +681,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "tool-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
@@ -702,8 +702,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "task-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo the user's request.")),
 			Fields.TASKS, Vectors.of(
@@ -748,8 +748,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "ghost-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo the request.")),
 			Fields.TASKS, Vectors.of(
@@ -775,7 +775,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "explicit-complete-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "parallel-complete-test",
 				"tools", Vectors.of(
@@ -815,13 +815,13 @@ public class GoalTreeAdapterTest {
 
 		ACell followup = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "explicit-complete-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "parallel-complete-test",
 				"tools", Vectors.of(
 					(ACell) Strings.create("complete"),
 					(ACell) Strings.create("v/test/ops/echo"))),
-			Fields.SESSION, Maps.of(AgentState.KEY_FRAMES, frames),
+			Fields.SESSION, Maps.of(Agent.KEY_FRAMES, frames),
 			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
 				Fields.MESSAGE, Strings.create("same session followup")))));
 		assertEquals("NEXT_TURN_OK", RT.getIn(followup, Fields.RESPONSE).toString(),
@@ -833,7 +833,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "textual-goal-complete-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "textual-goal-complete-test",
 				"tools", Vectors.of((ACell) Strings.create("complete"))),
@@ -849,7 +849,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "empty-goal-complete-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "empty-goal-complete-test",
 				"tools", Vectors.of((ACell) Strings.create("complete"))),
@@ -865,7 +865,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "goal-tool-failure-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "goal-tool-failure-test",
 				"tools", Vectors.of((ACell) Strings.create("context_load"))),
@@ -902,7 +902,7 @@ public class GoalTreeAdapterTest {
 			watch.awaitCycles(1);
 		}
 
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID)
+		Agent agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("strict-goal-schema-agent");
 		assertEquals(0, agent.getTasks().count());
 		ACell taskResults = RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS);
@@ -971,8 +971,8 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "live-load-goaltree",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/skillllm",
 				"model", "load-refresh-test",
 				"tools", Vectors.of(Strings.create("v/ops/covia/write")),
@@ -990,7 +990,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "explicit-fail-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "parallel-fail-test",
 				"tools", Vectors.of(
@@ -1022,7 +1022,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "malformed-terminal-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "malformed-complete-test",
 				"tools", Vectors.of(
@@ -1049,7 +1049,7 @@ public class GoalTreeAdapterTest {
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 		ACell output = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "parallel-nonterminal-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "parallel-nonterminal-test",
 				"tools", Vectors.of((ACell) Strings.create("v/test/ops/echo"))),
@@ -1081,8 +1081,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "compact-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/compactllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent."),
 				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.COMPACT))),
@@ -1111,8 +1111,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "cancel-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
@@ -1132,7 +1132,7 @@ public class GoalTreeAdapterTest {
 		// Test the full invoke path — cancel a chat whose LLM never answers,
 		// verify it ends cancelled rather than completing or failing
 		ACell input = Maps.of(Fields.AGENT_ID, "invoke-cancel",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/never"),
 				Strings.create("systemPrompt"), Strings.create("Test")));
 		// A step runs only for an agent that exists
@@ -1154,8 +1154,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "goal-msg-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo the message.")),
 			Fields.TASKS, Vectors.of(
@@ -1345,8 +1345,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "typed-text-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"),
 					Strings.create("anything"))));
@@ -1387,8 +1387,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "fail-debug-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("responseFormat"), responseFormat),
 			Fields.MESSAGES, Vectors.of(
@@ -1408,7 +1408,7 @@ public class GoalTreeAdapterTest {
 		assertTrue(((AVector<?>) framesOut).count() > 0,
 			"frames output must contain at least the root frame");
 		// state.lastFailure is retired — lattice frames are the sole record.
-		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
+		ACell newState = RT.getIn(output, Agent.KEY_STATE);
 		assertNull(RT.getIn(newState, Strings.create("lastFailure")),
 			"state.lastFailure is retired — frames on the session record are the post-mortem");
 	}
@@ -1422,8 +1422,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "happy-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("hello"))));
@@ -1435,7 +1435,7 @@ public class GoalTreeAdapterTest {
 		assertNotNull(framesOut, "Successful transition must emit frames");
 		assertTrue(framesOut instanceof AVector);
 		assertTrue(((AVector<?>) framesOut).count() > 0);
-		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
+		ACell newState = RT.getIn(output, Agent.KEY_STATE);
 		assertNull(RT.getIn(newState, Strings.create("lastFailure")),
 			"state.lastFailure is retired");
 	}
@@ -1462,8 +1462,8 @@ public class GoalTreeAdapterTest {
 		// --- Turn 1: no session, adapter mints a fresh root frame.
 		ACell input1 = Maps.of(
 			Fields.AGENT_ID, "persist-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn one"))));
 
@@ -1486,11 +1486,11 @@ public class GoalTreeAdapterTest {
 
 		// --- Turn 2: feed turn 1's frames back as session.frames. Adapter
 		// must read those and extend — not reset or duplicate.
-		AMap<AString, ACell> session2 = Maps.of(AgentState.KEY_FRAMES, frames1);
+		AMap<AString, ACell> session2 = Maps.of(Agent.KEY_FRAMES, frames1);
 		ACell input2 = Maps.of(
 			Fields.AGENT_ID, "persist-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, config,
 			Fields.SESSION, session2,
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn two"))));
@@ -1529,11 +1529,11 @@ public class GoalTreeAdapterTest {
 			"'turn two' user message must appear exactly once after turn 2");
 
 		// --- Turn 3: one more round-trip to confirm monotonic growth.
-		AMap<AString, ACell> session3 = Maps.of(AgentState.KEY_FRAMES, frames2);
+		AMap<AString, ACell> session3 = Maps.of(Agent.KEY_FRAMES, frames2);
 		ACell input3 = Maps.of(
 			Fields.AGENT_ID, "persist-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, config,
 			Fields.SESSION, session3,
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn three"))));
@@ -1561,7 +1561,7 @@ public class GoalTreeAdapterTest {
 			"llmOperation", "v/test/ops/llm", "systemPrompt", "OLD_GOAL_IDENTITY");
 		ACell first = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "config-generation-goal",
-			AgentState.KEY_CONFIG, oldConfig,
+			Agent.KEY_CONFIG, oldConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "first turn"))));
 		AVector<ACell> firstFrames = RT.ensureVector(RT.getIn(first, Fields.FRAMES));
 		AVector<ACell> firstTurns = GoalTreeContext.activeConversation(RT.ensureMap(firstFrames.get(0)));
@@ -1572,8 +1572,8 @@ public class GoalTreeAdapterTest {
 			"llmOperation", "v/test/ops/llm", "systemPrompt", "NEW_GOAL_IDENTITY");
 		ACell second = step(adapter,null, ALICE, Maps.of(
 			Fields.AGENT_ID, "config-generation-goal",
-			AgentState.KEY_CONFIG, newConfig,
-			Fields.SESSION, Maps.of(AgentState.KEY_FRAMES, firstFrames),
+			Agent.KEY_CONFIG, newConfig,
+			Fields.SESSION, Maps.of(Agent.KEY_FRAMES, firstFrames),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "second turn"))));
 		AVector<ACell> secondFrames = RT.ensureVector(RT.getIn(second, Fields.FRAMES));
 		ACell root = secondFrames.get(0);
@@ -1614,14 +1614,14 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "stateful-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Be brief.")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("hi"))));
 
 		ACell output = step(adapter,null, ALICE, input);
-		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
+		ACell newState = RT.getIn(output, Agent.KEY_STATE);
 		assertNotNull(newState);
 		assertNull(RT.getIn(newState, AbstractLLMAdapter.K_CONFIG),
 			"state must not carry config");
@@ -1647,8 +1647,8 @@ public class GoalTreeAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "text-agent",
-			AgentState.KEY_STATE, null,
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_STATE, null,
+			Agent.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("responseFormat"), responseFormat),
 			Fields.MESSAGES, Vectors.of(

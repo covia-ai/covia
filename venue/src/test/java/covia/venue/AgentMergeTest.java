@@ -18,7 +18,7 @@ import convex.core.lang.RT;
  * never a replacement of a value read minutes earlier. This is what lets
  * {@code agent:update} land during a transition without being clobbered.
  */
-public class AgentStateMergeTest {
+public class AgentMergeTest {
 
 	private static CVMLong n(long v) {
 		return CVMLong.create(v);
@@ -32,7 +32,7 @@ public class AgentStateMergeTest {
 		// The transition changed a, dropped c, left b alone.
 		AMap<AString, ACell> returned = Maps.of("a", 9, "b", 1);
 
-		ACell merged = AgentState.applyStateChange(current, snapshot, returned);
+		ACell merged = Agent.applyStateChange(current, snapshot, returned);
 		assertEquals(n(9), RT.getIn(merged, "a"), "changed by the transition: its value");
 		assertEquals(n(2), RT.getIn(merged, "b"), "untouched by the transition: the external update survives");
 		assertNull(RT.getIn(merged, "c"), "dropped by the transition: removed");
@@ -41,7 +41,7 @@ public class AgentStateMergeTest {
 
 	@Test
 	public void sameKeyConflictGoesToTheTransition() {
-		ACell merged = AgentState.applyStateChange(
+		ACell merged = Agent.applyStateChange(
 			Maps.of("a", 5), Maps.of("a", 1), Maps.of("a", 9));
 		assertEquals(n(9), RT.getIn(merged, "a"));
 	}
@@ -49,24 +49,24 @@ public class AgentStateMergeTest {
 	@Test
 	public void noResultIsNoChangeAndNonMapsReplace() {
 		AMap<AString, ACell> current = Maps.of("a", 5);
-		assertSame(current, AgentState.applyStateChange(current, Maps.of("a", 1), null));
-		assertEquals(Strings.create("blob"), AgentState.applyStateChange(current, Maps.of("a", 1), Strings.create("blob")));
+		assertSame(current, Agent.applyStateChange(current, Maps.of("a", 1), null));
+		assertEquals(Strings.create("blob"), Agent.applyStateChange(current, Maps.of("a", 1), Strings.create("blob")));
 		AMap<AString, ACell> returned = Maps.of("a", 9);
-		assertEquals(returned, AgentState.applyStateChange(null, Maps.of("a", 1), returned));
-		assertEquals(returned, AgentState.applyStateChange(current, null, returned));
+		assertEquals(returned, Agent.applyStateChange(null, Maps.of("a", 1), returned));
+		assertEquals(returned, Agent.applyStateChange(current, null, returned));
 	}
 
 	@Test
 	public void noConcurrentChangeReproducesTheTransitionResultExactly() {
 		AMap<AString, ACell> snapshot = Maps.of("a", 1, "b", 1);
 		AMap<AString, ACell> returned = Maps.of("a", 2, "c", 3);
-		assertEquals(returned, AgentState.applyStateChange(snapshot, snapshot, returned));
+		assertEquals(returned, Agent.applyStateChange(snapshot, snapshot, returned));
 	}
 
 	@Test
 	public void mergeRunResultAppliesTheChangeInsideTheRecordCas() {
 		AString did = TestEngine.uniqueDID("state-merge-seam");
-		AgentState agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
+		Agent agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
 			.ensureAgent(Strings.create("merge-seam"), Maps.empty(), Maps.of("a", 1, "b", 1));
 		ACell snapshot = agent.getState();               // what the transition fired with
 

@@ -24,7 +24,7 @@ public class TasksTest {
 	private static final AString SESSION_HEX = Strings.create(SESSION.toHexString());
 	private static final AString MESSAGE_ID = Strings.create("message-1");
 
-	private AgentState agent;
+	private Agent agent;
 	private Tasks tasks;
 	private Task task;
 

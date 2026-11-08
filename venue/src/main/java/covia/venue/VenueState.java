@@ -281,7 +281,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * touched, including when called inside an enclosing venue transaction.
 	 */
 	public void setAgentThreadWakeTime(AString owner, AString agentId,
-			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
+			Agent.ThreadKind kind, Blob threadId, long wakeTime) {
 		User user = users().user(owner);
 		if (user == null) return;
 		setAgentThreadWakeTime(owner, agentId, kind, threadId, wakeTime, RT.getIn(user.get(), Users.GENERATION));
@@ -289,13 +289,13 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Runtime calls retain the generation observed before handing work to the timer. */
 	void setAgentThreadWakeTime(AString owner, AString agentId,
-			AgentState.ThreadKind kind, Blob threadId, long wakeTime, ACell generation) {
+			Agent.ThreadKind kind, Blob threadId, long wakeTime, ACell generation) {
 		execute(draft -> {
 			User user = draft.users().user(owner);
 			if (user == null || !Objects.equals(generation, RT.getIn(user.get(), Users.GENERATION))) {
 				throw new AuthException(Users.ACCOUNT_DELETED);
 			}
-			AgentState agent = user.agent(agentId);
+			Agent agent = user.agent(agentId);
 			if (agent != null && agent.setThreadWakeTime(kind, threadId, wakeTime)) {
 				draft.reconcileAgentWake(owner, agent);
 			}
@@ -306,13 +306,13 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	public boolean rescheduleAgentWake(AString owner, AString agentId) {
 		return transact(draft -> {
 			User user = draft.users().user(owner);
-			AgentState agent = user == null ? null : user.agent(agentId);
+			Agent agent = user == null ? null : user.agent(agentId);
 			return agent != null && draft.reconcileAgentWake(owner, agent);
 		});
 	}
 
 	/** Agent intent and event replacement share this private venue draft. */
-	private boolean reconcileAgentWake(AString owner, AgentState agent) {
+	private boolean reconcileAgentWake(AString owner, Agent agent) {
 		Blob handle = schedule().replaceAgentWake(owner, agent.getAgentId(), agent.wakeHandle(), agent.earliestWake());
 		agent.setWakeHandle(handle);
 		return handle != null;
@@ -459,8 +459,8 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	/** Stored schedule; timer and execution lifecycle belong to Scheduler. */
-	public ScheduleState schedule() {
-		return new ScheduleState(context, level(Covia.SCHEDULE));
+	public Schedule schedule() {
+		return new Schedule(context, level(Covia.SCHEDULE));
 	}
 
 	/** The venue's content, by SHA-256 ({@code :storage}). */

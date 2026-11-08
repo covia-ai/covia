@@ -25,7 +25,7 @@ import covia.adapter.agent.LLMAgentAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -56,7 +56,7 @@ public class LLMAgentAdapterTest {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null || ctx.getUserDID() == null) return;
 		engine.getVenueState().users().ensure(ctx.getUserDID())
-			.ensureAgent(agentId, RT.ensureMap(RT.getIn(input, AgentState.KEY_CONFIG)), null);
+			.ensureAgent(agentId, RT.ensureMap(RT.getIn(input, Agent.KEY_CONFIG)), null);
 	}
 	// ALICE_DID is per-test (not static) so each test sees a fresh user
 	// namespace within the shared engine.
@@ -83,7 +83,7 @@ public class LLMAgentAdapterTest {
 			"llmTimeoutMs", 1000);
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "llm-timeout-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hang forever")));
 
 		long start = System.currentTimeMillis();
@@ -116,14 +116,14 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "first-run-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "Hello world"))
 		);
 
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
+		ACell newState = RT.getIn(output, Agent.KEY_STATE);
 		assertNotNull(newState, "Output should contain state");
 
 		// test:llm echoes last user message
@@ -140,7 +140,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "length-retry-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "length-then-answer-test"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
@@ -160,7 +160,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "length-failure-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "always-length-test"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "answer fully")));
@@ -178,7 +178,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "context-too-large-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"model", "context-too-large-test"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "too much")));
@@ -210,7 +210,7 @@ public class LLMAgentAdapterTest {
 			"apiKey", "s/NONEXISTENT_TEST_KEY");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "no-key-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "Hello"))
 		);
 
@@ -228,22 +228,22 @@ public class LLMAgentAdapterTest {
 		// First turn
 		ACell input1 = Maps.of(
 			Fields.AGENT_ID, "multi-turn-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "first message"))
 		);
 		ACell output1 = step(adapter,RequestContext.of(ALICE_DID), input1);
-		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
+		ACell state1 = RT.getIn(output1, Agent.KEY_STATE);
 
 		// Second turn — pass state from first turn; config rides on the input
 		// every turn (the framework always passes record.config, #144)
 		ACell input2 = Maps.of(
 			Fields.AGENT_ID, "multi-turn-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
-			AgentState.KEY_STATE, state1,
+			Agent.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_STATE, state1,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "second message"))
 		);
 		ACell output2 = step(adapter,RequestContext.of(ALICE_DID), input2);
-		ACell state2 = RT.getIn(output2, AgentState.KEY_STATE);
+		ACell state2 = RT.getIn(output2, Agent.KEY_STATE);
 
 		AString response = RT.ensureString(RT.getIn(output2, Fields.RESPONSE));
 		assertEquals("second message", response.toString());
@@ -261,12 +261,12 @@ public class LLMAgentAdapterTest {
 		for (int i = 1; i <= 3; i++) {
 			ACell input = Maps.of(
 				Fields.AGENT_ID, "no-bloat-agent",
-				AgentState.KEY_CONFIG, TEST_CONFIG,
-				AgentState.KEY_STATE, state,
+				Agent.KEY_CONFIG, TEST_CONFIG,
+				Agent.KEY_STATE, state,
 				Fields.MESSAGES, Vectors.of(Maps.of("content", "turn " + i))
 			);
 			ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
-			state = RT.getIn(output, AgentState.KEY_STATE);
+			state = RT.getIn(output, Agent.KEY_STATE);
 
 			AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 			assertNotNull(response, "Each turn should produce a response");
@@ -285,11 +285,11 @@ public class LLMAgentAdapterTest {
 		// First turn
 		ACell input1 = Maps.of(
 			Fields.AGENT_ID, "fresh-prompt-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))
 		);
 		ACell output1 = step(adapter,RequestContext.of(ALICE_DID), input1);
-		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
+		ACell state1 = RT.getIn(output1, Agent.KEY_STATE);
 
 		// Verify processChat completed and produced a response
 		AString response = RT.ensureString(RT.getIn(output1, Fields.RESPONSE));
@@ -298,7 +298,7 @@ public class LLMAgentAdapterTest {
 
 		// State carries no config (#144) and no frozen system message —
 		// the next turn rebuilds the system prompt fresh from record.config.
-		assertNull(RT.getIn(state1, AgentState.KEY_CONFIG),
+		assertNull(RT.getIn(state1, Agent.KEY_CONFIG),
 			"state must not carry config");
 	}
 
@@ -308,7 +308,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "batch-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", "message one"),
 				Maps.of("content", "message two"),
@@ -336,7 +336,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "pirate-agent",
-			AgentState.KEY_CONFIG, initialConfig,
+			Agent.KEY_CONFIG, initialConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "ahoy"))
 		);
 
@@ -357,7 +357,7 @@ public class LLMAgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake race
 		User e2eUser = engine.getVenueState().users().user(ALICE_DID);
-		AgentState e2eAgent = e2eUser.agent("e2e-agent");
+		Agent e2eAgent = e2eUser.agent("e2e-agent");
 		Blob e2eSid = Blob.fromHex("e2e10001e2e10001e2e10001e2e10001");
 		e2eAgent.ensureSession(e2eSid, ALICE_DID);
 		e2eAgent.appendSessionPending(e2eSid, Maps.of(
@@ -371,8 +371,8 @@ public class LLMAgentAdapterTest {
 		AgentWatch.awaitTimeline(engine, ALICE_DID, e2eAgent, 1);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("e2e-agent");
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		Agent agent = user.agent("e2e-agent");
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertFalse(agent.hasSessionPending());
 		assertEquals(1, agent.getTimeline().count());
 
@@ -388,7 +388,7 @@ public class LLMAgentAdapterTest {
 	public void testEndToEndMultiTrigger() {
 		createTestAgent("multi-run-agent");
 		User multiUser = engine.getVenueState().users().user(ALICE_DID);
-		AgentState multiAgent = multiUser.agent("multi-run-agent");
+		Agent multiAgent = multiUser.agent("multi-run-agent");
 		Blob multiSid = Blob.fromHex("11110001111100011111000111110001");
 		multiAgent.ensureSession(multiSid, ALICE_DID);
 		AString multiSidHex = Strings.create(multiSid.toHexString());
@@ -414,7 +414,7 @@ public class LLMAgentAdapterTest {
 		AgentWatch.awaitTimeline(engine, ALICE_DID, multiAgent, 2);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("multi-run-agent");
+		Agent agent = user.agent("multi-run-agent");
 
 		assertEquals(2, agent.getTimeline().count());
 	}
@@ -429,7 +429,7 @@ public class LLMAgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake
 		User echoUser = engine.getVenueState().users().user(ALICE_DID);
-		AgentState echoRegAgent = echoUser.agent("echo-regression");
+		Agent echoRegAgent = echoUser.agent("echo-regression");
 		Blob echoRegSid = Blob.fromHex("22220001222200012222000122220001");
 		echoRegAgent.ensureSession(echoRegSid, ALICE_DID);
 		echoRegAgent.appendSessionPending(echoRegSid, Maps.of(
@@ -442,7 +442,7 @@ public class LLMAgentAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result);
-		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+		assertEquals(Agent.SLEEPING, RT.getIn(result, Fields.STATUS));
 	}
 
 	// ========== Config ==========
@@ -455,7 +455,7 @@ public class LLMAgentAdapterTest {
 		);
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, "config-agent", AgentState.KEY_STATE, initialState),
+			Maps.of(Fields.AGENT_ID, "config-agent", Agent.KEY_STATE, initialState),
 			RequestContext.of(ALICE_DID));
 		try {
 			job.awaitResult(5000);
@@ -472,7 +472,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "minimal-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -499,7 +499,7 @@ public class LLMAgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake
 		User toolUser = engine.getVenueState().users().user(ALICE_DID);
-		AgentState toolAgent = toolUser.agent("tool-agent");
+		Agent toolAgent = toolUser.agent("tool-agent");
 		Blob toolSid = Blob.fromHex("33330001333300013333000133330001");
 		toolAgent.ensureSession(toolSid, ALICE_DID);
 		toolAgent.appendSessionPending(toolSid, Maps.of(
@@ -513,7 +513,7 @@ public class LLMAgentAdapterTest {
 		AgentWatch.awaitTimeline(engine, ALICE_DID, toolAgent, 1);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("tool-agent");
+		Agent agent = user.agent("tool-agent");
 
 		AVector<ACell> timeline = agent.getTimeline();
 		assertEquals(1, timeline.count());
@@ -532,11 +532,11 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "bad-args-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/badargsllm")),
+				Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/badargsllm")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("bad-args-agent");
+		Agent agent = user.agent("bad-args-agent");
 		Blob sid = Blob.fromHex("44440001444400014444000144440001");
 		agent.ensureSession(sid, ALICE_DID);
 		agent.appendSessionPending(sid, Maps.of(
@@ -563,7 +563,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "direct-tool-agent",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "do something"))
 		);
 
@@ -589,7 +589,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "provider-state-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/toolllm",
 				Fields.MODEL, "provider-state-test"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "continue signed state"))));
@@ -608,7 +608,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "flat-compact-agent",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm",
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/compactllm",
 				Fields.TOOLS, Vectors.of(Strings.create(HarnessTools.COMPACT))),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "compact this"))));
 
@@ -651,7 +651,7 @@ public class LLMAgentAdapterTest {
 			ACell output = java.util.concurrent.CompletableFuture.supplyAsync(() ->
 				step(adapter,ctx, Maps.of(
 					Fields.AGENT_ID, "issue-334-agent",
-					AgentState.KEY_CONFIG, config,
+					Agent.KEY_CONFIG, config,
 					Fields.MESSAGES, Vectors.of(Maps.of("content", prompt)))))
 				.get(10, java.util.concurrent.TimeUnit.SECONDS);
 
@@ -693,7 +693,7 @@ public class LLMAgentAdapterTest {
 			Fields.MESSAGE, "issue-334-read"), ctx).awaitResult(10000);
 		AString sid = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
 		assertNotNull(sid);
-		AgentState persistedAgent = engine.getVenueState().users().user(ALICE_DID)
+		Agent persistedAgent = engine.getVenueState().users().user(ALICE_DID)
 			.agent("issue-334-persist-agent");
 		AMap<AString, ACell> session = persistedAgent.getSession(Blob.fromHex(sid.toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
@@ -792,7 +792,7 @@ public class LLMAgentAdapterTest {
 			Fields.ID, Blob.fromHex("22bb22bb22bb22bb22bb22bb22bb22bb"),
 			Fields.LOADS, Maps.of("w/inspection-probe", load),
 			Fields.FRAMES, Vectors.of((ACell) Maps.of(
-				AgentState.KEY_CONVERSATION, Vectors.empty())));
+				Agent.KEY_CONVERSATION, Vectors.empty())));
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		AMap<AString, ACell> l3 = adapter.inspectContext(new ContextInspectable.Inspection(
@@ -856,7 +856,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "bad-skills-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/llm",
 				"skillsets", "w/skills"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello")));
@@ -1060,7 +1060,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "skill-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/skillllm",
 				"skillsets", Vectors.of(Strings.create("w/skills"))),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "use the alpha skill")),
@@ -1096,7 +1096,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "context-immediate-agent",
-			AgentState.KEY_CONFIG, CONTEXT_LIFECYCLE_CONFIG,
+			Agent.KEY_CONFIG, CONTEXT_LIFECYCLE_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of(
 				"content", "run generic context lifecycle")),
 			Fields.SESSION, Maps.of(Fields.ID, Strings.create("context-session")));
@@ -1128,7 +1128,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = step(adapter, RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "context-no-session-agent",
-			AgentState.KEY_CONFIG, CONTEXT_LIFECYCLE_CONFIG,
+			Agent.KEY_CONFIG, CONTEXT_LIFECYCLE_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "run generic context lifecycle"))));
 		assertEquals("CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE",
 			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
@@ -1150,7 +1150,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("skill-e2e-agent");
+		Agent agent = user.agent("skill-e2e-agent");
 		Blob sid = Blob.fromHex("44440001444400014444000144440001");
 		agent.ensureSession(sid, ALICE_DID);
 		agent.appendSessionPending(sid, Maps.of(
@@ -1262,7 +1262,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "format-agent",
-			AgentState.KEY_CONFIG, initialConfig,
+			Agent.KEY_CONFIG, initialConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "summarise this"))
 		);
 
@@ -1283,7 +1283,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "json-format-agent",
-			AgentState.KEY_CONFIG, initialConfig,
+			Agent.KEY_CONFIG, initialConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "give me json"))
 		);
 
@@ -1312,7 +1312,7 @@ public class LLMAgentAdapterTest {
 
 		// Add task directly and trigger — avoid agent:request's async wake
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("task-agent");
+		Agent agent = user.agent("task-agent");
 
 		// Tasks are pure lattice data — use a generated Blob ID, not a Job
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
@@ -1327,7 +1327,7 @@ public class LLMAgentAdapterTest {
 		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		// Verify agent state — task should be removed after completion
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(), "Tasks should be empty after completion");
 		assertEquals(1, agent.getTimeline().count());
 
@@ -1354,7 +1354,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("text-complete-agent");
+		Agent agent = user.agent("text-complete-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of("task", "review the poems"));
 
@@ -1400,7 +1400,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("strict-schema-agent");
+		Agent agent = user.agent("strict-schema-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of(
 			Fields.INPUT, Maps.of("task", "compute the answer"),
@@ -1438,7 +1438,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("advisory-schema-agent");
+		Agent agent = user.agent("advisory-schema-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of(
 			Fields.INPUT, Maps.of("task", "compute the answer"),
@@ -1489,7 +1489,7 @@ public class LLMAgentAdapterTest {
 			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the task's cycle runs");
 
 			User user = engine.getVenueState().users().user(ALICE_DID);
-			AgentState agent = user.agent("schema-request-agent");
+			Agent agent = user.agent("schema-request-agent");
 			assertEquals(1, agent.getTasks().count(), "task must be queued");
 			ACell record = agent.getTasks().entryAt(0).getValue();
 			assertNotNull(RT.getIn(record, Fields.RESPONSE_SCHEMA), "schema must persist on the task record");
@@ -1531,7 +1531,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "live-load-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/skillllm",
 				"model", "load-refresh-test",
 				"tools", Vectors.of(Strings.create("v/ops/covia/write")),
@@ -1567,7 +1567,7 @@ public class LLMAgentAdapterTest {
 		ACell taskResult = taskJob.awaitResult(10000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("parallel-task-agent");
+		Agent agent = user.agent("parallel-task-agent");
 		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 		assertEquals(Status.COMPLETE, taskJob.getStatus());
 
@@ -1630,7 +1630,7 @@ public class LLMAgentAdapterTest {
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID)
+		Agent agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent(agentId.toString());
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of("task", "fail deliberately"));
@@ -1638,7 +1638,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID).withAgentId(agentId).withTaskId(taskId),
 			Maps.of(
 				Fields.AGENT_ID, agentId,
-				AgentState.KEY_CONFIG, config,
+				Agent.KEY_CONFIG, config,
 				Fields.TASKS, Vectors.of(Maps.of(
 					Fields.JOB_ID, taskId.toHexString(),
 					Fields.INPUT, Maps.of("task", "fail deliberately"))),
@@ -1662,7 +1662,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "failed-terminal-looking-agent",
-			AgentState.KEY_CONFIG, Maps.of(
+			Agent.KEY_CONFIG, Maps.of(
 				"llmOperation", "v/test/ops/taskllm",
 				"model", "failed-terminal-looking-test",
 				"tools", Vectors.of(Strings.create("v/test/ops/echo"))),
@@ -1729,7 +1729,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("capped-task-agent");
+		Agent agent = user.agent("capped-task-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
 
@@ -1740,7 +1740,7 @@ public class LLMAgentAdapterTest {
 		runJob.awaitResult(5000);
 		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(),
 			"a capped agent must be able to complete its own task");
 		assertNotNull(RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS),
@@ -1757,7 +1757,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "tokens-direct-agent",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/llm"),
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/llm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello tokens")));
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), input);
 		AMap<AString, ACell> tokens = (AMap<AString, ACell>) RT.getIn(output, Fields.TOKENS);
@@ -1795,7 +1795,7 @@ public class LLMAgentAdapterTest {
 		assertNotNull(sid);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("tokens-agent");
+		Agent agent = user.agent("tokens-agent");
 		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
 		AMap<AString, ACell> t1 = entryTokens(agent.getTimeline().get(0));
@@ -1977,7 +1977,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("textctl-agent");
+		Agent agent = user.agent("textctl-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of("task", "Pay invoice AR-2214"));
 
@@ -1988,7 +1988,7 @@ public class LLMAgentAdapterTest {
 		runJob.awaitResult(5000);
 		AgentWatch.awaitTimeline(engine, ALICE_DID, agent, 1);
 
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(),
 			"textually-emitted complete_task must resolve the task");
 		assertNotNull(RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS),
@@ -2028,7 +2028,7 @@ public class LLMAgentAdapterTest {
 
 		// One cycle ran; the task is gone; the agent is not poisoned
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("stubborn-agent");
+		Agent agent = user.agent("stubborn-agent");
 		assertEquals(0, agent.getTasks().count(), "the yielded task must be removed");
 		AgentWatch.awaitIdle(engine, ALICE_DID, agent);
 		assertEquals(1, agent.getTimeline().count(), "the task ran exactly once");
@@ -2097,9 +2097,9 @@ public class LLMAgentAdapterTest {
 			"the denial must name the blocked op: " + response);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("scoped-deny-agent");
-		AgentWatch.awaitStatus(engine, ALICE_DID, agent, AgentState.SLEEPING);
-		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+		Agent agent = user.agent("scoped-deny-agent");
+		AgentWatch.awaitStatus(engine, ALICE_DID, agent, Agent.SLEEPING);
+		assertEquals(Agent.SLEEPING, agent.getStatus(),
 			"a handled denial is not an agent failure — no suspension, no loop");
 	}
 
@@ -2168,9 +2168,9 @@ public class LLMAgentAdapterTest {
 		// The limit bounds this task's cost and fails this task: the agent can
 		// still take its next one, so it is not suspended (AGENT_LOOP.md §3.4).
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("loop-agent");
+		Agent agent = user.agent("loop-agent");
 		AgentWatch.awaitIdle(engine, ALICE_DID, agent);
-		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+		assertEquals(Agent.SLEEPING, agent.getStatus(),
 			"giving up on a task leaves the agent running");
 		assertNull(agent.getError());
 	}
@@ -2184,17 +2184,17 @@ public class LLMAgentAdapterTest {
 		AMap<AString, ACell> config = Maps.of("llmOperation", "v/test/ops/llm",
 			Fields.TOOLS, Vectors.of(Strings.create("v/test/ops/echo")));
 		engine.jobs().invokeOperation("v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
+			Maps.of(Fields.AGENT_ID, agentId, Agent.KEY_CONFIG, config,
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of("question", "test?"));
 		RequestContext ctx = RequestContext.of(ALICE_DID).withAgentId(agentId);
 
 		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
 		step(adapter,ctx.withTaskId(taskId), Maps.of(
-			Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
+			Fields.AGENT_ID, agentId, Agent.KEY_CONFIG, config,
 			Fields.TASKS, Vectors.of(Maps.of(
 				Fields.JOB_ID, Strings.create(taskId.toHexString()),
 				Fields.INPUT, Maps.of("question", "test?"))),
@@ -2204,7 +2204,7 @@ public class LLMAgentAdapterTest {
 
 		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
 		step(adapter,ctx, Maps.of(
-			Fields.AGENT_ID, agentId, AgentState.KEY_CONFIG, config,
+			Fields.AGENT_ID, agentId, Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of((ACell) Maps.of(Fields.MESSAGE, Strings.create("hello")))));
 		assertTrue(TestAdapter.CAPTURED_LLM_INPUT.get(agentId).toString()
 			.contains(ContextAssembler.REPLY_NOTICE), "a conversational turn is");
@@ -2223,19 +2223,19 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, agentId,
-				AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/taskllm"),
+				Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/taskllm"),
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("direct-task-agent");
+		Agent agent = user.agent("direct-task-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
 		agent.tasks().add(taskId, Maps.of("question", "test?"));
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, agentId,
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/taskllm"),
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/taskllm"),
 			Fields.TASKS, Vectors.of(Maps.of(
 				Fields.JOB_ID, Strings.create(taskId.toHexString()),
 				Fields.INPUT, Maps.of("question", "test?")
@@ -2276,7 +2276,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "invoke-agent",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "call a tool"))
 		);
 
@@ -2303,7 +2303,7 @@ public class LLMAgentAdapterTest {
 		// the built-in directly by checking the tool dispatch
 		// For now, verify the agent exists and can receive messages
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState receiver = user.agent("receiver-agent");
+		Agent receiver = user.agent("receiver-agent");
 		assertFalse(receiver.hasSessionPending());
 
 		// Deliver via agent:message (existing path) to verify receiver works.
@@ -2328,7 +2328,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "tools-check",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/llm"),
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/llm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello"))
 		);
 
@@ -2678,7 +2678,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "custom-tools-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -2704,7 +2704,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "map-tools-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -2729,7 +2729,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "mixed-tools-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -2748,7 +2748,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "no-defaults-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -2770,7 +2770,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "custom-only-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -2789,7 +2789,7 @@ public class LLMAgentAdapterTest {
 
 		ACell output = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "no-tool-calling-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))));
 		ACell rendered = RT.getIn(output, Fields.FRAMES, CVMLong.ZERO,
 			GoalTreeContext.K_RENDERED_CONTEXT);
@@ -2816,7 +2816,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "invalid-tools-agent",
-			AgentState.KEY_CONFIG, config,
+			Agent.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -2930,7 +2930,7 @@ public class LLMAgentAdapterTest {
 
 		ACell withSession = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "loads-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_CONFIG, TEST_CONFIG,
 			Fields.SESSION, Maps.of(Fields.SESSION_ID, Strings.create("aa00"), Fields.LOADS, tier),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))));
 		assertEquals(tier, RT.getIn(withSession,
@@ -2940,7 +2940,7 @@ public class LLMAgentAdapterTest {
 
 		ACell withoutSession = step(adapter,RequestContext.of(ALICE_DID), Maps.of(
 			Fields.AGENT_ID, "loads-agent",
-			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Agent.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))));
 		assertNull(RT.getIn(withoutSession, Fields.LOADS));
 	}

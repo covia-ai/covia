@@ -551,8 +551,8 @@ public class JobCancellationTest {
 		suspendJob.awaitResult(5000);
 
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent("suspend-cancel-agent");
-		assertEquals(AgentState.SUSPENDED, agent.getStatus());
+		Agent agent = user.agent("suspend-cancel-agent");
+		assertEquals(Agent.SUSPENDED, agent.getStatus());
 	}
 
 	// ========== Helpers ==========
@@ -580,7 +580,7 @@ public class JobCancellationTest {
 
 	private AString getSessionIdFromAgent(String agentId) {
 		User user = engine.getVenueState().users().user(ALICE_DID);
-		AgentState agent = user.agent(agentId);
+		Agent agent = user.agent(agentId);
 		var sessions = agent.getSessions();
 		if (sessions == null || sessions.count() == 0) return null;
 		return Strings.create(sessions.entrySet().iterator().next().getKey().toHexString());
@@ -618,7 +618,7 @@ public class JobCancellationTest {
 	}
 
 	private void assertTaskGone(String agentId, Blob taskId) {
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 		assertTrue(agent.getTasks() == null || agent.getTasks().get(taskId) == null,
 			"the cancelled task has left the agent's queue (status=" + agent.getStatus() + ")");
 	}

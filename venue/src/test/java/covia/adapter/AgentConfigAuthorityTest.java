@@ -21,7 +21,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Admission;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -73,7 +73,7 @@ public class AgentConfigAuthorityTest {
 		return Capability.create(Strings.create(with), can);
 	}
 
-	private AgentState agent(AString owner, String id) {
+	private Agent agent(AString owner, String id) {
 		var user = engine.getVenueState().users().user(owner);
 		return (user == null) ? null : user.agent(id);
 	}
@@ -168,7 +168,7 @@ public class AgentConfigAuthorityTest {
 		RequestContext sibling = RequestContext.ofAgent(alice, Strings.create("sibling")).withCaps(Vectors.of(
 			cap("v/ops/llmagent/chat", INVOKE), cap("v/test/ops/toolllm", INVOKE)));
 		Job borrowed = run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "wide",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo"))), sibling);
 		assertEquals(Status.FAILED, borrowed.getStatus());
 		assertTrue(borrowed.getErrorMessage().contains(
@@ -181,7 +181,7 @@ public class AgentConfigAuthorityTest {
 			Fields.CONFIG, config(Vectors.of(cap("v/test/ops/toolllm", INVOKE)))), ALICE));
 		// Whatever caps the step's input names, it runs under the agent's record.
 		ACell widened = Maps.of(Fields.AGENT_ID, "narrow",
-			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm",
+			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm",
 				"caps", Vectors.of(Maps.of(Capability.CAN, Capability.TOP))),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo")));
 		Job chat = run("v/ops/llmagent/chat", widened, ALICE);

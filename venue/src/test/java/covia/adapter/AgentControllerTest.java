@@ -21,7 +21,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -89,11 +89,11 @@ public class AgentControllerTest {
 		return Principals.agentDID(alice, Strings.create(id));
 	}
 
-	private AgentState agent(AString owner, String id) {
+	private Agent agent(AString owner, String id) {
 		return engine.getVenueState().users().user(owner).agent(id);
 	}
 
-	private AgentState agent(String id) {
+	private Agent agent(String id) {
 		return agent(alice, id);
 	}
 
@@ -114,7 +114,7 @@ public class AgentControllerTest {
 	@Test
 	public void testAnOwnersAgentStoresNoController() {
 		assertComplete(create("own", null, ALICE));
-		assertNull(agent("own").getRecord().get(AgentState.KEY_CONTROLLER));
+		assertNull(agent("own").getRecord().get(Agent.KEY_CONTROLLER));
 		assertEquals(alice, agent("own").getController());
 		assertFalse(engine.harnessContext(alice, Strings.create("own")).hasSeparateAuthority());
 
@@ -194,7 +194,7 @@ public class AgentControllerTest {
 		assertNull(agent("claimed"));
 
 		assertComplete(run("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "named", Fields.CONTROLLER, alice), ALICE));
-		assertNull(agent("named").getRecord().get(AgentState.KEY_CONTROLLER), "handed back to its owner");
+		assertNull(agent("named").getRecord().get(Agent.KEY_CONTROLLER), "handed back to its owner");
 	}
 
 	private boolean covers(RequestContext ctx, String resource, AString ability) {

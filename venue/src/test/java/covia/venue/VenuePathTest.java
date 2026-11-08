@@ -65,7 +65,7 @@ public class VenuePathTest {
 		assertTrue(Entry.of(resolve("w/notes")).write(CVMLong.create(2)));
 		assertEquals(CVMLong.create(2), user.workspace().read(NOTES), "the change is in the user's workspace");
 
-		AgentState agent = user.ensureAgent(AGENT, Maps.empty(), null);
+		Agent agent = user.ensureAgent(AGENT, Maps.empty(), null);
 		agent.workspace().write(NOTES, CVMLong.ONE);
 		assertEquals(CVMLong.ONE, read(resolve("g/" + AGENT + "/n/notes")));
 	}

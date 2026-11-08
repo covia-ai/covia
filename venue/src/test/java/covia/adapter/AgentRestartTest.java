@@ -24,7 +24,7 @@ import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Config;
@@ -79,7 +79,7 @@ public class AgentRestartTest {
 				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS),
 					"the task transition never reached its test gate");
 				// The loop holds its running slot before its transition starts.
-				assertEquals(AgentState.RUNNING, status(first, agentId));
+				assertEquals(Agent.RUNNING, status(first, agentId));
 				assertFalse(request.isFinished(),
 					"a queued task Job is PENDING/STARTED while the agent holds it");
 				first.syncState();
@@ -149,7 +149,7 @@ public class AgentRestartTest {
 						Fields.INPUT, Strings.create("complete hold:" + gateName),
 						Fields.OUTPUT_PATH, path), alice);
 				assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the cycle never reached its test gate");
-				AgentState worker = first.getVenueState().users().user(ALICE).agent(agentId);
+				Agent worker = first.getVenueState().users().user(ALICE).agent(agentId);
 				assertNotNull(worker.getResolved().get(request.getID()), "the resolution is stored before the merge");
 				assertNull(worker.getTasks().get(request.getID()));
 				first.syncState();
@@ -205,7 +205,7 @@ public class AgentRestartTest {
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
 					Fields.AGENT_ID, agentId,
 					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
-					AgentState.KEY_STATE, later), alice).awaitResult(5000);
+					Agent.KEY_STATE, later), alice).awaitResult(5000);
 			}
 			try (AgentWatch wakingWatch = AgentWatch.open(first, ALICE, "parked-waking");
 					AgentWatch orphanWatch = AgentWatch.open(first, ALICE, "parked-orphan")) {
@@ -216,9 +216,9 @@ public class AgentRestartTest {
 				wakingWatch.awaitRest(1);
 				orphanWatch.awaitRest(1);
 			}
-			AgentState orphan = first.getVenueState().users().user(ALICE).agent("parked-orphan");
+			Agent orphan = first.getVenueState().users().user(ALICE).agent("parked-orphan");
 			assertTrue(Task.isParked(orphan.getTasks().get(orphaned.getID())));
-			orphan.setThreadWakeTime(AgentState.ThreadKind.TASK, orphaned.getID(), 0);
+			orphan.setThreadWakeTime(Agent.ThreadKind.TASK, orphaned.getID(), 0);
 			first.syncState();
 		} finally {
 			first.close();

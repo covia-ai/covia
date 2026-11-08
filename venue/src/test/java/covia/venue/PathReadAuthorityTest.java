@@ -81,7 +81,7 @@ public class PathReadAuthorityTest {
 
 	private ACell agentPrompt(AString owner, String id) {
 		var user = engine.getVenueState().users().user(owner);
-		AgentState agent = (user == null) ? null : user.agent(id);
+		Agent agent = (user == null) ? null : user.agent(id);
 		return (agent == null) ? null : RT.getIn(agent.getConfig(), "systemPrompt");
 	}
 

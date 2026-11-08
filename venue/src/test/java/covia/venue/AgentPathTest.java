@@ -36,7 +36,7 @@ public class AgentPathTest {
 	private static final AString C = Strings.intern("c");
 
 	private User user;
-	private AgentState agent;
+	private Agent agent;
 	private Blob sid;
 	private String session;
 
@@ -108,7 +108,7 @@ public class AgentPathTest {
 	@Test
 	public void testTheRestOfTheRecordIsReadOnly() {
 		ALatticeComponent<?> status = resolve("g/" + AGENT + "/status");
-		assertEquals(AgentState.SLEEPING, read(status));
+		assertEquals(Agent.SLEEPING, read(status));
 		assertEquals(Entry.READ_ONLY,
 			assertThrows(AuthException.class, () -> Entry.of(status)).getMessage());
 

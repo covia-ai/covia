@@ -19,7 +19,7 @@ import convex.core.data.Maps;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.exception.AuthException;
-import covia.venue.AgentState.ThreadKind;
+import covia.venue.Agent.ThreadKind;
 
 /**
  * Unit test for {@link Scheduler#setThreadWakeTime} and the per-agent-earliest
@@ -30,14 +30,14 @@ import covia.venue.AgentState.ThreadKind;
  * structure — the actual fire path is covered behaviourally elsewhere. Wake
  * times are far-future so nothing fires mid-test.
  */
-public class AgentStateThreadWakeTest {
+public class AgentThreadWakeTest {
 
 	private static final Engine engine = TestEngine.ENGINE;
 	private static final long FAR = 600_000L;   // 10 min — safely beyond the test window
 
 	private AString userDid;
 	private RequestContext ctx;
-	private AgentState agent;
+	private Agent agent;
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -54,12 +54,12 @@ public class AgentStateThreadWakeTest {
 
 	@SuppressWarnings("unchecked")
 	private static long timeOf(ACell event) {
-		return ((CVMLong) ((AMap<AString, ACell>) event).get(ScheduleState.K_TIME)).longValue();
+		return ((CVMLong) ((AMap<AString, ACell>) event).get(Schedule.K_TIME)).longValue();
 	}
 
 	@SuppressWarnings("unchecked")
 	private static AString opOf(ACell event) {
-		return (AString) ((AMap<AString, ACell>) event).get(ScheduleState.K_OP);
+		return (AString) ((AMap<AString, ACell>) event).get(Schedule.K_OP);
 	}
 
 	private Blob makeSession(String hex) {
@@ -90,7 +90,7 @@ public class AgentStateThreadWakeTest {
 		// Scheduler: exactly one agent:trigger wake event, at the requested time.
 		AVector<ACell> events = wakeEvents();
 		assertEquals(1, events.count(), "one wake event should be armed");
-		assertEquals(AgentState.TRIGGER_OP, opOf(events.get(0)));
+		assertEquals(Agent.TRIGGER_OP, opOf(events.get(0)));
 		assertEquals(target, timeOf(events.get(0)));
 	}
 

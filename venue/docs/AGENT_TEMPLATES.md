@@ -446,7 +446,7 @@ the handoff caps are mandatory, not optional.
 - Resets status to SLEEPING; tasks, pending, and sessions are fresh
 - Optional `config` override (inline map or string reference) is merged on top of source config per-field
 - Source must exist and not be TERMINATED; target must not already exist
-- Implementation: `User.forkAgent` + `AgentState.initialiseFromFork`
+- Implementation: `User.forkAgent` + `Agent.initialiseFromFork`
 
 ### Phase 3a: Ship standard templates ✓ DONE
 

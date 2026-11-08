@@ -103,15 +103,15 @@ public final class AgentWatch implements AutoCloseable {
 	 * and as each of its events arrives ({@link #awaitState}). The work may
 	 * already have happened: nothing needs to be opened before it.
 	 */
-	public static void awaitAgent(Engine engine, AString ownerDID, AgentState agent, String what,
-			java.util.function.Predicate<AgentState> state) {
+	public static void awaitAgent(Engine engine, AString ownerDID, Agent agent, String what,
+			java.util.function.Predicate<Agent> state) {
 		try (AgentWatch watch = open(engine, ownerDID, agent.getAgentId())) {
 			watch.awaitState(what, () -> state.test(agent));
 		}
 	}
 
 	/** Waits until the agent's timeline holds at least {@code count} entries. */
-	public static void awaitTimeline(Engine engine, AString ownerDID, AgentState agent, int count) {
+	public static void awaitTimeline(Engine engine, AString ownerDID, Agent agent, int count) {
 		awaitAgent(engine, ownerDID, agent, count + " timeline entries", a -> {
 			AVector<?> timeline = a.getTimeline();
 			return timeline != null && timeline.count() >= count;
@@ -119,13 +119,13 @@ public final class AgentWatch implements AutoCloseable {
 	}
 
 	/** Waits until the agent's persisted status is {@code status}. */
-	public static void awaitStatus(Engine engine, AString ownerDID, AgentState agent, AString status) {
+	public static void awaitStatus(Engine engine, AString ownerDID, Agent agent, AString status) {
 		awaitAgent(engine, ownerDID, agent, "status " + status, a -> status.equals(a.getStatus()));
 	}
 
 	/** Waits until the agent is idle: SLEEPING, with no session input pending and no tasks. */
-	public static void awaitIdle(Engine engine, AString ownerDID, AgentState agent) {
-		awaitAgent(engine, ownerDID, agent, "idle", a -> AgentState.SLEEPING.equals(a.getStatus())
+	public static void awaitIdle(Engine engine, AString ownerDID, Agent agent) {
+		awaitAgent(engine, ownerDID, agent, "idle", a -> Agent.SLEEPING.equals(a.getStatus())
 			&& !a.hasSessionPending() && (a.getTasks() == null || a.getTasks().count() == 0));
 	}
 
@@ -186,7 +186,7 @@ public final class AgentWatch implements AutoCloseable {
 		}
 		sb.append(']');
 		User user = engine.getVenueState().users().user(ownerDID);
-		AgentState agent = (user == null) ? null : user.agent(agentId);
+		Agent agent = (user == null) ? null : user.agent(agentId);
 		if (agent != null) {
 			AVector<?> timeline = agent.getTimeline();
 			sb.append("; status=").append(agent.getStatus())

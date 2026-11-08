@@ -12,6 +12,7 @@ import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
+import covia.venue.Agent;
 
 /**
  * Renders a goal tree frame stack into LLM context messages.
@@ -859,11 +860,11 @@ public class GoalTreeContext {
 			AMap<AString, ACell> message = (AMap<AString, ACell>) raw;
 			AString role = RT.ensureString(message.get(K_ROLE));
 			AString source = ROLE_TOOL.equals(role)
-				? covia.venue.AgentState.SOURCE_TOOL
-				: covia.venue.AgentState.SOURCE_TRANSITION;
+				? Agent.SOURCE_TOOL
+				: Agent.SOURCE_TRANSITION;
 			stamped = stamped.conj(message
-				.assoc(covia.venue.AgentState.K_TURN_TS, CVMLong.create(timestamp))
-				.assoc(covia.venue.AgentState.K_SOURCE, source));
+				.assoc(Agent.K_TURN_TS, CVMLong.create(timestamp))
+				.assoc(Agent.K_SOURCE, source));
 		}
 		return stamped;
 	}

@@ -214,16 +214,16 @@ class SteppedSchedulerTest {
 		RequestContext ctx = user(engine, info);
 		Scheduler scheduler = engine.gridScheduler();
 		long t = CLOCK.get();
-		AMap<AString, ACell> everySecond = Maps.of(ScheduleState.K_EVERY, CVMLong.create(1_000));
+		AMap<AString, ACell> everySecond = Maps.of(Schedule.K_EVERY, CVMLong.create(1_000));
 		Blob handle = scheduler.schedule(ECHO, Strings.create("tick"), ctx, t + 1_000, everySecond, true);
 
 		step(application, 3_500).get(10, TimeUnit.SECONDS);
 		AVector<ACell> listed = scheduler.list(ctx);
 		assertEquals(1, listed.count());
 		ACell rec = listed.get(0);
-		assertEquals(CVMLong.create(t + 4_000), RT.getIn(rec, ScheduleState.K_TIME),
+		assertEquals(CVMLong.create(t + 4_000), RT.getIn(rec, Schedule.K_TIME),
 			"the next slot after the update's time, on the event's phase");
-		assertEquals(CVMLong.create(t + 3_500), RT.getIn(rec, ScheduleState.K_LAST_FIRED),
+		assertEquals(CVMLong.create(t + 3_500), RT.getIn(rec, Schedule.K_LAST_FIRED),
 			"fired at the update's time");
 		assertEquals(1, engine.getVenueState().users().user(ctx.getUserDID()).jobs().getAll().count(),
 			"the slots it missed were skipped, not replayed");
@@ -234,7 +234,7 @@ class SteppedSchedulerTest {
 	void aHitlTimeoutExpiresTheRequestAtTheDrivenTime(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		AString agentId = Strings.create("asker");
-		AgentState agent = engine.getVenueState().users().user(ctx.getUserDID()).ensureAgent(agentId, Maps.empty(), null);
+		Agent agent = engine.getVenueState().users().user(ctx.getUserDID()).ensureAgent(agentId, Maps.empty(), null);
 		Job expiring = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Expires")
 			.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), RequestContext.ofAgent(ctx.getUserDID(), agentId));
 		Job answered = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Answered")

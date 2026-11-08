@@ -16,7 +16,7 @@ import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -41,7 +41,7 @@ public class AgentSuspensionTest {
 		return (AgentAdapter) engine.getAdapter("agent");
 	}
 
-	private AgentState create(RequestContext owner, String agentId, String model) {
+	private Agent create(RequestContext owner, String agentId, String model) {
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
 				"llmOperation", "v/test/ops/failllm", "model", model)), owner).awaitResult(5000);
@@ -54,7 +54,7 @@ public class AgentSuspensionTest {
 	}
 
 	/** Waits for the agent's run to reach a rest state, and returns it. */
-	private AString awaitRest(AgentState agent, RequestContext owner) throws Exception {
+	private AString awaitRest(Agent agent, RequestContext owner) throws Exception {
 		return agents().awaitRunFinished(agent.getAgentId(), owner, 10_000);
 	}
 
@@ -63,11 +63,11 @@ public class AgentSuspensionTest {
 	}
 
 	/** The note a Job waiting on this suspended agent carries. */
-	private static String suspendedNote(AgentState agent) {
+	private static String suspendedNote(Agent agent) {
 		return AgentAdapter.SUSPENDED_WAITING.formatted(agent.getAgentId(), ": " + agent.getError());
 	}
 
-	private static long timelineCount(AgentState agent) {
+	private static long timelineCount(Agent agent) {
 		AVector<ACell> timeline = agent.getTimeline();
 		return (timeline == null) ? 0 : timeline.count();
 	}
@@ -77,7 +77,7 @@ public class AgentSuspensionTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = "suspension-" + Long.toHexString(System.nanoTime());
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = create(owner, "broken-setup", "setup:" + gateName);
+			Agent agent = create(owner, "broken-setup", "setup:" + gateName);
 
 			// Hold the first cycle in its model call so a second task queues behind it.
 			Job first = request(owner, "broken-setup", "first");
@@ -85,7 +85,7 @@ public class AgentSuspensionTest {
 			Job second = request(owner, "broken-setup", "second");
 			gate.release();
 
-			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
+			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner));
 			assertTrue(agent.getError().toString().contains(TestAdapter.FAILLLM_REASON.formatted("setup")),
 				"the suspension names its cause: " + agent.getError());
 			assertEquals(1, timelineCount(agent), "the agent stops after the cycle that could not continue");
@@ -106,7 +106,7 @@ public class AgentSuspensionTest {
 				assertEquals(Status.COMPLETE, waiting.getStatus());
 				assertNull(progress(waiting), "resuming clears the note");
 			}
-			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 		}
 	}
 
@@ -114,9 +114,9 @@ public class AgentSuspensionTest {
 	public void anUnreachableProviderOrAFailureValueSuspendsTheAgent(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		for (String model : new String[] {"unavailable", "value"}) {
-			AgentState agent = create(owner, "cannot-continue-" + model, model);
+			Agent agent = create(owner, "cannot-continue-" + model, model);
 			Job waiting = request(owner, agent.getAgentId().toString(), "go");
-			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner), model);
+			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner), model);
 			assertTrue(agent.getError().toString().contains(TestAdapter.FAILLLM_REASON.formatted(model)),
 				model + ": " + agent.getError());
 			assertFalse(waiting.isFinished(), model + ": a suspended agent keeps its queue");
@@ -127,12 +127,12 @@ public class AgentSuspensionTest {
 	@Test
 	public void aVenueFaultSuspendsTheAgent(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "venue-fault", "bug");
+		Agent agent = create(owner, "venue-fault", "bug");
 		// The failed model call is logged at ERROR, as an unexpected failure
 		// must be, once, by the Job that reports it.
 		TestLogs.quiet(covia.exception.FaultException.class, () -> {
 			Job waiting = request(owner, "venue-fault", "go");
-			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
+			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner));
 			assertFalse(waiting.isFinished(), "a suspended agent keeps its queue");
 			assertEquals(suspendedNote(agent), progress(waiting));
 		});
@@ -141,19 +141,19 @@ public class AgentSuspensionTest {
 	@Test
 	public void aFailureOfTheWorkFailsOnlyThatWork(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "bad-content", "content");
+		Agent agent = create(owner, "bad-content", "content");
 		String reason = TestAdapter.FAILLLM_REASON.formatted("content");
 
 		Job first = request(owner, "bad-content", "first");
 		assertThrows(Exception.class, () -> first.awaitResult(10_000));
 		assertTrue(first.getErrorMessage().contains(reason), first.getErrorMessage());
-		assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 		assertNull(agent.getError(), "a failure of the work is not a fault in the agent");
 
 		Job second = request(owner, "bad-content", "second");
 		assertThrows(Exception.class, () -> second.awaitResult(10_000));
 		assertTrue(second.getErrorMessage().contains(reason), "the next task gets its own cycle");
-		assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 		assertEquals(2, timelineCount(agent));
 		assertEquals(0, agent.getTasks().count());
 	}
@@ -163,12 +163,12 @@ public class AgentSuspensionTest {
 		// Its message is already in the conversation and would never be
 		// presented again, so its caller is told rather than left waiting.
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "chat-cannot-continue", "setup");
+		Agent agent = create(owner, "chat-cannot-continue", "setup");
 		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "chat-cannot-continue", Fields.MESSAGE, Strings.create("hello")), owner);
 		assertThrows(Exception.class, () -> chat.awaitResult(10_000));
 		assertTrue(chat.getErrorMessage().contains(TestAdapter.FAILLLM_REASON.formatted("setup")),
 			chat.getErrorMessage());
-		assertEquals(AgentState.SUSPENDED, agent.getStatus(), "the agent is suspended before its caller hears");
+		assertEquals(Agent.SUSPENDED, agent.getStatus(), "the agent is suspended before its caller hears");
 	}
 }

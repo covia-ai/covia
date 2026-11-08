@@ -26,7 +26,7 @@ import covia.lattice.CoviaValue;
  * A task's row goes when the task ends ({@link Tasks#take}), so a stale view
  * of a task finds nothing and changes nothing. The static forms read a row
  * already in hand. Anything spanning the task and the rest of the agent, such
- * as beginning a cycle, belongs to {@link AgentState}.</p>
+ * as beginning a cycle, belongs to {@link Agent}.</p>
  */
 public final class Task extends ALatticeComponent<ACell>
 		implements TransactionalComponent<ACell, Task> {

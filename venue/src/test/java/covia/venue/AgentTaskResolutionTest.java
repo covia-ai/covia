@@ -17,18 +17,18 @@ import covia.api.Fields;
 import covia.grid.Status;
 
 /**
- * Resolving a task ({@link AgentState#resolveTask}): its row leaves the queue
+ * Resolving a task ({@link Agent#resolveTask}): its row leaves the queue
  * and its completion is kept with the agent until the request settles, in one
  * transaction, so a resolved task can be neither taken nor resolved again.
  */
-public class AgentStateTaskResolutionTest {
+public class AgentTaskResolutionTest {
 
 	private static final Blob SID = Blob.fromHex("5e55000000000000000000000000cafe");
 	private static final Blob TASK = Blob.fromHex("7a5c000000000000000000000000cafe");
 	private static final AMap<AString, ACell> DONE = Maps.of(Fields.ID, TASK, Fields.STATUS, Status.COMPLETE,
 		Fields.OUTPUT, Strings.create("result"));
 
-	private AgentState agent;
+	private Agent agent;
 
 	@BeforeEach
 	public void setup(TestInfo info) {

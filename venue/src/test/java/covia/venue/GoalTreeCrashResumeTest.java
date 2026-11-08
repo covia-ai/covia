@@ -104,7 +104,7 @@ public class GoalTreeCrashResumeTest {
 			RequestContext.of(ALICE)).awaitResult(5000);
 	}
 
-	private static AgentState agent(Engine engine, String agentId) {
+	private static Agent agent(Engine engine, String agentId) {
 		User user = engine.getVenueState().users().user(ALICE);
 		return (user != null) ? user.agent(agentId) : null;
 	}
@@ -112,7 +112,7 @@ public class GoalTreeCrashResumeTest {
 	@SuppressWarnings("unchecked")
 	private static AVector<ACell> rootConversation(Engine engine, String agentId, Blob sid) {
 		AMap<AString, ACell> session = agent(engine, agentId).getSession(sid);
-		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		AVector<ACell> frames = (AVector<ACell>) session.get(Agent.KEY_FRAMES);
 		return covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 	}
 
@@ -138,19 +138,19 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> legacy = Maps.of("description", "persisted legacy session", "conversation", selected);
 
 		Engine first = start(store, keyPair, config);
-		AgentState initial = first.getVenueState().users().ensure(ALICE).ensureAgent(agentId,
+		Agent initial = first.getVenueState().users().ensure(ALICE).ensureAgent(agentId,
 			Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
 		AMap<AString, ACell> session = initial.ensureSession(sid, ALICE).assoc(Fields.FRAMES, Vectors.of(legacy));
 		AMap<AString, ACell> meta = RT.ensureMap(session.get(Strings.intern("meta")));
 		session = session.assoc(Strings.intern("meta"), meta.assoc(Strings.intern("turns"), CVMLong.create(4)));
-		initial.putRecord(initial.getRecord().assoc(AgentState.KEY_SESSIONS, initial.getSessions().assoc(sid, session)));
+		initial.putRecord(initial.getRecord().assoc(Agent.KEY_SESSIONS, initial.getSessions().assoc(sid, session)));
 		first.flush();
 		closeActivePhase();
 		store.close();
 		activeStore = null;
 
 		Engine second = start(EtchStore.create(file), keyPair, config);
-		AgentState restored = agent(second, agentId);
+		Agent restored = agent(second, agentId);
 		AVector<ACell> oldFrames = RT.ensureVector(restored.getSession(sid).get(Fields.FRAMES));
 		assertEquals(legacy, oldFrames.get(0), "read/restart alone does not rewrite legacy state");
 		assertTrue(restored.session(sid).migrateHistory(oldFrames));
@@ -170,7 +170,7 @@ public class GoalTreeCrashResumeTest {
 		activeStore = null;
 
 		Engine third = start(EtchStore.create(file), keyPair, config);
-		AgentState reopened = agent(third, agentId);
+		Agent reopened = agent(third, agentId);
 		assertEquals(compacted, RT.getIn(reopened.getSession(sid), Fields.FRAMES, CVMLong.ZERO));
 		third.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, agentId,
 			Fields.SESSION_ID, sid.toHexString(), Fields.MESSAGE, "after restart"), alice).awaitResult(5000);
@@ -214,7 +214,7 @@ public class GoalTreeCrashResumeTest {
 		requestId = request.getID();
 		await(first, "request-agent", () -> parkedInTool(first, "request-agent", sid), "request parked in tool");
 		assertEquals(Status.STARTED, request.getStatus());
-		assertEquals(AgentState.RUNNING, agent(first, "request-agent").getStatus());
+		assertEquals(Agent.RUNNING, agent(first, "request-agent").getStatus());
 		assertNotNull(agent(first, "request-agent").getSessionCycleEpoch(sid));
 		first.flush();
 		closeActivePhase();
@@ -227,7 +227,7 @@ public class GoalTreeCrashResumeTest {
 		AMap<AString, ACell> restored = second.jobs().getJobData(requestId, RequestContext.of(ALICE));
 		assertEquals(Status.STARTED, restored.get(Fields.STATUS),
 			"an interrupted request is restored live, not failed");
-		AgentState recovered = agent(second, "request-agent");
+		Agent recovered = agent(second, "request-agent");
 		assertNotNull(recovered.getTasks().get(requestId),
 			"the surviving request is still the agent's task after recovery");
 		assertFalse(String.valueOf(rootConversation(second, "request-agent", sid)).contains("gave up"),
@@ -271,8 +271,8 @@ public class GoalTreeCrashResumeTest {
 		AgentAdapter adapter = (AgentAdapter) second.getAdapter("agent");
 		assertEquals(0, adapter.wakeAgentsWithWork(),
 			"inCycle alone must not wake an agent after restart");
-		AgentState recovered = agent(second, "message-agent");
-		assertEquals(AgentState.SLEEPING, recovered.getStatus());
+		Agent recovered = agent(second, "message-agent");
+		assertEquals(Agent.SLEEPING, recovered.getStatus());
 		assertNull(recovered.getSessionCycleEpoch(sid));
 		assertFalse(String.valueOf(rootConversation(second, "message-agent", sid)).contains("gave up"));
 		closeActivePhase();

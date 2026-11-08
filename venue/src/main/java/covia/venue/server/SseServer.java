@@ -20,8 +20,8 @@ import covia.adapter.AgentAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.venue.Agent;
 import covia.venue.AgentEvents;
-import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.api.ApiErrors;
@@ -217,7 +217,7 @@ public class SseServer {
 		AString status = RT.ensureString(info.get(Fields.STATUS));
 		boolean detail = !"false".equalsIgnoreCase(client.ctx().queryParam("detail"));
 		AString sessionFilter = sessionFilter(client.ctx().queryParam("sessionId"));
-		boolean terminated = AgentState.TERMINATED.equals(status);
+		boolean terminated = Agent.TERMINATED.equals(status);
 
 		if (!terminated) registerAgentClient(address, new AgentClient(client, detail, sessionFilter));
 

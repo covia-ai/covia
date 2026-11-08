@@ -15,7 +15,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.JobIndex;
 import covia.venue.OutputRules;
 import covia.venue.SecretStore;
@@ -66,7 +66,7 @@ public final class JobEntries implements MigrationStep {
 	static final AString[] CONNECTION = {
 		AUTHENTICATE_AS, Strings.intern("outboundAny"), Fields.VENUE, Fields.UCANS,
 		Strings.intern("location"), Fields.NAME, Strings.intern("bearer"), Strings.intern("secret")};
-	static final AString TASKS = AgentState.KEY_TASKS;
+	static final AString TASKS = Agent.KEY_TASKS;
 	static final AString OUTPUT_CONTEXT = Strings.intern("outputContext");
 	/** What a pending write's context keeps beyond its caller and owner, which the request's record names. */
 	static final AString[] CALLER_CONTEXT = {Fields.PROOFS, Fields.AGENT_ID, Fields.SESSION_ID, Fields.JOB_ID, Fields.TASK_ID};

@@ -123,7 +123,7 @@ mount their venue; restart tests unmount a venue and mount it again, or open a
 new application over the same store, as production does
 ([EMBEDDING.md](EMBEDDING.md#starting-and-stopping)).
 
-`VenueState`, `Users`, `User`, `AgentState`, `SessionState`, `Jobs`, `JobState`, `AuthState`, `ScheduleState`, `AdapterState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `Agent`, `Session`, `Jobs`, `JobState`, `AuthState`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
 `Workspace` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -164,7 +164,7 @@ agent.execute(draft -> {
     if (!draft.session(sessionId).beginCycle(epoch, turns, pendingCount)) {
         throw new IllegalStateException("Session is no longer available");
     }
-    draft.setStatus(AgentState.RUNNING);
+    draft.setStatus(Agent.RUNNING);
 });
 // Dispatch runtime work only after this outer transaction returns successfully.
 ```
@@ -194,7 +194,7 @@ belongs to the framework's `:user-deletions` region. See [ADAPTERS.md](ADAPTERS.
 
 Login provisioning commits the account and login directory row in one venue
 transaction. Agent wake changes likewise commit the thread's intent, schedule
-event and stored handle together. `AgentState` only changes lattice data;
+event and stored handle together. `Agent` only changes lattice data;
 `Scheduler` serialises runtime wake requests with firing under its lock and,
 once the venue transaction commits, tells the application when the venue's
 next event is due. It preserves the caller's account lifecycle guard inside
@@ -327,7 +327,7 @@ This has structural problems on at least four axes:
                            │ calls named methods on
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Lattice components (AgentState, UserWorkspace, AssetStore, │  encapsulate
+│  Lattice components (Agent, UserWorkspace, AssetStore, │  encapsulate
 │  SecretStore, Users, User, VenueState, …)                   │  cursor.updateAndGet
 │  Each owns a cursor + a vocabulary of named mutations.      │  via update() helper
 │  May fork internally for transactional multi-write atomicity│  (component's own concern)
@@ -377,7 +377,7 @@ This has structural problems on at least four axes:
 | `CoviaApplication` | `venue/.../CoviaApplication.java` | complete hosted root; publication and store policy |
 | `VenueState` | `venue/.../VenueState.java` | connected venue subtree; bounded transaction fork factory |
 | `Users` / `User` | `venue/.../Users.java`, `User.java` | per-DID lattice subtrees, child component factories |
-| `AgentState` | `venue/.../AgentState.java` | one agent's record (gold standard for the pattern) |
+| `Agent` | `venue/.../Agent.java` | one agent's record (gold standard for the pattern) |
 | `AssetStore` | `venue/.../AssetStore.java` | content-addressed asset index |
 | `SecretStore` | `venue/.../SecretStore.java` | encrypted secrets |
 | `AuthState` | `venue/.../AuthState.java` | the authentication directory (`:users`): named users' records and their sign-in keys |
@@ -401,7 +401,7 @@ Every lattice component:
 2. **Is constructed with its containing component** using
    `super(parent, cursor)`. Child factories pass `this`; a fork keeps the same
    component parent while its cursor continues to sync to the cursor it forked.
-3. **Has a private `update(UnaryOperator<V>)` helper** that wraps `cursor.updateAndGet`. All mutations go through it. Reference: `AgentState.update`.
+3. **Has a private `update(UnaryOperator<V>)` helper** that wraps `cursor.updateAndGet`. All mutations go through it. Reference: `Agent.update`.
 4. **Exposes named, intent-revealing mutation methods.** No `set(path, value)` escape hatch.
 5. **Never calls `engine.syncState()` or any persistence API.** Engine handles persistence at a higher level.
 6. **May expose CAS / atomic helpers** for concurrent access.

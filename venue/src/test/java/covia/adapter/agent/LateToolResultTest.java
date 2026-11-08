@@ -34,7 +34,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Config;
@@ -84,7 +84,7 @@ public class LateToolResultTest {
 			owner).awaitResult(5000);
 	}
 
-	private static String conversation(AgentState agent, Blob sid) {
+	private static String conversation(Agent agent, Blob sid) {
 		return GoalTreeContext.activeConversation(RT.ensureMap(
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
 	}
@@ -97,7 +97,7 @@ public class LateToolResultTest {
 			Maps.of(AbstractLLMAdapter.K_OPTIONS, Maps.of(AbstractLLMAdapter.OPT_LATE_TOOL_RESULTS,
 				AbstractLLMAdapter.LATE_RESULTS_TOOL)));
 		User user = engine.getVenueState().users().user(did);
-		AgentState agent = user.agent("late-step");
+		Agent agent = user.agent("late-step");
 		Blob sid = Blob.fromHex("1a7e00001a7e00001a7e00001a7e0000");
 		agent.ensureSession(sid, did);
 
@@ -147,7 +147,7 @@ public class LateToolResultTest {
 			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO)));
 		int outcomes = 0;
 		for (long i = 0; i < stored.count(); i++) {
-			if (!AgentState.SOURCE_TOOL_OUTCOME.equals(RT.getIn(stored.get(i), AgentState.K_SOURCE))) continue;
+			if (!Agent.SOURCE_TOOL_OUTCOME.equals(RT.getIn(stored.get(i), Agent.K_SOURCE))) continue;
 			assertEquals(Principals.agentDID(did, Strings.create("late-step")), RT.getIn(stored.get(i), Fields.CALLER),
 				"an outcome comes from the agent that made the call");
 			outcomes++;
@@ -170,8 +170,8 @@ public class LateToolResultTest {
 		}
 		assertEquals(java.util.Set.of(Strings.create(okJob), Strings.create(badJob)), jobs, "one exchange per outcome: " + messages);
 		for (long i = 0; i < messages.count(); i++) {
-			assertFalse(AgentState.ROLE_USER.equals(RT.getIn(messages.get(i), AgentState.K_ROLE))
-				&& String.valueOf(RT.getIn(messages.get(i), AgentState.K_CONTENT)).contains("finished-late"),
+			assertFalse(Agent.ROLE_USER.equals(RT.getIn(messages.get(i), Agent.K_ROLE))
+				&& String.valueOf(RT.getIn(messages.get(i), Agent.K_CONTENT)).contains("finished-late"),
 				"an outcome is not also a message");
 		}
 	}
@@ -183,14 +183,14 @@ public class LateToolResultTest {
 		AMap<AString, ACell> input = Maps.of(
 			Fields.NEW_INPUT, Maps.of(Fields.JOB_ID, "0a1b", Fields.STATUS, Status.COMPLETE),
 			Fields.TASKS, Vectors.of(Maps.of(Fields.CALLER, "did:key:z6MkRequester")),
-			AgentState.KEY_INPUT_SOURCE, Maps.of(Fields.CALLER, agentDID,
-				AgentState.K_SOURCE, AgentState.SOURCE_TOOL_OUTCOME));
+			Agent.KEY_INPUT_SOURCE, Maps.of(Fields.CALLER, agentDID,
+				Agent.K_SOURCE, Agent.SOURCE_TOOL_OUTCOME));
 		AVector<ACell> frames = FrameStore.appendCycleInputTurns(
 			Vectors.of((ACell) GoalTreeContext.createFrame("")), null, input, 1L);
 		AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		ACell turn = turns.get(turns.count() - 1);
 		assertEquals(agentDID, RT.getIn(turn, Fields.CALLER));
-		assertEquals(AgentState.SOURCE_TOOL_OUTCOME, RT.getIn(turn, AgentState.K_SOURCE));
+		assertEquals(Agent.SOURCE_TOOL_OUTCOME, RT.getIn(turn, Agent.K_SOURCE));
 	}
 
 	@Test
@@ -267,7 +267,7 @@ public class LateToolResultTest {
 				Fields.AGENT_ID, agentId,
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
 			watch.awaitRest(1);
-			AgentState agent = first.getVenueState().users().user(RESTART_OWNER).agent(agentId);
+			Agent agent = first.getVenueState().users().user(RESTART_OWNER).agent(agentId);
 			assertTrue(Task.isParked(agent.getTasks().get(job.getID())));
 			assertEquals(1, agent.getPending().count(), "the late call waits in the pending index");
 			first.syncState();
@@ -290,7 +290,7 @@ public class LateToolResultTest {
 		Crashed crashed = crashWhileACallRuns("late-restart");
 		Engine second = restart(crashed);
 		try {
-			AgentState agent = second.getVenueState().users().user(RESTART_OWNER).agent("late-restart");
+			Agent agent = second.getVenueState().users().user(RESTART_OWNER).agent("late-restart");
 			try (AgentWatch watch = AgentWatch.open(second, RESTART_OWNER, "late-restart")) {
 				second.jobs().recoverJobs();
 				((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
@@ -317,7 +317,7 @@ public class LateToolResultTest {
 			assertNotNull(user.jobs().remove(crashed.mirrorId()), "the late call's job is deleted before the restart");
 			second.jobs().recoverJobs();
 			((AgentAdapter) second.getAdapter("agent")).wakeAgentsWithWork();
-			AgentState agent = user.agent("late-deleted");
+			Agent agent = user.agent("late-deleted");
 			assertEquals(0, agent.getPending().count(), "a deleted job leaves nothing to deliver");
 			AMap<AString, ACell> task = second.jobs().getJobData(crashed.taskId(), RequestContext.of(RESTART_OWNER));
 			assertEquals(Status.FAILED, task.get(Fields.STATUS),
@@ -333,7 +333,7 @@ public class LateToolResultTest {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
 		createAgent(engine, owner, "late-orphan", "v/test/ops/toolllm");
-		AgentState agent = engine.getVenueState().users().user(did).agent("late-orphan");
+		Agent agent = engine.getVenueState().users().user(did).agent("late-orphan");
 		String gateName = "late-orphan-" + did;
 		Job job;
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName);
@@ -358,7 +358,7 @@ public class LateToolResultTest {
 		AString did = TestEngine.uniqueDID(info);
 		RequestContext owner = RequestContext.of(did);
 		createAgent(engine, owner, "late-task", "v/test/ops/toolllm");
-		AgentState agent = engine.getVenueState().users().user(did).agent("late-task");
+		Agent agent = engine.getVenueState().users().user(did).agent("late-task");
 
 		String gateName = "late-task-" + did;
 		Job job;
@@ -370,7 +370,7 @@ public class LateToolResultTest {
 				Fields.AGENT_ID, "late-task",
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
 			watch.awaitRest(1);
-			assertEquals(AgentState.SLEEPING, agent.getStatus());
+			assertEquals(Agent.SLEEPING, agent.getStatus());
 			assertTrue(Task.isParked(agent.getTasks().get(job.getID())),
 				"a task waiting on a late call is parked, not failed");
 			assertFalse(job.isFinished());
@@ -399,7 +399,7 @@ public class LateToolResultTest {
 	 * {@code cycle}, as a call that outlives its limit is tracked. The cycle
 	 * then yields, and the task parks on the call.
 	 */
-	private Job parkOnACall(RequestContext owner, AgentState agent, AgentWatch watch, int rest, Blob sid,
+	private Job parkOnACall(RequestContext owner, Agent agent, AgentWatch watch, int rest, Blob sid,
 			TestAdapter.TestGate cycle, String cycleGate, Job call) throws Exception {
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agent.getAgentId(),
 			Fields.INPUT, "hold:" + cycleGate + " yield");
@@ -421,7 +421,7 @@ public class LateToolResultTest {
 		RequestContext owner = RequestContext.of(did);
 		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "late-pair",
 			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/step")), owner).awaitResult(5000);
-		AgentState agent = engine.getVenueState().users().user(did).agent("late-pair");
+		Agent agent = engine.getVenueState().users().user(did).agent("late-pair");
 		String older = "late-older-" + did;
 		String newer = "late-newer-" + did;
 		try (TestAdapter.TestGate olderCycle = TestAdapter.createGate(older);
@@ -457,18 +457,18 @@ public class LateToolResultTest {
 			ACell outcomeTurn = null;
 			for (long i = turns.count() - 1; i >= 0 && outcomeTurn == null; i--) {
 				ACell turn = turns.get(i);
-				if (AgentState.ROLE_USER.equals(RT.getIn(turn, AgentState.K_ROLE))
-						&& String.valueOf(RT.getIn(turn, AgentState.K_CONTENT)).contains("newer-outcome")) {
+				if (Agent.ROLE_USER.equals(RT.getIn(turn, Agent.K_ROLE))
+						&& String.valueOf(RT.getIn(turn, Agent.K_CONTENT)).contains("newer-outcome")) {
 					outcomeTurn = turn;
 				}
 			}
 			assertNotNull(outcomeTurn, "the outcome is a turn in the session's conversation");
 			assertEquals(did, RT.getIn(outcomeTurn, Fields.CALLER));
-			assertEquals(AgentState.SOURCE_TOOL_OUTCOME, RT.getIn(outcomeTurn, AgentState.K_SOURCE),
+			assertEquals(Agent.SOURCE_TOOL_OUTCOME, RT.getIn(outcomeTurn, Agent.K_SOURCE),
 				"the venue marks it a tool call's outcome");
-			assertEquals(Strings.create(PARKED_CALL_ID), RT.getIn(outcomeTurn, AgentState.K_CONTENT, Fields.TOOL_CALL_ID),
+			assertEquals(Strings.create(PARKED_CALL_ID), RT.getIn(outcomeTurn, Agent.K_CONTENT, Fields.TOOL_CALL_ID),
 				"it cites the call as the model made it");
-			assertEquals(Strings.create(PARKED_TOOL), RT.getIn(outcomeTurn, AgentState.K_CONTENT, Fields.TOOL_NAME));
+			assertEquals(Strings.create(PARKED_TOOL), RT.getIn(outcomeTurn, Agent.K_CONTENT, Fields.TOOL_NAME));
 
 			olderGate.release();
 			watch.awaitRest(4);

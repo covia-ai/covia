@@ -133,11 +133,11 @@ class VenueMigrationEndToEndTest {
 				turn("user", "recent question"), turn("assistant", "recent answer"));
 			AMap<AString, ACell> root = Maps.of("description", "legacy session", "conversation", conversation,
 				Fields.LOADS, Maps.of("w/frame-notes", Maps.empty()));
-			AgentState agent = user.ensureAgent(AGENT,
+			Agent agent = user.ensureAgent(AGENT,
 				Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm"), null);
 			AMap<AString, ACell> session = agent.ensureSession(SESSION, USER)
 				.assoc(Fields.FRAMES, Vectors.of(root)).assoc(Fields.LOADS, Maps.of("w/notes", Maps.empty()));
-			agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS, agent.getSessions().assoc(SESSION, session)));
+			agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS, agent.getSessions().assoc(SESSION, session)));
 
 			// Records of calls as version 1 named them: a job one of the user's
 			// agents made, its scheduled event, a HITL request it asked from
@@ -181,9 +181,9 @@ class VenueMigrationEndToEndTest {
 				Hitl.STATUS, Hitl.OPEN));
 			user.inbox().put(TIMED_REQUEST, Maps.of(Hitl.ID, TIMED_REQUEST, Strings.create("from"), USER,
 				Hitl.STATUS, Hitl.OPEN, Hitl.CREATED, 500L, Hitl.EXPIRES, 1_000L));
-			AgentState parked = user.ensureAgent(PARKED, Maps.empty(), null);
-			parked.putRecord(parked.getRecord().assoc(AgentState.KEY_STATUS, AgentState.SUSPENDED)
-				.assoc(AgentState.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
+			Agent parked = user.ensureAgent(PARKED, Maps.empty(), null);
+			parked.putRecord(parked.getRecord().assoc(Agent.KEY_STATUS, Agent.SUSPENDED)
+				.assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
 					Maps.of(Strings.create("outputContext"), Maps.of(Fields.CALLER, USER, Strings.create("user"), USER)))));
 			seed.cursor().updateAndGet(value -> RT.assocIn(value, Maps.of(Strings.create("events"), Index.of(EVENT,
 				Maps.of(Fields.OP, "v/test/ops/echo", Fields.OWNER, USER, Strings.create("actor"), agentDID,
@@ -294,14 +294,14 @@ class VenueMigrationEndToEndTest {
 			// The session's next cycle turns the legacy frame into versioned
 			// history and folds the session loads into the root frame.
 			AMap<AString, ACell> before = rootFrame(user);
-			assertTrue(before.containsKey(AgentState.KEY_CONVERSATION));
+			assertTrue(before.containsKey(Agent.KEY_CONVERSATION));
 			assertNotNull(user.agent(AGENT).getSession(SESSION).get(Fields.LOADS));
 			ACell reply = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, AGENT,
 				Fields.SESSION_ID, SESSION.toHexString(), Fields.MESSAGE, "after migration"), ctx).awaitResult(20_000);
 			assertTrue(RT.getIn(reply, "response").toString().contains("after migration"));
 			AMap<AString, ACell> frame = rootFrame(user);
 			assertEquals(CVMLong.ONE, frame.get(HISTORY_VERSION));
-			assertFalse(frame.containsKey(AgentState.KEY_CONVERSATION));
+			assertFalse(frame.containsKey(Agent.KEY_CONVERSATION));
 			String history = GoalTreeContext.archivedConversation(frame).toString();
 			assertTrue(history.contains("old question") && history.contains("recent answer") && history.contains("after migration"), history);
 			assertNull(user.agent(AGENT).getSession(SESSION).get(Fields.LOADS));
@@ -319,6 +319,6 @@ class VenueMigrationEndToEndTest {
 	}
 
 	private static AMap<AString, ACell> rootFrame(User user) {
-		return RT.ensureMap(RT.getIn(user.agent(AGENT).getSession(SESSION), AgentState.KEY_FRAMES, CVMLong.ZERO));
+		return RT.ensureMap(RT.getIn(user.agent(AGENT).getSession(SESSION), Agent.KEY_FRAMES, CVMLong.ZERO));
 	}
 }

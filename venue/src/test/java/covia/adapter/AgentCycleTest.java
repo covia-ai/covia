@@ -27,7 +27,7 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.JobManager;
 import covia.venue.RequestContext;
@@ -64,17 +64,17 @@ public class AgentCycleTest {
 		return "cycle-" + what + "-" + Long.toHexString(System.nanoTime());
 	}
 
-	private AgentState create(RequestContext owner, String agentId, AMap<AString, ACell> config) {
+	private Agent create(RequestContext owner, String agentId, AMap<AString, ACell> config) {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config), owner).awaitResult(5000);
 		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 	}
 
-	private AgentState stepAgent(RequestContext owner, String agentId) {
+	private Agent stepAgent(RequestContext owner, String agentId) {
 		return create(owner, agentId, Maps.of(Fields.OPERATION, "v/test/ops/step"));
 	}
 
-	private AgentState llmAgent(RequestContext owner, String agentId, String model) {
+	private Agent llmAgent(RequestContext owner, String agentId, String model) {
 		return create(owner, agentId, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat",
 			"llmOperation", "v/test/ops/failllm", "model", model));
 	}
@@ -86,7 +86,7 @@ public class AgentCycleTest {
 	 * by the message, so {@link #script} gives the message that does this; an
 	 * LLM agent's model does it for every message.
 	 */
-	private AgentState holding(Runtime runtime, RequestContext owner, String agentId, String gate, String outcome) {
+	private Agent holding(Runtime runtime, RequestContext owner, String agentId, String gate, String outcome) {
 		if (runtime == Runtime.STEP) return stepAgent(owner, agentId);
 		String model = switch (outcome) {
 			case "fail" -> "content";
@@ -129,7 +129,7 @@ public class AgentCycleTest {
 	}
 
 	/** Waits for the agent's run to reach a rest state, and returns it. */
-	private AString awaitRest(AgentState agent, RequestContext owner) throws Exception {
+	private AString awaitRest(Agent agent, RequestContext owner) throws Exception {
 		return agents().awaitRunFinished(agent.getAgentId(), owner, 10_000);
 	}
 
@@ -141,40 +141,40 @@ public class AgentCycleTest {
 		return Strings.create(job.getID().toHexString());
 	}
 
-	private static long timelineCount(AgentState agent) {
+	private static long timelineCount(Agent agent) {
 		AVector<ACell> timeline = agent.getTimeline();
 		return (timeline == null) ? 0 : timeline.count();
 	}
 
-	private static long pendingCount(AgentState agent, Blob sid) {
+	private static long pendingCount(Agent agent, Blob sid) {
 		AVector<ACell> pending = agent.getSessionPending(sid);
 		return (pending == null) ? 0 : pending.count();
 	}
 
-	private static AVector<ACell> conversation(AgentState agent, Blob sid) {
-		AVector<ACell> frames = RT.ensureVector(RT.getIn(agent.getSession(sid), AgentState.KEY_FRAMES));
+	private static AVector<ACell> conversation(Agent agent, Blob sid) {
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(agent.getSession(sid), Agent.KEY_FRAMES));
 		if (frames == null || frames.isEmpty()) return Vectors.empty();
 		AVector<ACell> turns = GoalTreeContext.activeConversation(RT.ensureMap(frames.get(0)));
 		return (turns == null) ? Vectors.empty() : turns;
 	}
 
 	/** The user turns in the session's root conversation with this content. */
-	private static AVector<ACell> userTurns(AgentState agent, Blob sid, String content) {
+	private static AVector<ACell> userTurns(Agent agent, Blob sid, String content) {
 		AVector<ACell> found = Vectors.empty();
 		AVector<ACell> turns = conversation(agent, sid);
 		for (long i = 0; i < turns.count(); i++) {
 			ACell turn = turns.get(i);
-			if (AgentState.ROLE_USER.equals(RT.getIn(turn, AgentState.K_ROLE))
-					&& Strings.create(content).equals(RT.getIn(turn, AgentState.K_CONTENT))) found = found.conj(turn);
+			if (Agent.ROLE_USER.equals(RT.getIn(turn, Agent.K_ROLE))
+					&& Strings.create(content).equals(RT.getIn(turn, Agent.K_CONTENT))) found = found.conj(turn);
 		}
 		return found;
 	}
 
-	private static long assistantTurns(AgentState agent, Blob sid) {
+	private static long assistantTurns(Agent agent, Blob sid) {
 		AVector<ACell> turns = conversation(agent, sid);
 		long n = 0;
 		for (long i = 0; i < turns.count(); i++) {
-			if (AgentState.ROLE_ASSISTANT.equals(RT.getIn(turns.get(i), AgentState.K_ROLE))) n++;
+			if (Agent.ROLE_ASSISTANT.equals(RT.getIn(turns.get(i), Agent.K_ROLE))) n++;
 		}
 		return n;
 	}
@@ -195,7 +195,7 @@ public class AgentCycleTest {
 			RequestContext owner = owner(info, runtime);
 			String gateName = gateName("takes");
 			try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-				AgentState agent = holding(runtime, owner, "takes-input", gateName, "reply");
+				Agent agent = holding(runtime, owner, "takes-input", gateName, "reply");
 				String text = script(runtime, gateName, "reply");
 				Job chat = chat(owner, "takes-input", null, text);
 				awaitGate(gate);
@@ -210,7 +210,7 @@ public class AgentCycleTest {
 
 				gate.release();
 				chat.awaitResult(10_000);
-				assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 				assertEquals(1, userTurns(agent, sid, text).count(), runtime + ": the message is presented once");
 				assertEquals(1, assistantTurns(agent, sid), runtime + ": one reply");
 				assertNull(agent.getSessionCycleEpoch(sid), runtime + ": the claim ends with the cycle");
@@ -224,7 +224,7 @@ public class AgentCycleTest {
 			RequestContext owner = owner(info, runtime);
 			String gateName = gateName("midcycle");
 			try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-				AgentState agent = holding(runtime, owner, "mid-cycle", gateName, "reply");
+				Agent agent = holding(runtime, owner, "mid-cycle", gateName, "reply");
 				Job first = chat(owner, "mid-cycle", null, script(runtime, gateName, "reply"));
 				awaitGate(gate);
 				Blob sid = sessionOf(first);
@@ -236,7 +236,7 @@ public class AgentCycleTest {
 				gate.release();
 				assertEquals(Vectors.of(hex(first)), answered(first), runtime + ": a reply answers only what its cycle took");
 				assertEquals(Vectors.of(hex(second)), answered(second), runtime + ": the second message gets its own cycle");
-				assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 				assertEquals(2, timelineCount(agent), runtime.name());
 				assertEquals(1, userTurns(agent, sid, "second").count(), runtime + ": presented once");
 			}
@@ -255,7 +255,7 @@ public class AgentCycleTest {
 	 * Inspecting the agent meets the same setup, so it fails the same way.
 	 * Returns the chat's session.
 	 */
-	private Blob assertSuspendedByItsSetup(RequestContext owner, AgentState agent, String reason,
+	private Blob assertSuspendedByItsSetup(RequestContext owner, Agent agent, String reason,
 			String runtime) throws Exception {
 		String agentId = agent.getAgentId().toString();
 		Job inspect = engine.jobs().invokeOperation("v/ops/agent/context",
@@ -266,7 +266,7 @@ public class AgentCycleTest {
 		Job chat = chat(owner, agentId, null, "hello");
 		assertThrows(JobFailedException.class, () -> chat.awaitResult(10_000), runtime);
 		assertTrue(chat.getErrorMessage().contains(reason), runtime + ": " + chat.getErrorMessage());
-		assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner), runtime);
+		assertEquals(Agent.SUSPENDED, awaitRest(agent, owner), runtime);
 		assertTrue(agent.getError().toString().contains(reason), runtime + ": " + agent.getError());
 		assertEquals(1, timelineCount(agent), runtime + ": one cycle, not one per piece of work");
 		Blob sid = sessionOf(chat);
@@ -277,13 +277,13 @@ public class AgentCycleTest {
 	}
 
 	/** Resumes an agent whose setup has been fixed and checks it answers in {@code sid} again. */
-	private void assertRunsAgainOnResume(RequestContext owner, AgentState agent, Blob sid,
+	private void assertRunsAgainOnResume(RequestContext owner, Agent agent, Blob sid,
 			String runtime) throws Exception {
 		String agentId = agent.getAgentId().toString();
 		op(owner, "resume", agentId, Maps.empty());
 		Job next = chat(owner, agentId, sid, "again");
 		assertEquals(Vectors.of(hex(next)), answered(next), runtime);
-		assertEquals(AgentState.SLEEPING, awaitRest(agent, owner), runtime);
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner), runtime);
 		assertNull(agent.getError(), runtime);
 	}
 
@@ -301,7 +301,7 @@ public class AgentCycleTest {
 		for (String runtime : LLM_RUNTIMES) {
 			RequestContext owner = RequestContext.of(Strings.create(TestEngine.uniqueDID(info) + "-" + runtime));
 			AMap<AString, ACell> prompt = Maps.of("ref", "w/prompts/absent");
-			AgentState agent = create(owner, "no-prompt", Maps.of(
+			Agent agent = create(owner, "no-prompt", Maps.of(
 				Fields.OPERATION, "v/ops/" + runtime + "/chat",
 				"llmOperation", "v/test/ops/failllm",
 				"systemPrompt", prompt));
@@ -326,7 +326,7 @@ public class AgentCycleTest {
 		for (String runtime : LLM_RUNTIMES) {
 			RequestContext owner = RequestContext.of(Strings.create(TestEngine.uniqueDID(info) + "-" + runtime));
 			String absent = "v/test/ops/absent";
-			AgentState agent = create(owner, "no-model", Maps.of(
+			Agent agent = create(owner, "no-model", Maps.of(
 				Fields.OPERATION, "v/ops/" + runtime + "/chat",
 				"llmOperation", absent));
 			Blob sid = assertSuspendedByItsSetup(owner, agent, AbstractLLMAdapter.LLM_OPERATION_UNRESOLVED.formatted(
@@ -348,7 +348,7 @@ public class AgentCycleTest {
 				AbstractLLMAdapter.K_MODEL_ID, "absent-model",
 				AbstractLLMAdapter.K_MODEL_PROVIDER, "v/test/ops/absent"))), null);
 		String ref = "a/" + preset.toHexString();
-		AgentState agent = create(owner, "no-provider", Maps.of(
+		Agent agent = create(owner, "no-provider", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", ref));
 		assertSuspendedByItsSetup(owner, agent, AbstractLLMAdapter.LLM_OPERATION_UNRESOLVED.formatted(ref, ""), "llmagent");
 	}
@@ -359,7 +359,7 @@ public class AgentCycleTest {
 			RequestContext owner = owner(info, runtime);
 			String gateName = gateName("fails");
 			try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-				AgentState agent = holding(runtime, owner, "fails-work", gateName, "fail");
+				Agent agent = holding(runtime, owner, "fails-work", gateName, "fail");
 				String text = script(runtime, gateName, "fail");
 				Job first = chat(owner, "fails-work", null, text);
 				awaitGate(gate);
@@ -376,7 +376,7 @@ public class AgentCycleTest {
 				} else {
 					assertThrows(JobFailedException.class, () -> second.awaitResult(10_000));
 				}
-				assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 				assertNull(agent.getError(), runtime + ": a failure of the work is not a fault in the agent");
 				assertEquals(2, timelineCount(agent), runtime.name());
 				assertEquals(1, userTurns(agent, sid, text).count(), runtime + ": the failed cycle's message is kept");
@@ -388,7 +388,7 @@ public class AgentCycleTest {
 	@Test
 	public void aMessageWithoutAChatBecomesATurnEvenWhenItsCycleFails(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = stepAgent(owner, "plain-message");
+		Agent agent = stepAgent(owner, "plain-message");
 		Job opening = chat(owner, "plain-message", null, "reply");
 		opening.awaitResult(10_000);
 		Blob sid = sessionOf(opening);
@@ -396,7 +396,7 @@ public class AgentCycleTest {
 
 		message(owner, "plain-message", Maps.of(Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.MESSAGE, Strings.create("fail")));
-		assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 		assertEquals(2, timelineCount(agent));
 		assertEquals(1, userTurns(agent, sid, "fail").count(), "the message is kept although its cycle failed");
 		assertEquals(0, pendingCount(agent, sid));
@@ -408,7 +408,7 @@ public class AgentCycleTest {
 			RequestContext owner = owner(info, runtime);
 			String gateName = gateName("cannot");
 			try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-				AgentState agent = holding(runtime, owner, "cannot-continue", gateName, "cannot");
+				Agent agent = holding(runtime, owner, "cannot-continue", gateName, "cannot");
 				String text = script(runtime, gateName, "cannot");
 				Job first = chat(owner, "cannot-continue", null, text);
 				awaitGate(gate);
@@ -418,7 +418,7 @@ public class AgentCycleTest {
 				gate.release();
 				assertThrows(JobFailedException.class, () -> first.awaitResult(10_000));
 				assertTrue(first.getErrorMessage().contains(failure(runtime, "cannot")), first.getErrorMessage());
-				assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner), runtime.name());
+				assertEquals(Agent.SUSPENDED, awaitRest(agent, owner), runtime.name());
 				assertFalse(second.isFinished(), runtime + ": the chat the cycle never took waits");
 				assertEquals(AgentAdapter.SUSPENDED_WAITING.formatted("cannot-continue", ": " + agent.getError()),
 					Job.progressMessage(second.getData().get(Fields.PROGRESS)), runtime.name());
@@ -428,7 +428,7 @@ public class AgentCycleTest {
 				if (runtime == Runtime.LLM) op(owner, "update", "cannot-continue", Maps.of(Fields.CONFIG, Maps.of("model", "ok")));
 				op(owner, "resume", "cannot-continue", Maps.empty());
 				assertEquals(Vectors.of(hex(second)), answered(second), runtime + ": it runs after resume");
-				assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			}
 		}
 	}
@@ -440,13 +440,13 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("stopped");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = stepAgent(owner, "stopped-task");
+			Agent agent = stepAgent(owner, "stopped-task");
 			String script = "hold:" + gateName + " complete";
 			Job task = request(owner, "stopped-task", script);
 			awaitGate(gate);
 			op(owner, "suspend", "stopped-task", Maps.empty());
 			gate.release(); // the stopped step sees its cycle was cancelled and does nothing more
-			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
+			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner));
 			assertFalse(task.isFinished(), "a suspended agent keeps its task");
 			Blob sid = sessionOf(task);
 			assertEquals(1, userTurns(agent, sid, script).count(), "the task's input is in the conversation");
@@ -454,7 +454,7 @@ public class AgentCycleTest {
 			op(owner, "resume", "stopped-task", Maps.empty());
 			task.awaitResult(10_000);
 			assertEquals(Status.COMPLETE, task.getStatus(), "it runs again from its conversation");
-			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			assertEquals(1, userTurns(agent, sid, script).count(), "its input is still presented once");
 		}
 	}
@@ -471,13 +471,13 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("stopped");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = stepAgent(owner, "stopped");
+			Agent agent = stepAgent(owner, "stopped");
 			Job task = request(owner, "stopped", "hold:" + gateName + " complete");
 			awaitGate(gate);
 			assertNotNull(agent.suspend(owner.getCallerDID(), Strings.create("stop")));
 			gate.release();
 
-			assertEquals(AgentState.SUSPENDED, awaitRest(agent, owner));
+			assertEquals(Agent.SUSPENDED, awaitRest(agent, owner));
 			assertFalse(task.isFinished(), "a stopped cycle keeps its task: " + task.getErrorMessage());
 			AVector<ACell> timeline = agent.getTimeline();
 			assertEquals(CVMBool.TRUE, RT.getIn(timeline.get(timeline.count() - 1), Fields.CANCELLED),
@@ -495,7 +495,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("resumed");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = stepAgent(owner, "resumed");
+			Agent agent = stepAgent(owner, "resumed");
 			Job task = request(owner, "resumed", "hold:" + gateName + " complete");
 			awaitGate(gate);
 			Blob sid = sessionOf(task);
@@ -506,7 +506,7 @@ public class AgentCycleTest {
 
 			task.awaitResult(10_000);
 			assertEquals(Status.COMPLETE, task.getStatus(), "the task runs again after the resume");
-			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			AVector<ACell> timeline = agent.getTimeline();
 			assertEquals(2, timeline.count(), timeline.toString());
 			assertEquals(CVMBool.TRUE, RT.getIn(timeline.get(0), Fields.CANCELLED),
@@ -520,7 +520,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("continuation");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = stepAgent(owner, "continued-task");
+			Agent agent = stepAgent(owner, "continued-task");
 			String script = "hold:" + gateName + " yield";
 			Job task = request(owner, "continued-task", script);
 			awaitGate(gate);
@@ -530,7 +530,7 @@ public class AgentCycleTest {
 			ACell result = task.awaitResult(10_000);
 			assertEquals(Strings.create("complete"), RT.getIn(result, Fields.OUTPUT, Fields.INPUT),
 				"the next cycle is shown the continuation");
-			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			Blob sid = sessionOf(task);
 			assertEquals(1, userTurns(agent, sid, script).count());
 			assertEquals(1, userTurns(agent, sid, "complete").count(), "the continuation is presented once");
@@ -542,7 +542,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("orphan");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = stepAgent(owner, "orphan-task");
+			Agent agent = stepAgent(owner, "orphan-task");
 			Job first = request(owner, "orphan-task", "hold:" + gateName + " complete");
 			awaitGate(gate);
 			Job orphan = request(owner, "orphan-task", "complete");
@@ -553,7 +553,7 @@ public class AgentCycleTest {
 			first.awaitResult(10_000);
 			orphan.awaitResult(10_000);
 			assertEquals(Status.COMPLETE, orphan.getStatus(), "a task without its session runs once and settles");
-			assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+			assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			assertEquals(0, agent.getTasks().count());
 		}
 	}
@@ -563,10 +563,10 @@ public class AgentCycleTest {
 	@Test
 	public void aChatTakenByAYieldingCycleIsAnsweredByTheNextReply(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = stepAgent(owner, "yielding-chat");
+		Agent agent = stepAgent(owner, "yielding-chat");
 		Job first = chat(owner, "yielding-chat", null, "yield");
 		Blob sid = sessionOf(first);
-		assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 		assertFalse(first.isFinished(), "a cycle without a reply leaves its chat waiting");
 		assertEquals(0, pendingCount(agent, sid), "but its message was taken");
 
@@ -588,7 +588,7 @@ public class AgentCycleTest {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("gap");
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			AgentState agent = stepAgent(owner, "chat-gap");
+			Agent agent = stepAgent(owner, "chat-gap");
 			Job first = chat(owner, "chat-gap", null, "hold:" + gateName + " reply");
 			awaitGate(gate);
 			Blob sid = sessionOf(first);
@@ -611,7 +611,7 @@ public class AgentCycleTest {
 				assertTrue(waiting.await(10, TimeUnit.SECONDS), "the second chat waits, its message not yet queued");
 				gate.release();
 				assertEquals(Vectors.of(hex(first)), answered(first), "the reply answers the chat its cycle took");
-				assertEquals(AgentState.SLEEPING, awaitRest(agent, owner));
+				assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
 			} finally {
 				queue.countDown();
 			}

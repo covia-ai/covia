@@ -14,7 +14,7 @@ import covia.grid.Attribution;
 import covia.grid.Principals;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 
 /**
  * Part of venue version 1 to 2: a record of a call names the principal that made it
@@ -50,7 +50,7 @@ public final class CallerAndOwner implements MigrationStep {
 	static final AString REQUESTER_USER = Strings.intern("requesterUser");
 	static final AString USER = Strings.intern("user");
 	static final AString EVENTS = Strings.intern("events");
-	static final AString TASKS = AgentState.KEY_TASKS;
+	static final AString TASKS = Agent.KEY_TASKS;
 	static final AString OUTPUT_CONTEXT = Strings.intern("outputContext");
 	static final AString CAPS = Strings.intern("caps");
 
@@ -175,7 +175,7 @@ public final class CallerAndOwner implements MigrationStep {
 		if (agentId == null || !caller.equals(Principals.agentDID(owner, agentId))) return caller;
 		ACell agent = RT.getIn(venue, Covia.USER_DATA, owner, Namespace.G, agentId);
 		if (!(agent instanceof AMap<?, ?>)) return caller;
-		return AgentState.TERMINATED.equals(RT.getIn(agent, AgentState.KEY_STATUS)) ? caller : owner;
+		return Agent.TERMINATED.equals(RT.getIn(agent, Agent.KEY_STATUS)) ? caller : owner;
 	}
 
 	@SuppressWarnings("unchecked")

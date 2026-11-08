@@ -516,7 +516,7 @@ state; the existing `agent:fork` continues to create fresh sessions.
 **Storage migration.** `GoalTreeContext.migrateFrame/migrateFrames` are pure,
 idempotent transforms. The normal cycle claim converts all frames in the same
 session CAS that fences the old executor; pending input is drained only after
-successful conversion. `SessionState.migrateHistory` also supports an idle
+successful conversion. `Session.migrateHistory` also supports an idle
 session with an exact expected frame snapshot. Busy/stale snapshots do not
 publish, and malformed data or unknown versions leave the entire session,
 pending input and epoch unchanged. Completed cycle snapshots need no eager
@@ -1208,7 +1208,7 @@ the updated frame stack.
 Anything a runtime needs that is not in `Spec` is a missing input, not a reason
 to fork the assembly pipeline. Persistence is a separate boundary: the runtime
 computes a complete immutable rendering or event, then atomically associates it
-with the frame through `FrameStore` / `AgentState`.
+with the frame through `FrameStore` / `Agent`.
 
 `agent:context` reads the same durable frame and calls the same `assemble`, so an
 inspected existing context matches a live inference **by construction**. It
@@ -1237,7 +1237,7 @@ The same regions drive the timeline record (`AGENT_LOOP.md` §2.4): initial mess
 |---------|------|
 | `Spec`, `Rendered`, `Prompt`, concatenation and attribution | `ContextAssembler` |
 | The `From` element (§1.2): relationship, channel and identity key | `TurnProvenance` |
-| Atomic session/frame persistence | `AgentState`, through `FrameStore` |
+| Atomic session/frame persistence | `Agent`, through `FrameStore` |
 | Durable context cell contract | §1.1 of this document |
 | The label renderer (§1.2) | `Labels` |
 | Base manifest and dynamic-tool strategy (§3.2.3) | `ToolPalette` |

@@ -16,7 +16,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -52,9 +52,9 @@ interface FrameStore {
 			ACell input, AVector<ACell> messages, String rootDescription,
 			long cycleTs) {
 		Blob sid = ctx.getSessionId();
-		ACell claim = RT.getIn(input, Fields.SESSION, AgentState.KEY_IN_CYCLE);
+		ACell claim = RT.getIn(input, Fields.SESSION, Agent.KEY_IN_CYCLE);
 		if (sid != null && claim != null) {
-			AgentState agent = resolveAgentState(engine, ctx, agentId);
+			Agent agent = resolveAgentState(engine, ctx, agentId);
 			if (agent == null || agent.getSession(sid) == null) {
 				return failed("Session vanished before cycle start: " + sid);
 			}
@@ -77,7 +77,7 @@ interface FrameStore {
 		return new Opened(null, false, convex.core.data.Strings.create(message));
 	}
 
-	private static AgentState resolveAgentState(Engine engine, RequestContext ctx, AString agentId) {
+	private static Agent resolveAgentState(Engine engine, RequestContext ctx, AString agentId) {
 		if (agentId == null || ctx.getUserDID() == null) return null;
 		covia.venue.User user = engine.getVenueState().users().user(ctx.getUserDID());
 		return (user != null) ? user.agent(agentId.toString()) : null;
@@ -91,7 +91,7 @@ interface FrameStore {
 			AVector<ACell> messages, ACell input, long ts) {
 		if (frames == null || frames.isEmpty()) return frames;
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
-		ACell inputSource = RT.getIn(input, AgentState.KEY_INPUT_SOURCE);
+		ACell inputSource = RT.getIn(input, Agent.KEY_INPUT_SOURCE);
 		if (inputSource == null) inputSource = RT.getIn(input, Fields.TASKS, CVMLong.ZERO);
 		AVector<ACell> turns = AgentAdapter.cycleInputTurns(messages, RT.getIn(input, Fields.NEW_INPUT),
 			RT.getIn(input, Fields.JOB_ID), inputSource, ts);
@@ -156,13 +156,13 @@ interface FrameStore {
 	 * a flipped cancellation token latches {@link #aborted()}.
 	 */
 	final class LatticeFrameStore implements FrameStore {
-		private final AgentState agent;
+		private final Agent agent;
 		private final Blob sid;
 		private final ACell epoch;
 		private final AtomicBoolean cancelled;   // may be null (no token supplied)
 		private boolean aborted = false;
 
-		LatticeFrameStore(AgentState agent, Blob sid, ACell epoch, AtomicBoolean cancelled) {
+		LatticeFrameStore(Agent agent, Blob sid, ACell epoch, AtomicBoolean cancelled) {
 			this.agent = agent;
 			this.sid = sid;
 			this.epoch = epoch;
@@ -173,7 +173,7 @@ interface FrameStore {
 		public AVector<ACell> frames() {
 			var session = agent.getSession(sid);
 			if (session == null) { aborted = true; return Vectors.empty(); }
-			ACell fv = session.get(AgentState.KEY_FRAMES);
+			ACell fv = session.get(Agent.KEY_FRAMES);
 			return (fv instanceof AVector) ? (AVector<ACell>) fv : Vectors.empty();
 		}
 

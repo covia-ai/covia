@@ -78,7 +78,7 @@ class UserExportsTest {
 		user.secrets().store("API_KEY", SECRET, KEYS);
 		Blob jobID = Blob.fromHex("0a".repeat(16));
 		user.jobs().create(jobID, Maps.of(Fields.ID, jobID, Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "done"));
-		AgentState agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
+		Agent agent = user.ensureAgent(HELPER, Maps.of("model", "test"), Strings.create("state"));
 		agent.ensureSession(Blob.fromHex("aa"), did);
 		return user;
 	}
@@ -291,16 +291,16 @@ class UserExportsTest {
 		}
 		// An outstanding agent task is unfinished work, wherever its job is recorded.
 		assertEquals(UserExports.BUSY, UserExports.unfinishedWork(Maps.of(Namespace.G,
-			Maps.of(HELPER, Maps.of(AgentState.KEY_TASKS, Maps.of("task", Maps.empty()))))));
+			Maps.of(HELPER, Maps.of(Agent.KEY_TASKS, Maps.of("task", Maps.empty()))))));
 		assertNull(UserExports.unfinishedWork(Maps.of(Namespace.G,
-			Maps.of(HELPER, Maps.of(AgentState.KEY_TASKS, Maps.empty())))));
+			Maps.of(HELPER, Maps.of(Agent.KEY_TASKS, Maps.empty())))));
 	}
 
 	@Test
 	void cloneCopiesAsStoredAndRearmsWakes() {
 		User user = fill(source);
 		Blob sid = Blob.fromHex("aa");
-		engine.getVenueState().setAgentThreadWakeTime(source, HELPER, AgentState.ThreadKind.SESSION, sid,
+		engine.getVenueState().setAgentThreadWakeTime(source, HELPER, Agent.ThreadKind.SESSION, sid,
 			System.currentTimeMillis() + 86_400_000L);
 		Blob sourceWake = user.agent(HELPER).wakeHandle();
 		assertNotNull(sourceWake);
@@ -314,13 +314,13 @@ class UserExportsTest {
 			"a clone holds everything but the calls, which the account it fills has not made");
 		User clone = users.user(target);
 		assertEquals(SECRET, clone.secrets().decrypt("API_KEY", KEYS).toString());
-		AgentState agent = clone.agent(HELPER);
+		Agent agent = clone.agent(HELPER);
 		assertEquals(user.agent(HELPER).getSession(sid), agent.getSession(sid));
 
 		Blob cloneWake = agent.wakeHandle();
 		assertNotNull(cloneWake);
 		assertNotEquals(sourceWake, cloneWake);
-		ScheduleState schedule = engine.getVenueState().schedule();
+		Schedule schedule = engine.getVenueState().schedule();
 		assertEquals(target, Attribution.owner(schedule.find(cloneWake).rec()));
 		assertNotNull(schedule.find(sourceWake), "the source keeps its own wake");
 

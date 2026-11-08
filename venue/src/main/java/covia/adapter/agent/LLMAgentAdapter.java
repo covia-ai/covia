@@ -17,7 +17,7 @@ import covia.adapter.AgentAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.RequestContext;
 
 /**
@@ -331,7 +331,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
 		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
+		AMap<AString, ACell> recordConfig = (RT.getIn(input, Agent.KEY_CONFIG) instanceof AMap m) ? m : null;
 		ModelSetup model = modelSetup(recordConfig, ctx);
 
 		// Determine if there is real input for the agent
@@ -346,7 +346,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			GoalTreeContext.describeTransitionInput(messages, tasks, pending),
 			engine.currentTimestamp().longValue());
 		if (opened.failed()) {
-			return CycleRecord.endInto(Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error()));
+			return CycleRecord.endInto(Maps.of(Agent.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error()));
 		}
 		FrameStore store = opened.store();
 
@@ -415,7 +415,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// answer). If the LLM called fail_task, the error replaces the
 		// response entirely.
 		AMap<AString, ACell> output = Maps.of(
-			AgentState.KEY_STATE, newState,
+			Agent.KEY_STATE, newState,
 			Fields.RESPONSE, Strings.create(responseText));
 		// Preserve the conventional transition output for direct callers. Session
 		// runs have already written these turns live through FrameStore, and the
@@ -618,14 +618,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	private AMap<AString, ACell> normaliseRootTurn(AMap<AString, ACell> turn) {
-		if (turn.get(AgentState.K_TURN_TS) == null) {
-			turn = turn.assoc(AgentState.K_TURN_TS, engine.currentTimestamp());
+		if (turn.get(Agent.K_TURN_TS) == null) {
+			turn = turn.assoc(Agent.K_TURN_TS, engine.currentTimestamp());
 		}
-		if (turn.get(AgentState.K_SOURCE) == null) {
-			AString role = RT.ensureString(turn.get(AgentState.K_ROLE));
-			turn = turn.assoc(AgentState.K_SOURCE,
+		if (turn.get(Agent.K_SOURCE) == null) {
+			AString role = RT.ensureString(turn.get(Agent.K_ROLE));
+			turn = turn.assoc(Agent.K_SOURCE,
 				ROLE_TOOL.equals(role)
-					? AgentState.SOURCE_TOOL : AgentState.SOURCE_TRANSITION);
+					? Agent.SOURCE_TOOL : Agent.SOURCE_TRANSITION);
 		}
 		return turn;
 	}

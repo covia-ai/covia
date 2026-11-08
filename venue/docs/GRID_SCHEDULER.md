@@ -369,7 +369,7 @@ and how the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md
   authoritative per-thread "this thread wants to wake at T" marker.
 - `Scheduler.setThreadWakeTime` commits the intent, event and handle in one
   `VenueState` transaction, then reports the venue's next due time from
-  committed state (§4). `AgentState.setThreadWakeTime` itself is a data-only
+  committed state (§4). `Agent.setThreadWakeTime` itself is a data-only
   mutation, safe on drafts, and `VenueState.setAgentThreadWakeTime` writes the
   intent and the event together without touching the live scheduler, so it
   composes into a larger venue transaction. Drafts never call a live scheduler.

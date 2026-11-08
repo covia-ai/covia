@@ -38,7 +38,7 @@ import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.ToolGuards;
@@ -917,7 +917,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return Maps.of(
 			K_ROLE, ROLE_SYSTEM,
 			K_CONTENT, Strings.create(TRUNCATION_RETRY_MESSAGE),
-			AgentState.K_SOURCE, AgentState.SOURCE_TRANSITION);
+			Agent.K_SOURCE, Agent.SOURCE_TRANSITION);
 	}
 
 	// ========== Tool dispatch ==========

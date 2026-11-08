@@ -36,8 +36,8 @@ import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Agent;
 import covia.venue.RequestContext;
-import covia.venue.AgentState;
 import covia.venue.AdapterState;
 import covia.venue.api.A2ACodec;
 import covia.venue.migration.MigrationStep;
@@ -537,7 +537,7 @@ public class TestAdapter extends AAdapter {
      */
     private ACell handleTaskComplete(RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
-		AString gateName = RT.ensureString(RT.getIn(input, AgentState.KEY_CONFIG, "testGate"));
+		AString gateName = RT.ensureString(RT.getIn(input, Agent.KEY_CONFIG, "testGate"));
 		if (gateName != null) {
 			TestGate gate = TEST_GATES.get(gateName.toString());
 			if (gate == null) throw new IllegalStateException("Unknown test gate: " + gateName);
@@ -546,7 +546,7 @@ public class TestAdapter extends AAdapter {
         ACell delayCell = RT.getIn(newInput, Fields.DELAY);
 		// Agent/A2A integration tests can hold a transition open without shaping
 		// the user message around this test adapter's private delay control.
-		if (delayCell == null) delayCell = RT.getIn(input, AgentState.KEY_CONFIG, Fields.DELAY);
+		if (delayCell == null) delayCell = RT.getIn(input, Agent.KEY_CONFIG, Fields.DELAY);
         if (delayCell instanceof CVMLong delay && delay.longValue() > 0) {
             try {
                 Thread.sleep(delay.longValue());
@@ -556,7 +556,7 @@ public class TestAdapter extends AAdapter {
             }
         }
         AString readPath = RT.ensureString(RT.getIn(newInput, "readPath"));
-        if (readPath == null) readPath = RT.ensureString(RT.getIn(input, AgentState.KEY_CONFIG, "readPath"));
+        if (readPath == null) readPath = RT.ensureString(RT.getIn(input, Agent.KEY_CONFIG, "readPath"));
         if (readPath != null) {
             ACell read = ((CoviaAdapter) engine.getAdapter("covia"))
                 .handleRead(ctx, Maps.of(Fields.PATH, readPath));
@@ -604,7 +604,7 @@ public class TestAdapter extends AAdapter {
      * completes the task with that answer.
      */
     private ACell handleAskHuman(RequestContext ctx, ACell input) {
-        AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, AgentState.KEY_PENDING));
+        AVector<ACell> inbox = RT.ensureVector(RT.getIn(input, Fields.SESSION, Agent.KEY_PENDING));
         ACell answer = (ctx.getTaskRevision() > 0) ? RT.getIn(input, Fields.NEW_INPUT)
             : (inbox != null && inbox.count() > 0) ? RT.getIn(inbox.get(inbox.count() - 1), Fields.MESSAGE) : null;
         if (answer != null) {
@@ -1858,11 +1858,11 @@ public class TestAdapter extends AAdapter {
         if (taskInput != null) seen = seen.assoc(Fields.INPUT, taskInput);
         ACell script = (taskInput != null) ? taskInput : (saw.isEmpty() ? null : saw.get(saw.count() - 1));
         if (script == null) {
-            AMap<AString, ACell> root = RT.ensureMap(RT.getIn(input, Fields.SESSION, AgentState.KEY_FRAMES, CVMLong.ZERO));
+            AMap<AString, ACell> root = RT.ensureMap(RT.getIn(input, Fields.SESSION, Agent.KEY_FRAMES, CVMLong.ZERO));
             AVector<ACell> turns = (root == null) ? null : covia.adapter.agent.GoalTreeContext.activeConversation(root);
             for (long i = (turns == null) ? -1 : turns.count() - 1; i >= 0 && script == null; i--) {
-                if (AgentState.ROLE_USER.equals(RT.getIn(turns.get(i), AgentState.K_ROLE))) {
-                    script = RT.getIn(turns.get(i), AgentState.K_CONTENT);
+                if (Agent.ROLE_USER.equals(RT.getIn(turns.get(i), Agent.K_ROLE))) {
+                    script = RT.getIn(turns.get(i), Agent.K_CONTENT);
                 }
             }
         }

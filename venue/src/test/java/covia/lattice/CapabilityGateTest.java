@@ -22,6 +22,7 @@ import convex.core.data.Vectors;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -390,8 +391,8 @@ public class CapabilityGateTest {
 		}
 
 		covia.venue.User user = engine.getVenueState().users().user(ALICE_DID);
-		covia.venue.AgentState agent = user.agent("gated-agent");
-		assertEquals(covia.venue.AgentState.SLEEPING, agent.getStatus(),
+		Agent agent = user.agent("gated-agent");
+		assertEquals(Agent.SLEEPING, agent.getStatus(),
 			"a handled gate denial is not an agent failure");
 	}
 

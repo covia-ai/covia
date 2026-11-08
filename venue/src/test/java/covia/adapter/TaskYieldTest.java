@@ -19,8 +19,8 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
+import covia.venue.Agent;
 import covia.venue.AgentEvents;
-import covia.venue.AgentState;
 import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
@@ -41,10 +41,10 @@ public class TaskYieldTest {
 
 	private final Engine engine = TestEngine.ENGINE;
 
-	private AgentState create(RequestContext owner, String agentId, AMap<AString, ACell> config,
+	private Agent create(RequestContext owner, String agentId, AMap<AString, ACell> config,
 			AMap<AString, ACell> state) {
 		AMap<AString, ACell> input = Maps.of(Fields.AGENT_ID, agentId, Fields.CONFIG, config);
-		if (state != null) input = input.assoc(AgentState.KEY_STATE, state);
+		if (state != null) input = input.assoc(Agent.KEY_STATE, state);
 		engine.jobs().invokeOperation("v/ops/agent/create", input, owner).awaitResult(5000);
 		return engine.getVenueState().users().user(owner.getUserDID()).agent(agentId);
 	}
@@ -54,7 +54,7 @@ public class TaskYieldTest {
 			Maps.of(Fields.AGENT_ID, agentId, Fields.INPUT, Maps.of("ask", ask)), owner);
 	}
 
-	private static long timelineCount(AgentState agent) {
+	private static long timelineCount(Agent agent) {
 		AVector<ACell> timeline = agent.getTimeline();
 		return (timeline == null) ? 0 : timeline.count();
 	}
@@ -62,7 +62,7 @@ public class TaskYieldTest {
 	@Test
 	public void aYieldWithNothingOutstandingFailsTheTaskAtOnce(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "idle-yield", Maps.of(Fields.OPERATION, "v/test/ops/echo"), null);
+		Agent agent = create(owner, "idle-yield", Maps.of(Fields.OPERATION, "v/test/ops/echo"), null);
 
 		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "idle-yield")) {
 			Job job = request(owner, "idle-yield", "do something");
@@ -79,7 +79,7 @@ public class TaskYieldTest {
 	public void aWakeTimeParksTheTaskUntilItComes(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		long later = System.currentTimeMillis() + HOUR_MS;
-		AgentState agent = create(owner, "wake-yield",
+		Agent agent = create(owner, "wake-yield",
 			Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
 			Maps.of(Fields.WAKE_TIME, CVMLong.create(later)));
 		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "wake-yield")) {
@@ -106,7 +106,7 @@ public class TaskYieldTest {
 
 			// Time passes: the wake time is now behind us, the scheduler fires, and the task runs.
 			engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
-				AgentState.ThreadKind.TASK, taskId, System.currentTimeMillis() - 1);
+				Agent.ThreadKind.TASK, taskId, System.currentTimeMillis() - 1);
 			watch.awaitRest(3);
 			assertNotNull(RT.getIn(agent.getTimeline().get(2), Fields.TASKS),
 				"the task's own wake presents it again");
@@ -116,14 +116,14 @@ public class TaskYieldTest {
 
 			// Leave nothing armed in the shared engine.
 			engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
-				AgentState.ThreadKind.TASK, taskId, 0);
+				Agent.ThreadKind.TASK, taskId, 0);
 		}
 	}
 
 	@Test
 	public void aTaskThatAsksAPersonWaitsForTheAnswer(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "ask-yield", Maps.of(Fields.OPERATION, "v/test/ops/askhuman"), null);
+		Agent agent = create(owner, "ask-yield", Maps.of(Fields.OPERATION, "v/test/ops/askhuman"), null);
 
 		Job job;
 		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "ask-yield")) {
@@ -145,7 +145,7 @@ public class TaskYieldTest {
 	@Test
 	public void aTaskThatAsksThroughTheLlmHarnessWaitsForTheAnswer(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "harness-ask", Maps.of(
+		Agent agent = create(owner, "harness-ask", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat",
 			"llmOperation", "v/test/ops/toolllm",
 			Fields.TOOLS, Vectors.of(Strings.create("v/ops/hitl/request"))), null);
@@ -175,7 +175,7 @@ public class TaskYieldTest {
 		// A wake time already passed is honoured every cycle, so this task is
 		// always ready; the iteration cap remains the backstop (#215).
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "past-wake",
+		Agent agent = create(owner, "past-wake",
 			Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
 			Maps.of(Fields.WAKE_TIME, CVMLong.create(1)));
 
@@ -197,7 +197,7 @@ public class TaskYieldTest {
 		// loop, the task's Job fails with the agent's reason and the agent
 		// stays up for the next task.
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		AgentState agent = create(owner, "fails-a-task", Maps.of(
+		Agent agent = create(owner, "fails-a-task", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat",
 			"llmOperation", "v/test/ops/taskllm",
 			"model", "parallel-task-fail-test"), null);
@@ -206,7 +206,7 @@ public class TaskYieldTest {
 			assertThrows(Exception.class, () -> first.awaitResult(10_000));
 			assertEquals("failed deliberately", first.getErrorMessage());
 			watch.awaitRest(1);
-			assertEquals(AgentState.SLEEPING, agent.getStatus(),
+			assertEquals(Agent.SLEEPING, agent.getStatus(),
 				"failing a task is not a fault in the agent: " + agent.getError());
 
 			Job second = request(owner, "fails-a-task", "nor can this");
@@ -216,11 +216,11 @@ public class TaskYieldTest {
 			watch.awaitRest(2);
 		}
 		assertEquals(2, timelineCount(agent));
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(Agent.SLEEPING, agent.getStatus());
 	}
 
 	/** Answers the agent's one open ask, as its owner. */
-	private void respond(RequestContext owner, AgentState agent, String answer) {
+	private void respond(RequestContext owner, Agent agent, String answer) {
 		AString askId = null;
 		for (var entry : agent.getPending().entrySet()) askId = Strings.create(entry.getKey().toHexString());
 		assertNotNull(askId, "the agent should have an open ask");

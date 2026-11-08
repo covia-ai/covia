@@ -628,7 +628,7 @@ and `fail_task` tools, any other transition by invoking the operation itself.
 The call is scoped to the cycle's task and refused once a continuation has
 arrived that the cycle has not shown. In one transaction it moves the task
 out of the queue and records its outcome under `resolved`
-(`AgentState.resolveTask`), so a resolved task can be neither cancelled nor
+(`Agent.resolveTask`), so a resolved task can be neither cancelled nor
 resolved again, and the outcome survives a restart. The cycle's merge hands
 it back (§4.4 step 6): its request Job settles in the merge's transaction,
 so its caller sees the cycle's writes first. The timeline entry records each
@@ -1166,7 +1166,7 @@ is a read → transition → merge sequence; concurrency with external
 mutations is handled by reading the current record inside the merge
 (not the pre-transition snapshot) so late writes are never lost. That
 holds for `state` too: the transition's result is applied as its *change*
-against the snapshot it fired with (`AgentState.applyStateChange`) — keys it
+against the snapshot it fired with (`Agent.applyStateChange`) — keys it
 changed or removed win, keys it left alone keep the record's current value.
 So `agent:update` never waits for, or refuses, a running agent: config
 applies to future transitions (a started transition keeps its fire-time
@@ -1225,7 +1225,7 @@ task is ready again once something new is there for it: an input it has not
 been shown (a continuation through `agent:message` with its `taskId`, or the
 answer or outcome its cycle waited for), a message in its session, or its
 `wakeTime` having come. The work check and the
-choice of task both use this test (`AgentState.isTaskReady`), and the cycle
+choice of task both use this test (`Agent.isTaskReady`), and the cycle
 takes the oldest ready task.
 
 A cycle that leaves its picked task queued, neither completed nor failed and

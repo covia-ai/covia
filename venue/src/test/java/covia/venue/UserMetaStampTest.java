@@ -87,7 +87,7 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepAgentWriteBumpsUpdatedNotCreated() {
-		AgentState agent = user.ensureAgent("meta-agent", Maps.empty(), null);
+		Agent agent = user.ensureAgent("meta-agent", Maps.empty(), null);
 		long created = metaField("created");
 		long before = metaField("updated");
 		assertTrue(created > 0);
@@ -95,7 +95,7 @@ public class UserMetaStampTest {
 
 		// The existing long-lived wrapper shares the application's live policy;
 		// it does not need to be reconstructed with a fresh context snapshot.
-		agent.setStatus(AgentState.SUSPENDED);
+		agent.setStatus(Agent.SUSPENDED);
 
 		assertTrue(metaField("updated") > before,
 			"a deep agent write must bump meta.updated");
@@ -114,7 +114,7 @@ public class UserMetaStampTest {
 		// A frame write four levels down the subtree still refreshes the
 		// user-level stamp (StampedCursor deep-write re-stamp). Fresh wrapper
 		// after the clock advance, as real per-access derivation gives.
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("frame-agent");
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("frame-agent");
 		assertTrue(agent.session(sid).updateFrames(null,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("x")))));
 		assertTrue(metaField("updated") > before,
@@ -123,7 +123,7 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testReadDoesNotBump() {
-		AgentState agent = user.ensureAgent("read-agent", Maps.empty(), null);
+		Agent agent = user.ensureAgent("read-agent", Maps.empty(), null);
 		long before = metaField("updated");
 		tick();
 
@@ -137,12 +137,12 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testUnchangedWriteDoesNotBump() {
-		AgentState agent = user.ensureAgent("noop-agent", Maps.empty(), null);
-		agent.setStatus(AgentState.SLEEPING);   // already SLEEPING at creation
+		Agent agent = user.ensureAgent("noop-agent", Maps.empty(), null);
+		agent.setStatus(Agent.SLEEPING);   // already SLEEPING at creation
 		long before = metaField("updated");
 		tick();
 
-		agent.setStatus(AgentState.SLEEPING);   // no-change write
+		agent.setStatus(Agent.SLEEPING);   // no-change write
 		assertEquals(before, metaField("updated"),
 			"an unchanged write must not bump meta.updated");
 	}
@@ -150,13 +150,13 @@ public class UserMetaStampTest {
 	@Test
 	@SuppressWarnings("unchecked")
 	public void testAgentTimestampNeverMovesBackward() {
-		AgentState agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
+		Agent agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
 		AString ts = Strings.intern("ts");
 		CVMLong future = CVMLong.create(CLOCK.get() + 60_000);
 		agent.cursor().updateAndGet(value ->
 			((convex.core.data.AMap<AString, ACell>) value).assoc(ts, future));
 
-		agent.setStatus(AgentState.SUSPENDED);
+		agent.setStatus(Agent.SUSPENDED);
 
 		assertEquals(future, agent.getRecord().get(ts));
 	}

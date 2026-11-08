@@ -58,9 +58,9 @@ import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.Admission;
+import covia.venue.Agent;
 import covia.venue.RequestContext;
 import covia.venue.TestServer;
-import covia.venue.AgentState;
 
 /**
  * #183 — per-agent Agent Card over A2A (COG-14): {@code GET /a2a/<ownerDID>/g/<agentId>}.
@@ -438,8 +438,8 @@ public class A2AAgentCardTest {
 			// Provenance in the agent's own books: while held, the task row names
 			// the public principal as its caller, not the owner.
 			AString publicDid = Strings.create(TestServer.ENGINE.getDIDString() + ":public");
-			AgentState agentState = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent(agentId);
-			assertEquals(publicDid, RT.getIn(agentState.getTasks().get(Blob.fromHex(held.id())), Fields.CALLER));
+			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent(agentId);
+			assertEquals(publicDid, RT.getIn(Agent.getTasks().get(Blob.fromHex(held.id())), Fields.CALLER));
 
 			// Foreign to the public caller: the unrelated job, and the owner's own
 			// task on this very agent. Read, cancel and subscribe are all refused
@@ -554,12 +554,12 @@ public class A2AAgentCardTest {
 			Task completed = awaitTask(endpoint, initial.id(), jwt, TaskState.TASK_STATE_COMPLETED);
 			assertEquals(3, completed.history().size(),
 				"retrying the same messageId must not duplicate Task history");
-			AgentState continued = TestServer.ENGINE.getVenueState().users().user(ownerDid)
+			Agent continued = TestServer.ENGINE.getVenueState().users().user(ownerDid)
 				.agent("Continuer");
 			assertEquals(3, continued.getTimeline().count(),
 				"the stale cycle and both distinct continuations each run exactly once");
 			var session = continued.getSession(Blob.fromHex(initial.contextId()));
-			var frames = (convex.core.data.AVector<?>) session.get(AgentState.KEY_FRAMES);
+			var frames = (convex.core.data.AVector<?>) session.get(Agent.KEY_FRAMES);
 			var conversation = covia.adapter.agent.GoalTreeContext.activeConversation(convex.core.lang.RT.ensureMap(frames.get(0)));
 			assertEquals(6, conversation.count(),
 				"three user turns and three agent turns must be recorded without duplicate frames");
@@ -623,13 +623,13 @@ public class A2AAgentCardTest {
 
 			// Two contextId sends overlapping in one session are two tasks, two
 			// cycles and two replies — never one shared chat reply (#416).
-			AgentState agentState = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent("Continuer");
+			Agent Agent = TestServer.ENGINE.getVenueState().users().user(ownerDid).agent("Continuer");
 			String queuedGateName = "queued-" + UUID.randomUUID();
 			try (TestAdapter.TestGate queuedGate = TestAdapter.createGate(queuedGateName)) {
-				agentState.updateConfigAndState(
+				Agent.updateConfigAndState(
 					config -> config.assoc(Strings.intern("testGate"), Strings.create(queuedGateName)),
-					agentState.getState());
-				long cyclesBefore = agentState.getTimeline().count();
+					Agent.getState());
+				long cyclesBefore = Agent.getTimeline().count();
 				Message fifthTurn = Message.builder().role(Message.Role.ROLE_USER)
 					.parts(List.<Part<?>>of(new TextPart("fifth", null))).messageId("context-fifth")
 					.contextId(initial.contextId()).build();
@@ -648,7 +648,7 @@ public class A2AAgentCardTest {
 				queuedGate.release();
 				awaitTask(endpoint, fifth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
 				awaitTask(endpoint, sixth.id(), jwt, TaskState.TASK_STATE_COMPLETED);
-				assertEquals(cyclesBefore + 2, agentState.getTimeline().count(),
+				assertEquals(cyclesBefore + 2, Agent.getTimeline().count(),
 					"each queued send is its own task and runs its own cycle");
 			}
 		}

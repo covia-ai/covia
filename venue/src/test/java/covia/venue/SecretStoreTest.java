@@ -318,8 +318,8 @@ public class SecretStoreTest {
 		assertNull(user.agent("my-agent"),
 			"Agent should be null before creation");
 
-		AgentState agent = user.ensureAgent("my-agent", null, null);
-		assertNotNull(agent, "ensureAgent should return non-null AgentState");
+		Agent agent = user.ensureAgent("my-agent", null, null);
+		assertNotNull(agent, "ensureAgent should return non-null Agent");
 		assertTrue(agent.exists(), "Agent should exist after ensureAgent");
 	}
 

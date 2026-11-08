@@ -149,8 +149,8 @@ public class AgentEventsTest {
 		assertSeqStrictlyIncreasing(c.events);
 		assertEquals(1, c.events.get(0).seq(), "the first event of an agent is seq 1");
 
-		assertEquals(AgentState.RUNNING, str(c.events.get(0), Fields.STATUS));
-		assertEquals(AgentState.SLEEPING, str(c.events.get(4), Fields.STATUS));
+		assertEquals(Agent.RUNNING, str(c.events.get(0), Fields.STATUS));
+		assertEquals(Agent.SLEEPING, str(c.events.get(4), Fields.STATUS));
 
 		Event runStart = c.first(AgentEvents.RUN_START);
 		assertEquals(1, num(runStart, Fields.RUN));
@@ -166,10 +166,10 @@ public class AgentEventsTest {
 		Event cycleEnd = c.first(AgentEvents.CYCLE_END);
 		assertEquals(1, num(cycleEnd, Fields.CYCLE));
 		assertTrue(num(cycleEnd, Fields.MS) >= 0);
-		assertEquals(0, num(cycleEnd, AgentState.KEY_TIMELINE), "the first timeline entry was written");
+		assertEquals(0, num(cycleEnd, Agent.KEY_TIMELINE), "the first timeline entry was written");
 
 		Event runEnd = c.first(AgentEvents.RUN_END);
-		assertEquals(AgentState.SLEEPING, str(runEnd, Fields.STATUS));
+		assertEquals(Agent.SLEEPING, str(runEnd, Fields.STATUS));
 		assertEquals(1, num(runEnd, Fields.CYCLES));
 
 		// Wire form: the envelope names the agent by id and grid address.
@@ -279,10 +279,10 @@ public class AgentEventsTest {
 		Event cycleEnd = c.first(AgentEvents.CYCLE_END);
 		assertEquals(response, str(cycleEnd, Fields.RESPONSE));
 		assertNotNull(RT.getIn(cycleEnd.data(), Fields.TOKENS));
-		assertEquals(0, num(cycleEnd, AgentState.KEY_TIMELINE));
+		assertEquals(0, num(cycleEnd, Agent.KEY_TIMELINE));
 		assertNull(cycleEnd.data().get(Fields.DETAIL),
 			"frame-owning runtimes do not duplicate already-persisted turns in cycle:end");
-		AgentState agent = engine.getVenueState().users().user(did).agent(id);
+		Agent agent = engine.getVenueState().users().user(did).agent(id);
 		AVector<ACell> turns = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(RT.getIn(
 			agent.getSession(Blob.fromHex(sid.toString())), Fields.FRAMES,
 			CVMLong.ZERO)));
@@ -337,7 +337,7 @@ public class AgentEventsTest {
 		try (AgentEvents.Subscription s = engine.agentEvents().subscribe(c)) {
 			ACell out = engine.jobs().invokeOperation("v/ops/llmagent/chat", Maps.of(
 				Fields.AGENT_ID, "direct-agent",
-				AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
+				Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
 				Fields.MESSAGES, Vectors.of(Maps.of("content", "no tap"))),
 				ctx.withAgentId(Strings.create("direct-agent"))).awaitResult(10_000);
 			assertNotNull(RT.getIn(out, Fields.RESPONSE));
@@ -364,9 +364,9 @@ public class AgentEventsTest {
 				Maps.of(Fields.AGENT_ID, id), ctx).awaitResult(5_000);
 		}
 		assertEquals(List.of("status", "status", "status"), c.types());
-		assertEquals(AgentState.SUSPENDED, str(c.events.get(0), Fields.STATUS));
-		assertEquals(AgentState.SLEEPING, str(c.events.get(1), Fields.STATUS));
-		assertEquals(AgentState.TERMINATED, str(c.events.get(2), Fields.STATUS));
+		assertEquals(Agent.SUSPENDED, str(c.events.get(0), Fields.STATUS));
+		assertEquals(Agent.SLEEPING, str(c.events.get(1), Fields.STATUS));
+		assertEquals(Agent.TERMINATED, str(c.events.get(2), Fields.STATUS));
 		assertFalse(c.events.get(0).isTerminal());
 		assertTrue(c.events.get(2).isTerminal(), "TERMINATED ends the stream");
 	}
@@ -387,13 +387,13 @@ public class AgentEventsTest {
 		assertNotNull(cycleEnd);
 		assertNotNull(RT.getIn(cycleEnd.data(), Fields.ERROR), "a failed cycle ends with its error");
 		assertNull(RT.getIn(cycleEnd.data(), Fields.RESPONSE));
-		c.await(AgentEvents.STATUS, AgentState.SUSPENDED, 1_000);
+		c.await(AgentEvents.STATUS, Agent.SUSPENDED, 1_000);
 		Event suspended = null;
 		for (Event e : c.all(AgentEvents.STATUS)) {
-			if (AgentState.SUSPENDED.equals(str(e, Fields.STATUS))) suspended = e;
+			if (Agent.SUSPENDED.equals(str(e, Fields.STATUS))) suspended = e;
 		}
 		assertNotNull(RT.getIn(suspended.data(), Fields.ERROR), "the suspension carries the error");
-		assertEquals(AgentState.SUSPENDED, str(c.first(AgentEvents.RUN_END), Fields.STATUS));
+		assertEquals(Agent.SUSPENDED, str(c.first(AgentEvents.RUN_END), Fields.STATUS));
 	}
 
 	// ========== subscriptions ==========
@@ -449,7 +449,7 @@ public class AgentEventsTest {
 		assertNull(e.withoutDetail().toCell().get(Fields.DETAIL));
 		assertFalse(e.isTerminal());
 		Event terminated = new Event(owner, Strings.create("a"), 8, 124L, AgentEvents.STATUS,
-			Maps.of(Fields.STATUS, AgentState.TERMINATED));
+			Maps.of(Fields.STATUS, Agent.TERMINATED));
 		assertTrue(terminated.isTerminal());
 		assertEquals(CVMBool.TRUE, CVMBool.create(terminated.isTerminal()));
 	}

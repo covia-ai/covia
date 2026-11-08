@@ -24,7 +24,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Principals;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
@@ -85,7 +85,7 @@ public class AgentRunLoopIdentityTest {
 
 	/** Queues a message for agent {@code name} of {@code owner}, so its loop fires. */
 	private void queueMessage(AString owner, String name) {
-		AgentState agent = engine.getVenueState().users().ensure(owner).agent(name);
+		Agent agent = engine.getVenueState().users().ensure(owner).agent(name);
 		Blob sid = Blob.fromHex("12340001123400011234000112340001");
 		agent.ensureSession(sid, owner);
 		agent.appendSessionPending(sid, Maps.of(

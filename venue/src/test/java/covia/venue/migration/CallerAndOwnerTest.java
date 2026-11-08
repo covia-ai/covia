@@ -21,7 +21,7 @@ import covia.grid.Principals;
 import covia.grid.hitl.Hitl;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.User;
 import covia.venue.VenueState;
 
@@ -68,13 +68,13 @@ class CallerAndOwnerTest {
 		alice.inbox().put(Strings.create("legacy-ghost"), Maps.of(Hitl.ID, "legacy-ghost", FROM, GHOST));
 		alice.inbox().put(Strings.create("stranger"), Maps.of(Hitl.ID, "stranger", FROM, BOB));
 
-		AgentState worker = alice.ensureAgent(Strings.create("worker"), Maps.empty(), null);
-		worker.putRecord(worker.getRecord().assoc(AgentState.KEY_TASKS, Index.<Blob, ACell>none()
+		Agent worker = alice.ensureAgent(Strings.create("worker"), Maps.empty(), null);
+		worker.putRecord(worker.getRecord().assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none()
 			.assoc(TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, WORKER, USER, ALICE, CAPS, Maps.empty())))
 			.assoc(OLD_TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, WORKER)))
 			.assoc(OWN_TASK, Maps.of(OUTPUT_CONTEXT, Maps.of(Fields.CALLER, BOB, USER, BOB)))));
-		AgentState retired = alice.ensureAgent(Strings.create("retired"), Maps.empty(), null);
-		retired.putRecord(retired.getRecord().assoc(AgentState.KEY_STATUS, AgentState.TERMINATED));
+		Agent retired = alice.ensureAgent(Strings.create("retired"), Maps.empty(), null);
+		retired.putRecord(retired.getRecord().assoc(Agent.KEY_STATUS, Agent.TERMINATED));
 
 		AMap<AString, ACell> schedule = Maps.of(
 			EVENTS, Index.<Blob, ACell>none()
@@ -122,7 +122,7 @@ class CallerAndOwnerTest {
 	}
 
 	@Test void outputSnapshotsNameTheirOwner() {
-		AgentState worker = read(STEP.apply(legacy())).users().user(ALICE).agent("worker");
+		Agent worker = read(STEP.apply(legacy())).users().user(ALICE).agent("worker");
 		assertEquals(Maps.of(Fields.CALLER, WORKER, Fields.OWNER, ALICE),
 			RT.getIn(worker.getTasks().get(TASK), OUTPUT_CONTEXT), "and keeps no copy of its caller's caps");
 		assertEquals(Maps.of(Fields.CALLER, WORKER, Fields.OWNER, ALICE),

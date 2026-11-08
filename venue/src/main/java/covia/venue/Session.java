@@ -23,16 +23,16 @@ import convex.lattice.cursor.AForkableCursor;
 import covia.api.Fields;
 import covia.adapter.agent.GoalTreeContext;
 import covia.lattice.Workspace;
-import static covia.venue.AgentState.*;
+import static covia.venue.Agent.*;
 
 /**
  * One agent session: conversation frames, pending input and cycle fences.
  * Updates preserve the owning agent's timestamp/account policies. Missing
- * sessions are never created by this view; creation belongs to AgentState.
+ * sessions are never created by this view; creation belongs to Agent.
  * Transactions compose session changes without runtime services or external I/O.
  */
-public final class SessionState extends ALatticeComponent<ACell>
-		implements TransactionalComponent<ACell, SessionState>, Owner {
+public final class Session extends ALatticeComponent<ACell>
+		implements TransactionalComponent<ACell, Session>, Owner {
 	private final VenueContext context;
 	private final AString owner;
 	private final AString agentId;
@@ -45,7 +45,7 @@ public final class SessionState extends ALatticeComponent<ACell>
 	 * @param agentId The agent that holds the session
 	 * @param id The session's id
 	 */
-	SessionState(VenueContext context, AForkableCursor<ACell> cursor, AString owner, AString agentId, Blob id) {
+	Session(VenueContext context, AForkableCursor<ACell> cursor, AString owner, AString agentId, Blob id) {
 		super(cursor);
 		this.context = context;
 		this.owner = owner;
@@ -54,8 +54,8 @@ public final class SessionState extends ALatticeComponent<ACell>
 		this.policy = (owner == null) ? null : sessionPolicy(owner, agentId, id);
 	}
 
-	@Override public SessionState withCursor(AForkableCursor<ACell> draft) {
-		return new SessionState(context, draft, owner, agentId, id);
+	@Override public Session withCursor(AForkableCursor<ACell> draft) {
+		return new Session(context, draft, owner, agentId, id);
 	}
 
 	/**
@@ -298,7 +298,7 @@ public final class SessionState extends ALatticeComponent<ACell>
 		return summaryCovers(published, turns) ? published : null;
 	}
 
-	/** Admission is composed with agent status and optional creation by AgentState. */
+	/** Admission is composed with agent status and optional creation by Agent. */
 	boolean claimExternalTurn(Blob jobId, ACell content) {
 		CVMLong timestamp = context.currentTimestamp();
 		return update(session -> {

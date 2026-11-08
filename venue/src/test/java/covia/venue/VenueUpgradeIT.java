@@ -161,7 +161,7 @@ class VenueUpgradeIT {
 
 	private static AMap<AString, ACell> rootFrame(User user, Blob sid) {
 		AMap<AString, ACell> session = user.agent(VenueStoreFixture.AGENT).getSession(sid);
-		return RT.ensureMap(RT.ensureVector(session.get(AgentState.KEY_FRAMES)).get(0));
+		return RT.ensureMap(RT.ensureVector(session.get(Agent.KEY_FRAMES)).get(0));
 	}
 
 	private static AVector<ACell> conversation(User user, Blob sid) {

@@ -29,7 +29,7 @@ import covia.lattice.Entry;
 import covia.lattice.Namespace;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -61,7 +61,7 @@ public class CoviaAdapterTest {
 		Job createJob = engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "test-agent",
 				Fields.CONFIG, Maps.of("model", "gpt-4"),
-				AgentState.KEY_STATE, Maps.of("counter", CVMLong.ZERO)),
+				Agent.KEY_STATE, Maps.of("counter", CVMLong.ZERO)),
 			ALICE);
 		createJob.awaitResult(5000);
 	}
@@ -108,7 +108,7 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		ACell value = RT.getIn(result, "value");
 		assertNotNull(value, "Should read agent record");
-		assertEquals(AgentState.SLEEPING, RT.getIn(value, AgentState.KEY_STATUS));
+		assertEquals(Agent.SLEEPING, RT.getIn(value, Agent.KEY_STATUS));
 	}
 
 	@Test
@@ -155,7 +155,7 @@ public class CoviaAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
-		assertEquals(AgentState.SLEEPING, RT.getIn(result, "value"));
+		assertEquals(Agent.SLEEPING, RT.getIn(result, "value"));
 	}
 
 	@Test
@@ -646,7 +646,7 @@ public class CoviaAdapterTest {
 	public void testListVector() {
 		// Agent timeline is a vector — should report type and count, no keys
 		// First, deliver a message and trigger to create a timeline entry
-		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent("test-agent");
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("test-agent");
 		assertNotNull(agent);
 		AVector<ACell> timeline = agent.getTimeline();
 		assertNotNull(timeline);
@@ -2086,7 +2086,7 @@ public class CoviaAdapterTest {
 	public void testAgentWorkspaceWriteRefreshesAgentTimestamp() {
 		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		AString agentId = Strings.create("test-agent");
-		AgentState agent = user.agent(agentId);
+		Agent agent = user.agent(agentId);
 		user.cursor().path(Strings.intern("g"), agentId).updateAndGet(current ->
 			((AMap<AString, ACell>) current).assoc(Strings.intern("ts"), CVMLong.ZERO));
 		assertEquals(0, agent.getTs());
@@ -2550,12 +2550,12 @@ public class CoviaAdapterTest {
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "Brightside",
 				Fields.CONFIG, Maps.of("model", "upper-model"),
-				AgentState.KEY_STATE, Maps.of("marker", "upper-agent")),
+				Agent.KEY_STATE, Maps.of("marker", "upper-agent")),
 			ALICE).awaitResult(5000);
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "brightside",
 				Fields.CONFIG, Maps.of("model", "lower-model"),
-				AgentState.KEY_STATE, Maps.of("marker", "lower-agent")),
+				Agent.KEY_STATE, Maps.of("marker", "lower-agent")),
 			ALICE).awaitResult(5000);
 
 		ACell result = engine.jobs().invokeOperation("v/ops/covia/inspect",
@@ -2705,14 +2705,14 @@ public class CoviaAdapterTest {
 	@Test
 	public void testSessionScratchRequiresSessionRecordNotExistingScratchSlot() {
 		User user = engine.getVenueState().users().user(ALICE.getUserDID());
-		AgentState agent = user.agent("test-agent");
+		Agent agent = user.agent("test-agent");
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd45");
 		agent.ensureSession(sessionId, ALICE_DID, Maps.empty());
 
 		// Simulate a valid older/session record whose optional scratch slot has
 		// not been materialised. The guard applies to the session, not c itself.
 		AMap<AString, ACell> session = agent.getSession(sessionId);
-		agent.putRecord(agent.getRecord().assoc(AgentState.KEY_SESSIONS,
+		agent.putRecord(agent.getRecord().assoc(Agent.KEY_SESSIONS,
 			agent.getSessions().assoc(sessionId, session.dissoc(Strings.intern("c")))));
 
 		RequestContext ctx = ALICE.withAgentId(Strings.create("test-agent"))
@@ -2729,7 +2729,7 @@ public class CoviaAdapterTest {
 	public void testSessionScratchWriteRefreshesAgentTimestamp() {
 		User user = engine.getVenueState().users().user(ALICE.getUserDID());
 		AString agentId = Strings.create("test-agent");
-		AgentState agent = user.agent(agentId);
+		Agent agent = user.agent(agentId);
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd46");
 		agent.ensureSession(sessionId, ALICE_DID, Maps.empty());
 		user.cursor().path(Strings.intern("g"), agentId).updateAndGet(current ->

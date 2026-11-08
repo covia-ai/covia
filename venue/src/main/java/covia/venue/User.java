@@ -35,7 +35,7 @@ import convex.lattice.cursor.StampedCursor;
  * {@link Namespace} for JSON compliance:</p>
  * <ul>
  *   <li>{@code "j"} — user's jobs ({@link Jobs})</li>
- *   <li>{@code "g"} — user's agents ({@link AgentState})</li>
+ *   <li>{@code "g"} — user's agents ({@link Agent})</li>
  *   <li>{@code "s"} — user's encrypted credentials</li>
  *   <li>{@code "w"} — user's workspace data ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
  *   <li>{@code "o"} — user's operations ({@link Workspace}, in a {@link covia.lattice.Covia#WORKSPACE_RECORD})</li>
@@ -111,7 +111,7 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 		AMap<AString, ACell> agents = getAgents();
 		if (agents != null) {
 			for (AString agentId : agents.keySet()) {
-				AgentState agent = agent(agentId);
+				Agent agent = agent(agentId);
 				if (agent != null) size += storedSize(agent.workspace().cursor().getOrDefault(null));
 			}
 		}
@@ -140,8 +140,8 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * changes. Domain callers use {@link #agent}, which is null for a missing
 	 * agent.
 	 */
-	public AgentState agentAt(AString agentId) {
-		return new AgentState(context, agentStorage(agentId), did, agentId);
+	public Agent agentAt(AString agentId) {
+		return new Agent(context, agentStorage(agentId), did, agentId);
 	}
 
 	/** An agent's record in {@code g}, a map the first agent creates. */
@@ -177,16 +177,16 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * Gets a specific agent's state, or null if the agent doesn't exist.
 	 *
 	 * @param agentId Agent identifier
-	 * @return AgentState wrapper, or null if not initialised
+	 * @return Agent wrapper, or null if not initialised
 	 */
-	public AgentState agent(String agentId) {
+	public Agent agent(String agentId) {
 		return agent(Strings.create(agentId));
 	}
 
-	public AgentState agent(AString agentId) {
+	public Agent agent(AString agentId) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
 		if (c.getOrDefault(null) == null) return null;
-		return new AgentState(context, c, did, agentId);
+		return new Agent(context, c, did, agentId);
 	}
 
 	/**
@@ -195,15 +195,15 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @param agentId Agent identifier
 	 * @param config Optional framework configuration map, may be null
 	 * @param initialState Optional initial state for the transition function, may be null
-	 * @return AgentState wrapper (never null)
+	 * @return Agent wrapper (never null)
 	 */
-	public AgentState ensureAgent(String agentId, AMap<AString, ACell> config, ACell initialState) {
+	public Agent ensureAgent(String agentId, AMap<AString, ACell> config, ACell initialState) {
 		return ensureAgent(Strings.create(agentId), config, initialState);
 	}
 
-	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
+	public Agent ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState state = new AgentState(context, c, did, agentId);
+		Agent state = new Agent(context, c, did, agentId);
 		state.initialiseIfAbsent(config, initialState);
 		return state;
 	}
@@ -213,12 +213,12 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 *
 	 * @return the new agent, or null if the id already existed
 	 */
-	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState) {
 		return createAgent(agentId, config, initialState, null);
 	}
 
-	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition) {
 		return createAgent(agentId, config, initialState, definition, null);
 	}
@@ -229,10 +229,10 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 *
 	 * @return the new agent, or null if the id already existed
 	 */
-	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState state = new AgentState(context, c, did, agentId);
+		Agent state = new Agent(context, c, did, agentId);
 		return state.initialiseIfAbsent(config, initialState, definition, controller) ? state : null;
 	}
 
@@ -245,9 +245,9 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * @param config Config map to use (typically merged source+override)
 	 * @param state Initial state (typically source state)
 	 * @param timeline Optional timeline to copy, or null for empty
-	 * @return the new AgentState wrapper, or null if the id already existed
+	 * @return the new Agent wrapper, or null if the id already existed
 	 */
-	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline) {
 		return forkAgent(agentId, config, state, timeline, null);
 	}
@@ -256,10 +256,10 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 * As above, under {@code controller}: the principal whose authority the
 	 * fork's harness runs under, or null for this user.
 	 */
-	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
+	public Agent forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
-		AgentState fork = new AgentState(context, c, did, agentId);
+		Agent fork = new Agent(context, c, did, agentId);
 		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;
 	}
 

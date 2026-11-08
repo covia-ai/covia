@@ -16,7 +16,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
-import covia.venue.AgentState;
+import covia.venue.Agent;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -66,7 +66,7 @@ public class AgentWorkspaceTest {
 
 		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "workspace-agent")) {
 			// Run 1: agent writes knowledge, appends to log, reads back
-			AgentState wsAgent = engine.getVenueState().users().user(ALICE_DID)
+			Agent wsAgent = engine.getVenueState().users().user(ALICE_DID)
 				.agent("workspace-agent");
 			Blob wsSid = Blob.fromHex("55550001555500015555000155550001");
 			wsAgent.ensureSession(wsSid, ALICE_DID);
@@ -80,9 +80,9 @@ public class AgentWorkspaceTest {
 			watch.awaitRest(1);
 
 			// Verify: agent is sleeping, workspace has data
-			AgentState agent = engine.getVenueState().users().user(ALICE_DID)
+			Agent agent = engine.getVenueState().users().user(ALICE_DID)
 				.agent("workspace-agent");
-			assertEquals(AgentState.SLEEPING, agent.getStatus());
+			assertEquals(Agent.SLEEPING, agent.getStatus());
 			assertEquals(1, agent.getTimeline().count());
 
 			// Knowledge persisted
@@ -116,7 +116,7 @@ public class AgentWorkspaceTest {
 			agent = engine.getVenueState().users().user(ALICE_DID)
 				.agent("workspace-agent");
 			assertEquals(2, agent.getTimeline().count());
-			assertEquals(AgentState.SLEEPING, agent.getStatus());
+			assertEquals(Agent.SLEEPING, agent.getStatus());
 		}
 	}
 }

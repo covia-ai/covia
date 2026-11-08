@@ -425,13 +425,13 @@ larger value.
 |-----------|--------|
 | `VenueState` | a path's first segment, its owner's DID, to `Users`; `x/<adapter>` to the adapter's `Workspace` view |
 | `Users` | a user's DID to their `User` (`Users.at`) |
-| `User` | its namespaces: `g/<id>` to `AgentState`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
+| `User` | its namespaces: `g/<id>` to `Agent`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
 | `Jobs` | a job id, in hex, to its `JobState` |
 | `JobState` | `temp` to the job's `Workspace`; the rest of the job is read-only |
 | `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
-| `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState`; `tasks` to `Tasks` |
+| `Agent` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `Session`; `tasks` to `Tasks` |
 | `Tasks` | a task's id, in hex, to its `Task`; the agent's access rule covers both |
-| `SessionState` | `c` to the session's `Workspace` |
+| `Session` | `c` to the session's `Workspace` |
 
 Segments below the last component a path reaches are read by the value they
 meet (`ValuePath`): a map key, a vector index written in digits, an Index key
@@ -509,8 +509,8 @@ however the path was written or where resolution started:
 | Owner | Data | Who may use it |
 |-------|------|----------------|
 | `User` | `w`, `o`, `s`, `h`, `a`, `g` and `j` where nothing below claims them | authority over `<did>/<path>`: the user within its own scope, or a grantee |
-| `AgentState` | the agent's record and `n` | authority over `<owner>/g/<agent>/<path>` |
-| `SessionState` | the session, and `c` | the agent serving the session reaches `c` of right; otherwise authority over `<owner>/g/<agent>/sessions/<id>/<path>` |
+| `Agent` | the agent's record and `n` | authority over `<owner>/g/<agent>/<path>` |
+| `Session` | the session, and `c` | the agent serving the session reaches `c` of right; otherwise authority over `<owner>/g/<agent>/sessions/<id>/<path>` |
 | `Jobs`, `JobState` | job records, and `temp` | work running in the job reaches `temp` of right; otherwise authority over `<owner>/j/<id>/<path>` |
 | the venue's view | `v/` | any principal reads of right; nothing changes through it |
 | `AdapterView` | `x/` | authority over `<did>/x/<path>`, and the adapter's own write policy |
@@ -911,10 +911,10 @@ container it holds on the first change, so the stored shapes are plain data:
 | Root | `CoviaApplication`: `Regions` over a keyword `Index` | `:grid`, a `Regions` of `:venues` and `:meta`; `:dlfs` is a sibling region its service registers |
 | `:grid → :venues` | `OwnedMap` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
 | Venue `:value` | `VenueState`: `Timestamped` keyword `Index`, ordered by `Covia.VENUE` | The whole per-venue value as one **whole-value-LWW** node with a stamp-on-write boundary; holds `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:jobs`, `:user-data` |
-| `:schedule` | `ScheduleState`: `StampedCursor` over a string-keyed map | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
+| `:schedule` | `Schedule`: `StampedCursor` over a string-keyed map | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
 | `:user-data → <DID>` | `Users`, `User`: string-keyed map of `StampedCursor` records | Per-user record; every deep write refreshes `meta.updated` |
 | `j` / each Job | `Jobs` (an `Index` by job id), `JobState` (`StampedCursor`) | Existing Job map shape; deep writes such as `t/` refresh `updated` |
-| `g` / each agent | string-keyed map, `AgentState` (`StampedCursor`) | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
+| `g` / each agent | string-keyed map, `Agent` (`StampedCursor`) | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
 | `s` / `a` | `SecretStore`, `AssetStore` | Plain maps |
 | `w` / `o` / `h` | `Workspace`, `Inbox` over an `{updated, data}` map | `User` presents its `data` through a `StampedCursor` on the container |
 | `:grid → :meta` | `LatticeComponent` → `CASLattice` | Shared content-addressed metadata (multi-writer union) |
