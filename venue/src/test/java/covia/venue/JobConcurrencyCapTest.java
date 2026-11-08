@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.crypto.AKeyPair;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.Root;
+import covia.exception.AuthException;
 import covia.exception.RateLimitException;
 import covia.grid.Job;
 
@@ -78,6 +79,24 @@ public class JobConcurrencyCapTest {
 
 			e.jobs().cancelJob(j1.getID(), alice); // terminal → synchronously releases the permit
 			assertNotNull(never(e, alice), "cancelling a job must free a concurrency slot");
+		} finally {
+			e.close();
+		}
+	}
+
+	@Test
+	public void testRefusedInvokeFreesSlot() {
+		Engine e = capEngine(1);
+		try {
+			AString did = Strings.create("did:key:zAliceRefused");
+			RequestContext alice = RequestContext.of(did);
+			e.getVenueState().users().ensure(did);
+			e.deleteUser(e.venueContext(), did);
+
+			assertThrows(AuthException.class, () -> never(e, alice));
+
+			e.getVenueState().users().create(did);
+			assertNotNull(never(e, alice), "a refused invoke must give back its slot");
 		} finally {
 			e.close();
 		}

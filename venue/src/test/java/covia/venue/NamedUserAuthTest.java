@@ -323,6 +323,7 @@ public class NamedUserAuthTest {
 		assertAccepted(token);
 		engine.deleteUser(engine.venueContext(), did);
 		assertRejected(token);
+		assertThrows(AuthException.class, () -> engine.getAuth().ensureManagedUser(id, did));
 		engine.jobs().invokeInternal("v/ops/user/create", Maps.of("username", id),
 			engine.venueContext()).get(5, TimeUnit.SECONDS);
 		assertRejected(token);

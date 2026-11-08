@@ -209,8 +209,8 @@ do not independently re-stamp the containing record. No-op edits retain their
 version; whole-record replacement preserves the prior timestamp floor.
 
 `venue.auth()` owns directory records, authenticator uniqueness/revocation and
-their timestamps. Runtime `Auth` owns providers and admission policy; its monitor
-still coordinates account deletion with runtime cleanup. `venue.schedule()` owns
+their timestamps. Runtime `Auth` owns providers and admission policy; its writes
+check the account in the transaction that writes. `venue.schedule()` owns
 event records, handles, recurrence and schedule timestamps; runtime `Scheduler`
 owns the schedule's lock, the updates that claim due events, job preparation
 and dispatch. Both domain components rebind to

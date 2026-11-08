@@ -2,13 +2,11 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.lang.management.ManagementFactory;
-import java.lang.management.ThreadInfo;
-import java.lang.management.ThreadMXBean;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +24,7 @@ import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.exception.AuthException;
 import covia.exception.JobFailedException;
 import covia.grid.Status;
 
@@ -428,31 +427,51 @@ public class JobCancellationTest {
 
 	@Test
 	public void testCancelByIdWaitsForAcceptanceInProgress() throws Exception {
-		// Acceptance writes a recorded job's row, then registers its live handle,
-		// both under the account monitor. A caller can list the row in between and
-		// cancel it by id; that cancel must wait for the handle, not miss it and be
-		// lost. Hold the half-state by hand: the monitor held, a row, no handle.
-		Object acceptance = engine.getAuth();
+		// Acceptance writes a recorded job's row, then registers its live handle.
+		// A caller can list the row in between and cancel it by id; that cancel must
+		// wait for the handle, not miss it and be lost. Hold the half-state by hand:
+		// an acceptance in progress, a row, no handle.
 		User user = engine.getVenueState().users().ensure(ALICE_DID);
 		Blob id = Blob.createRandom(new java.util.Random(), 16);
+		CompletableFuture<Void> acceptance = new CompletableFuture<>();
 		CompletableFuture<AMap<AString, ACell>> cancelled = new CompletableFuture<>();
-		Thread canceller;
+		engine.jobs().accepting.put(id, acceptance);
 		try {
-			synchronized (acceptance) {
-				assertNotNull(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
-					Fields.CALLER, ALICE_DID)));
-				canceller = Thread.ofPlatform().start(
-					() -> cancelled.complete(engine.jobs().cancelJob(id)));
-				awaitBlockedOnOrDone(canceller, acceptance);
-				assertFalse(cancelled.isDone(),
-					"Cancel by id must wait out the acceptance in progress, not miss its handle");
-			}
+			assertNotNull(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
+				Fields.CALLER, ALICE_DID)));
+			Thread canceller = Thread.ofPlatform().start(
+				() -> cancelled.complete(engine.jobs().cancelJob(id)));
+			awaitParkedOrDone(canceller);
+			assertFalse(cancelled.isDone(),
+				"Cancel by id must wait out the acceptance in progress, not miss its handle");
+			engine.jobs().accepting.remove(id);
+			acceptance.complete(null);
 			canceller.join();
 			// No handle was ever registered here, so there is nothing live to cancel.
 			assertNull(cancelled.join());
 		} finally {
+			engine.jobs().accepting.remove(id);
+			acceptance.complete(null);
 			user.jobs().remove(id);
 		}
+	}
+
+	@Test
+	public void testDeletionDuringAcceptanceCancelsTheJob() {
+		// The deletion commits and scans the active jobs after the job's row is
+		// written and before its handle is registered, so the scan cannot find it.
+		Blob id = Blob.createRandom(new java.util.Random(), 16);
+		AMap<AString, ACell> status = Maps.of(Fields.ID, id, Fields.STATUS, Status.PENDING,
+			Fields.CALLER, ALICE_DID);
+		AtomicReference<VenueJob> handle = new AtomicReference<>();
+		assertThrows(AuthException.class, () -> engine.jobs().admit(id, status, OutputRules.NONE,
+			ALICE_DID, false, false, record -> {
+				handle.set(new VenueJob(record, status, OutputRules.NONE, ALICE_DID, engine.jobs(), null));
+				engine.deleteUser(engine.venueContext(), ALICE_DID);
+				return handle.get();
+			}));
+		assertEquals(Status.CANCELLED, handle.get().getStatus());
+		assertNull(engine.jobs().cancelJob(id), "The refused job must not stay live");
 	}
 
 	// ========== Cancel agent:trigger with wait ==========
@@ -592,17 +611,9 @@ public class JobCancellationTest {
 		return null; // Not critical for the test assertions
 	}
 
-	/** Yields until {@code thread} is blocked entering {@code monitor}, or has finished. */
-	private static void awaitBlockedOnOrDone(Thread thread, Object monitor) {
-		ThreadMXBean threads = ManagementFactory.getThreadMXBean();
-		int lock = System.identityHashCode(monitor);
-		while (thread.isAlive()) {
-			ThreadInfo info = threads.getThreadInfo(thread.threadId());
-			if (info != null && info.getThreadState() == Thread.State.BLOCKED
-					&& info.getLockInfo() != null
-					&& info.getLockInfo().getIdentityHashCode() == lock) return;
-			Thread.yield();
-		}
+	/** Yields until {@code thread} is parked, or has finished. */
+	private static void awaitParkedOrDone(Thread thread) {
+		while (thread.isAlive() && thread.getState() != Thread.State.WAITING) Thread.yield();
 	}
 
 	/** Waits until the job has started, failing if it finished instead. */

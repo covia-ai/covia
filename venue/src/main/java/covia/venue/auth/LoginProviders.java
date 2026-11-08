@@ -306,16 +306,18 @@ public class LoginProviders {
 	/** Trusted provisioning; never selects or links a legacy account using email. */
 	AString provisionIdentity(String provider, UserIdentity identity) {
 		Auth auth = engine.getAuth();
-		synchronized (auth) {
-			AString existing = findIdentity(auth, identity.issuer(), identity.sub());
+		// One transaction, so two first logins for one identity cannot both pass the checks.
+		return engine.getVenueState().transact(draft -> {
+			AMap<AString, AMap<AString, ACell>> users = draft.auth().getUsers();
+			AString existing = findIdentity(users, identity.issuer(), identity.sub());
 			AString id = identity.toUserId();
 			if (existing != null) {
-				for (var entry : auth.getUsers().entrySet()) {
+				for (var entry : users.entrySet()) {
 					if (matches(entry.getValue(), identity.issuer(), identity.sub())) { id = entry.getKey(); break; }
 				}
 			} else {
-				if (auth.getUser(id) != null) throw new ConflictException(IDENTITY_CONFLICT);
-				for (var record : auth.getUsers().values()) {
+				if (users.get(id) != null) throw new ConflictException(IDENTITY_CONFLICT);
+				for (var record : users.values()) {
 					if (record.get(EXTERNAL_IDENTITY) != null) continue;
 					if ((Strings.create(provider).equals(record.get(Fields.PROVIDER))
 							&& Strings.create(identity.sub()).equals(record.get(Fields.PROVIDER_SUB)))
@@ -327,15 +329,19 @@ public class LoginProviders {
 			AMap<AString, ACell> profile = Maps.of(EXTERNAL_IDENTITY,
 					identity.binding().assoc(Fields.PROVIDER, Strings.create(provider)),
 					Fields.EMAIL, identity.email(), Fields.NAME, identity.name());
-			return RT.ensureString(auth.provisionLogin(id, profile).get(Fields.DID));
-		}
+			return RT.ensureString(auth.provisionLogin(draft, id, profile).get(Fields.DID));
+		});
 	}
 
 	/** Lookup only: direct bearer presentation cannot provision or link an account. */
 	public static AString findIdentity(Auth auth, String issuer, String subject) {
+		return findIdentity(auth.getUsers(), issuer, subject);
+	}
+
+	private static AString findIdentity(AMap<AString, AMap<AString, ACell>> users, String issuer, String subject) {
 		if (issuer == null || subject == null) return null;
 		AString found = null;
-		for (var record : auth.getUsers().values()) {
+		for (var record : users.values()) {
 			if (!matches(record, issuer, subject)) continue;
 			AString did = RT.ensureString(record.get(Fields.DID));
 			if (did == null || (found != null && !found.equals(did))) throw new ConflictException(IDENTITY_CONFLICT);

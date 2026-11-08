@@ -30,9 +30,11 @@ job; its data comes directly from the job's `JobRecord` lattice component, which
 admission (`Jobs.create`) or recovery hands it.
 `JobManager` owns execution, recovery and admission. Transient handles and remote
 client snapshots retain local backing records. Acceptance writes a recorded job's
-row before it registers the live handle, both under the account monitor; a lookup
-by id that misses re-checks under that monitor, so a job a caller has just listed
-is always reachable by cancel, pause, resume and message delivery.
+row before it registers the live handle; a lookup by id that arrives in between
+waits for that job's acceptance alone, so a job a caller has just listed is always
+reachable by cancel, pause, resume and message delivery. The row's transaction
+refuses a deleted account, and the account is checked again once the handle is
+registered, so a job accepted across a deletion is cancelled and refused.
 
 ## Lifecycle and status semantics
 

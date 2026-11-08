@@ -3356,10 +3356,7 @@ public class Engine {
 		}
 		java.util.Map<String, java.util.function.Consumer<AdapterState>> cleanups = new java.util.LinkedHashMap<>();
 		registered.forEach((name, adapter) -> cleanups.put(name, state -> adapter.deleteUserState(did, state)));
-		VenueState.DeletedUser deleted;
-		synchronized (getAuth()) {
-			deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
-		}
+		VenueState.DeletedUser deleted = venueState.beginUserDeletion(did, ctx.getCallerDID(), cleanups);
 		// Persist revocation and retry evidence before invoking external effects.
 		flush();
 		RuntimeException failure = null;

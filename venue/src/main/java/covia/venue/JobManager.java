@@ -122,6 +122,9 @@ public class JobManager {
 	/** In-memory cache of active (non-terminal) jobs */
 	private final ConcurrentHashMap<Blob, Job> activeJobs = new ConcurrentHashMap<>();
 
+	/** Jobs being accepted, each completed once its handle is registered or its acceptance has failed ({@link #liveJob}). */
+	final ConcurrentHashMap<Blob, CompletableFuture<Void>> accepting = new ConcurrentHashMap<>();
+
 	/** Per-caller admission semaphores bounding concurrent top-level jobs. */
 	private final ConcurrentHashMap<AString, JobSemaphore> jobPermits = new ConcurrentHashMap<>();
 
@@ -460,22 +463,17 @@ public class JobManager {
 		AString opID = ctx.getOp();
 		if (opID == null) opID = Strings.create(meta.getHash().toHexString());
 		Blob parentID = parentJobID(ctx);
+		long ts = engine.currentTimestamp().longValue();
+		Blob jobID = generateJobID(ts);
+		// Attached before the job can be seen, so whatever ends it releases the permit.
+		if (permit) permitHolders.put(jobID, ownerDID);
 		Job job;
 		try {
-			synchronized (engine.getAuth()) {
-				job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(),
-					parentID, memoryOnly, resultOriented,
-					invocation == Invocation.RUN && ctx.getJob() == null && ctx.getJobId() == null, adapter);
-				// Deletion cannot cancel the accepted job before its quota permit
-				// has been attached for terminal cleanup.
-				if (permit) permitHolders.put(job.getID(), ownerDID);
-			}
+			job = submitJob(jobID, ts, opID, meta, input, ownerDID, ctx.getCallerDID(),
+				parentID, memoryOnly, resultOriented,
+				invocation == Invocation.RUN && ctx.getJob() == null && ctx.getJobId() == null, adapter);
 		} catch (RuntimeException e) {
-			// Never obtained a jobID to track — release the permit directly.
-			if (permit && ownerDID != null) {
-				JobSemaphore sem = jobPermits.get(ownerDID);
-				if (sem != null) sem.release();
-			}
+			releaseJobPermit(jobID);
 			throw e;
 		}
 		// Every adapter sees the immediate Job wrapper, including a transient one.
@@ -919,13 +917,11 @@ public class JobManager {
 	 *        recorded grandchild dispatched through a transient layer still
 	 *        links to its nearest recorded ancestor.
 	 */
-	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
+	private Job submitJob(Blob jobID, long ts, AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
 			AString callerDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
 			AAdapter adapter) {
 		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
-		long ts = engine.currentTimestamp().longValue();
-		Blob jobID = generateJobID(ts);
 		OutputRules rules = OutputRules.of(meta);
 
 		AMap<AString, ACell> status = Maps.of(
@@ -963,16 +959,23 @@ public class JobManager {
 
 	/**
 	 * Writes a job's row and its entry ({@link JobIndex}) in one transaction,
-	 * unless it is memory-only, and publishes its live handle, under the
-	 * account monitor that fences deletion.
+	 * unless it is memory-only, and publishes its live handle.
+	 *
+	 * <p>The row comes first because a handle reads a missing row as an erased
+	 * account. The transaction refuses a deleted account; deletion can still
+	 * commit after it, and scan the active jobs before the handle is published,
+	 * so the account is checked again once the handle can be seen: either the
+	 * scan finds the handle or this check finds the deletion.</p>
+	 *
+	 * @throws AuthException if the owner's account has been deleted
 	 */
-	private VenueJob admit(Blob jobID, AMap<AString, ACell> status, OutputRules rules,
+	VenueJob admit(Blob jobID, AMap<AString, ACell> status, OutputRules rules,
 			AString ownerDID, boolean memoryOnly, boolean preserveFailureCause,
 			java.util.function.Function<JobRecord, VenueJob> handle) {
-		synchronized (engine.getAuth()) {
+		CompletableFuture<Void> acceptance = new CompletableFuture<>();
+		accepting.put(jobID, acceptance);
+		try {
 			engine.getVenueState().users().requireNotDeleted(ownerDID);
-			// Create before publishing the runtime handle; updates only edit existing rows.
-			// Readers can see the row first, so by-id lookups go through liveJob.
 			JobRecord record = null;
 			if (!memoryOnly) {
 				User account = account(ownerDID);
@@ -986,12 +989,21 @@ public class JobManager {
 					}
 					draft.jobIndex().put(jobID, admitted);
 				});
-				record = account.jobs().job(jobID);
+				record = account.jobs().at(jobID);
 			}
 			VenueJob job = handle.apply(record);
 			job.setPreserveFailureCause(preserveFailureCause);
 			activeJobs.put(jobID, job);
+			try {
+				engine.getVenueState().users().requireNotDeleted(ownerDID);
+			} catch (AuthException deleted) {
+				job.cancel();
+				throw deleted;
+			}
 			return job;
+		} finally {
+			accepting.remove(jobID);
+			acceptance.complete(null);
 		}
 	}
 
@@ -1283,17 +1295,19 @@ public class JobManager {
 	}
 
 	/**
-	 * The live handle for a job a caller names by id. Acceptance writes a recorded
-	 * job's row before it registers the handle, both under the account monitor, so
-	 * a caller who has just read the row can arrive in between. A miss re-checks
-	 * under that monitor, after any acceptance in progress.
+	 * The live handle for a job a caller names by id. A recorded job's row is
+	 * written before its handle is registered, so a caller who has just read the
+	 * row can arrive in between; that caller alone waits, for that job's
+	 * acceptance ({@link #accepting}). The acceptance is listed before the row
+	 * exists and removed after the handle is registered, so the last read finds
+	 * a handle whichever side of the removal the caller arrived on.
 	 */
 	private Job liveJob(Blob jobID) {
 		Job job = activeJobs.get(jobID);
 		if (job != null) return job;
-		synchronized (engine.getAuth()) {
-			return activeJobs.get(jobID);
-		}
+		CompletableFuture<Void> acceptance = accepting.get(jobID);
+		if (acceptance != null) acceptance.join();
+		return activeJobs.get(jobID);
 	}
 
 	/**
