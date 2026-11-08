@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.AfterAll;
@@ -231,6 +234,39 @@ class SteppedSchedulerTest {
 	}
 
 	@Test
+	void anEventDueWhileTheVenueIsClosingStaysForItsNextStart(TestInfo info) throws Exception {
+		AtomicBoolean closing = new AtomicBoolean();
+		CoviaApplication closable = CoviaApplication.create(policy());
+		try {
+			Engine venue = closable.mount(AKeyPair.generate(), config(null), (cfg, app, key) -> new Engine(cfg, app, key) {
+				@Override public boolean isClosing() { return closing.get() || super.isClosing(); }
+			}).launch();
+			RequestContext ctx = user(venue, info);
+			Scheduler scheduler = venue.gridScheduler();
+			scheduler.schedule(ECHO, Strings.create("due"), ctx, CLOCK.get());
+			closing.set(true);
+			closable.update().get(10, TimeUnit.SECONDS);
+			assertEquals(1, scheduler.list(ctx).count(), "a closing venue neither starts nor consumes it");
+			assertEquals(Long.MAX_VALUE, closable.nextDue(), "and reports nothing due");
+			closing.set(false);
+			closable.update().get(10, TimeUnit.SECONDS);
+			assertTrue(scheduler.list(ctx).isEmpty());
+		} finally {
+			closable.close();
+		}
+	}
+
+	/** The handles of the venue's scheduled events that expire {@code request}. */
+	private static List<Blob> expiries(Engine venue, Job request) {
+		AString id = Strings.create(request.getID().toHexString());
+		List<Blob> handles = new ArrayList<>();
+		for (ACell item : venue.gridScheduler().list(venue.venueContext())) {
+			if (id.equals(RT.getIn(item, Schedule.K_INPUT, Hitl.ID))) handles.add((Blob) RT.getIn(item, Schedule.K_HANDLE));
+		}
+		return handles;
+	}
+
+	@Test
 	void aHitlTimeoutExpiresTheRequestAtTheDrivenTime(TestInfo info) throws Exception {
 		RequestContext ctx = user(engine, info);
 		AString agentId = Strings.create("asker");
@@ -239,12 +275,18 @@ class SteppedSchedulerTest {
 			.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), RequestContext.ofAgent(ctx.getUserDID(), agentId));
 		Job answered = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Answered")
 			.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), ctx);
+		Job cancelled = engine.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Cancelled")
+			.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), ctx);
 		assertEquals(Status.INPUT_REQUIRED, expiring.getStatus());
 		assertTrue(agent.getPending().containsKey(expiring.getID()));
+		assertEquals(1, expiries(engine, expiring).size(), "asking schedules its expiry");
 		String answeredId = answered.getID().toHexString();
 		engine.jobs().invokeOperation("v/ops/hitl/respond", Hitl.answer(answeredId).answer("ok", true).build(), ctx)
 			.awaitResult(10_000);
 		assertEquals(Status.COMPLETE, answered.getStatus());
+		assertEquals(0, expiries(engine, answered).size(), "answering takes the expiry with it");
+		engine.jobs().cancelJob(cancelled.getID(), ctx);
+		assertEquals(0, expiries(engine, cancelled).size(), "cancelling takes the expiry with it");
 
 		step(application, 59_999).get(10, TimeUnit.SECONDS);
 		assertEquals(Status.INPUT_REQUIRED, expiring.getStatus(), "still open a moment before its time");
@@ -276,26 +318,39 @@ class SteppedSchedulerTest {
 		MemoryStore store = new MemoryStore();
 		AKeyPair key = AKeyPair.generate();
 		AString did = TestEngine.uniqueDID(info);
-		Blob request;
+		Blob kept;
+		Blob lost;
 		CoviaApplication first = CoviaApplication.open(store, policy());
 		try {
 			Engine venue = first.mount(key, config(null)).launch();
 			venue.getVenueState().users().ensure(did);
-			request = venue.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Outlives a restart")
-				.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), RequestContext.of(did)).getID();
+			RequestContext ctx = RequestContext.of(did);
+			kept = venue.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Outlives a restart")
+				.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), ctx).getID();
+			Job gone = venue.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Loses its alarm")
+				.ask(Hitl.approval("ok", "OK?")).timeout(60).build(), ctx);
+			lost = gone.getID();
+			// As when an event fired but the venue stopped before the request expired
+			assertTrue(venue.gridScheduler().cancel(expiries(venue, gone).get(0), venue.venueContext()));
 		} finally {
 			first.close();
 		}
+		CLOCK.addAndGet(60_000); // both fall due while the venue is down
 		CoviaApplication second = CoviaApplication.open(store, policy());
 		try {
 			Engine venue = second.mount(key, config(null)).launch();
-			Job job = venue.jobs().getJob(request);
-			assertEquals(Status.INPUT_REQUIRED, job.getStatus(), "recovered, still waiting");
-			step(second, 60_000).get(10, TimeUnit.SECONDS);
-			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the stored expiry fires after the restart");
-			assertEquals(Status.FAILED, job.getStatus());
-			assertEquals(Hitl.EXPIRED, venue.getVenueState().users().user(did).inbox()
-				.get(Strings.create(request.toHexString())).get(Hitl.STATUS));
+			Job keptJob = venue.jobs().getJob(kept);
+			Job lostJob = venue.jobs().getJob(lost);
+			assertEquals(Status.INPUT_REQUIRED, keptJob.getStatus(), "recovered, still waiting");
+			assertEquals(1, expiries(venue, keptJob).size(), "recovery leaves an expiry it finds");
+			assertEquals(1, expiries(venue, lostJob).size(), "recovery restores a lost expiry from the request");
+			second.update().get(10, TimeUnit.SECONDS);
+			for (Job job : List.of(keptJob, lostJob)) {
+				TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "an overdue request expires at the first update");
+				assertEquals(Status.FAILED, job.getStatus());
+				assertEquals(Hitl.EXPIRED, venue.getVenueState().users().user(did).inbox()
+					.get(Strings.create(job.getID().toHexString())).get(Hitl.STATUS));
+			}
 		} finally {
 			second.close();
 		}

@@ -31,7 +31,6 @@ public final class VenueMigrations {
 				new CurrentJobRecords(),
 				new CallerAndOwner(),
 				new JobEntries(keys),
-				new DelegationEntries(),
-				new HitlExpiries()));
+				new DelegationEntries()));
 	}
 }

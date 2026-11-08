@@ -93,6 +93,9 @@ public class HITLAdapter extends AAdapter {
 	/** In a request job's adapter data: the DID of the user it was sent to. */
 	static final AString TARGET = Hitl.USER;
 
+	/** In a request job's adapter data: the handle of the scheduled event that expires it. */
+	static final AString EXPIRY_EVENT = Strings.intern("expiryEvent");
+
 	/** The operation whose authority a grant is minted with. */
 	private static final AString ISSUE_OPERATION = Strings.intern("v/ops/ucan/issue");
 
@@ -217,6 +220,7 @@ public class HITLAdapter extends AAdapter {
 
 		final AString targetDID = target;
 		Blob taskId = ctx.getTaskId();
+		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
 		Runnable parked = engine.getVenueState().transact(venue -> {
 			User targetUser = venue.users().user(targetDID);
 			if (targetUser == null) {
@@ -226,16 +230,18 @@ public class HITLAdapter extends AAdapter {
 			addPending(venue, job, taskId);
 			// The session goes with the request if the target's account does
 			AString askingSession = RT.ensureString(record.get(Fields.SESSION_ID));
-			venue.jobIndex().updateAdapterData(job.getID(), data -> (askingSession == null)
-				? data.assoc(TARGET, targetDID)
-				: data.assoc(TARGET, targetDID).assoc(Fields.SESSION_ID, askingSession));
+			Blob expiry = (expires == null) ? null : scheduleExpiry(venue, targetDID, id, expires);
+			venue.jobIndex().updateAdapterData(job.getID(), data -> {
+				AMap<AString, ACell> kept = data.assoc(TARGET, targetDID);
+				if (askingSession != null) kept = kept.assoc(Fields.SESSION_ID, askingSession);
+				return (expiry == null) ? kept : kept.assoc(EXPIRY_EVENT, expiry);
+			});
 			Runnable changed = ((VenueJob) job).updateIn(venue, data -> data.assoc(Fields.STATUS, Status.INPUT_REQUIRED));
 			if (changed == null) throw new ConflictException(JOB_ENDED + id);
 			return changed;
 		});
 		parked.run();
-		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
-		if (expires != null) scheduleExpiry(targetDID, id, expires.longValue());
+		if (expires != null) engine.gridScheduler().scheduleChanged();
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
 
@@ -284,6 +290,7 @@ public class HITLAdapter extends AAdapter {
 		User user = draft.users().user(askedBy(job, adapterData));
 		if (user != null) user.inbox().request(Strings.create(job.getID().toHexString())).resolve(Hitl.CANCELLED, null);
 		removePending(draft, job);
+		cancelExpiry(draft, adapterData);
 	}
 
 	@Override
@@ -307,7 +314,11 @@ public class HITLAdapter extends AAdapter {
 		}
 		HitlRequest request = user.inbox().request(id);
 		AString status = request.status();
-		if (status == null || Hitl.OPEN.equals(status)) return;
+		if (status == null) return;
+		if (Hitl.OPEN.equals(status)) {
+			ensureExpiry(job, target, id, RT.ensureLong(request.getRecord().get(Hitl.EXPIRES)));
+			return;
+		}
 		// Older records lack a prepared result. Never reissue a grant or pretend
 		// a redacted token is the original answer.
 		if (Hitl.CANCELLED.equals(status)) job.cancel();
@@ -726,13 +737,48 @@ public class HITLAdapter extends AAdapter {
 	// ========== Expiry ==========
 
 	/**
-	 * Schedules the request's expiry at {@code expires}: a one-shot event the
-	 * venue fires as itself, invoking {@link #EXPIRE_OP}. It lives in the
-	 * venue's schedule, so it survives a restart (COG-16).
+	 * Adds the request's expiry to the venue's schedule in {@code venue}'s
+	 * transaction: a one-shot event the venue fires as itself at
+	 * {@code expires}, invoking {@link #EXPIRE_OP}. The request's {@code expires}
+	 * is the durable fact and this event only its alarm. Its handle stays in
+	 * the job's adapter data, so the transaction that ends the job removes it.
+	 *
+	 * @return The event's handle
 	 */
-	private void scheduleExpiry(AString targetDID, AString id, long expires) {
-		engine.gridScheduler().schedule(EXPIRE_OP, expiryInput(targetDID, id), engine.venueContext(),
-			expires, null, Boolean.FALSE, Strings.create("Expires HITL request " + id));
+	private Blob scheduleExpiry(VenueState venue, AString targetDID, AString id, CVMLong expires) {
+		AString did = engine.getDIDString();
+		return venue.schedule().schedule(EXPIRE_OP, expiryInput(targetDID, id), did, did, null, null,
+			expires.longValue(), null, Boolean.FALSE, Strings.create("Expires HITL request " + id),
+			engine.currentTimestamp().longValue());
+	}
+
+	/** The handle of a request job's expiry event in its adapter data, or null when it has none. */
+	private static Blob expiryEvent(AMap<AString, ACell> adapterData) {
+		return (adapterData != null && adapterData.get(EXPIRY_EVENT) instanceof Blob handle) ? handle : null;
+	}
+
+	/** Removes a request job's expiry event, if it has one still, in {@code venue}'s transaction. */
+	private static void cancelExpiry(VenueState venue, AMap<AString, ACell> adapterData) {
+		Blob handle = expiryEvent(adapterData);
+		if (handle != null) venue.schedule().cancel(handle);
+	}
+
+	/**
+	 * Restores the alarm of an open request a recovered job waits on, when its
+	 * expiry event is gone: fired without resolving it because the venue
+	 * stopped, or never made because the request came from an older venue
+	 * (COG-16). An overdue request expires at the venue's first update.
+	 */
+	private void ensureExpiry(Job job, AString target, AString id, CVMLong expires) {
+		if (expires == null) return;
+		boolean restored = engine.getVenueState().transact(venue -> {
+			Blob held = expiryEvent(venue.jobIndex().adapterData(job.getID()));
+			if (held != null && venue.schedule().find(held) != null) return false;
+			Blob expiry = scheduleExpiry(venue, target, id, expires);
+			venue.jobIndex().updateAdapterData(job.getID(), data -> data.assoc(EXPIRY_EVENT, expiry));
+			return true;
+		});
+		if (restored) engine.gridScheduler().scheduleChanged();
 	}
 
 	/** The input of {@link #EXPIRE_OP} for request {@code id} in {@code targetDID}'s inbox. */
@@ -823,8 +869,11 @@ public class HITLAdapter extends AAdapter {
 		Runnable notification = null;
 		Blob waitingTask = null;
 		if (job != null) {
+			// Read first: the job's entry goes as it finishes
+			AMap<AString, ACell> kept = venue.jobIndex().adapterData(job.getID());
 			notification = ((VenueJob) job).updateIn(venue, outcome);
 			if (notification == null) return null;
+			cancelExpiry(venue, kept);
 			// Terminal jobs are skipped at restart, so the wait ends with the result
 			AString requestingAgent = Engine.agentIdIn(job.getOwner(), job.getCaller());
 			User owner = draft.user(job.getOwner());

@@ -206,8 +206,9 @@ until a place frees. An agent wake takes a place like any other event.
 
 Claims use the update's time, never the clock's current value, so a run stepped
 on a driven clock repeats exactly. Only a started venue takes part: until
-launch has finished recovery, and from close on, it starts nothing, and its
-close fails any update still waiting on it with `ShuttingDownException`.
+launch has finished recovery, and from the moment close begins, it starts
+nothing, so events falling due then stay in the schedule for its next start.
+Its close fails any update still waiting on it with `ShuttingDownException`.
 
 If a tracked Job cannot be prepared (unresolvable op, capability denied), the
 event is still claimed exactly as an untracked failure would be — the schedule
@@ -400,12 +401,15 @@ agent via the `runningLoops` CAS (**at most one active computation per agent**).
 A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transient Job,
 §7).
 
-**HITL timeouts** are another consumer. A request asked with a `timeout`
-schedules a one-shot `hitl:expire {user, id}` at its `expires` time, made and
-fired by the venue as itself, untracked. Only the venue may invoke
-`hitl:expire`, and it leaves a request already answered, rejected, expired or
-cancelled as it is. The event is in the schedule, so a request's expiry
-survives a restart (COG-16) with nothing re-armed at boot.
+**HITL timeouts** are another consumer, built on the job machinery. The
+request's `expires` is the durable fact; a one-shot `hitl:expire {user, id}`,
+made and fired by the venue as itself and untracked, is only its alarm. The
+transaction that opens a request also makes the event and keeps its handle in
+the job's adapter data ([ADAPTERS.md](./ADAPTERS.md)), and the transaction that
+ends the job, however it ends, removes the event. Only the venue may invoke
+`hitl:expire`, and it leaves a request already resolved as it is. Job recovery
+restores the event of an open request that has none, so a request whose alarm
+fired without expiring it, because the venue stopped, still expires (COG-16).
 
 ---
 

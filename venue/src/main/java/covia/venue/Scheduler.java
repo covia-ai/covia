@@ -353,13 +353,14 @@ public class Scheduler {
 	 * it resolves is its own, and a failure to start is logged. A time no
 	 * later than an earlier update's still starts whatever is due by it, such
 	 * as an event added since with a past time. A scheduler not started, or
-	 * shut down, starts nothing and completes at once.
+	 * of a venue closing, starts nothing and completes at once: what is due
+	 * stays in the schedule for the venue's next start.
 	 */
 	CompletableFuture<Void> update(long now) {
 		CompletableFuture<Void> done = new CompletableFuture<>();
 		lock.lock();
 		try {
-			if (!started || shutdown) return CompletableFuture.completedFuture(null);
+			if (!takingPart()) return CompletableFuture.completedFuture(null);
 			if (now > target) target = now;
 			waiters.add(new Waiter(now, done));
 		} finally {
@@ -375,7 +376,7 @@ public class Scheduler {
 	 * When the venue next needs an update: the first event's time, which may
 	 * already have passed, or {@link Long#MAX_VALUE} when nothing is
 	 * scheduled, every place is taken (the event that frees one reports the
-	 * next time), or the scheduler is not started.
+	 * next time), the scheduler is not started or the venue is closing.
 	 */
 	long nextDue() {
 		lock.lock();
@@ -386,8 +387,22 @@ public class Scheduler {
 		}
 	}
 
+	/**
+	 * Tells the application when the venue next needs an update. For a caller
+	 * whose own venue transaction changed the schedule ({@link VenueState#schedule}),
+	 * once it has committed.
+	 */
+	public void scheduleChanged() {
+		reportDue(nextDue());
+	}
+
+	/** Whether this scheduler starts events: from its start until the venue begins closing. */
+	private boolean takingPart() {
+		return started && !shutdown && !engine.isClosing();
+	}
+
 	private long nextDueLocked() {
-		if (!started || shutdown) return Long.MAX_VALUE;
+		if (!takingPart()) return Long.MAX_VALUE;
 		if (starting >= engine.config().getSchedulerMaxConcurrency()) return Long.MAX_VALUE;
 		Index<Blob, ACell> idx = index();
 		if (idx.isEmpty()) return Long.MAX_VALUE;
@@ -409,7 +424,7 @@ public class Scheduler {
 		lock.lock();
 		try {
 			int max = engine.config().getSchedulerMaxConcurrency();
-			while (started && !shutdown && starting < max) {
+			while (takingPart() && starting < max) {
 				Index<Blob, ACell> idx = index();
 				if (idx.isEmpty()) break;
 				var e = idx.entryAt(0);

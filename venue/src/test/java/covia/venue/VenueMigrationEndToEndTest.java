@@ -65,8 +65,6 @@ class VenueMigrationEndToEndTest {
 	private static final Blob AGENT_JOB = Blob.fromHex("e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2");
 	private static final Blob EVENT = Blob.fromHex("7fffffffffffffffe2e3e2e3e2e3e2e3");
 	private static final AString REQUEST = Strings.create("e2e-request");
-	/** An open HITL request with a timeout, whose expiry version 1 kept only in memory. */
-	private static final AString TIMED_REQUEST = Strings.create("e2ebe2ebe2ebe2ebe2ebe2ebe2ebe2eb");
 	private static final String PARKED = "migration-e2e-parked";
 	private static final Blob PARKED_TASK = Blob.fromHex("e2e4e2e4e2e4e2e4e2e4e2e4e2e4e2e4");
 	/** A job still running when a version 1 venue stopped, with no entry: that version kept none. */
@@ -179,8 +177,6 @@ class VenueMigrationEndToEndTest {
 				SecretStore.keys(key));
 			user.inbox().put(REQUEST, Maps.of(Hitl.ID, REQUEST, Strings.create("from"), agentDID,
 				Hitl.STATUS, Hitl.OPEN));
-			user.inbox().put(TIMED_REQUEST, Maps.of(Hitl.ID, TIMED_REQUEST, Strings.create("from"), USER,
-				Hitl.STATUS, Hitl.OPEN, Hitl.CREATED, 500L, Hitl.EXPIRES, 1_000L));
 			Agent parked = user.ensureAgent(PARKED, Maps.empty(), null);
 			parked.putRecord(parked.getRecord().assoc(Agent.KEY_STATUS, Agent.SUSPENDED)
 				.assoc(Agent.KEY_TASKS, Index.<Blob, ACell>none().assoc(PARKED_TASK,
@@ -220,17 +216,6 @@ class VenueMigrationEndToEndTest {
 				"a pending write's context is the request's to keep, not the worker's");
 			assertEquals(Maps.of(Fields.OP, "v/test/ops/echo", Fields.CALLER, agentDID, Fields.OWNER, USER,
 				Strings.create("time"), Long.MAX_VALUE), venue.schedule().events().get(EVENT));
-			AMap<AString, ACell> expiry = null;
-			for (var event : venue.schedule().events().entrySet()) {
-				if (covia.adapter.HITLAdapter.EXPIRE_OP.equals(RT.getIn(event.getValue(), Fields.OP))) {
-					assertNull(expiry, "one expiry for the one timed request");
-					expiry = RT.ensureMap(event.getValue());
-				}
-			}
-			assertNotNull(expiry, "the timed request's expiry is scheduled");
-			assertEquals(covia.adapter.HITLAdapter.expiryInput(USER, TIMED_REQUEST), expiry.get(Fields.INPUT));
-			assertEquals(CVMLong.create(1_000), expiry.get(Strings.create("time")), "at the request's expires time");
-			assertEquals(venueDID, expiry.get(Fields.CALLER), "made and fired by the venue");
 			assertEquals(Maps.of(JobIndex.OWNER, USER), venue.jobIndex().entry(RUNNING_JOB));
 			assertEquals(Maps.of(JobIndex.OWNER, USER, JobIndex.ADAPTER_DATA, Maps.of("authenticateAs", "caller",
 					RemoteJobs.PROTOCOL, "covia", RemoteJobs.TARGET, REMOTE_TARGET, RemoteJobs.OWNS_REMOTE, true)),
