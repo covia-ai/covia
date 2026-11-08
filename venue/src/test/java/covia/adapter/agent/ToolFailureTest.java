@@ -22,6 +22,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import covia.exception.AuthException;
 import covia.exception.FaultException;
 import covia.exception.InvalidInputException;
@@ -133,7 +134,8 @@ public class ToolFailureTest {
 				ToolCycleEngine.ToolOutcome outcome, long millis) {}
 		};
 		TestLogs.quiet(FaultException.class, () -> ToolCycleEngine.executeBatch(
-			Vectors.of(call("input"), call("bug")), 0, registry, new Object(), sink, NOPLogger.NOP_LOGGER));
+			Vectors.of(call("input"), call("bug")), 0, registry, new Object(), sink,
+			() -> CVMLong.create(0), NOPLogger.NOP_LOGGER));
 
 		assertEquals(2, messages.size());
 		String input = content(messages.get(0));

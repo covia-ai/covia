@@ -17,7 +17,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.Utils;
 import covia.api.Fields;
 
 /**
@@ -160,6 +159,13 @@ public final class AgentEvents {
 
 	private final ConcurrentHashMap<AString, Slot> slots = new ConcurrentHashMap<>();
 	private final CopyOnWriteArrayList<Consumer<Event>> global = new CopyOnWriteArrayList<>();
+	/** Whose clock stamps each event's {@code ts}. */
+	private final Engine engine;
+
+	/** The tap for {@code engine}'s agents, its events stamped by the venue's clock. */
+	public AgentEvents(Engine engine) {
+		this.engine = engine;
+	}
 
 	/** The grid address events are keyed by: {@code <ownerDID>/g/<agentId>}. */
 	public static AString address(AString ownerDID, AString agentId) {
@@ -212,7 +218,7 @@ public final class AgentEvents {
 	private void emit(AString ownerDID, AString agentId, AString type, AMap<AString, ACell> data) {
 		Slot s = slot(ownerDID, agentId);
 		synchronized (s) {
-			Event e = new Event(ownerDID, agentId, ++s.seq, Utils.getCurrentTimestamp(), type, data);
+			Event e = new Event(ownerDID, agentId, ++s.seq, engine.currentTimestamp().longValue(), type, data);
 			deliver(s.listeners, e);
 			deliver(global, e);
 		}

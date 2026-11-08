@@ -1562,7 +1562,7 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = session.id();
 		AMap<AString, ACell> taskData = withProvenance(Maps.of(
 			Fields.INPUT,      taskInput,
-			Fields.CREATED,    CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.CREATED,    engine.currentTimestamp(),
 			Fields.SESSION_ID, Strings.create(sid.toHexString())), ctx);
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
@@ -3076,7 +3076,7 @@ public class AgentAdapter extends AAdapter {
 		java.util.concurrent.atomic.AtomicLong total =
 			new java.util.concurrent.atomic.AtomicLong(0);
 		AMap<AString, ACell> provenance = Maps.of(
-			K_CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
+			K_CREATED, engine.currentTimestamp(),
 			Fields.CALLER, ctx.getCallerDID(),
 			Fields.JOB_ID, Strings.create(job.getID().toHexString()));
 		boolean applied = agent.session(sid).updateQuiescentFrames(frames -> {
@@ -4099,8 +4099,8 @@ public class AgentAdapter extends AAdapter {
 
 	/** Work is a session message waiting, or a task with something to run on
 	 *  ({@link AgentState#isTaskReady}); a parked task is not work. */
-	private static boolean hasWork(AgentState agent) {
-		return agent.hasSessionPending() || agent.hasReadyTask(System.currentTimeMillis());
+	private boolean hasWork(AgentState agent) {
+		return agent.hasSessionPending() || agent.hasReadyTask(engine.currentTimestamp().longValue());
 	}
 
 	// ========== Run loop ==========
@@ -4216,7 +4216,7 @@ public class AgentAdapter extends AAdapter {
 				AString transitionOp = resolveTransitionOp(ownerDID, agentId);
 				if (transitionOp == null) break;
 
-				long startTs = Utils.getCurrentTimestamp();
+				long startTs = engine.currentTimestamp().longValue();
 
 				// Pick at most one task per cycle: the oldest by created timestamp
 				// that has something to run on. Multi-task agents fan out across
@@ -4494,7 +4494,7 @@ public class AgentAdapter extends AAdapter {
 			long startTs, AMap<AString, ACell> allTaskResults, boolean cannotContinue,
 			ACell claim, AgentEvents.Cycle tap) {
 		final AgentKey key = new AgentKey(callerDID, agentId);
-		long endTs = Utils.getCurrentTimestamp();
+		long endTs = engine.currentTimestamp().longValue();
 		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
@@ -4652,7 +4652,7 @@ public class AgentAdapter extends AAdapter {
 			framesOwned ? null : turnsToAppend));
 
 		// Per-thread scheduled wake. Transition result may carry a
-		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
+		// `wakeTime` (absolute millis on the venue's clock) requesting a future fire on
 		// the picked thread. If present, install it via setThreadWakeTime
 		// (lattice-first, then scheduler). If absent but the picked record
 		// still carries a stale `wakeTime` from a just-consumed scheduler
@@ -5040,9 +5040,9 @@ public class AgentAdapter extends AAdapter {
 	 * keeps the first. Returns null if no task is ready.
 	 */
 	@SuppressWarnings("unchecked")
-	private static Map.Entry<Blob, ACell> pickOldestReadyTask(AgentState agent, Index<Blob, ACell> tasks) {
+	private Map.Entry<Blob, ACell> pickOldestReadyTask(AgentState agent, Index<Blob, ACell> tasks) {
 		if (tasks == null || tasks.count() == 0) return null;
-		long now = System.currentTimeMillis();
+		long now = engine.currentTimestamp().longValue();
 		Map.Entry<Blob, ACell> oldest = null;
 		long oldestTs = Long.MAX_VALUE;
 		for (var entry : tasks.entrySet()) {
@@ -5169,7 +5169,7 @@ public class AgentAdapter extends AAdapter {
 			Blob taskId, ACell row) {
 		if (RT.getIn(row, Fields.WAKE_TIME) instanceof CVMLong) return true;
 		if (agent.hasPendingFor(taskId)) return true;
-		return agent.hasNewWorkFor(row, System.currentTimeMillis());
+		return agent.hasNewWorkFor(row, engine.currentTimestamp().longValue());
 	}
 
 	/**
@@ -5461,7 +5461,7 @@ public class AgentAdapter extends AAdapter {
 				} else if (AgentState.isParked(entry.getValue())
 						&& !(RT.getIn(entry.getValue(), Fields.WAKE_TIME) instanceof CVMLong)
 						&& !agent.hasPendingFor(taskId)
-						&& !agent.hasNewWorkFor(entry.getValue(), System.currentTimeMillis())) {
+						&& !agent.hasNewWorkFor(entry.getValue(), engine.currentTimestamp().longValue())) {
 					failTask(ownerDID, agent.getAgentId(), taskId, TASK_WAIT_LOST);
 				}
 			}
@@ -5827,7 +5827,7 @@ public class AgentAdapter extends AAdapter {
 	// ========== ID generation ==========
 
 	private synchronized Blob generateSessionId() {
-		long ts = Utils.getCurrentTimestamp();
+		long ts = engine.currentTimestamp().longValue();
 		byte[] bs = new byte[16];
 		Utils.writeLong(bs, 0, ts);
 		Utils.writeLong(bs, 8, sessionIdCounter++);
@@ -5891,10 +5891,10 @@ public class AgentAdapter extends AAdapter {
 	 * the session tier's declared loads, #142). Returns null when absent;
 	 * throws {@link InvalidInputException} on a malformed value.
 	 */
-	private static AMap<AString, ACell> mintLoads(ACell input) {
+	private AMap<AString, ACell> mintLoads(ACell input) {
 		ACell raw = RT.getIn(input, Fields.LOADS);
 		if (raw == null) return null;
-		return covia.adapter.agent.ContextChain.declaredLoads(raw, "loads", true);
+		return covia.adapter.agent.ContextChain.declaredLoads(raw, "loads", engine.currentTimestamp());
 	}
 
 	/**

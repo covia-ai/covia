@@ -188,13 +188,14 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final long SKILL_LOAD_DEFAULT_BUDGET = 2_000L;
 
 	/**
-	 * Builds the loaded-context entry metadata: {@code {budget, ts, label?}}.
-	 * The {@code label} key is omitted when the input is null.
+	 * Builds the loaded-context entry metadata: {@code {budget, ts, label?}},
+	 * where {@code ts} is the load time from the venue's clock. The
+	 * {@code label} key is omitted when the input is null.
 	 */
-	public static AMap<AString, ACell> buildLoadEntryMeta(long budget, AString label) {
+	public static AMap<AString, ACell> buildLoadEntryMeta(long budget, AString label, CVMLong ts) {
 		AMap<AString, ACell> meta = Maps.of(
 			K_BUDGET, CVMLong.create(budget),
-			Strings.intern("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()),
+			Strings.intern("ts"), ts,
 			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
 			Loads.K_TRUSTED, CVMBool.FALSE);
 		if (label != null) meta = meta.assoc(K_LABEL, label);
@@ -390,12 +391,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_DONE     = Strings.intern("done");
 	public static final AString K_NEXT     = Strings.intern("next");
 
-	/** A conversation turn stamped with the wall-clock moment it was recorded. */
-	static ACell stampTs(ACell message) {
+	/** A conversation turn stamped with the moment it was recorded, {@code ts}
+	 *  from the venue's clock. */
+	static ACell stampTs(ACell message, CVMLong ts) {
 		if (!(message instanceof AMap<?, ?>)) return message;
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> m = (AMap<AString, ACell>) message;
-		return m.assoc(Fields.TS, CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+		return m.assoc(Fields.TS, ts);
 	}
 
 	/**
@@ -534,7 +536,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// prompt: what it newly sent, then the reply verbatim or the failure.
 		CycleRecord record = CycleRecord.current();
 		if (record != null) {
-			record.beginInference(prompt, model.operationRef(), RT.ensureString(model.config().get(K_MODEL)));
+			record.beginInference(prompt, model.operationRef(), RT.ensureString(model.config().get(K_MODEL)),
+				engine.currentTimestamp());
 		}
 		try {
 			ACell reply = invokeLevel3(model, prompt.toL3Input(model.config()), prompt.messages(), ctx);

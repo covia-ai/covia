@@ -504,7 +504,8 @@ public class ContextAssemblerTest {
 				"volatile", false,
 				"trusted", false,
 				"budget", 500L)), "config.loads");
-		AMap<AString, ACell> dynamic = AbstractLLMAdapter.buildLoadEntryMeta(500, null)
+		AMap<AString, ACell> dynamic = AbstractLLMAdapter.buildLoadEntryMeta(500, null,
+				engine.currentTimestamp())
 			.assoc(Loads.K_TEXT, Strings.create(scratch));
 		AMap<AString, ACell> effective = pinned.assoc(Strings.create("working-note"), dynamic);
 		Loads.Snapshot loads = Loads.resolve(engine, ctx, effective, java.util.Set.of(), Labels.BRACKET);
@@ -623,7 +624,8 @@ public class ContextAssemblerTest {
 			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS, Vectors.of(Strings.create("w/specialists")))));
 		writeSkill("w/specialists/reviewer", "Review a result");
 		Skills.ResolvedSkill root = Skills.resolveRef(engine, ctx, Strings.create("w/root-skill"));
-		AMap<AString, ACell> loads = Maps.of(root.path(), Skills.buildSkillLoadMeta(2000, root));
+		AMap<AString, ACell> loads = Maps.of(root.path(), Skills.buildSkillLoadMeta(2000, root,
+			engine.currentTimestamp()));
 
 		Loads.Snapshot described = Loads.describe(engine, ctx, loads, java.util.Set.of());
 		String all = allContent(ContextAssembler.assemble(
@@ -665,7 +667,8 @@ public class ContextAssemblerTest {
 				Strings.create("text"), Strings.create("Alpha extra context"),
 				Strings.create("label"), Strings.create("Alpha notes"))))));
 		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("w/skills/alpha"));
-		return Maps.of(Strings.create("w/skills/alpha"), Skills.buildSkillLoadMeta(2000, s));
+		return Maps.of(Strings.create("w/skills/alpha"),
+			Skills.buildSkillLoadMeta(2000, s, engine.currentTimestamp()));
 	}
 
 	@Test

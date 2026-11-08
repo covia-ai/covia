@@ -180,7 +180,7 @@ public class HITLAdapter extends AAdapter {
 
 		// Build and deliver the record (venue-mediated: `caller` is the verified
 		// caller, and h/ is not writable via covia:write), then park the Job.
-		long nowMs = System.currentTimeMillis();
+		long nowMs = engine.currentTimestamp().longValue();
 		AString id = Strings.create(job.getID().toHexString());
 		AMap<AString, ACell> record = buildRecord(id, caller, ctx.getUserDID(), ctx.getAgentId(),
 			ctx.getSessionId(), title,
@@ -347,7 +347,7 @@ public class HITLAdapter extends AAdapter {
 		// Lazy expiry: a due-but-untriggered timer (e.g. lost on restart before
 		// re-arm) must not let an expired request be answered.
 		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
-		if (expires != null && System.currentTimeMillis() > expires.longValue()) {
+		if (expires != null && engine.currentTimestamp().longValue() > expires.longValue()) {
 			expireRequest(caller, id, Blob.parse(id.toString()));
 			throw new NotSupportedException("HITL request " + id + " has expired");
 		}
@@ -745,7 +745,7 @@ public class HITLAdapter extends AAdapter {
 		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
 		if (all == null) return 0;
 		int count = 0;
-		long nowMs = System.currentTimeMillis();
+		long nowMs = engine.currentTimestamp().longValue();
 		for (long u = 0; u < all.count(); u++) {
 			AString did = RT.ensureString(all.entryAt(u).getKey());
 			if (did == null) continue;

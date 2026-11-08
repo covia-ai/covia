@@ -225,14 +225,14 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 		// Reconfiguration cannot execute old accepted work using a different handler
 		// or admission policy. Fail it once; the receipt stays visible for the operator.
 		if (!version.equals(event.get(VERSION))) {
-			if (guarded(() -> inbox.fail(id, RECONFIGURED, null, System.currentTimeMillis())) != null) lastError = RECONFIGURED;
+			if (guarded(() -> inbox.fail(id, RECONFIGURED, null, adapter.engine.currentTimestamp().longValue())) != null) lastError = RECONFIGURED;
 			return;
 		}
 		// A message accepted without its verified channel (by an earlier version)
 		// cannot say who it comes from. Fail it once, as for a reconfiguration.
 		Channel channel = Channel.fromData(event.get(K_CHANNEL));
 		if (channel == null) {
-			if (guarded(() -> inbox.fail(id, UNVERIFIED, null, System.currentTimeMillis())) != null) lastError = UNVERIFIED;
+			if (guarded(() -> inbox.fail(id, UNVERIFIED, null, adapter.engine.currentTimestamp().longValue())) != null) lastError = UNVERIFIED;
 			return;
 		}
 		String conversation = MessagingSettings.required(event, "conversation");
@@ -263,7 +263,7 @@ public final class WebhookBot<S extends WebhookBotSpec> implements MessagingBot<
 				if (AAdapter.isExpectedFailure(failure)) {
 					log.warn("{} bot '{}': {}: {}", adapter.getName(), spec.name(), PROCESSING_FAILED, cause);
 				}
-				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, cause, System.currentTimeMillis())); }
+				try { if (localSession) guarded(() -> inbox.fail(id, PROCESSING_FAILED, cause, adapter.engine.currentTimestamp().longValue())); }
 				catch (RuntimeException writeFailure) { log.warn("Could not record processing failure: {}", writeFailure.toString()); }
 			}
 		});

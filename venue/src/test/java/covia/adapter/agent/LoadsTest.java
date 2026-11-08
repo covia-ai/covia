@@ -130,7 +130,8 @@ public class LoadsTest {
 		assertTrue(Loads.isConfigured(ContextChain.operatorLoads(declared, "config.loads").get(key)));
 		assertFalse(Loads.isConfigured(ContextChain.declaredLoads(declared, "loads").get(key)),
 			"a caller's tier cannot claim it");
-		assertFalse(Loads.isConfigured(AbstractLLMAdapter.buildLoadEntryMeta(100, null)),
+		assertFalse(Loads.isConfigured(AbstractLLMAdapter.buildLoadEntryMeta(100, null,
+				engine.currentTimestamp())),
 			"nor a load the agent makes");
 	}
 
@@ -141,7 +142,7 @@ public class LoadsTest {
 			Strings.create("brief"), spec("text", "Be brief."),
 			Strings.create("listing"), spec("op", "v/ops/covia/list", "input", Maps.of(Fields.PATH, Strings.create("w"))),
 			Strings.create("result"), spec("job", "00ff"),
-			Strings.create("alias"), spec("ref", "w/other")), "loads", true);
+			Strings.create("alias"), spec("ref", "w/other")), "loads", engine.currentTimestamp());
 		assertEquals(5, loads.count());
 		// Every entry is normalised the same way — budget clamped, ts stamped — whatever its form.
 		for (var e : loads.entrySet()) {
@@ -248,12 +249,13 @@ public class LoadsTest {
 	public void testCallerAndAgentDataCannotPromoteThemselves() {
 		AMap<AString, ACell> caller = ContextChain.declaredLoads(Maps.of(
 			Strings.create("note"), spec("text", "caller data", "trusted", CVMBool.TRUE)),
-			"loads", true);
+			"loads", engine.currentTimestamp());
 		Loads.Snapshot callerSnap = resolve(caller);
 		assertEquals(0, callerSnap.instructionElements().count());
 		assertEquals("caller data", result(callerSnap.exchanges(), 0));
 
-		AMap<AString, ACell> agentMeta = AbstractLLMAdapter.buildLoadEntryMeta(500, null)
+		AMap<AString, ACell> agentMeta = AbstractLLMAdapter.buildLoadEntryMeta(500, null,
+				engine.currentTimestamp())
 			.assoc(Loads.K_TEXT, Strings.create("agent data"))
 			.assoc(Loads.K_TRUSTED, CVMBool.TRUE);
 		Loads.Snapshot agentSnap = resolve(Maps.of(Strings.create("note"), agentMeta));
@@ -641,7 +643,7 @@ public class LoadsTest {
 				Skills.K_SKILLS, Vectors.of(Strings.create("w/skills/old-child")))));
 		Skills.ResolvedSkill old = Skills.resolveRef(engine, ctx, path);
 		AMap<AString, ACell> declarations = Maps.of(path,
-			Skills.buildSkillLoadMeta(2000, old));
+			Skills.buildSkillLoadMeta(2000, old, engine.currentTimestamp()));
 		Loads.Append loaded = Loads.append(engine, ctx, declarations, path,
 			Labels.BRACKET, Strings.create("context:old"));
 		assertTrue(all(loaded.messages()).contains("OLD BODY"));

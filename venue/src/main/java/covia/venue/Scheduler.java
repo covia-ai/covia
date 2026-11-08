@@ -117,7 +117,7 @@ public class Scheduler {
 	private record Claimed(AMap<AString, ACell> rec, JobManager.Prepared job, RuntimeException error) {}
 
 	public Scheduler(Engine engine) {
-		this(engine, System::currentTimeMillis);
+		this(engine, () -> engine.currentTimestamp().longValue());
 	}
 
 	public Scheduler(Engine engine, LongSupplier clock) {

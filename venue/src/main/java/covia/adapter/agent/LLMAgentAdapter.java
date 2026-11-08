@@ -12,7 +12,6 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AgentAdapter;
 import covia.adapter.agent.ContextInspectable.Inspection;
@@ -174,7 +173,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// then the task's request turn.
 		previewFrames = FrameStore.appendCycleInputTurns(previewFrames, in.messages(),
 			(in.task() != null) ? Maps.of(Fields.NEW_INPUT, in.task()) : null,
-			convex.core.util.Utils.getCurrentTimestamp());
+			engine.currentTimestamp().longValue());
 		boolean hasInput = (in.messages() != null && in.messages().count() > 0)
 			|| (in.pending() != null && in.pending().count() > 0)
 			|| in.task() != null;
@@ -198,7 +197,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		spec = spec.withLoads(loads, concatTools(fixedTools, loads.tools()))
 			.withTask(frameTools.tasks.message());
 		if (!frameTools.store.observe(0, ContextAssembler.observations(spec, loads),
-				convex.core.util.Utils.getCurrentTimestamp())) {
+				engine.currentTimestamp().longValue())) {
 			throw new IllegalStateException("Could not preview watched context observations");
 		}
 		spec = spec.withFrames(frameTools.reload());
@@ -247,7 +246,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		frameTools.appendTurn(reply);
 		StepSink sink = new StepSink(frameTools);
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
-			calls, 0, frameTools.registry(), frameTools, sink, log);
+			calls, 0, frameTools.registry(), frameTools, sink, engine::currentTimestamp, log);
 		AVector<ACell> turns = Vectors.of((ACell) reply).concat(sink.turns());
 
 		ACell task = frameTools.tasks.message();
@@ -278,7 +277,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * observations do.
 	 */
 	@SuppressWarnings("unchecked")
-	private static ContextAssembler.Spec observeStep(ContextAssembler.Spec spec,
+	private ContextAssembler.Spec observeStep(ContextAssembler.Spec spec,
 			Loads.Snapshot loads, boolean compacted) {
 		AVector<ACell> frames = spec.frames();
 		if (frames.isEmpty()) return spec;
@@ -287,7 +286,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		if (before == null) before = Vectors.empty();
 		AMap<AString, ACell> observed = GoalTreeContext.applyObservations(frame,
 			ContextAssembler.observations(spec, loads),
-			convex.core.util.Utils.getCurrentTimestamp());
+			engine.currentTimestamp().longValue());
 		if (compacted) return spec.withFrames(frames.assoc(0, observed));
 
 		AVector<ACell> after = GoalTreeContext.activeConversation(observed);
@@ -345,7 +344,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// exactly as GoalTree does.
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input, messages,
 			GoalTreeContext.describeTransitionInput(messages, tasks, pending),
-			convex.core.util.Utils.getCurrentTimestamp());
+			engine.currentTimestamp().longValue());
 		if (opened.failed()) {
 			return CycleRecord.endInto(Maps.of(AgentState.KEY_STATE, Maps.empty(), Fields.ERROR, opened.error()));
 		}
@@ -533,7 +532,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				.withNotice(replyNotice(taskMessage, tools))
 				.withTask(taskMessage);
 			if (!frameTools.store.observe(0, ContextAssembler.observations(inference, loads),
-					convex.core.util.Utils.getCurrentTimestamp())) {
+					engine.currentTimestamp().longValue())) {
 				throw new JobFailedException(SESSION_SUPERSEDED.formatted("observing context"));
 			}
 			inference = inference.withFrames(frameTools.reload());
@@ -548,7 +547,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 				}
 				retriedAfterTruncation = true;
 				log.warn("LLM response reached its output token limit — retrying once without partial output");
-				AMap<AString, ACell> retry = RT.ensureMap(stampTs(truncationRetryTurn()));
+				AMap<AString, ACell> retry = RT.ensureMap(stampTs(truncationRetryTurn(), engine.currentTimestamp()));
 				messages = messages.conj(retry);
 				appendRootTurn(frameTools, retry);
 				iteration--; // truncation recovery is not a tool iteration
@@ -577,17 +576,17 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 					Completion completion = Completion.of(content, null, schema, null);
 					if (!completion.accepted()) log.warn("LLM response schema violation: {}", completion.rejection());
 				}
-				AMap<AString, ACell> finalTurn = RT.ensureMap(stampTs(assistant));
+				AMap<AString, ACell> finalTurn = RT.ensureMap(stampTs(assistant, engine.currentTimestamp()));
 				appendRootTurn(frameTools, finalTurn);
 				return messages.conj(finalTurn);
 			}
 
-			AMap<AString, ACell> callTurn = RT.ensureMap(stampTs(assistant));
+			AMap<AString, ACell> callTurn = RT.ensureMap(stampTs(assistant, engine.currentTimestamp()));
 			messages = messages.conj(callTurn);
 			appendRootTurn(frameTools, callTurn);
 			frameTools.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
 			sinkMessages[0] = messages;
-			ToolCycleEngine.executeBatch(calls, iteration, registry, frameTools, sink, log);
+			ToolCycleEngine.executeBatch(calls, iteration, registry, frameTools, sink, engine::currentTimestamp, log);
 			persistRootFrame(frameTools);
 			messages = sinkMessages[0];
 		}
@@ -618,10 +617,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return spec.withFrames(frameTools.reload());
 	}
 
-	private static AMap<AString, ACell> normaliseRootTurn(AMap<AString, ACell> turn) {
+	private AMap<AString, ACell> normaliseRootTurn(AMap<AString, ACell> turn) {
 		if (turn.get(AgentState.K_TURN_TS) == null) {
-			turn = turn.assoc(AgentState.K_TURN_TS,
-				CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+			turn = turn.assoc(AgentState.K_TURN_TS, engine.currentTimestamp());
 		}
 		if (turn.get(AgentState.K_SOURCE) == null) {
 			AString role = RT.ensureString(turn.get(AgentState.K_ROLE));
@@ -632,7 +630,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return turn;
 	}
 
-	private static void appendRootTurn(FrameTools frameTools, AMap<AString, ACell> turn) {
+	private void appendRootTurn(FrameTools frameTools, AMap<AString, ACell> turn) {
 		turn = normaliseRootTurn(turn);
 		if (!frameTools.store.appendRoot(turn)) {
 			throw new JobFailedException(SESSION_SUPERSEDED.formatted("appending conversation"));

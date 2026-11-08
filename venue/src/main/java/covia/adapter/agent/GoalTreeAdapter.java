@@ -299,7 +299,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				GoalTreeContext.describeTransitionInput(inbox, tasks, in.pending())));
 		}
 		if (!rootFrames.isEmpty()) {
-			long ts = convex.core.util.Utils.getCurrentTimestamp();
+			long ts = engine.currentTimestamp().longValue();
 			if (inbox != null) rootFrames = FrameStore.appendCycleInputTurns(rootFrames, inbox, null, ts);
 			if (in.task() != null) {
 				rootFrames = FrameStore.appendCycleInputTurns(
@@ -346,7 +346,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AMap<AString, ACell> observedRoot = GoalTreeContext.applyObservations(
 			(AMap<AString, ACell>) rootFrames.get(0),
 			ContextAssembler.observations(spec, loads),
-			convex.core.util.Utils.getCurrentTimestamp());
+			engine.currentTimestamp().longValue());
 		rootFrames = rootFrames.assoc(0, observedRoot);
 		spec = spec.withFrames(rootFrames);
 		Cycle cycle = new Cycle(model, fixed.toolIndex(),
@@ -458,7 +458,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		frameTools.turnText = RT.ensureString(reply.get(K_CONTENT));
 		StepSink sink = new StepSink(frameTools);
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
-			calls, 0, registry, frameTools, sink, log);
+			calls, 0, registry, frameTools, sink, engine::currentTimestamp, log);
 		AVector<ACell> turns = Vectors.of((ACell) reply).concat(sink.turns());
 		if (batch.isTerminal()) {
 			boolean failed = "failed".equals(batch.terminalStatus());
@@ -571,7 +571,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// the session has no frames yet (first transition).
 		String rootDescription = GoalTreeContext.describeTransitionInput(messages, tasks, pending);
 
-		long cycleTs = convex.core.util.Utils.getCurrentTimestamp();
+		long cycleTs = engine.currentTimestamp().longValue();
 		FrameStore.Opened opened = FrameStore.open(engine, ctx, agentId, input,
 			messages, rootDescription, cycleTs);
 		if (opened.failed()) {
@@ -775,7 +775,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 			for (var entry : declared.entrySet()) {
 				long budget = clampLoadBudget(RT.getIn(entry.getValue(), K_BUDGET));
-				childLoads = childLoads.assoc(entry.getKey(), buildLoadEntryMeta(budget, null));
+				childLoads = childLoads.assoc(entry.getKey(),
+					buildLoadEntryMeta(budget, null, engine.currentTimestamp()));
 			}
 
 			AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(
@@ -807,7 +808,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 			AMap<AString, ACell> result = subgoalResult(Strings.create(childResult.status()), childResult.value());
 			AMap<AString, ACell> withResult = GoalTreeContext.appendTurn(activeFrame,
-				stampTs(toolResultMessage(call.id(), call.name(), result)));
+				stampTs(toolResultMessage(call.id(), call.name(), result), engine.currentTimestamp()));
 			if (!store.update(frames -> updateFrame(
 					(AVector<ACell>) frames.slice(0, frameIndex + 1), frameIndex, withResult))) {
 				return ToolCycleEngine.ToolOutcome.abort();
@@ -921,7 +922,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				log.warn("Frame[{}] response reached its output token limit — retrying once without partial output",
 					frameIndex);
 				frameTools.activeFrame = GoalTreeContext.appendTurn(
-					frameTools.activeFrame, stampTs(truncationRetryTurn()));
+					frameTools.activeFrame, stampTs(truncationRetryTurn(), engine.currentTimestamp()));
 				if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 				iteration--; // truncation recovery is not a tool iteration
 				continue;
@@ -950,7 +951,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 						log.warn("Frame[{}] iter={} typed output rejected: {}",
 							frameIndex, iteration, completion.rejection());
 						frameTools.activeFrame = GoalTreeContext.appendTurn(
-							GoalTreeContext.appendTurn(frameTools.activeFrame, stampTs(assistant)),
+							GoalTreeContext.appendTurn(frameTools.activeFrame,
+								stampTs(assistant, engine.currentTimestamp())),
 							retryTurn(completion));
 						if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 						continue;
@@ -958,19 +960,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					value = completion.value();
 				}
 				AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
-					GoalTreeContext.appendTurn(frameTools.activeFrame, stampTs(assistant)),
+					GoalTreeContext.appendTurn(frameTools.activeFrame,
+						stampTs(assistant, engine.currentTimestamp())),
 					GoalTreeContext.STATUS_COMPLETE);
 				if (!persist(store, frameIndex, terminal)) return abortedResult(store);
 				return FrameResult.complete(value, store.frames());
 			}
 
-			frameTools.activeFrame = GoalTreeContext.appendTurn(frameTools.activeFrame, stampTs(assistant));
+			frameTools.activeFrame = GoalTreeContext.appendTurn(frameTools.activeFrame,
+				stampTs(assistant, engine.currentTimestamp()));
 			frameTools.turnText = RT.ensureString(RT.getIn(assistant, K_CONTENT));
 			if (!persist(store, frameIndex, frameTools.activeFrame)) return abortedResult(store);
 			log.info("Frame[{}] iter={} tools={}", frameIndex, iteration, calls.count());
 
 			ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
-				calls, iteration, toolRegistry, frameTools, sink, log);
+				calls, iteration, toolRegistry, frameTools, sink, engine::currentTimestamp, log);
 			if (batch.aborted()) return abortedResult(store);
 			if (batch.isTerminal()) {
 				boolean failed = "failed".equals(batch.terminalStatus());
@@ -1071,7 +1075,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withTask(task);
 		if (!frameTools.store.observe(frameTools.frameIndex,
 				ContextAssembler.observations(inference, loads),
-				convex.core.util.Utils.getCurrentTimestamp())) return null;
+				engine.currentTimestamp().longValue())) return null;
 		AVector<ACell> observedFrames = frameTools.store.frames();
 		if (frameTools.frameIndex >= observedFrames.count()) return null;
 		frameTools.activeFrame = (AMap<AString, ACell>) observedFrames.get(frameTools.frameIndex);

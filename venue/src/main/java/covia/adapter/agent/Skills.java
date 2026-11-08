@@ -1038,18 +1038,19 @@ public final class Skills {
 
 	/**
 	 * Builds the loads-entry spec for a loaded skill:
-	 * {@code {skill: true, budget, ts, label, tools?, skills?, skillsets?}}. A
+	 * {@code {skill: true, budget, ts, label, tools?, skills?, skillsets?}}, where
+	 * {@code ts} is the load time from the venue's clock. A
 	 * plain map — fully compatible with ContextChain (tombstones, masking),
 	 * context_unload and the loads snapshot. The body itself is carried by the
 	 * appended load event; tool and child refs are snapshotted onto the entry,
 	 * including empty vectors, so later inference never consults a mutated skill
 	 * merely to rediscover that it contributed nothing.
 	 */
-	public static AMap<AString, ACell> buildSkillLoadMeta(long budget, ResolvedSkill skill) {
+	public static AMap<AString, ACell> buildSkillLoadMeta(long budget, ResolvedSkill skill, CVMLong ts) {
 		AMap<AString, ACell> meta = Maps.of(
 			K_SKILL, CVMBool.TRUE,
 			K_BUDGET, CVMLong.create(budget),
-			K_TS, CVMLong.create(System.currentTimeMillis()),
+			K_TS, ts,
 			Loads.K_AGENT_MANAGED, CVMBool.TRUE,
 			Loads.K_TRUSTED, CVMBool.FALSE,
 			K_LABEL, Strings.create(skill.name()),
@@ -1661,7 +1662,7 @@ public final class Skills {
 		long budget = AbstractLLMAdapter.clampLoadBudget(
 			RT.getIn(toolInput, K_BUDGET), defaultBudget);
 
-		AMap<AString, ACell> entryMeta = buildSkillLoadMeta(budget, skill);
+		AMap<AString, ACell> entryMeta = buildSkillLoadMeta(budget, skill, engine.currentTimestamp());
 		ACell volatileCell = RT.getIn(toolInput, Loads.K_VOLATILE);
 		if (volatileCell != null && !(volatileCell instanceof CVMBool)) {
 			throw new InvalidInputException("skill_load volatile must be a boolean");

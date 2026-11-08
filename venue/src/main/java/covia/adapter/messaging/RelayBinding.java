@@ -105,7 +105,7 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 		this.adapter = adapter;
 		this.settings = RelaySettings.parse(bot.spec().relay(), false);
 		this.relay = new MessageRelay(bot.state(), root, settings.holdSeconds(), adapter.relayReplyWindowMs(),
-			System::currentTimeMillis);
+			() -> adapter.engine.currentTimestamp().longValue());
 	}
 
 	public RelaySettings settings() { return settings; }
@@ -183,7 +183,7 @@ public final class RelayBinding<S extends WebhookBotSpec> {
 	private long timestamp(AMap<AString, ACell> event) {
 		String ts = str(event, K_TIMESTAMP);
 		if (ts != null && ts.matches("[0-9]{1,12}")) return Long.parseLong(ts);
-		return System.currentTimeMillis() / 1000;
+		return adapter.engine.currentTimestamp().longValue() / 1000;
 	}
 
 	/** An event's attachments as a principal sees them: no provider ids, which grant nothing to it. */

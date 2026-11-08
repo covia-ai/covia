@@ -923,7 +923,7 @@ public class JobManager {
 			AString callerDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun) {
 		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
-		long ts = Utils.getCurrentTimestamp();
+		long ts = engine.currentTimestamp().longValue();
 		Blob jobID = generateJobID(ts);
 		OutputRules rules = OutputRules.of(meta);
 
@@ -1128,7 +1128,7 @@ public class JobManager {
 		}
 		requireAccepting(false);
 		AMap<AString, ACell> data = call.getData();
-		long ts = Utils.getCurrentTimestamp();
+		long ts = engine.currentTimestamp().longValue();
 		Blob jobID = generateJobID(ts);
 		AMap<AString, ACell> status = Maps.of(
 			Fields.ID, jobID,
@@ -1487,7 +1487,7 @@ public class JobManager {
 			throw new NotSupportedException(JOB_NO_MESSAGES + jobID.toHexString());
 		}
 
-		long ts = Utils.getCurrentTimestamp();
+		long ts = engine.currentTimestamp().longValue();
 		Blob msgId = generateJobID(ts);
 
 		AMap<AString, ACell> record = Maps.of(

@@ -106,7 +106,7 @@ public class ToolCycleEngineTest {
 			});
 		Sink sink = new Sink();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
-			Vectors.of(call("a", "op"), call("b", "op"), call("c", "op")), 0, registry, new Object(), sink, log);
+			Vectors.of(call("a", "op"), call("b", "op"), call("c", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertFalse(batch.isTerminal());
 		assertFalse(batch.aborted());
@@ -131,7 +131,7 @@ public class ToolCycleEngineTest {
 				return ok("b first");
 			});
 		Sink sink = new Sink();
-		ToolCycleEngine.executeBatch(Vectors.of(call("a", "op"), call("b", "op")), 0, registry, new Object(), sink, log);
+		ToolCycleEngine.executeBatch(Vectors.of(call("a", "op"), call("b", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertEquals(List.of("a", "b"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
 		assertEquals("a after b", content(sink.messages.get(0)));
@@ -174,7 +174,7 @@ public class ToolCycleEngineTest {
 			try {
 				batch.complete(ToolCycleEngine.executeBatch(
 					Vectors.of(call("1", "op"), call("2", "op"), call("ctl", CONTROL), call("3", "op")),
-					0, registry, new Object(), sink, log));
+					0, registry, new Object(), sink, engine::currentTimestamp, log));
 			} catch (Throwable t) {
 				batch.completeExceptionally(t);
 			}
@@ -219,7 +219,7 @@ public class ToolCycleEngineTest {
 			});
 		Sink sink = new Sink();
 		ToolCycleEngine.executeBatch(
-			Vectors.of(call("a", "op"), call("ctl", CONTROL), call("b", "op")), 0, registry, new Object(), sink, log);
+			Vectors.of(call("a", "op"), call("ctl", CONTROL), call("b", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertEquals(0, handled.get(), "an unoffered harness tool's handler never runs");
 		assertEquals(List.of("answered op", "answered " + CONTROL, "answered op"),
@@ -240,7 +240,7 @@ public class ToolCycleEngineTest {
 						AbstractLLMAdapter.K_CONTENT, Strings.create("event"))));
 			});
 		Sink sink = new Sink();
-		ToolCycleEngine.executeBatch(Vectors.of(call("only", "op")), 0, registry, new Object(), sink, log);
+		ToolCycleEngine.executeBatch(Vectors.of(call("only", "op")), 0, registry, new Object(), sink, engine::currentTimestamp, log);
 		assertEquals(1, seen.size());
 		assertSame(caller, seen.get(0));
 		assertEquals(2, sink.messages.size());
@@ -261,7 +261,7 @@ public class ToolCycleEngineTest {
 		Sink sink = new Sink();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			Vectors.of(call("1", "op"), call("done", COMPLETE), call("2", "op"), call("3", "op")),
-			0, registry, new Object(), sink, log);
+			0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertTrue(batch.isTerminal());
 		assertEquals("completed", batch.terminalStatus());
@@ -281,7 +281,7 @@ public class ToolCycleEngineTest {
 		Sink sink = new Sink();
 		ToolCycleEngine.BatchResult batch = ToolCycleEngine.executeBatch(
 			Vectors.of(call("1", "op"), call("stop", CONTROL), call("2", "op")),
-			0, registry, new Object(), sink, log);
+			0, registry, new Object(), sink, engine::currentTimestamp, log);
 		assertTrue(batch.aborted());
 		assertEquals(1, dispatched.get());
 		assertEquals(List.of("1"), sink.messages.stream().map(ToolCycleEngineTest::id).toList());
@@ -304,7 +304,7 @@ public class ToolCycleEngineTest {
 		Sink sink = new Sink();
 		ToolCycleEngine.executeBatch(
 			Vectors.of(call("a", "op"), malformed, call("throws", "op"), call("nothing", "op"), call("z", "op")),
-			0, registry, new Object(), sink, log);
+			0, registry, new Object(), sink, engine::currentTimestamp, log);
 
 		assertEquals(List.of("a", "bad", "throws", "nothing", "z"),
 			sink.messages.stream().map(ToolCycleEngineTest::id).toList());

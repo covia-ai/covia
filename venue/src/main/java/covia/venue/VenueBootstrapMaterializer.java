@@ -70,7 +70,7 @@ final class VenueBootstrapMaterializer {
 		User venue = did == null ? null : engine.getVenueState().users().user(did);
 		if (venue == null) throw new IllegalStateException(NO_VENUE_USER);
 		var names = engine.getAdapterNamesInRegistrationOrder();
-		long started = System.currentTimeMillis();
+		long started = engine.currentTimestamp().longValue();
 		venue.execute(draft -> action.accept(new VenueBootstrapMaterializer(engine, draft, names, started)));
 	}
 

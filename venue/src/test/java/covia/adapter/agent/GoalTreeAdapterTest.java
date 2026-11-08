@@ -164,7 +164,7 @@ public class GoalTreeAdapterTest {
 		// a tombstone without touching the parent.
 		writeAlphaSkill();
 		Skills.ResolvedSkill skill = Skills.resolveRef(engine, ALICE, Strings.create("w/skills/alpha"));
-		AMap<AString, ACell> skillMeta = Skills.buildSkillLoadMeta(2000, skill);
+		AMap<AString, ACell> skillMeta = Skills.buildSkillLoadMeta(2000, skill, engine.currentTimestamp());
 
 		AMap<AString, ACell> parent = GoalTreeContext.createFrame("root goal");
 		parent = GoalTreeContext.addLoad(parent, Strings.create("w/skills/alpha"), skillMeta);

@@ -84,6 +84,39 @@ schema versions, Covia's and each adapter's, without starting a venue.
 Covia never runs your own migration steps: run them after Covia's, in your
 own code. See [MIGRATE.md](MIGRATE.md).
 
+## Time
+
+The venue's clock belongs to the application's policy. Give one to
+`CoviaApplication.create(policy)`, `open(store, policy)` or
+`connect(host, policy)` as `VenueContext.create(clock)`, where `clock` supplies
+the time in epoch milliseconds as a `CVMLong`. Without one the application uses
+the system clock (`VenueContext.SYSTEM`). Every venue mounted in the
+application shares it.
+
+Every timestamp the venue and its adapters write comes from that clock: jobs,
+agents, scheduled events, HITL requests, user records, DLFS file times and
+message receipts. So does every check against such a timestamp, such as an
+agent's wake time, a request's expiry or a connected account's token expiry.
+`engine.currentTimestamp()` reads it, for your own code writing to the same
+lattice. Elapsed time stays on the system timer: sync and flush intervals,
+shutdown grace, timeouts, retries, rate limits and in-memory caches.
+
+The clock may stand still. It may give several writes the same time, and a
+test may hold it or step it by zero: a local write overwrites the venue's own
+state, and a merge on an equal timestamp keeps the local value, so no write is
+lost to a tie. Step a driven clock forward only.
+
+A test drives the clock with a supplier over a value it sets:
+
+```java
+AtomicLong now = new AtomicLong(Instant.parse("2026-01-01T00:00:00Z").toEpochMilli());
+CoviaApplication application =
+	CoviaApplication.create(VenueContext.create(() -> CVMLong.create(now.get())));
+Engine engine = application.mount(AKeyPair.generate(), config).launch();
+// ... act, then check what the venue wrote at that time
+now.addAndGet(60_000);   // one minute later
+```
+
 ## Routes
 
 Routes you add with `VenueServer.launch(config, extraRoutes)` share the

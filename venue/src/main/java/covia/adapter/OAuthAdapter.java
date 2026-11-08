@@ -723,10 +723,10 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return state.read(state.userPath(userDID, provider)) != null;
 	}
 
-	private static boolean expiring(AMap<AString, ACell> grant) {
+	private boolean expiring(AMap<AString, ACell> grant) {
 		CVMLong at = RT.ensureLong(grant.get(G_EXPIRES_AT));
 		if (at == null || at.longValue() <= 0) return false;   // no expiry reported: treat as long-lived
-		return at.longValue() - REFRESH_MARGIN_MILLIS <= System.currentTimeMillis();
+		return at.longValue() - REFRESH_MARGIN_MILLIS <= engine.currentTimestamp().longValue();
 	}
 
 	// ========== Provider calls ==========
@@ -840,7 +840,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			G_PROVIDER, Strings.create(p.name()),
 			G_ACCESS_TOKEN, Strings.create(str(tokens, Strings.intern("access_token"))),
 			G_EXPIRES_AT, CVMLong.create(expiresAt(tokens)),
-			G_OBTAINED, CVMLong.create(System.currentTimeMillis()));
+			G_OBTAINED, engine.currentTimestamp());
 		String refresh = str(tokens, Strings.intern("refresh_token"));
 		if (refresh != null) grant = grant.assoc(G_REFRESH_TOKEN, Strings.create(refresh));
 		String scope = str(tokens, Strings.intern("scope"));
@@ -853,9 +853,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		return stored;
 	}
 
-	private static long expiresAt(AMap<AString, ACell> tokens) {
+	private long expiresAt(AMap<AString, ACell> tokens) {
 		CVMLong in = RT.ensureLong(tokens.get(Strings.intern("expires_in")));
-		return (in != null) ? System.currentTimeMillis() + in.longValue() * 1000 : 0;
+		return (in != null) ? engine.currentTimestamp().longValue() + in.longValue() * 1000 : 0;
 	}
 
 	/** A grant as stored: its facts in the clear, its tokens sealed. */

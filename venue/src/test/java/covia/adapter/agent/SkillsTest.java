@@ -511,7 +511,7 @@ public class SkillsTest {
 		write("w/skills/alpha", Maps.of(Fields.DESCRIPTION, Strings.create("Alpha skill")));
 		Skills.ResolvedSkill s = resolve("w/skills/alpha");
 		AMap<AString, ACell> loads = Maps.of(
-			Strings.create("w/skills/alpha"), Skills.buildSkillLoadMeta(2000, s));
+			Strings.create("w/skills/alpha"), Skills.buildSkillLoadMeta(2000, s, engine.currentTimestamp()));
 
 		String index = Skills.renderIndex(engine, ctx,
 			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/skills"))), loads, false);
@@ -527,7 +527,7 @@ public class SkillsTest {
 			Vectors.of(Strings.create("v/ops/covia/read")), Vectors.empty(), Vectors.empty(),
 			Vectors.empty(), 0,
 			Strings.create("w/skills/pdf"), id);
-		AMap<AString, ACell> meta = Skills.buildSkillLoadMeta(2000, s);
+		AMap<AString, ACell> meta = Skills.buildSkillLoadMeta(2000, s, engine.currentTimestamp());
 
 		assertTrue(Skills.isSkillEntry(meta));
 		assertEquals(2000, ((CVMLong) meta.get(Strings.create("budget"))).longValue());
@@ -561,7 +561,8 @@ public class SkillsTest {
 
 		// findLoadedDuplicate spots it under the other address by content
 		// identity, regardless of address.
-		AMap<AString, ACell> loads = Maps.of(direct.path(), Skills.buildSkillLoadMeta(2000, direct));
+		AMap<AString, ACell> loads = Maps.of(direct.path(),
+			Skills.buildSkillLoadMeta(2000, direct, engine.currentTimestamp()));
 		assertEquals(direct.path(), Skills.findLoadedDuplicate(engine, ctx, loads, viaRef.id()));
 		assertNull(Skills.findLoadedDuplicate(engine, ctx, loads, Strings.create("other").getHash()));
 
@@ -580,7 +581,7 @@ public class SkillsTest {
 			Vectors.empty(), 0,
 			Strings.create("w/skills/x"), Strings.create("x-id").getHash());
 		AMap<AString, ACell> loads = Maps.of(
-			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s));
+			Strings.create("w/skills/x"), Skills.buildSkillLoadMeta(2000, s, engine.currentTimestamp()));
 
 		ToolPalette.Palette palette = ToolPalette.loadPalette(
 			engine, Loads.Readers.of(ctx), loads, (name, owner) -> false, true).active();

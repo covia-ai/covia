@@ -386,7 +386,7 @@ final class HarnessTools {
 
 		AString key = Strings.create("tools/" + bindings.getHash().toHexString());
 		AMap<AString, ACell> meta = AbstractLLMAdapter.buildLoadEntryMeta(
-			AbstractLLMAdapter.CONTEXT_LOAD_MIN_BUDGET, Strings.create("Tools"))
+			AbstractLLMAdapter.CONTEXT_LOAD_MIN_BUDGET, Strings.create("Tools"), scope.engine.currentTimestamp())
 			.assoc(Loads.K_KIND, Loads.KIND_TOOLS)
 			.assoc(Fields.TOOLS, operations)
 			.assoc(Loads.K_TOOL_BINDINGS, bindings);
@@ -460,7 +460,8 @@ final class HarnessTools {
 		long budget = AbstractLLMAdapter.clampLoadBudget(
 			RT.getIn(input, AbstractLLMAdapter.K_BUDGET));
 		AString label = RT.ensureString(RT.getIn(input, AbstractLLMAdapter.K_LABEL));
-		AMap<AString, ACell> meta = AbstractLLMAdapter.buildLoadEntryMeta(budget, label);
+		AMap<AString, ACell> meta = AbstractLLMAdapter.buildLoadEntryMeta(budget, label,
+			scope.engine.currentTimestamp());
 		AString key = path;
 		if (path != null) {
 			try {

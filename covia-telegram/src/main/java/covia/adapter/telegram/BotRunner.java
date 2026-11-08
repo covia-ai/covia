@@ -379,7 +379,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			try {
 				if (recover) { recoverPending(); recover = false; }
 				if (System.currentTimeMillis() >= nextPrune) {
-					inbox.pruneCompleted(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(7));
+					inbox.pruneCompleted(adapter.engine.currentTimestamp().longValue() - TimeUnit.DAYS.toMillis(7));
 					nextPrune = System.currentTimeMillis() + TimeUnit.HOURS.toMillis(1);
 				}
 				GetUpdates req = new GetUpdates().offset(offset).timeout(POLL_TIMEOUT_SECS);
@@ -544,7 +544,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 			respondAgent(id, m, messageText(m), true);
 		} catch (RuntimeException failure) {
 			String detail = concise(failure);
-			AMap<AString, ACell> rejected = guarded(() -> inbox.fail(id, DELIVERY_FAILED, detail, System.currentTimeMillis()));
+			AMap<AString, ACell> rejected = guarded(() -> inbox.fail(id, DELIVERY_FAILED, detail, adapter.engine.currentTimestamp().longValue()));
 			if (rejected == null) throw failure; // Already admitted: report an uncertain outcome, not "not delivered".
 			failed.incrementAndGet();
 			error = "Update " + id + " was not delivered: " + detail;

@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 
@@ -17,6 +18,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.FaultException;
@@ -272,10 +274,13 @@ final class ToolCycleEngine {
 	 * see the class comment for the wave model. Every call is decoded first,
 	 * so a malformed argument string costs its own call an error result and
 	 * nothing else.
+	 *
+	 * @param clock the venue's clock, which stamps each tool result and event
+	 *        the batch produces
 	 */
 	@SuppressWarnings("unchecked")
 	static <C> BatchResult executeBatch(AVector<ACell> toolCalls, int iteration,
-			Registry<C> registry, C context, BatchSink sink, Logger log) {
+			Registry<C> registry, C context, BatchSink sink, Supplier<CVMLong> clock, Logger log) {
 		List<Decoded> decoded = new ArrayList<>();
 		for (long i = 0; i < toolCalls.count(); i++) {
 			decoded.add(decode(toolCalls.get(i), iteration, log));
@@ -306,7 +311,7 @@ final class ToolCycleEngine {
 			if (terminalStatus != null) {
 				for (Decoded d : wave) {
 					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(d.call().id(), d.call().name(),
-						Strings.create(NOT_EXECUTED.formatted(terminalStatus)))));
+						Strings.create(NOT_EXECUTED.formatted(terminalStatus))), clock));
 				}
 				continue;
 			}
@@ -328,11 +333,11 @@ final class ToolCycleEngine {
 
 				if (e.outcome().appendResult()) {
 					ACell result = (e.outcome().result() != null) ? e.outcome().result() : Maps.empty();
-					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(e.call().id(), e.call().name(), result)));
+					sink.append(stamped(AbstractLLMAdapter.toolResultMessage(e.call().id(), e.call().name(), result), clock));
 				}
 				for (long eventIndex = 0; eventIndex < e.outcome().events().count(); eventIndex++) {
 					AMap<AString, ACell> event = RT.ensureMap(e.outcome().events().get(eventIndex));
-					if (event != null) deferredEvents.add(stamped(event));
+					if (event != null) deferredEvents.add(stamped(event, clock));
 				}
 
 				if (e.outcome().terminalStatus() != null) {
@@ -499,7 +504,7 @@ final class ToolCycleEngine {
 	}
 
 	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> stamped(AMap<AString, ACell> message) {
-		return (AMap<AString, ACell>) AbstractLLMAdapter.stampTs(message);
+	private static AMap<AString, ACell> stamped(AMap<AString, ACell> message, Supplier<CVMLong> clock) {
+		return (AMap<AString, ACell>) AbstractLLMAdapter.stampTs(message, clock.get());
 	}
 }

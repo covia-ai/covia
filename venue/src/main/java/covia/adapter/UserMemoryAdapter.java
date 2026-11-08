@@ -180,7 +180,7 @@ public class UserMemoryAdapter extends AAdapter {
 		AString text = RT.ensureString(RT.getIn(input, "text"));
 		if (text == null) throw new InvalidInputException("memory:remember requires 'text'");
 
-		AMap<AString, ACell> entry = Maps.of(K_TEXT, text, K_TS, CVMLong.create(System.currentTimeMillis()));
+		AMap<AString, ACell> entry = Maps.of(K_TEXT, text, K_TS, engine.currentTimestamp());
 		AVector<ACell> list = editList(ctx, path, current -> current.conj(entry));
 
 		return Maps.of(K_REMEMBERED, CVMBool.TRUE, K_N, CVMLong.create(list.count()), K_COUNT, CVMLong.create(list.count()));
@@ -193,7 +193,7 @@ public class UserMemoryAdapter extends AAdapter {
 		AString text = RT.ensureString(RT.getIn(input, "text"));
 		if (text == null) throw new InvalidInputException("memory:update requires 'text'");
 
-		long now = System.currentTimeMillis();
+		long now = engine.currentTimestamp().longValue();
 		long[] idx = {0};
 		AVector<ACell> list = editList(ctx, path, current -> {
 			idx[0] = index(input, current.count());

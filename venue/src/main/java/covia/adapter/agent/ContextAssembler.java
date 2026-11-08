@@ -1,7 +1,9 @@
 package covia.adapter.agent;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -260,7 +262,8 @@ public final class ContextAssembler {
 	 * @param task the outstanding task as a user message, rendered last, or null
 	 * @param unavailable configured tools that did not resolve, as {@code {operation, reason}}
 	 * @param notice a runtime notice for the tail, or null
-	 * @param now the clock
+	 * @param now the current date; null takes it from the venue's clock, in the
+	 *        system time zone
 	 */
 	public record Spec(
 			Engine engine,
@@ -304,7 +307,8 @@ public final class ContextAssembler {
 			input = orEmpty(input);
 			toolLoop = orEmpty(toolLoop);
 			unavailable = orEmpty(unavailable);
-			if (now == null) now = LocalDate.now();
+			if (now == null) now = Instant.ofEpochMilli(engine.currentTimestamp().longValue())
+				.atZone(ZoneId.systemDefault()).toLocalDate();
 		}
 
 		/** Backwards-compatible construction: when there is no separately

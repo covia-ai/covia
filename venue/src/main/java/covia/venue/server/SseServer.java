@@ -16,7 +16,6 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.core.util.Utils;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -224,7 +223,7 @@ public class SseServer {
 
 		AMap<AString, ACell> initial = Maps.of(
 			Fields.SEQ, CVMLong.create(engine.agentEvents().lastSeq(address)),
-			Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.TS, engine.currentTimestamp(),
 			Fields.TYPE, AgentEvents.STATUS,
 			Fields.AGENT_ID, agentId,
 			Fields.ADDRESS, address,

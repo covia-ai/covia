@@ -508,8 +508,7 @@ public class MCPAdapter extends AAdapter {
 			K_URL, url,
 			K_AUTH, storedAuth,
 			Fields.CALLER, ctx.getCallerDID(),
-			Strings.intern("added"), convex.core.data.prim.CVMLong.create(
-				convex.core.util.Utils.getCurrentTimestamp()),
+			Strings.intern("added"), engine.currentTimestamp(),
 			Fields.TOTAL, AInteger.create(toolNames.count())));
 
 		AMap<AString, ACell> result = Maps.of(

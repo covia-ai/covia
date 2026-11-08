@@ -124,11 +124,12 @@ public class ContextChainTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(operator.get(A), Loads.K_TRUSTED));
 		assertEquals(CVMBool.FALSE, RT.getIn(operator.get(B), Loads.K_TRUSTED),
 			"operator config may explicitly keep reference data untrusted");
+		CVMLong mintedAt = CVMLong.create(1_000L);
 		AMap<AString, ACell> minted = ContextChain.declaredLoads(
 			Maps.of(A, Maps.of(Loads.K_AGENT_MANAGED, CVMBool.TRUE,
-				Loads.K_TRUSTED, CVMBool.TRUE)), "loads", true);
-		assertNotNull(RT.getIn(minted.get(A), "ts"),
-			"persistence boundaries stamp missing timestamps once");
+				Loads.K_TRUSTED, CVMBool.TRUE)), "loads", mintedAt);
+		assertEquals(mintedAt, RT.getIn(minted.get(A), "ts"),
+			"persistence boundaries stamp missing timestamps once, with the time given");
 		assertEquals(CVMBool.FALSE, RT.getIn(minted.get(A), Loads.K_AGENT_MANAGED),
 			"caller-provided session context stays pinned even if it supplies an ownership flag");
 		assertEquals(CVMBool.FALSE, RT.getIn(minted.get(A), Loads.K_TRUSTED),

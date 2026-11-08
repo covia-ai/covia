@@ -16,7 +16,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
@@ -196,8 +195,9 @@ public final class CycleRecord {
 
 	// ========== Inferences ==========
 
-	/** Before a call: what this inference newly sends, by the bands the prompt marks. */
-	void beginInference(ContextAssembler.Prompt prompt, AString op, AString model) {
+	/** Before a call: what this inference newly sends, by the bands the prompt
+	 *  marks, stamped {@code ts} from the venue's clock. */
+	void beginInference(ContextAssembler.Prompt prompt, AString op, AString model, CVMLong ts) {
 		Frame f = frames.peek();
 		boolean first = f.inferences.isEmpty();
 		boolean child = frames.size() > 1;
@@ -226,7 +226,7 @@ public final class CycleRecord {
 		if (first) f.context = context;
 		AVector<ACell> tools = toolNames(prompt.tools());
 		AMap<AString, ACell> inference = Maps.of(
-			Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.TS, ts,
 			Fields.OP, op);
 		if (model != null) inference = inference.assoc(AbstractLLMAdapter.K_MODEL, model);
 		if (!newly.isEmpty()) inference = inference.assoc(Fields.SENT, newly);

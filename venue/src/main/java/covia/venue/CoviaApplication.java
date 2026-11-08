@@ -190,8 +190,18 @@ public final class CoviaApplication
 	 * mounted.
 	 */
 	public static CoviaApplication open(AStore store) throws IOException {
+		return open(store, VenueContext.SYSTEM);
+	}
+
+	/**
+	 * As {@link #open(AStore)}, with the given application policy.
+	 *
+	 * @throws ConfigurationException if the policy signs ({@link #POLICY_SIGNS})
+	 */
+	public static CoviaApplication open(AStore store, VenueContext policy) throws IOException {
+		requireUnsigned(policy);
 		LatticeHost<Index<Keyword, ACell>> host = LatticeHost.open(Index.none(), store);
-		return install(host, VenueContext.SYSTEM);
+		return install(host, policy);
 	}
 
 	/**

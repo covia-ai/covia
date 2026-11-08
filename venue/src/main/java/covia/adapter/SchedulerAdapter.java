@@ -111,10 +111,10 @@ public class SchedulerAdapter extends AAdapter {
 		if (timeV != null) {
 			wakeTime = timeV.longValue();
 		} else if (afterV != null) {
-			wakeTime = System.currentTimeMillis() + afterV.longValue();
+			wakeTime = engine.currentTimestamp().longValue() + afterV.longValue();
 		} else if (repeat != null) {
 			// "every N" with no start: the first fire is one interval from now.
-			wakeTime = System.currentTimeMillis() + Scheduler.everyOf(repeat);
+			wakeTime = engine.currentTimestamp().longValue() + Scheduler.everyOf(repeat);
 		} else {
 			throw new InvalidInputException(
 				"schedule requires 'time' (absolute millis), 'after' (millis from now) or 'repeat'");

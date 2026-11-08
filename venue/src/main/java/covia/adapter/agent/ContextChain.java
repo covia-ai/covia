@@ -92,7 +92,7 @@ public class ContextChain {
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which) {
-		return declaredLoads(raw, which, false);
+		return declaredLoads(raw, which, null);
 	}
 
 	/**
@@ -102,7 +102,7 @@ public class ContextChain {
 	 * never acquire operator authority merely by also being pinned.
 	 */
 	public static AMap<AString, ACell> operatorLoads(ACell raw, String which) {
-		return declaredLoads(raw, which, false, true);
+		return declaredLoads(raw, which, null, true);
 	}
 
 	/**
@@ -114,16 +114,19 @@ public class ContextChain {
 	 * persistence boundary (for example session mint), never during ordinary
 	 * rendering — otherwise a stable declaration would appear newest on every
 	 * inference.
+	 *
+	 * @param missingTs the time, from the venue's clock, stamped on an entry
+	 *        that has none; null leaves such entries unstamped
 	 */
 	@SuppressWarnings("unchecked")
 	public static AMap<AString, ACell> declaredLoads(ACell raw, String which,
-			boolean stampMissingTimestamp) {
-		return declaredLoads(raw, which, stampMissingTimestamp, false);
+			CVMLong missingTs) {
+		return declaredLoads(raw, which, missingTs, false);
 	}
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> declaredLoads(ACell raw, String which,
-			boolean stampMissingTimestamp, boolean operatorOwned) {
+			CVMLong missingTs, boolean operatorOwned) {
 		if (raw == null) return Maps.empty();
 		if (!(raw instanceof AMap)) {
 			throw new InvalidInputException(which + " must be a map of key → {budget?, …}, got "
@@ -158,8 +161,8 @@ public class ContextChain {
 			Loads.validateSpec(meta, which, entry.getKey());
 			long budget = AbstractLLMAdapter.clampLoadBudget(meta.get(budgetKey));
 			meta = meta.assoc(budgetKey, CVMLong.create(budget));
-			if (ts == null && stampMissingTimestamp) {
-				meta = meta.assoc(tsKey, CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+			if (ts == null && missingTs != null) {
+				meta = meta.assoc(tsKey, missingTs);
 			}
 			// Every declared tier is external to the agent's mutable working set.
 			// Trust is a separate authority marker: operator config may opt out,

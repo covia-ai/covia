@@ -47,7 +47,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.core.util.Utils;
 import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
@@ -152,7 +151,7 @@ public class Engine {
 	private final Scheduler gridScheduler;
 	/** The live agent tap (#394): run-loop, cycle, inference, tool and status
 	 *  events for every agent hosted here. */
-	private final AgentEvents agentEvents = new AgentEvents();
+	private final AgentEvents agentEvents = new AgentEvents(this);
 	/** Guards an embedding host registers on agents' tool calls. */
 	private final ToolGuards toolGuards = new ToolGuards();
 
@@ -2974,7 +2973,7 @@ public class Engine {
 
 	public AMap<AString,ACell> getStatus() {
 		AMap<AString,ACell> status=STATUS_MAP;
-		status=status.assoc(Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()));
+		status=status.assoc(Fields.TS, currentTimestamp());
 		status=status.assoc(Fields.DID, getDIDString());
 
 		AString name=getName();
@@ -3483,6 +3482,16 @@ public class Engine {
 	 */
 	public VenueState getVenueState() {
 		return venueState;
+	}
+
+	/**
+	 * The venue's clock: the application's time, for every timestamp the venue
+	 * and its adapters write and every check against one. It may give several
+	 * writes the same time. Elapsed time (intervals, timeouts, rate limits)
+	 * stays on the system timer.
+	 */
+	public CVMLong currentTimestamp() {
+		return application.venueContext().currentTimestamp();
 	}
 
 	/**

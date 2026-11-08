@@ -318,7 +318,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		AccountKey self = engine.getAccountKey();
 		AString declared = engine.getDIDString();
 		AHashMap<Keyword, ACell> metadata = declared.equals(UCAN.toDIDKey(self)) ? null : Maps.of(ID_DID, declared);
-		long timestamp = convex.core.util.Utils.getCurrentTimestamp();
+		long timestamp = engine.currentTimestamp().longValue();
 		P2PUser user = node.p2p();
 		user.setIdentity(P2PLattice.createIdentity(engine.config().getName(), Vectors.of(self), metadata, timestamp));
 		user.sync();
