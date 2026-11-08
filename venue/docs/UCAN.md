@@ -951,10 +951,23 @@ the delegation does not let it grant. An owner may give its agent caps over
 the agent's own keys, which are its agent's. An update re-checks only the
 fields it changes, against the config it replaces, in the same atomic update.
 
-**A step runs as its agent.** `llmagent:chat` and `goaltree:chat` always run
-as the agent they name, under its current `config.caps`, whoever invokes them
-and whatever `config` their input carries (`Engine.stepContext`). Only the
-agent's own run or its owner may invoke one, and only for an agent that exists.
+**The transition operation is the harness.** Each cycle, the run loop invokes
+the agent's transition operation (`config.operation`) as a harness step. The
+owner chose it when it configured the agent, so it needs no grant in the
+agent's caps, and it runs as the agent, unrestricted in its owner's namespace.
+The transition operation defines where the agent acts: it switches what it
+does on the agent's behalf to the agent's own context (`Engine.stepContext`),
+under its current `config.caps`. A transition operation that never switches is
+not bounded by the caps; that is the choice of whoever installs it.
+
+The built-in runtimes, `llmagent:chat` and `goaltree:chat`, switch at each
+tool call and at each context entry and load they read. Everything else they
+do is the harness's: resolving the model setup (the model operation, its
+provider and the system prompt), calling the model, reading the configured
+tools' definitions and keeping the session's frames. The switch takes the
+agent from the step's input, never its authority, whoever invokes the runtime
+and whatever `config` its input carries. Only the agent's own run or its
+owner may make an agent act, and only an agent that exists.
 
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.

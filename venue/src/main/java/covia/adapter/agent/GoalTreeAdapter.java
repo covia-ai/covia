@@ -160,10 +160,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	/** Everything a cycle holds constant across its frames and inferences;
-	 *  each frame adds its index and fixed base-tool projection. */
+	 *  each frame adds its index and fixed base-tool projection. {@code harness}
+	 *  is the harness's own context, which the model calls run under; the
+	 *  agent's acts run under the agent's ({@code spec.capsCtx()}). */
 	record Cycle(ModelSetup model,
 			AMap<AString, ACell> toolIndex,
-			RequestContext ctx, ContextAssembler.Spec spec, AVector<ACell> typedRootHarnessTools,
+			RequestContext harness, ContextAssembler.Spec spec, AVector<ACell> typedRootHarnessTools,
 			long toolCallTimeoutMs, AMap<AString, ACell> outerLoads, TaskTools.Tasks tasks) {
 		/** The config the root frame's calls carry. */
 		AMap<AString, ACell> config() {
@@ -348,7 +350,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		rootFrames = rootFrames.assoc(0, observedRoot);
 		spec = spec.withFrames(rootFrames);
 		Cycle cycle = new Cycle(model, fixed.toolIndex(),
-			capsCtx, spec, typedTools, toolCallTimeoutMs, outerLoads, taskTools);
+			ctx, spec, typedTools, toolCallTimeoutMs, outerLoads, taskTools);
 		AVector<ACell> entries = Vectors.empty();
 		if (profile.toolCalling()) {
 			entries = (AVector<ACell>) ToolPalette.provenance(TaskTools.DEFINITIONS, "harness")
@@ -617,7 +619,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared
 		// with subgoal recursion.
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
-		Cycle cycle = new Cycle(model, fixed.toolIndex(), capsCtx, cycleSpec,
+		Cycle cycle = new Cycle(model, fixed.toolIndex(), ctx, cycleSpec,
 			typedHarnessTools, toolCallTimeoutMs, outerLoads,
 			new TaskTools.Tasks(engine, capsCtx, tasks, toolCallTimeoutMs, false));
 
@@ -831,7 +833,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	FrameResult runFrame(Job job, FrameStore store, int frameIndex,
 			AVector<ACell> baseTools, Cycle cycle) {
 		AMap<AString, ACell> config = cycle.config();
-		RequestContext ctx = cycle.ctx();
+		RequestContext harness = cycle.harness();
 		ContextAssembler.Spec cycleSpec = cycle.spec();
 		AVector<ACell> typedRootHarnessTools = cycle.typedRootHarnessTools();
 
@@ -904,7 +906,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (inference == null) return abortedResult(store);
 			ContextAssembler.Prompt prompt = ContextAssembler.assemble(inference);
 
-			ACell assistant = invokeLevel3(frameModel, prompt, ctx);
+			// The model call is the harness's, not the agent's (UCAN.md §5.4).
+			ACell assistant = invokeLevel3(frameModel, prompt, harness);
 			if (isLengthLimited(assistant)) {
 				if (retriedAfterTruncation) {
 					log.warn("Frame[{}] response reached its output token limit again — failing the frame",

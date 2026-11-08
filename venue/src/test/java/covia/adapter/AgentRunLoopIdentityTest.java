@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -77,14 +78,18 @@ public class AgentRunLoopIdentityTest {
 		User user = engine.getVenueState().users().ensure(owner);
 		SecretStore.Keys encKey = SecretStore.keys(engine.getKeyPair());
 		user.secrets().store(secretName, secretValue, encKey);
+		queueMessage(owner, name);
+		return agentId;
+	}
 
-		AgentState agent = user.agent(name);
+	/** Queues a message for agent {@code name} of {@code owner}, so its loop fires. */
+	private void queueMessage(AString owner, String name) {
+		AgentState agent = engine.getVenueState().users().ensure(owner).agent(name);
 		Blob sid = Blob.fromHex("12340001123400011234000112340001");
 		agent.ensureSession(sid, owner);
 		agent.appendSessionPending(sid, Maps.of(
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.MESSAGE, Maps.of("content", "hi")));
-		return agentId;
 	}
 
 	private AgentAdapter adapter() {
@@ -107,6 +112,39 @@ public class AgentRunLoopIdentityTest {
 		assertNull(seen.getCaps(),   "run context must carry no caps");
 		assertEquals("alice-secret", engine.resolveSecret("RUNLOOP_KEY", seen),
 			"owner-scoped secret must resolve under the run-loop context");
+	}
+
+	/**
+	 * The transition operation is a harness step: it runs unrestricted though
+	 * the agent has caps, and the caps bound what it switches to the agent's
+	 * own context ({@link Engine#stepContext}, UCAN.md §5.4).
+	 */
+	@Test
+	public void testATransitionRunsAsTheHarnessAndSwitchesToTheAgentsCaps() {
+		AString agentId = Strings.create("capped-harness");
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/capturectx",
+					"caps", Vectors.of(Maps.of(
+						"with", Strings.create("w/public/"),
+						"can", Capability.CRUD_READ)))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		queueMessage(ALICE_DID, "capped-harness");
+		adapter().wakeAgent(ALICE_DID, agentId, true).join();
+
+		RequestContext harness = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
+		assertNotNull(harness, "transition must have executed");
+		AString publicNote = Strings.create("w/public/note");
+		AString privateNote = Strings.create("w/private-note");
+		assertTrue(engine.authorityCovers(harness, privateNote, Capability.CRUD_READ),
+			"the transition itself is not bounded by the agent's caps");
+
+		RequestContext agent = engine.stepContext(harness, agentId);
+		assertTrue(engine.authorityCovers(agent, publicNote, Capability.CRUD_READ),
+			"switched to the agent, it reads what its caps cover");
+		assertFalse(engine.authorityCovers(agent, privateNote, Capability.CRUD_READ),
+			"and nothing else");
 	}
 
 	@Test

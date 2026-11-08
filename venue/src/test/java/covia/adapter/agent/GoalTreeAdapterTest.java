@@ -70,6 +70,31 @@ public class GoalTreeAdapterTest {
 		assertEquals("goaltree", adapter.getName());
 	}
 
+	/**
+	 * The model call is the harness's, not the agent's: an agent whose caps hold
+	 * no invoke grant for its model still gets its answer, as an llmagent one does
+	 * ({@code LLMAgentAdapterTest.testCappedAgentCanCompleteTask}).
+	 */
+	@Test
+	public void testCappedAgentCallsItsModelAsTheHarness() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "capped-goal-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/goaltree/chat",
+					"llmOperation", "v/test/ops/llm",
+					"caps", Vectors.of(Maps.of(
+						"with", Strings.create("w/allowed/"),
+						"can", Strings.create("crud/read"))))),
+			ALICE).awaitResult(5000);
+
+		Job task = engine.jobs().invokeOperation("v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "capped-goal-agent",
+				Fields.INPUT, Maps.of("task", "say hello")),
+			ALICE);
+		assertNotNull(task.awaitResult(10000), "the model answers the capped agent's task");
+		assertEquals(Status.COMPLETE, task.getStatus());
+	}
+
 	@Test
 	public void testOperationResolvable() {
 		// goaltree:chat should resolve to an operation

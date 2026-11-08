@@ -147,6 +147,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Two concurrent `user:create` calls for one username with different `authenticationKeys` cannot both install them.
 - A request's session, an A2A agent's asset and a cycle's token usage are added to the job record without losing a change made alongside.
 - A goal-tree subgoal whose model call fails reaches its parent as a failed subgoal (`{status: "failed", result}`), and a failed child leaves the frame stack.
+- A `goaltree:chat` agent with `config.caps` calls its model without an invoke grant for it, as an `llmagent:chat` agent does: the model call is the harness's, not the agent's.
 - `agent:context` and `agent:step` on an `llmagent` agent show a task's request turn, as the live cycle sends it.
 - `agent:step` answers `compact` with the turn count a live cycle gives.
 - Cancel, pause, resume and messages by id reach a just-submitted job.

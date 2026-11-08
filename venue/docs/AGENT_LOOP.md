@@ -574,6 +574,10 @@ they write their turns into the session's frames live under the cycle's claim,
 and the run loop appends none of its own. Status, timeline, task settlement and
 scheduling remain framework-owned.
 
+**Authority.** The transition is a harness step and decides where the agent's
+caps apply; [UCAN.md §5.4](./UCAN.md) defines the boundary and where the LLM
+runtimes draw it.
+
 Pending outbound jobs are not declared in transition output. The field is a
 reserved framework surface; the built-in harnesses currently have no generic
 writer for it (§3.4.2).

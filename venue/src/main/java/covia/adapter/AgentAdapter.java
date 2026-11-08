@@ -1990,7 +1990,7 @@ public class AgentAdapter extends AAdapter {
 
 		java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
 		job.setCancelHook(() -> cancelled.set(true));
-		// Fresh agent authority, as in the run loop: caller proofs and
+		// The harness's own context, as in the run loop: caller proofs and
 		// session/task/cycle scopes must not leak into this independent run.
 		RequestContext queryCtx = query.target().executionContext().withCancellation(cancelled);
 		CompletableFuture<ACell> transition = engine.jobs().invokeInternal(
@@ -3892,7 +3892,10 @@ public class AgentAdapter extends AAdapter {
 		// (secrets /s/, workspace w/, job ownership, per-user cursors) resolves
 		// in the owner's namespace, deterministically (#91), while the caller
 		// identity is the agent's own sub-principal DID so what the agent did is
-		// attributable to the agent rather than to the human who owns it.
+		// attributable to the agent rather than to the human who owns it. It is
+		// the harness's context: the transition operation runs under it and
+		// switches the agent's acts to its caps itself (Engine.stepContext,
+		// UCAN.md §5.4).
 		final RequestContext agentCtx = RequestContext.ofAgent(ownerDID, agentId);
 		try {
 			if (!agent.tryRun()) {

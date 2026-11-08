@@ -552,10 +552,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	private ACell invokeLevel3(ModelSetup model, AMap<AString, ACell> l3Input,
 			AVector<ACell> messages, RequestContext ctx) {
 		AString llmOperation = model.operationRef();
-		// LLM invocation is framework infrastructure: the agent's caps gate
-		// what it can DO via tools, not the inference call itself. Trust is
-		// established by going through invokeInternal — the framework path —
-		// rather than the user-facing invokeOperation. Caps stay on ctx.
+		// The model call is the harness's, not the agent's: the owner chose the
+		// model in the agent's config, and the agent's caps bound what it does
+		// in its tool calls (UCAN.md §5.4). Each runtime passes its harness context.
 		// Park (cheaply, on a virtual thread) until the LLM op completes,
 		// bounded by llmTimeoutMs: a hung provider connection must fail the
 		// transition, not stall the agent run loop indefinitely. On timeout the

@@ -485,11 +485,9 @@ public class ContextLoader {
 				throw new InvalidInputException(
 					"Context operation has non-boolean operation.readOnly: " + op);
 			}
-			// Context loading is framework infrastructure: entries are
-			// declared in the agent's config (visible to the caller before
-			// invocation) and run pre-transition under the caller's identity.
-			// invokeInternal is the framework dispatch path — no cap check
-			// applied. Caps stay on ctx for audit.
+			// The operation runs under ctx, with its adapter's own checks: for
+			// an agent's pinned context and loads that is the agent's context,
+			// so its caps apply (UCAN.md §5.4).
 			ACell result = await(engine.jobs().invokeInternal(asset.meta(), input, ctx.withOp(op)), op);
 			if (result == null) {
 				if (required) throw new NotFoundException("Required context operation returned null: " + op, op.toString());

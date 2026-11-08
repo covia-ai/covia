@@ -377,8 +377,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withLateToolResults(profile.lateToolResults());
 		FrameTools frameTools = frameTools(spec, tasks, configLoads, fixed, store, false);
 
-		// ctx (uncapped) makes the provider call; the agent's authority flows
-		// through frameTools for tool dispatch.
+		// The model call is the harness's, under ctx; the agent acts under its
+		// caps in each tool call, through frameTools (UCAN.md §5.4).
 		AVector<ACell> newMessages = invokeWithToolLoop(model, spec, fixedTools, ctx, frameTools);
 
 		// Filter out empty assistant messages (e.g. when LLM produces only <think> tags)
