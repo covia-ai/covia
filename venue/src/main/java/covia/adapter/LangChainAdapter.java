@@ -151,10 +151,9 @@ public class LangChainAdapter extends AAdapter {
 	static final AString ROLE_TOOL      = Strings.intern("tool");
 
 	// ========== Provider failures (ERRORS.md) ==========
-	// Each names the provider and model and what failed, never the provider's
-	// own words: a model reads these, and a provider's text quoted here would
-	// reach it as the venue's statement. The %s after the model takes httpNote
-	// or refusalNote: the status, and on a refusal the provider's code if it has one.
+	// Each names the provider and model and what failed. Where the provider
+	// answered, the %s after the model takes providerNote: its status and what
+	// it said. A refused key quotes nothing, since that text is about the key.
 
 	/** The provider refused the venue's own API key: the operator's to fix. */
 	public static final String OPERATOR_KEY_REFUSED =
@@ -162,8 +161,12 @@ public class LangChainAdapter extends AAdapter {
 	/** The provider refused the API key the caller supplied, as input or from its own secrets. */
 	public static final String CALLER_KEY_REFUSED =
 		"Model provider %s refused the API key supplied for model %s; check the apiKey input or the secret it comes from";
+	/** The most of a provider's own text a message carries. */
+	static final int MAX_PROVIDER_TEXT = 500;
+	/** Stands in for the key the venue sent, should a provider's text echo it. */
+	static final String KEY_REMOVED = "[API key]";
 	public static final String PROVIDER_RATE_LIMITED =
-		"Model provider %s rate-limited the request for model %s; retry later";
+		"Model provider %s rate-limited the request for model %s%s; retry later";
 	public static final String PROVIDER_TIMED_OUT =
 		"Model provider %s did not answer in time for model %s; retry later";
 	public static final String PROVIDER_FAILED =
@@ -522,7 +525,7 @@ public class LangChainAdapter extends AAdapter {
 					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools,
 						responseFormatCell, cacheMarks);
 				} catch (RuntimeException e) {
-					throw providerFailure(provider, resolvedModelName, key.operators(), ollamaUrl, e);
+					throw providerFailure(provider, resolvedModelName, key, ollamaUrl, e);
 				}
 				if (legacyOutput) {
 					// Wrap assistant message as {response: content}
@@ -651,9 +654,9 @@ public class LangChainAdapter extends AAdapter {
 	/**
 	 * The failure a provider call reports, typed for what went wrong
 	 * (ERRORS.md): a langchain4j or connection failure becomes the Covia type,
-	 * named by provider and model, never in the provider's words. The
-	 * provider's text is read only to recognise a context-size refusal.
-	 * Anything else, a cancellation included, passes on unchanged.
+	 * named by provider and model, with what the provider said where it
+	 * answered ({@link #providerNote}). Anything else, a cancellation
+	 * included, passes on unchanged.
 	 *
 	 * <p>The type says what failed. A refused key or a missing model is the
 	 * setup the call runs under, so {@code ConfigurationException}; a provider
@@ -663,10 +666,11 @@ public class LangChainAdapter extends AAdapter {
 	 * {@code NotSupportedException}. The agent harness relies on this split
 	 * (AGENT_LOOP.md §3.4).</p>
 	 *
-	 * @param operatorKey whether the API key sent was the operator's rather than the caller's
+	 * @param key the API key sent: whose it is says who can fix a refused key,
+	 *        and its value is removed from anything quoted
 	 * @param ollamaUrl the Ollama base URL called, or null for a hosted provider
 	 */
-	static RuntimeException providerFailure(String provider, String model, boolean operatorKey,
+	static RuntimeException providerFailure(String provider, String model, ApiKey key,
 			String ollamaUrl, RuntimeException e) {
 		if (e instanceof CoviaException || causedBy(e, InterruptedException.class)) return e;
 		Integer status = httpStatus(e);
@@ -678,14 +682,14 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.AuthenticationException) {
 			// langchain4j maps 401 and 403 alike; only a 401 says the key was not accepted.
 			failure = new ConfigurationException(Integer.valueOf(403).equals(status)
-				? REQUEST_REFUSED.formatted(provider, model, refusalNote(status, e))
-				: (operatorKey ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED).formatted(provider, model));
+				? REQUEST_REFUSED.formatted(provider, model, providerNote(status, key, e))
+				: (key.operators() ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED).formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
-			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model));
+			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model, providerNote(status, key, e)));
 		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
 			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
-			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, httpNote(status)));
+			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, providerNote(status, key, e)));
 		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
 			failure = new ConfigurationException(MODEL_NOT_FOUND.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
@@ -695,11 +699,11 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
 			failure = mentionsContextSize(e)
 				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model))
-				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, refusalNote(status, e)));
+				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, providerNote(status, key, e)));
 		} else if (e instanceof dev.langchain4j.exception.JsonReadException) {
 			failure = new ResponseException(MALFORMED_RESPONSE.formatted(provider, model));
 		} else if (status != null) {
-			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, refusalNote(status, e)));
+			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, providerNote(status, key, e)));
 		} else if (e instanceof dev.langchain4j.exception.UnresolvedModelServerException
 				|| causedBy(e, java.io.IOException.class)
 				|| causedBy(e, java.nio.channels.UnresolvedAddressException.class)) {
@@ -717,36 +721,56 @@ public class LangChainAdapter extends AAdapter {
 		return (status != null) ? " (HTTP " + status + ")" : "";
 	}
 
-	/** A refusal's status and any code of the provider's fit to quote: " (HTTP 403, budget_exceeded)". */
-	static String refusalNote(Integer status, Throwable e) {
-		String code = providerCode(e);
-		return (status != null && code != null) ? " (HTTP " + status + ", " + code + ")" : httpNote(status);
+	/**
+	 * The status and what the provider said, for a message:
+	 * " (HTTP 403, permission_error: This key may not use that model)". The code
+	 * is {@code error} when that reads as an identifier, else {@code code} or
+	 * {@code type}, from the {@code error} object or the answer itself. The text
+	 * is {@code message} beside it, an {@code error} that is free text, or a
+	 * body that is not JSON. The key the venue sent is removed first.
+	 */
+	static String providerNote(Integer status, ApiKey key, Throwable e) {
+		var http = httpFailure(e);
+		if (http == null) return httpNote(status);
+		String body = http.getMessage();
+		if (body != null && key.value() != null && !key.value().isEmpty()) {
+			body = body.replace(key.value(), KEY_REMOVED);
+		}
+		String code = null;
+		String text = null;
+		AMap<AString, ACell> answer = jsonObject(body);
+		if (answer == null) {
+			if (body != null && !body.stripLeading().startsWith("<")) text = body;   // not a markup error page
+		} else if (answer.get(Fields.ERROR) instanceof AString said) {
+			code = identifier(said.toString());
+			if (code == null) text = said.toString();
+		} else {
+			AMap<AString, ACell> detail = (answer.get(Fields.ERROR) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : answer;
+			AString named = RT.ensureString(detail.get(K_CODE));
+			if (named == null) named = RT.ensureString(detail.get(K_TYPE));
+			if (named != null) code = identifier(named.toString());
+			AString said = RT.ensureString(detail.get(Fields.MESSAGE));
+			if (said != null) text = said.toString();
+		}
+		text = providerText(text);
+		if (code == null && text == null) return httpNote(status);
+		return " (HTTP " + status + ((code != null) ? ", " + code : "") + ((text != null) ? ": " + text : "") + ")";
 	}
 
-	/**
-	 * The provider's own code from the body of its answer, or null when it has
-	 * none that reads as an identifier: {@code error} when that is a string,
-	 * else {@code error.code} or {@code error.type}.
-	 */
-	private static String providerCode(Throwable e) {
-		var http = httpFailure(e);
-		if (http == null) return null;
-		ACell answer;
+	/** {@code text} on one line and bounded, or null when there is nothing to say. */
+	private static String providerText(String text) {
+		if (text == null) return null;
+		String line = text.strip().replaceAll("\\s+", " ");
+		if (line.isEmpty()) return null;
+		return (line.length() > MAX_PROVIDER_TEXT) ? line.substring(0, MAX_PROVIDER_TEXT) + "..." : line;
+	}
+
+	private static AMap<AString, ACell> jsonObject(String text) {
 		try {
-			answer = JSON.parse(http.getMessage());
+			return (JSON.parse(text) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : null;
 		} catch (RuntimeException notJson) {
 			return null;
 		}
-		AMap<AString, ACell> body = RT.ensureMap(answer);
-		if (body == null) return null;
-		ACell error = body.get(Fields.ERROR);
-		AString code = RT.ensureString(error);
-		AMap<AString, ACell> detail = RT.ensureMap(error);
-		if (detail != null) {
-			code = RT.ensureString(detail.get(K_CODE));
-			if (code == null) code = RT.ensureString(detail.get(K_TYPE));
-		}
-		return (code != null) ? identifier(code.toString()) : null;
 	}
 
 	/** The status of the HTTP answer behind a langchain4j failure, or null when there was none. */

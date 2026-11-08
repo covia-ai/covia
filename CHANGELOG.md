@@ -150,7 +150,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
-- A model provider's HTTP 403 no longer reports a refused API key, and refused requests quote the provider's error code.
+- A model provider's HTTP 403 no longer reports a refused API key, and model call failures carry the provider's error code and message.
 - A HITL request fails with a message saying why when the person asked loses their account, and the agent that asked is told (#674).
 - A HITL grant reaches the audit log only once the answer carrying it commits (#674).
 - A request, chat or message sent while its agent is being deleted fails rather than waiting for ever, as does a chat on a session being deleted.

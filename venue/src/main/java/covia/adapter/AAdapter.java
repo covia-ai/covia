@@ -1249,7 +1249,7 @@ public abstract class AAdapter {
 
 	/**
 	 * A remote's error code or request id if it reads as an identifier, else
-	 * null: a message may quote that, never a remote's free text (ERRORS.md).
+	 * null (ERRORS.md).
 	 */
 	public static String identifier(String value) {
 		return (value != null && IDENTIFIER.matcher(value).matches()) ? value : null;
