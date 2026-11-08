@@ -93,8 +93,8 @@ EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
   `[ERROR]` lines: a test that provokes an ERROR log wraps it in
   `TestLogs.quiet` in an `@Isolated` class.
 - **Lattice reads are consistent:** once a CAS commits, every thread reads the
-  write. A flaky agent test is a timing assumption, a same-tick LWW tie or a
-  lifecycle race; never add a read-after-write retry.
+  write. A flaky agent test is a timing assumption or a lifecycle race; never
+  add a read-after-write retry.
 - **CHANGELOG:** one short headline per change, optionally with `(#issue)`.
   List what operators and API users see (operations, abilities, config keys,
   REST, MCP and A2A behaviour, modules), never Java API changes.

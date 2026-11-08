@@ -5069,8 +5069,9 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Picks the oldest ready task ({@link AgentState#isTaskReady}) by
-	 * {@code created} timestamp. Index iteration order is hash-based, so we
-	 * must scan to find FIFO. Returns null if no task is ready.
+	 * {@code created} timestamp. Tasks created at the same time go in task ID
+	 * order, which is submission order: the scan meets them in key order and
+	 * keeps the first. Returns null if no task is ready.
 	 */
 	@SuppressWarnings("unchecked")
 	private static Map.Entry<Blob, ACell> pickOldestReadyTask(AgentState agent, Index<Blob, ACell> tasks) {
