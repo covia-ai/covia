@@ -181,8 +181,8 @@ file when you repackage the jar.
 
 ## User data
 
-Find a user with `engine.getVenueState().users().ensure(did)` or `get(did)`.
-These components check no authority: they act for whatever code calls them,
+Find a user with `engine.getVenueState().users().ensure(did)`, or with
+`user(did)`, which is null for a user who is unknown or deleted. These components check no authority: they act for whatever code calls them,
 so the application decides who reaches them.
 
 - **Workspace.** `user.workspace()` is the user's workspace (`w`). Its
