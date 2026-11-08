@@ -86,6 +86,7 @@ import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
+import covia.grid.Attribution;
 import covia.grid.Grid;
 import covia.grid.Operation;
 import covia.grid.Venue;
@@ -3275,6 +3276,9 @@ public class Engine {
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now,
 			AString destination) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return proofsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now, destination);
+		}
 		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now, destination);
 	}
 
@@ -3287,6 +3291,9 @@ public class Engine {
 	public boolean proofsStructurallyCover(RequestContext ctx, AString resource,
 			AString ability, long now) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return proofsStructurallyCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now);
+		}
 		return covia.lattice.CapabilityChecker.proofsStructurallyCover(
 			ctx.getProofs(), ctx.getCallerDID(), rootAuthorityPolicy(),
 			resource, ability, now);
@@ -3710,6 +3717,9 @@ public class Engine {
 	 *  {@code nb.url} caveat, in the public scope or a presented proof, must cover it. */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null || resource == null || ability == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return crossUserAllows(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
 		// The venue's explicitly addressed asset catalog is public. This is NOT
 		// true of another user's /a/: knowing a hash is not authorisation to read
 		// someone else's asset. On user-facing APIs a bare hash names the caller's
@@ -3844,6 +3854,10 @@ public class Engine {
 	 *  (a secret into an outbound request): a grant's {@code nb.url} caveat must
 	 *  cover it. */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			requireStanding(ctx);
+			return requireLocalAccess(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
 		if (ownedByCaller(ctx, resource)) {
 			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
 			AString owner = ownerOf(resource);
@@ -3915,6 +3929,10 @@ public class Engine {
 	 */
 	public void requireGrantable(RequestContext ctx, AString namespace, AString resource, AString can,
 			Long exp, AString destination) {
+		if (ctx.hasSeparateAuthority()) {
+			requireGrantable(ctx.authorityContext(), namespace, ctx.inNamespace(resource), can, exp, destination);
+			return;
+		}
 		AString grant = Strings.create("grant/" + can);
 		AString owner = isHosted(resource) ? ownerOf(resource) : namespace;
 		// Presented grants are checked against the whole namespace for a match-any resource.
@@ -4129,6 +4147,97 @@ public class Engine {
 	}
 
 	/**
+	 * What a stored context keeps of {@code ctx}'s separate authority
+	 * ({@link RequestContext#withAuthorityOf}), beside its caller, owner and
+	 * proofs, so that work continuing later acts with the same authority: its
+	 * principal as {@link Fields#CALLER}, namespace as {@link Fields#OWNER} and
+	 * presented {@link Fields#PROOFS}. Null when it acts with its caller's own.
+	 */
+	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
+		if (ctx == null || !ctx.hasSeparateAuthority()) return null;
+		RequestContext authority = ctx.authorityContext();
+		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
+		AVector<ACell> proofs = authority.getProofs();
+		return (proofs == null || proofs.isEmpty()) ? kept : kept.assoc(Fields.PROOFS, proofs);
+	}
+
+	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
+	public static final String NOT_CONTROLLERS = "Changing %s needs the authority of its controller, %s";
+
+	/** Why a request may not make a principal an agent's controller; the principal follows. */
+	public static final String CONTROLLER_NOT_HELD = "Cannot make %s an agent's controller: the request does not hold its authority";
+
+	/**
+	 * Whether {@code ctx} acts with {@code principal}'s whole authority, as
+	 * making it an agent's controller, or changing an agent it controls, needs.
+	 * The authority the request acts with ({@link RequestContext#authorityContext})
+	 * must be that principal, an identity it signs in as, or its owner if it is
+	 * an agent; acting in a namespace that is root of it counts only with an
+	 * unrestricted scope. So a user holds its own and its agents' authority, an
+	 * agent its own, and a capped agent not its owner's or a sibling's. A
+	 * {@code user/sudo} delegate, whose scope is its presented grants, holds no
+	 * other principal's.
+	 */
+	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
+		if (ctx == null || principal == null) return false;
+		RequestContext authority = ctx.authorityContext();
+		if (isRootOf(authority.getCallerDID(), principal)) return true;
+		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
+	}
+
+	/**
+	 * The principal whose authority {@code ctx} acts with, which an agent it
+	 * creates or forks takes for its controller: the authority's own principal
+	 * when it acts in its own namespace or is an agent of it, and otherwise the
+	 * namespace it acts for, as a {@code user/sudo} delegate acts for its target.
+	 */
+	public static AString actingPrincipal(RequestContext ctx) {
+		RequestContext authority = ctx.authorityContext();
+		AString caller = authority.getCallerDID();
+		AString user = authority.getUserDID();
+		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
+		return user;
+	}
+
+	/**
+	 * The context agent {@code agentId}'s harness runs under: the agent in its
+	 * owner's namespace, attributed to the agent, acting with its controller's
+	 * authority as it stands now. For an agent its owner controls that is the
+	 * agent with its owner's whole authority; for any other controller the
+	 * agent acts with that controller's authority
+	 * ({@link RequestContext#withAuthorityOf}), an agent controller's read from
+	 * its caps at each check and none once it is gone.
+	 *
+	 * @throws AuthException when the controller could not act now
+	 */
+	public RequestContext harnessContext(AString owner, AString agentId) {
+		RequestContext harness = RequestContext.ofAgent(owner, agentId);
+		AgentState agent = getAgent(owner, agentId);
+		AString controller = (agent == null) ? null : agent.getController();
+		if (controller == null || controller.equals(owner)) return harness;
+		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
+			? covia.grid.Principals.userOf(controller) : controller;
+		return harness.withAuthorityOf(context(controllerOwner, controller));
+	}
+
+	/**
+	 * As {@link #context(AString, AString, AVector)}, acting with the authority
+	 * {@link #keptAuthority} kept, if any, rebuilt as it would act now: an
+	 * authority that could not act now fails as its own request would.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
+	 *         the caller or the kept authority
+	 */
+	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
+			AMap<AString, ACell> authority) {
+		RequestContext ctx = context(owner, principal, proofs);
+		if (authority == null) return ctx;
+		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
+			RT.ensureVector(authority.get(Fields.PROOFS)));
+		return ctx.withAuthorityOf(held);
+	}
+
+	/**
 	 * The context agent {@code agentId}'s step runs under: the agent itself as it
 	 * stands now ({@link #context(AString, AString)}), carrying on {@code ctx}'s
 	 * execution. A step runs only for an agent that exists, and only the agent's
@@ -4237,6 +4346,9 @@ public class Engine {
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
 		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination);
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
 	}
@@ -4271,6 +4383,10 @@ public class Engine {
 	/** As above for a use that sends a value to {@code destination}. */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
 		requireStanding(ctx);
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			requireAuthority(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+			return;
+		}
 		if (authorityCovers(ctx, resource, ability, destination)) return;
 		if (ctx != null && isAnothers(ctx, resource)) throw anothersDenial(ctx, resource, ability);
 		throw scopeDenial(ctx, resource, ability, destination);
@@ -4299,6 +4415,11 @@ public class Engine {
 	 */
 	public void requireInvoke(RequestContext ctx, AString operation) {
 		requireStanding(ctx);
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			// A reference, checked as given against the authority's scope.
+			requireInvoke(ctx.authorityContext(), operation);
+			return;
+		}
 		if (ctx != null && scopeOrHeldCovers(ctx, operation, Abilities.INVOKE, null)) return;
 		throw scopeDenial(ctx, operation, Abilities.INVOKE, null);
 	}
@@ -4323,6 +4444,10 @@ public class Engine {
 	public void requireStanding(RequestContext ctx) {
 		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
 		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
+		// A separate authority acts only while its own account stands too.
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			venueState.users().requireNotDeleted(ctx.authorityContext().getUserDID());
+		}
 	}
 
 	/**
@@ -4573,7 +4698,7 @@ public class Engine {
 		String name = secretRef.startsWith("did:")
 			? secretRef.substring(secretRef.indexOf("/s/") + 3) : secretName(secretRef);
 		if (name.isEmpty() || name.indexOf('/') >= 0) return null;   // one secret name, as secret:set requires
-		if (!isOwnSecret(owner, ctx)) {
+		if (!isOwnSecret(owner, ctx.authorityContext())) {
 			requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
 				destination != null ? Strings.create(destination) : null);
 		}
@@ -4591,7 +4716,7 @@ public class Engine {
 	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
 		AString owner = secretOwner(secretRef, ctx.getUserDID());
-		return owner != null && isOwnSecret(owner, ctx);
+		return owner != null && isOwnSecret(owner, ctx.authorityContext());
 	}
 
 	/**

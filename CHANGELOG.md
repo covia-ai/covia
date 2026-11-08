@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Agents have a `controller`, the principal whose authority their harness acts with: whoever creates or forks the agent, or one it names that the creator holds the authority of. Changing an agent someone else controls needs that controller's authority; `agent:info` and `agent:list` show it.
 - `user:info` and `user:list` report each user's storage: workspace and DLFS drives, in bytes.
 - `agent:sessionRead` reads the turns behind the caller's own compaction summaries (#597).
 - Agent `accepts: "anyone"` admits every caller, anonymous ones included.
@@ -37,7 +38,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `ucan:issue` hands on only what its caller could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry.
 - An agent's `caps` and `accepts` are no longer limited to what their author could grant: whoever may create, update or fork the agent sets them, and an agent may create sub-agents with wider caps than its own.
 - A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
-- The context an agent's config names (`config.context`, `config.loads` and the skills index) is assembled by the harness with its owner's authority, as the system prompt already was; the agent's tool calls, and the loads it or a caller adds, stay under its `caps`. Whoever may create or configure an owner's agents reaches whatever that owner can.
+- The context an agent's config names (`config.context`, `config.loads` and the skills index) is assembled by the harness with its controller's authority, as the system prompt already was; the agent's tool calls, and the loads it or a caller adds, stay under its `caps`. Whoever may create or configure an agent its owner controls reaches whatever that owner can.
 - `auth:identity-token` takes any `lifetime` the caller chooses, no longer capped at an hour.
 - `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
@@ -202,6 +203,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A public agent's `a2a.caps` becomes `accepts: "anyone"`; beside another `accepts` it is refused.
 - A delegate that acts for a user through `user:sudo` needs that user's `secret/use` grant for each secret it uses.
 - Grant `agent/create` or `agent/write` on a user's agents, to a person or an agent, only where you would grant that user's own authority.
+- An agent created by another agent, or by a delegate in another user's namespace without `user:sudo`, is controlled by its creator: its harness acts with the creator's authority, not the owner's, so a creating agent's caps must cover `invoke` on the new agent's transition and model operations.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
 - An open chat bot's agent needs `accepts: "anyone"`, and the public scope `invoke` on

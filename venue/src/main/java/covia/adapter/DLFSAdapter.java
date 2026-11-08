@@ -327,7 +327,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	private void authoriseNewDrive(RequestContext ctx, DriveTarget target) {
 		if (target.crossUser()) {
 			String resource = dlfsResource(target.ownerDID(), null, null);
-			if (!engine.crossUserAllows(ctx, Strings.create(resource), Capability.CRUD_WRITE)) {
+			if (!engine.authorityCovers(ctx, Strings.create(resource), Capability.CRUD_WRITE)) {
 				throw new AuthException(
 					"Access denied: no " + Capability.CRUD_WRITE + " capability for " + resource);
 			}
@@ -618,7 +618,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (isCrossUser(ctx, fr)) {
 			String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
 				Strings.create(fr.path()));
-			boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
+			boolean ok = engine.authorityCovers(ctx, Strings.create(resource), ability);
 			if (!ok) throw new AuthException(
 				"Access denied: no " + ability + " capability for " + resource);
 			return RequestContext.of(fr.ownerDID());
@@ -752,16 +752,15 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	}
 
 	/**
-	 * Authorises a cross-user DLFS access: the caller must present UCAN proofs
-	 * covering the owner-scoped resource {@code <ownerDID>/dlfs/<drive>/<path>}
-	 * for the ability the op requires ({@code crud/read} for reads,
-	 * {@code crud/write} for writes, {@code crud/delete} for deletes). Reads,
-	 * writes and deletes are all permitted when the proof authorises them — a
-	 * mutation is applied to the owner's drive under the owner's key (custodial;
-	 * caller identity is recorded on the job). Mirrors
-	 * {@code CoviaAdapter.resolveDIDURL} for {@code /w/} cross-user access — the
-	 * shared {@link CapabilityChecker#proofsCover} check is the single grant
-	 * gate. Signatures/chains were already verified at transport ingress.
+	 * Authorises access to a drive outside the request's namespace: the
+	 * request's authority must cover the owner-scoped resource
+	 * {@code <ownerDID>/dlfs/<drive>/<path>} for the ability the op requires
+	 * ({@code crud/read} for reads, {@code crud/write} for writes,
+	 * {@code crud/delete} for deletes) — a presented grant for another user's
+	 * drive, or its own scope where the drive is the authority's own. A mutation
+	 * is applied to the owner's drive under the owner's key (custodial; caller
+	 * identity is recorded on the job). Mirrors {@code CoviaAdapter.resolveDIDURL}
+	 * for {@code /w/}: Engine's authority seam is the single gate.
 	 */
 	private void authoriseCrossUser(RequestContext ctx, String subOp, DriveTarget target,
 			AMap<AString, ACell> input) {
@@ -772,7 +771,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 		AString pathCell = RT.ensureString(RT.getIn(input, FIELD_PATH));
 		String resource = opResource(target.ownerDID(), subOp, Strings.create(target.driveName()), pathCell);
-		boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
+		boolean ok = engine.authorityCovers(ctx, Strings.create(resource), ability);
 		if (!ok) throw new AuthException(
 			"Access denied: no " + ability + " capability for " + resource);
 	}

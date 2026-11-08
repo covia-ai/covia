@@ -833,7 +833,7 @@ assemble(Spec)                                 →  Prompt
 
 - **Authority** first: the context the config names (the system prompt,
   `config.context`, `config.loads`, the skills index) is assembled by the
-  harness, with its owner's authority; the agent's tool calls, and the loads it
+  harness, with its controller's authority; the agent's tool calls, and the loads it
   makes or a caller adds, read under its capability-narrowed context
   ([UCAN.md §5.4](./UCAN.md)).
 - **Snapshot** fixes the declarative and effective config, session/frame state

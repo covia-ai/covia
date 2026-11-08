@@ -68,7 +68,7 @@ public class AccessControl {
 		AString userDID = ctx.getUserDID();
 		if (userDID == null) return false;            // anonymous
 		if (!owner.equals(userDID)) return false;
-		if (ctx.getCaps() == null) return true;
+		if (isOwnerOutright(ctx)) return true;
 		if (madeItFor(ctx, jobData)) return true;
 		if (!(jobData.get(Fields.ID) instanceof Blob id)) return false;
 		return engine.authorityCovers(ctx, Strings.create(userDID + "/j/" + id.toHexString()), ability);
@@ -92,8 +92,19 @@ public class AccessControl {
 		if (event == null) return false;
 		AString userDID = ctx.getUserDID();
 		if (userDID == null || !userDID.equals(Attribution.owner(event))) return false;
-		if (ctx.getCaps() == null) return true;
+		if (isOwnerOutright(ctx)) return true;
 		return madeItFor(ctx, event);
+	}
+
+	/**
+	 * Whether the request acts with its namespace owner's whole authority: the
+	 * authority it acts with ({@link RequestContext#authorityContext}) is that
+	 * owner's, unscoped. A request acting with a separate authority is the owner
+	 * outright only when that authority is.
+	 */
+	private static boolean isOwnerOutright(RequestContext ctx) {
+		RequestContext authority = ctx.authorityContext();
+		return authority.getCaps() == null && ctx.getUserDID().equals(authority.getUserDID());
 	}
 
 	/**

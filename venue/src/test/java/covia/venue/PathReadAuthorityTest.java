@@ -280,31 +280,41 @@ public class PathReadAuthorityTest {
 
 	/**
 	 * Context assembly is the harness's: the context an agent's config names
-	 * shows what its owner can read, whatever the agent's caps, since whoever
-	 * configures an agent acts with its owner's authority (UCAN.md §5.4).
+	 * shows what its controller can read, whatever the agent's own caps
+	 * (UCAN.md §5.4). An agent its owner created shows the owner's; one a capped
+	 * agent created shows only what that agent can read.
 	 */
 	@Test
 	public void testConfiguredContextIsAssembledByTheHarness() {
-		RequestContext parent = RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(Vectors.of(
-			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
-			Capability.create(Strings.create("g/"), Capability.CRUD_READ),
-			Capability.create(Strings.create("g/"), Strings.create("grant/crud/read")),
-			Maps.of(Capability.CAN, Strings.create("invoke"))));
-		Job pinned = createAgent("pinned", Maps.of(
+		AMap<AString, ACell> pinning = Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
 			"caps", Vectors.of(Capability.create(Strings.create("g/"), Capability.CRUD_READ)),
-			"context", Vectors.of(Strings.create("w/cfg"))), parent);
+			"context", Vectors.of(Strings.create("w/cfg")));
+		Job pinned = createAgent("pinned", pinning, ALICE);
 		assertEquals(Status.COMPLETE, pinned.getStatus(), pinned.getErrorMessage());
-		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned"), parent)).contains(SECRET),
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned"), ALICE)).contains(SECRET),
 			"a pinned entry outside the agent's caps is assembled by the harness");
 
 		Job loaded = createAgent("loaded", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
 			"caps", Vectors.of(Capability.create(Strings.create("g/"), Capability.CRUD_READ)),
-			"loads", Maps.of("w/cfg", Maps.empty())), parent);
+			"loads", Maps.of("w/cfg", Maps.empty())), ALICE);
 		assertEquals(Status.COMPLETE, loaded.getStatus(), loaded.getErrorMessage());
-		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "loaded"), parent)).contains(SECRET),
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "loaded"), ALICE)).contains(SECRET),
 			"so is a configured load");
+
+		Job parentAgent = createAgent("parent", Maps.of(
+			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
+			"caps", Vectors.of(
+				Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
+				Capability.create(Strings.create("g/"), Capability.CRUD_READ),
+				Maps.of(Capability.CAN, Strings.create("invoke")))), ALICE);
+		assertEquals(Status.COMPLETE, parentAgent.getStatus(), parentAgent.getErrorMessage());
+		RequestContext parent = engine.context(alice, covia.grid.Principals.agentDID(alice, Strings.create("parent")));
+		Job bounded = createAgent("bounded", pinning, parent);
+		assertEquals(Status.COMPLETE, bounded.getStatus(), bounded.getErrorMessage());
+		assertFalse(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "bounded"), ALICE)).contains(SECRET),
+			"the harness of an agent a capped agent controls reads only what that agent can");
 	}
 
 	@Test

@@ -934,26 +934,63 @@ That guard is pinned to identity. An agent with no `config.caps` holds a
 scope-based defence would therefore be absent on exactly the agent that most
 needs bounding.
 
-**Configuring an agent acts with its owner's authority.** The config chooses
-the agent's harness, its transition operation and the context it assembles,
-and the harness runs unrestricted in the owner's namespace (below). So whoever
-may create or configure an owner's agents (`agent/create`, `agent/write`),
-person or agent, reaches whatever the owner can: grant those abilities as you
-would the owner's own authority. The config's `caps` and `accepts` are part of
-it and take no check of their own. `caps` narrow what the agent does, an
-absent `caps` leaving it unrestricted; `accepts` admits others to talk to it
-(an older public `a2a.caps` reads as `accepts: "anyone"`). Configuring mints
-no token, and caps reach nothing of another identity's, which a request
-reaches only by what it holds (§5.3).
+**A request's caller, namespace and authority are separate.** Its caller is
+who acted, its namespace is where its names resolve (with the agent, session
+and task its work belongs to), and its authority is what it may do. A request
+usually acts with its caller's own authority in the namespace it acts in. An
+agent's harness acts with its controller's instead
+(`RequestContext.withAuthorityOf`): access checks decide under that authority,
+on names resolved in the agent's namespace (`RequestContext.authorityContext`,
+`inNamespace`). State a namespace keeps with no capability of its own, such as
+its Python instances, dictations and bot list, is reachable only by a request
+acting with that namespace's authority. A recorded job and a scheduled event
+keep a separate authority with the work and act with it again.
+
+**Each agent has a controller:** the principal whose authority its harness
+acts with. It is the agent's owner unless the record stores another
+(`controller`, shown by `agent:info` and `agent:list`). Whoever creates or
+forks an agent controls it, meaning the principal whose authority the request
+acts with (`Engine.actingPrincipal`): a user, an agent itself, or for a
+`user/sudo` delegate the user it acts for. An input's `controller` names
+another, whose authority the request must hold (`Engine.holdsAuthorityOf`): it
+is that principal or an identity it signs in as, is its owner if it is an
+agent, or acts unscoped in a namespace that is root of it. So a user may name
+itself or its agents, and a capped agent only itself. A `user/sudo` delegate,
+whose scope is its presented grants, holds no other principal's authority.
+
+Changing an agent (`agent:update`) needs `agent/write` on it, and for an agent
+another principal controls, that controller's authority too, checked against
+the record in the same atomic update; `agent:update` with `controller` hands
+the agent on under the same rule. Its owner may still delete it.
+`user:import` and `user:clone` keep a stored controller only when it is the
+target user or one of its agents; any other agent returns to its owner.
+
+**Configuring an agent acts with its controller's authority.** The config
+chooses the agent's harness, its transition operation and the context it
+assembles, and the harness acts with the controller's authority (below). So
+whoever may create or configure an agent its owner controls (`agent/create`,
+`agent/write`), person or agent, reaches whatever the owner can: grant those
+abilities as you would the owner's own authority. The config's `caps` and
+`accepts` are part of it and take no check of their own. `caps` narrow what
+the agent does, an absent `caps` leaving it unrestricted; `accepts` admits
+others to talk to it (an older public `a2a.caps` reads as
+`accepts: "anyone"`). Configuring mints no token, and caps reach nothing of
+another identity's, which a request reaches only by what it holds (§5.3).
 
 **The transition operation is the harness.** Each cycle, the run loop invokes
-the agent's transition operation (`config.operation`) as a harness step. The
-owner chose it when it configured the agent, so it needs no grant in the
-agent's caps, and it runs as the agent, unrestricted in its owner's namespace.
-The transition operation defines where the agent acts: it switches what it
-does on the agent's behalf to the agent's own context (`Engine.stepContext`),
-under its current `config.caps`. A transition operation that never switches is
-not bounded by the caps; that is the choice of whoever installs it.
+the agent's transition operation (`config.operation`) as a harness step, under
+the harness context (`Engine.harnessContext`): in the owner's namespace,
+attributed to the agent, and acting with its controller's authority as it
+stands that cycle. An agent controller's is read from its caps at each check,
+and is none once it is gone; a controller whose account is gone stops the
+run. The controller chose the operation when it configured the agent, so it
+needs no grant in the agent's caps. A controller agent's caps must cover
+`invoke` on the transition and model operations, or the agents it controls
+cannot run. The transition operation defines where the agent acts: it
+switches what it does on the agent's behalf to the agent's own context
+(`Engine.stepContext`), its owner's authority under its current
+`config.caps`. A transition operation that never switches is not bounded by
+the caps; that is the choice of whoever installs it.
 
 The built-in runtimes, `llmagent:chat` and `goaltree:chat`, switch at each
 tool call and for each load the agent makes or a caller adds (a session's

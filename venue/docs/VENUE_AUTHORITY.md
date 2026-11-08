@@ -46,7 +46,8 @@ Tracked by covia#660.
   instead. An agent's caps are not a grant: they narrow what it does in its
   owner's namespace (§5.4 there).
 - **Deferred work.** A recorded job (`JobManager.keepCallerContext`) and a
-  scheduled event (`Scheduler.schedule`) keep the grants presented to them but
+  scheduled event (`Scheduler.schedule`) keep the grants presented to them, and
+  a separate authority the request acted with ([UCAN.md](./UCAN.md) §5.4), but
   not the scope. Agents are unaffected, because their scope is read again from
   their config.
 - **Revocation.** Nothing revokes a grant; only sign-in keys can be revoked

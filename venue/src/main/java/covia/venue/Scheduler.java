@@ -202,7 +202,8 @@ public class Scheduler {
 		// work stays visible to (and cancellable by) the account it runs in.
 		AString caller = ctx.getCallerDID();
 		AVector<ACell> proofs = ctx.getProofs();
-		return onTimer(() -> doSchedule(opRef, input, owner, caller, proofs, wakeTime, rep, track, desc));
+		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
+		return onTimer(() -> doSchedule(opRef, input, owner, caller, proofs, authority, wakeTime, rep, track, desc));
 	}
 
 	/**
@@ -261,8 +262,8 @@ public class Scheduler {
 	 * {@code repeat}, {@code lastFired} and {@code lastJob}. {@code track} is
 	 * the effective tracking that the next fire will use; {@code input} is
 	 * shown as the owner's job history would show it ({@link #listedInput}).
-	 * Captured {@code proofs} are authority, not description, and are never
-	 * listed.
+	 * Captured {@code proofs} and a kept {@code authority} are authority, not
+	 * description, and are never listed.
 	 */
 	public AVector<ACell> list(RequestContext ctx) {
 		AccessControl access = engine.getAccessControl();
@@ -328,10 +329,10 @@ public class Scheduler {
 	// ------------------------------------------------------- timer-thread bodies
 
 	private Blob doSchedule(AString opRef, ACell input, AString owner, AString caller,
-			AVector<ACell> proofs, long wakeTime,
+			AVector<ACell> proofs, AMap<AString, ACell> authority, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description) {
 		engine.getVenueState().users().requireNotDeleted(owner);
-		Blob key = state().schedule(opRef, input, owner, caller, proofs, wakeTime,
+		Blob key = state().schedule(opRef, input, owner, caller, proofs, authority, wakeTime,
 			repeat, track, description, clock.getAsLong());
 		armNext();
 		return key;
@@ -491,12 +492,14 @@ public class Scheduler {
 	/**
 	 * The context a fire runs under (design §5): its caller (the owner, one of
 	 * its agents or a delegate) as it would invoke the operation now, in the
-	 * owner's namespace, presenting again the proofs it presented when scheduling.
+	 * owner's namespace, presenting again the proofs it presented when scheduling,
+	 * and with the separate authority it acted with, if it had one.
 	 *
 	 * @throws AuthException when the caller could not invoke it now
 	 */
 	RequestContext fireContext(AMap<AString, ACell> rec) {
-		return engine.context(Attribution.owner(rec), Attribution.caller(rec), asVector(rec.get(K_PROOFS)));
+		return engine.context(Attribution.owner(rec), Attribution.caller(rec), asVector(rec.get(K_PROOFS)),
+			RT.ensureMap(rec.get(Fields.AUTHORITY)));
 	}
 
 	/**

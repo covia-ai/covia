@@ -200,8 +200,29 @@ public final class UserExports {
 		return restore(to, state);
 	}
 
+	/**
+	 * {@code state} with each agent's controller kept only where it is
+	 * {@code did} itself or one of its agents. A controller anywhere else
+	 * authorised none of this copy, so the agent returns to its owner's control.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> ownControllers(AString did, AMap<AString, ACell> state) {
+		if (!(state.get(Namespace.G) instanceof AMap<?, ?> found)) return state;
+		AMap<AString, ACell> agents = (AMap<AString, ACell>) found;
+		AMap<AString, ACell> kept = agents;
+		for (long i = 0; i < agents.count(); i++) {
+			var entry = agents.entryAt(i);
+			if (!(entry.getValue() instanceof AMap<?, ?> rec)) continue;
+			AString controller = RT.ensureString(rec.get(AgentState.KEY_CONTROLLER));
+			if (controller == null || controller.equals(did) || Engine.agentIdIn(did, controller) != null) continue;
+			kept = kept.assoc(entry.getKey(), ((AMap<AString, ACell>) rec).dissoc(AgentState.KEY_CONTROLLER));
+		}
+		return (kept == agents) ? state : state.assoc(Namespace.G, kept);
+	}
+
 	/** Writes the state, then re-arms its agents' wakes in this venue's schedule. */
 	private boolean restore(AString did, AMap<AString, ACell> state) {
+		state = ownControllers(did, state);
 		boolean created = engine.getVenueState().users().restore(did, state);
 		Scheduler scheduler = engine.gridScheduler();
 		if (scheduler != null && state.get(Namespace.G) instanceof AMap<?, ?> agents) {

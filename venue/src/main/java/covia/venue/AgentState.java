@@ -53,6 +53,8 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	public VenueContext getContext() { return context; }
 
 	public static final AString KEY_AGENT = Strings.intern("agent");
+	/** The principal whose authority the agent's harness runs under, absent for its owner. */
+	public static final AString KEY_CONTROLLER = Fields.CONTROLLER;
 	public static final AString KEY_EXTERNAL = Strings.intern("external");
 	/** Present only for a deliberate stop; faults use {@link #KEY_ERROR}. */
 	public static final AString KEY_SUSPENSION = Strings.intern("suspension");
@@ -249,6 +251,15 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	}
 
 	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState, AMap<AString, ACell> definition) {
+		return initialiseIfAbsent(config, initialState, definition, null);
+	}
+
+	/**
+	 * Atomically initialises this record under {@code controller} (null or the
+	 * owner for its owner), returning false if it already exists.
+	 */
+	boolean initialiseIfAbsent(AMap<AString, ACell> config, ACell initialState, AMap<AString, ACell> definition,
+			AString controller) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -258,8 +269,15 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (initialState != null) record = record.assoc(K_STATE, initialState);
 		if (definition != null) record = record.assoc(KEY_AGENT, definition);
+		record = withController(record, controller);
 		AMap<AString, ACell> initial = record;
 		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
+	}
+
+	/** {@code record} with {@code controller}, which is stored only when it is not the owner. */
+	private AMap<AString, ACell> withController(AMap<AString, ACell> record, AString controller) {
+		return (controller == null || controller.equals(owner)) ? record.dissoc(KEY_CONTROLLER)
+			: record.assoc(KEY_CONTROLLER, controller);
 	}
 
 	/**
@@ -275,6 +293,12 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	/** Atomically initialises a fork record, returning false if it already exists. */
 	boolean initialiseFromForkIfAbsent(AMap<AString, ACell> config, ACell state,
 			AVector<ACell> timeline) {
+		return initialiseFromForkIfAbsent(config, state, timeline, null);
+	}
+
+	/** As above, under {@code controller} (null or the owner for its owner). */
+	boolean initialiseFromForkIfAbsent(AMap<AString, ACell> config, ACell state,
+			AVector<ACell> timeline, AString controller) {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
@@ -283,11 +307,19 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (state != null) record = record.assoc(K_STATE, state);
+		record = withController(record, controller);
 		AMap<AString, ACell> initial = record;
 		return cursor().getAndUpdate(current -> (current == null) ? initial : current) == null;
 	}
 
 	// ========== Read accessors ==========
+
+	/** The principal whose authority this agent's harness runs under: its owner unless one is stored. */
+	public AString getController() {
+		AMap<AString, ACell> r = getRecord();
+		AString stored = (r != null) ? RT.ensureString(r.get(KEY_CONTROLLER)) : null;
+		return (stored != null) ? stored : owner;
+	}
 
 	public AString getStatus() {
 		AMap<AString, ACell> r = getRecord();
@@ -1128,10 +1160,10 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * one atomic update.
 	 *
 	 * <p>{@code config} receives the config the record holds (null when it has
-	 * none) and returns its replacement, so anything the new config depends on,
-	 * such as what the caller may confer, is decided against the config it
-	 * replaces. It may run again on a retry, so it must be pure, and an
-	 * exception from it leaves the record unchanged. Null leaves config alone.</p>
+	 * none) and returns its replacement, so anything the new config depends on
+	 * is decided against the config it replaces. It may run again on a retry,
+	 * so it must be pure, and an exception from it leaves the record unchanged.
+	 * Null leaves config alone.</p>
 	 *
 	 * <p>Incoming state is shallow-merged into the existing state so that
 	 * updating a single field does not wipe its siblings: top-level keys in the
@@ -1140,10 +1172,29 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return The config the record holds after the update, or null when the
 	 *         record does not exist
 	 */
-	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> updateConfigAndState(UnaryOperator<AMap<AString, ACell>> config, ACell state) {
+		return update(null, null, config, state);
+	}
+
+	/**
+	 * As {@link #updateConfigAndState}, checked against the controller the
+	 * record holds and, with {@code controller}, handing the agent to it, all
+	 * in one atomic update. {@code check} receives the current controller
+	 * ({@link #getController()}) and refuses by throwing, leaving the record
+	 * unchanged; like {@code config}, it may run again on a retry.
+	 *
+	 * @param check refuses an update its caller may not make, or null for none
+	 * @param controller the new controller, or null to keep the current one
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> update(java.util.function.Consumer<AString> check, AString controller,
+			UnaryOperator<AMap<AString, ACell>> config, ACell state) {
 		AMap<AString, ACell> record = update(r -> {
-			AMap<AString, ACell> u = r;
+			if (check != null) {
+				AString current = RT.ensureString(r.get(KEY_CONTROLLER));
+				check.accept((current != null) ? current : owner);
+			}
+			AMap<AString, ACell> u = (controller == null) ? r : withController(r, controller);
 			if (config != null) {
 				ACell existing = r.get(K_CONFIG);
 				u = u.assoc(K_CONFIG, config.apply((existing instanceof AMap) ? (AMap<AString, ACell>) existing : null));
