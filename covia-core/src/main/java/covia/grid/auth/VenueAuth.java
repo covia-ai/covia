@@ -1,6 +1,7 @@
 package covia.grid.auth;
 
 import java.net.http.HttpRequest;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import convex.auth.did.DID;
@@ -176,8 +177,29 @@ public abstract class VenueAuth {
 	 */
 	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID,
 			long lifetimeSeconds) {
+		return namedKeyPair(keyPair, subjectDID, lifetimeSeconds, System::currentTimeMillis);
+	}
+
+	/**
+	 * As {@link #namedKeyPair(AKeyPair, String)}, issuing each token at the time
+	 * {@code clock} gives: a venue presenting its DID passes its own clock.
+	 *
+	 * @param clock the time each token is issued at, in epoch milliseconds
+	 */
+	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID, LongSupplier clock) {
+		return namedKeyPair(keyPair, subjectDID, KeyPairAuth.DEFAULT_TOKEN_LIFETIME, clock);
+	}
+
+	/**
+	 * As {@link #namedKeyPair(AKeyPair, String, long)}, issuing each token at
+	 * the time {@code clock} gives.
+	 *
+	 * @param clock the time each token is issued at, in epoch milliseconds
+	 */
+	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID,
+			long lifetimeSeconds, LongSupplier clock) {
 		requireDID(subjectDID, "subjectDID");
-		return new KeyPairAuth(keyPair, subjectDID, lifetimeSeconds);
+		return new KeyPairAuth(keyPair, subjectDID, lifetimeSeconds, clock);
 	}
 
 	static void requireDID(String value, String label) {

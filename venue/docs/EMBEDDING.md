@@ -101,6 +101,12 @@ agent's wake time, a request's expiry or a connected account's token expiry.
 lattice. Elapsed time stays on the system timer: sync and flush intervals,
 shutdown grace, timeouts, retries, rate limits and in-memory caches.
 
+Tokens follow the same clock. The venue judges the times in every token and
+proof presented to it by its clock, and issues its own tokens at its time, so
+a venue on a driven clock accepts only tokens minted on that clock. A client
+minting for it passes the clock to `VenueAuth.namedKeyPair(keyPair, did,
+clock)`.
+
 The clock may stand still. It may give several writes the same time, and a
 test may hold it or step it by zero: a local write overwrites the venue's own
 state, and a merge on an equal timestamp keeps the local value, so no write is
@@ -211,6 +217,7 @@ identity token through an operation", and HELD_KEYS.md.
 | `CoviaApplication.CANNOT_SIGN` | `CoviaApplication.NOT_MOUNTED`, for a venue that is not mounted |
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |
+| `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
 
 ## Upgrading from 0.9.x
 

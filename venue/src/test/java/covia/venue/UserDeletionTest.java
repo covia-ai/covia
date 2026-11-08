@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
-import convex.auth.did.DIDVerifier;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
 import convex.core.lang.RT;
@@ -22,7 +21,6 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.server.AuthMiddleware;
 
 class UserDeletionTest {
 	private static Engine engine;
@@ -69,7 +67,7 @@ class UserDeletionTest {
 			System.currentTimeMillis() / 1000 + 3600,
 			Vectors.of(Capability.create(Strings.create(engine.getDIDString() + "/users"), Abilities.USER_DELETE)),
 			Vectors.empty()).toJWT(engine.getKeyPair());
-		RequestContext ctx = AuthMiddleware.withTransportGrants(RequestContext.of(did), Vectors.of(proof), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(RequestContext.of(did), Vectors.of(proof));
 		ACell result = engine.jobs().invokeInternal("v/ops/user/delete", Maps.of(Fields.DID, did), ctx).get(5, TimeUnit.SECONDS);
 		assertEquals(did, RT.getIn(result, "deletedBy"));
 		assertNull(engine.getVenueState().users().user(did));

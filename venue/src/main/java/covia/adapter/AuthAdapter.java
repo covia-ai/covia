@@ -75,7 +75,8 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 	@Override
 	public Map<AString, VenueProofMethods.Method> venueProofMethods() { return proofs; }
 
-	private static Map<AString, VenueProofMethods.Method> builtInProofs() {
+	/** The built-in proofs, judged by the venue's clock. */
+	private Map<AString, VenueProofMethods.Method> builtInProofs() {
 		VenueProofMethods.Method address = (target, did, connection) ->
 			VenueDID.provenAt(target, did) ? null : VenueDID.NOT_ITS_ADDRESS;
 		VenueProofMethods.Method challenge = new VenueProofMethods.Method() {
@@ -89,7 +90,9 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 					// Refused by the outbound guard, or no address to dial
 					return VenueChallenge.Reason.UNREACHABLE + e.getMessage();
 				}
-				return venue instanceof VenueHTTP http ? VenueChallenge.prove(http, did) : VenueChallenge.Reason.NOT_HTTP;
+				return venue instanceof VenueHTTP http
+					? VenueChallenge.prove(http, did, engine.currentTimestamp().longValue() / 1000)
+					: VenueChallenge.Reason.NOT_HTTP;
 			}
 
 			@Override
@@ -221,7 +224,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		}
 		AString name = params.get(Fields.NAME) instanceof AString s ? s : null;
 		AString token = Strings.create(VenueAuth.namedKeyPair(signer,
-			caller.toString(), lifetime).mintToken(audience.toString()));
+			caller.toString(), lifetime, () -> engine.currentTimestamp().longValue()).mintToken(audience.toString()));
 		// Reuse the secret/write gate, encrypted storage, collision handling and audit.
 		SecretAdapter.storeSecret(engine, ctx, name, token, CVMBool.TRUE.equals(params.get(OVERWRITE)));
 		return Maps.of(SECRET, Strings.create("s/" + name), JWT.SUB, caller, JWT.AUD, audience,

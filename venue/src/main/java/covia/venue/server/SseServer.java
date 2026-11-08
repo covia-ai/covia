@@ -77,8 +77,8 @@ public class SseServer {
 
 		// Resolve the record under the CALLER's context — the stream carries
 		// exactly what GET /jobs/{id} would show this caller.
-		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(client.ctx()),
-			AuthMiddleware.headerUcans(client.ctx()), engine.didVerifier());
+		RequestContext rctx = engine.withTransportGrants(AuthMiddleware.callerContext(client.ctx()),
+			AuthMiddleware.headerUcans(client.ctx()));
 		AMap<AString, ACell> record = engine.jobs().getJobData(jobId, rctx);
 		if (record == null) {
 			// Vanished between the route check and here (e.g. deleted)
@@ -203,8 +203,8 @@ public class SseServer {
 		client.keepAlive();
 
 		String ref = client.ctx().pathParam("id");
-		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(client.ctx()),
-			AuthMiddleware.headerUcans(client.ctx()), engine.didVerifier());
+		RequestContext rctx = engine.withTransportGrants(AuthMiddleware.callerContext(client.ctx()),
+			AuthMiddleware.headerUcans(client.ctx()));
 		AgentAdapter agents = (AgentAdapter) engine.getAdapter("agent");
 		AMap<AString, ACell> info = (agents != null) ? agents.agentInfo(rctx, Strings.create(ref)) : null;
 		if (info == null) {

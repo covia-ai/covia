@@ -14,7 +14,9 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 /**
  * Deterministic unit tests for the grid hop's token relay filter (covia#100
@@ -24,6 +26,7 @@ import covia.venue.RequestContext;
  */
 public class GridForwardingFilterTest {
 
+	private final Engine engine = TestEngine.ENGINE;
 	private final AKeyPair aliceKP = AKeyPair.generate();
 	private final AKeyPair bobKP = AKeyPair.generate();
 	private final AKeyPair venueKP = AKeyPair.generate();
@@ -50,12 +53,11 @@ public class GridForwardingFilterTest {
 		String grantToBob = token(aliceKP, BOB, ALICE + "/w/", "crud/read", 3600);
 		String identityForTarget = token(bobKP, VENUE, null, null, 300);
 		RequestContext ctx = ctxWith(BOB, grantToBob, identityForTarget);
-		List<UCAN> parsed = GridAdapter.parsedRawUcans(ctx,
-			convex.auth.did.DIDVerifier.CONVEX);
+		List<UCAN> parsed = VenueConnection.parsedRawUcans(engine, ctx);
 
 		assertEquals(identityForTarget,
-			GridAdapter.identityCredential(ctx, parsed, BOB, VENUE));
-		assertEquals(List.of(grantToBob), GridAdapter.admissibleGrants(ctx, parsed, BOB),
+			VenueConnection.identityCredential(engine, ctx, parsed, BOB, VENUE));
+		assertEquals(List.of(grantToBob), VenueConnection.admissibleGrants(engine, ctx, parsed, BOB),
 			"the identity credential travels as authentication, never as a grant");
 	}
 
@@ -68,8 +70,8 @@ public class GridForwardingFilterTest {
 		String chainToVenue = token(aliceKP, VENUE, ALICE + "/w/", "crud/read", 3600);
 		RequestContext ctx = ctxWith(BOB, grantToBob, chainToVenue);
 
-		List<String> out = GridAdapter.admissibleGrants(ctx,
-			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), VENUE);
+		List<String> out = VenueConnection.admissibleGrants(engine, ctx,
+			VenueConnection.parsedRawUcans(engine, ctx), VENUE);
 		assertNotNull(out);
 		assertEquals(List.of(chainToVenue), out,
 			"only the venue-audienced token is relayed when the venue is the principal");
@@ -79,8 +81,8 @@ public class GridForwardingFilterTest {
 	public void testExpiredAndGarbageDropped() {
 		String expired = token(aliceKP, BOB, ALICE + "/w/", "crud/read", -3600);
 		RequestContext ctx = ctxWith(BOB, expired, "not-a-jwt");
-		assertNull(GridAdapter.admissibleGrants(ctx,
-			GridAdapter.parsedRawUcans(ctx, convex.auth.did.DIDVerifier.CONVEX), BOB),
+		assertNull(VenueConnection.admissibleGrants(engine, ctx,
+			VenueConnection.parsedRawUcans(engine, ctx), BOB),
 			"expired and unparseable tokens are provably inert — nothing to relay");
 	}
 

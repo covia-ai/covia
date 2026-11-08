@@ -212,13 +212,13 @@ class AuthResultTest {
 			assertThrows(AuthException.class, () -> engine.admitUser(agent));
 			AString proof = JWT.signPublic(UCAN.buildPayload(key.getAccountKey(), agent, expiry, null,
 				Vectors.of(Capability.create(resource, Capability.CRUD_READ)), Vectors.empty(), null), key);
-			RequestContext granted = AuthMiddleware.withTransportGrants(caller, Vectors.of(proof));
+			RequestContext granted = engine.withTransportGrants(caller, Vectors.of(proof));
 			assertEquals(did, engine.requireLocalAccess(granted, resource, Capability.CRUD_READ));
 			assertThrows(AuthException.class, () -> engine.requireLocalAccess(granted, resource, Capability.CRUD_WRITE));
 			AString sibling = Strings.create(agent + "-sibling");
 			Context siblingCtx = context();
 			auth.authenticate(siblingCtx, JWT.signPublic(claims().assoc(Fields.SUB, sibling), key));
-			RequestContext other = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(siblingCtx), Vectors.of(proof));
+			RequestContext other = engine.withTransportGrants(AuthMiddleware.callerContext(siblingCtx), Vectors.of(proof));
 			assertThrows(AuthException.class, () -> engine.requireLocalAccess(other, resource, Capability.CRUD_READ));
 		}
 	}
@@ -252,13 +252,13 @@ class AuthResultTest {
 			Vectors.of(Capability.create(resource, Capability.CRUD_READ)), Vectors.empty()).toJWT(owner);
 		Context root = context();
 		auth.authenticate(root, JWT.signPublic(claims(), key));
-		assertTrue(engine.proofsCover(AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(root), Vectors.of(proof)),
+		assertTrue(engine.proofsCover(engine.withTransportGrants(AuthMiddleware.callerContext(root), Vectors.of(proof)),
 			resource, Capability.CRUD_READ, now));
 		Context child = context();
 		AString user = Strings.create(did + ":u:isolated");
 		auth.authenticate(child, JWT.signPublic(claims().assoc(Fields.SUB, user), key));
 		RequestContext caller = AuthMiddleware.callerContext(child);
-		assertFalse(engine.proofsCover(AuthMiddleware.withTransportGrants(caller, Vectors.of(proof)),
+		assertFalse(engine.proofsCover(engine.withTransportGrants(caller, Vectors.of(proof)),
 			resource, Capability.CRUD_READ, now), "a grant to the signer is not a grant to its user");
 		assertFalse(engine.crossUserAllows(caller, Strings.create(did + "/w/private"), Capability.CRUD_READ));
 		AString sibling = Strings.create(did + ":u:sibling");

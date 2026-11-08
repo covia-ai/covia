@@ -3129,6 +3129,46 @@ public class Engine {
 	}
 
 	/**
+	 * Attaches transport-presented UCAN grants to a request context: the single
+	 * seam every transport (REST, MCP, A2A, SSE) uses. Each token is verified
+	 * with the venue's DID verifier and judged by the venue's clock.
+	 * Capability-bearing tokens are attached only for capability checks
+	 * (UCAN.md §5.2). Proofs are additive grants: their presence never
+	 * authenticates a caller, selects an execution namespace or instructs an
+	 * operation. Empty-att target credentials remain only in the raw relay
+	 * envelope. With no token presented, nothing is attached.
+	 *
+	 * @param rctx context for the authenticated caller (caller DID already set)
+	 * @param ucans transport {@code ucans} vector, or null
+	 * @return rctx with the presented proofs attached
+	 */
+	public RequestContext withTransportGrants(RequestContext rctx, AVector<ACell> ucans) {
+		AVector<ACell> parsed = UcanJwtValidator.parseTransportUCANs(ucans,
+			currentTimestamp().longValue() / 1000, didVerifier());
+		if (parsed == null) return rctx;
+
+		AVector<ACell> grants = Vectors.empty();
+		for (long i = 0; i < parsed.count(); i++) {
+			AMap<AString, ACell> map = RT.castMap(parsed.get(i));
+			UCAN token = (map != null) ? UCAN.parse(map) : null;
+			AVector<ACell> capabilities = (token != null) ? token.getCapabilities() : null;
+			if (capabilities != null && !capabilities.isEmpty()) {
+				grants = grants.conj(parsed.get(i));
+			}
+		}
+		if (!grants.isEmpty()) rctx = rctx.withProofs(grants);
+		// Retain the raw transport envelope for cross-venue forwarding (C3a):
+		// proofs are self-verifying, but only the original signed JWTs verify at
+		// the next hop, not the parsed maps. A target credential may be carried
+		// here, but it remains inert and never enters the proof channel.
+		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
+		// Presented proofs are additive and never subtractive. To act with reduced
+		// authority, hand the callee a narrower Authority (Authority.of(did, grants))
+		// or present only the UCANs the request needs.
+		return rctx;
+	}
+
+	/**
 	 * Converts a venue-managed username to its canonical user DID. Publicly
 	 * named venues use their did:web alias (for example
 	 * {@code did:web:venue.example.com:u:alice}). A public hostname is required

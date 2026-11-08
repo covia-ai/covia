@@ -13,6 +13,8 @@ import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,6 +22,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -93,6 +96,23 @@ class DrivenClockTest {
 		User user = engine.getVenueState().users().user(ctx.getUserDID());
 		assertEquals(now, time(user.get(), "meta", "created"));
 		assertEquals(now, time(user.get(), "meta", "updated"));
+	}
+
+	@Test
+	void tokensAreJudgedByTheVenueClock() {
+		AKeyPair alice = AKeyPair.generate();
+		AKeyPair bob = AKeyPair.generate();
+		AString bobDID = UCAN.toDIDKey(bob.getAccountKey());
+		AVector<ACell> read = Vectors.of(Capability.create(
+			Strings.create(UCAN.toDIDKey(alice.getAccountKey()) + "/w/"), Capability.CRUD_READ));
+		long venueSeconds = CLOCK.get() / 1000;
+
+		// Long expired by the system clock, still in date on the venue's.
+		AString inDate = UCAN.create(alice, bob.getAccountKey(), venueSeconds + 3600, read, Vectors.empty()).toJWT(alice);
+		AString expired = UCAN.create(alice, bob.getAccountKey(), venueSeconds - 1, read, Vectors.empty()).toJWT(alice);
+		assertEquals(1, engine.withTransportGrants(RequestContext.of(bobDID), Vectors.of(inDate)).getProofs().count());
+		assertNull(engine.withTransportGrants(RequestContext.of(bobDID), Vectors.of(expired)).getProofs(),
+			"a token expired by the venue's clock grants nothing");
 	}
 
 	@Test

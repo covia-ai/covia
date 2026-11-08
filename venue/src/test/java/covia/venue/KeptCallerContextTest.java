@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
-import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
@@ -23,7 +22,6 @@ import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.lattice.Namespace;
-import covia.venue.server.AuthMiddleware;
 
 /**
  * A caller's context a job keeps for work that continues after the request:
@@ -143,8 +141,8 @@ class KeptCallerContextTest {
 				Capability.create(Strings.create(owner + "/v/test/ops/never"), Strings.create("invoke")),
 				Capability.create(Strings.create(owner + "/w/output"), Capability.CRUD_WRITE)),
 			Vectors.empty()).toJWT(ownerKey);
-		RequestContext sudo = engine.sudoContext(AuthMiddleware.withTransportGrants(
-				RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX), owner)
+		RequestContext sudo = engine.sudoContext(engine.withTransportGrants(
+				RequestContext.of(delegate), Vectors.of(grant)), owner)
 			.withAgentId(Strings.create("worker")).withSessionId(Blob.fromHex("1234"));
 
 		Job kept = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), sudo);

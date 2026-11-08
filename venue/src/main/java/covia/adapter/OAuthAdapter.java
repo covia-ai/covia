@@ -494,7 +494,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		AdapterState connections = adapterState(userDID);
 		String state = randomToken(24);
 		String verifier = p.pkce() ? randomToken(32) : null;
-		long expiresAt = System.currentTimeMillis() + pendingTtlMillis;
+		long expiresAt = engine.currentTimestamp().longValue() + pendingTtlMillis;
 		pending.put(state, new Pending(p.name(), userDID, connections, verifier, scopes, returnTo, expiresAt));
 
 		return Maps.of(
@@ -562,7 +562,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	 */
 	public Callback callback(String providerName, String state, String code, String error) {
 		Pending pend = (state != null && !state.isBlank()) ? pending.remove(state) : null;
-		long now = System.currentTimeMillis();
+		long now = engine.currentTimestamp().longValue();
 		if (pend == null || pend.expiresAt() < now) {
 			return new Callback(false, providerName, UNKNOWN_REQUEST, null, null);
 		}
@@ -598,7 +598,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 		AString raw = RT.ensureString(RT.getIn(input, K_CODE));
 		if (raw == null || raw.toString().isBlank()) throw new InvalidInputException("code is required");
 		Approved app = approved.remove(raw.toString().trim());
-		if (app == null || app.expiresAt() < System.currentTimeMillis()) throw new InvalidInputException(UNKNOWN_COMPLETION);
+		if (app == null || app.expiresAt() < engine.currentTimestamp().longValue()) throw new InvalidInputException(UNKNOWN_COMPLETION);
 		Pending pend = app.pending();
 		if (!pend.userDID().equals(userDID)) throw new AuthException(ANOTHER_ACCOUNT);
 		engine.requireAuthority(ctx, resource(pend.provider()), Abilities.OAUTH_CONNECT);
@@ -1070,7 +1070,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	// ========== Helpers ==========
 
 	private void sweepPending() {
-		long now = System.currentTimeMillis();
+		long now = engine.currentTimestamp().longValue();
 		pending.entrySet().removeIf(e -> e.getValue().expiresAt() < now);
 		approved.entrySet().removeIf(e -> e.getValue().expiresAt() < now);
 	}

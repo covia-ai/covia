@@ -1,15 +1,10 @@
 package covia.adapter;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.Capability;
-import convex.auth.ucan.UCAN;
-import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -33,7 +28,6 @@ import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 import covia.venue.RemoteJobs;
 import covia.grid.client.VenueHTTP;
-import covia.venue.UcanJwtValidator;
 
 /**
  * Adapter that proxies Covia grid operations to the local engine or a remote venue.
@@ -348,81 +342,6 @@ public class GridAdapter extends AAdapter {
 		return venue.invoke("v/ops/covia/write",
 				writeInput)
 			.thenCompose(Job::future);
-	}
-
-	/**
-	 * Filters raw tokens down to in-date, non-empty capability grants whose
-	 * audience is exactly the principal authenticated at the target. Identity
-	 * credentials never enter the grant channel. Returns raw JWT strings;
-	 * {@code tokens} is index-aligned with {@link RequestContext#getRawUcans()}.
-	 */
-	static List<String> admissibleGrants(RequestContext ctx,
-			List<UCAN> tokens, AString principal) {
-		AVector<ACell> raw = ctx.getRawUcans();
-		if (raw == null || tokens == null || principal == null) return null;
-		long now = System.currentTimeMillis() / 1000;
-		List<String> out = new ArrayList<>();
-		for (int i = 0; i < raw.count(); i++) {
-			AString jwt = RT.ensureString(raw.get(i));
-			UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
-			if (jwt == null || token == null) continue;                    // unparseable → don't relay
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;  // expired → inert
-			AString aud = token.getAudience();
-			AVector<ACell> capabilities = token.getCapabilities();
-			if (aud == null || !aud.equals(principal)
-					|| capabilities == null || capabilities.isEmpty()) continue;
-			out.add(jwt.toString());
-		}
-		return out.isEmpty() ? null : out;
-	}
-
-	/** Finds the caller's explicit, target-audienced identity credential. */
-	static String identityCredential(RequestContext ctx, List<UCAN> tokens,
-			AString caller, AString targetVenueDID) {
-		AVector<ACell> raw = ctx.getRawUcans();
-		if (raw == null || tokens == null || caller == null || targetVenueDID == null) return null;
-		long now = System.currentTimeMillis() / 1000;
-		String found = null;
-		for (int i = 0; i < raw.count(); i++) {
-			AString jwt = RT.ensureString(raw.get(i));
-			UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
-			if (jwt == null || token == null
-					|| !UCANValidator.checkTemporalBounds(token, now)
-					|| !caller.equals(token.getIssuer())
-					|| !targetVenueDID.equals(token.getAudience())) continue;
-			AVector<ACell> capabilities = token.getCapabilities();
-			if (capabilities == null || !capabilities.isEmpty()) continue;
-			if (found != null && !found.equals(jwt.toString())) {
-				throw new InvalidInputException(
-					"Multiple caller identity credentials were supplied for " + targetVenueDID);
-			}
-			found = jwt.toString();
-		}
-		return found;
-	}
-
-	/**
-	 * Parses the caller's raw transport tokens for audience/issuer inspection;
-	 * null-padded on failure so indices align with {@link RequestContext#getRawUcans()}.
-	 */
-	static List<UCAN> parsedRawUcans(RequestContext ctx, DIDVerifier verifier) {
-		AVector<ACell> raw = ctx.getRawUcans();
-		if (raw == null || raw.isEmpty()) return null;
-		List<UCAN> out = new ArrayList<>();
-		long now = System.currentTimeMillis() / 1000;
-		for (long i = 0; i < raw.count(); i++) {
-			UCAN token = null;
-			AString jwt = RT.ensureString(raw.get(i));
-			if (jwt != null) {
-				try {
-					token = UcanJwtValidator.validateJWT(jwt, now, verifier);
-				} catch (Exception e) {
-					// Defective token: null slot, grants nothing.
-				}
-			}
-			out.add(token);
-		}
-		return out;
 	}
 
     private Blob parseJobId(ACell jobIdCell) {

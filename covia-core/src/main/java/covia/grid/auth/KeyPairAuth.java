@@ -1,6 +1,8 @@
 package covia.grid.auth;
 
 import java.net.http.HttpRequest;
+import java.util.Objects;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import convex.core.crypto.AKeyPair;
@@ -44,6 +46,13 @@ class KeyPairAuth extends VenueAuth {
 	private final String subject;
 	/** JOSE key identifier: bare Multikey, or the named subject's DID URL. */
 	private final AString keyID;
+	/** The time a token is issued at, in epoch milliseconds. */
+	private final LongSupplier clock;
+
+	/** As {@link #KeyPairAuth(AKeyPair, String, long, LongSupplier)}, on the system clock. */
+	KeyPairAuth(AKeyPair keyPair, String subject, long tokenLifetime) {
+		this(keyPair, subject, tokenLifetime, System::currentTimeMillis);
+	}
 
 	/**
 	 * Creates a key-pair authenticator whose subject may differ from the
@@ -52,8 +61,9 @@ class KeyPairAuth extends VenueAuth {
 	 * Authentication alone grants neither user admission nor parent authority.
 	 *
 	 * @param subject named identity, or null for the key's own {@code did:key}
+	 * @param clock the time each token is issued at, in epoch milliseconds
 	 */
-	KeyPairAuth(AKeyPair keyPair, String subject, long tokenLifetime) {
+	KeyPairAuth(AKeyPair keyPair, String subject, long tokenLifetime, LongSupplier clock) {
 		if (keyPair == null) {
 			throw new IllegalArgumentException("Key pair must not be null");
 		}
@@ -62,6 +72,7 @@ class KeyPairAuth extends VenueAuth {
 		}
 		this.keyPair = keyPair;
 		this.tokenLifetime = tokenLifetime;
+		this.clock = Objects.requireNonNull(clock, "clock");
 		// Pre-compute the did:key from the public key
 		AString multikey = Multikey.encodePublicKey(keyPair.getAccountKey());
 		this.didKey = "did:key:" + multikey;
@@ -90,7 +101,7 @@ class KeyPairAuth extends VenueAuth {
 	 * exactly what a request would carry, by construction.
 	 */
 	private AString buildToken(String venueDID) {
-		long nowSecs = System.currentTimeMillis() / 1000;
+		long nowSecs = clock.getAsLong() / 1000;
 		AMap<AString, ACell> claims = Maps.of(
 			JWT.SUB, Strings.create(subject),
 			JWT.ISS, Strings.create(subject),

@@ -18,7 +18,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
-import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
@@ -42,7 +41,6 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.server.AuthMiddleware;
 
 /**
  * Tests for the per-venue grid {@link Scheduler}. Firing is exercised
@@ -196,8 +194,8 @@ public class SchedulerTest {
 			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(s(owner + "/v/test/ops/capturectx"), s("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
-		RequestContext sudo = engine.sudoContext(AuthMiddleware.withTransportGrants(
-			RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX), owner);
+		RequestContext sudo = engine.sudoContext(engine.withTransportGrants(
+			RequestContext.of(delegate), Vectors.of(grant)), owner);
 
 		Blob handle = sched.schedule(s("v/test/ops/capturectx"), Maps.empty(), sudo, future());
 		TestAdapter.CAPTURED_CTX.remove(owner);

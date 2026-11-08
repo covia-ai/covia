@@ -11,7 +11,6 @@ import org.junit.jupiter.api.TestInfo;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
-import convex.auth.did.DIDVerifier;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -30,7 +29,6 @@ import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.auth.UcanTokens;
 import covia.lattice.CapabilityChecker;
-import covia.venue.server.AuthMiddleware;
 
 /**
  * Tests for the UCAN capability flow: issue tokens, present as proofs,
@@ -106,7 +104,7 @@ public class UCANTest {
 		// Presented proofs are additive grants, never subtractive: to act with
 		// reduced authority, use a narrower Authority (Authority.of(did, grants))
 		// or present only the UCANs the request needs.
-		RequestContext rctx = AuthMiddleware.withTransportGrants(
+		RequestContext rctx = engine.withTransportGrants(
 			RequestContext.of(ALICE_DID), null);
 		assertNull(rctx.getCaps());
 		engine.jobs().invokeOperation("v/ops/covia/write",
@@ -122,8 +120,8 @@ public class UCANTest {
 				Capability.create(Strings.create(ALICE_DID + "/w/shared"), Capability.CRUD_READ)),
 			Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			BOB, Vectors.of(delegation), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			BOB, Vectors.of(delegation));
 		assertEquals(BOB_DID, ctx.getCallerDID());
 		assertEquals(BOB_DID, ctx.getUserDID(),
 			"a grant cannot instruct the venue to enter its issuer's namespace");
@@ -141,8 +139,8 @@ public class UCANTest {
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			RequestContext.ANONYMOUS, Vectors.of(identity, wrongAudience), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			RequestContext.ANONYMOUS, Vectors.of(identity, wrongAudience));
 		assertNull(ctx.getCallerDID(),
 			"proof-channel tokens cannot establish authentication");
 		assertEquals(1, ctx.getProofs().count(),
@@ -158,8 +156,8 @@ public class UCANTest {
 			Vectors.of(Capability.create(
 				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			BOB, Vectors.of(readGrant), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			BOB, Vectors.of(readGrant));
 		assertEquals(BOB_DID, ctx.getUserDID(),
 			"a data grant alone must not relocate the caller's jobs or implicit paths");
 		assertNull(ctx.getCaps(), "the caller keeps ambient authority over its own namespace");
@@ -176,8 +174,8 @@ public class UCANTest {
 			Vectors.of(Capability.create(CAROL_DID, Abilities.USER_SUDO),
 				Capability.create(Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)), Vectors.empty());
 
-		RequestContext ctx = AuthMiddleware.withTransportGrants(
-			BOB, Vectors.of(alice, carol), DIDVerifier.CONVEX);
+		RequestContext ctx = engine.withTransportGrants(
+			BOB, Vectors.of(alice, carol));
 		assertEquals(BOB_DID, ctx.getUserDID());
 		assertEquals(2, ctx.getProofs().count(),
 			"even several grants cannot select an execution target");
@@ -695,7 +693,7 @@ public class UCANTest {
 		assertEquals(BOB_DID, token.getAudience());
 		assertEquals(Vectors.of(Strings.create(held)), token.getProofs());
 
-		RequestContext bob = AuthMiddleware.withTransportGrants(BOB, Vectors.of(jwt), engine.didVerifier());
+		RequestContext bob = engine.withTransportGrants(BOB, Vectors.of(jwt));
 		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"), bob).awaitResult(5000);
 		assertEquals(Strings.create("shared content"), RT.getIn(read, "value"));

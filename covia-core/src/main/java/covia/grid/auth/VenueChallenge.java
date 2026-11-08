@@ -139,6 +139,16 @@ public final class VenueChallenge {
 	 * @return null when proven, else the reason it is not
 	 */
 	public static String prove(VenueHTTP venue, String did) {
+		return prove(venue, did, System.currentTimeMillis() / 1000);
+	}
+
+	/**
+	 * As {@link #prove(VenueHTTP, String)}, judging the proof's times at
+	 * {@code now}: a venue passes its own clock.
+	 *
+	 * @param now The current time, in seconds since the epoch
+	 */
+	public static String prove(VenueHTTP venue, String did, long now) {
 		if (UCAN.fromDIDKey(Strings.create(did)) == null) return Reason.NO_KEY + did;
 		URI api = venue.getBaseURI();
 		String dialled = api.getScheme() + "://" + api.getRawAuthority();
@@ -154,7 +164,7 @@ public final class VenueChallenge {
 			return Reason.NO_ANSWER + (cause instanceof ResponseException re ? re.getMessage()
 				: cause == null ? "no response" : cause.getClass().getSimpleName());
 		}
-		return verify(proof, did, nonce, dialled, System.currentTimeMillis() / 1000);
+		return verify(proof, did, nonce, dialled, now);
 	}
 
 	/**

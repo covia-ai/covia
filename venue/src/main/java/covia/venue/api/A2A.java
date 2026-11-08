@@ -277,8 +277,8 @@ public class A2A extends ACoviaAPI {
 	 * {@code X-Covia-Ucans} header.
 	 */
 	private RequestContext askerContext(Context ctx) {
-		return AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		return engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 	}
 
 	/**

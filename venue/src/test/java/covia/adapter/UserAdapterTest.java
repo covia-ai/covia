@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.RootAuthorityPolicy;
-import convex.auth.did.DIDVerifier;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -39,7 +38,6 @@ import covia.lattice.CoviaPath;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import covia.venue.server.AuthMiddleware;
 import covia.venue.User;
 
 class UserAdapterTest {
@@ -346,8 +344,8 @@ class UserAdapterTest {
 				Capability.create(Strings.create(owner + "/v/test/ops/capturectx"),
 					Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
-		RequestContext delegateCtx = AuthMiddleware.withTransportGrants(
-			RequestContext.of(delegate), Vectors.of(grant), DIDVerifier.CONVEX);
+		RequestContext delegateCtx = engine.withTransportGrants(
+			RequestContext.of(delegate), Vectors.of(grant));
 
 		// The grant is inert during an ordinary invocation.
 		TestAdapter.CAPTURED_CTX.remove(delegate);
@@ -411,8 +409,7 @@ class UserAdapterTest {
 			AString delegate, long exp, convex.core.data.AVector<ACell> capabilities) {
 		AString jwt = UCAN.create(ownerKey, delegateKey.getAccountKey(), exp,
 			capabilities, Vectors.empty()).toJWT(ownerKey);
-		return AuthMiddleware.withTransportGrants(RequestContext.of(delegate),
-			Vectors.of(jwt), DIDVerifier.CONVEX);
+		return engine.withTransportGrants(RequestContext.of(delegate), Vectors.of(jwt));
 	}
 
 	private static ACell invokeSudo(AString owner, RequestContext ctx) throws Exception {

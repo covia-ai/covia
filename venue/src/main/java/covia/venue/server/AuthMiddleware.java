@@ -6,10 +6,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Set;
 import java.util.concurrent.Semaphore;
 
-import convex.auth.did.DIDVerifier;
-import convex.auth.ucan.UCAN;
 import convex.core.data.ACell;
-import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
@@ -24,7 +21,6 @@ import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import covia.venue.UcanJwtValidator;
 import covia.venue.api.ACoviaAPI;
 import covia.venue.api.ApiErrors;
 import covia.venue.auth.VenueAuthenticator;
@@ -345,28 +341,8 @@ public class AuthMiddleware {
 	public static final String NO_VENUE = "No venue serves this request: its caller was not bound by a venue's middleware or authenticator";
 
 	/**
-	 * Attach transport-presented UCAN grants to a request context — the single
-	 * seam used by every invoke transport (REST, MCP). Capability-bearing tokens
-	 * are attached only for capability checks
-	 * (§5.2). Proofs are additive grants: their presence never authenticates a
-	 * caller, selects an execution namespace, or instructs an operation. Empty-att
-	 * target credentials remain only in the raw relay envelope.
-	 *
-	 * <p>With no token presented, nothing is attached and access is unrestricted
-	 * (the common case).</p>
-	 *
-	 * @param rctx context for the authenticated caller (caller DID already set)
-	 * @param ucans transport {@code ucans} vector, or null
-	 * @return rctx with the presented proofs attached
-	 */
-	public static RequestContext withTransportGrants(RequestContext rctx,
-			AVector<ACell> ucans) {
-		return withTransportGrants(rctx, ucans, DIDVerifier.CONVEX);
-	}
-
-	/**
 	 * The {@code ucans} array of a request body or tool arguments, in the vector
-	 * shape {@link #withTransportGrants} takes.
+	 * shape {@link Engine#withTransportGrants} takes.
 	 *
 	 * @param request the request body, or null
 	 * @return the presented proofs, or null when there are none
@@ -386,7 +362,7 @@ public class AuthMiddleware {
 	/**
 	 * Raw JWT strings from the {@code X-Covia-Ucans} header (comma-separated),
 	 * in the same vector shape as the request-body {@code ucans} array —
-	 * verified downstream by {@link #withTransportGrants} exactly like the body
+	 * verified downstream by {@link Engine#withTransportGrants} exactly like the body
 	 * envelope. The header channel exists for body-less requests (job
 	 * observation GETs): without it a federated hop can invoke a remote job
 	 * but never observe it. Returns null when the header is absent or empty.
@@ -402,38 +378,4 @@ public class AuthMiddleware {
 		return v.isEmpty() ? null : v;
 	}
 
-	/**
-	 * Verifies proof signatures with the supplied DID verifier. Venue call
-	 * sites pass {@code engine.didVerifier()} so did:web-identified issuers
-	 * (covia#343) verify at ingress exactly like did:key ones; the
-	 * {@link DIDVerifier#CONVEX} default of the shorter overload remains
-	 * did:key-only.
-	 */
-	public static RequestContext withTransportGrants(RequestContext rctx,
-			AVector<ACell> ucans, DIDVerifier verifier) {
-		// Verify signatures at ingress with an explicit DID verifier.
-		DIDVerifier effectiveVerifier = (verifier != null) ? verifier : DIDVerifier.CONVEX;
-		AVector<ACell> parsed = UcanJwtValidator.parseTransportUCANs(ucans, effectiveVerifier);
-		if (parsed == null) return rctx;
-
-		AVector<ACell> grants = Vectors.empty();
-		for (long i = 0; i < parsed.count(); i++) {
-			AMap<AString, ACell> map = RT.castMap(parsed.get(i));
-			UCAN token = (map != null) ? UCAN.parse(map) : null;
-			AVector<ACell> capabilities = (token != null) ? token.getCapabilities() : null;
-			if (capabilities != null && !capabilities.isEmpty()) {
-				grants = grants.conj(parsed.get(i));
-			}
-		}
-		if (!grants.isEmpty()) rctx = rctx.withProofs(grants);
-		// Retain the raw transport envelope for cross-venue forwarding (C3a):
-		// proofs are self-verifying, but only the original signed JWTs verify at
-		// the next hop, not the parsed maps. A target credential may be carried
-		// here, but it remains inert and never enters the proof channel.
-		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
-		// Presented proofs are additive and never subtractive. To act with reduced authority, hand the
-		// callee a narrower Authority (Authority.of(did, grants)) or present only the
-		// UCANs the request needs — you never send everything and then subtract.
-		return rctx;
-	}
 }

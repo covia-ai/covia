@@ -25,7 +25,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.auth.did.DIDVerifier;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -42,7 +41,6 @@ import covia.venue.AgentWatch;
 import covia.venue.TestEngine;
 import covia.venue.TestLogs;
 import covia.venue.User;
-import covia.venue.server.AuthMiddleware;
 
 /**
  * HITL end-to-end (COG-16), driven through the {@link Hitl} builders — the
@@ -125,8 +123,8 @@ public class HITLAdapterTest {
 			Vectors.of(Capability.create(owner, Abilities.USER_SUDO),
 				Capability.create(Strings.create(owner + "/v/ops/hitl/request"), Strings.create("invoke"))),
 			Vectors.empty()).toJWT(ownerKey);
-		RequestContext delegate = engine.sudoContext(AuthMiddleware.withTransportGrants(
-			BOB, Vectors.of(grant), DIDVerifier.CONVEX), owner);
+		RequestContext delegate = engine.sudoContext(engine.withTransportGrants(
+			BOB, Vectors.of(grant)), owner);
 
 		Job job = request(delegate, Hitl.request("For the owner").ask(Hitl.approval("ok", "OK?").required()).build());
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), job.getErrorMessage());

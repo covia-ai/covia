@@ -555,8 +555,8 @@ public class CoviaAPI extends ACoviaAPI {
 	private void serveAssetMeta(Context ctx, String ref) {
 		// Caller identity comes from authentication; UCAN grants arrive separately.
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		rctx = AuthMiddleware.withTransportGrants(rctx,
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
 			Asset asset=resolveAssetReference(ref, rctx);
@@ -755,8 +755,8 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			RequestContext rctx = AuthMiddleware.callerContext(ctx);
-			rctx = AuthMiddleware.withTransportGrants(rctx,
-				AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+			rctx = engine().withTransportGrants(rctx,
+				AuthMiddleware.headerUcans(ctx));
 			AString ref = Strings.create(id);
 
 			Hash assetID=parseCallerAssetId(id);
@@ -867,8 +867,8 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			RequestContext rctx = AuthMiddleware.callerContext(ctx);
-			rctx = AuthMiddleware.withTransportGrants(rctx,
-				AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+			rctx = engine().withTransportGrants(rctx,
+				AuthMiddleware.headerUcans(ctx));
 			AString ref = Strings.create(idString);
 			AString writeAs=engine().requireLocalAccess(rctx, ref, Abilities.ASSET_STORE);
 			AVector<?> record=engine().getAssetRecord(assetID, writeAs);
@@ -962,7 +962,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
-		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx, ucans);
 
 		JobManager.Run run = engine().jobs().startRun(op, input, rctx, privateJob);
 		try {
@@ -1080,7 +1080,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 400, e.getMessage());
 			return;
 		}
-		rctx = AuthMiddleware.withTransportGrants(rctx, ucans, engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx, ucans);
 
 		try {
 			// Wait window: `wait` (query param or body field) is boolean or an
@@ -1213,8 +1213,8 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		// Job reads are delegable and federated observation must carry the
 		// caller's authority: attach grants from X-Covia-Ucans (a GET has no body).
-		rctx = AuthMiddleware.withTransportGrants(rctx,
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx));
 
 		try {
 			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
@@ -1468,8 +1468,8 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		// Ownership applies to the stream exactly as to GET /jobs/{id}: the
 		// record resolves under the caller's context or not at all.
-		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		try {
 			if (engine().jobs().getJobData(id, rctx) == null) {
 				buildError(ctx, 404, "Job not found: " + id);
@@ -1638,8 +1638,8 @@ public class CoviaAPI extends ACoviaAPI {
 		String name = ctx.pathParam("name");
 		// Resolved as the caller, like assets/<ref>: an encoded name may be any
 		// lattice path, so the read is the caller's to make, never the venue's.
-		RequestContext rctx = AuthMiddleware.withTransportGrants(AuthMiddleware.callerContext(ctx),
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		RequestContext rctx = engine().withTransportGrants(AuthMiddleware.callerContext(ctx),
+			AuthMiddleware.headerUcans(ctx));
 		try {
 			Asset asset = engine().resolveAsset(Strings.create(name), rctx);
 			if (asset == null) {
@@ -1802,8 +1802,8 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		rctx = AuthMiddleware.withTransportGrants(rctx,
-			AuthMiddleware.headerUcans(ctx), engine().didVerifier());
+		rctx = engine().withTransportGrants(rctx,
+			AuthMiddleware.headerUcans(ctx));
 
 		AMap<AString, ACell> input;
 		try {
