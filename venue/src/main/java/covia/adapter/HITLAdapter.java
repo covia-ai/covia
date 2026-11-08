@@ -173,7 +173,7 @@ public class HITLAdapter extends AAdapter {
 		AString title = RT.ensureString(RT.getIn(input, Hitl.TITLE));
 		if (title == null) throw new InvalidInputException("title is required");
 		AVector<ACell> asks = HitlValidation.validateAsks(RT.getIn(input, Hitl.ASKS));
-		validateOfferedGrantExpiries(asks, System.currentTimeMillis() / 1000);
+		validateOfferedGrantExpiries(asks, engine.currentTimestamp().longValue() / 1000);
 		Long timeoutSecs = parseTimeout(RT.getIn(input, Hitl.TIMEOUT));
 
 		requireDeliverable(ctx, caller, target);
@@ -397,7 +397,7 @@ public class HITLAdapter extends AAdapter {
 		AString requester = Attribution.caller(record);
 		AMap<AString, ACell> transported = Maps.empty();
 		AMap<AString, ACell> recordedAnswers = answers;
-		long tnow = System.currentTimeMillis() / 1000;
+		long tnow = engine.currentTimestamp().longValue() / 1000;
 		for (long i = 0; i < asks.count(); i++) {
 			AMap<AString, ACell> ask = (AMap<AString, ACell>) asks.get(i);
 			if (!Hitl.TOKEN_ASK.equals(RT.ensureString(ask.get(Hitl.TYPE)))) continue;
@@ -490,7 +490,7 @@ public class HITLAdapter extends AAdapter {
 	 *  (exp: null, Convex #678) — permitted only when no venue ceiling is set. */
 	private AString issueGrants(AString responder, AString requester, AVector<ACell> approved) {
 		if (requester == null) throw new IllegalStateException("record has no requester identity");
-		long now = System.currentTimeMillis() / 1000;
+		long now = engine.currentTimestamp().longValue() / 1000;
 		Long maxLifetime = configuredMaxGrantLifetimeSecs();
 		Long exp = null; // null sorts as infinity and means an explicitly unbounded token
 		for (long i = 0; i < approved.count(); i++) {

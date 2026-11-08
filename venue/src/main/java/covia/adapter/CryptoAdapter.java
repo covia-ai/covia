@@ -310,7 +310,7 @@ public class CryptoAdapter extends AAdapter {
 		return token;
 	}
 
-	private static String jwtVerificationReason(JWT jwt, AccountKey trustedKey,
+	private String jwtVerificationReason(JWT jwt, AccountKey trustedKey,
 			AString issuer, AString audience, boolean requireExpiration) {
 		AMap<AString, ACell> header = jwt.getHeader();
 		if (!EDDSA.equals(header.get(JWT.ALG))) return JWT_ALGORITHM;
@@ -321,7 +321,7 @@ public class CryptoAdapter extends AAdapter {
 		String reason = jwtClaimShape(claims);
 		if (reason != null) return reason;
 		if (requireExpiration && !claims.containsKey(JWT.EXP)) return JWT_EXPIRATION_REQUIRED;
-		double now = System.currentTimeMillis() / 1000.0;
+		double now = engine.currentTimestamp().longValue() / 1000.0;
 		if (claims.get(JWT.EXP) instanceof ANumeric exp && now >= exp.doubleValue()) return JWT_EXPIRED;
 		if (claims.get(JWT.NBF) instanceof ANumeric nbf && now < nbf.doubleValue()) return JWT_NOT_YET_VALID;
 		if (issuer != null && !issuer.equals(claims.get(JWT.ISS))) return JWT_ISSUER;

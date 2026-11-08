@@ -3690,7 +3690,7 @@ public class Engine {
 			}
 		}
 		if (admissionAllows(ctx, resource, ability)) return true;
-		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000, destination);
+		return proofsCover(ctx, resource, ability, currentTimestamp().longValue() / 1000, destination);
 	}
 
 	/** The abilities that mean "talk to this agent": submit a request or a message. */
@@ -3884,7 +3884,7 @@ public class Engine {
 			AVector<ACell> scope = ctx.getCaps();
 			if (scope == null || ctx.denialUnder(scope, resource, grant, ctx.getUserDID(), destination) == null) return;
 		}
-		if (!proofsCover(ctx, target, grant, System.currentTimeMillis() / 1000, destination)) {
+		if (!proofsCover(ctx, target, grant, currentTimestamp().longValue() / 1000, destination)) {
 			throw new AuthException((root ? GRANT_BEYOND_SCOPE : NO_GRANTING_RIGHT) + " " + can + " on " + target);
 		}
 		// Granted under presented rights: they must still hold at the horizon,

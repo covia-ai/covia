@@ -430,7 +430,7 @@ public final class VenueAuthenticator {
 
 	/** A UCAN-shaped bearer: valid, audience-bound, and with empty {@code att}. */
 	private Verdict verifyUCAN(AString jwt) {
-		long now = System.currentTimeMillis() / 1000;
+		long now = engine.currentTimestamp().longValue() / 1000;
 		// Signature + temporal bounds under the venue's DID verifier, so a
 		// did:web-identified issuer (covia#343) verifies exactly like did:key.
 		// The validator's reason describes only the token's own bytes and
@@ -472,7 +472,7 @@ public final class VenueAuthenticator {
 		AString sub = RT.ensureString(claims.get(SUB));
 		AString iss = RT.ensureString(claims.get(ISS));
 		String subject = sub.toString();
-		long now = System.currentTimeMillis() / 1000;
+		long now = engine.currentTimestamp().longValue() / 1000;
 		// The venue key could sign its own public principal as a nested subject;
 		// nothing authenticates as the anonymous namespace.
 		if (engine.isPublicPrincipal(sub)) return Verdict.fail(Reason.PUBLIC_SUBJECT + sub);
@@ -562,7 +562,7 @@ public final class VenueAuthenticator {
 		if (venueKey == null) return Verdict.fail(Reason.NO_VENUE_KEY);
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
 		if (claims == null) return Verdict.fail(Reason.VENUE_SIGNATURE_FAILS);
-		String when = temporalProblem(claims, System.currentTimeMillis() / 1000);
+		String when = temporalProblem(claims, engine.currentTimestamp().longValue() / 1000);
 		if (when != null) return Verdict.fail(when);
 		String audience = audienceProblem(claims.get(AUD));
 		if (audience != null) return Verdict.fail(audience);

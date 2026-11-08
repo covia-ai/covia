@@ -4,16 +4,14 @@ import static org.junit.jupiter.api.Assertions.*;
 import static covia.adapter.whatsapp.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.Test;
 
@@ -333,8 +331,8 @@ class WhatsAppAdapterTest {
 		var input = agent.inputs.poll(5, TimeUnit.SECONDS); assertNotNull(input); return input;
 	}
 	@Test void appliesInboundAgeAndFutureSkewLimits() throws Exception {
-		var clock = new MutableClock(); long now = clock.instant().getEpochSecond();
-		try (Fixture f = new Fixture(spec().assoc(Strings.intern("token"), Strings.create("s/LATE")), new WhatsAppAdapter(clock))) {
+		AtomicLong clock = venueClock(); long now = clock.get() / 1000;
+		try (Fixture f = new Fixture(spec().assoc(Strings.intern("token"), Strings.create("s/LATE")), clock)) {
 			for (long offset : new long[] {-86401, -86399, 300, 301}) {
 				String id = "offset-" + offset;
 				assertEquals(200, f.webhook(payload(message(id).assoc(Strings.intern("timestamp"), Strings.create(Long.toString(now + offset))))).status());
@@ -345,13 +343,13 @@ class WhatsAppAdapterTest {
 		}
 	}
 	@Test void repliesUntilButNotAtThe24HourBoundary() throws Exception {
-		var clock = new MutableClock(); long timestamp = clock.instant().getEpochSecond();
-		try (Fixture f = new Fixture(spec(), new WhatsAppAdapter(clock))) {
+		AtomicLong clock = venueClock(); long timestamp = clock.get() / 1000;
+		try (Fixture f = new Fixture(spec(), clock)) {
 			AMap<AString, ACell> event = Maps.of("to", "441234567890", "messageId", "boundary", "timestamp", Long.toString(timestamp));
-			clock.now = Instant.ofEpochSecond(timestamp + 86399);
+			clock.set((timestamp + 86399) * 1000);
 			f.adapter.sendReply(f.bot(), event, "still in window"); f.api.take();
 			for (long age : new long[] {86400, 86401}) {
-				clock.now = Instant.ofEpochSecond(timestamp + age);
+				clock.set((timestamp + age) * 1000);
 				assertEquals(WhatsAppAdapter.WINDOW_EXPIRED, assertThrows(NotSupportedException.class,
 					() -> f.adapter.sendReply(f.bot(), event, "expired")).getMessage());
 			}
@@ -359,15 +357,15 @@ class WhatsAppAdapterTest {
 		}
 	}
 	@Test void rechecksTheReplyWindowAfterTheAgentCompletes() throws Exception {
-		var clock = new MutableClock();
+		AtomicLong clock = venueClock();
 		var agentSpec = spec().dissoc(Strings.intern("operation")).dissoc(Strings.intern("reply")).assoc(Strings.intern("agent"), Strings.create("slow-agent"));
-		try (Fixture f = new Fixture(agentSpec, new WhatsAppAdapter(clock))) {
+		try (Fixture f = new Fixture(agentSpec, clock)) {
 			FakeAgent agent = new FakeAgent(); agent.blocked = new CompletableFuture<>(); f.engine.registerAdapter(agent);
 			try {
-				var message = message("slow").assoc(Strings.intern("timestamp"), Strings.create(Long.toString(clock.instant().getEpochSecond())));
+				var message = message("slow").assoc(Strings.intern("timestamp"), Strings.create(Long.toString(clock.get() / 1000)));
 				assertEquals(200, f.webhook(payload(message)).status());
 				assertNotNull(agent.inputs.poll(5, TimeUnit.SECONDS));
-				clock.now = clock.now.plusSeconds(86400);
+				clock.addAndGet(86_400_000);
 				agent.blocked.complete(Maps.of(Fields.SESSION_ID, "late-session", Fields.RESPONSE, "too late"));
 				long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
 				while (f.bot().status().get(Fields.ERROR) == null && System.nanoTime() < deadline) Thread.sleep(10);
@@ -419,11 +417,9 @@ class WhatsAppAdapterTest {
 			} finally { second.close(); }
 		}
 	}
-	private static final class MutableClock extends Clock {
-		volatile Instant now = Instant.parse("2026-10-06T12:00:00Z");
-		@Override public ZoneId getZone() { return ZoneOffset.UTC; }
-		@Override public Clock withZone(ZoneId zone) { return Clock.fixed(now, zone); }
-		@Override public Instant instant() { return now; }
+	/** A venue clock the test moves, in epoch milliseconds. */
+	private static AtomicLong venueClock() {
+		return new AtomicLong(Instant.parse("2026-10-06T12:00:00Z").toEpochMilli());
 	}
 	private static final class FakeAgent extends AAdapter {
 		final LinkedBlockingQueue<AMap<AString, ACell>> inputs = new LinkedBlockingQueue<>();

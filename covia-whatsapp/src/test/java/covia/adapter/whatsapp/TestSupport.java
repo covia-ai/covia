@@ -8,10 +8,13 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import com.sun.net.httpserver.HttpServer;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.messaging.*;
@@ -118,13 +121,23 @@ final class TestSupport {
     @Override public void close() { server.stop(0); }
   }
   static final class Fixture implements AutoCloseable {
+    private static final AMap<AString,ACell> CONFIG = Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true));
     final FakeAPI api = new FakeAPI();
-    final Engine engine = Engine.createTemp(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+    final Engine engine;
     final WhatsAppAdapter adapter;
     Fixture(AMap<AString,ACell> spec) throws Exception {
       this(spec, new WhatsAppAdapter());
     }
     Fixture(AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {
+      this(Engine.createTemp(CONFIG), spec, adapter);
+    }
+    /** A venue whose clock is {@code clock}, in epoch milliseconds, which the test moves. */
+    Fixture(AMap<AString,ACell> spec, AtomicLong clock) throws Exception {
+      this(CoviaApplication.create(VenueContext.create(() -> CVMLong.create(clock.get())))
+        .mount(AKeyPair.generate(), CONFIG).start(), spec, new WhatsAppAdapter());
+    }
+    private Fixture(Engine engine, AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {
+      this.engine = engine;
       this.adapter = adapter;
       Engine.addDemoAssets(engine);
       secret(engine, "TOKEN", TOKEN); secret(engine, "SIGNING", SECRET); secret(engine, "VERIFY", "test-verify");

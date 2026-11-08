@@ -1,6 +1,5 @@
 package covia.adapter.slack;
 
-import java.time.Instant;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -42,7 +41,7 @@ public final class SlackAdapter extends AWebhookMessagingAdapter<BotSpec> {
 		if (!"POST".equals(request.method())) return WebhookResponse.text(405, INVALID_REQUEST);
 		String timestamp = request.header("X-Slack-Request-Timestamp");
 		if (timestamp == null || !timestamp.matches("[0-9]{1,12}")) return WebhookResponse.text(401, UNAUTHORIZED);
-		long time = Long.parseLong(timestamp), now = Instant.now().getEpochSecond();
+		long time = Long.parseLong(timestamp), now = engine.currentTimestamp().longValue() / 1000;
 		if (time < now - 300 || time > now + 300) return WebhookResponse.text(401, UNAUTHORIZED);
 		String secret = bot.credential("signingSecret");
 		if (secret == null || secret.isBlank()) return WebhookResponse.text(503, UNAVAILABLE);

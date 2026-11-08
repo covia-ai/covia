@@ -139,7 +139,7 @@ public class UCANAdapter extends AAdapter {
 		AMap<AString, ACell> inputMap = RT.castMap(input);
 		ACell expValue = inputMap.get(UCAN.EXP);
 		CVMLong expCell = RT.ensureLong(expValue);
-		long now = System.currentTimeMillis() / 1000;
+		long now = engine.currentTimestamp().longValue() / 1000;
 		// UCAN v0.10.0 (Convex #678, covia#322): a non-expiring token carries an
 		// explicit exp: null. Tolerant API input treats an omitted exp as null;
 		// the minted claim is always explicit.
@@ -326,7 +326,7 @@ public class UCANAdapter extends AAdapter {
 			throw new InvalidInputException("token is required: a UCAN JWT string or token map");
 		}
 
-		long now = System.currentTimeMillis() / 1000;
+		long now = engine.currentTimestamp().longValue() / 1000;
 		AString venueDID = engine.getDIDString();
 
 		// Full verification (signature at every hop, temporal bounds, chain structure).

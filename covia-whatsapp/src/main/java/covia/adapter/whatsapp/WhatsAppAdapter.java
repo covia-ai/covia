@@ -1,9 +1,6 @@
 package covia.adapter.whatsapp;
 
 import java.net.URI;
-import java.time.Clock;
-import java.time.Instant;
-import java.util.Objects;
 import java.util.Set;
 
 import convex.core.data.ACell;
@@ -54,9 +51,8 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	/** Message types that carry a fetchable attachment. */
 	static final Set<String> MEDIA_TYPES = Set.of("image", "audio", "video", "document", "sticker");
 	static final String MEDIA_ID = "[A-Za-z0-9_.-]{1,128}";
-	private final Clock clock;
-	public WhatsAppAdapter() { this(Clock.systemUTC()); }
-	WhatsAppAdapter(Clock clock) { this.clock = Objects.requireNonNull(clock); }
+	/** The venue's time in epoch seconds, against which message ages and the reply window run. */
+	private long nowSeconds() { return engine.currentTimestamp().longValue() / 1000; }
 	@Override public String getName() { return NAME; }
 	@Override public String getDescription() { return "WhatsApp Cloud API text messages, media downloads and signed inbound conversations, bound to an owner and phone number."; }
 	@Override protected String defaultApiUrl() { return "https://graph.facebook.com"; }
@@ -104,7 +100,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 					String id = MessagingSettings.required(message, "id");
 					String timestamp = MessagingSettings.id(message, "timestamp", "[0-9]{1,12}");
 					long time = Long.parseLong(timestamp);
-					long now = Instant.now(clock).getEpochSecond();
+					long now = nowSeconds();
 					if (time > now + 300 || time < now - WINDOW_SECONDS) continue;
 					// A WhatsApp chat is the sender's own number; the business number encloses it.
 					Channel verified = Channel.of(NAME, ChannelAuthentication.SIGNED_CALLBACK,
@@ -187,7 +183,7 @@ public final class WhatsAppAdapter extends AWebhookMessagingAdapter<BotSpec> {
 	}
 	private void requireWindow(AMap<AString, ACell> event) {
 		long timestamp = Long.parseLong(MessagingSettings.required(event, "timestamp"));
-		if (Instant.now(clock).getEpochSecond() - timestamp >= WINDOW_SECONDS) throw new NotSupportedException(WINDOW_EXPIRED);
+		if (nowSeconds() - timestamp >= WINDOW_SECONDS) throw new NotSupportedException(WINDOW_EXPIRED);
 	}
 	@Override protected int maxText() { return MAX_TEXT; }
 	@Override protected long relayReplyWindowMs() { return WINDOW_SECONDS * 1000; }

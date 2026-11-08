@@ -51,7 +51,7 @@ public final class VenueProofs {
 	private final ConcurrentHashMap<Proven, Long> proven = new ConcurrentHashMap<>();
 
 	public VenueProofs(Engine engine) {
-		this(engine, System::currentTimeMillis);
+		this(engine, () -> engine.currentTimestamp().longValue());
 	}
 
 	/** @param clock Milliseconds since the epoch, against which reuse periods run */

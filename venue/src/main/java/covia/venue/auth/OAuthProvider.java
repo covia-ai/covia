@@ -309,7 +309,7 @@ public class OAuthProvider {
 			return;
 		}
 		String code = randomToken(24);
-		codes.put(code, new Code(client.id(), userDID, matched, challenge, scope, System.currentTimeMillis() + CODE_TTL_MILLIS));
+		codes.put(code, new Code(client.id(), userDID, matched, challenge, scope, engine.currentTimestamp().longValue() + CODE_TTL_MILLIS));
 		String sep = matched.contains("?") ? "&" : "?";
 		StringBuilder to = new StringBuilder(matched).append(sep).append("code=").append(enc(code));
 		if (state != null) to.append("&state=").append(enc(state));
@@ -336,7 +336,7 @@ public class OAuthProvider {
 	private AMap<AString, ACell> exchangeCode(Context ctx) {
 		String codeParam = ctx.formParam("code");
 		Code code = (codeParam != null) ? codes.remove(codeParam) : null;
-		if (code == null || code.expiresAt() < System.currentTimeMillis()) {
+		if (code == null || code.expiresAt() < engine.currentTimestamp().longValue()) {
 			throw new OAuthError("invalid_grant", "authorization code is unknown or expired");
 		}
 		Client client = authenticateClient(ctx, code.clientId());
@@ -375,7 +375,7 @@ public class OAuthProvider {
 
 	/** Mints the venue bearer and (optionally) a rotating refresh token. */
 	private AMap<AString, ACell> issue(Client client, AString userDID, List<String> scope, boolean withRefresh) {
-		long nowSecs = System.currentTimeMillis() / 1000;
+		long nowSecs = engine.currentTimestamp().longValue() / 1000;
 		String scopeString = String.join(" ", scope);
 		AMap<AString, ACell> claims = Maps.of(
 			Strings.intern("sub"), userDID,
@@ -515,7 +515,7 @@ public class OAuthProvider {
 	}
 
 	private void sweep() {
-		long now = System.currentTimeMillis();
+		long now = engine.currentTimestamp().longValue();
 		codes.entrySet().removeIf(e -> e.getValue().expiresAt() < now);
 	}
 

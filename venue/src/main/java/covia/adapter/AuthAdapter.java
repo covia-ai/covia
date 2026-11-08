@@ -211,7 +211,7 @@ public class AuthAdapter extends AAdapter implements AuthenticationMethods, Venu
 		long lifetime = DEFAULT_IDENTITY_LIFETIME;
 		if (params.containsKey(LIFETIME)) {
 			if (!(params.get(LIFETIME) instanceof CVMLong seconds) || seconds.longValue() < 1
-					|| seconds.longValue() > Long.MAX_VALUE - System.currentTimeMillis() / 1000) {
+					|| seconds.longValue() > Long.MAX_VALUE - engine.currentTimestamp().longValue() / 1000) {
 				throw new InvalidInputException(IDENTITY_LIFETIME);
 			}
 			lifetime = seconds.longValue();

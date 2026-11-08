@@ -84,7 +84,7 @@ public class LoginProviders {
 	private record Exchange(AString userDID, UserIdentity identity, String redirect, String challenge, long expiresAt) {}
 
 	public LoginProviders(Engine engine, AMap<AString, ACell> authConfig) {
-		this(engine, authConfig, configuredProviders(engine, authConfig), System::currentTimeMillis);
+		this(engine, authConfig, configuredProviders(engine, authConfig), () -> engine.currentTimestamp().longValue());
 	}
 
 	// Explicit clock and provider endpoints allow real HTTP contract tests without external accounts.
