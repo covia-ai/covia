@@ -23,6 +23,7 @@ import covia.exception.AuthException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotSupportedException;
 import covia.lattice.CapabilityChecker;
+import covia.venue.Audit;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.UcanJwtValidator;
@@ -95,7 +96,43 @@ public class UCANAdapter extends AAdapter {
 	}
 
 	/**
-	 * Issues a UCAN token (UCAN.md, "Issuing grants").
+	 * A grant {@link #mint} signed and has not yet recorded.
+	 *
+	 * @param token The signed UCAN JWT
+	 * @param issuer Its {@code iss}
+	 * @param caller Who had it minted
+	 * @param audience Its {@code aud}
+	 * @param exp Its expiry in unix seconds, or null for none
+	 */
+	public record Grant(AString token, AString issuer, AString caller, AString audience, Long exp) {
+		/**
+		 * Records that this grant was issued. {@code ucan:issue} records each
+		 * grant as it returns it; work that mints a grant to hand over later
+		 * records it once it has.
+		 */
+		public void audit(Audit audit) {
+			audit.event(Audit.TOKEN_ISSUED, Audit.K_TYPE, "ucan", Audit.K_DID, caller,
+				Audit.K_SUBJECT, audience, Audit.K_EXP, (exp == null) ? "never" : exp);
+		}
+	}
+
+	/**
+	 * Issues a UCAN token (UCAN.md, "Issuing grants"): {@link #mint}, then
+	 * {@link Grant#audit}.
+	 *
+	 * @return The complete signed UCAN token as a CVM map
+	 */
+	private ACell handleIssue(RequestContext ctx, ACell input) {
+		Grant grant = mint(ctx, input);
+		grant.audit(engine.audit());
+		return Maps.of("token", grant.token(), UCAN.ISS, grant.issuer());
+	}
+
+	/**
+	 * Signs the grant {@code ucan:issue} would, with every check it makes, and
+	 * records nothing: whoever hands the token over records it then
+	 * ({@link Grant#audit}). Signing changes no state, so a grant that is never
+	 * handed over leaves no trace.
 	 *
 	 * <p>Without {@code key} or {@code prf} the venue signs a root, valid only
 	 * here, over resources it hosts, for a caller who may grant them
@@ -103,9 +140,10 @@ public class UCANAdapter extends AAdapter {
 	 * itself, over resources its did:key is root of. With {@code prf} the venue
 	 * passes on grants made to it ({@link #requireHeld}).</p>
 	 *
-	 * @return The complete signed UCAN token as a CVM map
+	 * @param ctx Whose authority the grant is made with
+	 * @param input As {@code ucan:issue} takes it
 	 */
-	private ACell handleIssue(RequestContext ctx, ACell input) {
+	public Grant mint(RequestContext ctx, ACell input) {
 		AString audDID = RT.ensureString(RT.getIn(input, UCAN.AUD));
 		if (audDID == null) {
 			throw new InvalidInputException("aud (audience DID) is required");
@@ -244,12 +282,7 @@ public class UCANAdapter extends AAdapter {
 			UCAN.ATT, att,
 			UCAN.PRF, (prf != null) ? prf : Vectors.empty());
 		claims = claims.assoc(UCAN.EXP, (exp == null) ? null : CVMLong.create(exp));
-		AString token = JWT.signPublic(claims, signer);
-		engine.audit().event(covia.venue.Audit.TOKEN_ISSUED, covia.venue.Audit.K_TYPE, "ucan",
-			covia.venue.Audit.K_DID, ctx.getCallerDID(), covia.venue.Audit.K_SUBJECT, audDID,
-			covia.venue.Audit.K_EXP, (exp == null) ? "never" : exp);
-
-		return Maps.of("token", token, UCAN.ISS, issuer);
+		return new Grant(JWT.signPublic(claims, signer), issuer, ctx.getCallerDID(), audDID, exp);
 	}
 
 	/**

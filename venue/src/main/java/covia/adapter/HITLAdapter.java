@@ -88,8 +88,14 @@ public class HITLAdapter extends AAdapter {
 	/** An inbox already holds a request under the id of a job opening one. */
 	public static final String REQUEST_EXISTS = "A HITL request is already open under the id of job ";
 
+	/** Refusal of an approved grant when the venue has no granting surface. */
+	public static final String GRANTS_UNAVAILABLE = "This venue cannot issue capability grants: its ucan adapter is not running";
+
 	/** In a request job's adapter data: the DID of the user it was sent to. */
 	static final AString TARGET = Hitl.USER;
+
+	/** The operation whose authority a grant is minted with. */
+	private static final AString ISSUE_OPERATION = Strings.intern("v/ops/ucan/issue");
 
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
@@ -387,7 +393,7 @@ public class HITLAdapter extends AAdapter {
 		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.REJECT);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
 		if (!resolveRequest(user.getDID(), id, Hitl.REJECTED, response, user.getDID(),
-				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), job)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
+				response.assoc(Hitl.ID, id).assoc(Hitl.STATUS, Hitl.REJECTED), job, null)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
 	}
 
@@ -403,7 +409,7 @@ public class HITLAdapter extends AAdapter {
 		// echo-consent intersection — all pure (HitlValidation).
 		AVector<ACell> triggered = HitlValidation.validateAnswers(asks, answers);
 		AVector<ACell> approved = HitlValidation.intersectEchoedGrants(RT.getIn(input, Hitl.GRANTS), triggered);
-		AString token = (approved.count() > 0)
+		UCANAdapter.Grant grant = (approved.count() > 0)
 			? issueGrants(user.getDID(), Attribution.caller(record), approved)
 			: null;
 
@@ -438,13 +444,13 @@ public class HITLAdapter extends AAdapter {
 		if (approved.count() > 0) response = response.assoc(Hitl.GRANTS, approved);
 
 		AMap<AString, ACell> output = response.assoc(Hitl.ID, id);
-		if (token != null) output = output.assoc(Hitl.TOKEN, token);
+		if (grant != null) output = output.assoc(Hitl.TOKEN, grant.token());
 		// The full signed tokens ride the requester's job output (never the
 		// responder's inbox record); an agent requester receives the same value
 		// in its own durable session.
 		if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
 		AMap<AString, ACell> result = output;
-		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, job)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
+		if (!resolveRequest(user.getDID(), id, Hitl.ANSWERED, response, user.getDID(), result, job, grant)) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
@@ -502,12 +508,13 @@ public class HITLAdapter extends AAdapter {
 		}
 	}
 
-	/** Issues the approved grants as a single token via the granting surface
-	 *  (ucan:issue under the RESPONDER's authority — bare paths canonicalise to
-	 *  the responder's namespace). Token exp = earliest grant exp, defaulted;
-	 *  explicit null is unbounded and mints a genuinely non-expiring token
-	 *  (exp: null, Convex #678) — permitted only when no venue ceiling is set. */
-	private AString issueGrants(AString responder, AString requester, AVector<ACell> approved) {
+	/** Mints the approved grants as a single token, as the granting surface
+	 *  does (ucan:issue under the RESPONDER's authority — bare paths canonicalise
+	 *  to the responder's namespace), but unrecorded: the answer records it once
+	 *  it commits ({@link UCANAdapter#audit}). Token exp = earliest grant exp,
+	 *  defaulted; explicit null is unbounded and mints a genuinely non-expiring
+	 *  token (exp: null, Convex #678) — permitted only when no venue ceiling is set. */
+	private UCANAdapter.Grant issueGrants(AString responder, AString requester, AVector<ACell> approved) {
 		if (requester == null) throw new IllegalStateException("record has no requester identity");
 		long now = engine.currentTimestamp().longValue() / 1000;
 		Long maxLifetime = configuredMaxGrantLifetimeSecs();
@@ -538,14 +545,11 @@ public class HITLAdapter extends AAdapter {
 			validateExpiryAgainstMaximum(grantExp, maxLifetime, now, "approved grant " + i);
 			if (grantExp != null && (exp == null || grantExp < exp)) exp = grantExp;
 		}
-		ACell result = await(engine.jobs().invokeInternal("v/ops/ucan/issue",
-			Maps.of(Strings.intern("aud"), requester,
-				Strings.intern("att"), approved,
-				Hitl.EXP, (exp == null) ? null : CVMLong.create(exp)),
-			engine.context(responder)), 30_000, "ucan:issue");
-		AString token = RT.ensureString(RT.getIn(result, Hitl.TOKEN));
-		if (token == null) throw new IllegalStateException("ucan:issue returned no token");
-		return token;
+		if (!(engine.getAdapter("ucan") instanceof UCANAdapter ucan)) throw new ConfigurationException(GRANTS_UNAVAILABLE);
+		RequestContext issuer = engine.context(responder);
+		engine.requireInvoke(issuer, ISSUE_OPERATION);
+		return ucan.mint(issuer, Maps.of(UCAN.AUD, requester, UCAN.ATT, approved,
+			UCAN.EXP, (exp == null) ? null : CVMLong.create(exp)));
 	}
 
 	/** Validate policy before delivery, so the human never approves an expiry
@@ -665,7 +669,7 @@ public class HITLAdapter extends AAdapter {
 	private void expireRequest(AString targetDID, AString id, Blob jobId) {
 		if (resolveRequest(targetDID, id, Hitl.EXPIRED, null, engine.getDIDString(), Maps.of(
 				Hitl.ID, id, Hitl.STATUS, Hitl.EXPIRED, Fields.ERROR, REQUEST_EXPIRED),
-				engine.jobs().getJob(jobId))) log.info("HITL request {} expired", id);
+				engine.jobs().getJob(jobId), null)) log.info("HITL request {} expired", id);
 	}
 
 	private record SessionWake(AString owner, AString agent) { }
@@ -679,9 +683,10 @@ public class HITLAdapter extends AAdapter {
 
 	/** Resolve once and deliver to the asking task or session in the same native transaction.
 	 * Tokens have already been prepared; no signing, I/O or live Job mutation is
-	 * allowed inside the retryable draft callback. */
+	 * allowed inside the retryable draft callback. A minted {@code grant} the
+	 * result carries is recorded once the resolution commits, and only then. */
 	private boolean resolveRequest(AString targetDID, AString id, AString status,
-			AMap<AString, ACell> response, AString responder, ACell result, Job job) {
+			AMap<AString, ACell> response, AString responder, ACell result, Job job, UCANAdapter.Grant grant) {
 		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
 		AString requester = job == null ? null : job.getOwner();
 		AString requestingAgent = job == null ? null : Engine.agentIdIn(requester, job.getCaller());
@@ -730,6 +735,7 @@ public class HITLAdapter extends AAdapter {
 			return new Resolution(notification, null, true);
 		});
 		if (resolution == null) return false;
+		if (grant != null) grant.audit(engine.audit());
 		SessionWake destination = resolution.wake();
 		// Notify live waiters even if the durability barrier fails: the in-memory
 		// transaction is already committed. The responder still receives that error.
@@ -745,7 +751,7 @@ public class HITLAdapter extends AAdapter {
 
 	/** Cancellation uses the same terminal-state arbitration without a session reply. */
 	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
-		return resolveRequest(targetDID, id, status, response, null, null, null);
+		return resolveRequest(targetDID, id, status, response, null, null, null, null);
 	}
 
 	/**

@@ -613,6 +613,64 @@ public class HITLAdapterTest {
 			RT.getIn(token.getCapabilities().get(0), Capability.WITH));
 	}
 
+	/**
+	 * Every concurrent answer approving a grant may mint one, but only the
+	 * answer that resolves the request hands its token over, so the audit trail
+	 * records exactly that grant.
+	 */
+	@Test
+	public void testOnlyTheAnswerThatResolvesRecordsItsGrant() throws Exception {
+		String venue = "hitl-audit.test.covia.example";
+		Engine audited = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create(venue),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.LOGGING, Maps.of(Config.AUDIT, true)));
+		ch.qos.logback.classic.Logger auditLog =
+			(ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(covia.venue.Audit.LOGGER);
+		var captured = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+		ch.qos.logback.classic.Level level = auditLog.getLevel();
+		boolean additive = auditLog.isAdditive();
+		captured.start();
+		auditLog.setLevel(ch.qos.logback.classic.Level.INFO);
+		auditLog.setAdditive(false);
+		auditLog.addAppender(captured);
+		try {
+			Engine.addDemoAssets(audited);
+			AString user = audited.managedUserDID(Strings.create("hitl-audit"));
+			audited.getVenueState().users().ensure(user);
+			RequestContext ctx = RequestContext.of(user);
+			Job job = audited.jobs().invokeOperation("v/ops/hitl/request", Hitl.request("Grant?")
+				.ask(Hitl.approval("access", "Grant?").grant("w/reports/", "crud/read")).build(), ctx);
+			var answer = Hitl.answer(job.getID().toHexString())
+				.answer("access", true).echo("w/reports/", "crud/read").build();
+			var answers = new java.util.ArrayList<java.util.concurrent.Callable<Boolean>>();
+			for (int n = 0; n < 6; n++) answers.add(() -> {
+				try {
+					audited.jobs().invokeOperation("v/ops/hitl/respond", answer, ctx).awaitResult(5000);
+					return true;
+				} catch (JobFailedException lost) {
+					return false;
+				}
+			});
+			long accepted = covia.test.Rendezvous.all(answers).stream().filter(Boolean::booleanValue).count();
+			assertEquals(1, accepted, "one answer resolves the request");
+			assertEquals(Status.COMPLETE, job.getStatus());
+			long recorded = java.util.List.copyOf(captured.list).stream().filter(e -> {
+				var pairs = e.getKeyValuePairs();
+				return pairs != null
+					&& pairs.stream().anyMatch(p -> covia.venue.Audit.K_EVENT.equals(p.key) && covia.venue.Audit.TOKEN_ISSUED.equals(p.value))
+					&& pairs.stream().anyMatch(p -> covia.venue.Audit.K_VENUE.equals(p.key) && venue.equals(p.value));
+			}).count();
+			assertEquals(1, recorded, "the one grant handed over is the one recorded");
+		} finally {
+			auditLog.detachAppender(captured);
+			auditLog.setLevel(level);
+			auditLog.setAdditive(additive);
+			captured.stop();
+			audited.close();
+		}
+	}
+
 	@Test
 	public void testExplicitGrantExpiryIsNotSilentlyCapped() {
 		long offeredExp = (System.currentTimeMillis() / 1000) + 14 * 24 * 3600L;
