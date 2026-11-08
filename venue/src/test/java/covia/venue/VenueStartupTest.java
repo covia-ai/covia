@@ -418,6 +418,8 @@ public class VenueStartupTest {
 				release.complete(null);
 				assertSame(engine, ready.get(10, TimeUnit.SECONDS));
 				assertTrue(adapter.recovered);
+				// No update timer runs here: the embedder steps the application.
+				application.update().get(10, TimeUnit.SECONDS);
 				assertEquals(Strings.create("embedded due"), adapter.fired.get(5, TimeUnit.SECONDS));
 				assertEquals(Status.COMPLETE, engine.getVenueState().users().user(engine.getDIDString())
 					.jobs().getRecord(RECOVERED_JOB).get(Fields.STATUS));

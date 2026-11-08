@@ -634,8 +634,9 @@ The hook receives a restored, prepared Engine with built-in and configured
 module adapters installed and their current catalogue published. Configured secrets
 and available configured MCP tools are provisioned before the hook. Adapters
 registered or replaced in the hook are published immediately. Its returned stage
-must finish before Jobs and queued agents are recovered. Scheduler alarms and adapter-owned
-inbound workers remain stopped during assembly. An already-completed stage
+must finish before Jobs and queued agents are recovered. Scheduled events and
+adapter-owned inbound workers stay idle during assembly: a venue takes part in
+the application's updates only once it has started. An already-completed stage
 (`CompletableFuture.completedFuture(null)`) is sufficient for synchronous setup.
 
 Actions that must precede live work belong in the hook's returned chain.
@@ -666,7 +667,9 @@ ready.join();
 Call launch once on a new or prepared engine; do not call `start()` first.
 It installs the built-ins and configured modules, publishes the catalogue,
 provisions configured secrets, seeds MCP, awaits the hook, recovers Jobs and
-queued agent work, re-arms HITL expiries, then activates workers and schedules.
+queued agent work, then activates workers and takes part in the application's
+updates. An application you open yourself fires scheduled events only once you
+start `application.autoUpdate()` or step it (EMBEDDING.md, Time).
 Do not copy this sequence into the application. `prepare()` and `start()`
 remain low-level APIs for manually assembled runtimes and tests: they do not
 provide a complete venue bootstrap.
@@ -1967,19 +1970,21 @@ off by default: a call is then recorded only if it outlasts the agent's
 `toolCallTimeoutMs` (see the agent-side bounds under
 [LLM providers](#llm-providers-langchain)).
 
-## Scheduled job tracking
+## Scheduler
 
 A scheduled event (`scheduler:schedule`) fires as a transient Job by default —
 no record beyond the log — which suits chatty machinery such as agent wakes.
 A caller can ask for a durable Job per fire with `track: true` on the event;
 the venue decides what happens when the caller says nothing, and may override
-the caller altogether:
+the caller altogether. The venue also bounds how many due events it starts at
+once:
 
 ```json
 {
   "scheduler": {
     "trackJobs": false,
-    "forceTrackJobs": false
+    "forceTrackJobs": false,
+    "maxConcurrency": 2
   }
 }
 ```
@@ -1989,9 +1994,15 @@ the caller altogether:
 - `forceTrackJobs` — every scheduled fire is a durable Job whatever the event
   asked for. Off by default. Use it where an audit trail of all scheduled
   work is required.
+- `maxConcurrency` — how many due events the venue starts at once, at least 1;
+  2 by default. Due events start in time order, and the rest wait in the
+  schedule, still cancellable, until a place frees. An event holds its place
+  until its operation has been invoked, not until its Job finishes, so a long
+  job does not hold one. Agent wakes and HITL timeouts count like any other
+  event.
 
-Both are resolved at fire time, so changing them covers events already
-queued. A tracked fire is recorded in the owner's job history; on a recurring
+`trackJobs` and `forceTrackJobs` are resolved at fire time, so changing them
+covers events already queued. A tracked fire is recorded in the owner's job history; on a recurring
 event its ID is reported as `lastJob` by `scheduler:list` / `GET
 /api/v1/schedules` — read that Job for the outcome. The scheduler itself keeps
 no execution history. See `GRID_SCHEDULER.md` §7.

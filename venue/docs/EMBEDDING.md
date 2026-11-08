@@ -16,11 +16,11 @@ already opened: the venue closes it when it closes, or if launch fails.
 
 The venue opens a `LatticeHost` over the store and, once the venue is running,
 starts the host's sync and flush workers
-([PERSISTENCE.md](PERSISTENCE.md#snapshot-implementation-contract)). It closes in
-this order:
-1. the application, which unmounts the venue: its engine stops intake, gives
-   work in flight the shutdown grace window ([JOBS.md](JOBS.md#shutdown)) and
-   makes its final flush;
+([PERSISTENCE.md](PERSISTENCE.md#snapshot-implementation-contract)) and the
+application's update timer (see Time). It closes in this order:
+1. the application, which stops the timer and unmounts the venue: its engine
+   stops intake, gives work in flight the shutdown grace window
+   ([JOBS.md](JOBS.md#shutdown)) and makes its final flush;
 2. the node;
 3. the host, whose `close()` stops its workers and makes the final checkpoint;
 4. the store.
@@ -39,13 +39,16 @@ venue that is already mounted is refused (`CoviaApplication.ALREADY_MOUNTED`).
 Whoever opens a host runs its workers and closes it. Once the venue is running,
 start `host.autoSync(VenueServer.SYNC_INTERVAL, application::sync)` and
 `host.autoFlush(VenueServer.FLUSH_INTERVAL)`, or intervals of your own; without
-them the venue publishes and saves only when it flushes or closes.
+them the venue publishes and saves only when it flushes or closes. Whoever
+opens the application likewise decides when scheduled events fire: start
+`application.autoUpdate()`, or step the application yourself (see Time);
+without either, no scheduled event, agent wake or HITL timeout fires.
 
 `application.unmount(venueKey)` closes the venue's engine, which makes its
 final flush, signs the venue's copy into its record and forgets it; closing
 the engine does the same, and the venue can then be mounted again.
-`application.close()` unmounts every venue. Neither closes the host or the
-store. So close the application, then `application.host().close()`, which
+`application.close()` stops the update timer and unmounts every venue. Neither
+closes the host or the store. So close the application, then `application.host().close()`, which
 stops the workers, then the store.
 
 **The venue's state.** The application holds one working copy of each mounted
@@ -112,7 +115,22 @@ test may hold it or step it by zero: a local write overwrites the venue's own
 state, and a merge on an equal timestamp keeps the local value, so no write is
 lost to a tie. Step a driven clock forward only.
 
-A test drives the clock with a supplier over a value it sets:
+Scheduled events fire when the application is updated.
+`application.update()` reads the clock once and starts, in each mounted venue,
+the events due by then: scheduled operations, agent wakes and HITL timeouts.
+Its future completes when each has started (its operation's invocation has
+returned); how each resolves is its own. A step that leaves the time unchanged
+still starts what is due, such as an event added since with a past time.
+`application.autoUpdate()` starts a timer that updates the application
+whenever a venue has something due, and returns it: `failure()` reports its
+first failure and `close()` stops it, as does closing the application. One
+runs at a time (`CoviaApplication.AUTO_UPDATING`). It waits in real time for
+the clock's distance to the next event, so on a clock you drive, step the
+application yourself rather than starting it. How many events a venue starts
+at once is `scheduler.maxConcurrency` ([CONFIG.md](CONFIG.md)).
+
+A test drives the clock with a supplier over a value it sets, and updates the
+application after each step:
 
 ```java
 AtomicLong now = new AtomicLong(Instant.parse("2026-01-01T00:00:00Z").toEpochMilli());
@@ -120,7 +138,8 @@ CoviaApplication application =
 	CoviaApplication.create(VenueContext.create(() -> CVMLong.create(now.get())));
 Engine engine = application.mount(AKeyPair.generate(), config).launch();
 // ... act, then check what the venue wrote at that time
-now.addAndGet(60_000);   // one minute later
+now.addAndGet(60_000);              // one minute later
+application.update().get();         // start what is due by then
 ```
 
 ## Routes
@@ -218,6 +237,7 @@ identity token through an operation", and HELD_KEYS.md.
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |
 | `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
+| Scheduled events, agent wakes and HITL timeouts firing by themselves on an engine you mounted | Whoever opens the application starts `application.autoUpdate()` or calls `application.update()` (see Time); `VenueServer` and `Engine.createTemp` start the timer |
 
 ## Upgrading from 0.9.x
 

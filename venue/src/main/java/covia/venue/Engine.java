@@ -266,7 +266,7 @@ public class Engine {
 		lifecycle = Lifecycle.STARTING;
 		try {
 			resumeCoreUserDeletions();
-			// Reconcile wake handles while the alarm is still disarmed. Hosts
+			// Reconcile wake handles before the scheduler takes part in updates. Hosts
 			// prepare the catalog and recover Jobs before activating this engine.
 			rebuildSchedulerFromLattice();
 			for (String name : getAdapterNamesInRegistrationOrder()) {
@@ -449,7 +449,6 @@ public class Engine {
 			venueProofs.validate();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
-			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
 			checkLaunchCancellation();
 			return activate();
 		} catch (IOException | RuntimeException | Error failure) {
@@ -1703,9 +1702,17 @@ public class Engine {
 		return auth;
 	}
 
+	/**
+	 * A started venue with a fresh key pair, mounted in an in-memory
+	 * application of its own whose update timer runs, so its scheduled events
+	 * fire by themselves. For tests and throwaway use.
+	 */
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
-			return CoviaApplication.create().mount(AKeyPair.generate(), config).start();
+			CoviaApplication application = CoviaApplication.create();
+			Engine engine = application.mount(AKeyPair.generate(), config).start();
+			application.autoUpdate();
+			return engine;
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -3632,6 +3639,28 @@ public class Engine {
 	 */
 	public Scheduler gridScheduler() {
 		return gridScheduler;
+	}
+
+	/**
+	 * Starts what this venue has due by {@code now}: its part of
+	 * {@link CoviaApplication#update()}. Until the venue has started, and from
+	 * its close on, nothing starts and the future is complete at once.
+	 */
+	CompletableFuture<Void> update(long now) {
+		return gridScheduler.update(now);
+	}
+
+	/**
+	 * When this venue next needs an update ({@link Scheduler#nextDue}), or
+	 * {@link Long#MAX_VALUE} for none.
+	 */
+	long nextDue() {
+		return gridScheduler.nextDue();
+	}
+
+	/** The application this venue is mounted in. */
+	CoviaApplication application() {
+		return application;
 	}
 
 	/**

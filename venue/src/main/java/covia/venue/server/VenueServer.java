@@ -792,15 +792,19 @@ public class VenueServer {
 	}
 
 	/**
-	 * Starts the host's sync and flush workers once the venue is running: the
-	 * venue opened the host, so it decides when state is published and saved.
-	 * Closing the host stops them. Each worker reports its first failure.
+	 * Starts the host's sync and flush workers and the application's update
+	 * timer once the venue is running: the venue opened the host and the
+	 * application, so it decides when state is published and saved and when
+	 * scheduled events fire. Closing the host stops the workers, and closing
+	 * the application the timer. Each reports its first failure.
 	 */
 	private void startHostWorkers() {
 		host.autoSync(SYNC_INTERVAL, application::sync).failure()
 			.thenAccept(e -> log.error("Venue persistence: the host's sync worker failed", e));
 		host.autoFlush(FLUSH_INTERVAL).failure()
 			.thenAccept(e -> log.error("Venue persistence: the host's flush worker failed", e));
+		application.autoUpdate().failure()
+			.thenAccept(e -> log.error("Venue scheduler: the application's update timer failed", e));
 	}
 
 	/**

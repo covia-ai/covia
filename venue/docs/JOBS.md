@@ -347,8 +347,9 @@ agent loop) or to retry an operation *it* knows is idempotent, calling
 `super` for the cases it does not handle. The agent adapter keeps queued
 request and chat Jobs whose intake is still on the agent — a request
 *is* its task, a chat is answered from its session's pending envelope — and
-the boot wake completes them; only a `trigger` wait takes the default. HITL
-re-arms its durable expiries after recovery.
+the boot wake completes them; only a `trigger` wait takes the default. A HITL
+request's expiry is a scheduled event, so it needs nothing re-armed after
+recovery (GRID_SCHEDULER.md §8).
 
 Restored non-terminal jobs **re-occupy their caller's concurrency-cap
 permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):

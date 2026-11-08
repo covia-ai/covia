@@ -30,6 +30,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Agents hold keyrings of their own, removed when the agent is deleted (#637).
 - Agents can issue grants over their own resources and their owner's, and owners over their agents'.
 - Audit events `keyring.add`, `keyring.remove` and `keyring.use`.
+- `scheduler.maxConcurrency` bounds how many due scheduled events a venue starts at once, 2 by default (#671).
+- `hitl:expire`, which the venue alone invokes when a HITL request's timeout falls due (#671).
 
 ### Changed
 

@@ -12,6 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import covia.exception.ConfigurationException;
 
 /**
@@ -123,11 +124,18 @@ public class ConfigTest {
 		Config dflt = new Config(null);
 		assertFalse(dflt.isTrackScheduledJobs(), "scheduled fires are transient unless configured");
 		assertFalse(dflt.isForceTrackScheduledJobs());
+		assertEquals(Config.DEFAULT_SCHEDULER_MAX_CONCURRENCY, dflt.getSchedulerMaxConcurrency());
 
 		Config set = new Config(Maps.of(Config.SCHEDULER, Maps.of(
-			Config.TRACK_JOBS, CVMBool.TRUE, Config.FORCE_TRACK_JOBS, CVMBool.TRUE)));
+			Config.TRACK_JOBS, CVMBool.TRUE, Config.FORCE_TRACK_JOBS, CVMBool.TRUE,
+			Config.MAX_CONCURRENCY, CVMLong.create(5))));
 		assertTrue(set.isTrackScheduledJobs());
 		assertTrue(set.isForceTrackScheduledJobs());
+		assertEquals(5, set.getSchedulerMaxConcurrency());
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
+			Config.SCHEDULER, Maps.of(Config.MAX_CONCURRENCY, CVMLong.ZERO))), "at least one event starts at a time");
+		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(
+			Config.SCHEDULER, Maps.of(Config.MAX_CONCURRENCY, Strings.create("2")))));
 
 		// Malformed values always fail; unknown keys only under strictConfig.
 		assertThrows(ConfigurationException.class, () -> new Config(Maps.of(

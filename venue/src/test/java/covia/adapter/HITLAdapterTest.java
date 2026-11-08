@@ -351,9 +351,9 @@ public class HITLAdapterTest {
 				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
 				User owner = first.getVenueState().users().user(BOB_DID);
 				AString expiryId = Strings.create(expired.toHexString());
-				owner.inbox().put(expiryId, owner.inbox().get(expiryId).assoc(Hitl.EXPIRES, CVMLong.ZERO));
-				var expiring = java.util.concurrent.CompletableFuture.runAsync(() ->
-					((HITLAdapter) first.getAdapter("hitl")).rearmExpiries(), AAdapter.VIRTUAL_EXECUTOR);
+				// As the venue does when the request's expiry event fires.
+				var expiring = first.jobs().invokeInternal(HITLAdapter.EXPIRE_OP,
+					HITLAdapter.expiryInput(BOB_DID, expiryId), first.venueContext());
 				for (Job pending : java.util.List.of(answer, reject, expire)) {
 					TestEngine.awaitJob(pending, Job::isFinished, 10_000, () -> "resolution includes the final Job record");
 				}
@@ -727,28 +727,7 @@ public class HITLAdapterTest {
 
 	// ========== Expiry and cancellation ==========
 
-	@Test
-	public void testExpiry() {
-		AString agentId = Strings.create("expiry-agent");
-		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
-		Job job = request(RequestContext.ofAgent(ALICE_DID, agentId), Hitl.request("quick")
-			.ask(Hitl.approval("ok", "OK?")).timeout(1).build());
-		String id = job.getID().toHexString();
-		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
-		assertTrue(agent.getPending().containsKey(job.getID()));
-
-		// The expiry timer fails the job; awaitResult surfaces it.
-		assertThrows(JobFailedException.class, () -> job.awaitResult(15000));
-		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("expired"));
-		assertFalse(agent.getPending().containsKey(job.getID()));
-		assertEquals(Hitl.EXPIRED, readRecord(ALICE, id).get(Hitl.STATUS));
-
-		// ADVERSARIAL: responding to an expired request must fail.
-		assertThrows(Exception.class, () -> respond(ALICE,
-			Hitl.answer(id).answer("ok", true).build()));
-	}
+	// Expiry at a request's timeout: SteppedSchedulerTest, on a driven clock.
 
 	@Test
 	public void testCancelMarksRecordCancelled() {

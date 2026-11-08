@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.exception.ConfigurationException;
 
 /**
@@ -133,7 +134,8 @@ public class Config {
 	public static final AString RATE_LIMIT = Strings.intern("rateLimit");
 
 	/** Key for the grid scheduler config block ({@code trackJobs},
-	 *  {@code forceTrackJobs}). See {@code venue/docs/GRID_SCHEDULER.md} §7. */
+	 *  {@code forceTrackJobs}, {@code maxConcurrency}). See
+	 *  {@code venue/docs/GRID_SCHEDULER.md}. */
 	public static final AString SCHEDULER = Strings.intern("scheduler");
 	public static final AString SHUTDOWN = Strings.intern("shutdown");
 	/** Per-venue logging of normal operational events: {@code {audit, access}}, both off by default (covia#538). */
@@ -153,6 +155,12 @@ public class Config {
 	/** Scheduler block: operator override — every scheduled fire is a durable
 	 *  Job, whatever the event asked for. */
 	public static final AString FORCE_TRACK_JOBS = Strings.intern("forceTrackJobs");
+
+	/** Scheduler block: how many due events a venue starts at once. */
+	public static final AString MAX_CONCURRENCY = Fields.MAX_CONCURRENCY;
+
+	/** Scheduled events a venue starts at once when {@code scheduler.maxConcurrency} is absent. */
+	public static final int DEFAULT_SCHEDULER_MAX_CONCURRENCY = 2;
 
 	/** Key for the HTTP connector's accept-queue (backlog) size */
 	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
@@ -686,9 +694,10 @@ public class Config {
 	private void validateScheduler(boolean strict) {
 		AMap<AString, ACell> sched = optionalMap(config, SCHEDULER, "scheduler");
 		if (sched == null) return;
-		validateUnknownFields(sched, Set.of("trackJobs", "forceTrackJobs"), "scheduler", strict);
+		validateUnknownFields(sched, Set.of("trackJobs", "forceTrackJobs", "maxConcurrency"), "scheduler", strict);
 		optionalBoolean(sched, TRACK_JOBS, "scheduler.trackJobs", false);
 		optionalBoolean(sched, FORCE_TRACK_JOBS, "scheduler.forceTrackJobs", false);
+		optionalLong(sched, MAX_CONCURRENCY, "scheduler.maxConcurrency", 1, Integer.MAX_VALUE);
 	}
 
 	private void validateShutdown(boolean strict) {
@@ -2315,6 +2324,22 @@ public class Config {
 	 */
 	public boolean isForceTrackScheduledJobs() {
 		return schedulerBool(FORCE_TRACK_JOBS);
+	}
+
+	/**
+	 * How many due scheduled events the venue starts at once
+	 * ({@code scheduler.maxConcurrency}), at least 1; defaults to
+	 * {@link #DEFAULT_SCHEDULER_MAX_CONCURRENCY}. An event holds its place
+	 * until its operation's invocation returns, not until its Job finishes.
+	 */
+	public int getSchedulerMaxConcurrency() {
+		ACell block = config.get(SCHEDULER);
+		if (block instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			ACell v = ((AMap<AString, ACell>) block).get(MAX_CONCURRENCY);
+			if (v instanceof CVMLong n) return (int) n.longValue();
+		}
+		return DEFAULT_SCHEDULER_MAX_CONCURRENCY;
 	}
 
 	private boolean schedulerBool(AString key) {

@@ -1,9 +1,6 @@
 package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -74,6 +71,14 @@ public class HITLAdapter extends AAdapter {
 	public static final String RESOLVED_WITHOUT_RESULT = "HITL request was resolved before restart but its full result was not saved";
 	public static final String REQUEST_REJECTED = "HITL request rejected";
 	public static final String REQUEST_EXPIRED = "HITL request expired";
+	/** Refusal of {@code hitl:expire} from anyone but the venue, which schedules it. */
+	public static final String EXPIRE_VENUE_ONLY = "Only the venue expires HITL requests, as their timeouts fall due";
+
+	/**
+	 * The operation a request's timeout schedules, fired as the venue at its
+	 * {@code expires} time with input {@code {user, id}}.
+	 */
+	public static final AString EXPIRE_OP = Strings.intern("v/ops/hitl/expire");
 
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
@@ -88,13 +93,6 @@ public class HITLAdapter extends AAdapter {
 
 	/** Optional adapter-config ceiling. Absent/null means no venue maximum. */
 	static final AString CONFIG_MAX_GRANT_LIFETIME_SECS = Strings.intern("maxGrantLifetimeSecs");
-
-	/** Expiry timers — daemon; lost on restart and re-armed by {@link #rearmExpiries()}. */
-	private static final ScheduledExecutorService EXPIRY = Executors.newSingleThreadScheduledExecutor(r -> {
-		Thread t = new Thread(r, "hitl-expiry");
-		t.setDaemon(true);
-		return t;
-	});
 
 	@Override
 	public String getName() {
@@ -123,6 +121,7 @@ public class HITLAdapter extends AAdapter {
 		installAsset("hitl/request", "/adapters/hitl/request.json");
 		installAsset("hitl/respond", "/adapters/hitl/respond.json");
 		installAsset("hitl/list",    "/adapters/hitl/list.json");
+		installAsset("hitl/expire",  "/adapters/hitl/expire.json");
 	}
 
 	@Override
@@ -137,6 +136,10 @@ public class HITLAdapter extends AAdapter {
 				}
 				case "list":
 					return CompletableFuture.completedFuture(handleList(ctx, input));
+				case "expire": {
+					final ACell in = input;
+					return CompletableFuture.supplyAsync(() -> handleExpire(ctx, in), VIRTUAL_EXECUTOR);
+				}
 				case "request":
 					return CompletableFuture.failedFuture(new NotSupportedException(
 						"hitl:request is Job-carried — invoke it as an operation, not internally"));
@@ -193,11 +196,11 @@ public class HITLAdapter extends AAdapter {
 				+ targetDID, targetDID.toString());
 		}
 		targetUser.inbox().put(id, record);
-		Blob jobId = job.getID();
 		trackPending(job, ctx.getTaskId());
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
 		job.setStatus(Status.INPUT_REQUIRED);
-		if (timeoutSecs != null) scheduleExpiry(targetDID, id, jobId, timeoutSecs * 1000);
+		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
+		if (expires != null) scheduleExpiry(targetDID, id, expires.longValue());
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
 
@@ -346,8 +349,8 @@ public class HITLAdapter extends AAdapter {
 			throw new NotSupportedException("HITL request " + id + " is not open (status: "
 				+ record.get(Hitl.STATUS) + ")");
 		}
-		// Lazy expiry: a due-but-untriggered timer (e.g. lost on restart before
-		// re-arm) must not let an expired request be answered.
+		// Lazy expiry: an expiry event not yet fired (the venue has not been
+		// updated past its time) must not let an expired request be answered.
 		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
 		if (expires != null && engine.currentTimestamp().longValue() > expires.longValue()) {
 			expireRequest(caller, id, Blob.parse(id.toString()));
@@ -633,14 +636,41 @@ public class HITLAdapter extends AAdapter {
 
 	// ========== Expiry ==========
 
-	private void scheduleExpiry(AString targetDID, AString id, Blob jobId, long delayMs) {
-		EXPIRY.schedule(() -> {
-			try {
-				expireRequest(targetDID, id, jobId);
-			} catch (Throwable t) {
-				log.warn("HITL expiry for {} failed: {}", id, t.getMessage());
-			}
-		}, delayMs, TimeUnit.MILLISECONDS);
+	/**
+	 * Schedules the request's expiry at {@code expires}: a one-shot event the
+	 * venue fires as itself, invoking {@link #EXPIRE_OP}. It lives in the
+	 * venue's schedule, so it survives a restart (COG-16).
+	 */
+	private void scheduleExpiry(AString targetDID, AString id, long expires) {
+		engine.gridScheduler().schedule(EXPIRE_OP, expiryInput(targetDID, id), engine.venueContext(),
+			expires, null, Boolean.FALSE, Strings.create("Expires HITL request " + id));
+	}
+
+	/** The input of {@link #EXPIRE_OP} for request {@code id} in {@code targetDID}'s inbox. */
+	public static AMap<AString, ACell> expiryInput(AString targetDID, AString id) {
+		return Maps.of(Hitl.USER, targetDID, Hitl.ID, id);
+	}
+
+	// ========== hitl:expire ==========
+
+	/**
+	 * Expires an open request whose timeout has fallen due. Only the venue
+	 * invokes it, from the event its request scheduled. Idempotent: a request
+	 * already resolved, or gone, is left as it is. Returns the request's
+	 * {@code id} and its {@code status} now, when it still exists.
+	 */
+	private ACell handleExpire(RequestContext ctx, ACell input) {
+		if (!engine.isDirectVenue(ctx)) throw new AuthException(EXPIRE_VENUE_ONLY);
+		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
+		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
+		if (target == null || id == null) throw new InvalidInputException("user and id are required");
+		Blob jobId = Blob.parse(id.toString());
+		if (jobId == null) throw new InvalidInputException("id is not a HITL request id: " + id);
+		expireRequest(target, id, jobId);
+		User user = engine.getVenueState().users().user(target);
+		AMap<AString, ACell> record = (user == null) ? null : user.inbox().get(id);
+		AMap<AString, ACell> result = Maps.of(Hitl.ID, id);
+		return (record == null) ? result : result.assoc(Hitl.STATUS, record.get(Hitl.STATUS));
 	}
 
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
@@ -731,49 +761,5 @@ public class HITLAdapter extends AAdapter {
 	/** Cancellation uses the same terminal-state arbitration without a session reply. */
 	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
 		return resolveRequest(targetDID, id, status, response, null, null, null);
-	}
-
-	/**
-	 * Re-arms expiry enforcement after a venue restart (COG-16: expiry MUST
-	 * survive restarts). Scans users' inboxes for OPEN requests with an
-	 * {@code expires} stamp: overdue ones expire immediately, future ones get
-	 * fresh timers. Called at venue launch after {@code recoverJobs()} (which
-	 * restores the parked INPUT_REQUIRED jobs these records refer to).
-	 *
-	 * @return number of requests re-armed or expired
-	 */
-	@SuppressWarnings("unchecked")
-	public int rearmExpiries() {
-		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
-		if (all == null) return 0;
-		int count = 0;
-		long nowMs = engine.currentTimestamp().longValue();
-		for (long u = 0; u < all.count(); u++) {
-			AString did = RT.ensureString(all.entryAt(u).getKey());
-			if (did == null) continue;
-			User user = engine.getVenueState().users().user(did);
-			if (user == null) continue;
-			AMap<AString, AMap<AString, ACell>> reqs = user.inbox().getAll();
-			for (long i = 0; i < reqs.count(); i++) {
-				ACell v = reqs.entryAt(i).getValue();
-				if (!(v instanceof AMap)) continue;
-				AMap<AString, ACell> rec = (AMap<AString, ACell>) v;
-				if (!Hitl.OPEN.equals(rec.get(Hitl.STATUS))) continue;
-				CVMLong expires = RT.ensureLong(rec.get(Hitl.EXPIRES));
-				if (expires == null) continue;
-				AString id = RT.ensureString(rec.get(Hitl.ID));
-				if (id == null) continue;
-				Blob jobId = Blob.parse(id.toString());
-				long delay = expires.longValue() - nowMs;
-				if (delay <= 0) {
-					expireRequest(did, id, jobId);
-				} else {
-					scheduleExpiry(did, id, jobId, delay);
-				}
-				count++;
-			}
-		}
-		if (count > 0) log.info("HITL: re-armed expiry for {} open request(s)", count);
-		return count;
 	}
 }

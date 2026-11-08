@@ -74,10 +74,12 @@ public class TestEngine {
 			throw new ExceptionInInitializerError(e);
 		}
 		Engine.addDemoAssets(ENGINE);
-		// This class opened the host, so it runs the host's workers, as a venue server does.
+		// This class opened the host and the application, so it runs the host's
+		// workers and the update timer, as a venue server does.
 		var host = application.host();
 		host.autoSync(covia.venue.server.VenueServer.SYNC_INTERVAL, application::sync);
 		host.autoFlush(covia.venue.server.VenueServer.FLUSH_INTERVAL);
+		application.autoUpdate();
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 			application.close();
 			try {

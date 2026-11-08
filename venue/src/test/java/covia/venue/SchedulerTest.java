@@ -45,9 +45,10 @@ import covia.grid.Status;
 /**
  * Tests for the per-venue grid {@link Scheduler}. Firing is exercised
  * deterministically via {@link Scheduler#trigger} (fire-by-handle) — no
- * wall-clock sleeps — except one test that lets the alarm fire an
- * immediately-due event. Owner isolation makes these safe under the shared
- * parallel engine. See {@code venue/docs/GRID_SCHEDULER.md}.
+ * wall-clock sleeps — except the tests that let the shared engine's update
+ * timer fire an immediately-due event. Owner isolation makes these safe under
+ * the shared parallel engine. Stepping on a driven clock is
+ * {@link SteppedSchedulerTest}. See {@code venue/docs/GRID_SCHEDULER.md}.
  */
 public class SchedulerTest {
 
@@ -56,7 +57,7 @@ public class SchedulerTest {
 	private AString did;
 	private RequestContext ctx;
 
-	/** Comfortably beyond any test run, so the alarm never fires these mid-test. */
+	/** Comfortably beyond any test run, so the update timer never fires these mid-test. */
 	private static final long HOUR = 3_600_000L;
 
 	private static AString s(String x) { return Strings.create(x); }
@@ -501,23 +502,23 @@ public class SchedulerTest {
 		assertTrue(result != null, "a caps-covered deferred op must run, not be denied");
 	}
 
-	// ------------------------------------------------------------- alarm firing
+	// -------------------------------------------------------------- timer firing
 
 	/**
-	 * An immediately-due event is fired by the alarm without any manual trigger.
-	 * Its operation waits at a test gate: the alarm claims an event before it
-	 * dispatches the fire, so once the gate is reached the event has left the
-	 * owner's list.
+	 * An immediately-due event is fired by the shared engine's update timer
+	 * without any manual trigger. Its operation waits at a test gate: an update
+	 * claims an event before it dispatches the fire, so once the gate is
+	 * reached the event has left the owner's list.
 	 */
 	@Test
-	public void testAlarmFiresImmediatelyDueEvent() throws Exception {
-		String gateName = "alarm-fires-" + did;
+	public void testTimerFiresImmediatelyDueEvent() throws Exception {
+		String gateName = "timer-fires-" + did;
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
 			sched.schedule(s("v/test/ops/hold"), Maps.of("gate", gateName), ctx, System.currentTimeMillis());
 
-			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the alarm should fire the immediately-due event");
+			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the timer should fire the immediately-due event");
 			assertTrue(sched.list(ctx).isEmpty(),
-				"the alarm should fire and remove an immediately-due event: " + sched.list(ctx));
+				"the timer should fire and remove an immediately-due event: " + sched.list(ctx));
 		}
 	}
 
@@ -560,7 +561,7 @@ public class SchedulerTest {
 		String gateName = "recurring-fires-" + did;
 		Blob handle;
 		AMap<AString, ACell> rec;
-		// The fire waits at a test gate: the alarm moves the event to its next
+		// The fire waits at a test gate: the update moves the event to its next
 		// slot before it dispatches the fire, so once the gate is reached it has.
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
 			handle = sched.schedule(s("v/test/ops/hold"), Maps.of("gate", gateName), ctx, start, everyHour(), null,
