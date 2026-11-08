@@ -42,7 +42,6 @@ public final class ToolPalette {
 
 	private static final AString K_TOOLS         = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS = Strings.intern("defaultTools");
-	private static final AString K_CAPS          = Strings.intern("caps");
 	private static final AString K_NAME          = Strings.intern("name");
 	private static final AString K_DESCRIPTION   = Strings.intern("description");
 	private static final AString K_PARAMETERS    = Strings.intern("parameters");
@@ -156,17 +155,16 @@ public final class ToolPalette {
 	/**
 	 * Resolves the configured palette: the default pack when opted in, then
 	 * {@code config.tools}, deduplicated by name. Resolution runs under the
-	 * agent's capability-narrowed context ({@code config.caps}); a configured
-	 * tool that cannot be resolved is reported in {@code unavailable} rather
-	 * than failing the cycle.
+	 * given context narrowed by {@code config.caps}; a configured tool that
+	 * cannot be resolved is reported in {@code unavailable} rather than failing
+	 * the cycle.
 	 *
 	 * @param skipNames bare names the runtime resolves itself (its harness
 	 *        tools) — silently skipped when they appear in {@code config.tools}
 	 */
 	public static Palette resolve(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> config, Set<String> skipNames) {
-		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		RequestContext resolutionCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
+		RequestContext resolutionCtx = AbstractLLMAdapter.capsContext(config, ctx);
 		Set<String> skipped = (skipNames != null) ? skipNames : Set.of();
 		Palette palette = Palette.EMPTY;
 		if (config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS))) {
