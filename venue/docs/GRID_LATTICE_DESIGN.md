@@ -400,8 +400,8 @@ a component that is not Covia's.
 **An entity is a collection and its entries.** A kind of domain entity is two
 components with different operations: the collection adds and finds entries
 (`Inbox.open`, `Tasks.add`, `Jobs.create`), and an entry changes itself
-(`HitlRequest.resolve`, `Task.park`). Each names what it is, not how it is
-held, and manages its own state as a lattice component.
+(`HitlRequest.resolve`, `Task.park`). Each manages its own state as a lattice
+component.
 
 **Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
 `AssetStore`, `ContentStore` and `Tasks` extend Convex's `IndexComponent`, and
