@@ -96,8 +96,13 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		if (caller != null) updateCaller(caller, keys -> keys.exclude(key));
 	}
 
+	/**
+	 * Stores a new event. {@code authority} is the separate authority the
+	 * scheduling request acted with ({@link Engine#keptAuthority}), or null when
+	 * it acted with its caller's own; the event fires with it.
+	 */
 	public Blob schedule(AString op, ACell input, AString owner, AString caller,
-			AVector<ACell> proofs, long wakeTime,
+			AVector<ACell> proofs, AMap<AString, ACell> authority, long wakeTime,
 			AMap<AString, ACell> repeat, Boolean track, AString description, long created) {
 		Blob key = mintKey(wakeTime);
 		AMap<AString, ACell> rec = Attribution.attribute(Maps.of(K_OP, op,
@@ -105,6 +110,7 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		if (description != null) rec = rec.assoc(K_DESCRIPTION, validateDescription(description));
 		if (input != null) rec = rec.assoc(K_INPUT, input);
 		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
+		if (authority != null) rec = rec.assoc(Fields.AUTHORITY, authority);
 		if (repeat != null) rec = rec.assoc(K_REPEAT, validateRepeat(repeat));
 		if (track != null) rec = rec.assoc(K_TRACK, CVMBool.create(track));
 		var record = rec;
@@ -174,7 +180,7 @@ public final class ScheduleState extends ALatticeComponent<ACell>
 		}
 		return earliest <= 0 ? null : schedule(AgentState.TRIGGER_OP,
 			Maps.of(Fields.AGENT_ID, agentId, Fields.FORCE, CVMBool.FALSE, Fields.WAIT, CVMBool.FALSE),
-			owner, owner, null, earliest, null, false, null,
+			owner, owner, null, null, earliest, null, false, null,
 			context.currentTimestamp().longValue());
 	}
 

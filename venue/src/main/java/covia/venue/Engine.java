@@ -87,6 +87,7 @@ import covia.exception.UnavailableException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
+import covia.grid.Attribution;
 import covia.grid.Grid;
 import covia.grid.Operation;
 import covia.grid.Venue;
@@ -4094,6 +4095,38 @@ public class Engine {
 		RequestContext ctx = own ? context(owner, principal) : context(principal);
 		if (proofs != null) ctx = ctx.withProofs(proofs);
 		return own ? ctx : sudoContext(ctx, owner);
+	}
+
+	/**
+	 * What a stored context keeps of {@code ctx}'s separate authority
+	 * ({@link RequestContext#withAuthorityOf}), beside its caller, owner and
+	 * proofs, so that work continuing later acts with the same authority: its
+	 * principal as {@link Fields#CALLER}, namespace as {@link Fields#OWNER} and
+	 * presented {@link Fields#PROOFS}. Null when it acts with its caller's own.
+	 */
+	public static AMap<AString, ACell> keptAuthority(RequestContext ctx) {
+		if (ctx == null || !ctx.hasSeparateAuthority()) return null;
+		RequestContext authority = ctx.authorityContext();
+		AMap<AString, ACell> kept = Attribution.attribute(Maps.empty(), authority.getCallerDID(), authority.getUserDID());
+		AVector<ACell> proofs = authority.getProofs();
+		return (proofs == null || proofs.isEmpty()) ? kept : kept.assoc(Fields.PROOFS, proofs);
+	}
+
+	/**
+	 * As {@link #context(AString, AString, AVector)}, acting with the authority
+	 * {@link #keptAuthority} kept, if any, rebuilt as it would act now: an
+	 * authority that could not act now fails as its own request would.
+	 *
+	 * @throws AuthException as {@link #context(AString, AString, AVector)}, for
+	 *         the caller or the kept authority
+	 */
+	public RequestContext context(AString owner, AString principal, AVector<ACell> proofs,
+			AMap<AString, ACell> authority) {
+		RequestContext ctx = context(owner, principal, proofs);
+		if (authority == null) return ctx;
+		RequestContext held = context(Attribution.owner(authority), Attribution.caller(authority),
+			RT.ensureVector(authority.get(Fields.PROOFS)));
+		return ctx.withAuthorityOf(held);
 	}
 
 	/**

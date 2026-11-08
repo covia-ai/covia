@@ -246,7 +246,7 @@ class DomainTransactionTest {
 			scheduleDraft.set(draft.schedule());
 			draft.auth().ensureManagedUser(id, DID);
 			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
-				null, 1000, null, false, null, 100);
+				null, null, 1000, null, false, null, 100);
 			assertNull(venue.auth().get(id));
 			assertTrue(venue.schedule().events().isEmpty());
 			throw new IllegalStateException();
@@ -258,7 +258,7 @@ class DomainTransactionTest {
 		venue.execute(draft -> {
 			draft.auth().ensureManagedUser(id, DID);
 			draft.schedule().schedule(Strings.create("v/test/ops/echo"), null, DID, DID,
-				null, 1000, null, false, null, 100);
+				null, null, 1000, null, false, null, 100);
 		});
 		assertNotNull(venue.auth().get(id));
 		assertEquals(1, venue.schedule().events().count());

@@ -66,6 +66,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	public static final String CONFIG_BOT = "Bot '%s' is declared in venue config; remove it there";
 	public static final String MISSING_BOT = "You have no %s bot named '%s'";
 	public static final String FOREIGN_PRINCIPAL = "a bot's principal must be its user or one of that user's agents, not %s";
+	public static final String SEPARATE_AUTHORITY_CREATOR = "a bot acts as its creator, so a request acting with "
+		+ "another principal's authority cannot create one";
 
 	private volatile Map<String, S> specs = Map.of();
 	private final Map<String, R> runners = new LinkedHashMap<>();
@@ -334,6 +336,8 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 		String key = runtimeKey(owner, name);
 		if (runners.containsKey(key)) throw new ConflictException(DUPLICATE_BOT.formatted(providerName(), name));
 		// The bot identifies its senders as exactly its creator: an agent as itself, never its owner.
+		// It then acts as that creator, so it cannot record one whose authority was another's.
+		if (ctx.hasSeparateAuthority()) throw new AuthException(SEPARATE_AUTHORITY_CREATOR);
 		AString principal = ctx.getCallerDID();
 		if (!owner.equals(Principals.userOf(principal))) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal));
 		boolean own = owner.equals(principal);

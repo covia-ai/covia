@@ -305,10 +305,19 @@ public class Fields {
 	 *  differs from {@link #CALLER}. Ownership, access control and quota key on
 	 *  it. Read and written with {@link covia.grid.Attribution}. */
 	public static final StringShort OWNER = Strings.intern("owner");
+	/** On an agent: the principal whose authority its harness runs under, and
+	 *  whose authority an update needs. Absent means the agent's owner. */
+	public static final StringShort CONTROLLER = Strings.intern("controller");
 	/** On a record whose work continues after the request that made it: the
 	 *  verified UCAN proofs the caller presented, presented again when the work
 	 *  continues. Dropped when the work ends and never shown to a caller. */
 	public static final StringShort PROOFS = Strings.intern("proofs");
+	/** On a record whose work continues after the request that made it, when
+	 *  that request acted with another principal's authority (an agent's
+	 *  harness under its controller): that authority, as its principal
+	 *  ({@link #CALLER}), namespace ({@link #OWNER}) and {@link #PROOFS}. Never
+	 *  shown to a caller. */
+	public static final StringShort AUTHORITY = Strings.intern("authority");
 	/** Beside a request or message an agent receives, and on its history turn:
 	 *  how the venue authenticated the caller through a channel binding (COG-3
 	 *  §7), written by the agent's ingress from the request context. Attribution

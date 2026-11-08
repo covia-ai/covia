@@ -9,6 +9,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -134,6 +135,43 @@ class SeparateAuthorityTest {
 		Job home = engine.jobs().invokeOperation("v/ops/hitl/request", ask, helper(alice, RequestContext.of(alice)));
 		assertEquals(Status.INPUT_REQUIRED, home.getStatus(), home.getErrorMessage());
 		home.cancel();
+	}
+
+	@Test void aKeptContextKeepsItsAuthority() {
+		AString alice = TestEngine.uniqueDID("SeparateKeptAlice");
+		AString bob = TestEngine.uniqueDID("SeparateKeptBob");
+		agent(alice, HELPER.toString(), null);
+		RequestContext ctx = helper(alice, RequestContext.of(bob));
+		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
+		engine.jobs().keepCallerContext(job, ctx);
+		try {
+			RequestContext resumed = engine.jobs().callerContext(job);
+			assertTrue(resumed.hasSeparateAuthority());
+			assertEquals(ctx.getCallerDID(), resumed.getCallerDID());
+			assertEquals(alice, resumed.getUserDID());
+			assertEquals(bob, resumed.authorityContext().getUserDID());
+			assertFalse(engine.authorityCovers(resumed, path("w/notes"), READ), "not the agent's own authority");
+			assertTrue(engine.authorityCovers(resumed, path(bob + "/w/notes"), READ));
+		} finally {
+			job.cancel();
+		}
+	}
+
+	@Test void aScheduledEventFiresWithItsAuthority() {
+		AString alice = TestEngine.uniqueDID("SeparateFireAlice");
+		AString bob = TestEngine.uniqueDID("SeparateFireBob");
+		agent(alice, HELPER.toString(), null);
+		Scheduler scheduler = engine.gridScheduler();
+		Blob handle = scheduler.schedule(path("v/test/ops/echo"), Strings.create("x"),
+			helper(alice, RequestContext.of(bob)), System.currentTimeMillis() + 3_600_000);
+		try {
+			RequestContext fire = scheduler.fireContext(engine.getVenueState().schedule().find(handle).rec());
+			assertTrue(fire.hasSeparateAuthority());
+			assertEquals(alice, fire.getUserDID());
+			assertEquals(bob, fire.authorityContext().getUserDID());
+		} finally {
+			scheduler.cancel(handle, RequestContext.of(alice));
+		}
 	}
 
 	@Test void aStepActsWithTheAgentsOwnAuthority() {
