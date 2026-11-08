@@ -162,11 +162,6 @@ public class LangChainAdapter extends AAdapter {
 	/** The provider refused the API key the caller supplied, as input or from its own secrets. */
 	public static final String CALLER_KEY_REFUSED =
 		"Model provider %s refused the API key supplied for model %s; check the apiKey input or the secret it comes from";
-	/** The provider understood the request and will not serve it (HTTP 403), which need not mean the key is wrong. */
-	public static final String PROVIDER_FORBIDDEN =
-		"Model provider %s understood the request for model %s and refused to serve it%s. The API key may be valid: "
-		+ "a refusal like this usually means the account, plan or region behind it lacks access to the model or has "
-		+ "no allowance left. Retrying unchanged will not help; a code after the status is the provider's own and says why";
 	public static final String PROVIDER_RATE_LIMITED =
 		"Model provider %s rate-limited the request for model %s; retry later";
 	public static final String PROVIDER_TIMED_OUT =
@@ -683,7 +678,7 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.AuthenticationException) {
 			// langchain4j maps 401 and 403 alike; only a 401 says the key was not accepted.
 			failure = new ConfigurationException(Integer.valueOf(403).equals(status)
-				? PROVIDER_FORBIDDEN.formatted(provider, model, refusalNote(status, e))
+				? REQUEST_REFUSED.formatted(provider, model, refusalNote(status, e))
 				: (operatorKey ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED).formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
 			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model));
