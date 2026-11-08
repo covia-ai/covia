@@ -1875,7 +1875,7 @@ public class LangChainAdapterTest {
 		var refusal = new dev.langchain4j.exception.AuthenticationException(
 			new dev.langchain4j.exception.HttpException(403, body));
 		for (boolean operatorKey : new boolean[] { true, false }) {
-			var failure = assertMapped(ConfigurationException.class, LangChainAdapter.PROVIDER_FORBIDDEN
+			var failure = assertMapped(ConfigurationException.class, LangChainAdapter.REQUEST_REFUSED
 				.formatted("anthropic", "claude-x", LangChainAdapter.refusalNote(403, refusal)), refusal, operatorKey);
 			if (code != null) assertTrue(failure.getMessage().contains(code), failure.getMessage());
 		}
@@ -1902,7 +1902,7 @@ public class LangChainAdapterTest {
 				""}) {
 			var refusal = new dev.langchain4j.exception.AuthenticationException(
 				new dev.langchain4j.exception.HttpException(403, body));
-			assertMapped(ConfigurationException.class, LangChainAdapter.PROVIDER_FORBIDDEN
+			assertMapped(ConfigurationException.class, LangChainAdapter.REQUEST_REFUSED
 				.formatted("anthropic", "claude-x", LangChainAdapter.httpNote(403)), refusal, false);
 		}
 	}
@@ -1989,7 +1989,7 @@ public class LangChainAdapterTest {
 			Throwable spent = failureOf(adapter.invokeFuture(venue, meta,
 				input.assoc(Strings.create("model"), Strings.create("spent-test-model"))));
 			assertInstanceOf(ConfigurationException.class, spent);
-			assertEquals(LangChainAdapter.PROVIDER_FORBIDDEN.formatted("anthropic", "spent-test-model",
+			assertEquals(LangChainAdapter.REQUEST_REFUSED.formatted("anthropic", "spent-test-model",
 				LangChainAdapter.refusalNote(403, spent.getCause())), spent.getMessage());
 			assertTrue(spent.getMessage().contains("budget_exceeded"), spent.getMessage());
 
