@@ -36,6 +36,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only.
 - `ucan:issue` and an agent's `caps` and `accepts` hand on only what their author could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry. A right to use something no longer lets you give it to an agent, and an agent's caps, which do not expire, need a presented right that does not either.
 - A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
+- The context an agent's config names (`config.context`, `config.loads` and the skills index) is assembled by the harness with its owner's authority, as the system prompt already was; the agent's tool calls, and the loads it or a caller adds, stay under its `caps`. Whoever may create or configure an owner's agents reaches whatever that owner can.
 - `auth:identity-token` takes any `lifetime` the caller chooses, no longer capped at an hour.
 - `ucan:issue` reads a bare `with` in the namespace the request acts in.
 - Job records name the principal that made the call as `caller` and its namespace as `owner`, present only when it differs; `actor` is gone.
@@ -199,6 +200,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Grant `oauth/use` on `x/oauth/<provider>` instead of `secret/use` on `s/oauth/<provider>`.
 - A public agent's `a2a.caps` becomes `accepts: "anyone"`; beside another `accepts` it is refused.
 - A delegate that acts for a user through `user:sudo` needs that user's `secret/use` grant for each secret it uses.
+- Grant `agent/create` or `agent/write` on a user's agents, to a person or an agent, only where you would grant that user's own authority.
 - Anonymous callers need `auth.public.caps` to grant `invoke` on `v/ops/agent/request`
   and `v/ops/agent/message`, and `crud/read` on `j` to follow their jobs.
 - An open chat bot's agent needs `accepts: "anyone"`, and the public scope `invoke` on

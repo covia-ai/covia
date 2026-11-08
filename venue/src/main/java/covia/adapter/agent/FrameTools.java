@@ -26,8 +26,11 @@ class FrameTools {
 	static final String COMPACTED = "Compacted %d turns into an archived summary. Context freed.";
 
 	final AbstractLLMAdapter runtime;
-	/** The agent's authority: every tool call and load runs under it. */
+	/** The agent's authority: every tool call, and every load the agent or a
+	 *  caller adds, runs under it. */
 	final RequestContext ctx;
+	/** Who reads the loads: the harness what the config declares, the agent the rest. */
+	final Loads.Readers readers;
 	final TaskTools.Tasks tasks;
 	final long toolCallTimeoutMs;
 	/** Whether the agent's tool calls are recorded from the start ({@code recordToolCalls}). */
@@ -70,6 +73,7 @@ class FrameTools {
 			FrameStore store, int frameIndex) {
 		this.runtime = runtime;
 		this.ctx = cycleSpec.capsCtx();
+		this.readers = new Loads.Readers(cycleSpec.ctx(), cycleSpec.capsCtx());
 		this.tasks = tasks;
 		this.toolIndex = (toolIndex != null) ? toolIndex : Maps.empty();
 		this.outerLoads = (outerLoads != null) ? outerLoads : Maps.empty();
@@ -142,7 +146,7 @@ class FrameTools {
 	 * retracts both its advertised definition and its dispatch route.
 	 */
 	Loads.Snapshot refreshLoadSnapshot() {
-		Loads.Snapshot snapshot = Loads.resolveForInference(runtime.engine, ctx,
+		Loads.Snapshot snapshot = Loads.resolveForInference(runtime.engine, readers,
 			ContextChain.effective(outerLoads, loads()), this::excludesLoadName, labels,
 			!renderingCurrent());
 		adoptLoadSnapshot(snapshot);
@@ -298,7 +302,7 @@ class FrameTools {
 	}
 
 	private Loads.Snapshot loadSnapshot(AMap<AString, ACell> frameLoads) {
-		return Loads.describe(runtime.engine, ctx, ContextChain.effective(outerLoads, frameLoads),
+		return Loads.describe(runtime.engine, readers, ContextChain.effective(outerLoads, frameLoads),
 			this::excludesLoadName, !renderingCurrent());
 	}
 }

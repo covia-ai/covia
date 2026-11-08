@@ -278,28 +278,33 @@ public class PathReadAuthorityTest {
 		assertEquals(Strings.create("DATA"), agentPrompt(alice, "within"));
 	}
 
+	/**
+	 * Context assembly is the harness's: the context an agent's config names
+	 * shows what its owner can read, whatever the agent's caps, since whoever
+	 * configures an agent acts with its owner's authority (UCAN.md §5.4).
+	 */
 	@Test
-	public void testScopedAgentCannotPinOwnPathsOutsideItsCaps() {
+	public void testConfiguredContextIsAssembledByTheHarness() {
 		RequestContext parent = RequestContext.ofAgent(alice, Strings.create("parent")).withCaps(Vectors.of(
 			Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
 			Capability.create(Strings.create("g/"), Capability.CRUD_READ),
 			Capability.create(Strings.create("g/"), Strings.create("grant/crud/read")),
 			Maps.of(Capability.CAN, Strings.create("invoke"))));
-		Job created = createAgent("pinned", Maps.of(
+		Job pinned = createAgent("pinned", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
 			"caps", Vectors.of(Capability.create(Strings.create("g/"), Capability.CRUD_READ)),
 			"context", Vectors.of(Strings.create("w/cfg"))), parent);
-		assertEquals(Status.COMPLETE, created.getStatus(), created.getErrorMessage());
-		String shown = shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned"), parent));
-		assertFalse(shown.contains(SECRET), "an agent's pinned context showed what its caps do not cover: " + shown);
+		assertEquals(Status.COMPLETE, pinned.getStatus(), pinned.getErrorMessage());
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned"), parent)).contains(SECRET),
+			"a pinned entry outside the agent's caps is assembled by the harness");
 
-		Job covered = createAgent("pinned-covered", Maps.of(
+		Job loaded = createAgent("loaded", Maps.of(
 			Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/toolllm",
-			"caps", Vectors.of(Capability.create(Strings.create("w/cfg"), Capability.CRUD_READ)),
-			"context", Vectors.of(Strings.create("w/cfg"))), ALICE);
-		assertEquals(Status.COMPLETE, covered.getStatus(), covered.getErrorMessage());
-		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "pinned-covered"), ALICE)).contains(SECRET),
-			"caps that cover a pinned entry show it");
+			"caps", Vectors.of(Capability.create(Strings.create("g/"), Capability.CRUD_READ)),
+			"loads", Maps.of("w/cfg", Maps.empty())), parent);
+		assertEquals(Status.COMPLETE, loaded.getStatus(), loaded.getErrorMessage());
+		assertTrue(shown(run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "loaded"), parent)).contains(SECRET),
+			"so is a configured load");
 	}
 
 	@Test

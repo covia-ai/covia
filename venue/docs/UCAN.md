@@ -945,11 +945,16 @@ unrestricted, so only a caller that may grant everything in that namespace may
 leave it out. Caps do not expire, so a presented right to grant them must not
 expire either. The same holds for `accepts`, which confers `agent/request` and
 `agent/message` on the agent (an older public `a2a.caps` reads as
-`accepts: "anyone"`). An agent may therefore create sub-agents only with what
-it may grant, and a delegated `agent/create` or `agent/write` confers nothing
-the delegation does not let it grant. An owner may give its agent caps over
-the agent's own keys, which are its agent's. An update re-checks only the
-fields it changes, against the config it replaces, in the same atomic update.
+`accepts: "anyone"`). An owner may give its agent caps over the agent's own
+keys, which are its agent's. An update re-checks only the fields it changes,
+against the config it replaces, in the same atomic update.
+
+**Configuring an agent acts with its owner's authority.** The config chooses
+the agent's harness, its transition operation and the context it assembles,
+and the harness runs unrestricted in the owner's namespace (below). So whoever
+may create or configure an owner's agents (`agent/create`, `agent/write`),
+person or agent, reaches whatever the owner can: grant those abilities as you
+would the owner's own authority.
 
 **The transition operation is the harness.** Each cycle, the run loop invokes
 the agent's transition operation (`config.operation`) as a harness step. The
@@ -961,10 +966,11 @@ under its current `config.caps`. A transition operation that never switches is
 not bounded by the caps; that is the choice of whoever installs it.
 
 The built-in runtimes, `llmagent:chat` and `goaltree:chat`, switch at each
-tool call and at each context entry and load they read. Everything else they
-do is the harness's: resolving the model setup (the model operation, its
-provider and the system prompt), calling the model, reading the configured
-tools' definitions and keeping the session's frames. The switch takes the
+tool call and for each load the agent makes or a caller adds (a session's
+`loads`). Everything else they do is the harness's: assembling the context the
+config names (the system prompt, `config.context`, `config.loads` and the
+skills index), resolving the model setup, calling the model, reading the
+configured tools' definitions and keeping the session's frames. The switch takes the
 agent from the step's input, never its authority, whoever invokes the runtime
 and whatever `config` its input carries. Only the agent's own run or its
 owner may make an agent act, and only an agent that exists.

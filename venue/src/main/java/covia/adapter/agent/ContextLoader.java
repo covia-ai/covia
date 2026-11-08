@@ -485,9 +485,9 @@ public class ContextLoader {
 				throw new InvalidInputException(
 					"Context operation has non-boolean operation.readOnly: " + op);
 			}
-			// The operation runs under ctx, with its adapter's own checks: for
-			// an agent's pinned context and loads that is the agent's context,
-			// so its caps apply (UCAN.md §5.4).
+			// The operation runs under ctx, with its adapter's own checks: the
+			// harness's context for what the config names, the agent's for what
+			// it or a caller added (UCAN.md §5.4).
 			ACell result = await(engine.jobs().invokeInternal(asset.meta(), input, ctx.withOp(op)), op);
 			if (result == null) {
 				if (required) throw new NotFoundException("Required context operation returned null: " + op, op.toString());
