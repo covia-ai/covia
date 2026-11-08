@@ -130,12 +130,17 @@ public class RequestContext {
 	 */
 	@FunctionalInterface
 	public interface ScopeSource {
-		/** The scope as it stands now; null for unrestricted. */
-		AVector<ACell> read();
+		/**
+		 * The scope as it stands now, for a check on {@code resource}; null for
+		 * unrestricted. It includes what control of the agent that resource belongs
+		 * to gives ({@link Engine#context(AString, AString)}), so a null resource
+		 * asks for the scope alone.
+		 */
+		AVector<ACell> read(AString resource);
 	}
 
 	/** The source of this context's scope, or null when it holds its own
-	 *  ({@link Authority#getGrants()}). Read only through {@link #currentGrants()}. */
+	 *  ({@link Authority#getGrants()}). Read only through {@link #scopeFor}. */
 	private final ScopeSource scopeSource;
 
 	/**
@@ -396,16 +401,19 @@ public class RequestContext {
 			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.narrowedBy(bound, boundOwner));
 		}
 		AString owner = getUserDID();
-		return readingScope(() -> CapabilityChecker.intersect(currentGrants(), owner, bound.read(), boundOwner));
+		return readingScope(resource -> CapabilityChecker.intersect(scopeFor(resource), owner, bound.read(resource), boundOwner));
 	}
 
 	/**
 	 * This context with the authority it acts with narrowed to {@code caps},
-	 * whose bare paths name its namespace; null leaves it unchanged. A harness
-	 * narrowed by its agent's caps sees what the agent may.
+	 * whose bare paths name its namespace and whose {@code n/} its agent's notes;
+	 * null leaves it unchanged. A harness narrowed by its agent's caps sees what
+	 * the agent may.
 	 */
 	public RequestContext narrowedTo(AVector<ACell> caps) {
-		return (caps == null) ? this : narrowedBy(() -> caps, getUserDID());
+		if (caps == null) return this;
+		AVector<ACell> own = CapabilityChecker.inAgent(caps, getAgentId());
+		return narrowedBy(resource -> own, getUserDID());
 	}
 
 	/**
@@ -420,7 +428,7 @@ public class RequestContext {
 	 * dropped. To narrow what a context may do, use {@link #narrowedTo}.</p>
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(authority.withGrantScope(caps), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, null, null);
+		return new RequestContext(authority.withGrantScope(CapabilityChecker.inAgent(caps, getAgentId())), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, null, null);
 	}
 
 	/**
@@ -542,7 +550,7 @@ public class RequestContext {
 	 */
 	RequestContext forGateEvaluation(AString gateOp) {
 		RequestContext holder = authorityContext();
-		AVector<ACell> grants = holder.currentGrants();
+		AVector<ACell> grants = holder.scopeFor(null);
 		if (grants == null) grants = Vectors.empty();
 		if (gateOp != null) {
 			grants = grants.conj(Capability.create(gateOp, covia.api.Abilities.INVOKE));
@@ -601,12 +609,16 @@ public class RequestContext {
 	 * {@link #getProofs()}) read through to it.
 	 */
 	public Authority getAuthority() {
-		return (scopeSource == null) ? authority : authority.withGrantScope(currentGrants());
+		return (scopeSource == null) ? authority : authority.withGrantScope(scopeFor(null));
 	}
 
-	/** The scope this context acts under now: read from its source, else its own grants. */
-	private AVector<ACell> currentGrants() {
-		return (scopeSource != null) ? scopeSource.read() : authority.getGrants();
+	/**
+	 * The scope this context acts under now for a check on {@code resource}: read
+	 * from its source, else its own grants. Null asks for the scope alone
+	 * ({@link ScopeSource#read}).
+	 */
+	AVector<ACell> scopeFor(AString resource) {
+		return (scopeSource != null) ? scopeSource.read(resource) : authority.getGrants();
 	}
 
 	/**
@@ -729,7 +741,7 @@ public class RequestContext {
 	 * grants (nothing subtracts).
 	 */
 	public AVector<ACell> getCaps() {
-		return currentGrants();
+		return scopeFor(null);
 	}
 
 	/**
@@ -770,7 +782,7 @@ public class RequestContext {
 			authorityContext().requireExplicitCapability(resource, ability);
 			return;
 		}
-		AVector<ACell> grants = currentGrants();
+		AVector<ACell> grants = scopeFor(resource);
 		if (grants == null) grants = Vectors.empty();
 		String denial = CapabilityChecker.allows(grants, resource, ability,
 			authority.getUserDID(), authority.getDID(), op, invocationInput, gate);
@@ -814,7 +826,7 @@ public class RequestContext {
 			}
 			return holder.grantsDenial(resolved, ability, destination);
 		}
-		return denialUnder(currentGrants(), resource, ability, authority.getUserDID(), destination);
+		return denialUnder(scopeFor(resource), resource, ability, authority.getUserDID(), destination);
 	}
 
 	/** Why a scope-only check refuses a request with a separate authority: the resource is not that authority's own. */

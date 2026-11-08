@@ -169,7 +169,9 @@ public class OwnerAccessTest {
 		assertReads("n-note", ALICE, place);
 
 		assertReads("n-note", agent(caps("g/" + AGENT + "/n/", Capability.CRUD_READ)), "n/note");
-		assertDenied(agent(caps("n/", Capability.CRUD_READ)), "n/note");
+		assertReads("n-note", agent(caps("n/", Capability.CRUD_READ)), "n/note");
+		assertReads("n-note", agent(caps("n/", Capability.CRUD_READ)), place);
+		assertDenied(agent(caps(alice + "/n/", Capability.CRUD_READ)), "n/note");
 		assertDenied(agent(NONE), "n/note");
 
 		assertDenied(BOB, place);
@@ -236,8 +238,10 @@ public class OwnerAccessTest {
 		assertReads("c-op", agent(null), "c/op");
 
 		String place = alice + "/g/" + AGENT + "/n/note";
+		assertEquals(Status.COMPLETE, run("v/ops/covia/read", Maps.of("path", "n/note"),
+			agent(caps("n/", Capability.CRUD_READ))).getStatus(), "n/ in caps names the agent's own");
 		assertEquals(Status.FAILED, run("v/ops/covia/read", Maps.of("path", "n/note"),
-			agent(caps("n/", Capability.CRUD_READ))).getStatus(), "n/ is checked where it lives");
+			agent(caps("w/", Capability.CRUD_READ))).getStatus(), "n/ is checked where it lives");
 		Job granted = run("v/ops/covia/read", Maps.of("path", place),
 			bobGranted(alice + "/g/" + AGENT + "/n/", Capability.CRUD_READ));
 		assertEquals(Status.COMPLETE, granted.getStatus(), granted.getErrorMessage());
@@ -263,7 +267,9 @@ public class OwnerAccessTest {
 	@Test
 	public void testAReferenceIsReadWhereItsDataLives() {
 		assertThrows(AuthException.class, () -> engine.resolvePath(Strings.create("n/note"),
-			agent(caps("n/", Capability.CRUD_READ))), "n/ is checked where it lives");
+			agent(caps("w/", Capability.CRUD_READ))), "n/ is checked where it lives");
+		assertEquals(Strings.create("n-note"), engine.resolvePath(Strings.create("n/note"),
+			agent(caps("n/", Capability.CRUD_READ))));
 		assertEquals(Strings.create("n-note"), engine.resolvePath(Strings.create("n/note"),
 			agent(caps("g/" + AGENT + "/n/", Capability.CRUD_READ))));
 		assertEquals(Strings.create("c-draft"), engine.resolvePath(Strings.create("c/draft"), agent(NONE)));

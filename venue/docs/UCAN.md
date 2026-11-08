@@ -115,7 +115,7 @@ This aligns with `DIDURL` from convex-core — the DID is the authority, the pat
 
 **Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above; a **bare** lattice path is shorthand whose owner is implied by context, always the same principal: **the authority whose grant it is**.
 
-- **Agent caps (config scopes)**: a bare `w/projects/foo` is in the namespace the request acts in, an agent's owner's; enforcement canonicalises it to `<ownerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths. An agent's own DID is named explicitly (`<ownerDID>:g:<id>/x/crypto/keys/`).
+- **Agent caps (config scopes)**: a bare `w/projects/foo` is in the namespace the request acts in, an agent's owner's; enforcement canonicalises it to `<ownerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths. A bare `n/…` names the agent's own notes, `<ownerDID>/g/<id>/n/…`, as `n/` does in any path it uses (`CapabilityChecker.inAgent`). An agent's own DID is named explicitly (`<ownerDID>:g:<id>/x/crypto/keys/`).
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
 - **Venue issuance** (`ucan:issue`): the venue signs, so its `iss` is not the caller — bare paths are absolutised to the namespace the request acts in before signing (§4.1). Tokens minted by the venue always carry the canonical form.
 
@@ -959,6 +959,17 @@ the caps along the chain of controllers as they stand, so a controller narrowed
 or gone bounds its agents' running work. A chain that loops has no authority at its root and
 grants nothing, and two caveats that ask different things of the same grant
 allow nothing (`CapabilityChecker.intersect`).
+
+A controller has authority over the namespace of each agent it controls,
+directly or through the agents it controls: everything under
+`<owner>/g/<agent>/`, in its own right and whatever its own caps say
+(`Engine.withControl`). Its agents act with that too, within their caps, so an
+agent reaches its own namespace, and one with no caps reaches those of the
+other agents its controller controls. A capability naming a path in full gets
+no more than that: an agent reaches another agent's `n/` only if its caps name
+it and its controller has authority there. Control is not a root, so it grants
+nothing over those namespaces (§4.1), and what is held under an agent's own DID,
+such as its keyring, stays the agent's.
 
 It is the agent's owner unless the record stores another (`controller`, shown
 by `agent:info` and `agent:list`). Whoever creates or forks an agent controls

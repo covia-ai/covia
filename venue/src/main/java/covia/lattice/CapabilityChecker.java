@@ -607,6 +607,30 @@ public class CapabilityChecker {
 	}
 
 	/**
+	 * {@code caps} as agent {@code agentId} means them: a bare {@code n/} names
+	 * its own notes, as {@code n/} does in any path it uses, so a capability
+	 * over it is one over {@code g/<agentId>/n/}. Paths naming an owner, and
+	 * every other bare path, are unchanged. {@code c/} and {@code t/} need no
+	 * capability, so name nothing here.
+	 *
+	 * @return {@code caps} itself when nothing names {@code n/}, or when there is no agent
+	 */
+	public static AVector<ACell> inAgent(AVector<ACell> caps, AString agentId) {
+		if (caps == null || agentId == null) return caps;
+		AVector<ACell> resolved = caps;
+		for (long i = 0; i < caps.count(); i++) {
+			AMap<AString, ACell> grant = RT.castMap(caps.get(i));
+			AString with = (grant == null) ? null : RT.ensureString(grant.get(Capability.WITH));
+			if (with == null) continue;
+			String value = with.toString();
+			while (value.startsWith("/")) value = value.substring(1);
+			if (!value.equals("n") && !value.startsWith("n/")) continue;
+			resolved = resolved.assoc(i, grant.assoc(Capability.WITH, Strings.create(Namespace.G + "/" + agentId + "/" + value)));
+		}
+		return resolved;
+	}
+
+	/**
 	 * The scope allowing exactly what both {@code a} and {@code b} allow, for
 	 * authority narrowed twice, as an agent's is by its controller's authority
 	 * and its own caps. A null scope is unrestricted, so the other scope is the

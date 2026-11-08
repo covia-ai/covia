@@ -94,6 +94,7 @@ import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
+import covia.lattice.Namespace;
 import covia.venue.api.CoviaAPI;
 import covia.venue.auth.VenueAuthenticator;
 import covia.venue.storage.ContentStorage;
@@ -3888,7 +3889,7 @@ public class Engine {
 			requireStanding(ctx);
 			return requireLocalAccess(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
 		}
-		if (ownedByCaller(ctx, resource)) {
+		if (ownedByCaller(ctx, resource) || (ctx != null && controlsAgentAt(ctx, resource))) {
 			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
 			AString owner = ownerOf(resource);
 			return (owner != null) ? owner : (ctx != null) ? ctx.getUserDID() : null;
@@ -4158,18 +4159,23 @@ public class Engine {
 	 * owner's own. A chain of controllers that loops has no authority at its
 	 * root, so grants nothing.
 	 *
+	 * <p>What control gives is not narrowed by the controller's own caps
+	 * ({@link #withControl}), and an agent under that controller has it within
+	 * its own caps.</p>
+	 *
 	 * @param seen the agents already on this chain of controllers
 	 */
 	private RequestContext agentContext(AString owner, AString agentId, Set<AString> seen) {
 		RequestContext agent = RequestContext.ofAgent(owner, agentId);
-		RequestContext.ScopeSource caps = () -> agentScope(owner, agentId);
+		AString self = covia.grid.Principals.agentDID(owner, agentId);
+		RequestContext.ScopeSource caps = resource -> withControl(agentScope(owner, agentId), self, resource, owner);
 		AgentState state = getAgent(owner, agentId);
 		AString controller = (state == null) ? null : state.getController();
 		if (controller == null || controller.equals(owner)) return agent.readingScope(caps);
 
 		Set<AString> chain = new HashSet<>(seen);
-		chain.add(covia.grid.Principals.agentDID(owner, agentId));
-		if (chain.contains(controller)) return agent.readingScope(() -> Vectors.empty());
+		chain.add(self);
+		if (chain.contains(controller)) return agent.readingScope(resource -> Vectors.empty());
 
 		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
 			? covia.grid.Principals.userOf(controller) : controller;
@@ -4178,19 +4184,91 @@ public class Engine {
 			? agentContext(controllerOwner, controllerAgent, chain)
 			: context(controllerOwner, controller);
 		if (controllerOwner.equals(owner) && !bound.hasSeparateAuthority()) {
-			return agent.readingScope(() -> CapabilityChecker.intersect(caps.read(), owner, bound.getCaps(), owner));
+			return agent.readingScope(resource -> withControl(
+				CapabilityChecker.intersect(agentScope(owner, agentId), owner, bound.scopeFor(resource), owner),
+				self, resource, owner));
 		}
 		return agent.withAuthorityOf(bound.narrowedBy(caps, owner));
 	}
 
 	/**
 	 * Agent {@code agentId}'s capability scope as it stands now: its
-	 * {@code config.caps}, unrestricted without them, and none once the agent
-	 * is gone or terminated.
+	 * {@code config.caps}, with {@code n/} naming its own notes, unrestricted
+	 * without them, and none once the agent is gone or terminated.
 	 */
 	AVector<ACell> agentScope(AString owner, AString agentId) {
 		AgentState agent = getAgent(owner, agentId);
-		return (agent == null) ? Vectors.empty() : RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS));
+		return (agent == null) ? Vectors.empty()
+			: CapabilityChecker.inAgent(RT.ensureVector(RT.getIn(agent.getConfig(), Config.CAPS)), agentId);
+	}
+
+	/**
+	 * {@code scope} with what {@code principal} has by control for a check on
+	 * {@code resource}: all of the namespace of an agent it controls. A controller
+	 * has authority over its agents' namespaces whatever its own caps say, so this
+	 * joins the scope rather than narrowing it. It is worked out for the resource
+	 * being checked, so nothing lists the agents a principal controls.
+	 *
+	 * @param owner the namespace a bare {@code resource} is in
+	 */
+	private AVector<ACell> withControl(AVector<ACell> scope, AString principal, AString resource, AString owner) {
+		if (scope == null) return null;
+		AgentPlace place = AgentPlace.of(resource, owner);
+		return (place != null && controls(principal, place))
+			? scope.conj(Capability.create(place.address(), Capability.TOP)) : scope;
+	}
+
+	/**
+	 * The namespace of agent {@code agentId} in {@code owner}'s record,
+	 * {@code <owner>/g/<agentId>/}. It is not what is held under the agent's own
+	 * DID, such as its keyring, which is the agent's alone.
+	 */
+	private record AgentPlace(AString owner, AString agentId) {
+		/** The agent namespace {@code resource} lies in, a bare path being in {@code owner}'s; null when it lies in none. */
+		static AgentPlace of(AString resource, AString owner) {
+			if (resource == null) return null;
+			String value = resource.toString();
+			while (value.startsWith("/")) value = value.substring(1);
+			value = CapabilityChecker.canonicalResource(value, owner);
+			if (value == null || !value.startsWith("did:")) return null;
+			int slash = value.indexOf('/');
+			if (slash < 0 || !value.startsWith(Namespace.G + "/", slash + 1)) return null;
+			int start = value.indexOf('/', slash + 1) + 1;
+			int end = value.indexOf('/', start);
+			String id = (end < 0) ? value.substring(start) : value.substring(start, end);
+			return id.isEmpty() ? null : new AgentPlace(Strings.create(value.substring(0, slash)), Strings.create(id));
+		}
+
+		AString address() {
+			return Strings.create(owner + "/" + Namespace.G + "/" + agentId + "/");
+		}
+	}
+
+	/**
+	 * Whether {@code principal} controls the agent at {@code place}: it is that
+	 * agent's controller, or the controller of an agent on the chain above it.
+	 */
+	private boolean controls(AString principal, AgentPlace place) {
+		if (principal == null) return false;
+		Set<AString> seen = new HashSet<>();
+		AString owner = place.owner();
+		AString agentId = place.agentId();
+		while (true) {
+			AgentState state = getAgent(owner, agentId);
+			AString controller = (state == null) ? null : state.getController();
+			if (controller == null) return false;
+			if (controller.equals(principal)) return true;
+			if (!seen.add(controller) || !covia.grid.Principals.isAgentDID(controller)) return false;
+			owner = covia.grid.Principals.userOf(controller);
+			agentId = agentIdIn(owner, controller);
+			if (agentId == null) return false;
+		}
+	}
+
+	/** Whether the request's caller or namespace controls the agent {@code resource} belongs to. */
+	private boolean controlsAgentAt(RequestContext ctx, AString resource) {
+		AgentPlace place = AgentPlace.of(resource, ctx.getUserDID());
+		return place != null && (controls(ctx.getCallerDID(), place) || controls(ctx.getUserDID(), place));
 	}
 
 	/**
@@ -4431,9 +4509,9 @@ public class Engine {
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
 	}
 
-	/** Whether {@code resource} is another identity's that this venue hosts. */
+	/** Whether {@code resource} is another identity's that this venue hosts, and not in the namespace of an agent the request controls. */
 	private boolean isAnothers(RequestContext ctx, AString resource) {
-		return !ownedByCaller(ctx, resource) && isHosted(resource);
+		return !ownedByCaller(ctx, resource) && isHosted(resource) && !controlsAgentAt(ctx, resource);
 	}
 
 	/**
@@ -4443,7 +4521,7 @@ public class Engine {
 	 * it stands now, once for this check.
 	 */
 	private boolean scopeOrHeldCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
-		AVector<ACell> scope = ctx.getCaps();
+		AVector<ACell> scope = ctx.scopeFor(resource);
 		if (scope == null) return true;
 		if (crossUserAllows(ctx, resource, ability, destination)) return true;
 		return ctx.denialUnder(scope, resource, ability, ctx.getUserDID(), destination) == null;

@@ -39,6 +39,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only.
 - `ucan:issue` hands on only what its caller could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry.
 - An agent's `caps` and `accepts` take no check of their own when set: `caps` can never exceed the authority of the agent's controller, so what an agent creates stays within what it can do.
+- A controller has authority over the whole of the agents it controls (`g/<agent>/`), whatever its own `caps` say.
+- A bare `n/` in an agent's `caps` names that agent's own notes; it used to name nothing.
 - A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
 - The context an agent's config names (`config.context`, `config.loads` and the skills index) is assembled by the harness with its controller's authority, as the system prompt already was; the agent's tool calls, and the loads it or a caller adds, stay under its `caps`.
 - `auth:identity-token` takes any `lifetime` the caller chooses, no longer capped at an hour.
