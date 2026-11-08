@@ -14,7 +14,6 @@ import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.lattice.AccessPolicy;
@@ -79,19 +78,6 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	/** Handle of this agent's single pending {@code agent:trigger} wake event in the
 	 *  venue grid scheduler, or absent when no wake is armed. */
 	private static final AString K_WAKE_HANDLE = Strings.intern("wakeHandle");
-	/** Monotonic task-row revision. A continuation increments it so a transition
-	 *  that started against an older view cannot complete the task concurrently. */
-	private static final AString K_TASK_REVISION = Strings.intern("revision");
-	/** A2A message IDs already accepted for a task, retained on the task row so
-	 *  retries are idempotent even after the session pending entry is drained. */
-	private static final AString K_CONTINUATION_IDS = Strings.intern("continuationIds");
-	/** Ordered continuation envelopes queued behind the task's original input. */
-	private static final AString K_CONTINUATIONS = Strings.intern("continuations");
-	/** Number of original/continuation inputs already claimed by run cycles. */
-	private static final AString K_PRESENTED_INPUTS = Strings.intern("presentedInputs");
-	/** Set on a task row that yielded while something it waits on is outstanding:
-	 *  it runs again only when something new arrives for it ({@link #isTaskReady}). */
-	private static final AString K_PARKED = Strings.intern("parked");
 	/** The running cycle's claim on the record, {@code inCycle}, holds its epoch here. */
 	private static final AString K_EPOCH = Strings.intern("epoch");
 
@@ -382,6 +368,11 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getSession(Blob sid) { return session(sid).getRecord(); }
 
+	/** The agent's queue of tasks, bound to this agent (including when this agent is a draft). */
+	public Tasks tasks() {
+		return new Tasks(cursor().path(K_TASKS));
+	}
+
 	/** Session view bound to this agent (including when this agent is a draft).
 	 * Missing sessions read as null; mutations never create or resurrect them. */
 	public SessionState session(Blob sid) {
@@ -406,6 +397,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		if (route != null) return route.child().resolve(segments, start + route.taken(), end);
 		AString segment = segments[start];
 		if (K_N.equals(segment)) return workspace().resolve(segments, start + 1, end);
+		if (K_TASKS.equals(segment)) return tasks().resolve(segments, start + 1, end);
 		if (K_SESSIONS.equals(segment) && end - start > 1) throw new NoSuchPathException(segments, start + 1, end);
 		return CoviaValue.within(this, segments, start, end);
 	}
@@ -489,8 +481,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	public SessionIntake addTaskInSession(Blob sid, AString caller,
 			AMap<AString, ACell> initialLoads, Blob taskId, ACell taskData) {
-		return intakeSession(sid, caller, initialLoads, true, draft ->
-			draft.update(record -> record.assoc(K_TASKS, extractTasks(record).assoc(taskId, taskData))));
+		return intakeSession(sid, caller, initialLoads, true, draft -> draft.tasks().add(taskId, taskData));
 	}
 
 	/** Atomically creates/reuses a session and appends one pending envelope. */
@@ -693,117 +684,29 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 		update(r -> r.dissoc(K_ERROR));
 	}
 
-	public void addTask(Blob taskId, ACell taskData) {
-		update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, taskData)));
-	}
-
 	/** Removes a task, queued or resolved. */
 	public void removeTask(Blob taskId) {
-		update(r -> {
-			AMap<AString, ACell> next = r.assoc(K_TASKS, extractTasks(r).dissoc(taskId));
-			Index<Blob, ACell> resolved = extractResolved(r);
-			return resolved.containsKey(taskId) ? next.assoc(K_RESOLVED, resolved.dissoc(taskId)) : next;
+		execute(draft -> {
+			draft.tasks().remove(taskId);
+			draft.update(r -> {
+				Index<Blob, ACell> resolved = extractResolved(r);
+				return resolved.containsKey(taskId) ? r.assoc(K_RESOLVED, resolved.dissoc(taskId)) : r;
+			});
 		});
-	}
-
-	/** Returns the continuation revision of a task row (legacy rows are zero). */
-	public static long taskRevision(ACell taskData) {
-		if (taskData instanceof AMap<?, ?> map
-				&& map.get(K_TASK_REVISION) instanceof CVMLong revision) {
-			return revision.longValue();
-		}
-		return 0L;
-	}
-
-	/** Whether a task row still has original/continuation input not yet claimed. */
-	@SuppressWarnings("unchecked")
-	public static boolean hasUnpresentedTaskInputs(ACell taskData) {
-		if (!(taskData instanceof AMap<?, ?> map)) return false;
-		long presented = (map.get(K_PRESENTED_INPUTS) instanceof CVMLong count)
-			? count.longValue() : 0L;
-		long continuations = (map.get(K_CONTINUATIONS) instanceof AVector<?> v)
-			? v.count() : 0L;
-		return presented < 1L + continuations;
 	}
 
 	/**
 	 * Atomically accepts a message for an existing task and queues it on that
-	 * task row. Completion or cancellation that removes the task first makes
-	 * this return false. The run loop claims each queued input once and presents
-	 * it as {@code newInput}; the task's session supplies the conversation state.
-	 * Repeated non-null message IDs are accepted idempotently without appending
-	 * a second continuation or incrementing the revision.
+	 * task row ({@link Task#appendContinuation}), provided the session it runs
+	 * in still exists. Completion or cancellation that removes the task first
+	 * makes this return false. The run loop claims each queued input once and
+	 * presents it as {@code newInput}; the task's session supplies the
+	 * conversation state.
 	 */
-	@SuppressWarnings("unchecked")
 	public boolean appendTaskContinuation(Blob taskId, Blob sid, ACell envelope,
 			AString messageId) {
-		java.util.concurrent.atomic.AtomicBoolean accepted =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
-		update(r -> {
-			accepted.set(false);
-			Index<Blob, ACell> tasks = extractTasks(r);
-			ACell rawTask = tasks.get(taskId);
-			if (!(rawTask instanceof AMap<?, ?>)) return r;
-			AMap<AString, ACell> task = (AMap<AString, ACell>) rawTask;
-			AString taskSid = RT.ensureString(task.get(Fields.SESSION_ID));
-			if (taskSid == null || !sid.toHexString().equals(taskSid.toString())) return r;
-
-			AVector<ACell> ids = (task.get(K_CONTINUATION_IDS) instanceof AVector<?> v)
-				? (AVector<ACell>) v : Vectors.empty();
-			if (messageId != null) {
-				for (long i = 0; i < ids.count(); i++) {
-					if (messageId.equals(ids.get(i))) {
-						accepted.set(true);
-						return r;
-					}
-				}
-			}
-
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index<?, ?> idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell rawSession = sessions.get(sid);
-			if (!(rawSession instanceof AMap<?, ?>)) return r;
-			AVector<ACell> continuations = (task.get(K_CONTINUATIONS) instanceof AVector<?> v)
-				? (AVector<ACell>) v : Vectors.empty();
-
-			long revision = taskRevision(task) + 1;
-			task = task
-				.assoc(K_TASK_REVISION, CVMLong.create(revision))
-				.assoc(K_CONTINUATIONS, continuations.conj(envelope));
-			if (messageId != null) task = task.assoc(K_CONTINUATION_IDS, ids.conj(messageId));
-			accepted.set(true);
-			return r.assoc(K_TASKS, tasks.assoc(taskId, task));
-		});
-		return accepted.get();
-	}
-
-	/**
-	 * The input a task has not been shown yet: its original {@code input}
-	 * first, then each continuation's message in turn. Null once every input
-	 * has been shown.
-	 */
-	@SuppressWarnings("unchecked")
-	public static ACell nextTaskInput(ACell taskData) {
-		if (!hasUnpresentedTaskInputs(taskData)) return null;
-		AMap<AString, ACell> task = (AMap<AString, ACell>) taskData;
-		long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
-		if (presented == 0) return task.get(Fields.INPUT);
-		AVector<ACell> continuations = (AVector<ACell>) task.get(K_CONTINUATIONS);
-		return RT.getIn(continuations.get(presented - 1), Fields.MESSAGE);
-	}
-
-	/**
-	 * Who {@link #nextTaskInput} came from, for its provenance: the task row for
-	 * its original input, else the continuation's envelope. Null once every
-	 * input has been shown.
-	 */
-	@SuppressWarnings("unchecked")
-	public static ACell nextTaskInputSource(ACell taskData) {
-		if (!hasUnpresentedTaskInputs(taskData)) return null;
-		AMap<AString, ACell> task = (AMap<AString, ACell>) taskData;
-		long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
-		if (presented == 0) return task;
-		return ((AVector<ACell>) task.get(K_CONTINUATIONS)).get(presented - 1);
+		return transact(draft -> draft.getSession(sid) != null
+			&& draft.tasks().task(taskId).appendContinuation(sid, envelope, messageId));
 	}
 
 	/** What {@link #beginCycle} took. */
@@ -823,7 +726,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * where it is taken, and issues the cycle's claim ({@code inCycle},
 	 * AGENT_LOOP.md §2.5.1). An agent that is SUSPENDED or TERMINATED is issued
 	 * none, and nothing is taken. The picked task, while its row is exactly as
-	 * picked, has its next input ({@link #nextTaskInput}) marked shown and is no
+	 * picked, has its next input ({@link Task#nextInput}) marked shown and is no
 	 * longer parked: it is in a cycle now, so a restart before the cycle ends
 	 * finds it interrupted rather than waiting. The picked session, when it
 	 * exists, is claimed with the same epoch and given the cycle's input
@@ -847,13 +750,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 			if (taskId != null) {
 				ACell current = draft.getTasks().get(taskId);
 				if (current == null || !current.equals(pickedTask)) return CycleStart.MOVED;
-				AMap<AString, ACell> task = ((AMap<AString, ACell>) current).dissoc(K_PARKED);
-				if (hasUnpresentedTaskInputs(task)) {
-					long presented = (task.get(K_PRESENTED_INPUTS) instanceof CVMLong count) ? count.longValue() : 0L;
-					task = task.assoc(K_PRESENTED_INPUTS, CVMLong.create(presented + 1));
-				}
-				AMap<AString, ACell> shown = task;
-				draft.update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, shown)));
+				draft.tasks().task(taskId).present();
 			}
 			boolean sessionClaimed = sid != null && draft.session(sid).beginCycle(epoch, turns, drainCount);
 			if (taskId == null && sid != null && !sessionClaimed) return CycleStart.MOVED;
@@ -917,44 +814,14 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 
 	/** Takes a task's row at the expected revision and claim, recording {@code completion} when given. */
 	private ACell take(Blob taskId, long expectedRevision, ACell expectedClaim, AMap<AString, ACell> completion) {
-		AMap<AString, ACell> before = getAndUpdate(r -> {
-			if (!takeable(r, taskId, expectedRevision, expectedClaim)) return r;
-			AMap<AString, ACell> next = r.assoc(K_TASKS, extractTasks(r).dissoc(taskId));
-			return (completion == null) ? next
-				: next.assoc(K_RESOLVED, extractResolved(r).assoc(taskId, completion));
+		return transact(draft -> {
+			if (expectedClaim != null && !expectedClaim.equals(RT.getIn(draft.getRecord(), K_IN_CYCLE, K_EPOCH))) return null;
+			ACell row = draft.tasks().take(taskId, expectedRevision);
+			if (row != null && completion != null) {
+				draft.update(r -> r.assoc(K_RESOLVED, extractResolved(r).assoc(taskId, completion)));
+			}
+			return row;
 		});
-		if (before == null || !takeable(before, taskId, expectedRevision, expectedClaim)) return null;
-		return extractTasks(before).get(taskId);
-	}
-
-	private static boolean takeable(AMap<AString, ACell> r, Blob taskId, long expectedRevision, ACell expectedClaim) {
-		ACell task = extractTasks(r).get(taskId);
-		if (task == null) return false;
-		if (expectedClaim != null && !expectedClaim.equals(RT.getIn(r, K_IN_CYCLE, K_EPOCH))) return false;
-		return expectedRevision < 0
-			|| (taskRevision(task) == expectedRevision && !hasUnpresentedTaskInputs(task));
-	}
-
-	/**
-	 * Parks a task that yielded while something it waits on is outstanding, so
-	 * the run loop passes it over until something new arrives for it. Does
-	 * nothing if the revision moved: a continuation arrived, and the task is
-	 * ready anyway.
-	 */
-	@SuppressWarnings("unchecked")
-	public void parkTask(Blob taskId, long expectedRevision) {
-		update(r -> {
-			Index<Blob, ACell> tasks = extractTasks(r);
-			ACell task = tasks.get(taskId);
-			if (!(task instanceof AMap<?, ?>) || taskRevision(task) != expectedRevision) return r;
-			return r.assoc(K_TASKS, tasks.assoc(taskId,
-				((AMap<AString, ACell>) task).assoc(K_PARKED, CVMBool.TRUE)));
-		});
-	}
-
-	/** Whether a task row has been parked by a yield. */
-	public static boolean isParked(ACell taskData) {
-		return taskData instanceof AMap<?, ?> map && CVMBool.TRUE.equals(map.get(K_PARKED));
 	}
 
 	/**
@@ -966,7 +833,7 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * mid-cycle, and runs again.
 	 */
 	public boolean isTaskReady(ACell taskData, long now) {
-		return !isParked(taskData) || hasNewWorkFor(taskData, now);
+		return !Task.isParked(taskData) || hasNewWorkFor(taskData, now);
 	}
 
 	/**
@@ -974,12 +841,9 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	 * has not been shown, a wake time that has come, or messages waiting in
 	 * its session.
 	 */
-	@SuppressWarnings("unchecked")
 	public boolean hasNewWorkFor(ACell taskData, long now) {
-		if (!(taskData instanceof AMap<?, ?>)) return false;
-		AMap<AString, ACell> task = (AMap<AString, ACell>) taskData;
-		if (hasUnpresentedTaskInputs(task)) return true;
-		if (task.get(Fields.WAKE_TIME) instanceof CVMLong wake && wake.longValue() <= now) return true;
+		if (!(taskData instanceof AMap<?, ?> task)) return false;
+		if (Task.hasOwnWork(task, now)) return true;
 		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
 		Blob sessionId = (sid == null) ? null : Blob.parse(sid.toString());
 		AMap<AString, ACell> session = (sessionId == null) ? null : getSession(sessionId);
@@ -1021,18 +885,18 @@ public class AgentState extends ALatticeComponent<ACell> implements Transactiona
 	public boolean setThreadWakeTime(ThreadKind kind, Blob threadId, long wakeTime) {
 		Objects.requireNonNull(kind, "kind");
 		Objects.requireNonNull(threadId, "threadId");
-		AString key = (kind == ThreadKind.SESSION) ? K_SESSIONS : K_TASKS;
+		if (kind == ThreadKind.TASK) return tasks().task(threadId).setWakeTime(wakeTime);
 		AMap<AString, ACell> before = getAndUpdate(r -> {
-			if (!(r.get(key) instanceof Index<?, ?>)) return r;
-			Index<Blob, ACell> idx = (Index<Blob, ACell>) r.get(key);
+			if (!(r.get(K_SESSIONS) instanceof Index<?, ?>)) return r;
+			Index<Blob, ACell> idx = (Index<Blob, ACell>) r.get(K_SESSIONS);
 			if (!(idx.get(threadId) instanceof AMap<?, ?>)) return r;
 			AMap<AString, ACell> rec = (AMap<AString, ACell>) idx.get(threadId);
 			AMap<AString, ACell> updated = (wakeTime > 0)
 				? rec.assoc(Fields.WAKE_TIME, CVMLong.create(wakeTime))
 				: rec.dissoc(Fields.WAKE_TIME);
-			return r.assoc(key, idx.assoc(threadId, updated));
+			return r.assoc(K_SESSIONS, idx.assoc(threadId, updated));
 		});
-		return RT.getIn(before, key, threadId) instanceof AMap<?, ?>;
+		return RT.getIn(before, K_SESSIONS, threadId) instanceof AMap<?, ?>;
 	}
 
 	Blob wakeHandle() {

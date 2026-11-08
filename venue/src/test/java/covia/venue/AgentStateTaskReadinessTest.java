@@ -35,7 +35,7 @@ public class AgentStateTaskReadinessTest {
 		agent = TestEngine.ENGINE.getVenueState().users().ensure(did)
 			.ensureAgent("readiness", Maps.empty(), null);
 		agent.ensureSession(SID, did);
-		agent.addTask(TASK, Maps.of(
+		agent.tasks().add(TASK, Maps.of(
 			Fields.INPUT, Maps.of("ask", "something"),
 			Fields.SESSION_ID, Strings.create(SID.toHexString()),
 			Fields.CREATED, CVMLong.create(1)));
@@ -54,8 +54,8 @@ public class AgentStateTaskReadinessTest {
 	/** Shows the task its input and parks it, as a cycle that yields does. */
 	private void presentAndPark() {
 		startCycle();
-		agent.parkTask(TASK, 0);
-		assertTrue(AgentState.isParked(row()));
+		agent.tasks().task(TASK).park(0);
+		assertTrue(Task.isParked(row()));
 	}
 
 	@Test
@@ -98,17 +98,17 @@ public class AgentStateTaskReadinessTest {
 	@Test
 	public void startingACycleUnparksTheTask() {
 		presentAndPark();
-		assertNull(AgentState.nextTaskInput(row()), "nothing new to show");
+		assertNull(Task.nextInput(row()), "nothing new to show");
 		startCycle();
-		assertFalse(AgentState.isParked(row()),
+		assertFalse(Task.isParked(row()),
 			"a task in a cycle is not parked, so a restart mid-cycle runs it again");
 	}
 
 	@Test
 	public void parkingWithAStaleRevisionDoesNothing() {
 		startCycle();
-		agent.parkTask(TASK, 7);
-		assertFalse(AgentState.isParked(row()));
+		agent.tasks().task(TASK).park(7);
+		assertFalse(Task.isParked(row()));
 	}
 
 	@Test

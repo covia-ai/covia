@@ -5682,7 +5682,7 @@ public class AgentAdapterTest {
 		AgentState agent = user.agent("task-agent");
 
 		Blob taskId = Blob.createRandom(new java.util.Random(42), 16);
-		agent.addTask(taskId, Maps.of("question", "What is 2+2?"));
+		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
 		assertEquals(1, agent.getTasks().count());
 
 		// Cancel the task
@@ -5713,7 +5713,7 @@ public class AgentAdapterTest {
 
 		// Task ID == the requester's job ID: a live job stands in for the request.
 		Job request = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), RequestContext.of(ALICE_DID));
-		agent.addTask(request.getID(), Maps.of("question", "Still needed?"));
+		agent.tasks().add(request.getID(), Maps.of("question", "Still needed?"));
 
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/cancel-task",
@@ -5798,9 +5798,9 @@ public class AgentAdapterTest {
 		Blob task1 = Blob.createRandom(rng, 16);
 		Blob task2 = Blob.createRandom(rng, 16);
 		Blob task3 = Blob.createRandom(rng, 16);
-		agent.addTask(task1, Maps.of("q", "one"));
-		agent.addTask(task2, Maps.of("q", "two"));
-		agent.addTask(task3, Maps.of("q", "three"));
+		agent.tasks().add(task1, Maps.of("q", "one"));
+		agent.tasks().add(task2, Maps.of("q", "two"));
+		agent.tasks().add(task3, Maps.of("q", "three"));
 		assertEquals(3, agent.getTasks().count());
 
 		// Cancel the middle one
@@ -5848,7 +5848,7 @@ public class AgentAdapterTest {
 		AgentState agent = user.ensureAgent("rm-task-agent", null, null);
 
 		Blob taskId = Blob.createRandom(new java.util.Random(0), 16);
-		agent.addTask(taskId, Maps.of("data", "test"));
+		agent.tasks().add(taskId, Maps.of("data", "test"));
 		assertEquals(1, agent.getTasks().count());
 
 		agent.removeTask(taskId);

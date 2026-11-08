@@ -21,6 +21,7 @@ import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.AgentEvents;
 import covia.venue.AgentState;
+import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -86,7 +87,7 @@ public class TaskYieldTest {
 			watch.awaitRest(1);
 			Blob taskId = job.getID();
 			ACell row = agent.getTasks().get(taskId);
-			assertTrue(AgentState.isParked(row), "a yield with a wake time parks the task");
+			assertTrue(Task.isParked(row), "a yield with a wake time parks the task");
 			assertEquals(CVMLong.create(later), RT.getIn(row, Fields.WAKE_TIME));
 			assertFalse(job.isFinished(), "the caller's job waits with its task");
 
@@ -101,7 +102,7 @@ public class TaskYieldTest {
 			assertEquals(2, timelineCount(agent));
 			assertNull(RT.getIn(agent.getTimeline().get(1), Fields.TASKS),
 				"a forced kick does not present a parked task");
-			assertTrue(AgentState.isParked(agent.getTasks().get(taskId)));
+			assertTrue(Task.isParked(agent.getTasks().get(taskId)));
 
 			// Time passes: the wake time is now behind us, the scheduler fires, and the task runs.
 			engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
@@ -109,7 +110,7 @@ public class TaskYieldTest {
 			watch.awaitRest(3);
 			assertNotNull(RT.getIn(agent.getTimeline().get(2), Fields.TASKS),
 				"the task's own wake presents it again");
-			assertTrue(AgentState.isParked(agent.getTasks().get(taskId)),
+			assertTrue(Task.isParked(agent.getTasks().get(taskId)),
 				"it asked for a later wake again, so it is parked again");
 			assertFalse(job.isFinished());
 
@@ -129,7 +130,7 @@ public class TaskYieldTest {
 			job = request(owner, "ask-yield", "decide for me");
 			watch.awaitRest(1);
 		}
-		assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
+		assertTrue(Task.isParked(agent.getTasks().get(job.getID())),
 			"an open ask from the task's cycle parks the task");
 		assertTrue(agent.hasPendingFor(job.getID()));
 		assertFalse(job.isFinished());
@@ -157,7 +158,7 @@ public class TaskYieldTest {
 			job = request(owner, "harness-ask", "ask-human");
 			watch.awaitRest(1);
 		}
-		assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
+		assertTrue(Task.isParked(agent.getTasks().get(job.getID())),
 			"an ask made through the LLM harness parks its task");
 		assertFalse(job.isFinished());
 

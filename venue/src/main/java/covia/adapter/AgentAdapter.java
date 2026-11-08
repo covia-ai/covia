@@ -60,6 +60,7 @@ import covia.grid.Status;
 import covia.venue.Admission;
 import covia.venue.AgentState;
 import covia.venue.SessionState;
+import covia.venue.Task;
 import covia.venue.AgentEvents;
 import covia.api.Abilities;
 import covia.venue.Engine;
@@ -3286,8 +3287,8 @@ public class AgentAdapter extends AAdapter {
 			throw new NotFoundException("Task not found: " + taskId.toHexString(), taskId.toHexString());
 		}
 		if (expectedRevision >= 0
-				&& (AgentState.taskRevision(currentTask) != expectedRevision
-					|| AgentState.hasUnpresentedTaskInputs(currentTask))) {
+				&& (Task.revision(currentTask) != expectedRevision
+					|| Task.hasUnshownInput(currentTask))) {
 			return Maps.of(
 				Fields.AGENT_ID, agentId,
 				Fields.TASK_ID, taskIdHex(taskId),
@@ -3332,8 +3333,8 @@ public class AgentAdapter extends AAdapter {
 			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
 			if (current != null && expectedRevision >= 0
-					&& (AgentState.taskRevision(current) != expectedRevision
-						|| AgentState.hasUnpresentedTaskInputs(current))) {
+					&& (Task.revision(current) != expectedRevision
+						|| Task.hasUnshownInput(current))) {
 				return Maps.of(
 					Fields.AGENT_ID, agentId,
 					Fields.TASK_ID, taskIdHex(taskId),
@@ -3382,8 +3383,8 @@ public class AgentAdapter extends AAdapter {
 			refuseIfStopped(agent, taskId, ctx);
 			ACell current = agent.getTasks().get(taskId);
 			if (current != null && expectedRevision >= 0
-					&& (AgentState.taskRevision(current) != expectedRevision
-						|| AgentState.hasUnpresentedTaskInputs(current))) {
+					&& (Task.revision(current) != expectedRevision
+						|| Task.hasUnshownInput(current))) {
 					return Maps.of(
 						Fields.AGENT_ID, agentId,
 						Fields.TASK_ID, taskIdHex(taskId),
@@ -4148,7 +4149,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = getAgent(ownerDID, agentId);
 		Index<Blob, ACell> tasks = (agent == null) ? null : agent.getTasks();
 		ACell row = (tasks == null) ? null : tasks.get(taskId);
-		if (AgentState.isParked(row) && !yieldIsBacked(agent, ownerDID, agentId, taskId, row)) {
+		if (Task.isParked(row) && !yieldIsBacked(agent, ownerDID, agentId, taskId, row)) {
 			failTask(ownerDID, agentId, taskId, TASK_OUTCOME_UNDELIVERED);
 		}
 	}
@@ -4357,14 +4358,14 @@ public class AgentAdapter extends AAdapter {
 				// the session is claimed, and the presented messages and the task's
 				// input become turns in its conversation. Nothing after this may
 				// abandon the cycle, since only its merge settles what it took.
-				ACell pickedTaskInput = (pickedTask != null) ? AgentState.nextTaskInput(pickedTask.getValue()) : null;
+				ACell pickedTaskInput = (pickedTask != null) ? Task.nextInput(pickedTask.getValue()) : null;
 				// The cycle's claim (AGENT_LOOP.md §2.5.1): the cycle's own writes
 				// take effect only while it is current, and a stop revokes it.
 				ACell claim = Blob.createRandom(new java.util.Random(), 8);
 				// A continuation keeps its own sender's provenance, not the requester's
 				AVector<ACell> inputTurns = cycleInputTurns(filteredInbox, pickedTaskInput,
 					(pickedTask != null) ? Strings.create(pickedTask.getKey().toHexString()) : null,
-					(pickedTask != null) ? AgentState.nextTaskInputSource(pickedTask.getValue()) : null, startTs);
+					(pickedTask != null) ? Task.nextInputSource(pickedTask.getValue()) : null, startTs);
 				AgentState.CycleStart started = agent.beginCycle(
 					(pickedTask != null) ? pickedTask.getKey() : null,
 					(pickedTask != null) ? pickedTask.getValue() : null,
@@ -4389,7 +4390,7 @@ public class AgentAdapter extends AAdapter {
 				RequestContext cycleCtx = harness.withAgentId(agentId).withClaim(claim);
 				if (pickedTask != null) {
 					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
-						AgentState.taskRevision(pickedTask.getValue()));
+						Task.revision(pickedTask.getValue()));
 				}
 				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
 
@@ -4412,7 +4413,7 @@ public class AgentAdapter extends AAdapter {
 				if (pickedTaskInput != null) {
 					transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput)
 						.assoc(AgentState.KEY_INPUT_SOURCE, withRecordedProvenance(Maps.empty(),
-							AgentState.nextTaskInputSource(pickedTask.getValue())));
+							Task.nextInputSource(pickedTask.getValue())));
 					// The task is keyed by the delegating agent:request Job id; carry it
 					// so a frame-owning harness can tie the request turn back to the
 					// calling job, exactly as chat turns record their job id (#378).
@@ -4785,7 +4786,7 @@ public class AgentAdapter extends AAdapter {
 			ACell row = agent.getTasks().get(taskId);
 			if (row != null) {
 				if (yieldIsBacked(agent, callerDID, agentId, taskId, row)) {
-					agent.parkTask(taskId, AgentState.taskRevision(pickedTask.getValue()));
+					agent.tasks().task(taskId).park(Task.revision(pickedTask.getValue()));
 				} else {
 					log.info("Agent {} yielded task {} with nothing to resume it — failing the task job",
 						agentId, taskId);
@@ -5546,7 +5547,7 @@ public class AgentAdapter extends AAdapter {
 				if (rawJob instanceof AMap<?, ?> map
 						&& Job.isFinished((AMap<AString, ACell>) map)) {
 					agent.removeTask(taskId);
-				} else if (AgentState.isParked(entry.getValue())
+				} else if (Task.isParked(entry.getValue())
 						&& !(RT.getIn(entry.getValue(), Fields.WAKE_TIME) instanceof CVMLong)
 						&& !agent.hasPendingFor(taskId)
 						&& !agent.hasNewWorkFor(entry.getValue(), engine.currentTimestamp().longValue())) {

@@ -99,7 +99,7 @@ public class AgentStateThreadWakeTest {
 	@Test
 	public void testTaskWakeWritesLatticeAndArmsEvent() {
 		Blob taskId = Blob.fromHex("bb");
-		agent.addTask(taskId, Maps.empty());
+		agent.tasks().add(taskId, Maps.empty());
 		long target = System.currentTimeMillis() + FAR;
 
 		sched().setThreadWakeTime(userDid, agent, ThreadKind.TASK, taskId, target);

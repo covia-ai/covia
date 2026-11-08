@@ -265,7 +265,7 @@ public class AgentConcurrencyTest {
 		AgentState agent = user.ensureAgent("take-task-test", Maps.empty(), null);
 		Blob taskId = Blob.fromHex("cafe");
 		ACell task = Maps.of(Fields.MESSAGE, Strings.create("claim once"));
-		agent.addTask(taskId, task);
+		agent.tasks().add(taskId, task);
 
 		CountDownLatch ready = new CountDownLatch(2);
 		CountDownLatch start = new CountDownLatch(1);
@@ -309,7 +309,7 @@ public class AgentConcurrencyTest {
 		agent.ensureSession(sid, ALICE_DID);
 		agent.appendSessionPending(sid, Maps.of("content", "hello"));
 		Blob taskId = Blob.fromHex("0001");
-		agent.addTask(taskId, Strings.create("new work"));
+		agent.tasks().add(taskId, Strings.create("new work"));
 
 		AMap<AString, ACell> merged = agent.mergeRunResult(
 			null, null, null, Maps.of("ts", CVMLong.create(1)),

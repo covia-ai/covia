@@ -45,7 +45,7 @@ public class EngineSchedulerRebuildTest {
 			Blob sid = Blob.fromHex("aa");
 			agent.ensureSession(sid, userDid);
 			Blob taskId = Blob.fromHex("bb");
-			agent.addTask(taskId, Maps.empty());
+			agent.tasks().add(taskId, Maps.empty());
 
 			long now = System.currentTimeMillis();
 			long sessionWake = now + 600_000;
@@ -83,7 +83,7 @@ public class EngineSchedulerRebuildTest {
 
 			// Session + task exist but neither carries a wakeTime.
 			agent.ensureSession(Blob.fromHex("cc"), userDid);
-			agent.addTask(Blob.fromHex("dd"), Maps.empty());
+			agent.tasks().add(Blob.fromHex("dd"), Maps.empty());
 
 			engine.rebuildSchedulerFromLattice();
 			assertEquals(0, engine.gridScheduler().list(ctx).count(),

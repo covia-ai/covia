@@ -25,6 +25,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Config;
 import covia.venue.Engine;
@@ -216,7 +217,7 @@ public class AgentRestartTest {
 				orphanWatch.awaitRest(1);
 			}
 			AgentState orphan = first.getVenueState().users().user(ALICE).agent("parked-orphan");
-			assertTrue(AgentState.isParked(orphan.getTasks().get(orphaned.getID())));
+			assertTrue(Task.isParked(orphan.getTasks().get(orphaned.getID())));
 			orphan.setThreadWakeTime(AgentState.ThreadKind.TASK, orphaned.getID(), 0);
 			first.syncState();
 		} finally {
@@ -238,7 +239,7 @@ public class AgentRestartTest {
 			Job kept = second.jobs().getJob(waking.getID(), alice);
 			assertNotNull(kept);
 			assertFalse(kept.isFinished(), "a task waiting on its wake time stays queued");
-			assertTrue(AgentState.isParked(second.getVenueState().users().user(ALICE)
+			assertTrue(Task.isParked(second.getVenueState().users().user(ALICE)
 				.agent("parked-waking").getTasks().get(waking.getID())));
 
 			// A recovered request still leaves the queue when its caller cancels it.

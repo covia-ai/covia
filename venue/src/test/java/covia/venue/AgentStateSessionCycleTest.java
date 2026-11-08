@@ -321,11 +321,11 @@ public class AgentStateSessionCycleTest {
 		ACell picked = queueTask("work");
 		agent.appendSessionPending(sid, envelope("m1"));
 		agent.appendSessionPending(sid, envelope("m2"));
-		assertEquals(Strings.create("work"), AgentState.nextTaskInput(picked));
+		assertEquals(Strings.create("work"), Task.nextInput(picked));
 
 		assertEquals(AgentState.CycleStart.SESSION, agent.beginCycle(TASK, picked, sid, EPOCH_A,
 			Vectors.of(turn("m1"), turn("work")), 1));
-		assertNull(AgentState.nextTaskInput(agent.getTasks().get(TASK)), "the task's input is marked shown");
+		assertNull(Task.nextInput(agent.getTasks().get(TASK)), "the task's input is marked shown");
 		assertEquals(EPOCH_A, agent.getSessionCycleEpoch(sid), "the session is claimed");
 		assertEquals(2, rootConversation().count(), "the input is in the conversation");
 		AVector<ACell> pending = agent.getSessionPending(sid);
@@ -352,7 +352,7 @@ public class AgentStateSessionCycleTest {
 
 		assertEquals(AgentState.CycleStart.NO_SESSION, agent.beginCycle(TASK, picked, sid, EPOCH_A,
 			Vectors.of(turn("work")), 0));
-		assertNull(AgentState.nextTaskInput(agent.getTasks().get(TASK)), "the task's input is marked shown");
+		assertNull(Task.nextInput(agent.getTasks().get(TASK)), "the task's input is marked shown");
 	}
 
 	// ========== updateSessionFrames (epoch fence) ==========
@@ -541,7 +541,7 @@ public class AgentStateSessionCycleTest {
 	public void testOnlyTheCycleHoldingTheClaimResolvesItsTask() {
 		ACell picked = queueTask("work");
 		agent.beginCycle(TASK, picked, sid, EPOCH_A, Vectors.of(turn("work")), 0);
-		long revision = AgentState.taskRevision(agent.getTasks().get(TASK));
+		long revision = Task.revision(agent.getTasks().get(TASK));
 		agent.suspend(userDid, Strings.create("stop"));
 		assertNull(agent.resolveTask(TASK, revision, EPOCH_A, DONE), "a stopped cycle cannot resolve its task");
 		assertNotNull(agent.getTasks().get(TASK), "the task stays queued");

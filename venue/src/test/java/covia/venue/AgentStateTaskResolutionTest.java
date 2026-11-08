@@ -35,7 +35,7 @@ public class AgentStateTaskResolutionTest {
 		AString did = TestEngine.uniqueDID(info);
 		agent = TestEngine.ENGINE.getVenueState().users().ensure(did).ensureAgent("resolver", Maps.empty(), null);
 		agent.ensureSession(SID, did);
-		agent.addTask(TASK, Maps.of(Fields.INPUT, Maps.of("ask", "something"),
+		agent.tasks().add(TASK, Maps.of(Fields.INPUT, Maps.of("ask", "something"),
 			Fields.SESSION_ID, Strings.create(SID.toHexString())));
 	}
 
@@ -43,7 +43,7 @@ public class AgentStateTaskResolutionTest {
 	private long present() {
 		ACell row = agent.getTasks().get(TASK);
 		agent.beginCycle(TASK, row, null, Strings.create("claim"), Vectors.empty(), 0);
-		return AgentState.taskRevision(agent.getTasks().get(TASK));
+		return Task.revision(agent.getTasks().get(TASK));
 	}
 
 	@Test void aResolvedTaskLeavesTheQueueWithItsCompletionKept() {

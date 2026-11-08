@@ -1316,7 +1316,7 @@ public class LLMAgentAdapterTest {
 
 		// Tasks are pure lattice data — use a generated Blob ID, not a Job
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of("question", "What is 2+2?"));
+		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
 
 		// Trigger the agent — level 2 (test:taskllm) will call complete_task
 		Job runJob = engine.jobs().invokeOperation(
@@ -1356,7 +1356,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("text-complete-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of("task", "review the poems"));
+		agent.tasks().add(taskId, Maps.of("task", "review the poems"));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -1402,7 +1402,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("strict-schema-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of(
+		agent.tasks().add(taskId, Maps.of(
 			Fields.INPUT, Maps.of("task", "compute the answer"),
 			Fields.RESPONSE_SCHEMA, answerSchema(),
 			Fields.STRICT, CVMBool.TRUE));
@@ -1440,7 +1440,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("advisory-schema-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of(
+		agent.tasks().add(taskId, Maps.of(
 			Fields.INPUT, Maps.of("task", "compute the answer"),
 			Fields.RESPONSE_SCHEMA, answerSchema()));
 
@@ -1633,7 +1633,7 @@ public class LLMAgentAdapterTest {
 		AgentState agent = engine.getVenueState().users().user(ALICE_DID)
 			.agent(agentId.toString());
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of("task", "fail deliberately"));
+		agent.tasks().add(taskId, Maps.of("task", "fail deliberately"));
 		ACell output = step(adapter,
 			RequestContext.of(ALICE_DID).withAgentId(agentId).withTaskId(taskId),
 			Maps.of(
@@ -1731,7 +1731,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("capped-task-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of("question", "What is 2+2?"));
+		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -1979,7 +1979,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("textctl-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of("task", "Pay invoice AR-2214"));
+		agent.tasks().add(taskId, Maps.of("task", "Pay invoice AR-2214"));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -2189,7 +2189,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		AgentState agent = engine.getVenueState().users().user(ALICE_DID).agent(agentId);
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of("question", "test?"));
+		agent.tasks().add(taskId, Maps.of("question", "test?"));
 		RequestContext ctx = RequestContext.of(ALICE_DID).withAgentId(agentId);
 
 		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
@@ -2231,7 +2231,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().user(ALICE_DID);
 		AgentState agent = user.agent("direct-task-agent");
 		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
-		agent.addTask(taskId, Maps.of("question", "test?"));
+		agent.tasks().add(taskId, Maps.of("question", "test?"));
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, agentId,

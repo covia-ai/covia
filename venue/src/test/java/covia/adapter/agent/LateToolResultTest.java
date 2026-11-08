@@ -35,6 +35,7 @@ import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Config;
 import covia.venue.CoviaApplication;
@@ -267,7 +268,7 @@ public class LateToolResultTest {
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
 			watch.awaitRest(1);
 			AgentState agent = first.getVenueState().users().user(RESTART_OWNER).agent(agentId);
-			assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())));
+			assertTrue(Task.isParked(agent.getTasks().get(job.getID())));
 			assertEquals(1, agent.getPending().count(), "the late call waits in the pending index");
 			first.syncState();
 			Crashed crashed = new Crashed(Cursors.root(cursor.get()), keyPair, job.getID(),
@@ -342,7 +343,7 @@ public class LateToolResultTest {
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
 			watch.awaitRest(1);
 			ACell task = agent.getTasks().get(job.getID());
-			assertTrue(AgentState.isParked(task));
+			assertTrue(Task.isParked(task));
 			agent.removeSession(Blob.fromHex(RT.ensureString(RT.getIn(task, Fields.SESSION_ID)).toString()));
 			gate.release();
 			TestEngine.awaitJob(job, Job::isFinished, 10_000, () -> "the stranded task did not fail");
@@ -370,7 +371,7 @@ public class LateToolResultTest {
 				Fields.INPUT, Maps.of("ask", "hold:" + gateName)), owner);
 			watch.awaitRest(1);
 			assertEquals(AgentState.SLEEPING, agent.getStatus());
-			assertTrue(AgentState.isParked(agent.getTasks().get(job.getID())),
+			assertTrue(Task.isParked(agent.getTasks().get(job.getID())),
 				"a task waiting on a late call is parked, not failed");
 			assertFalse(job.isFinished());
 			gate.release();
@@ -410,7 +411,7 @@ public class LateToolResultTest {
 			taskSession, task.getID(), call, Maps.of(Fields.TOOL_CALL_ID, PARKED_CALL_ID, Fields.TOOL_NAME, PARKED_TOOL));
 		cycle.release();
 		watch.awaitRest(rest);
-		assertTrue(AgentState.isParked(agent.getTasks().get(task.getID())), "the task parks on its call");
+		assertTrue(Task.isParked(agent.getTasks().get(task.getID())), "the task parks on its call");
 		return task;
 	}
 
@@ -443,7 +444,7 @@ public class LateToolResultTest {
 			assertEquals(AgentAdapter.TASK_YIELDED_IDLE, newerTask.getErrorMessage(),
 				"the newer task ran on its outcome, and with nothing left to wait on it ends");
 			assertFalse(olderTask.isFinished());
-			assertTrue(AgentState.isParked(agent.getTasks().get(olderTask.getID())),
+			assertTrue(Task.isParked(agent.getTasks().get(olderTask.getID())),
 				"the older task still waits on its own call");
 			assertEquals(1, agent.getPending().count());
 			assertNotNull(agent.getPending().get(olderCall.getID()));
