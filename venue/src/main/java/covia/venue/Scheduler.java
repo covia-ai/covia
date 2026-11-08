@@ -29,6 +29,7 @@ import covia.exception.NotFoundException;
 import covia.exception.ShuttingDownException;
 import covia.grid.Asset;
 import covia.grid.Attribution;
+import covia.grid.Job;
 import covia.venue.Schedule.Entry;
 import static covia.venue.Schedule.*;
 
@@ -121,12 +122,13 @@ public class Scheduler {
 	/** Updates waiting for every event due by their time to start. Concurrent so shutdown needs no lock. */
 	private final Queue<Waiter> waiters = new ConcurrentLinkedQueue<>();
 
-	private record Waiter(long time, CompletableFuture<Void> done) {}
+	/** An update waiting for its events to start, and their Jobs so far, guarded by the lock. */
+	private record Waiter(long time, List<Job> jobs, CompletableFuture<List<Job>> done) {}
 
 	/**
 	 * A claimed fire: the event record as fired, and either the prepared Job
-	 * to start (tracked) or null (transient), or the error that prevented
-	 * preparing it. The event's own state has already been committed.
+	 * to start or the error that prevented preparing it. The event's own state
+	 * has already been committed.
 	 */
 	private record Claimed(AMap<AString, ACell> rec, JobManager.Prepared job, RuntimeException error) {}
 
@@ -349,20 +351,23 @@ public class Scheduler {
 	 * Starts every event due by {@code now}, in index order and at most
 	 * {@code scheduler.maxConcurrency} at once; events already due wait in the
 	 * schedule until a place frees. The future completes when each of them
-	 * has started, that is when its operation's invocation has returned; how
-	 * it resolves is its own, and a failure to start is logged. A time no
-	 * later than an earlier update's still starts whatever is due by it, such
-	 * as an event added since with a past time. A scheduler not started, or
-	 * of a venue closing, starts nothing and completes at once: what is due
-	 * stays in the schedule for the venue's next start.
+	 * has started, that is when its operation's invocation has returned, with
+	 * their Jobs in the order claimed. How each resolves is its own, and a
+	 * failure to start is logged; an event whose Job could not be prepared has
+	 * none in the list. Overlapping updates each get the Jobs claimed while
+	 * they waited that were due by their own time. A time no later than an
+	 * earlier update's still starts whatever is due by it, such as an event
+	 * added since with a past time. A scheduler not started, or of a venue
+	 * closing, starts nothing and completes at once: what is due stays in the
+	 * schedule for the venue's next start.
 	 */
-	CompletableFuture<Void> update(long now) {
-		CompletableFuture<Void> done = new CompletableFuture<>();
+	CompletableFuture<List<Job>> update(long now) {
+		CompletableFuture<List<Job>> done = new CompletableFuture<>();
 		lock.lock();
 		try {
-			if (!takingPart()) return CompletableFuture.completedFuture(null);
+			if (!takingPart()) return CompletableFuture.completedFuture(List.of());
 			if (now > target) target = now;
-			waiters.add(new Waiter(now, done));
+			waiters.add(new Waiter(now, new ArrayList<>(), done));
 		} finally {
 			lock.unlock();
 		}
@@ -419,7 +424,7 @@ public class Scheduler {
 	private void drain() {
 		List<Long> times = new ArrayList<>();
 		List<Claimed> batch = new ArrayList<>();
-		List<CompletableFuture<Void>> completed = new ArrayList<>();
+		List<Waiter> completed = new ArrayList<>();
 		long due;
 		lock.lock();
 		try {
@@ -439,7 +444,9 @@ public class Scheduler {
 				if (time > target) break;                      // earliest is not yet due
 				// Claim: a one-shot is removed; a recurring event moves to its next
 				// slot (strictly after the target, so this loop always advances).
-				batch.add(claim(key, rec, target, true));
+				Claimed claimed = claim(key, rec, target, true);
+				if (claimed.job() != null) addToWaiters(claimed.job().job(), time);
+				batch.add(claimed);
 				times.add(time);
 				inFlight.merge(time, 1, Integer::sum);
 				starting++;
@@ -449,7 +456,7 @@ public class Scheduler {
 		} finally {
 			lock.unlock();
 		}
-		for (CompletableFuture<Void> f : completed) f.complete(null);
+		for (Waiter w : completed) w.done().complete(List.copyOf(w.jobs()));
 		for (int i = 0; i < batch.size(); i++) {
 			Claimed c = batch.get(i);
 			long time = times.get(i);
@@ -481,12 +488,19 @@ public class Scheduler {
 		}
 	}
 
+	/** Adds a claimed event's Job to each waiting update it was due by. Under the lock. */
+	private void addToWaiters(Job job, long time) {
+		for (Waiter w : waiters) {
+			if (time <= w.time()) w.jobs().add(job);
+		}
+	}
+
 	/**
 	 * Moves the updates whose events have all started into {@code completed}:
 	 * every event due by an update's time has started once the schedule's first
 	 * event and every event still starting are later than it. Under the lock.
 	 */
-	private void settleWaiters(List<CompletableFuture<Void>> completed) {
+	private void settleWaiters(List<Waiter> completed) {
 		if (waiters.isEmpty()) return;
 		long covered = Long.MAX_VALUE;
 		Index<Blob, ACell> idx = index();
@@ -498,7 +512,7 @@ public class Scheduler {
 		for (Iterator<Waiter> it = waiters.iterator(); it.hasNext(); ) {
 			Waiter w = it.next();
 			if (w.time() < covered) {
-				completed.add(w.done());
+				completed.add(w);
 				it.remove();
 			}
 		}
@@ -531,8 +545,8 @@ public class Scheduler {
 	 * Claim {@code rec} (at {@code key}) for a fire at {@code now} — one atomic
 	 * lattice write covering everything the fire changes about the schedule:
 	 * <ul>
-	 * <li>a tracked fire's Job is prepared first (minted, PENDING, persisted —
-	 *     the adapter is not started), so its ID is known;</li>
+	 * <li>the fire's Job is prepared first (minted, PENDING and, when tracked,
+	 *     persisted — the adapter is not started), so its ID is known;</li>
 	 * <li>a one-shot event is removed;</li>
 	 * <li>a recurring event is re-inserted with {@code lastFired = now} and,
 	 *     when tracked, {@code lastJob} — re-keyed at its next due slot when
@@ -544,8 +558,8 @@ public class Scheduler {
 	 * between the two updates can leave a PENDING Job while retaining the event;
 	 * recovery fails that unstarted Job, and a later fire prepares a new one.
 	 * If the Job cannot be prepared (unresolvable op, capability
-	 * denied), the event is still claimed exactly as an untracked failure
-	 * would be, and the error travels with the claim for the caller to see.
+	 * denied), the event is still claimed, and the error travels with the
+	 * claim for the caller to see.
 	 * An event whose scheduling agent no longer exists is removed, recurring or
 	 * not, and fails the same way: nothing fires as a deleted agent.
 	 */
@@ -573,9 +587,8 @@ public class Scheduler {
 	// ------------------------------------------------------------------ firing
 
 	/**
-	 * Run a claimed fire. Tracked: start the Job prepared at claim time (its
-	 * ID is already on the record). Untracked: a transient Job via
-	 * {@code invokeInternal} (design §7). Either way the dispatch runs as its
+	 * Run a claimed fire: start the Job prepared at claim time, durable when
+	 * tracked and transient otherwise (design §7). The dispatch runs as its
 	 * caller would invoke it now ({@link #fireContext}), which JobManager
 	 * enforces — so a fire never has authority its caller has since lost.
 	 * Returns once the operation's invocation has returned.
@@ -583,10 +596,7 @@ public class Scheduler {
 	private CompletableFuture<ACell> fire(Claimed c) {
 		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
 		try {
-			if (c.job() != null) return c.job().start().future();
-			AMap<AString, ACell> rec = c.rec();
-			return engine.jobs().invokeInternal(
-				RT.ensureString(rec.get(K_OP)), rec.get(K_INPUT), fireContext(rec));
+			return c.job().start().future();
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}

@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CancellationException;
@@ -88,6 +89,7 @@ import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Attribution;
 import covia.grid.Grid;
+import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
@@ -3649,9 +3651,10 @@ public class Engine {
 	/**
 	 * Starts what this venue has due by {@code now}: its part of
 	 * {@link CoviaApplication#update()}. Until the venue has started, and from
-	 * its close on, nothing starts and the future is complete at once.
+	 * its close on, nothing starts and the future is complete at once. The
+	 * future gives the Jobs started.
 	 */
-	CompletableFuture<Void> update(long now) {
+	CompletableFuture<List<Job>> update(long now) {
 		return gridScheduler.update(now);
 	}
 

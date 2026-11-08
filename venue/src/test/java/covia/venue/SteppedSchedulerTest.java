@@ -100,7 +100,7 @@ class SteppedSchedulerTest {
 	}
 
 	/** Moves the clock on by {@code ms} and updates the application. */
-	private static CompletableFuture<Void> step(CoviaApplication app, long ms) {
+	private static CompletableFuture<List<Job>> step(CoviaApplication app, long ms) {
 		CLOCK.addAndGet(ms);
 		return app.update();
 	}
@@ -115,7 +115,7 @@ class SteppedSchedulerTest {
 			assertFalse(gate.awaitEntered(0, TimeUnit.SECONDS), "no update has run, so nothing has started");
 			assertEquals(1, scheduler.list(ctx).count(), "a due event waits in the schedule until an update");
 
-			CompletableFuture<Void> update = application.update();
+			CompletableFuture<List<Job>> update = application.update();
 			entered(gate, "the update starts the due event");
 			assertTrue(scheduler.list(ctx).isEmpty(), "a started one-shot event has left the schedule");
 			assertFalse(update.isDone(), "the update completes once its events' invocations have returned");
@@ -139,7 +139,7 @@ class SteppedSchedulerTest {
 			scheduler.schedule(HOLD_START, gate(prefix + "b"), ctx, t + 2);
 			Blob later = scheduler.schedule(ECHO, Strings.create("later"), ctx, t + 100);
 
-			CompletableFuture<Void> update = step(application, 10);
+			CompletableFuture<List<Job>> update = step(application, 10);
 			entered(a, "the first due event starts");
 			entered(b, "the second due event starts alongside it");
 			assertEquals(2, scheduler.list(ctx).count(),
@@ -170,7 +170,7 @@ class SteppedSchedulerTest {
 				scheduler.schedule(HOLD_START, gate(prefix + "b"), ctx, t + 2);
 				scheduler.schedule(HOLD_START, gate(prefix + "a"), ctx, t + 1);
 
-				CompletableFuture<Void> update = step(single, 10);
+				CompletableFuture<List<Job>> update = step(single, 10);
 				entered(a, "the earlier event starts first");
 				assertEquals(1, scheduler.list(ctx).count(), "the later one waits for the only place");
 				a.release();
@@ -179,11 +179,30 @@ class SteppedSchedulerTest {
 				update.get(10, TimeUnit.SECONDS);
 				assertTrue(scheduler.list(ctx).isEmpty());
 
+				// Overlapping updates each get the Jobs started that were due by their own time.
+				try (TestAdapter.TestGate first = TestAdapter.createGate(prefix + "first")) {
+					long at = CLOCK.get();
+					scheduler.schedule(HOLD_START, gate(prefix + "first"), ctx, at + 1);
+					scheduler.schedule(ECHO, Strings.create("later"), ctx, at + 20);
+					CompletableFuture<List<Job>> earlier = step(single, 10);
+					entered(first, "the first event takes the only place");
+					scheduler.schedule(ECHO, Strings.create("both"), ctx, at + 5);
+					CompletableFuture<List<Job>> overlapping = step(single, 20);
+					first.release();
+					List<Job> toEarlier = earlier.get(10, TimeUnit.SECONDS);
+					List<Job> toOverlapping = overlapping.get(10, TimeUnit.SECONDS);
+					assertEquals(2, toEarlier.size(), "the event due by the earlier time and the one added since");
+					assertEquals(2, toOverlapping.size(), "the events claimed once it was waiting");
+					assertSame(toEarlier.get(1), toOverlapping.get(0), "a Job due by both times goes to both");
+					assertEquals(Strings.create("both"), toEarlier.get(1).awaitResult(10_000));
+					assertEquals(Strings.create("later"), toOverlapping.get(1).awaitResult(10_000));
+				}
+
 				// A closing venue starts nothing more: an update waiting on it fails.
 				try (TestAdapter.TestGate held = TestAdapter.createGate(prefix + "held")) {
 					scheduler.schedule(HOLD_START, gate(prefix + "held"), ctx, CLOCK.get());
 					scheduler.schedule(ECHO, Strings.create("never started"), ctx, CLOCK.get());
-					CompletableFuture<Void> waiting = single.update();
+					CompletableFuture<List<Job>> waiting = single.update();
 					entered(held, "the first event takes the only place");
 					scheduler.shutdown();
 					ExecutionException failed = assertThrows(ExecutionException.class,
@@ -204,12 +223,32 @@ class SteppedSchedulerTest {
 		String name = "stepped-past-" + ctx.getUserDID();
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(name)) {
 			scheduler.schedule(HOLD_START, gate(name), ctx, CLOCK.get() - 1_000);
-			CompletableFuture<Void> update = step(application, 0);
+			CompletableFuture<List<Job>> update = step(application, 0);
 			entered(gate, "a step that leaves the time unchanged still starts what is due");
 			gate.release();
 			update.get(10, TimeUnit.SECONDS);
 			assertTrue(scheduler.list(ctx).isEmpty());
 		}
+	}
+
+	@Test
+	void anUpdateGivesTheJobsItStarted(TestInfo info) throws Exception {
+		RequestContext ctx = user(engine, info);
+		Scheduler scheduler = engine.gridScheduler();
+		application.update().get(10, TimeUnit.SECONDS);
+		long t = CLOCK.get();
+		scheduler.schedule(ECHO, Strings.create("untracked"), ctx, t + 2, null, false);
+		scheduler.schedule(ECHO, Strings.create("tracked"), ctx, t + 1, null, true);
+		scheduler.schedule(Strings.create("v/test/ops/no-such-operation"), Maps.empty(), ctx, t + 3);
+		Blob later = scheduler.schedule(ECHO, Strings.create("later"), ctx, t + 100);
+
+		List<Job> started = step(application, 10).get(10, TimeUnit.SECONDS);
+
+		assertEquals(2, started.size(), "one Job for each due event that could have one: " + started);
+		assertEquals(Strings.create("tracked"), started.get(0).awaitResult(10_000), "in the order claimed");
+		assertEquals(Strings.create("untracked"), started.get(1).awaitResult(10_000), "an untracked fire is reachable too");
+		assertTrue(step(application, 0).get(10, TimeUnit.SECONDS).isEmpty(), "nothing due starts no Jobs");
+		assertTrue(scheduler.cancel(later, ctx));
 	}
 
 	@Test

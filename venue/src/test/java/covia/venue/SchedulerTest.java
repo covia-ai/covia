@@ -430,7 +430,7 @@ public class SchedulerTest {
 			Schedule.K_CALLER, did,
 			Schedule.K_TIME, CVMLong.create(time),
 			Schedule.K_INPUT, s("legacy"));
-		engine.getVenueState().schedule().cursor().path(Schedule.K_EVENTS).updateAndGet(cur -> {
+		engine.getVenueState().schedule().cursor().withDefault(Maps.empty()).path(Schedule.K_EVENTS).updateAndGet(cur -> {
 			@SuppressWarnings("unchecked")
 			Index<Blob, ACell> events = (cur instanceof Index) ? (Index<Blob, ACell>) cur : Index.none();
 			return events.assoc(key, legacy);

@@ -32,6 +32,7 @@ import convex.lattice.cursor.AForkableCursor;
 import convex.lattice.generic.CASLattice;
 import covia.exception.ConfigurationException;
 import covia.exception.ConflictException;
+import covia.grid.Job;
 import covia.lattice.Covia;
 
 /**
@@ -291,28 +292,34 @@ public final class CoviaApplication
 	 * Steps the application to its clock's time: reads the clock once and
 	 * updates each mounted venue in mount order, starting the scheduled events
 	 * due by then. The future completes when each of those has started, that is
-	 * when its operation's invocation has returned; how each resolves is its
-	 * own, and a failure to start is logged and does not fail the future. A
-	 * step at an unchanged time still starts what is due, such as an event
-	 * added since with a past time. A venue not yet started, or closing, takes
-	 * no part.
+	 * when its operation's invocation has returned, and gives their Jobs, venue
+	 * by venue in mount order and within a venue in the order it claimed them.
+	 * How each resolves is its own: wait on its Job. A failure to start is
+	 * logged and does not fail the future; an event whose Job could not be
+	 * created has none in the list. A step at an unchanged time still starts
+	 * what is due, such as an event added since with a past time. A venue not
+	 * yet started, or closing, takes no part.
 	 *
 	 * <p>{@link #autoUpdate()} calls this whenever a venue has something due.
 	 * An embedder that drives the clock calls it after each step instead.</p>
 	 */
-	public CompletableFuture<Void> update() {
+	public CompletableFuture<List<Job>> update() {
 		long now = venueContext.currentTimestamp().longValue();
 		List<Mounted> order = new ArrayList<>(mounted.values());
 		order.sort(Comparator.comparingLong(Mounted::order));
-		CompletableFuture<?>[] steps = new CompletableFuture<?>[order.size()];
-		for (int i = 0; i < steps.length; i++) {
+		List<CompletableFuture<List<Job>>> steps = new ArrayList<>(order.size());
+		for (Mounted venue : order) {
 			try {
-				steps[i] = order.get(i).engine().update(now);
+				steps.add(venue.engine().update(now));
 			} catch (RuntimeException e) {
-				steps[i] = CompletableFuture.failedFuture(e);
+				steps.add(CompletableFuture.failedFuture(e));
 			}
 		}
-		return CompletableFuture.allOf(steps);
+		return CompletableFuture.allOf(steps.toArray(new CompletableFuture<?>[0])).thenApply(all -> {
+			List<Job> started = new ArrayList<>();
+			for (CompletableFuture<List<Job>> step : steps) started.addAll(step.join());
+			return List.copyOf(started);
+		});
 	}
 
 	/**
