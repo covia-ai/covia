@@ -3,8 +3,10 @@ package covia.venue;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Queue;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
@@ -116,8 +118,8 @@ public class Scheduler {
 	private int starting = 0;
 	/** The times of those events, counted, so an update knows what it still waits for. */
 	private final TreeMap<Long, Integer> inFlight = new TreeMap<>();
-	/** Updates waiting for every event due by their time to start. */
-	private final List<Waiter> waiters = new ArrayList<>();
+	/** Updates waiting for every event due by their time to start. Concurrent so shutdown needs no lock. */
+	private final Queue<Waiter> waiters = new ConcurrentLinkedQueue<>();
 
 	private record Waiter(long time, CompletableFuture<Void> done) {}
 
@@ -326,19 +328,19 @@ public class Scheduler {
 	/**
 	 * Takes part in no further update. Fires already being started continue;
 	 * updates still waiting for events to start fail with
-	 * {@link ShuttingDownException}, since nothing more will start.
+	 * {@link ShuttingDownException}, since nothing more will start. Takes no
+	 * lock: the engine's close holds its monitor here, which a claim holding
+	 * the schedule's lock may be waiting for.
 	 */
 	public void shutdown() {
 		shutdown = true;
-		List<Waiter> stopped;
-		lock.lock();
-		try {
-			stopped = new ArrayList<>(waiters);
-			waiters.clear();
-		} finally {
-			lock.unlock();
+		failWaiters();
+	}
+
+	private void failWaiters() {
+		for (Waiter w = waiters.poll(); w != null; w = waiters.poll()) {
+			w.done().completeExceptionally(new ShuttingDownException(SHUT_DOWN));
 		}
-		for (Waiter w : stopped) w.done().completeExceptionally(new ShuttingDownException(SHUT_DOWN));
 	}
 
 	// ------------------------------------------------------------- updates
@@ -363,6 +365,8 @@ public class Scheduler {
 		} finally {
 			lock.unlock();
 		}
+		// A shutdown that emptied the queue just before this update joined it.
+		if (shutdown) failWaiters();
 		drain();
 		return done;
 	}
