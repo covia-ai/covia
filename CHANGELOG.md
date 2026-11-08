@@ -34,7 +34,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Requires Convex 0.8.19.
 - A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only.
-- `ucan:issue` and an agent's `caps` and `accepts` hand on only what their author could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry. A right to use something no longer lets you give it to an agent, and an agent's caps, which do not expire, need a presented right that does not either.
+- `ucan:issue` hands on only what its caller could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry.
+- An agent's `caps` and `accepts` are no longer limited to what their author could grant: whoever may create, update or fork the agent sets them, and an agent may create sub-agents with wider caps than its own.
 - A `did:key` roots grants over the identities nested below it, at any venue; `ucan:verify` reports such a root as `owner`.
 - The context an agent's config names (`config.context`, `config.loads` and the skills index) is assembled by the harness with its owner's authority, as the system prompt already was; the agent's tool calls, and the loads it or a caller adds, stay under its `caps`. Whoever may create or configure an owner's agents reaches whatever that owner can.
 - `auth:identity-token` takes any `lifetime` the caller chooses, no longer capped at an hour.

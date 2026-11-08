@@ -42,8 +42,9 @@ Tracked by covia#660.
   for a caller that is root of the resource (its own, an identity's it signs
   in as, its agent's) and whose scope includes the right to grant it, or that
   presents a `grant/<can>` right; it accepts any expiry or none
-  ([UCAN.md](./UCAN.md) §4.1). An agent's caps are conferred by the same
-  check. A caller with a held key signs as that key instead.
+  ([UCAN.md](./UCAN.md) §4.1). A caller with a held key signs as that key
+  instead. An agent's caps are not a grant: they narrow what it does in its
+  owner's namespace (§5.4 there).
 - **Deferred work.** A recorded job (`JobManager.keepCallerContext`) and a
   scheduled event (`Scheduler.schedule`) keep the grants presented to them but
   not the scope. Agents are unaffected, because their scope is read again from

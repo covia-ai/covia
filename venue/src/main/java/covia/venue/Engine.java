@@ -3828,9 +3828,6 @@ public class Engine {
 		}
 	}
 
-	/** Opening of every {@link #requireConferrable} denial. */
-	public static final String CONFERRAL_DENIED = "Cannot confer authority the caller could not grant";
-
 	/** Why a principal may not grant what it is root of: its scope leaves out the right to grant it. */
 	public static final String GRANT_BEYOND_SCOPE = "Your scope does not include the right to grant";
 
@@ -3842,10 +3839,9 @@ public class Engine {
 		+ "granted under: grant it for a shorter time, or present a right that lasts";
 
 	/**
-	 * May {@code ctx} grant {@code can} on {@code resource}? The one check
-	 * wherever authority is handed on: a grant the venue signs ({@code ucan:issue})
-	 * and an agent's {@code config.caps} ({@link #requireConferrable}). You pass
-	 * on only what you could grant.
+	 * May {@code ctx} grant {@code can} on {@code resource}? The check on every
+	 * grant the venue signs ({@code ucan:issue}): you pass on only what you
+	 * could grant.
 	 *
 	 * <ul>
 	 * <li>A principal is root of its own resources, of an identity's it signs in
@@ -3896,50 +3892,6 @@ public class Engine {
 		if (principal == null || owner == null) return false;
 		return principal.equals(owner) || VenueAuthenticator.signsInAs(principal, owner)
 			|| (covia.grid.Principals.isAgentDID(owner) && principal.equals(covia.grid.Principals.userOf(owner)));
-	}
-
-	/**
-	 * Attenuation where authority is handed on: may {@code ctx} confer {@code scope}
-	 * on a principal acting in {@code ownerDID}'s namespace, such as an agent's
-	 * {@code config.caps}? Each capability must be one the caller could grant
-	 * ({@link #requireGrantable}), and stored caps never expire, so conferring
-	 * only ever narrows: an agent may create a sub-agent only with what it may
-	 * grant.
-	 *
-	 * <p>A {@code null} scope is unrestricted, so only a caller that may grant
-	 * everything in that namespace may confer it. A bare resource names
-	 * {@code ownerDID}'s namespace, as it will when the scope is used, and an
-	 * empty one covers any resource. A capability's {@code nb.url} is the
-	 * destination its use is checked against; other caveats only narrow it
-	 * further.</p>
-	 *
-	 * @throws AuthException naming the first capability the caller cannot confer
-	 */
-	public void requireConferrable(RequestContext ctx, AString ownerDID, AVector<ACell> scope) {
-		if (scope == null) {
-			requireConferred(ctx, ownerDID, null, Capability.TOP, null);
-			return;
-		}
-		for (long i = 0; i < scope.count(); i++) {
-			AMap<AString, ACell> cap = RT.ensureMap(scope.get(i));
-			AString can = (cap == null) ? null : RT.ensureString(cap.get(Capability.CAN));
-			if (can == null) throw new AuthException(CONFERRAL_DENIED + ": capability " + i + " names no ability");
-			requireConferred(ctx, ownerDID, RT.ensureString(cap.get(Capability.WITH)), can,
-				RT.ensureString(RT.getIn(cap, Capability.NB, Fields.URL)));
-		}
-	}
-
-	private void requireConferred(RequestContext ctx, AString ownerDID, AString with, AString can,
-			AString destination) {
-		String resource = (with == null) ? "" : with.toString();
-		while (resource.startsWith("/")) resource = resource.substring(1);
-		AString absolute = resource.isEmpty() ? null
-			: Strings.create(covia.lattice.CapabilityChecker.canonicalResource(resource, ownerDID));
-		try {
-			requireGrantable(ctx, ownerDID, absolute, can, null, destination);
-		} catch (AuthException e) {
-			throw new AuthException(CONFERRAL_DENIED + ": " + e.getMessage());
-		}
 	}
 
 	/**

@@ -321,10 +321,8 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   in a venue-signed token a stored-bare path would denote the venue's own
   namespace (§3.1). For an agent that is its owner's namespace, which it may
   not grant. Empty paths and scheme forms are rejected.
-- You pass on only what you could grant. That one check
-  (`Engine.requireGrantable`) governs every place authority is handed on:
-  this operation, and an agent's caps and `accepts` (§5.4). A principal may
-  grant what it is root of:
+- You pass on only what you could grant (`Engine.requireGrantable`). A
+  principal may grant what it is root of:
   - its own resources, an agent's own DID included;
   - those of an identity it signs in as (a `did:key` and the identities
     nested below it);
@@ -936,25 +934,17 @@ That guard is pinned to identity. An agent with no `config.caps` holds a
 scope-based defence would therefore be absent on exactly the agent that most
 needs bounding.
 
-**Conferring:** attenuation only. Creating or reconfiguring an agent mints no
-token, but it hands authority on, so the caller may confer only what it could
-grant, by the same check as `ucan:issue` (`Engine.requireConferrable`).
-`agent:create`, `agent:update` and `agent:fork` refuse a config whose `caps`
-the caller could not grant, one capability at a time; an absent `caps` is
-unrestricted, so only a caller that may grant everything in that namespace may
-leave it out. Caps do not expire, so a presented right to grant them must not
-expire either. The same holds for `accepts`, which confers `agent/request` and
-`agent/message` on the agent (an older public `a2a.caps` reads as
-`accepts: "anyone"`). An owner may give its agent caps over the agent's own
-keys, which are its agent's. An update re-checks only the fields it changes,
-against the config it replaces, in the same atomic update.
-
 **Configuring an agent acts with its owner's authority.** The config chooses
 the agent's harness, its transition operation and the context it assembles,
 and the harness runs unrestricted in the owner's namespace (below). So whoever
 may create or configure an owner's agents (`agent/create`, `agent/write`),
 person or agent, reaches whatever the owner can: grant those abilities as you
-would the owner's own authority.
+would the owner's own authority. The config's `caps` and `accepts` are part of
+it and take no check of their own. `caps` narrow what the agent does, an
+absent `caps` leaving it unrestricted; `accepts` admits others to talk to it
+(an older public `a2a.caps` reads as `accepts: "anyone"`). Configuring mints
+no token, and caps reach nothing of another identity's, which a request
+reaches only by what it holds (§5.3).
 
 **The transition operation is the harness.** Each cycle, the run loop invokes
 the agent's transition operation (`config.operation`) as a harness step. The

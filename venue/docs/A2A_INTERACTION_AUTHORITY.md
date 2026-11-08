@@ -48,10 +48,9 @@ public principal, under the operator's `auth.public.caps`; the read-only
 default grants no `invoke`, so anonymous askers are refused until the operator
 opts in ([CONFIG.md](./CONFIG.md#a2a-protocol)).
 
-Setting an admission policy hands on the right to ask, so `agent:create`,
-`agent:update` and `agent:fork` refuse a policy that admits others unless the
-author holds `agent/request` and `agent/message` on the agent
-(`Engine.requireConferrable`).
+An admission policy is part of the agent's config, so whoever may create or
+configure the agent (`agent/create`, `agent/write`) sets it, with its owner's
+authority ([UCAN.md](./UCAN.md) §5.4).
 
 `a2a: {public: true}` publishes the agent's card and admits nobody. An older
 config with `a2a.caps` on a public agent reads as `accepts: "anyone"`

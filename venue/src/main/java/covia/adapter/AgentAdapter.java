@@ -426,35 +426,6 @@ public class AgentAdapter extends AAdapter {
 		return resolveAgentTarget(ctx, ref, ability, createOwner);
 	}
 
-	/**
-	 * Refuses a config that confers authority its author could not grant (see
-	 * {@link Engine#requireConferrable}): the agent's own {@code caps}, absent
-	 * meaning unrestricted; and the right to talk to it for whoever its
-	 * admission {@link Admission#policy} admits. An update re-checks only what
-	 * it changes from {@code previous}, so editing anything else needs no more
-	 * than {@code agent/write}.
-	 */
-	private void requireConferrable(RequestContext ctx, AgentTarget target,
-			AMap<AString, ACell> config, AMap<AString, ACell> previous) {
-		AString owner = target.ownerDID();
-		if (previous == null || changed(config, previous, K_CAPS)) {
-			engine.requireConferrable(ctx, owner, RT.ensureVector(config.get(K_CAPS)));
-		}
-		ACell accepts = Admission.policy(config);
-		boolean admitsOthers = accepts != null && !Admission.OWNER.equals(accepts)
-			&& !(accepts instanceof AVector<?> entries && entries.isEmpty());
-		if (admitsOthers && (previous == null
-				|| !java.util.Objects.equals(accepts, Admission.policy(previous)))) {
-			engine.requireConferrable(ctx, owner, Vectors.of(
-				Capability.create(target.address(), Abilities.AGENT_REQUEST),
-				Capability.create(target.address(), Abilities.AGENT_MESSAGE)));
-		}
-	}
-
-	private static boolean changed(AMap<AString, ACell> config, AMap<AString, ACell> previous, AString key) {
-		return !java.util.Objects.equals(config.get(key), (previous == null) ? null : previous.get(key));
-	}
-
 	private static AMap<AString, ACell> identify(AgentTarget target, AMap<AString, ACell> result) {
 		return result
 			.assoc(Fields.AGENT_ID, target.agentId())
@@ -886,7 +857,6 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> config = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
 			if (config == null) config = Maps.empty();
 			validateComposedConfig(config);
-			requireConferrable(ctx, target, config, null);
 			AgentState created = user.createAgent(agentId, config,
 				RT.getIn(input, AgentState.KEY_STATE), definition);
 			if (created == null) throw new ConflictException("Agent already exists: " + agentId);
@@ -1005,7 +975,6 @@ public class AgentAdapter extends AAdapter {
 			job.fail(e);
 			return;
 		}
-		requireConferrable(ctx, target, config, null);
 
 		AgentState agent = user.createAgent(agentId, config, initialState);
 		if (agent == null) {
@@ -1495,8 +1464,6 @@ public class AgentAdapter extends AAdapter {
 			job.fail(e);
 			return;
 		}
-		// The fork's authority is conferred by the forker, in the target's namespace.
-		requireConferrable(ctx, targetTarget, forkConfig, null);
 
 		ACell sourceState = sourceRecord.get(AgentState.KEY_STATE);
 		AVector<ACell> sourceTimeline = null;
@@ -2884,16 +2851,15 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// The new config is built from the config it replaces and checked against
-		// it inside the record's own update, so a concurrent change is never
-		// overwritten unchecked.
+		// The new config is built from the config it replaces and validated
+		// inside the record's own update, so a concurrent change is never
+		// overwritten.
 		AMap<AString, ACell> changes = resolved;
 		AMap<AString, ACell> newConfig;
 		try {
 			AMap<AString, ACell> committed = agent.updateConfigAndState((changes == null) ? null : current -> {
 				AMap<AString, ACell> composed = mergeConfigMaps(current, changes);
 				validateComposedConfig(composed);
-				requireConferrable(ctx, target, composed, current);
 				return composed;
 			}, newState);
 			newConfig = (changes == null) ? null : committed;
