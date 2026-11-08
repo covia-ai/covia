@@ -1067,7 +1067,7 @@ public class JobManager {
 	 */
 	public AMap<AString, ACell> adapterData(Job job) {
 		if (job instanceof VenueJob held && held.isMemoryOnly()) return held.adapterData();
-		return RT.ensureMap(RT.getIn(venue().jobIndex().entry(job.getID()), JobIndex.ADAPTER_DATA));
+		return venue().jobIndex().adapterData(job.getID());
 	}
 
 	/**
@@ -1083,12 +1083,7 @@ public class JobManager {
 			held.updateAdapterData(change);
 			return;
 		}
-		venue().jobIndex().update(job.getID(), entry -> {
-			AMap<AString, ACell> kept = RT.ensureMap(entry.get(JobIndex.ADAPTER_DATA));
-			AMap<AString, ACell> next = change.apply((kept == null) ? Maps.empty() : kept);
-			if (next != null && next == kept) return entry;
-			return (next == null) ? entry.dissoc(JobIndex.ADAPTER_DATA) : entry.assoc(JobIndex.ADAPTER_DATA, next);
-		});
+		venue().jobIndex().updateAdapterData(job.getID(), change);
 	}
 
 	/** Why a job's work cannot regain authority: its record names no caller. */

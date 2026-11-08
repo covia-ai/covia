@@ -7,6 +7,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.IndexComponent;
@@ -91,6 +92,29 @@ public final class JobIndex extends IndexComponent<Blob, ACell>
 		path(id).updateAndGet(current -> {
 			AMap<AString, ACell> entry = RT.ensureMap(current);
 			return (entry == null) ? current : change.apply(entry);
+		});
+	}
+
+	/**
+	 * What a job's adapter keeps to carry it to its end ({@link #ADAPTER_DATA}).
+	 *
+	 * @return the data, or null when the adapter keeps none or the job has no entry
+	 */
+	public AMap<AString, ACell> adapterData(Blob id) {
+		return RT.ensureMap(RT.getIn(entry(id), ADAPTER_DATA));
+	}
+
+	/**
+	 * Changes what a job's adapter keeps, if the job has an entry.
+	 *
+	 * @param change Pure edit of the data, empty when there is none; null removes it
+	 */
+	public void updateAdapterData(Blob id, UnaryOperator<AMap<AString, ACell>> change) {
+		update(id, entry -> {
+			AMap<AString, ACell> kept = RT.ensureMap(entry.get(ADAPTER_DATA));
+			AMap<AString, ACell> next = change.apply((kept == null) ? Maps.empty() : kept);
+			if (next != null && next == kept) return entry;
+			return (next == null) ? entry.dissoc(ADAPTER_DATA) : entry.assoc(ADAPTER_DATA, next);
 		});
 	}
 

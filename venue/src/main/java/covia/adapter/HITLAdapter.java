@@ -39,8 +39,11 @@ import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.RequestContext;
 import covia.venue.AgentState;
+import covia.venue.HitlRequest;
 import covia.venue.UcanJwtValidator;
 import covia.venue.User;
+import covia.venue.VenueJob;
+import covia.venue.VenueState;
 
 /**
  * Human-in-the-Loop requests (COG-16). A HITL request separates three
@@ -72,8 +75,21 @@ import covia.venue.User;
 public class HITLAdapter extends AAdapter {
 	public static final String REQUEST_ALREADY_RESOLVED = "HITL request is no longer open";
 	public static final String RESOLVED_WITHOUT_RESULT = "HITL request was resolved before restart but its full result was not saved";
-	public static final String REQUEST_REJECTED = "HITL request rejected";
-	public static final String REQUEST_EXPIRED = "HITL request expired";
+	/** A request's job error when the person asked declines it; {@code %s} is their DID. */
+	public static final String REQUEST_REJECTED = "The person you asked (%s) declined this request, so no answer will come.";
+	/** Follows {@link #REQUEST_REJECTED} with the comment the person gave. */
+	public static final String THEIR_COMMENT = " Their comment: ";
+	/** A request's job error when nobody answers before it expires. */
+	public static final String REQUEST_EXPIRED = "No one answered this request before it expired, so no answer will come.";
+	/** Refusal of a request to a user the venue does not host. */
+	public static final String TARGET_NOT_REGISTERED = "HITL target user is not registered at this venue: ";
+	/** A request's job ended before the request could wait for an answer. */
+	public static final String JOB_ENDED = "The job carrying this HITL request has already ended: ";
+	/** An inbox already holds a request under the id of a job opening one. */
+	public static final String REQUEST_EXISTS = "A HITL request is already open under the id of job ";
+
+	/** In a request job's adapter data: the DID of the user it was sent to. */
+	static final AString TARGET = Hitl.USER;
 
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
@@ -178,25 +194,33 @@ public class HITLAdapter extends AAdapter {
 
 		requireDeliverable(ctx, caller, target);
 
-		// Build and deliver the record (venue-mediated: `caller` is the verified
-		// caller, and h/ is not writable via covia:write), then park the Job.
+		// Open the request (venue-mediated: `caller` is the verified caller, and
+		// h/ is not writable via covia:write) and park its Job in one transaction,
+		// so the request is open exactly when its Job waits for it.
 		long nowMs = engine.currentTimestamp().longValue();
 		AString id = Strings.create(job.getID().toHexString());
-		AMap<AString, ACell> record = buildRecord(id, caller, ctx.getUserDID(), ctx.getAgentId(),
-			ctx.getSessionId(), title,
-			RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs, timeoutSecs);
+		AMap<AString, ACell> record = HitlRequest.record(id, caller, ctx.getUserDID(), ctx.getAgentId(),
+			ctx.getSessionId(), title, RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs,
+			(timeoutSecs == null) ? null : nowMs + timeoutSecs * 1000);
 
 		final AString targetDID = target;
-		User targetUser = engine.getVenueState().users().user(targetDID);
-		if (targetUser == null) {
-			throw new NotFoundException("HITL target user is not registered at this venue: "
-				+ targetDID, targetDID.toString());
-		}
-		targetUser.inbox().put(id, record);
+		Blob taskId = ctx.getTaskId();
+		Runnable parked = engine.getVenueState().transact(venue -> {
+			User targetUser = venue.users().user(targetDID);
+			if (targetUser == null) {
+				throw new NotFoundException(TARGET_NOT_REGISTERED + targetDID, targetDID.toString());
+			}
+			if (!targetUser.inbox().open(record)) throw new IllegalStateException(REQUEST_EXISTS + id);
+			addPending(venue, job, taskId);
+			venue.jobIndex().updateAdapterData(job.getID(), data -> data.assoc(TARGET, targetDID));
+			Runnable changed = ((VenueJob) job).updateIn(venue, data -> data.assoc(Fields.STATUS, Status.INPUT_REQUIRED));
+			if (changed == null) throw new ConflictException(JOB_ENDED + id);
+			return changed;
+		});
+		parked.run();
 		Blob jobId = job.getID();
-		trackPending(job, ctx.getTaskId());
+		watchPending(job);
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
-		job.setStatus(Status.INPUT_REQUIRED);
 		if (timeoutSecs != null) scheduleExpiry(targetDID, id, jobId, timeoutSecs * 1000);
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
@@ -205,12 +229,12 @@ public class HITLAdapter extends AAdapter {
 	 * HITL's result is delivered through the session inbox; pending holds only
 	 * its handle, and the task whose cycle asked when there is one, so that
 	 * task waits for the answer rather than failing as idle. Recovery passes
-	 * no task and keeps the entry already recorded.
+	 * no task and keeps the entry already recorded. A pure edit of the draft.
 	 */
-	private void trackPending(Job job, Blob taskId) {
+	private static void addPending(VenueState venue, Job job, Blob taskId) {
 		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
 		if (agentId == null) return;
-		User owner = engine.getVenueState().users().user(job.getOwner());
+		User owner = venue.users().user(job.getOwner());
 		AgentState agent = owner == null ? null : owner.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return;
 		if (taskId != null) {
@@ -218,6 +242,15 @@ public class HITLAdapter extends AAdapter {
 		} else if (!agent.getPending().containsKey(job.getID())) {
 			agent.addPending(job.getID(), Maps.empty());
 		}
+	}
+
+	/** Removes the asking agent's pending entry when the job finishes. */
+	private void watchPending(Job job) {
+		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
+		if (agentId == null) return;
+		User owner = engine.getVenueState().users().user(job.getOwner());
+		AgentState agent = owner == null ? null : owner.agent(agentId);
+		if (agent == null || agent.getRecord() == null) return;
 		var cleanup = new java.util.function.Consumer<Job>() {
 			@Override public void accept(Job updated) {
 				if (!updated.isFinished()) return;
@@ -231,7 +264,9 @@ public class HITLAdapter extends AAdapter {
 
 	@Override
 	public void recoverJob(Job job) {
-		trackPending(job, null); // restores legacy waits and arms cleanup if recovery fails
+		// Restores legacy waits and arms cleanup if recovery fails
+		engine.getVenueState().execute(venue -> addPending(venue, job, null));
+		watchPending(job);
 		super.recoverJob(job);
 		if (job.isFinished()) return;
 		AMap<AString, ACell> data = job.getData();
@@ -240,21 +275,23 @@ public class HITLAdapter extends AAdapter {
 		AString targetDID = target;
 		AString id = Strings.create(job.getID().toHexString());
 		User user = engine.getVenueState().users().user(target);
-		AMap<AString, ACell> record = user == null ? null : user.inbox().get(id);
-		if (record != null && !Hitl.OPEN.equals(record.get(Hitl.STATUS))) {
+		HitlRequest request = (user == null) ? null : user.inbox().request(id);
+		AString status = (request == null) ? null : request.status();
+		if (status != null && !Hitl.OPEN.equals(status)) {
 			// Older records lack a prepared result. Never reissue a grant or pretend
 			// a redacted token is the original answer.
-			if (Hitl.CANCELLED.equals(record.get(Hitl.STATUS))) job.cancel();
-			else if (Hitl.EXPIRED.equals(record.get(Hitl.STATUS))) job.fail(REQUEST_EXPIRED);
-			else if (Hitl.REJECTED.equals(record.get(Hitl.STATUS))) job.fail(rejection(RT.getIn(record, Hitl.RESPONSE, Hitl.COMMENT)));
+			if (Hitl.CANCELLED.equals(status)) job.cancel();
+			else if (Hitl.EXPIRED.equals(status)) job.fail(REQUEST_EXPIRED);
+			else if (Hitl.REJECTED.equals(status)) job.fail(rejection(targetDID, RT.getIn(request.getRecord(), Hitl.RESPONSE, Hitl.COMMENT)));
 			else job.fail(RESOLVED_WITHOUT_RESULT);
 			return;
 		}
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
 	}
 
-	private static String rejection(ACell comment) {
-		return REQUEST_REJECTED + (comment == null ? "" : ": " + comment);
+	/** The job error for a request {@code responder} declined, with their comment if any. */
+	static String rejection(AString responder, ACell comment) {
+		return String.format(REQUEST_REJECTED, responder) + (comment == null ? "" : THEIR_COMMENT + comment);
 	}
 
 	/** An ask within the caller's own user family is always permitted — a user
@@ -273,26 +310,6 @@ public class HITLAdapter extends AAdapter {
 		// once so public policy/proofs and any delegated caveats are evaluated
 		// exactly once.
 		engine.requireLocalAccess(ctx, resource, ABILITY_HITL_REQUEST);
-	}
-
-	private static AMap<AString, ACell> buildRecord(AString id, AString caller,
-			AString owner, AString agentId, Blob sessionId, AString title,
-			AString description, AVector<ACell> asks, long nowMs, Long timeoutSecs) {
-		AMap<AString, ACell> record = Attribution.attribute(Maps.of(
-			Hitl.ID, id,
-			Hitl.TITLE, title,
-			Hitl.ASKS, asks,
-			Hitl.STATUS, Hitl.OPEN,
-			Hitl.CREATED, CVMLong.create(nowMs)), caller, owner);
-		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
-		if (agentId != null) {
-			record = record.assoc(Hitl.AGENT, agentId);
-			if (sessionId != null) {
-				record = record.assoc(Fields.SESSION_ID, Strings.create(sessionId.toHexString()));
-			}
-		}
-		if (timeoutSecs != null) record = record.assoc(Hitl.EXPIRES, CVMLong.create(nowMs + timeoutSecs * 1000));
-		return record;
 	}
 
 	private static Long parseTimeout(ACell timeoutCell) {
@@ -338,18 +355,18 @@ public class HITLAdapter extends AAdapter {
 		// Structural authorisation: respond reads the CALLER's own inbox only.
 		User user = engine.getVenueState().users().user(caller);
 		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
-		AMap<AString, ACell> record = user.inbox().get(id);
+		HitlRequest request = user.inbox().request(id);
+		AMap<AString, ACell> record = request.getRecord();
 		if (record == null) {
 			throw new NotFoundException("No HITL request " + id + " in your inbox", id.toString());
 		}
-		if (!Hitl.OPEN.equals(record.get(Hitl.STATUS))) {
+		if (!request.isOpen()) {
 			throw new NotSupportedException("HITL request " + id + " is not open (status: "
-				+ record.get(Hitl.STATUS) + ")");
+				+ request.status() + ")");
 		}
 		// Lazy expiry: a due-but-untriggered timer (e.g. lost on restart before
 		// re-arm) must not let an expired request be answered.
-		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
-		if (expires != null && engine.currentTimestamp().longValue() > expires.longValue()) {
+		if (request.isExpired(engine.currentTimestamp().longValue())) {
 			expireRequest(caller, id, Blob.parse(id.toString()));
 			throw new NotSupportedException("HITL request " + id + " has expired");
 		}
@@ -675,15 +692,13 @@ public class HITLAdapter extends AAdapter {
 			Runnable notification = null;
 			Blob waitingTask = null;
 			User target = draft.user(targetDID);
-			AMap<AString, ACell> record = target == null ? null : target.inbox().get(id);
-			if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return null;
-			AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
-			if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
-			target.inbox().put(id, updated);
+			HitlRequest request = (target == null) ? null : target.inbox().request(id);
+			AMap<AString, ACell> record = (request == null) ? null : request.getRecord();
+			if (record == null || !request.resolve(status, response)) return null;
 			if (job != null) {
-				Runnable changed = ((covia.venue.VenueJob) job).updateIn(venue, data -> {
+				Runnable changed = ((VenueJob) job).updateIn(venue, data -> {
 					if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
-					String error = Hitl.REJECTED.equals(status) ? rejection(RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED;
+					String error = Hitl.REJECTED.equals(status) ? rejection(targetDID, RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED;
 					return data.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(error)).dissoc(Fields.ERROR_CODE);
 				});
 				if (changed == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);

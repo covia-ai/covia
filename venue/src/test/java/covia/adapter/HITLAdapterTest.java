@@ -154,6 +154,8 @@ public class HITLAdapterTest {
 		assertEquals(ALICE_DID, record.get(Hitl.CALLER),
 			"caller is the VERIFIED caller identity, venue-set");
 		assertNull(record.get(Hitl.OWNER), "a user asking in its own namespace names no other owner");
+		assertEquals(ALICE_DID, RT.getIn(engine.jobs().adapterData(job), HITLAdapter.TARGET),
+			"the job keeps whom its request went to, outside its record");
 
 		// The inbox listing shows the open ask.
 		ACell list = engine.jobs().invokeOperation("v/ops/hitl/list",
@@ -172,6 +174,7 @@ public class HITLAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(output, "answers", "pay"));
 		assertEquals(Strings.create(id), RT.getIn(output, "id"));
 		assertEquals(Hitl.ANSWERED, readRecord(ALICE, id).get(Hitl.STATUS));
+		assertNull(engine.jobs().adapterData(job), "a finished job keeps no adapter data");
 	}
 
 	@Test
@@ -379,7 +382,8 @@ public class HITLAdapterTest {
 				assertEquals(Status.COMPLETE, answer.getStatus());
 				assertEquals(Strings.create(token), RT.getIn(answer.getOutput(), Hitl.TOKENS, Strings.create("b-access")));
 				assertEquals(Status.FAILED, second.jobs().getJob(rejected, BOB).getStatus());
-				assertEquals(Strings.create(HITLAdapter.REQUEST_REJECTED + ": No"), second.jobs().getJob(rejected, BOB).getData().get(Fields.ERROR));
+				assertEquals(Strings.create(String.format(HITLAdapter.REQUEST_REJECTED, BOB_DID) + HITLAdapter.THEIR_COMMENT + "No"),
+					second.jobs().getJob(rejected, BOB).getData().get(Fields.ERROR));
 				assertEquals(Strings.create(HITLAdapter.REQUEST_EXPIRED), second.jobs().getJob(expired, BOB).getData().get(Fields.ERROR));
 			} finally { second.close(); }
 		}
@@ -498,7 +502,8 @@ public class HITLAdapterTest {
 		respond(ALICE, Hitl.reject(id, "Wrong PO"));
 
 		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("rejected"));
+		assertEquals(String.format(HITLAdapter.REQUEST_REJECTED, ALICE_DID) + HITLAdapter.THEIR_COMMENT + "Wrong PO",
+			job.getErrorMessage());
 		assertTrue(job.getErrorMessage().contains("Wrong PO"),
 			"the rejection reason must travel in the job error — the requester cannot read the inbox");
 		assertEquals(Hitl.REJECTED, readRecord(ALICE, id).get(Hitl.STATUS));
@@ -741,7 +746,7 @@ public class HITLAdapterTest {
 		// The expiry timer fails the job; awaitResult surfaces it.
 		assertThrows(JobFailedException.class, () -> job.awaitResult(15000));
 		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("expired"));
+		assertEquals(HITLAdapter.REQUEST_EXPIRED, job.getErrorMessage());
 		assertFalse(agent.getPending().containsKey(job.getID()));
 		assertEquals(Hitl.EXPIRED, readRecord(ALICE, id).get(Hitl.STATUS));
 
