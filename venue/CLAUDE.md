@@ -96,7 +96,7 @@ AUTH_REQUIRED).
 | `agent` | Agent lifecycle | `create`, `fromSkills`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask`, `deleteSession` |
 | `llmagent` | LLM agent transitions | `chat` |
 | `goaltree` | Goal-tree agent planning | `chat` |
-| `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox |
+| `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox; `expire` (venue-only, fired by a request's scheduled timeout) |
 | `project` | Projects as a work breakdown tree at `w/projects/<pid>` (`docs/PROJECT.md`); publishes the `projects` skill family | none yet — skills only |
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
 | `vault` | Personal vault (configurable-drive DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
@@ -110,7 +110,7 @@ AUTH_REQUIRED).
 | `oauth` | Connected accounts — OAuth 2.0 grants held for users; `http:*` attaches tokens via `bearerSecret: "oauth/<provider>"` | `connect`, `complete`, `status`, `disconnect` |
 | `user` | Explicit user registration, operator account deletion and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `delete`, `info`, `list` |
 | `venue` | Venue administration — runtime adapter/module lifecycle and process restart (venue-owned; `docs/CONFIG.md`) | `adapters`, `adapter/enable`, `adapter/disable`, `adapter/configure`, `module/load`, `module/unload`, `restart`, `gc` |
-| `test` | Testing | `echo`, `delay`, `fail`, `never`, `hold` (finishes when the test releases its gate), `random`, `chat`, `pause`, `taskComplete`, `failllm` (a model call that fails as the agent's `model` names: `setup`, `unavailable`, `value`, `content`, `bug`), `step` (an agent transition scripted by its input: hold at a gate, complete or fail the task, fail the cycle, yield) |
+| `test` | Testing | `echo`, `delay`, `fail`, `never`, `hold` (finishes when the test releases its gate), `holdstart` (as `hold`, inside its own invocation, so its start waits too), `random`, `chat`, `pause`, `taskComplete`, `failllm` (a model call that fails as the agent's `model` names: `setup`, `unavailable`, `value`, `content`, `bug`), `step` (an agent transition scripted by its input: hold at a gate, complete or fail the task, fail the cycle, yield) |
 
 Module adapters (shaded module jars, not in covia.jar — `docs/CONFIG.md` "Venue modules"):
 

@@ -197,6 +197,151 @@ public class AgentControllerTest {
 		assertNull(agent("named").getRecord().get(AgentState.KEY_CONTROLLER), "handed back to its owner");
 	}
 
+	private boolean covers(RequestContext ctx, String resource, AString ability) {
+		return engine.authorityCovers(ctx, Strings.create(resource), ability);
+	}
+
+	private RequestContext as(String id) {
+		return engine.context(alice, agentDID(id));
+	}
+
+	@Test
+	public void testAnAgentsAuthorityIsItsControllersNarrowedByItsCaps() {
+		RequestContext parent = parent();
+		assertComplete(create("uncapped", null, parent));
+		assertTrue(covers(as("uncapped"), "w/shared/doc", READ), "within its creator's caps");
+		assertFalse(covers(as("uncapped"), "w/private", READ), "no caps of its own give it nothing more than its creator");
+
+		assertComplete(create("wider", Vectors.of(cap("w/", Capability.CRUD)), parent));
+		assertTrue(covers(as("wider"), "w/shared/doc", READ));
+		assertFalse(covers(as("wider"), "w/shared/doc", Capability.CRUD_WRITE), "caps cannot exceed its controller's");
+		assertFalse(covers(as("wider"), "w/private", READ));
+
+		assertComplete(create("narrower", Vectors.of(cap("w/shared/sub/", READ)), parent));
+		assertTrue(covers(as("narrower"), "w/shared/sub/doc", READ));
+		assertFalse(covers(as("narrower"), "w/shared/other", READ), "its caps still narrow");
+
+		AString uncapped = Strings.create("uncapped");
+		RequestContext step = engine.stepContext(engine.harnessContext(alice, uncapped), uncapped);
+		assertTrue(covers(step, "w/shared/doc", READ));
+		assertFalse(covers(step, "w/private", READ), "its tool calls are bound the same way");
+
+		RequestContext narrowed = engine.harnessContext(alice, Strings.create("wider"))
+			.narrowedTo(Vectors.of(cap("w/shared/sub/", READ)));
+		assertTrue(covers(narrowed, "w/shared/sub/doc", READ));
+		assertFalse(covers(narrowed, "w/shared/other", READ), "a harness narrowed by caps stays within its controller's");
+		assertFalse(covers(engine.harnessContext(alice, Strings.create("wider")).narrowedTo(Vectors.of(cap("w/", READ))),
+			"w/private", READ), "caps cannot lift it past its controller's");
+	}
+
+	@Test
+	public void testAChainOfControllersNarrowsAtEveryLink() {
+		RequestContext parent = parent();
+		assertComplete(create("middle", Vectors.of(cap("g/", Abilities.AGENT_CREATE), cap("w/shared/sub/", READ),
+			Maps.of(Capability.CAN, Abilities.INVOKE)), parent));
+		assertComplete(create("leaf", null, as("middle")));
+		assertEquals(agentDID("middle"), agent("leaf").getController());
+
+		assertTrue(covers(as("leaf"), "w/shared/sub/doc", READ));
+		assertFalse(covers(as("leaf"), "w/shared/other", READ));
+	}
+
+	@Test
+	public void testAnOwnersAgentKeepsItsCapsAsWritten() {
+		AVector<ACell> caps = Vectors.of(cap("w/notes/", READ));
+		assertComplete(create("own", caps, ALICE));
+		assertEquals(caps, as("own").getCaps());
+		assertFalse(as("own").hasSeparateAuthority());
+		assertTrue(covers(as("own"), "w/notes/a", READ));
+
+		assertComplete(create("free", null, ALICE));
+		assertNull(as("free").getCaps(), "an agent its owner controls with no caps has its owner's authority");
+	}
+
+	@Test
+	public void testAControllerBoundsItsAgentsAsItStands() {
+		RequestContext parent = parent();
+		assertComplete(create("child", null, parent));
+		RequestContext child = as("child");
+		assertTrue(covers(child, "w/shared/doc", READ));
+
+		assertComplete(run("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "parent", Fields.CONFIG, Maps.of("caps",
+			Vectors.of(cap("w/other/", READ)))), ALICE));
+		assertFalse(covers(child, "w/shared/doc", READ), "work already running is bound by the change");
+
+		assertComplete(run("v/ops/agent/delete", Maps.of(Fields.AGENT_ID, "parent"), ALICE));
+		assertFalse(covers(child, "w/other/doc", READ), "a controller that is gone gives nothing");
+	}
+
+	@Test
+	public void testALoopOfControllersGrantsNothing() {
+		assertComplete(create("x", null, ALICE));
+		assertComplete(create("y", null, ALICE));
+		assertComplete(run("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "x", Fields.CONTROLLER, agentDID("y")), ALICE));
+		assertComplete(run("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "y", Fields.CONTROLLER, agentDID("x")), ALICE));
+
+		assertFalse(covers(as("x"), "w/anything", READ));
+		assertFalse(covers(as("y"), "w/anything", READ));
+	}
+
+	@Test
+	public void testConfiguringAnOwnersAgentNeedsTheOwnersAuthority() {
+		RequestContext parent = parent();
+		assertComplete(create("own", null, ALICE));
+		AString address = Strings.create(alice + "/g/own");
+
+		assertRefused(update("own", parent), Engine.NOT_CONTROLLERS.formatted(address, alice));
+		assertRefused(run("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "parent", Fields.CONFIG, Maps.of("caps",
+			Vectors.empty())), parent), Engine.NOT_CONTROLLERS.formatted(alice + "/g/parent", alice));
+		assertRefused(update(address.toString(), bobWith(cap(address.toString(), Abilities.AGENT_WRITE))),
+			Engine.NOT_CONTROLLERS.formatted(address, alice));
+
+		assertComplete(run("v/ops/agent/update", Maps.of(Fields.AGENT_ID, "own", "state", Maps.of("step", 1)), parent));
+		assertComplete(run("v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, "own"), parent));
+		assertComplete(run("v/ops/agent/resume", Maps.of(Fields.AGENT_ID, "own"), parent));
+
+		assertComplete(create("uncapped", null, ALICE));
+		assertComplete(update("own", as("uncapped")));
+		assertComplete(update("own", ALICE));
+	}
+
+	@Test
+	public void testAnAgentAnotherNamespaceControlsHoldsOnlyItsOwnAuthority() {
+		String address = alice + "/g/bobs";
+		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, address,
+			Fields.CONFIG, config(Vectors.of(cap(bob + "/w/notes/", READ)))),
+			bobWith(cap(alice + "/g/", Abilities.AGENT_CREATE))));
+
+		RequestContext bobs = as("bobs");
+		assertTrue(bobs.hasSeparateAuthority());
+		assertEquals(agentDID("bobs"), bobs.getCallerDID(), "it is still the agent acting");
+		assertTrue(covers(bobs, bob + "/w/notes/a", READ));
+		assertFalse(covers(bobs, bob + "/w/other", READ), "its caps narrow its controller's authority");
+		assertFalse(covers(bobs, "w/notes/a", READ), "Alice's data is not Bob's");
+
+		assertEquals(agentDID("bobs"), Engine.actingPrincipal(bobs), "what it creates stays within it");
+		assertFalse(engine.holdsAuthorityOf(bobs, bob), "narrowed, it does not hold Bob's whole authority");
+		assertTrue(engine.holdsAuthorityOf(bobs, agentDID("bobs")));
+	}
+
+	@Test
+	public void testASudoDelegateHoldsNoControllersAuthority() {
+		RequestContext sudo = engine.sudoContext(bobWith(cap(alice.toString(), Abilities.USER_SUDO)), alice);
+		assertEquals(alice, sudo.getUserDID());
+		assertFalse(engine.holdsAuthorityOf(sudo, alice), "its scope is its presented grants, so it cannot configure her agents");
+		assertEquals(alice, Engine.actingPrincipal(sudo), "what it creates, she controls");
+	}
+
+	@Test
+	public void testTheCapabilityNoticeStatesWhatTheControllerLeaves() {
+		RequestContext parent = parent();
+		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "told", Fields.CONFIG,
+			config(null).assoc(Fields.TOOLS, Vectors.of((ACell) Strings.create("v/ops/covia/read")))), parent));
+		Job context = run("v/ops/agent/context", Maps.of(Fields.AGENT_ID, "told"), ALICE);
+		assertComplete(context);
+		assertTrue(context.getOutput().toString().contains("w/shared/"), "the agent is told its creator's limits");
+	}
+
 	@Test
 	public void testACloneDropsControllersItsTargetDoesNotHold() {
 		RequestContext parent = parent();

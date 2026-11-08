@@ -1,9 +1,6 @@
 package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,6 +96,15 @@ public class HITLAdapter extends AAdapter {
 	/** The operation whose authority a grant is minted with. */
 	private static final AString ISSUE_OPERATION = Strings.intern("v/ops/ucan/issue");
 
+	/** Refusal of {@code hitl:expire} from anyone but the venue, which schedules it. */
+	public static final String EXPIRE_VENUE_ONLY = "Only the venue expires HITL requests, as their timeouts fall due";
+
+	/**
+	 * The operation a request's timeout schedules, fired as the venue at its
+	 * {@code expires} time with input {@code {user, id}}.
+	 */
+	public static final AString EXPIRE_OP = Strings.intern("v/ops/hitl/expire");
+
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
 	/** Delivery ability for cross-user asks: {@code hitl/request} on {@code <target>/h/}. */
@@ -112,13 +118,6 @@ public class HITLAdapter extends AAdapter {
 
 	/** Optional adapter-config ceiling. Absent/null means no venue maximum. */
 	static final AString CONFIG_MAX_GRANT_LIFETIME_SECS = Strings.intern("maxGrantLifetimeSecs");
-
-	/** Expiry timers — daemon; lost on restart and re-armed by {@link #rearmExpiries()}. */
-	private static final ScheduledExecutorService EXPIRY = Executors.newSingleThreadScheduledExecutor(r -> {
-		Thread t = new Thread(r, "hitl-expiry");
-		t.setDaemon(true);
-		return t;
-	});
 
 	@Override
 	public String getName() {
@@ -147,6 +146,7 @@ public class HITLAdapter extends AAdapter {
 		installAsset("hitl/request", "/adapters/hitl/request.json");
 		installAsset("hitl/respond", "/adapters/hitl/respond.json");
 		installAsset("hitl/list",    "/adapters/hitl/list.json");
+		installAsset("hitl/expire",  "/adapters/hitl/expire.json");
 	}
 
 	@Override
@@ -161,6 +161,10 @@ public class HITLAdapter extends AAdapter {
 				}
 				case "list":
 					return CompletableFuture.completedFuture(handleList(ctx, input));
+				case "expire": {
+					final ACell in = input;
+					return CompletableFuture.supplyAsync(() -> handleExpire(ctx, in), VIRTUAL_EXECUTOR);
+				}
 				case "request":
 					return CompletableFuture.failedFuture(new NotSupportedException(
 						"hitl:request is Job-carried — invoke it as an operation, not internally"));
@@ -230,7 +234,8 @@ public class HITLAdapter extends AAdapter {
 			return changed;
 		});
 		parked.run();
-		if (timeoutSecs != null) scheduleExpiry(targetDID, id, job.getID(), timeoutSecs * 1000);
+		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
+		if (expires != null) scheduleExpiry(targetDID, id, expires.longValue());
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
 
@@ -262,22 +267,21 @@ public class HITLAdapter extends AAdapter {
 		if (agent != null && agent.getRecord() != null) agent.removePending(job.getID());
 	}
 
-	/** The user a request job asked, as its input says. */
-	private static AString askedBy(Job job) {
+	/**
+	 * The user a request job asked. Requests opened before the adapter kept its
+	 * target name it only in the job's input.
+	 */
+	private static AString askedBy(Job job, AMap<AString, ACell> adapterData) {
+		AString kept = (adapterData == null) ? null : RT.ensureString(adapterData.get(TARGET));
+		if (kept != null) return kept;
 		AString target = RT.ensureString(RT.getIn(job.getData(), Fields.INPUT, Hitl.USER));
 		return (target != null) ? target : job.getOwner();
 	}
 
-	/**
-	 * Cancelling a request job resolves its request as cancelled and ends the
-	 * asking agent's wait. Requests opened before the adapter kept its target
-	 * name it only in the job's input.
-	 */
+	/** Cancelling a request job resolves its request as cancelled and ends the asking agent's wait. */
 	@Override
 	public void cancelIn(VenueState draft, Job job, AMap<AString, ACell> adapterData) {
-		AString target = (adapterData == null) ? null : RT.ensureString(adapterData.get(TARGET));
-		if (target == null) target = askedBy(job);
-		User user = draft.users().user(target);
+		User user = draft.users().user(askedBy(job, adapterData));
 		if (user != null) user.inbox().request(Strings.create(job.getID().toHexString())).resolve(Hitl.CANCELLED, null);
 		removePending(draft, job);
 	}
@@ -291,11 +295,18 @@ public class HITLAdapter extends AAdapter {
 		}
 		// Restores waits recorded before they were opened with the request
 		engine.getVenueState().execute(venue -> addPending(venue, job, null));
-		AString target = askedBy(job);
+		AMap<AString, ACell> kept = engine.jobs().adapterData(job);
+		AString target = askedBy(job, kept);
 		AString id = Strings.create(job.getID().toHexString());
 		User user = engine.getVenueState().users().user(target);
-		HitlRequest request = (user == null) ? null : user.inbox().request(id);
-		AString status = (request == null) ? null : request.status();
+		if (user == null) {
+			// The account went before this job's handle was restored. Launch wakes
+			// agents with work once every job is back, so this one wakes nothing.
+			failForDeletedTarget(target, job, kept, null);
+			return;
+		}
+		HitlRequest request = user.inbox().request(id);
+		AString status = request.status();
 		if (status == null || Hitl.OPEN.equals(status)) return;
 		// Older records lack a prepared result. Never reissue a grant or pretend
 		// a redacted token is the original answer.
@@ -311,46 +322,34 @@ public class HITLAdapter extends AAdapter {
 	 */
 	@Override
 	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
-		failRequestsToDeletedUsers();
+		for (var entry : engine.getVenueState().jobIndex().all().entrySet()) {
+			if (!(engine.jobs().getJob(entry.getKey()) instanceof VenueJob job) || job.adapter() != this) continue;
+			if (!Status.INPUT_REQUIRED.equals(job.getStatus())) continue;
+			AMap<AString, ACell> kept = engine.jobs().adapterData(job);
+			if (did.equals(askedBy(job, kept))) {
+				failForDeletedTarget(did, job, kept, engine.getVenueState().users().user(job.getOwner()));
+			}
+		}
 	}
 
 	/**
-	 * Fails every waiting request whose target has no account. Run on each
-	 * deletion, and at launch for a deletion that finished before this venue's
-	 * jobs were restored: a deleted account takes the request's record with it,
-	 * so nothing else would end the wait.
+	 * Fails a request whose target has no account, ends the asking agent's wait
+	 * and tells it why. The account took the request's record with it, so
+	 * nothing else would end the wait.
 	 *
-	 * @return how many requests failed
+	 * @param ownerAccount The job owner's account, to wake the agent that asked, or null to wake nothing
 	 */
-	private int failRequestsToDeletedUsers() {
-		int failed = 0;
-		for (var entry : engine.getVenueState().jobIndex().all().entrySet()) {
-			Blob jobId = entry.getKey();
-			if (!(engine.jobs().getJob(jobId) instanceof VenueJob job) || job.adapter() != this) continue;
-			if (!Status.INPUT_REQUIRED.equals(job.getStatus())) continue;
-			AMap<AString, ACell> kept = engine.jobs().adapterData(job);
-			AString target = (kept == null) ? null : RT.ensureString(kept.get(TARGET));
-			if (target == null) target = askedBy(job);
-			if (engine.getVenueState().users().user(target) != null) continue;
-			if (failForDeletedTarget(target, job, kept)) failed++;
-		}
-		return failed;
-	}
-
-	private boolean failForDeletedTarget(AString target, Job job, AMap<AString, ACell> kept) {
+	private void failForDeletedTarget(AString target, Job job, AMap<AString, ACell> kept, User ownerAccount) {
 		String error = String.format(TARGET_DELETED, target);
 		AString id = Strings.create(job.getID().toHexString());
 		AString owner = job.getOwner();
 		AString agentId = Engine.agentIdIn(owner, job.getCaller());
 		AString session = (kept == null) ? null : RT.ensureString(kept.get(Fields.SESSION_ID));
-		User ownerAccount = engine.getVenueState().users().user(owner);
 		ACell result = Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.CANCELLED, Fields.ERROR, error);
 		// Null when the job finished first
 		Resolution resolution = engine.getVenueState().transact(venue ->
 			settle(venue, job, data -> failed(data, error), owner, agentId, session, engine.getDIDString(), result));
-		if (resolution == null) return false;
-		afterResolution(resolution, id, ownerAccount);
-		return true;
+		if (resolution != null) afterResolution(resolution, id, ownerAccount);
 	}
 
 	private static AMap<AString, ACell> failed(AMap<AString, ACell> data, String error) {
@@ -442,8 +441,8 @@ public class HITLAdapter extends AAdapter {
 			throw new NotSupportedException("HITL request " + id + " is not open (status: "
 				+ request.status() + ")");
 		}
-		// Lazy expiry: a due-but-untriggered timer (e.g. lost on restart before
-		// re-arm) must not let an expired request be answered.
+		// Lazy expiry: an expiry event not yet fired (the venue has not been
+		// updated past its time) must not let an expired request be answered.
 		if (request.isExpired(engine.currentTimestamp().longValue())) {
 			expireRequest(caller, id, Blob.parse(id.toString()));
 			throw new NotSupportedException("HITL request " + id + " has expired");
@@ -726,14 +725,41 @@ public class HITLAdapter extends AAdapter {
 
 	// ========== Expiry ==========
 
-	private void scheduleExpiry(AString targetDID, AString id, Blob jobId, long delayMs) {
-		EXPIRY.schedule(() -> {
-			try {
-				expireRequest(targetDID, id, jobId);
-			} catch (Throwable t) {
-				log.warn("HITL expiry for {} failed: {}", id, t.getMessage());
-			}
-		}, delayMs, TimeUnit.MILLISECONDS);
+	/**
+	 * Schedules the request's expiry at {@code expires}: a one-shot event the
+	 * venue fires as itself, invoking {@link #EXPIRE_OP}. It lives in the
+	 * venue's schedule, so it survives a restart (COG-16).
+	 */
+	private void scheduleExpiry(AString targetDID, AString id, long expires) {
+		engine.gridScheduler().schedule(EXPIRE_OP, expiryInput(targetDID, id), engine.venueContext(),
+			expires, null, Boolean.FALSE, Strings.create("Expires HITL request " + id));
+	}
+
+	/** The input of {@link #EXPIRE_OP} for request {@code id} in {@code targetDID}'s inbox. */
+	public static AMap<AString, ACell> expiryInput(AString targetDID, AString id) {
+		return Maps.of(Hitl.USER, targetDID, Hitl.ID, id);
+	}
+
+	// ========== hitl:expire ==========
+
+	/**
+	 * Expires an open request whose timeout has fallen due. Only the venue
+	 * invokes it, from the event its request scheduled. Idempotent: a request
+	 * already resolved, or gone, is left as it is. Returns the request's
+	 * {@code id} and its {@code status} now, when it still exists.
+	 */
+	private ACell handleExpire(RequestContext ctx, ACell input) {
+		if (!engine.isDirectVenue(ctx)) throw new AuthException(EXPIRE_VENUE_ONLY);
+		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
+		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
+		if (target == null || id == null) throw new InvalidInputException("user and id are required");
+		Blob jobId = Blob.parse(id.toString());
+		if (jobId == null) throw new InvalidInputException("id is not a HITL request id: " + id);
+		expireRequest(target, id, jobId);
+		User user = engine.getVenueState().users().user(target);
+		AMap<AString, ACell> record = (user == null) ? null : user.inbox().get(id);
+		AMap<AString, ACell> result = Maps.of(Hitl.ID, id);
+		return (record == null) ? result : result.assoc(Hitl.STATUS, record.get(Hitl.STATUS));
 	}
 
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
@@ -834,51 +860,5 @@ public class HITLAdapter extends AAdapter {
 			agents.wakeAgent(destination.owner(), destination.agent(), true);
 		}
 		if (resolution.unavailable()) log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
-	}
-
-	/**
-	 * Re-arms expiry enforcement after a venue restart (COG-16: expiry MUST
-	 * survive restarts). Scans users' inboxes for OPEN requests with an
-	 * {@code expires} stamp: overdue ones expire immediately, future ones get
-	 * fresh timers. Called at venue launch after {@code recoverJobs()} (which
-	 * restores the parked INPUT_REQUIRED jobs these records refer to).
-	 *
-	 * @return number of requests re-armed or expired
-	 */
-	@SuppressWarnings("unchecked")
-	public int rearmExpiries() {
-		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
-		if (all == null) return 0;
-		int count = 0;
-		long nowMs = engine.currentTimestamp().longValue();
-		for (long u = 0; u < all.count(); u++) {
-			AString did = RT.ensureString(all.entryAt(u).getKey());
-			if (did == null) continue;
-			User user = engine.getVenueState().users().user(did);
-			if (user == null) continue;
-			AMap<AString, AMap<AString, ACell>> reqs = user.inbox().getAll();
-			for (long i = 0; i < reqs.count(); i++) {
-				ACell v = reqs.entryAt(i).getValue();
-				if (!(v instanceof AMap)) continue;
-				AMap<AString, ACell> rec = (AMap<AString, ACell>) v;
-				if (!Hitl.OPEN.equals(rec.get(Hitl.STATUS))) continue;
-				CVMLong expires = RT.ensureLong(rec.get(Hitl.EXPIRES));
-				if (expires == null) continue;
-				AString id = RT.ensureString(rec.get(Hitl.ID));
-				if (id == null) continue;
-				Blob jobId = Blob.parse(id.toString());
-				long delay = expires.longValue() - nowMs;
-				if (delay <= 0) {
-					expireRequest(did, id, jobId);
-				} else {
-					scheduleExpiry(did, id, jobId, delay);
-				}
-				count++;
-			}
-		}
-		if (count > 0) log.info("HITL: re-armed expiry for {} open request(s)", count);
-		int failed = failRequestsToDeletedUsers();
-		if (failed > 0) log.info("HITL: failed {} request(s) to deleted users", failed);
-		return count;
 	}
 }

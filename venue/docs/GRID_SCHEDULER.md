@@ -1,7 +1,7 @@
 # Grid Scheduler — Deferred Operation Invocation
 
-A per-venue service that invokes **any grid operation** at a future wall-clock
-time. The unit of work is a *scheduled event* — "invoke operation `op(input)`
+A per-venue service that invokes **any grid operation** at a future time on the
+venue's clock ([EMBEDDING.md](./EMBEDDING.md#time)). The unit of work is a *scheduled event* — "invoke operation `op(input)`
 as `owner` at time `T`". Waking an agent is one consumer of this, not the
 model: it is simply a scheduled invocation of the agent's wake operation
 (`agent:trigger`, §8).
@@ -15,7 +15,7 @@ Agent wake is a consumer of this service — see §8, and
 
 - **Scheduled event** — a deferred invocation, one-shot or recurring:
   `{ time, id, operation, input, caller, owner?, created, proofs, description?, repeat?, track?, lastFired?, lastJob? }`.
-  - `time` — absolute wall-clock millis at which the event is next due.
+  - `time` — absolute millis on the venue's clock at which the event is next due.
   - `operation` — a grid operation reference (asset id or operation path).
   - `input` — the cell passed to that operation when it fires.
   - `caller` — the principal that scheduled it: the owner, or one of its
@@ -26,7 +26,7 @@ Agent wake is a consumer of this service — see §8, and
     namespace it runs in and the key for `list`, `cancel` and `trigger`. Absent
     means the caller's own. Both fields follow COG-8 and are written and read
     with `covia.grid.Attribution`.
-  - `created` — wall-clock millis at which it was scheduled.
+  - `created` — millis on the venue's clock at which it was scheduled.
   - `description` — optional caller-written display text saying what the event
     is for, at most 500 characters. Never interpreted.
   - `proofs` — the UCAN proof(s) the scheduler presented when scheduling,
@@ -75,7 +75,7 @@ events  = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (uniqu
                     repeat?, track?, lastFired?, lastJob? }
 byActor = map from each caller that scheduled for another owner (an agent or a
           delegate) to the set of keys of those events
-updated = wall-clock stamp of the last mutation
+updated = the venue clock's stamp of the last mutation
 ```
 
 - The `events` **Index** keeps entries sorted by key, so the key *is* the
@@ -105,12 +105,12 @@ stamp-on-write boundary, which refreshes `updated` from the lattice write clock
 while preserving sibling metadata. Deletion durability itself comes from the
 venue-level whole-value LWW.
 
-**Single-writer.** The scheduler's single timer thread (§4) is the sole mutator
-of `:schedule`, so there is no concurrency downside. Cross-venue federation of
+**Single-writer.** Every mutation of `:schedule` holds the scheduler's lock
+(§4), so there is no concurrency downside. Cross-venue federation of
 schedules is out of scope.
 
-**The lattice is the source of truth.** The in-memory firing mechanism (§4) holds
-no durable state — it is rebuilt from the index on boot.
+**The lattice is the source of truth.** The firing mechanism (§4) keeps in
+memory only the events it is starting — nothing durable, nothing to rebuild.
 
 ---
 
@@ -141,42 +141,73 @@ handle that has moved on; `list` always reports the current key.
 
 ## 4. Firing model
 
-The mechanism is a single in-memory **alarm** (one `ScheduledThreadPoolExecutor`
-daemon, one thread) that does nothing but wake at the head event's time. That one
-timer thread also **owns every index mutation** — `schedule`, `cancel`,
-`trigger`, and drain all run on it (callers hop onto it and await). So mutations
-are serialised by construction: there is no cross-thread race on the index, no
-claim flag, and no lock. The alarm is deliberately dumb — all ordering lives in
-the lattice index.
+Nothing in the scheduler keeps time. The application's **update**
+(`CoviaApplication.update()`) reads the application's clock once and updates
+each mounted venue in mount order, and a venue's update starts its events due
+by then. Whoever opens the application decides when it runs:
+`CoviaApplication.autoUpdate()` starts a timer that calls it when the earliest
+next event across the venues is due by the clock, and a venue server,
+`Engine.createTemp` and the shared test engine start one. An embedder that
+drives the clock steps the application itself instead
+([EMBEDDING.md](./EMBEDDING.md#time)).
 
-**Arming.** After any mutation the alarm is (re)set for the current head's `time`.
-Inserting an earlier event brings it forward; a later insert leaves the existing
-alarm (it fires and re-arms for the next head). At idle the alarm is unset and
-costs nothing — there is no scan of sleeping events.
+**One lock per venue** covers every index mutation — `schedule`, `cancel`,
+`trigger`, claims by an update, agent wakes, user and caller cancellation —
+each run on its caller's thread. There is no cross-thread race on the index and
+no claim flag: a claim reads the head and removes it under the lock. All
+ordering lives in the lattice index; nothing scans sleeping events.
 
-**On fire** (now ≥ head time), on the timer thread:
-1. Walk the head while `time ≤ now`.
-2. **Claim each** before dispatching — **one** whole-value replace (§2) that
-   covers everything the fire changes about the schedule: a one-shot event is
+**Next due.** Once a change commits, the venue tells the application when its
+next event is due, after releasing its lock so that no venue's lock is ever
+held while another's is taken. That is the head event's `time`, which may
+already have passed (an event scheduled in the past is due at once). A venue
+reports nothing due when its schedule is empty, while every place is taken
+(the start that frees one reports again), and until it has started or once it
+is closing. The timer wakes by the reported time when that is sooner than its
+current wake-up, and after each update asks every venue again. A timer with
+nothing due holds no thread.
+
+**An update at time `t`:**
+1. Raises the venue's drain time to `t`. Overlapping updates make one drain,
+   whose time is the latest asked for. A step that leaves the time unchanged
+   still starts whatever is due, such as an event added since with a past time.
+2. While a place is free (`scheduler.maxConcurrency`, below), **claims** the
+   head event if its `time ≤ t` — **one** whole-value replace (§2) that covers
+   everything the fire changes about the schedule: a one-shot event is
    **removed**; a recurring event is **re-inserted** under the same `id` at
-   its next due slot with `lastFired = now` and, for a tracked fire, `lastJob`.
+   its next due slot with `lastFired = t` and, for a tracked fire, `lastJob`.
    To make `lastJob` part of that schedule write, a tracked fire's Job is
-   *prepared* first, on the timer thread: minted, PENDING, persisted in the
+   *prepared* first, under the lock: minted, PENDING, persisted in the
    owner's history — the adapter is **not** started. Job preparation and the
    schedule claim are two ordered lattice updates because they touch different
    records. A crash between them can leave an unstarted PENDING Job while the
    event remains; recovery fails that Job and a later fire prepares a new one.
    There is still no state in which an event has been consumed but its Job is
-   unknown. Because the
-   claim and every other mutation run on this one thread, a `trigger` of the
-   same event either already ran (drain skips it) or runs after. This gives
-   **at-most-once** firing with no locking.
-3. Dispatch on a fresh virtual thread, **as the event's caller would invoke it
-   now, presenting its `proofs` again** (§5): start the prepared Job (tracked) or
-   run the engine's transient-Job dispatch (untracked, §7). Fire-and-forget;
-   any error is logged. The vthread keeps the operation's I/O off the timer
-   thread — the timer only ever resolves the op and writes the lattice.
-4. Re-arm for the new head.
+   unknown. Because the claim and every other mutation hold the lock, a
+   `trigger` of the same event either already ran (the drain finds it gone) or
+   runs after. This gives **at-most-once** firing.
+3. Starts each claimed event on a fresh virtual thread, **as the event's caller
+   would invoke it now, presenting its `proofs` again** (§5): start the
+   prepared Job (tracked) or run the engine's transient-Job dispatch
+   (untracked, §7). Any error is logged. Its place frees **when the
+   operation's invocation returns** — the adapter has been called and has
+   handed back its result — not when its Job finishes; the drain then claims
+   the next due event. Adapters run blocking I/O off the invoking thread
+   ([ADAPTERS.md](./ADAPTERS.md)), so a place is held only briefly.
+4. Completes the update's future once every event due by `t` has started. How
+   each resolves is its own: a test waits on the Job.
+
+**Concurrency.** `scheduler.maxConcurrency` (default 2,
+[CONFIG.md](./CONFIG.md)) bounds the events a venue is starting at once, so a
+backlog never starts a thousand operations together. Due events start in index
+order — time, then ID — and the rest wait in the schedule, still cancellable,
+until a place frees. An agent wake takes a place like any other event.
+`trigger` is a caller's own request and takes none.
+
+Claims use the update's time, never the clock's current value, so a run stepped
+on a driven clock repeats exactly. Only a started venue takes part: until
+launch has finished recovery, and from close on, it starts nothing, and its
+close fails any update still waiting on it with `ShuttingDownException`.
 
 If a tracked Job cannot be prepared (unresolvable op, capability denied), the
 event is still claimed exactly as an untracked failure would be — the schedule
@@ -189,17 +220,18 @@ need at-least-once delivery are a future option (§9) paired with idempotent
 operations.
 
 **Recurrence.** The next due time of a `{every}` event is the first slot on the
-`time + n·every` grid strictly after `now`. Anchoring to the grid keeps the
-phase ("every hour" stays on the hour it started on); taking the first slot
-*after now* means a backlog of missed slots collapses into the single catch-up
-fire that just happened — one fire, never a burst. The next slot is always in
-the future, so the drain loop always advances.
+`time + n·every` grid strictly after the update's time. Anchoring to the grid
+keeps the phase ("every hour" stays on the hour it started on); taking the
+first slot *after* the update means a backlog of missed slots collapses into
+the single catch-up fire that just happened — one fire, never a burst. The next
+slot is always later than the drain's time, so the drain always advances.
 
-**Boot.** On startup the service reads the index head and arms — nothing to
-replay. Events whose `time` already passed while the venue was down are overdue
-and fire immediately as a catch-up — once each, however many slots a recurring
-event missed; a large overdue backlog is drained in time-order (throttling the
-catch-up is a future concern).
+**Boot.** On startup the venue keeps nothing in memory: when it has started it
+reports its index head to the application — nothing to replay. Events whose
+`time` already passed while the venue was down are overdue and start at the
+next update as a catch-up — once each, however many slots a recurring event
+missed; a large overdue backlog starts in time order, `scheduler.maxConcurrency`
+at a time.
 
 ---
 
@@ -330,17 +362,17 @@ Job, but `track:true` does the same with one Job per fire instead of two.
 ## 8. Agent wake as a consumer
 
 The agent wake path uses ordinary scheduled operations; its runtime entry point
-coordinates the venue transaction and timer (where `wakeTime` is set, and how
-the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md)):
+coordinates the venue transaction and the scheduler (where `wakeTime` is set,
+and how the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md)):
 
 - A session or task carries its own `wakeTime` on the agent record — the
   authoritative per-thread "this thread wants to wake at T" marker.
 - `Scheduler.setThreadWakeTime` commits the intent, event and handle in one
-  `VenueState` transaction, then arms the timer from committed state.
-  `AgentState.setThreadWakeTime` itself is a data-only mutation, safe on drafts,
-  and `VenueState.setAgentThreadWakeTime` writes the intent and the event
-  together without touching the timer, so it composes into a larger venue
-  transaction. Drafts never call a live scheduler.
+  `VenueState` transaction, then reports the venue's next due time from
+  committed state (§4). `AgentState.setThreadWakeTime` itself is a data-only
+  mutation, safe on drafts, and `VenueState.setAgentThreadWakeTime` writes the
+  intent and the event together without touching the live scheduler, so it
+  composes into a larger venue transaction. Drafts never call a live scheduler.
   The venue re-derives the agent's **single** scheduled event at the *earliest* unfired
   `wakeTime` across all its threads. The event fires `agent:trigger {agentId,
   force:false, wait:false}` with `track:false` stated explicitly — a wake is
@@ -355,7 +387,7 @@ the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md)):
   session is minted and no durable Job is recorded) calls `wakeAgent(force:false)`. The run
   loop runs iff there is work (a session message, or a ready task, which includes a
   parked task whose `wakeTime` has come: AGENT_LOOP.md §4.6); it processes what's
-  due, and the post-cycle `setThreadWakeTime` re-arms for the next earliest or
+  due, and the post-cycle `setThreadWakeTime` schedules the next earliest or
   clears `wakeHandle` if none remain.
 - On boot, `Engine.rebuildSchedulerFromLattice` calls `Scheduler.rescheduleAgentWake` per agent,
   idempotently re-deriving each agent's event from the authoritative per-thread
@@ -368,6 +400,13 @@ agent via the `runningLoops` CAS (**at most one active computation per agent**).
 A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transient Job,
 §7).
 
+**HITL timeouts** are another consumer. A request asked with a `timeout`
+schedules a one-shot `hitl:expire {user, id}` at its `expires` time, made and
+fired by the venue as itself, untracked. Only the venue may invoke
+`hitl:expire`, and it leaves a request already answered, rejected, expired or
+cancelled as it is. The event is in the schedule, so a request's expiry
+survives a restart (COG-16) with nothing re-armed at boot.
+
 ---
 
 ## 9. Boundaries and future work
@@ -377,8 +416,10 @@ A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transien
 across re-keying; **fires run as their caller at fire time, presenting their
 recorded proofs, no escalation (§5)**; transient or tracked fires per event and venue
 policy, with `lastJob` as the sole link to execution records (§7);
-owner-scoped access; boot catch-up (one fire per event, missed slots skipped);
-claim-then-invoke (at-most-once); a 1 s floor on `repeat.every`.
+owner-scoped access; firing by the application's update, at most
+`scheduler.maxConcurrency` starting at once (§4); boot catch-up (one fire per
+event, missed slots skipped); claim-then-invoke (at-most-once); a 1 s floor on
+`repeat.every`.
 
 **Deferred:**
 - **Calendar recurrence** — `repeat` forms beyond `every`: cron-style or
@@ -396,7 +437,7 @@ claim-then-invoke (at-most-once); a 1 s floor on `repeat.every`.
 ## 10. Resolved decisions and open questions
 
 **Resolved (as built):**
-1. **Records per-venue** — single slot, single-writer (the timer thread).
+1. **Records per-venue** — single slot, single-writer (the scheduler's lock).
 2. **Firing is transient-Job by default** — lightweight fire-and-forget; a
    durable Job per fire is opted into per event (`track`) or by venue policy
    (`scheduler.trackJobs` / `forceTrackJobs`), and is still forced by

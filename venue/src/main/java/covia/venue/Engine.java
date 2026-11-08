@@ -92,6 +92,7 @@ import covia.grid.Operation;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
 import covia.venue.auth.VenueAuthenticator;
@@ -266,7 +267,7 @@ public class Engine {
 		lifecycle = Lifecycle.STARTING;
 		try {
 			resumeCoreUserDeletions();
-			// Reconcile wake handles while the alarm is still disarmed. Hosts
+			// Reconcile wake handles before the scheduler takes part in updates. Hosts
 			// prepare the catalog and recover Jobs before activating this engine.
 			rebuildSchedulerFromLattice();
 			for (String name : getAdapterNamesInRegistrationOrder()) {
@@ -449,7 +450,6 @@ public class Engine {
 			venueProofs.validate();
 			jobs().recoverJobs();
 			if (getAdapter("agent") instanceof AgentAdapter agents) agents.wakeAgentsWithWork();
-			if (getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitl) hitl.rearmExpiries();
 			checkLaunchCancellation();
 			return activate();
 		} catch (IOException | RuntimeException | Error failure) {
@@ -1703,9 +1703,17 @@ public class Engine {
 		return auth;
 	}
 
+	/**
+	 * A started venue with a fresh key pair, mounted in an in-memory
+	 * application of its own whose update timer runs, so its scheduled events
+	 * fire by themselves. For tests and throwaway use.
+	 */
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
-			return CoviaApplication.create().mount(AKeyPair.generate(), config).start();
+			CoviaApplication application = CoviaApplication.create();
+			Engine engine = application.mount(AKeyPair.generate(), config).start();
+			application.autoUpdate();
+			return engine;
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -3635,6 +3643,28 @@ public class Engine {
 	}
 
 	/**
+	 * Starts what this venue has due by {@code now}: its part of
+	 * {@link CoviaApplication#update()}. Until the venue has started, and from
+	 * its close on, nothing starts and the future is complete at once.
+	 */
+	CompletableFuture<Void> update(long now) {
+		return gridScheduler.update(now);
+	}
+
+	/**
+	 * When this venue next needs an update ({@link Scheduler#nextDue}), or
+	 * {@link Long#MAX_VALUE} for none.
+	 */
+	long nextDue() {
+		return gridScheduler.nextDue();
+	}
+
+	/** The application this venue is mounted in. */
+	CoviaApplication application() {
+		return application;
+	}
+
+	/**
 	 * The live agent event tap (#394). In-process consumers subscribe here —
 	 * per agent or venue-wide — and see the same ordered events the REST
 	 * stream {@code GET /agents/{id}/sse} carries. See AGENT_LOOP.md §2.6.
@@ -4104,7 +4134,8 @@ public class Engine {
 	 * <p>An agent's context carries the agent, not a copy of its caps: each
 	 * point of action reads its {@code config.caps} as they stand then
 	 * ({@link #agentScope}), so narrowing or deleting an agent bounds work it
-	 * already has running.</p>
+	 * already has running. An agent acts with its controller's authority
+	 * narrowed by those caps ({@link #agentContext}).</p>
 	 *
 	 * @throws AuthException for any other principal, or for the public principal
 	 *         while public access is off
@@ -4115,7 +4146,41 @@ public class Engine {
 		}
 		AString agentId = agentIdIn(owner, principal);
 		if (agentId == null) throw new AuthException(FOREIGN_PRINCIPAL.formatted(principal, owner));
-		return RequestContext.ofAgent(owner, agentId).readingScope(() -> agentScope(owner, agentId));
+		return agentContext(owner, agentId, Set.of());
+	}
+
+	/**
+	 * Agent {@code agentId} as it acts now: in its owner's namespace, with its
+	 * controller's authority narrowed by its caps. Its owner's agents narrow one
+	 * scope along the chain of controllers, read at each point of action. A
+	 * controller from another namespace is a separate authority
+	 * ({@link RequestContext#withAuthorityOf}), since it holds nothing of the
+	 * owner's own. A chain of controllers that loops has no authority at its
+	 * root, so grants nothing.
+	 *
+	 * @param seen the agents already on this chain of controllers
+	 */
+	private RequestContext agentContext(AString owner, AString agentId, Set<AString> seen) {
+		RequestContext agent = RequestContext.ofAgent(owner, agentId);
+		RequestContext.ScopeSource caps = () -> agentScope(owner, agentId);
+		AgentState state = getAgent(owner, agentId);
+		AString controller = (state == null) ? null : state.getController();
+		if (controller == null || controller.equals(owner)) return agent.readingScope(caps);
+
+		Set<AString> chain = new HashSet<>(seen);
+		chain.add(covia.grid.Principals.agentDID(owner, agentId));
+		if (chain.contains(controller)) return agent.readingScope(() -> Vectors.empty());
+
+		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
+			? covia.grid.Principals.userOf(controller) : controller;
+		AString controllerAgent = agentIdIn(controllerOwner, controller);
+		RequestContext bound = (controllerAgent != null)
+			? agentContext(controllerOwner, controllerAgent, chain)
+			: context(controllerOwner, controller);
+		if (controllerOwner.equals(owner) && !bound.hasSeparateAuthority()) {
+			return agent.readingScope(() -> CapabilityChecker.intersect(caps.read(), owner, bound.getCaps(), owner));
+		}
+		return agent.withAuthorityOf(bound.narrowedBy(caps, owner));
 	}
 
 	/**
@@ -4177,9 +4242,19 @@ public class Engine {
 	 * agent its own, and a capped agent not its owner's or a sibling's. A
 	 * {@code user/sudo} delegate, whose scope is its presented grants, holds no
 	 * other principal's.
+	 *
+	 * <p>A request made as an agent holds that agent's authority, however it is
+	 * derived, and its owner's only when nothing narrows it. The authority of a
+	 * controller it derives from is narrowed by the agent's caps, so is not
+	 * that controller's whole authority.</p>
 	 */
 	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
 		if (ctx == null || principal == null) return false;
+		AString caller = ctx.getCallerDID();
+		if (agentIdIn(ctx.getUserDID(), caller) != null) {
+			if (isRootOf(caller, principal)) return true;
+			return !ctx.hasSeparateAuthority() && ctx.getCaps() == null && isRootOf(ctx.getUserDID(), principal);
+		}
 		RequestContext authority = ctx.authorityContext();
 		if (isRootOf(authority.getCallerDID(), principal)) return true;
 		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
@@ -4187,11 +4262,14 @@ public class Engine {
 
 	/**
 	 * The principal whose authority {@code ctx} acts with, which an agent it
-	 * creates or forks takes for its controller: the authority's own principal
-	 * when it acts in its own namespace or is an agent of it, and otherwise the
-	 * namespace it acts for, as a {@code user/sudo} delegate acts for its target.
+	 * creates or forks takes for its controller: an agent acting in its owner's
+	 * namespace, whatever its authority derives from, so that what it creates
+	 * stays within it; the authority's own principal when it acts in its own
+	 * namespace; and otherwise the namespace it acts for, as a {@code user/sudo}
+	 * delegate acts for its target.
 	 */
 	public static AString actingPrincipal(RequestContext ctx) {
+		if (agentIdIn(ctx.getUserDID(), ctx.getCallerDID()) != null) return ctx.getCallerDID();
 		RequestContext authority = ctx.authorityContext();
 		AString caller = authority.getCallerDID();
 		AString user = authority.getUserDID();

@@ -85,7 +85,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `ts` | long | Ratcheted timestamp of the last write to the agent record. Metadata, not a merge discriminator. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"`. `RUNNING` is a persisted execution marker, validated against the live executor by the hosting venue. |
 | `agent` | map? | Optional external implementation selector; absent for the native Covia runtime. See §2.2.1. |
-| `controller` | string? | DID of the principal whose authority the agent's harness acts with, and whose authority changing the agent needs; absent for its owner ([UCAN.md §5.4](./UCAN.md)). |
+| `controller` | string? | DID of the principal whose authority the agent acts with, and whose authority configuring the agent needs; absent for its owner ([UCAN.md §5.4](./UCAN.md)). |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op) and `caps`, the agent's capability scope ([UCAN.md §5.4](./UCAN.md): Model A, user-scoped). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function configuration (LLM operation, model, system prompt, tools, caps) lives in `config`, not here (#144). Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |

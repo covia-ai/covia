@@ -568,4 +568,76 @@ public class CapabilityCheckerTest {
 			Maps.of(Fields.PATH, "s/x"), ctx).awaitResult(5000),
 			"secret delete must be denied under a read-only scope");
 	}
+
+	// ========== Intersecting scopes ==========
+
+	private static final AString A = Strings.create("did:key:zA");
+	private static final AString B = Strings.create("did:key:zB");
+	private static final AString READ = Strings.create("crud/read");
+
+	private static boolean allowed(AVector<ACell> scope, String resource, String ability, AString owner) {
+		return CapabilityChecker.allows(scope, resource, ability, owner) == null;
+	}
+
+	@Test
+	public void testIntersectAllowsWhatBothAllow() {
+		AVector<ACell> met = CapabilityChecker.intersect(
+			caps("w/", "crud/read", "g/", "agent"), A, caps("w/data/", "crud", "w/other/", "invoke"), A);
+		assertTrue(allowed(met, "w/data/x", "crud/read", A));
+		assertFalse(allowed(met, "w/data/x", "crud/write", A), "only the first side allows reading");
+		assertFalse(allowed(met, "w/elsewhere", "crud/read", A), "only the first side covers it");
+		assertFalse(allowed(met, "w/other/x", "invoke", A), "no pair shares an ability there");
+		assertFalse(allowed(met, "g/x", "agent/create", A), "only the first side covers agents");
+	}
+
+	@Test
+	public void testIntersectWithUnrestrictedAndEmpty() {
+		AVector<ACell> scope = caps("w/", "crud/read");
+		assertNull(CapabilityChecker.intersect(null, A, null, A));
+		assertEquals(scope, CapabilityChecker.intersect(null, A, scope, A), "a bare path stays as written in one namespace");
+		assertEquals(scope, CapabilityChecker.intersect(scope, A, null, A));
+		assertTrue(CapabilityChecker.intersect(scope, A, Vectors.empty(), A).isEmpty());
+	}
+
+	@Test
+	public void testIntersectTreatsWildcardsAsCoveringAnything() {
+		AVector<ACell> met = CapabilityChecker.intersect(caps("", "*"), A, caps("w/data/", "crud/read"), A);
+		assertTrue(allowed(met, "w/data/x", "crud/read", A));
+		assertFalse(allowed(met, "w/other", "crud/read", A));
+		assertFalse(allowed(met, "w/data/x", "crud/write", A));
+	}
+
+	@Test
+	public void testIntersectAcrossNamespacesNamesPathsAbsolutely() {
+		AVector<ACell> met = CapabilityChecker.intersect(caps("", "*"), A, caps("w/notes/", "crud/read"), B);
+		assertTrue(allowed(met, B + "/w/notes/x", "crud/read", A), "a bare path stays its own owner's");
+		assertFalse(allowed(met, "w/notes/x", "crud/read", A), "and does not become the other namespace's");
+
+		assertFalse(allowed(CapabilityChecker.intersect(caps("w/", "*"), A, caps("w/", "*"), B),
+			"w/x", "crud/read", A), "the same bare path in two namespaces shares nothing");
+
+		AVector<ACell> view = CapabilityChecker.intersect(null, A, caps("v/ops/", "invoke"), B);
+		assertTrue(allowed(view, "v/ops/x", "invoke", null), "the venue's view is every namespace's");
+	}
+
+	private static AVector<ACell> caveated(String with, String key, String value) {
+		return Vectors.of(Capability.create(Strings.create(with), READ)
+			.assoc(Capability.NB, Maps.of(Strings.create(key), Strings.create(value))));
+	}
+
+	@Test
+	public void testIntersectKeepsEveryCaveat() {
+		AVector<ACell> carried = CapabilityChecker.intersect(caveated("w/", "url", "https://a.example/"), A,
+			caveated("w/data/", "gate", "v/ops/check"), A);
+		assertEquals(1, carried.count());
+		assertEquals(2, ((convex.core.data.AMap<?, ?>) convex.core.lang.RT.getIn(carried.get(0), Capability.NB)).count());
+		assertFalse(allowed(carried, "w/data/x", "crud/read", A), "a caveat still binds");
+
+		assertFalse(allowed(CapabilityChecker.intersect(caveated("w/", "url", "https://a.example/"), A, caps("w/", "crud/read"), A),
+			"w/x", "crud/read", A), "one side's caveat binds the result");
+		assertTrue(CapabilityChecker.intersect(caveated("w/", "url", "https://a.example/"), A,
+			caveated("w/", "url", "https://b.example/"), A).isEmpty(), "conflicting caveats allow nothing");
+		assertTrue(CapabilityChecker.intersect(caveated("w/", "unknown", "x"), A, caps("w/", "crud/read"), A).isEmpty(),
+			"a malformed grant allows nothing");
+	}
 }

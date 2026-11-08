@@ -195,10 +195,11 @@ belongs to the framework's `:user-deletions` region. See [ADAPTERS.md](ADAPTERS.
 Login provisioning commits the account and login directory row in one venue
 transaction. Agent wake changes likewise commit the thread's intent, schedule
 event and stored handle together. `AgentState` only changes lattice data;
-`Scheduler` serialises runtime wake requests with firing and arms the timer
-after the venue transaction commits. It preserves the caller's account lifecycle
-guard inside that same transaction across the timer handoff. Code composing wake changes inside a larger venue
-transaction uses `draft.setAgentThreadWakeTime(...)` and must re-arm the runtime
+`Scheduler` serialises runtime wake requests with firing under its lock and,
+once the venue transaction commits, tells the application when the venue's
+next event is due. It preserves the caller's account lifecycle guard inside
+that same transaction. Code composing wake changes inside a larger venue
+transaction uses `draft.setAgentThreadWakeTime(...)` and must tell the runtime
 scheduler after the outer commit (for example via `rescheduleAgentWake`). No
 runtime scheduler, job dispatch or other external effect belongs in a draft.
 
@@ -211,7 +212,8 @@ version; whole-record replacement preserves the prior timestamp floor.
 their timestamps. Runtime `Auth` owns providers and admission policy; its monitor
 still coordinates account deletion with runtime cleanup. `venue.schedule()` owns
 event records, handles, recurrence and schedule timestamps; runtime `Scheduler`
-owns the timer, job preparation and dispatch. Both domain components rebind to
+owns the schedule's lock, the updates that claim due events, job preparation
+and dispatch. Both domain components rebind to
 draft storage and have no engine or runtime-service reference. Venue operations
 coordinate changes across these children without constructing their records.
 

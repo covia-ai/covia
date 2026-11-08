@@ -3,6 +3,7 @@ package covia.lattice;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -15,6 +16,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
@@ -602,6 +604,125 @@ public class CapabilityChecker {
 		}
 		if (ownerDID == null) return resource;               // no owner context — compare as given
 		return ownerDID + "/" + resource;                    // bare lattice path → owner-scoped
+	}
+
+	/**
+	 * The scope allowing exactly what both {@code a} and {@code b} allow, for
+	 * authority narrowed twice, as an agent's is by its controller's authority
+	 * and its own caps. A null scope is unrestricted, so the other scope is the
+	 * answer. Two grants covering one request are nested, since both are
+	 * segment-boundary prefixes of its resource and ability, so the narrower
+	 * {@code with} and narrower {@code can} of each pair cover just what the pair
+	 * does together.
+	 *
+	 * <p>Every caveat of a pair still binds, so the result carries them all. A
+	 * pair asking different things of the same caveat cannot be carried on one
+	 * grant and allows nothing. A malformed grant allows nothing.</p>
+	 *
+	 * <p>Each scope's bare paths and gates are its own owner's. When the owners
+	 * differ the result names them absolutely, so it reads the same wherever it
+	 * is evaluated; the venue's {@code v/} view is the same from every namespace
+	 * and stays as written.</p>
+	 *
+	 * @param aOwner the namespace {@code a}'s bare paths name
+	 * @param bOwner the namespace {@code b}'s bare paths name
+	 */
+	public static AVector<ACell> intersect(AVector<ACell> a, AString aOwner, AVector<ACell> b, AString bOwner) {
+		boolean sameOwner = Objects.equals(aOwner, bOwner);
+		if (a == null) return sameOwner ? b : absoluteScope(b, bOwner);
+		if (b == null) return sameOwner ? a : absoluteScope(a, aOwner);
+		AVector<ACell> met = Vectors.empty();
+		for (long i = 0; i < a.count(); i++) {
+			for (long j = 0; j < b.count(); j++) {
+				AMap<AString, ACell> grant = meet(a.get(i), aOwner, b.get(j), bOwner, sameOwner);
+				if (grant != null) met = met.conj(grant);
+			}
+		}
+		return met;
+	}
+
+	/** The grant covering what both grants cover, or null when they share nothing or their caveats conflict. */
+	private static AMap<AString, ACell> meet(ACell a, AString aOwner, ACell b, AString bOwner, boolean sameOwner) {
+		AMap<AString, ACell> p = RT.castMap(a);
+		AMap<AString, ACell> q = RT.castMap(b);
+		if (p == null || q == null || !caveatsOf(p).valid() || !caveatsOf(q).valid()) return null;
+
+		AString pCan = RT.ensureString(p.get(Capability.CAN));
+		AString qCan = RT.ensureString(q.get(Capability.CAN));
+		if (pCan == null || qCan == null) return null;
+		AString can;
+		if (Capability.abilityCovers(pCan, qCan)) can = qCan;
+		else if (Capability.abilityCovers(qCan, pCan)) can = pCan;
+		else return null;
+
+		AString pWith = comparableWith(p, aOwner);
+		AString qWith = comparableWith(q, bOwner);
+		boolean pNarrower;
+		if (pWith.count() == 0) pNarrower = false;
+		else if (qWith.count() == 0) pNarrower = true;
+		else if (Capability.resourceCovers(pWith, qWith)) pNarrower = false;
+		else if (Capability.resourceCovers(qWith, pWith)) pNarrower = true;
+		else return null;
+
+		AMap<AString, ACell> nb = carriedCaveats(caveatMap(p, aOwner, sameOwner), caveatMap(q, bOwner, sameOwner));
+		if (nb == null) return null;
+		AString with;
+		if (sameOwner) {
+			with = RT.ensureString((pNarrower ? p : q).get(Capability.WITH));
+			if (with == null) with = Strings.EMPTY;
+		} else {
+			with = pNarrower ? pWith : qWith;
+		}
+		AMap<AString, ACell> grant = Maps.of(Capability.WITH, with, Capability.CAN, can);
+		return nb.isEmpty() ? grant : grant.assoc(Capability.NB, nb);
+	}
+
+	/** A grant's resource in the form two scopes compare: empty for match-any, absolute in its owner's namespace otherwise. */
+	private static AString comparableWith(AMap<AString, ACell> grant, AString owner) {
+		AString with = RT.ensureString(grant.get(Capability.WITH));
+		if (with == null || with.count() == 0) return Strings.EMPTY;
+		return absoluteWith(with, owner);
+	}
+
+	/** {@code with} made absolute in {@code owner}'s namespace, except the venue's {@code v/} view, which is every namespace's. */
+	private static AString absoluteWith(AString with, AString owner) {
+		String value = with.toString();
+		if (value.equals("v") || value.startsWith("v/")) return with;
+		return Strings.create(canonicalResource(value, owner));
+	}
+
+	/** A grant's caveats as a map, its gate bound to its owner when the result will be read in another namespace. */
+	private static AMap<AString, ACell> caveatMap(AMap<AString, ACell> grant, AString owner, boolean sameOwner) {
+		AMap<AString, ACell> nb = RT.castMap(grant.get(Capability.NB));
+		if (nb == null) return Maps.empty();
+		if (sameOwner) return nb;
+		AString gate = RT.ensureString(nb.get(GATE));
+		return (gate == null) ? nb : nb.assoc(GATE, bindGate(gate, owner));
+	}
+
+	/** Both grants' caveats together, or null when they ask different things of the same one. */
+	private static AMap<AString, ACell> carriedCaveats(AMap<AString, ACell> a, AMap<AString, ACell> b) {
+		AMap<AString, ACell> carried = a;
+		for (var entry : b.entrySet()) {
+			ACell held = carried.get(entry.getKey());
+			if (held != null && !held.equals(entry.getValue())) return null;
+			carried = carried.assoc(entry.getKey(), entry.getValue());
+		}
+		return carried;
+	}
+
+	/** {@code scope} with its paths and gates named absolutely in {@code owner}'s namespace; null stays unrestricted. */
+	private static AVector<ACell> absoluteScope(AVector<ACell> scope, AString owner) {
+		if (scope == null) return null;
+		AVector<ACell> absolute = Vectors.empty();
+		for (long i = 0; i < scope.count(); i++) {
+			AMap<AString, ACell> grant = RT.castMap(scope.get(i));
+			if (grant == null || !caveatsOf(grant).valid()) continue;
+			AMap<AString, ACell> nb = caveatMap(grant, owner, false);
+			AMap<AString, ACell> named = grant.assoc(Capability.WITH, comparableWith(grant, owner));
+			absolute = absolute.conj(nb.isEmpty() ? named : named.assoc(Capability.NB, nb));
+		}
+		return absolute;
 	}
 
 }

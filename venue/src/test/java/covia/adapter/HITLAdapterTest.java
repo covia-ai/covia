@@ -354,9 +354,9 @@ public class HITLAdapterTest {
 				first.jobs().invokeOperation("v/ops/hitl/respond", Hitl.reject(rejected.toHexString(), "No"), BOB);
 				User owner = first.getVenueState().users().user(BOB_DID);
 				AString expiryId = Strings.create(expired.toHexString());
-				owner.inbox().put(expiryId, owner.inbox().get(expiryId).assoc(Hitl.EXPIRES, CVMLong.ZERO));
-				var expiring = java.util.concurrent.CompletableFuture.runAsync(() ->
-					((HITLAdapter) first.getAdapter("hitl")).rearmExpiries(), AAdapter.VIRTUAL_EXECUTOR);
+				// As the venue does when the request's expiry event fires.
+				var expiring = first.jobs().invokeInternal(HITLAdapter.EXPIRE_OP,
+					HITLAdapter.expiryInput(BOB_DID, expiryId), first.venueContext());
 				for (Job pending : java.util.List.of(answer, reject, expire)) {
 					TestEngine.awaitJob(pending, Job::isFinished, 10_000, () -> "resolution includes the final Job record");
 				}
@@ -792,8 +792,12 @@ public class HITLAdapterTest {
 
 	/** A delegation from the venue letting an agent's owner ask {@code target}. */
 	private RequestContext asking(AString owner, AString agentId, AString target) {
+		return asking(engine, owner, agentId, target);
+	}
+
+	private static RequestContext asking(Engine venue, AString owner, AString agentId, AString target) {
 		RequestContext caller = (agentId == null) ? RequestContext.of(owner) : RequestContext.ofAgent(owner, agentId);
-		String delegation = UcanTokens.grant(engine.getKeyPair(), caller.getCallerDID().toString(),
+		String delegation = UcanTokens.grant(venue.getKeyPair(), caller.getCallerDID().toString(),
 			target + "/h/", HITLAdapter.ABILITY_HITL_REQUEST.toString(), HOUR);
 		return caller.withProofs(Vectors.of(UCAN.fromJWT(Strings.create(delegation)).toMap()));
 	}
@@ -840,6 +844,33 @@ public class HITLAdapterTest {
 	}
 
 	@Test
+	public void testRecoveryFailsARequestWhoseTargetAlreadyWent() {
+		Engine isolated = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create("hitl.test.covia.example"),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		try {
+			Engine.addDemoAssets(isolated);
+			isolated.getVenueState().users().ensure(ALICE_DID);
+			isolated.getVenueState().users().ensure(BOB_DID);
+			Job original = isolated.jobs().invokeOperation("v/ops/hitl/request",
+				Hitl.request("Report access").to(ALICE_DID.toString()).ask(Hitl.approval("ok", "OK?")).build(),
+				asking(isolated, BOB_DID, null, ALICE_DID));
+			assertEquals(Status.INPUT_REQUIRED, original.getStatus());
+			// No live handle, as for a deletion finishing before the job's handle is restored
+			isolated.jobs().deleteJob(original.getID());
+			isolated.deleteUser(isolated.venueContext(), ALICE_DID);
+
+			isolated.jobs().recoverJobs();
+
+			AMap<AString, ACell> recovered = isolated.jobs().getJobData(original.getID(), RequestContext.of(BOB_DID));
+			assertEquals(Status.FAILED, recovered.get(Fields.STATUS));
+			assertEquals(Strings.create(String.format(HITLAdapter.TARGET_DELETED, ALICE_DID)), recovered.get(Fields.ERROR));
+		} finally {
+			isolated.close();
+		}
+	}
+
+	@Test
 	public void testDeletingSomeoneElseLeavesTheRequestWaiting() {
 		engine.getVenueState().users().ensure(BOB_DID);
 		AString bystander = engine.managedUserDID(Strings.create("hitl-bystander"));
@@ -855,28 +886,7 @@ public class HITLAdapterTest {
 
 	// ========== Expiry and cancellation ==========
 
-	@Test
-	public void testExpiry() {
-		AString agentId = Strings.create("expiry-agent");
-		AgentState agent = engine.getVenueState().users().ensure(ALICE_DID)
-			.ensureAgent(agentId, Maps.empty(), null);
-		Job job = request(RequestContext.ofAgent(ALICE_DID, agentId), Hitl.request("quick")
-			.ask(Hitl.approval("ok", "OK?")).timeout(1).build());
-		String id = job.getID().toHexString();
-		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
-		assertTrue(agent.getPending().containsKey(job.getID()));
-
-		// The expiry timer fails the job; awaitResult surfaces it.
-		assertThrows(JobFailedException.class, () -> job.awaitResult(15000));
-		assertEquals(Status.FAILED, job.getStatus());
-		assertEquals(HITLAdapter.REQUEST_EXPIRED, job.getErrorMessage());
-		assertFalse(agent.getPending().containsKey(job.getID()));
-		assertEquals(Hitl.EXPIRED, readRecord(ALICE, id).get(Hitl.STATUS));
-
-		// ADVERSARIAL: responding to an expired request must fail.
-		assertThrows(Exception.class, () -> respond(ALICE,
-			Hitl.answer(id).answer("ok", true).build()));
-	}
+	// Expiry at a request's timeout: SteppedSchedulerTest, on a driven clock.
 
 	@Test
 	public void testCancelMarksRecordCancelled() {
@@ -887,7 +897,7 @@ public class HITLAdapterTest {
 		engine.jobs().cancelJob(job.getID(), ALICE);
 		assertEquals(Status.CANCELLED, job.getStatus());
 		assertEquals(Hitl.CANCELLED, readRecord(ALICE, id).get(Hitl.STATUS),
-			"the cancel hook marks the inbox record cancelled");
+			"cancelling marks the inbox record cancelled");
 		assertThrows(Exception.class, () -> respond(ALICE,
 			Hitl.answer(id).answer("ok", true).build()));
 	}

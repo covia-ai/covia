@@ -368,16 +368,20 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Refuses a change to {@code target} by a request that does not act for its
-	 * {@code controller}. An agent its owner controls needs nothing beyond the
-	 * {@code agent/write} its target was resolved with; any other controller's
-	 * authority must be the request's own ({@link Engine#holdsAuthorityOf}), since
-	 * its harness acts with it.
+	 * Refuses a change to {@code target} by a request that does not hold the
+	 * authority of its {@code controller} ({@link Engine#holdsAuthorityOf}).
+	 * Configuring an agent, or handing it on, chooses how that authority is
+	 * used, so needs it whoever controls the agent. Changing only the state of
+	 * an agent its owner controls needs just the {@code agent/write} its target
+	 * was resolved with.
+	 *
+	 * @param configuring whether the change sets the agent's config or controller
 	 */
-	private void requireController(RequestContext ctx, AgentTarget target, AString controller) {
-		if (controller == null || controller.equals(target.ownerDID())) return;
-		if (!engine.holdsAuthorityOf(ctx, controller)) {
-			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), controller));
+	private void requireController(RequestContext ctx, AgentTarget target, AString controller, boolean configuring) {
+		if (!configuring && (controller == null || controller.equals(target.ownerDID()))) return;
+		AString held = (controller != null) ? controller : target.ownerDID();
+		if (!engine.holdsAuthorityOf(ctx, held)) {
+			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), held));
 		}
 	}
 
@@ -2947,7 +2951,8 @@ public class AgentAdapter extends AAdapter {
 		AString controller = namedController(ctx, input);
 		AMap<AString, ACell> newConfig;
 		try {
-			AMap<AString, ACell> committed = agent.update(current -> requireController(ctx, target, current),
+			boolean configuring = (changes != null) || (controller != null);
+			AMap<AString, ACell> committed = agent.update(current -> requireController(ctx, target, current, configuring),
 				controller, (changes == null) ? null : current -> {
 					AMap<AString, ACell> composed = mergeConfigMaps(current, changes);
 					validateComposedConfig(composed);

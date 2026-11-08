@@ -295,6 +295,9 @@ public class TestAdapter extends AAdapter {
                     return new CompletableFuture<>();
                 case "hold":
                     return CompletableFuture.supplyAsync(() -> handleHold(input), VIRTUAL_EXECUTOR);
+                case "holdstart":
+                    // Holds in the invocation itself, so whoever starts it waits too.
+                    return CompletableFuture.completedFuture(handleHold(input));
                 case "failllm":
                     return handleFailLlm(input);
                 case "step":
@@ -354,6 +357,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
 			installTestAsset("hold",         BASE+"holdop.json");
+			installTestAsset("holdstart",    BASE+"holdstartop.json");
 			installTestAsset("holdread",     BASE+"holdreadop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
 			installTestAsset("progress",     BASE+"progressop.json");

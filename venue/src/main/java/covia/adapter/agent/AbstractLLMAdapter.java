@@ -224,10 +224,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	// ========== Authority and model profile (AGENT_CONTEXT.md §4, §8) ==========
 
-	/** The agent's capability-narrowed context: {@code config.caps} applied, else {@code ctx} unchanged. */
+	/** {@code ctx} narrowed by {@code config.caps}: for an agent's harness, what the agent itself may do. */
 	public static RequestContext capsContext(AMap<AString, ACell> config, RequestContext ctx) {
-		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-		return (caps != null) ? ctx.withCaps(caps) : ctx;
+		return ctx.narrowedTo(RT.ensureVector(config != null ? config.get(K_CAPS) : null));
 	}
 
 	/**

@@ -332,7 +332,7 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   request under `user/sudo` with the target's. That is the authority it has of
   its own, never what others have granted it. Its scope must include the right
   to grant, `grant/<can>`, as having no scope does, so an agent with no caps
-  grants what its owner could.
+  that its owner controls grants what its owner could.
 - Any other resource is issuable only under a held **granting right**
   (COG-17), or passed on by the venue itself with `prf` (below). The caller's
   transport-presented proofs must cover `grant/<can>` on the resource (proofs
@@ -868,8 +868,9 @@ What a principal may do *now* is decided in one place, `Engine.context`.
 `context(principal)` is a principal in its own namespace: the public principal
 holds `auth.public.caps`, an agent-shaped DID holds nothing, and anyone else is
 unrestricted there. `context(owner, principal)` is a principal a record of
-`owner`'s names (a messaging binding, say): the owner, one of its agents under
-the agent's current `config.caps`, or the public principal; the owner comes
+`owner`'s names (a messaging binding, say): the owner, one of its agents with
+its controller's authority under the agent's current `config.caps`, or the
+public principal; the owner comes
 from the record, never from the principal's name. An agent's context carries
 the agent, not a copy of its caps: every point of action reads `config.caps`
 as they stand then, and none once the agent is gone or terminated. `context(owner, principal,
@@ -921,10 +922,11 @@ capabilities, read from her `config.caps` at each check. Carol can write to `w/d
 
 **Identity:** `did:key:zAlice...:g:Carol` (a sub-principal of Alice)
 **Keys:** None — the venue holds the relationship, and nothing is signed
-**Granting:** by the rule for everyone (§4.1). With no caps an agent grants
-what its owner could grant of its own right, its owner's resources and its
-own, and never what others granted its owner; with caps, only what they
-include the right to grant (`grant/<can>`). `hitl:respond` refuses an agent
+**Granting:** by the rule for everyone (§4.1). With no caps an agent its owner
+controls grants what its owner could grant of its own right, its owner's
+resources and its own, and never what others granted its owner; with caps, or
+under a capped controller, only what they include the right to grant
+(`grant/<can>`). `hitl:respond` refuses an agent
 context outright, because answering an ask mints a grant *as the inbox owner*:
 an agent reaching it would approve its own request with authority it may not
 have. An agent that needs more asks its human, and only the human can answer.
@@ -938,44 +940,60 @@ needs bounding.
 who acted, its namespace is where its names resolve (with the agent, session
 and task its work belongs to), and its authority is what it may do. A request
 usually acts with its caller's own authority in the namespace it acts in. An
-agent's harness acts with its controller's instead
-(`RequestContext.withAuthorityOf`): access checks decide under that authority,
-on names resolved in the agent's namespace (`RequestContext.authorityContext`,
+agent acts with its controller's instead. Where that is a principal from
+another namespace it is a separate authority
+(`RequestContext.withAuthorityOf`): access checks decide under it, on names
+resolved in the agent's namespace (`RequestContext.authorityContext`,
 `inNamespace`). State a namespace keeps with no capability of its own, such as
 its Python instances, dictations and bot list, is reachable only by a request
 acting with that namespace's authority. A recorded job and a scheduled event
 keep a separate authority with the work and act with it again.
 
-**Each agent has a controller:** the principal whose authority its harness
-acts with. It is the agent's owner unless the record stores another
-(`controller`, shown by `agent:info` and `agent:list`). Whoever creates or
-forks an agent controls it, meaning the principal whose authority the request
-acts with (`Engine.actingPrincipal`): a user, an agent itself, or for a
-`user/sudo` delegate the user it acts for. An input's `controller` names
-another, whose authority the request must hold (`Engine.holdsAuthorityOf`): it
-is that principal or an identity it signs in as, is its owner if it is an
-agent, or acts unscoped in a namespace that is root of it. So a user may name
-itself or its agents, and a capped agent only itself. A `user/sudo` delegate,
-whose scope is its presented grants, holds no other principal's authority.
+**Each agent has a controller:** the principal whose authority it acts with.
+Its harness acts with that authority as it stands, and its tool calls with that
+authority narrowed by its `config.caps`. Read as a delegation, the controller
+is the issuer, the agent the audience and the caps the capabilities, with no
+caps passing on all the controller has, so an agent never exceeds its
+controller, at any depth (`Engine.agentContext`). Each point of action reads
+the caps along the chain of controllers as they stand, so a controller narrowed
+or gone bounds its agents' running work. A chain that loops has no authority at its root and
+grants nothing, and two caveats that ask different things of the same grant
+allow nothing (`CapabilityChecker.intersect`).
 
-Changing an agent (`agent:update`) needs `agent/write` on it, and for an agent
-another principal controls, that controller's authority too, checked against
-the record in the same atomic update; `agent:update` with `controller` hands
-the agent on under the same rule. Its owner may still delete it.
-`user:import` and `user:clone` keep a stored controller only when it is the
-target user or one of its agents; any other agent returns to its owner.
+It is the agent's owner unless the record stores another (`controller`, shown
+by `agent:info` and `agent:list`). Whoever creates or forks an agent controls
+it, meaning the principal whose authority the request acts with
+(`Engine.actingPrincipal`): a user, an agent itself, or for a `user/sudo`
+delegate the user it acts for. An input's `controller` names another, whose
+authority the request must hold (`Engine.holdsAuthorityOf`): it is that
+principal or an identity it signs in as, is its owner if it is an agent, or
+acts unscoped in a namespace that is root of it. So a user may name itself or
+its agents, and a capped agent only itself. A request made as an agent holds
+that agent's authority however it is derived, and not the whole authority of a
+controller its caps narrow. A `user/sudo` delegate, whose scope is its
+presented grants, holds no other principal's authority. An agent such a
+delegate creates is controlled by its target, so grant `agent/create` beside
+`user/sudo` as you would that user's own authority.
 
 **Configuring an agent acts with its controller's authority.** The config
 chooses the agent's harness, its transition operation and the context it
-assembles, and the harness acts with the controller's authority (below). So
-whoever may create or configure an agent its owner controls (`agent/create`,
-`agent/write`), person or agent, reaches whatever the owner can: grant those
-abilities as you would the owner's own authority. The config's `caps` and
-`accepts` are part of it and take no check of their own. `caps` narrow what
-the agent does, an absent `caps` leaving it unrestricted; `accepts` admits
-others to talk to it (an older public `a2a.caps` reads as
-`accepts: "anyone"`). Configuring mints no token, and caps reach nothing of
-another identity's, which a request reaches only by what it holds (§5.3).
+assembles, and how far its caps narrow its controller. So changing an agent's
+config or controller (`agent:update`) needs `agent/write` on it and that
+controller's authority, checked against the record in the same atomic update,
+and for an agent its owner controls that is the owner's. So a capped agent or
+a delegate holding `agent/write` cannot change the config of an agent its owner
+controls, its own included. Changing only the state of an agent its owner controls, suspending or resuming
+it, and managing its sessions need `agent/write` alone, and its owner may
+always delete it.
+`user:import` and `user:clone` keep a stored controller only when it is the
+target user or one of its agents; any other agent returns to its owner.
+
+The config's `caps` and `accepts` take no check of their own. `caps` narrow
+what the agent does and cannot exceed its controller, an absent `caps` leaving
+it all its controller has; `accepts` admits others to talk to it (an older
+public `a2a.caps` reads as `accepts: "anyone"`). Configuring mints no token,
+and caps reach nothing of another identity's, which a request reaches only by
+what it holds (§5.3).
 
 **The transition operation is the harness.** Each cycle, the run loop invokes
 the agent's transition operation (`config.operation`) as a harness step, under
@@ -988,7 +1006,7 @@ needs no grant in the agent's caps. A controller agent's caps must cover
 `invoke` on the transition and model operations, or the agents it controls
 cannot run. The transition operation defines where the agent acts: it
 switches what it does on the agent's behalf to the agent's own context
-(`Engine.stepContext`), its owner's authority under its current
+(`Engine.stepContext`), its controller's authority under its current
 `config.caps`. A transition operation that never switches is not bounded by
 the caps; that is the choice of whoever installs it.
 

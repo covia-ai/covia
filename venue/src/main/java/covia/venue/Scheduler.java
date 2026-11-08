@@ -1,16 +1,14 @@
 package covia.venue;
 
-import java.util.concurrent.Callable;
-import java.util.concurrent.CancellationException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Queue;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
-import java.util.function.LongSupplier;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,10 +20,8 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
-import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -38,8 +34,8 @@ import static covia.venue.ScheduleState.*;
 
 /**
  * Per-venue scheduler for deferred grid-operation invocations. Fires any grid
- * operation at a future wall-clock time, once or on a fixed interval; an agent
- * wake is one consumer (a scheduled {@code agent:trigger}). Design in
+ * operation at a time on the venue's clock, once or on a fixed interval; an
+ * agent wake is one consumer (a scheduled {@code agent:trigger}). Design in
  * {@code venue/docs/GRID_SCHEDULER.md}.
  *
  * <p>Authoritative state lives on the lattice in the per-venue {@code :schedule}
@@ -47,16 +43,27 @@ import static covia.venue.ScheduleState.*;
  * {@code wakeTime||id}, so its head is always the next event due. The record
  * retains its stable {@code {updated, events, ...}} shape so scheduler metadata
  * can grow without another storage migration. Deletions are durable because
- * the venue value merges whole-value by its own timestamp. This in-memory
- * service is a dumb alarm pointed at the events head, rebuilt from the lattice
- * on boot. See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
+ * the venue value merges whole-value by its own timestamp. Nothing here keeps
+ * time: the application's update fires what is due ({@link #update}), and the
+ * scheduler tells the application when its next event is due
+ * ({@link #nextDue}). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
  *
- * <p><b>Concurrency.</b> A single-thread {@link ScheduledThreadPoolExecutor}
- * owns the alarm <i>and</i> every index mutation (schedule / cancel / trigger /
- * drain). Because removals happen only on that one thread, a claim is simply
- * "read the entry, then remove it" — no cross-thread race, no claim flag. The
- * fired operation itself runs on a fresh virtual thread so its I/O never stalls
- * the alarm.</p>
+ * <p><b>Concurrency.</b> One lock covers every index mutation (schedule,
+ * cancel, trigger, claims by an update, agent wakes, user and caller
+ * cancellation). Because removals happen only under it, a claim is simply
+ * "read the entry, then remove it" — no claim flag. Once a change commits, the
+ * application hears when the venue's next event is due. A claimed event's
+ * operation is invoked on a fresh virtual thread, off the lock, so its I/O
+ * never stalls the schedule.</p>
+ *
+ * <p><b>Updates.</b> An update at time {@code t} starts every event due by
+ * {@code t} in index order (time, then ID), at most
+ * {@code scheduler.maxConcurrency} at once. The rest wait in the schedule,
+ * cancellable, until a place frees, which happens when the operation's
+ * invocation returns, not when its Job finishes. Overlapping updates make one
+ * drain whose time is the latest asked for; claims use that time, never the
+ * clock's current value, so a stepped run repeats. Only a started scheduler
+ * takes part.</p>
  *
  * <p><b>Recurrence.</b> An event carrying a {@code repeat} spec is not removed
  * when it fires: it is re-inserted at its next due slot under the same
@@ -68,10 +75,10 @@ import static covia.venue.ScheduleState.*;
  * Job in the owner's history, and the only thing the scheduler keeps of it is
  * its ID ({@code lastJob} on a recurring record). No outcome, status or error
  * is ever stored here — that is what the Job is for. The Job is
- * {@link JobManager#prepareTracked prepared} (minted, PENDING, persisted) on
- * the timer thread before the schedule is atomically claimed. For recurrence,
- * that one schedule update also records the prepared Job ID; only then does
- * the adapter start, off-thread. Job preparation and schedule claim are two
+ * {@link JobManager#prepareTracked prepared} (minted, PENDING, persisted) under
+ * the lock before the schedule is atomically claimed. For recurrence, that one
+ * schedule update also records the prepared Job ID; only then does the
+ * adapter start, off the lock. Job preparation and schedule claim are two
  * ordered record updates because they have different lattice owners.</p>
  *
  * <p><b>No escalation.</b> An event records its caller, its owner when that
@@ -100,14 +107,21 @@ public class Scheduler {
 	public static final String SHUT_DOWN = "Scheduler is shut down";
 
 	private final Engine engine;
-	private final LongSupplier clock;
-	private final ScheduledThreadPoolExecutor timer;
+	private final ReentrantLock lock = new ReentrantLock();
 
-	/** The single outstanding alarm (fires {@link #drainDue}); null when idle. */
-	private ScheduledFuture<?> armed;
 	private volatile boolean shutdown = false;
-	/** Timer-thread owned: schedule writes during assembly must not arm alarms. */
+	/** Schedule writes during assembly take part in no update until start. */
 	private boolean started = false;
+	/** The latest time an update asked for: the drain starts what is due by then. */
+	private long target = Long.MIN_VALUE;
+	/** Events claimed whose operation's invocation has not yet returned. */
+	private int starting = 0;
+	/** The times of those events, counted, so an update knows what it still waits for. */
+	private final TreeMap<Long, Integer> inFlight = new TreeMap<>();
+	/** Updates waiting for every event due by their time to start. Concurrent so shutdown needs no lock. */
+	private final Queue<Waiter> waiters = new ConcurrentLinkedQueue<>();
+
+	private record Waiter(long time, CompletableFuture<Void> done) {}
 
 	/**
 	 * A claimed fire: the event record as fired, and either the prepared Job
@@ -117,25 +131,12 @@ public class Scheduler {
 	private record Claimed(AMap<AString, ACell> rec, JobManager.Prepared job, RuntimeException error) {}
 
 	public Scheduler(Engine engine) {
-		this(engine, () -> engine.currentTimestamp().longValue());
-	}
-
-	public Scheduler(Engine engine, LongSupplier clock) {
 		this.engine = engine;
-		this.clock = clock;
-		ThreadFactory tf = r -> {
-			Thread t = Executors.defaultThreadFactory().newThread(r);
-			t.setName("venue-scheduler");
-			t.setDaemon(true);
-			return t;
-		};
-		this.timer = new ScheduledThreadPoolExecutor(1, tf);
-		this.timer.setRemoveOnCancelPolicy(true);
 	}
 
 	// ---------------------------------------------------------------- public API
 
-	/** Commit wake intent and the event together, then arm from committed state. */
+	/** Commit wake intent and the event together, then report the next due time. */
 	public void setThreadWakeTime(AString owner, AgentState agent,
 			AgentState.ThreadKind kind, Blob threadId, long wakeTime) {
 		User user = engine.getVenueState().users().user(owner);
@@ -144,20 +145,15 @@ public class Scheduler {
 		// Validate the retained agent after reading the generation. A run loop
 		// from an erased account must not schedule work for its replacement.
 		if (!agent.exists()) return;
-		onTimer(() -> {
+		locked(() -> {
 			engine.getVenueState().setAgentThreadWakeTime(owner, agent.getAgentId(), kind, threadId, wakeTime, generation);
-			armNext();
 			return null;
 		});
 	}
 
-	/** Rebuild an agent's persisted wake and arm only after the local commit. */
+	/** Rebuild an agent's persisted wake, reporting the next due time after the local commit. */
 	public boolean rescheduleAgentWake(AString owner, AString agentId) {
-		return onTimer(() -> {
-			boolean armed = engine.getVenueState().rescheduleAgentWake(owner, agentId);
-			armNext();
-			return armed;
-		});
+		return locked(() -> engine.getVenueState().rescheduleAgentWake(owner, agentId));
 	}
 
 	/**
@@ -203,7 +199,11 @@ public class Scheduler {
 		AString caller = ctx.getCallerDID();
 		AVector<ACell> proofs = ctx.getProofs();
 		AMap<AString, ACell> authority = Engine.keptAuthority(ctx);
-		return onTimer(() -> doSchedule(opRef, input, owner, caller, proofs, authority, wakeTime, rep, track, desc));
+		return locked(() -> {
+			engine.getVenueState().users().requireNotDeleted(owner);
+			return state().schedule(opRef, input, owner, caller, proofs, authority, wakeTime,
+				rep, track, desc, now());
+		});
 	}
 
 	/**
@@ -211,23 +211,26 @@ public class Scheduler {
 	 * cancels only events it scheduled. Returns false if absent.
 	 */
 	public boolean cancel(Blob handle, RequestContext ctx) {
-		return onTimer(() -> doCancel(handle, ctx));
+		return locked(() -> {
+			Entry e = state().find(handle);
+			// An event keeps its caller and owner for life, so this check holds for the cancel.
+			if (e != null) requireAccess(e.rec(), ctx);
+			return state().cancel(handle);
+		});
 	}
 
 	/** Remove queued input and recurring work for an erased account. */
 	void cancelUser(AString did) {
-		onTimer(() -> {
+		locked(() -> {
 			state().cancelUser(did);
-			armNext();
 			return null;
 		});
 	}
 
 	/** Remove the events a deleted agent scheduled, found through the reverse index. */
 	public void cancelCaller(AString agentDID) {
-		onTimer(() -> {
+		locked(() -> {
 			state().cancelCaller(agentDID);
-			armNext();
 			return null;
 		});
 	}
@@ -237,13 +240,18 @@ public class Scheduler {
 	 * capability-scoped agent triggers only events it scheduled. A one-shot
 	 * event is consumed; a recurring one stays scheduled at its unchanged next
 	 * due time. Returns the invocation's result future (run as the event's caller
-	 * would invoke it now). The deterministic test hook as well as a real "run it
-	 * now".
+	 * would invoke it now). It takes no place under
+	 * {@code scheduler.maxConcurrency}: the caller asked for this one.
 	 */
 	public CompletableFuture<ACell> trigger(Blob handle, RequestContext ctx) {
 		Claimed c;
 		try {
-			c = onTimer(() -> doClaim(handle, ctx));
+			c = locked(() -> {
+				Entry e = state().find(handle);
+				if (e == null) return null;
+				requireAccess(e.rec(), ctx);
+				return claim(e.key(), e.rec(), now(), false);
+			});
 		} catch (RuntimeException ex) {
 			return CompletableFuture.failedFuture(ex);
 		}
@@ -306,17 +314,184 @@ public class Scheduler {
 		return (op == null) ? null : OutputRules.of(op.meta()).redact(input);
 	}
 
-	/** Arm the alarm from the (already-loaded) lattice index. Call once on boot. */
+	/**
+	 * Takes part in the application's updates from now on, reporting when the
+	 * (already-loaded) schedule's first event is due. Call once, when the
+	 * venue has recovered.
+	 */
 	public void start() {
 		// Starting a scheduler the venue already shut down is a lifecycle bug.
 		if (shutdown) throw new IllegalStateException(SHUT_DOWN);
-		onTimer(() -> { started = true; armNext(); return null; });
+		locked(() -> { started = true; return null; });
 	}
 
-	/** Stop the alarm thread. Fires already dispatched to virtual threads continue. */
+	/**
+	 * Takes part in no further update. Fires already being started continue;
+	 * updates still waiting for events to start fail with
+	 * {@link ShuttingDownException}, since nothing more will start. Takes no
+	 * lock: the engine's close holds its monitor here, which a claim holding
+	 * the schedule's lock may be waiting for.
+	 */
 	public void shutdown() {
 		shutdown = true;
-		timer.shutdownNow();
+		failWaiters();
+	}
+
+	private void failWaiters() {
+		for (Waiter w = waiters.poll(); w != null; w = waiters.poll()) {
+			w.done().completeExceptionally(new ShuttingDownException(SHUT_DOWN));
+		}
+	}
+
+	// ------------------------------------------------------------- updates
+
+	/**
+	 * Starts every event due by {@code now}, in index order and at most
+	 * {@code scheduler.maxConcurrency} at once; events already due wait in the
+	 * schedule until a place frees. The future completes when each of them
+	 * has started, that is when its operation's invocation has returned; how
+	 * it resolves is its own, and a failure to start is logged. A time no
+	 * later than an earlier update's still starts whatever is due by it, such
+	 * as an event added since with a past time. A scheduler not started, or
+	 * shut down, starts nothing and completes at once.
+	 */
+	CompletableFuture<Void> update(long now) {
+		CompletableFuture<Void> done = new CompletableFuture<>();
+		lock.lock();
+		try {
+			if (!started || shutdown) return CompletableFuture.completedFuture(null);
+			if (now > target) target = now;
+			waiters.add(new Waiter(now, done));
+		} finally {
+			lock.unlock();
+		}
+		// A shutdown that emptied the queue just before this update joined it.
+		if (shutdown) failWaiters();
+		drain();
+		return done;
+	}
+
+	/**
+	 * When the venue next needs an update: the first event's time, which may
+	 * already have passed, or {@link Long#MAX_VALUE} when nothing is
+	 * scheduled, every place is taken (the event that frees one reports the
+	 * next time), or the scheduler is not started.
+	 */
+	long nextDue() {
+		lock.lock();
+		try {
+			return nextDueLocked();
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	private long nextDueLocked() {
+		if (!started || shutdown) return Long.MAX_VALUE;
+		if (starting >= engine.config().getSchedulerMaxConcurrency()) return Long.MAX_VALUE;
+		Index<Blob, ACell> idx = index();
+		if (idx.isEmpty()) return Long.MAX_VALUE;
+		ACell head = idx.entryAt(0).getValue();
+		// A malformed head is due now, so the drain drops it.
+		return (head instanceof AMap) ? timeOf(asMap(head)) : Long.MIN_VALUE;
+	}
+
+	/**
+	 * Claims due events in index order while places are free and dispatches
+	 * each to start off the lock; completes the updates whose events have all
+	 * started, and reports the next due time.
+	 */
+	private void drain() {
+		List<Long> times = new ArrayList<>();
+		List<Claimed> batch = new ArrayList<>();
+		List<CompletableFuture<Void>> completed = new ArrayList<>();
+		long due;
+		lock.lock();
+		try {
+			int max = engine.config().getSchedulerMaxConcurrency();
+			while (started && !shutdown && starting < max) {
+				Index<Blob, ACell> idx = index();
+				if (idx.isEmpty()) break;
+				var e = idx.entryAt(0);
+				final Blob key = (Blob) e.getKey();
+				ACell recCell = e.getValue();
+				if (!(recCell instanceof AMap)) {              // malformed — drop it
+					state().remove(key);
+					continue;
+				}
+				AMap<AString, ACell> rec = asMap(recCell);
+				long time = timeOf(rec);
+				if (time > target) break;                      // earliest is not yet due
+				// Claim: a one-shot is removed; a recurring event moves to its next
+				// slot (strictly after the target, so this loop always advances).
+				batch.add(claim(key, rec, target, true));
+				times.add(time);
+				inFlight.merge(time, 1, Integer::sum);
+				starting++;
+			}
+			settleWaiters(completed);
+			due = nextDueLocked();
+		} finally {
+			lock.unlock();
+		}
+		for (CompletableFuture<Void> f : completed) f.complete(null);
+		for (int i = 0; i < batch.size(); i++) {
+			Claimed c = batch.get(i);
+			long time = times.get(i);
+			Thread.ofVirtual().name("venue-scheduler-fire").start(() -> startClaimed(c, time));
+		}
+		reportDue(due);
+	}
+
+	/**
+	 * Starts a claimed event and frees its place once its operation's
+	 * invocation has returned, then drains again. Its outcome is only logged.
+	 */
+	private void startClaimed(Claimed c, long time) {
+		try {
+			fire(c).whenComplete((r, err) -> {
+				if (err != null) log.warn("scheduled fire failed for op {}", c.rec().get(K_OP), err);
+			});
+		} catch (RuntimeException | Error e) {
+			log.warn("scheduled fire failed to start for op {}", c.rec().get(K_OP), e);
+		} finally {
+			lock.lock();
+			try {
+				starting--;
+				inFlight.computeIfPresent(time, (t, n) -> (n > 1) ? n - 1 : null);
+			} finally {
+				lock.unlock();
+			}
+			drain();
+		}
+	}
+
+	/**
+	 * Moves the updates whose events have all started into {@code completed}:
+	 * every event due by an update's time has started once the schedule's first
+	 * event and every event still starting are later than it. Under the lock.
+	 */
+	private void settleWaiters(List<CompletableFuture<Void>> completed) {
+		if (waiters.isEmpty()) return;
+		long covered = Long.MAX_VALUE;
+		Index<Blob, ACell> idx = index();
+		if (!idx.isEmpty()) {
+			ACell head = idx.entryAt(0).getValue();
+			covered = (head instanceof AMap) ? timeOf(asMap(head)) : Long.MIN_VALUE;
+		}
+		if (!inFlight.isEmpty()) covered = Math.min(covered, inFlight.firstKey());
+		for (Iterator<Waiter> it = waiters.iterator(); it.hasNext(); ) {
+			Waiter w = it.next();
+			if (w.time() < covered) {
+				completed.add(w.done());
+				it.remove();
+			}
+		}
+	}
+
+	/** Tells the application when this venue next needs an update. Off the lock. */
+	private void reportDue(long due) {
+		if (due != Long.MAX_VALUE) engine.application().dueAt(due);
 	}
 
 	// ------------------------------------------------------------- recurrence
@@ -326,34 +501,7 @@ public class Scheduler {
 	public static long everyOf(AMap<AString, ACell> repeat) { return ScheduleState.everyOf(repeat); }
 	static long nextTime(AMap<AString, ACell> repeat, long time, long now) { return ScheduleState.nextTime(repeat, time, now); }
 
-	// ------------------------------------------------------- timer-thread bodies
-
-	private Blob doSchedule(AString opRef, ACell input, AString owner, AString caller,
-			AVector<ACell> proofs, AMap<AString, ACell> authority, long wakeTime,
-			AMap<AString, ACell> repeat, Boolean track, AString description) {
-		engine.getVenueState().users().requireNotDeleted(owner);
-		Blob key = state().schedule(opRef, input, owner, caller, proofs, authority, wakeTime,
-			repeat, track, description, clock.getAsLong());
-		armNext();
-		return key;
-	}
-
-	private boolean doCancel(Blob handle, RequestContext ctx) {
-		Entry e = state().find(handle);
-		// An event keeps its caller and owner for life, so this check holds for the cancel.
-		if (e != null) requireAccess(e.rec(), ctx);
-		boolean cancelled = state().cancel(handle);
-		armNext();
-		return cancelled;
-	}
-
-	/** Claim an event for an early fire, access-checked. Returns null if absent. */
-	private Claimed doClaim(Blob handle, RequestContext ctx) {
-		Entry e = state().find(handle);
-		if (e == null) return null;
-		requireAccess(e.rec(), ctx);
-		return claim(e.key(), e.rec(), clock.getAsLong(), false);
-	}
+	// ------------------------------------------------------- bodies under the lock
 
 	/** Owner-only, and a capability-scoped agent only for an event it scheduled. */
 	private void requireAccess(AMap<AString, ACell> rec, RequestContext ctx) {
@@ -373,7 +521,7 @@ public class Scheduler {
 	 * <li>a one-shot event is removed;</li>
 	 * <li>a recurring event is re-inserted with {@code lastFired = now} and,
 	 *     when tracked, {@code lastJob} — re-keyed at its next due slot when
-	 *     {@code advance} (the alarm path), or left at its current time when not
+	 *     {@code advance} (an update), or left at its current time when not
 	 *     (an early {@code trigger} does not disturb the schedule).</li>
 	 * </ul>
 	 * The prepared Job is persisted before this schedule update, so there is no
@@ -390,7 +538,6 @@ public class Scheduler {
 		AString gone = goneAgent(rec);
 		if (gone != null) {
 			state().remove(key);
-			armNext();
 			return new Claimed(rec, null, new NotFoundException(AGENT_GONE.formatted(gone), gone.toString()));
 		}
 		JobManager.Prepared job = null;
@@ -405,57 +552,10 @@ public class Scheduler {
 			error = e;
 		}
 		state().recordFire(new Entry(key, rec), now, advance, tracked && job != null ? job.job().getID() : null);
-		armNext();
 		return new Claimed(rec, job, error);
 	}
 
-	/** Fire every event due at or before now, then re-arm. Runs on the timer thread. */
-	private void drainDue() {
-		if (shutdown) return;
-		long now = clock.getAsLong();
-		while (true) {
-			Index<Blob, ACell> idx = index();
-			if (idx.isEmpty()) break;
-			var e = idx.entryAt(0);
-			final Blob key = (Blob) e.getKey();
-			ACell recCell = e.getValue();
-			if (!(recCell instanceof AMap)) {              // malformed — drop it
-				state().remove(key);
-				continue;
-			}
-			AMap<AString, ACell> rec = asMap(recCell);
-			if (timeOf(rec) > now) break;                  // earliest is in the future
-			// Claim: a one-shot is removed; a recurring event moves to its next
-			// slot (strictly after now, so this loop always advances).
-			dispatchFire(claim(key, rec, now, true));
-		}
-		armNext();
-	}
-
-	/** (Re)arm the alarm for the current index head. Runs on the timer thread. */
-	private void armNext() {
-		if (shutdown || !started) return;
-		if (armed != null) { armed.cancel(false); armed = null; }
-		Index<Blob, ACell> idx = index();
-		if (idx.isEmpty()) return;
-		var e = idx.entryAt(0);
-		if (!(e.getValue() instanceof AMap)) {             // malformed head — drain to drop it
-			armed = timer.schedule(this::drainDue, 0, TimeUnit.MILLISECONDS);
-			return;
-		}
-		long delay = Math.max(0L, timeOf(asMap(e.getValue())) - clock.getAsLong());
-		armed = timer.schedule(this::drainDue, delay, TimeUnit.MILLISECONDS);
-	}
-
 	// ------------------------------------------------------------------ firing
-
-	/** Fire-and-forget on a virtual thread (drain path); errors are logged. */
-	private void dispatchFire(Claimed c) {
-		Thread.ofVirtual().name("venue-scheduler-fire").start(() ->
-			fire(c).whenComplete((r, err) -> {
-				if (err != null) log.warn("scheduled fire failed for op {}", c.rec().get(K_OP), err);
-			}));
-	}
 
 	/**
 	 * Run a claimed fire. Tracked: start the Job prepared at claim time (its
@@ -463,6 +563,7 @@ public class Scheduler {
 	 * {@code invokeInternal} (design §7). Either way the dispatch runs as its
 	 * caller would invoke it now ({@link #fireContext}), which JobManager
 	 * enforces — so a fire never has authority its caller has since lost.
+	 * Returns once the operation's invocation has returned.
 	 */
 	private CompletableFuture<ACell> fire(Claimed c) {
 		if (c.error() != null) return CompletableFuture.failedFuture(c.error());
@@ -519,6 +620,7 @@ public class Scheduler {
 
 	private ScheduleState state() { return engine.getVenueState().schedule(); }
 	private Index<Blob, ACell> index() { return state().events(); }
+	private long now() { return engine.currentTimestamp().longValue(); }
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> asMap(ACell c) {
@@ -539,18 +641,23 @@ public class Scheduler {
 		return to;
 	}
 
-	/** Run a body on the single timer thread and await it, unwrapping its exception. */
-	private <T> T onTimer(Callable<T> body) {
+	/**
+	 * Runs a schedule change under the lock, then reports the venue's next due
+	 * time to the application, off the lock so no other venue's lock is ever
+	 * taken while this one is held.
+	 */
+	private <T> T locked(Supplier<T> body) {
 		if (shutdown) throw new ShuttingDownException(SHUT_DOWN);
+		T result;
+		long due;
+		lock.lock();
 		try {
-			return timer.submit(body).get();
-		} catch (ExecutionException e) {
-			Throwable c = e.getCause();
-			if (c instanceof RuntimeException re) throw re;
-			throw new CompletionException(c);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new CancellationException("Interrupted awaiting the scheduler");
+			result = body.get();
+			due = nextDueLocked();
+		} finally {
+			lock.unlock();
 		}
+		reportDue(due);
+		return result;
 	}
 }

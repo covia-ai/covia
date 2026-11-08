@@ -1,7 +1,11 @@
 package covia.venue;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiPredicate;
 
@@ -47,6 +51,9 @@ import covia.lattice.Covia;
  * <p>The application runs the venues mounted in it ({@link #mount}). Each is
  * its key pair, its one working copy ({@link #venue}) and its engine
  * ({@link #engine}), and signs with the application's policy and its own key.
+ * The policy's clock is every venue's time; {@link #update()} starts the
+ * scheduled events due by it, and {@link #autoUpdate()} does so whenever one
+ * is due.
  * Edits to a copy are unsigned; {@link #sync()} signs each venue's record once
  * and then publishes the regions. Unmounting a venue signs its copy and closes
  * its engine; its records stay. Whole-venue LWW selects recovery/replication
@@ -74,13 +81,20 @@ public final class CoviaApplication
 		Engine create(Config config, CoviaApplication application, AKeyPair keyPair);
 	}
 
-	/** A mounted venue: its working copy and its engine. */
-	private record Mounted(VenueState state, Engine engine) {}
+	/** Refusal to start a second update timer while one runs ({@link #autoUpdate()}). */
+	public static final String AUTO_UPDATING = "This application's update timer is already running: close it first";
+
+	/** A mounted venue: its working copy, its engine and its place in mount order. */
+	private record Mounted(VenueState state, Engine engine, long order) {}
 
 	private final Regions regions;
 	private final OwnedMap<ACell, ACell> venues;
 	/** Each venue mounted here, by its key. */
 	private final ConcurrentHashMap<AccountKey, Mounted> mounted = new ConcurrentHashMap<>();
+	/** The order the next venue mounts in. Guarded by this. */
+	private long mounts = 0;
+	/** The running update timer, or null. Guarded by this. */
+	private AutoUpdate autoUpdate;
 	private final DLFSRegion dlfs;
 	/** The host the factory opened or connected to; it owns storage and durability. */
 	private final LatticeHost<Index<Keyword, ACell>> host;
@@ -269,8 +283,86 @@ public final class CoviaApplication
 		if (mounted.containsKey(key)) throw new ConflictException(String.format(ALREADY_MOUNTED, key));
 		VenueState state = VenueState.draft(venues, key, venueContext.withSigner(keyPair));
 		Engine engine = factory.create(config, this, keyPair);
-		mounted.put(key, new Mounted(state, engine));
+		mounted.put(key, new Mounted(state, engine, mounts++));
 		return engine;
+	}
+
+	/**
+	 * Steps the application to its clock's time: reads the clock once and
+	 * updates each mounted venue in mount order, starting the scheduled events
+	 * due by then. The future completes when each of those has started, that is
+	 * when its operation's invocation has returned; how each resolves is its
+	 * own, and a failure to start is logged and does not fail the future. A
+	 * step at an unchanged time still starts what is due, such as an event
+	 * added since with a past time. A venue not yet started, or closing, takes
+	 * no part.
+	 *
+	 * <p>{@link #autoUpdate()} calls this whenever a venue has something due.
+	 * An embedder that drives the clock calls it after each step instead.</p>
+	 */
+	public CompletableFuture<Void> update() {
+		long now = venueContext.currentTimestamp().longValue();
+		List<Mounted> order = new ArrayList<>(mounted.values());
+		order.sort(Comparator.comparingLong(Mounted::order));
+		CompletableFuture<?>[] steps = new CompletableFuture<?>[order.size()];
+		for (int i = 0; i < steps.length; i++) {
+			try {
+				steps[i] = order.get(i).engine().update(now);
+			} catch (RuntimeException e) {
+				steps[i] = CompletableFuture.failedFuture(e);
+			}
+		}
+		return CompletableFuture.allOf(steps);
+	}
+
+	/**
+	 * Starts this application's update timer: it calls {@link #update()} when
+	 * the earliest next event across the mounted venues is due by the clock,
+	 * and is told whenever a venue's next event moves earlier. While nothing is
+	 * due it holds no thread. Whoever opened the application starts it, as with
+	 * the host's sync and flush workers; {@link #close()} stops it. An embedder
+	 * that drives the clock does not start it: the timer waits in real time.
+	 *
+	 * @return the timer, which reports its first failure and stops on close
+	 * @throws IllegalStateException if one is already running ({@link #AUTO_UPDATING})
+	 */
+	public AutoUpdate autoUpdate() {
+		AutoUpdate timer;
+		synchronized (this) {
+			if (autoUpdate != null) throw new IllegalStateException(AUTO_UPDATING);
+			timer = new AutoUpdate(this);
+			autoUpdate = timer;
+		}
+		timer.refresh();
+		return timer;
+	}
+
+	/** Called by a timer as it closes, so another may start. */
+	synchronized void autoUpdateClosed(AutoUpdate timer) {
+		if (autoUpdate == timer) autoUpdate = null;
+	}
+
+	/**
+	 * The earliest time any mounted venue next needs an update, or
+	 * {@link Long#MAX_VALUE} for none. Takes each venue's schedule lock in
+	 * turn, never two at once.
+	 */
+	long nextDue() {
+		long due = Long.MAX_VALUE;
+		for (Mounted venue : mounted.values()) due = Math.min(due, venue.engine().nextDue());
+		return due;
+	}
+
+	/**
+	 * Called by a venue, holding none of its locks, when its next event is
+	 * due at {@code time}: the timer, if one runs, wakes by then.
+	 */
+	void dueAt(long time) {
+		AutoUpdate timer;
+		synchronized (this) {
+			timer = autoUpdate;
+		}
+		if (timer != null) timer.dueAt(time);
 	}
 
 	/**
@@ -285,11 +377,16 @@ public final class CoviaApplication
 	}
 
 	/**
-	 * Unmounts every venue, leaving the host and its store open: whoever
-	 * opened the host closes it after this.
+	 * Stops the update timer, if one runs, and unmounts every venue, leaving the
+	 * host and its store open: whoever opened the host closes it after this.
 	 */
 	@Override
 	public void close() {
+		AutoUpdate timer;
+		synchronized (this) {
+			timer = autoUpdate;
+		}
+		if (timer != null) timer.close();
 		RuntimeException failure = null;
 		for (Mounted venue : mounted.values()) {
 			try {

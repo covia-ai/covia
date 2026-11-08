@@ -1,0 +1,24 @@
+{
+	"name": "HITL Expire",
+	"description": "Expire one open HITL request whose timeout has fallen due: its record becomes expired and the requester's Job fails. Only the venue invokes it, from the event a request with a timeout scheduled; anyone else is refused. A request already answered, rejected, expired or cancelled, or gone, is left as it is.",
+	"creator": "Covia",
+	"operation": {
+		"adapter": "hitl:expire",
+		"readOnly": false,
+		"input": {
+			"type": "object",
+			"properties": {
+				"user": { "type": "string", "description": "DID of the user whose h/ inbox holds the request." },
+				"id": { "type": "string", "description": "Request id." }
+			},
+			"required": ["user", "id"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"id": { "type": "string" },
+				"status": { "type": "string", "description": "The request's status now; absent when there is no such request." }
+			}
+		}
+	}
+}
