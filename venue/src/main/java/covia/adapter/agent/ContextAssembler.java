@@ -699,12 +699,23 @@ public final class ContextAssembler {
 		// Capabilities bound what the agent can DO; with no tools there is
 		// nothing the notice would inform.
 		if (spec.tools().count() > 0) {
-			String caps = capabilityNotice(RT.ensureVector(config != null ? config.get(K_CAPS) : null));
+			String caps = capabilityNotice(disclosedCaps(spec, config));
 			if (caps != null) sb.append("\n\n").append(caps);
 		}
 		sb.append("\n\n").append(TOOL_RESULT_BOUNDARY);
 		if (spec.headNotice() != null) sb.append("\n\n").append(spec.headNotice());
 		return system(sb.toString());
+	}
+
+	/**
+	 * The scope the notice states: what the agent's tool calls act under now,
+	 * which its controller may narrow beyond its own caps, or with no agent in
+	 * scope, the caps in {@code config}.
+	 */
+	private static AVector<ACell> disclosedCaps(Spec spec, AMap<AString, ACell> config) {
+		RequestContext agent = spec.capsCtx();
+		if (agent.getAgentId() == null) return RT.ensureVector(config != null ? config.get(K_CAPS) : null);
+		return agent.authorityContext().getCaps();
 	}
 
 	/**

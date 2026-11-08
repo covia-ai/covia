@@ -386,6 +386,29 @@ public class RequestContext {
 	}
 
 	/**
+	 * This context with the authority it acts with narrowed further to
+	 * {@code bound}, read at each point of action. A separate authority
+	 * ({@link #withAuthorityOf}) is what narrows, so a context holding one keeps
+	 * its own grants empty. Bare paths in {@code bound} are {@code boundOwner}'s.
+	 */
+	RequestContext narrowedBy(ScopeSource bound, AString boundOwner) {
+		if (rights != null) {
+			return new RequestContext(authority, executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, scopeSource, rights.narrowedBy(bound, boundOwner));
+		}
+		AString owner = getUserDID();
+		return readingScope(() -> CapabilityChecker.intersect(currentGrants(), owner, bound.read(), boundOwner));
+	}
+
+	/**
+	 * This context with the authority it acts with narrowed to {@code caps},
+	 * whose bare paths name its namespace; null leaves it unchanged. A harness
+	 * narrowed by its agent's caps sees what the agent may.
+	 */
+	public RequestContext narrowedTo(AVector<ACell> caps) {
+		return (caps == null) ? this : narrowedBy(() -> caps, getUserDID());
+	}
+
+	/**
 	 * Returns a new context whose capability scope is replaced. Every operation
 	 * executed under this context is checked against that scope at the adapter's
 	 * point of action ({@link #requireCapability} / Engine's common gates), on
@@ -394,7 +417,7 @@ public class RequestContext {
 	 *
 	 * <p>The scope replaces the caller's own authority's, and the context acts
 	 * with that authority: any separate one ({@link #withAuthorityOf}) is
-	 * dropped. So an agent's harness narrowed to the agent's caps is the agent.</p>
+	 * dropped. To narrow what a context may do, use {@link #narrowedTo}.</p>
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
 		return new RequestContext(authority.withGrantScope(caps), executionScope, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation, job, cycle, sessionDelivery, authentication, null, null);

@@ -263,8 +263,8 @@ made against the request's authority as for any resource, with nothing added
 for keys:
 
 - A user's own authority covers its own keyring, and an agent's its own.
-- An agent with no caps uses its own keys, and its owner's as it reaches its
-  owner's other resources. An agent with caps uses what they cover: a bare
+- An agent with no caps uses its own keys, and within what its controller may
+  do, its owner's as it reaches its owner's other resources. An agent with caps uses what they cover: a bare
   `x/crypto/keys/` in its caps names its owner's keyring, and its own is
   named in full, `<owner>:g:<id>/x/crypto/keys/`.
 - An owner uses its agent's keys under a grant, which it can have the venue

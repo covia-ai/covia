@@ -23,7 +23,8 @@ Tracked by covia#660.
   presented grant or the scope covers the request. Another identity's resource
   that the venue hosts passes only on a presented grant, admission or the
   public scope, whatever the scope. Choosing the base replaces
-  the owner's authority with the caps; nothing intersects. An agent is a
+  the owner's authority with the caps, which a capped controller narrows
+  further. An agent is a
   sub-principal of its owner and works in the owner's namespace
   ([UCAN.md](./UCAN.md) §5.4).
 - **Venue authority.** `Engine.hasVenueAuthority` admits the venue acting as
@@ -94,7 +95,7 @@ without cost.
   never be passed on and there are no chains of allowances.
 - Issuing is an action the issuer's base must cover: an agent with caps can
   issue only if a cap allows it.
-- An agent with no caps has its owner's authority as its base, so it can issue
+- An agent with no caps that its owner controls has its owner's authority as its base, so it can issue
   allowances over its owner's namespace. An agent with caps can issue only
   within them.
 - The same base rule applies to issuing grants: `ucan:issue` must check the
