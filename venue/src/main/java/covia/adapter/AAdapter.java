@@ -996,8 +996,8 @@ public abstract class AAdapter {
 	 * owns and which is still in flight once the grace window has passed.
 	 * In-process execution is bounded and ends with the process; a wait on
 	 * something outside it is state, not a thread. The default pauses a Job
-	 * whose adapter registered a pause hook — its declaration that the work
-	 * can be suspended — and cancels any other {@code PENDING}/{@code STARTED}
+	 * this adapter can suspend ({@link #canPause}) and cancels any other
+	 * {@code PENDING}/{@code STARTED}
 	 * Job with {@link #VENUE_SHUT_DOWN}; the paused family is left as is.
 	 * Override to record a durable wait and let the thread go; whatever
 	 * remains non-terminal is handed to {@link #recoverJob} at the next boot.
@@ -1097,6 +1097,53 @@ public abstract class AAdapter {
 	 */
 	public void stop(Job job) {
 		stopWork(job);
+	}
+
+	// ===== Suspending a job's work =====
+
+	/**
+	 * Whether this adapter can suspend {@code job}'s work and restart it later.
+	 * Saying so makes the job pausable, and venue shutdown pauses it rather than
+	 * cancelling it. The default suspends nothing.
+	 *
+	 * @param job The job
+	 * @return true when {@link #pause} would suspend its work
+	 */
+	public boolean canPause(Job job) {
+		return false;
+	}
+
+	/**
+	 * Suspends {@code job}'s work, once its pause has committed. The job's handle
+	 * calls it once for each pause; a throw fails the job.
+	 *
+	 * @param job The paused job
+	 */
+	public void pause(Job job) {
+		// Nothing to suspend by default
+	}
+
+	/**
+	 * Whether this adapter can restart {@code job}'s suspended work through the
+	 * generic resume path. A job it cannot restart advances only by message
+	 * delivery. The default restarts nothing.
+	 *
+	 * @param job The job
+	 * @return true when {@link #resume} would restart its work
+	 */
+	public boolean canResume(Job job) {
+		return false;
+	}
+
+	/**
+	 * Restarts {@code job}'s suspended work, once its resume has committed. It
+	 * sees the job STARTED and may complete or suspend it again at once. The
+	 * job's handle calls it once for each resume; a throw fails the job.
+	 *
+	 * @param job The resumed job
+	 */
+	public void resume(Job job) {
+		// Nothing to restart by default
 	}
 
 	/**

@@ -260,21 +260,21 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
   one key explains every way a job can end short of completion.
 - Best-effort: side effects already produced are not undone.
 
-## Pause and resume — Job verbs, hook opt-in
+## Pause and resume — Job verbs, adapter opt-in
 
-- Pause/resume are **`Job` verbs**: `job.pause()` / `job.resume()`. There is no
-  parallel adapter pause path — an adapter opts in by registering a **pause /
-  resume hook** (`Job.setPauseHook`/`setResumeHook`) when it starts a
-  suspendable execution. The hook is how the adapter actually suspends or
-  restarts its work.
-- A job with **no hook rejects** pause/resume (`NotSupportedException` → HTTP
-  409): changing only the status while work continues underneath is not a pause.
+- Pause/resume are **`Job` verbs**: `job.pause()` / `job.resume()`. The job's
+  adapter opts in by answering `canPause(job)` / `canResume(job)`, and after
+  the change commits the job calls its `pause(job)` / `resume(job)`, which
+  actually suspend or restart the work.
+- A job whose adapter **cannot rejects** pause/resume (`NotSupportedException`
+  → HTTP 409): changing only the status while work continues underneath is not
+  a pause.
 - `Job.pause()` is `STARTED`-only; `resume()` accepts the whole paused family.
 - Resume **never re-invokes the operation from its stored input** — that would
   duplicate non-idempotent side effects and lose request authority. Resumption
-  continues from adapter-owned suspended state (the resume hook's closure).
+  continues from the suspended state the adapter holds.
 - `INPUT_REQUIRED`/`AUTH_REQUIRED` jobs are advanced by **message delivery**,
-  not the resume endpoint (they register no resume hook).
+  not the resume endpoint, unless their adapter can restart them.
 
 ## Message delivery — no per-job queue
 
@@ -381,7 +381,7 @@ monitor (`JobManager.shutdown`):
 3. **Suspend**: each job still in flight is handed to its adapter,
    `AAdapter.suspendJob(job)`. In-process execution is bounded and ends with
    the process; a wait on something outside it is state, not a thread. The
-   default pauses a job whose adapter registered a pause hook and cancels any
+   default pauses a job whose adapter can suspend it and cancels any
    other in-flight job with the reason "Venue shut down"; the paused family
    is left as is. An adapter overrides to record a durable wait and let its
    thread go — whatever it leaves non-terminal comes back through

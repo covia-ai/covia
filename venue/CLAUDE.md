@@ -221,10 +221,9 @@ AMap<AString, ACell> data = engine.jobs().getJobData(jobID, requestCtx);
 
 // Lifecycle control
 engine.jobs().cancelJob(jobID, requestCtx);
-// Pause/resume are opt-in via Job hooks (the adapter calls job.setPauseHook /
-// setResumeHook when it starts a suspendable execution). A job with no hook
-// rejects them (HTTP 409). Pause is STARTED-only; resume never re-invokes the
-// operation from stored input.
+// Pause/resume are opt-in by the job's adapter (AAdapter.canPause / canResume).
+// A job whose adapter cannot rejects them (HTTP 409). Pause is STARTED-only;
+// resume never re-invokes the operation from stored input.
 engine.jobs().pauseJob(jobID, requestCtx);
 engine.jobs().resumeJob(jobID, requestCtx);
 ```

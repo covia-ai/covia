@@ -279,15 +279,18 @@ public class JobTest {
 
 	@Test
 	public void testStartAndResumeCommitBeforeContinuation() {
-		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
+		Job job = new Job(Maps.of(Fields.STATUS, Status.PENDING)) {
+			@Override protected boolean supportsPause() { return true; }
+			@Override protected void onPaused() { assertEquals(Status.PAUSED, getStatus()); }
+			@Override protected boolean supportsResume() { return true; }
+			@Override protected void onResumed() {
+				assertEquals(Status.STARTED, getStatus());
+				setStatus(Status.INPUT_REQUIRED);
+			}
+		};
 		assertTrue(job.start(() -> assertEquals(Status.STARTED, job.getStatus())));
 		assertFalse(job.start(() -> { throw new AssertionError("already started"); }));
-		job.setPauseHook(() -> assertEquals(Status.PAUSED, job.getStatus()));
 		job.pause();
-		job.setResumeHook(() -> {
-			assertEquals(Status.STARTED, job.getStatus());
-			job.setStatus(Status.INPUT_REQUIRED);
-		});
 		job.resume();
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), "continuation's next state must not be overwritten");
 	}

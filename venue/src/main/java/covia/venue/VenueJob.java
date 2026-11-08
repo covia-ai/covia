@@ -218,6 +218,20 @@ public class VenueJob extends Job {
 		stopWork();
 	}
 
+	/** Whether the Job's adapter can suspend its work ({@link AAdapter#canPause}). */
+	@Override
+	protected boolean supportsPause() { return adapter != null && adapter.canPause(this); }
+
+	@Override
+	protected void onPaused() { if (adapter != null) adapter.pause(this); }
+
+	/** Whether the Job's adapter can restart its work ({@link AAdapter#canResume}). */
+	@Override
+	protected boolean supportsResume() { return adapter != null && adapter.canResume(this); }
+
+	@Override
+	protected void onResumed() { if (adapter != null) adapter.resume(this); }
+
 	/** Edit this recorded Job in a caller-owned venue transaction. The updater must
 	 * be pure. Run only the successful draft's returned notification after commit;
 	 * null means the row was missing, terminal, or the update was rejected. */

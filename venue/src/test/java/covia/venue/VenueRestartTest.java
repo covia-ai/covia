@@ -211,11 +211,10 @@ public class VenueRestartTest {
 			assertEquals(Status.FAILED, RT.ensureString(errorData.get(Fields.STATUS)),
 					"Error job should still be FAILED");
 
-			// 4g: an in-flight job that registered a pause hook is SUSPENDED at
-			// graceful shutdown, not left to fail. test:never wires a pause hook
-			// (so the lifecycle endpoints work), which under the shutdown
-			// contract (4e3b4cf1) is its declaration that the work can be
-			// suspended: defaultSuspend pauses it, and boot recovery restores the
+			// 4g: an in-flight job its adapter can suspend is SUSPENDED at
+			// graceful shutdown, not left to fail. The test adapter says it can
+			// suspend test:never (so the lifecycle endpoints work), so
+			// defaultSuspend pauses it, and boot recovery restores the
 			// paused family live. A non-pausable in-flight job is instead
 			// cancelled with "Venue shut down", and a true STARTED-at-crash record
 			// takes the FAILED default — both covered in JobShutdownTest.

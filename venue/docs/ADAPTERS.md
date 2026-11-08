@@ -48,8 +48,8 @@ shutting down. See
 
 The default invocation path claims `PENDING → STARTED` with `Job.start` before
 calling `invokeFuture`. Job transitions commit atomically; only the winning
-transition triggers its continuation. Start, pause, and resume hooks see the
-committed state and may immediately advance it again. Hooks should schedule
+transition triggers its continuation. Start, pause and resume continuations see
+the committed state and may immediately advance it again. They should schedule
 their next step promptly. A synchronous exception or JVM error fails the Job
 before propagating; late completion cannot replace a terminal state. Typed
 failure causes are committed together with the failure record.
@@ -236,7 +236,12 @@ status record. Only the job's adapter reads it, callers never see it, and it
 goes when the job finishes. Keep it before the link exists, or check
 `job.isFinished()` after making the link, so a cancel in between leaves nothing
 behind. Adapters hold work and data this way, never callbacks: a job has no
-mutable hook for cancellation.
+mutable hooks.
+
+An adapter whose work can be suspended answers `canPause(job)` and implements
+`pause(job)`, and likewise `canResume(job)` and `resume(job)`. Both default to
+refusing, and the job refuses with them. `pause` and `resume` run after the
+change commits, so each sees the new status.
 
 There are two distinct configuration hooks:
 

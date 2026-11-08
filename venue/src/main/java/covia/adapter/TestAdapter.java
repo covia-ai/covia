@@ -2,8 +2,10 @@ package covia.adapter;
 
 import java.security.SecureRandom;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -14,6 +16,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -408,17 +411,30 @@ public class TestAdapter extends AAdapter {
                 if (!hold) job.completeWith(Maps.of("done", Strings.create("all steps")));
             });
         } else if ("never".equals(subOp)) {
-            // Never completes. Run the default one-shot path (starts the
-            // never-completing future and wires the cancel hook), then register
-            // pause/resume hooks so the generic lifecycle endpoints work. There
-            // is no real work to suspend, so the hooks are status-only markers.
+            // Never completes. Marked suspendable so the generic pause and resume
+            // endpoints work; there is no real work to suspend. Marked before the
+            // default one-shot path starts it, so it is pausable once STARTED.
+            Blob id = job.getID();
+            suspendable.add(id);
+            job.future().whenComplete((result, error) -> suspendable.remove(id));
             super.invoke(job, ctx, meta, input);
-            job.setPauseHook(() -> {});
-            job.setResumeHook(() -> {});
         } else {
             // Default one-shot path
             super.invoke(job, ctx, meta, input);
         }
+    }
+
+    /** The running {@code never} jobs, which can pause and resume. Lost on restart. */
+    private final Set<Blob> suspendable = ConcurrentHashMap.newKeySet();
+
+    @Override
+    public boolean canPause(Job job) {
+        return suspendable.contains(job.getID());
+    }
+
+    @Override
+    public boolean canResume(Job job) {
+        return suspendable.contains(job.getID());
     }
 
     @Override

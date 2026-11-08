@@ -519,7 +519,7 @@ How long `Engine.close()` lets in-flight jobs finish before their adapters
 are asked to suspend them. An upper bound: shutdown proceeds as soon as
 nothing is in flight. Default 2000; `0` suspends at once. What "suspend"
 means is the adapter's decision — bounded in-process work is cancelled
-("Venue shut down"), a job whose adapter registered a pause hook is paused,
+("Venue shut down"), a job whose adapter can suspend it is paused,
 and a durable wait is recorded and restored at the next boot. See
 [JOBS.md § Shutdown](JOBS.md#shutdown).
 

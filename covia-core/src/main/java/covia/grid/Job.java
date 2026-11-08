@@ -59,21 +59,6 @@ public class Job {
 	 * the transport-safe {@link JobFailedException}. */
 	private volatile boolean preserveFailureCause;
 
-	/**
-	 * Optional pause hook, invoked by {@link #pause()} so the executing adapter
-	 * can actually suspend its work rather than merely flipping the status.
-	 * Registered via {@link #setPauseHook} when a suspendable execution starts;
-	 * absence means the job cannot be paused (a bare status flip is not a pause).
-	 */
-	private volatile Runnable onPause = null;
-
-	/**
-	 * Optional resume hook, invoked by {@link #resume()} to restart the adapter's
-	 * suspended work. Registered via {@link #setResumeHook}; absence means the
-	 * generic resume path is unsupported (advance via message delivery instead).
-	 */
-	private volatile Runnable onResume = null;
-
 	/** Obsolete field, recognised only to discard legacy state chains. */
 	private static final AString LEGACY_PREV = Strings.intern("prev");
 
@@ -192,14 +177,14 @@ public class Job {
 	}
 
 	/**
-	 * True when this Job is STARTED and its adapter registered a pause hook —
-	 * the adapter's declaration that the work can be suspended and resumed
-	 * later. Venue shutdown pauses pausable Jobs rather than cancelling them.
+	 * True when this Job is STARTED and its work can be suspended and resumed
+	 * later ({@link #supportsPause}). Venue shutdown pauses pausable Jobs rather
+	 * than cancelling them.
 	 *
 	 * @return true if {@link #pause()} would be accepted
 	 */
 	public boolean isPausable() {
-		return onPause != null && Status.STARTED.equals(getStatus());
+		return supportsPause() && Status.STARTED.equals(getStatus());
 	}
 
 	/**
@@ -632,65 +617,64 @@ public class Job {
 	}
 
 	/**
-	 * Register a pause hook invoked by {@link #pause()}. Adapters that can
-	 * genuinely suspend work register one when they start executing; the hook
-	 * performs the suspension. Registering a hook is what makes a job pausable.
-	 *
-	 * @param hook the pause callback, or null to clear
+	 * Whether this Job's work can actually be suspended. Without it the Job
+	 * refuses to pause: a status flip while work continues is not a pause.
 	 */
-	public void setPauseHook(Runnable hook) {
-		this.onPause = hook;
-	}
+	protected boolean supportsPause() { return false; }
 
 	/**
-	 * Register a resume hook invoked by {@link #resume()} to restart the
-	 * adapter's suspended work. Registering a hook is what makes a job resumable
-	 * via the generic resume path (vs message-based advancement).
-	 *
-	 * @param hook the resume callback, or null to clear
+	 * Suspends this Job's work, once its pause has committed. Runs once for each
+	 * pause; a throw fails the Job.
 	 */
-	public void setResumeHook(Runnable hook) {
-		this.onResume = hook;
-	}
+	protected void onPaused() {}
 
 	/**
-	 * Pause this Job. Commits STARTED &rarr; PAUSED, then triggers the registered
-	 * {@linkplain #setPauseHook pause hook}. A throwing hook fails the Job.
-	 * @throws NotSupportedException if the job is finished, not STARTED, or has no
-	 *         pause hook registered (a status flip while work continues is not a
-	 *         pause; unsupported pause surfaces as HTTP 409).
+	 * Whether this Job's suspended work can be restarted through {@link #resume()}.
+	 * Without it the Job advances only by message delivery.
+	 */
+	protected boolean supportsResume() { return false; }
+
+	/**
+	 * Restarts this Job's suspended work, once its resume has committed. It sees
+	 * STARTED and may complete or suspend the Job again at once. Runs once for
+	 * each resume; a throw fails the Job.
+	 */
+	protected void onResumed() {}
+
+	/**
+	 * Pause this Job. Commits STARTED &rarr; PAUSED, then suspends its work
+	 * ({@link #onPaused}). Failing to suspend it fails the Job.
+	 * @throws NotSupportedException if the job is finished, not STARTED, or its
+	 *         work cannot be suspended (unsupported pause surfaces as HTTP 409).
 	 */
 	public void pause() {
-		Runnable hook = onPause;
 		boolean changed = commitUpdate(job -> {
 			if (!Status.STARTED.equals(job.get(Fields.STATUS))) {
 				throw new NotSupportedException("Cannot pause job: expected STARTED");
 			}
-			if (hook == null) throw new NotSupportedException(
+			if (!supportsPause()) throw new NotSupportedException(
 				"Cannot pause job: its operation does not support pausing; cancel it if appropriate");
 			return job.assoc(Fields.STATUS, Status.PAUSED);
-		}, null, () -> runContinuation(hook));
+		}, null, () -> runContinuation(this::onPaused));
 		if (!changed) throw new NotSupportedException("Cannot pause job: status is terminal (" + getStatus() + ")");
 	}
 
 	/**
-	 * Atomically resumes a paused Job, then triggers its continuation. The hook
-	 * observes STARTED and may complete or suspend the Job again immediately.
-	 * @throws NotSupportedException if the job is not paused or waiting, or has
-	 *         no resume hook registered
+	 * Atomically resumes a paused Job, then restarts its work ({@link #onResumed}).
+	 * @throws NotSupportedException if the job is not paused or waiting, or its
+	 *         work cannot be restarted this way
 	 */
 	public void resume() {
-		Runnable hook = onResume;
 		boolean changed = commitUpdate(job -> {
 			ACell status = job.get(Fields.STATUS);
 			if (!Status.PAUSED.equals(status) && !Status.INPUT_REQUIRED.equals(status)
 					&& !Status.AUTH_REQUIRED.equals(status)) {
 				throw new NotSupportedException("Cannot resume job: expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
 			}
-			if (hook == null) throw new NotSupportedException(
+			if (!supportsResume()) throw new NotSupportedException(
 				"Cannot resume job: its operation does not provide a resume action");
 			return job.assoc(Fields.STATUS, Status.STARTED);
-		}, null, () -> runContinuation(hook));
+		}, null, () -> runContinuation(this::onResumed));
 		if (!changed) throw new NotSupportedException("Cannot resume job: status is terminal (" + getStatus() + ")");
 	}
 

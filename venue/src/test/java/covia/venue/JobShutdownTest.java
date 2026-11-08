@@ -115,7 +115,7 @@ public class JobShutdownTest {
 
 		Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config).start();
 		Engine.addDemoAssets(first);
-		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // registers a pause hook
+		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // its adapter can suspend it
 		Job slow;
 		String gateName = "shutdown-parked-" + System.identityHashCode(first);
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
