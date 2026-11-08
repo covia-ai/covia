@@ -602,7 +602,7 @@ What happens next depends on what failed:
   operation names ([AGENT_CONTEXT.md](AGENT_CONTEXT.md) §4). Every cycle
   resolves the setup again, and `agent:context` and `agent:step` fail with the
   same reason. During the cycle they raise it when a model call fails with
-  `ConfigurationException` (a refused key, a missing model, an invalid
+  `ConfigurationException` (a refused key, a provider's 403, a missing model, an invalid
   setting) or `UnavailableException` (the provider cannot be reached, or keeps
   failing after the provider library's own retries), or returns a failure
   value, which a level-3 operation returns only for a setup problem. A fault,

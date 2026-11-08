@@ -128,6 +128,7 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	static final AString K_SCHEMA      = Strings.intern("schema");
 	static final AString K_TYPE        = Strings.intern("type");
+	private static final AString K_CODE = Strings.intern("code");
 	static final AString K_DESCRIPTION = Strings.intern("description");
 	static final AString K_ENUM        = Strings.intern("enum");
 	static final AString K_ITEMS       = Strings.intern("items");
@@ -152,7 +153,8 @@ public class LangChainAdapter extends AAdapter {
 	// ========== Provider failures (ERRORS.md) ==========
 	// Each names the provider and model and what failed, never the provider's
 	// own words: a model reads these, and a provider's text quoted here would
-	// reach it as the venue's statement. A trailing %s takes httpNote(status).
+	// reach it as the venue's statement. The %s after the model takes httpNote
+	// or refusalNote: the status, and on a refusal the provider's code if it has one.
 
 	/** The provider refused the venue's own API key: the operator's to fix. */
 	public static final String OPERATOR_KEY_REFUSED =
@@ -160,6 +162,11 @@ public class LangChainAdapter extends AAdapter {
 	/** The provider refused the API key the caller supplied, as input or from its own secrets. */
 	public static final String CALLER_KEY_REFUSED =
 		"Model provider %s refused the API key supplied for model %s; check the apiKey input or the secret it comes from";
+	/** The provider understood the request and will not serve it (HTTP 403), which need not mean the key is wrong. */
+	public static final String PROVIDER_FORBIDDEN =
+		"Model provider %s understood the request for model %s and refused to serve it%s. The API key may be valid: "
+		+ "a refusal like this usually means the account, plan or region behind it lacks access to the model or has "
+		+ "no allowance left. Retrying unchanged will not help; a code after the status is the provider's own and says why";
 	public static final String PROVIDER_RATE_LIMITED =
 		"Model provider %s rate-limited the request for model %s; retry later";
 	public static final String PROVIDER_TIMED_OUT =
@@ -674,8 +681,10 @@ public class LangChainAdapter extends AAdapter {
 			String at = origin(ollamaUrl);
 			failure = new UnavailableException(OLLAMA_UNREACHABLE.formatted(at != null ? at : "its configured url"));
 		} else if (e instanceof dev.langchain4j.exception.AuthenticationException) {
-			failure = new ConfigurationException((operatorKey ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED)
-				.formatted(provider, model));
+			// langchain4j maps 401 and 403 alike; only a 401 says the key was not accepted.
+			failure = new ConfigurationException(Integer.valueOf(403).equals(status)
+				? PROVIDER_FORBIDDEN.formatted(provider, model, refusalNote(status, e))
+				: (operatorKey ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED).formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
 			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
@@ -691,11 +700,11 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
 			failure = mentionsContextSize(e)
 				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model))
-				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, httpNote(status)));
+				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, refusalNote(status, e)));
 		} else if (e instanceof dev.langchain4j.exception.JsonReadException) {
 			failure = new ResponseException(MALFORMED_RESPONSE.formatted(provider, model));
 		} else if (status != null) {
-			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, httpNote(status)));
+			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, refusalNote(status, e)));
 		} else if (e instanceof dev.langchain4j.exception.UnresolvedModelServerException
 				|| causedBy(e, java.io.IOException.class)
 				|| causedBy(e, java.nio.channels.UnresolvedAddressException.class)) {
@@ -713,10 +722,47 @@ public class LangChainAdapter extends AAdapter {
 		return (status != null) ? " (HTTP " + status + ")" : "";
 	}
 
+	/** A refusal's status and any code of the provider's fit to quote: " (HTTP 403, budget_exceeded)". */
+	static String refusalNote(Integer status, Throwable e) {
+		String code = providerCode(e);
+		return (status != null && code != null) ? " (HTTP " + status + ", " + code + ")" : httpNote(status);
+	}
+
+	/**
+	 * The provider's own code from the body of its answer, or null when it has
+	 * none that reads as an identifier: {@code error} when that is a string,
+	 * else {@code error.code} or {@code error.type}.
+	 */
+	private static String providerCode(Throwable e) {
+		var http = httpFailure(e);
+		if (http == null) return null;
+		ACell answer;
+		try {
+			answer = JSON.parse(http.getMessage());
+		} catch (RuntimeException notJson) {
+			return null;
+		}
+		AMap<AString, ACell> body = RT.ensureMap(answer);
+		if (body == null) return null;
+		ACell error = body.get(Fields.ERROR);
+		AString code = RT.ensureString(error);
+		AMap<AString, ACell> detail = RT.ensureMap(error);
+		if (detail != null) {
+			code = RT.ensureString(detail.get(K_CODE));
+			if (code == null) code = RT.ensureString(detail.get(K_TYPE));
+		}
+		return (code != null) ? identifier(code.toString()) : null;
+	}
+
 	/** The status of the HTTP answer behind a langchain4j failure, or null when there was none. */
 	private static Integer httpStatus(Throwable e) {
+		var http = httpFailure(e);
+		return (http != null) ? http.statusCode() : null;
+	}
+
+	private static dev.langchain4j.exception.HttpException httpFailure(Throwable e) {
 		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
-			if (t instanceof dev.langchain4j.exception.HttpException http) return http.statusCode();
+			if (t instanceof dev.langchain4j.exception.HttpException http) return http;
 		}
 		return null;
 	}

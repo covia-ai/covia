@@ -1870,6 +1870,52 @@ public class LangChainAdapterTest {
 			new dev.langchain4j.exception.JsonReadException(new java.io.IOException(PROVIDER_TEXT)), false);
 	}
 
+	/** A 403 from {@code body}, mapped as langchain4j maps one, is reported as forbidden for either key. */
+	private static void assertForbidden(String body, String code) {
+		var refusal = new dev.langchain4j.exception.AuthenticationException(
+			new dev.langchain4j.exception.HttpException(403, body));
+		for (boolean operatorKey : new boolean[] { true, false }) {
+			var failure = assertMapped(ConfigurationException.class, LangChainAdapter.PROVIDER_FORBIDDEN
+				.formatted("anthropic", "claude-x", LangChainAdapter.refusalNote(403, refusal)), refusal, operatorKey);
+			if (code != null) assertTrue(failure.getMessage().contains(code), failure.getMessage());
+		}
+	}
+
+	@Test
+	public void testA403IsNotReportedAsARefusedKeyAndQuotesTheProvidersCode() {
+		assertForbidden("{\"error\":\"budget_exceeded\"}", "budget_exceeded");
+		assertForbidden("{\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"" + PROVIDER_TEXT + "\"}}",
+			"permission_error");
+		assertForbidden("{\"error\":{\"code\":\"region_blocked\",\"type\":\"request_forbidden\",\"message\":\"" + PROVIDER_TEXT + "\"}}",
+			"region_blocked");
+		assertForbidden("{\"error\":{\"code\":null,\"type\":\"request_forbidden\"}}", "request_forbidden");
+		assertForbidden("{\"error\":{\"code\":403,\"message\":\"" + PROVIDER_TEXT + "\"}}", null);
+	}
+
+	@Test
+	public void testARefusalQuotesOnlyAnIdentifierFromTheProvider() {
+		for (String body : new String[] {
+				"{\"error\":\"you have spent it all " + PROVIDER_TEXT + "\"}",
+				"{\"error\":{\"code\":\"" + PROVIDER_TEXT + " and more\"}}",
+				"<html>" + PROVIDER_TEXT + "</html>",
+				"[\"" + PROVIDER_TEXT + "\"]",
+				""}) {
+			var refusal = new dev.langchain4j.exception.AuthenticationException(
+				new dev.langchain4j.exception.HttpException(403, body));
+			assertMapped(ConfigurationException.class, LangChainAdapter.PROVIDER_FORBIDDEN
+				.formatted("anthropic", "claude-x", LangChainAdapter.httpNote(403)), refusal, false);
+		}
+	}
+
+	@Test
+	public void testOtherRefusalsQuoteTheProvidersCode() {
+		var billing = new dev.langchain4j.exception.InvalidRequestException(new dev.langchain4j.exception.HttpException(402,
+			"{\"type\":\"error\",\"error\":{\"type\":\"billing_error\",\"message\":\"" + PROVIDER_TEXT + "\"}}"));
+		var failure = assertMapped(ResponseException.class, LangChainAdapter.REQUEST_REFUSED
+			.formatted("anthropic", "claude-x", LangChainAdapter.refusalNote(402, billing)), billing, false);
+		assertTrue(failure.getMessage().contains("billing_error"), failure.getMessage());
+	}
+
 	@Test
 	public void testContextSizeRefusalIsRecognisedByItsReason() {
 		for (String body : new String[] {
@@ -1902,12 +1948,13 @@ public class LangChainAdapterTest {
 		provider.createContext("/v1/messages", exchange -> {
 			String request = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
 			boolean context = request.contains("context-test-model");
-			byte[] body = (context
+			boolean spent = request.contains("spent-test-model");
+			byte[] body = (spent ? "{\"error\":\"budget_exceeded\"}" : context
 				? "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long " + PROVIDER_TEXT + "\"}}"
 				: "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"" + PROVIDER_TEXT + "\"}}")
 				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 			exchange.getResponseHeaders().set("content-type", "application/json");
-			exchange.sendResponseHeaders(context ? 400 : 401, body.length);
+			exchange.sendResponseHeaders(spent ? 403 : context ? 400 : 401, body.length);
 			try (var out = exchange.getResponseBody()) {
 				out.write(body);
 			}
@@ -1938,6 +1985,13 @@ public class LangChainAdapterTest {
 				input.assoc(Strings.create("apiKey"), Strings.create("sk-caller"))));
 			assertInstanceOf(ConfigurationException.class, callers);
 			assertEquals(LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x"), callers.getMessage());
+
+			Throwable spent = failureOf(adapter.invokeFuture(venue, meta,
+				input.assoc(Strings.create("model"), Strings.create("spent-test-model"))));
+			assertInstanceOf(ConfigurationException.class, spent);
+			assertEquals(LangChainAdapter.PROVIDER_FORBIDDEN.formatted("anthropic", "spent-test-model",
+				LangChainAdapter.refusalNote(403, spent.getCause())), spent.getMessage());
+			assertTrue(spent.getMessage().contains("budget_exceeded"), spent.getMessage());
 
 			Throwable context = failureOf(adapter.invokeFuture(venue, meta,
 				input.assoc(Strings.create("model"), Strings.create("context-test-model"))));
