@@ -146,6 +146,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- A HITL request fails with a message saying why when the person asked loses their account, and the agent that asked is told (#674).
+- A HITL grant reaches the audit log only once the answer carrying it commits (#674).
 - A request, chat or message sent while its agent is being deleted fails rather than waiting for ever, as does a chat on a session being deleted.
 - Two concurrent `user:create` calls for one username with different `authenticationKeys` cannot both install them.
 - A request's session, an A2A agent's asset and a cycle's token usage are added to the job record without losing a change made alongside.

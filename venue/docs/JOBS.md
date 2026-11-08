@@ -245,10 +245,13 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
 
 ## Cancellation
 
-- `cancel()` marks the job `CANCELLED` and runs the registered **cancel
-  hook**. The default adapter path wires the hook to `future.cancel(true)`;
-  adapters that submit interruptible work (e.g. LangChainAdapter) bridge
-  cancellation to a worker-thread interrupt, closing in-flight HTTP calls.
+- `cancel()` marks the job `CANCELLED`. The adapter that runs the job, set
+  when the job is created, then ends what the job was linked to, in the same
+  transaction (`cancelIn`: a request it opened, a task it queued), and stops
+  its running work once that commits (`stop`). Work recorded with `runs` is
+  cancelled with interruption, so adapters that submit interruptible work
+  (e.g. LangChainAdapter) close in-flight HTTP calls. See
+  [ADAPTERS.md](ADAPTERS.md#ending-a-job).
 - `cancel(reason)` — `PUT /jobs/{id}/cancel` with a `{"reason"}` body,
   `agent:cancelTask reason`, `VenueHTTP.cancelJob(id, reason)` — makes the
   reason the job's `error`, so a cancelled job reads like any other
@@ -261,9 +264,9 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
 
 - Pause/resume are **`Job` verbs**: `job.pause()` / `job.resume()`. There is no
   parallel adapter pause path — an adapter opts in by registering a **pause /
-  resume hook** (`Job.setPauseHook`/`setResumeHook`, symmetric to the cancel
-  hook) when it starts a suspendable execution. The hook is how the adapter
-  actually suspends or restarts its work.
+  resume hook** (`Job.setPauseHook`/`setResumeHook`) when it starts a
+  suspendable execution. The hook is how the adapter actually suspends or
+  restarts its work.
 - A job with **no hook rejects** pause/resume (`NotSupportedException` → HTTP
   409): changing only the status while work continues underneath is not a pause.
 - `Job.pause()` is `STARTED`-only; `resume()` accepts the whole paused family.

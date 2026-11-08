@@ -208,6 +208,36 @@ disable, configure, load, and unload changes are not persisted. Full operator
 semantics and authority requirements are in
 [CONFIG.md, “Runtime adapter lifecycle”](CONFIG.md#runtime-adapter-lifecycle).
 
+### Ending a job
+
+Every job is run by one adapter, fixed when the job is created, and that
+adapter ends what it started when the job is cancelled. The job calls it once:
+
+- `cancelIn(draft, job, adapterData)` runs inside the transaction that cancels
+  the job. It ends what the adapter linked to the job (a request it opened, a
+  task it queued), so the job and its links change together. It must be a pure
+  edit of `draft`, since the transaction may be retried. The default links
+  nothing.
+- `stop(job)` runs after the cancellation commits and stops the job's running
+  work. The default cancels what was recorded with `runs`. An override that
+  has other running work stops it and calls `super.stop(job)`. Holding work in
+  a map keyed by job id is enough: register the work, then call `stop` if the
+  job is already cancelled, so a cancel that came first still stops it.
+
+`runs(job, future)` records a future as the job's running work until the job
+ends. `bridgeToJob` calls it, so an adapter on the `invokeFuture` path gets
+cancellation for nothing. Pass the `Future` from `ExecutorService.submit` for
+work that must be interrupted: cancelling a `CompletableFuture` interrupts
+nothing.
+
+What `cancelIn` needs to find its links goes in the job's **adapter data**
+(`JobManager.updateAdapterData`), kept with the unfinished job outside its
+status record. Only the job's adapter reads it, callers never see it, and it
+goes when the job finishes. Keep it before the link exists, or check
+`job.isFinished()` after making the link, so a cancel in between leaves nothing
+behind. Adapters hold work and data this way, never callbacks: a job has no
+mutable hook for cancellation.
+
 There are two distinct configuration hooks:
 
 - `configureModule` receives module bootstrap configuration exactly once and
@@ -678,8 +708,8 @@ terminal completion. Administrative operations retain `invokeFuture` dispatch.
 Providers validate their target, credentials, options and resource authority
 before effects. Construct a passive `RemoteInteraction` and bind it with
 `bindInteraction` before starting work, or on remote acceptance when its handle
-first becomes known. Late acceptance after local cancellation still invokes
-the binding's cancel hook.
+first becomes known. Late acceptance after local cancellation still cancels
+the interaction.
 
 An interaction implements `deliver(messageRecord)` and `cancel()`. Delivery
 receives the original structured Job message; it must throw on unsupported or

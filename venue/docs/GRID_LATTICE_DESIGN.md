@@ -397,10 +397,16 @@ read-only; one that takes no path keeps Convex's default and refuses any
 segment. Resolution returns Convex's `ALatticeComponent`, so a path may end at
 a component that is not Covia's.
 
-**Keyed collections are Convex's map components.** `Jobs`, `JobIndex` and
-`AssetStore` extend Convex's `IndexComponent`, and `Users`, `AuthState`,
-`SecretStore` and `Inbox` its `MapComponent`, so `get`, `put`, `remove` and
-`size` are Convex's and `get(key)` is the entry as stored. A collection binds a
+**An entity is a collection and its entries.** A kind of domain entity is two
+components with different operations: the collection adds and finds entries
+(`Inbox.open`, `Tasks.add`, `Jobs.create`), and an entry changes itself
+(`HitlRequest.resolve`, `Task.park`). Each names what it is, not how it is
+held, and manages its own state as a lattice component.
+
+**Keyed collections are Convex's map components.** `Jobs`, `JobIndex`,
+`AssetStore`, `ContentStore` and `Tasks` extend Convex's `IndexComponent`, and
+`Users`, `AuthState`, `SecretStore` and `Inbox` its `MapComponent`, so `get`,
+`put`, `remove` and `size` are Convex's and `get(key)` is the entry as stored. A collection binds a
 child component to one entry through `path(key)`, which reads a missing key as
 absent, under a name of its own (`Users.user`, `Jobs.job`). Its domain
 operations (`Users.create`, `Jobs.create`, `SecretStore.store`) keep the rules
@@ -423,7 +429,8 @@ larger value.
 | `Jobs` | a job id, in hex, to its `JobState` |
 | `JobState` | `temp` to the job's `Workspace`; the rest of the job is read-only |
 | `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
-| `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState` |
+| `AgentState` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `SessionState`; `tasks` to `Tasks` |
+| `Tasks` | a task's id, in hex, to its `Task`; the agent's access rule covers both |
 | `SessionState` | `c` to the session's `Workspace` |
 
 Segments below the last component a path reaches are read by the value they

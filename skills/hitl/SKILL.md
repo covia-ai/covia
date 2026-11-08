@@ -52,7 +52,7 @@ covia_read path=j/<jobId>        # status INPUT_REQUIRED while waiting; COMPLETE
 ### `inbox` — review pending asks
 
 ```
-hitl_list status="open"          # {items: [{id, from, title, status, created, expires?}], count}
+hitl_list status="open"          # {items: [{id, caller, title, status, created, expires?}], count}
 covia_read path=h/<id>           # the full record: asks, options, offered grants
 ```
 

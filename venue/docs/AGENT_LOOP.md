@@ -1024,7 +1024,7 @@ for whether a loop is live. Launch is serialised by an atomic CAS via
 `ConcurrentHashMap.compute` — the first wake installs a fresh future,
 subsequent wakes observe the existing one and return it. A virtual
 thread is started only by the winning wake. Mutations to the agent
-record (`addTask`, `appendSessionPending`, run loop writes) use atomic
+record (`addTaskInSession`, `appendSessionPending`, run loop writes) use atomic
 cursor updates directly — no shared lock.
 
 The lattice `status` field supplies remote observability; `runningLoops` is the
@@ -1244,7 +1244,7 @@ with `AgentAdapter.TASK_YIELDED_IDLE`. Claiming a task for a cycle clears
 `parked`, so a task that is not parked but has been shown its input was
 interrupted mid-cycle, and runs again (§6.1).
 
-**No lost wakeups.** `addTask` / `appendSessionPending` write to the lattice
+**No lost wakeups.** `addTaskInSession` / `appendSessionPending` write to the lattice
 atomically, then call `wakeAgent`. The loop's top-of-iteration `hasWork` check
 reads the current lattice. If work landed while a loop was running, the next
 iteration sees it. If work landed while the loop removed its slot, the
@@ -1371,15 +1371,9 @@ model turn waits for the human.
 External callers keep the standard Job contract: the returned Job remains
 `INPUT_REQUIRED` until it completes or fails.
 
-**User request namespace:**
-
-```
-:user-data → <DID> → "h" → <job-id> → job reference
-```
-
-The `/h/` namespace is analogous to `/g/` (agents) and `/s/` (secrets) but
-holds Job IDs for requests that the human user is expected to complete. MCP
-clients can list and respond to these requests.
+The target's `h/` namespace is their inbox (`Inbox`): each request is a record
+(`HitlRequest`) keyed by its job's id in hex, holding the asks and how they
+were resolved. MCP clients can list and respond to these requests.
 
 The MCP-facing operations are `hitl:list`, `hitl:respond`, and the ordinary Job
 read/status surfaces.
