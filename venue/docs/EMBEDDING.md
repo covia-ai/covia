@@ -119,8 +119,9 @@ Scheduled events fire when the application is updated.
 `application.update()` reads the clock once and starts, in each mounted venue,
 the events due by then: scheduled operations, agent wakes and HITL timeouts.
 Its future completes when each has started (its operation's invocation has
-returned); how each resolves is its own. A step that leaves the time unchanged
-still starts what is due, such as an event added since with a past time.
+returned) and gives their Jobs; how each resolves is its own, so wait on the
+Job for that. A step that leaves the time unchanged still starts what is due,
+such as an event added since with a past time.
 `application.autoUpdate()` starts a timer that updates the application
 whenever a venue has something due, and returns it: `failure()` reports its
 first failure and `close()` stops it, as does closing the application. One
@@ -139,7 +140,8 @@ CoviaApplication application =
 Engine engine = application.mount(AKeyPair.generate(), config).launch();
 // ... act, then check what the venue wrote at that time
 now.addAndGet(60_000);              // one minute later
-application.update().get();         // start what is due by then
+List<Job> started = application.update().get(); // start what is due by then
+for (Job job : started) job.awaitResult();      // when the test needs them finished
 ```
 
 ## Routes

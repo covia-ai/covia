@@ -176,9 +176,9 @@ nothing due holds no thread.
    everything the fire changes about the schedule: a one-shot event is
    **removed**; a recurring event is **re-inserted** under the same `id` at
    its next due slot with `lastFired = t` and, for a tracked fire, `lastJob`.
-   To make `lastJob` part of that schedule write, a tracked fire's Job is
-   *prepared* first, under the lock: minted, PENDING, persisted in the
-   owner's history — the adapter is **not** started. Job preparation and the
+   The fire's Job is *prepared* first, under the lock: minted, PENDING and,
+   when tracked, persisted in the owner's history, which makes `lastJob` part
+   of that schedule write — the adapter is **not** started. Job preparation and the
    schedule claim are two ordered lattice updates because they touch different
    records. A crash between them can leave an unstarted PENDING Job while the
    event remains; recovery fails that Job and a later fire prepares a new one.
@@ -186,16 +186,18 @@ nothing due holds no thread.
    unknown. Because the claim and every other mutation hold the lock, a
    `trigger` of the same event either already ran (the drain finds it gone) or
    runs after. This gives **at-most-once** firing.
-3. Starts each claimed event on a fresh virtual thread, **as the event's caller
-   would invoke it now, presenting its `proofs` again** (§5): start the
-   prepared Job (tracked) or run the engine's transient-Job dispatch
-   (untracked, §7). Any error is logged. Its place frees **when the
+3. Starts each claimed event's prepared Job (§7) on a fresh virtual thread,
+   **as the event's caller would invoke it now, presenting its `proofs`
+   again** (§5). Any error is logged. Its place frees **when the
    operation's invocation returns** — the adapter has been called and has
    handed back its result — not when its Job finishes; the drain then claims
    the next due event. Adapters run blocking I/O off the invoking thread
    ([ADAPTERS.md](./ADAPTERS.md)), so a place is held only briefly.
-4. Completes the update's future once every event due by `t` has started. How
-   each resolves is its own: a test waits on the Job.
+4. Completes the update's future once every event due by `t` has started,
+   giving their Jobs in the order claimed; an event whose Job could not be
+   prepared has none. Overlapping updates each get the Jobs claimed while they
+   waited that were due by their own time. How each resolves is its own: a
+   test waits on the Job.
 
 **Concurrency.** `scheduler.maxConcurrency` (default 2,
 [CONFIG.md](./CONFIG.md)) bounds the events a venue is starting at once, so a
@@ -210,10 +212,9 @@ launch has finished recovery, and from the moment close begins, it starts
 nothing, so events falling due then stay in the schedule for its next start.
 Its close fails any update still waiting on it with `ShuttingDownException`.
 
-If a tracked Job cannot be prepared (unresolvable op, capability denied), the
-event is still claimed exactly as an untracked failure would be — the schedule
-advances, there is no Job and no `lastJob`, and the error is logged (or
-returned, for `trigger`).
+If a Job cannot be prepared (unresolvable op, capability denied), the event is
+still claimed — the schedule advances, there is no Job and no `lastJob`, and
+the error is logged (or returned, for `trigger`).
 
 **Claim-then-invoke** is chosen over invoke-then-remove so a crash mid-fire can
 at worst *drop* an event, never double-run a user's operation. Schedules that
