@@ -119,8 +119,9 @@ class RemoteDelegationTest {
 		try (CancellationPeer peer = new CancellationPeer(protocol)) {
 			Job child = peer.submit();
 			awaitRemoteId(child);
-			Job parent = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
-			parent.setCancelHook(child::cancel);
+			Job parent = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
+				@Override protected void onCancelled() { child.cancel(); }
+			};
 			java.util.concurrent.CompletableFuture.runAsync(parent::cancel).get(2, TimeUnit.SECONDS);
 			assertEquals(Status.CANCELLED, child.getStatus());
 			assertTrue(parent.future().isDone());

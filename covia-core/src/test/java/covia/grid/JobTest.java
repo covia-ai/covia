@@ -68,11 +68,11 @@ public class JobTest {
 		var notifications = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public void onFinish(AMap<AString, ACell> data) { finishes.incrementAndGet(); }
+			@Override protected void onCancelled() { hooks.incrementAndGet(); }
 		};
 		AMap<AString, ACell> evidence = Maps.of("outcome", "acknowledged");
 		job.recordCancellation(evidence);
 		assertNull(job.getData().get(Fields.CANCELLATION));
-		job.setCancelHook(hooks::incrementAndGet);
 		job.subscribe(j -> notifications.incrementAndGet());
 		job.cancel("stop");
 		var future = job.future();
@@ -154,14 +154,17 @@ public class JobTest {
 	}
 
 	@Test
-	public void testLateCancelHookRunsExactlyOnceAndSeesCommittedState() {
-		Job job = Job.create(Maps.of(Fields.STATUS, Status.PENDING));
-		job.cancel();
+	public void testCancellationRunsOnceAndSeesCommittedState() {
 		var calls = new java.util.concurrent.atomic.AtomicInteger();
-		job.setCancelHook(() -> {
-			assertEquals(Status.CANCELLED, job.getStatus());
-			calls.incrementAndGet();
-		});
+		var holder = new java.util.concurrent.atomic.AtomicReference<Job>();
+		Job job = new Job(Maps.of(Fields.STATUS, Status.PENDING)) {
+			@Override protected void onCancelled() {
+				assertEquals(Status.CANCELLED, holder.get().getStatus());
+				calls.incrementAndGet();
+			}
+		};
+		holder.set(job);
+		job.cancel();
 		job.cancel();
 		job.completeWith(Strings.create("too late"));
 		assertEquals(1, calls.get());
@@ -183,9 +186,10 @@ public class JobTest {
 	}
 
 	@Test
-	public void testCancellationLosingToCompletionDoesNotRunHook() throws Exception {
+	public void testCancellationLosingToCompletionDoesNotRunCancellation() throws Exception {
 		var entered = new java.util.concurrent.CountDownLatch(1);
 		var release = new java.util.concurrent.CountDownLatch(1);
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> next) {
 				if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
@@ -194,9 +198,8 @@ public class JobTest {
 				}
 				return next;
 			}
+			@Override protected void onCancelled() { calls.incrementAndGet(); }
 		};
-		var calls = new java.util.concurrent.atomic.AtomicInteger();
-		job.setCancelHook(calls::incrementAndGet);
 		var cancelling = CompletableFuture.runAsync(job::cancel);
 		try {
 			assertTrue(entered.await(5, TimeUnit.SECONDS));
@@ -208,17 +211,17 @@ public class JobTest {
 	}
 
 	@Test
-	public void testCompetingCancellationsOnlyRunWinningHook() throws Exception {
+	public void testCompetingCancellationsOnlyRunTheWinner() throws Exception {
 		var ready = new java.util.concurrent.CountDownLatch(2);
+		var calls = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> next) {
 				ready.countDown();
 				awaitLatch(ready);
 				return next;
 			}
+			@Override protected void onCancelled() { calls.incrementAndGet(); }
 		};
-		var calls = new java.util.concurrent.atomic.AtomicInteger();
-		job.setCancelHook(calls::incrementAndGet);
 		var first = CompletableFuture.runAsync(job::cancel);
 		var second = CompletableFuture.runAsync(job::cancel);
 		CompletableFuture.allOf(first, second).get(5, TimeUnit.SECONDS);
@@ -261,13 +264,13 @@ public class JobTest {
 	}
 
 	@Test
-	public void testThrowingCancelHookStillCompletesAndFinishesJob() {
+	public void testThrowingCancellationStillCompletesAndFinishesJob() {
 		var finished = new java.util.concurrent.atomic.AtomicInteger();
 		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED)) {
 			@Override public void onFinish(AMap<AString, ACell> next) { finished.incrementAndGet(); }
+			@Override protected void onCancelled() { throw new IllegalStateException("cleanup failed"); }
 		};
 		var future = job.future();
-		job.setCancelHook(() -> { throw new IllegalStateException("cleanup failed"); });
 		assertThrows(IllegalStateException.class, job::cancel);
 		assertEquals(Status.CANCELLED, job.getStatus());
 		assertTrue(future.isCompletedExceptionally());

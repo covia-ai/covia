@@ -468,7 +468,7 @@ public class TestAdapter extends AAdapter {
 
     private void handleDelay(Job job, RequestContext ctx, ACell input) {
     	// Use submit() (not CompletableFuture.runAsync) so the returned Future
-    	// is interruptible — the cancel hook below calls f.cancel(true), which
+    	// is interruptible — cancelling the Job calls f.cancel(true), which
     	// interrupts Thread.sleep. CompletableFuture from runAsync ignores
     	// mayInterruptIfRunning and would leave the sleep running.
     	java.util.concurrent.Future<?> f = VIRTUAL_EXECUTOR.submit(() -> {
@@ -488,7 +488,7 @@ public class TestAdapter extends AAdapter {
     			job.fail(e);
     		}
     	});
-    	job.setCancelHook(() -> f.cancel(true));
+    	runs(job, f);
 	}
 
 	private ACell handleEcho(ACell input) {

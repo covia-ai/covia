@@ -102,7 +102,8 @@ public class AAdapterInstallTest {
 
 	@Test
 	public void testAsyncResultProcessingErrorFailsJob() throws Exception {
-		covia.grid.Job job = new covia.grid.Job(Maps.of(Fields.STATUS, covia.grid.Status.PENDING)) {
+		covia.grid.Job job = new covia.grid.Job(Maps.of(Fields.ID, convex.core.data.Blob.fromHex("00112233445566778899aabbccddeeff"),
+				Fields.STATUS, covia.grid.Status.PENDING)) {
 			@Override public void completeWith(ACell result) {
 				throw new NoClassDefFoundError("output/validator/Class");
 			}

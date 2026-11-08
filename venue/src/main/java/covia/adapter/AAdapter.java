@@ -1031,20 +1031,77 @@ public abstract class AAdapter {
 	// ===== Shared future -> Job completion bridge =====
 
 	/**
-	 * Bridge a future to a Job's lifecycle: wire the standard cancel hook
-	 * ({@code future.cancel(true)}), then settle the job when the future
-	 * completes. The canonical one-shot completion path. Adapters that manage
-	 * their own cancellation (e.g. a remote cancel) set their own hook and call
-	 * {@link #completeFromJobFuture} instead.
+	 * Bridge a future to a Job's lifecycle: record it as the Job's running work
+	 * ({@link #runs}), so cancelling the Job cancels it, then settle the Job
+	 * when the future completes. The canonical one-shot completion path.
+	 * Adapters that manage their own cancellation (e.g. a remote cancel) stop
+	 * it in {@link #stop} and call {@link #completeFromJobFuture} instead.
 	 */
-	protected static void bridgeToJob(Job job, CompletableFuture<ACell> future) {
-		job.setCancelHook(() -> future.cancel(true));
+	protected void bridgeToJob(Job job, CompletableFuture<ACell> future) {
+		runs(job, future);
 		completeFromJobFuture(job, future);
 	}
 
+	// ===== Ending a job: its links and its running work =====
+
+	/** Work this adapter is running for its jobs, by job id: what {@link #stop} cancels. */
+	private final java.util.concurrent.ConcurrentHashMap<convex.core.data.Blob, java.util.concurrent.Future<?>> work =
+		new java.util.concurrent.ConcurrentHashMap<>();
+
 	/**
-	 * Settle a Job when {@code future} completes, without touching the cancel
-	 * hook. Use when the adapter has already wired a bespoke cancel hook.
+	 * Records {@code future} as the work this adapter is running for
+	 * {@code job}, until the job ends. Cancelling the job cancels it, with
+	 * interruption: pass a {@link java.util.concurrent.Future} from
+	 * {@code ExecutorService.submit} for work that must be interrupted, since a
+	 * {@link CompletableFuture} ignores it. A job that has already been
+	 * cancelled stops the work at once.
+	 */
+	protected final void runs(Job job, java.util.concurrent.Future<?> future) {
+		convex.core.data.Blob id = job.getID();
+		work.put(id, future);
+		if (job.isFinished()) {
+			stopWork(job);
+			return;
+		}
+		job.future().whenComplete((result, error) -> work.remove(id, future));
+	}
+
+	private void stopWork(Job job) {
+		java.util.concurrent.Future<?> future = work.remove(job.getID());
+		if (future != null) future.cancel(true);
+	}
+
+	/**
+	 * Ends what this adapter linked to {@code job}, in the transaction that
+	 * cancels it: a request it opened, a task it queued. The job's handle calls
+	 * it once, with the data this adapter keeps for the job
+	 * ({@link covia.venue.JobManager#adapterData}), or null when it keeps none.
+	 * It must be a pure edit of {@code draft}, since the transaction may be
+	 * retried; work to stop belongs in {@link #stop}. The default links nothing.
+	 *
+	 * @param draft The cancelling transaction's venue
+	 * @param job The job being cancelled
+	 * @param adapterData What this adapter keeps for the job, or null
+	 */
+	public void cancelIn(covia.venue.VenueState draft, Job job, AMap<AString, ACell> adapterData) {
+		// Nothing linked by default
+	}
+
+	/**
+	 * Stops {@code job}'s running work once its cancellation has committed.
+	 * The job's handle calls it once. The default cancels the work recorded by
+	 * {@link #runs}; an adapter with other running work stops that too and
+	 * calls this.
+	 *
+	 * @param job The cancelled job
+	 */
+	public void stop(Job job) {
+		stopWork(job);
+	}
+
+	/**
+	 * Settle a Job when {@code future} completes, without recording it as the
+	 * Job's running work. Use when the adapter stops the work itself.
 	 */
 	protected static void completeFromJobFuture(Job job, CompletableFuture<ACell> future) {
 		future.whenComplete((result, error) -> {

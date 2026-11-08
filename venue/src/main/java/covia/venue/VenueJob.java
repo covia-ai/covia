@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import covia.exception.AuthException;
 import covia.exception.CoviaException;
 import covia.exception.FaultException;
+import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 
@@ -24,6 +25,8 @@ public class VenueJob extends Job {
 	public static final String RECORDED_JOB_REQUIRED = "A transaction requires a recorded Job";
 
 	private final JobManager manager;
+	/** The adapter that runs this Job and ends it when it is cancelled; null when none does. */
+	private final AAdapter adapter;
 	private final OutputRules rules;
 	private final JobState record;
 	/** Last observed snapshot, used only if the primary record/account is erased. */
@@ -38,18 +41,21 @@ public class VenueJob extends Job {
 
 	/** An observable recorded Job over its existing record. */
 	VenueJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
-			AString ownerDID, JobManager manager) {
-		this(record, data, rules, ownerDID, manager, true, false);
+			AString ownerDID, JobManager manager, AAdapter adapter) {
+		this(record, data, rules, ownerDID, manager, true, false, adapter);
 	}
 
 	/**
 	 * @param record The Job's record, or null for a memory-only Job
 	 * @param data The Job's data when the handle is made
 	 * @param rules What the Job's operation declared about its data when the Job was admitted
+	 * @param adapter The adapter that runs the Job, which ends it when it is
+	 *        cancelled; null when no adapter runs it
 	 */
 	VenueJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
-			AString ownerDID, JobManager manager, boolean observable, boolean directRun) {
+			AString ownerDID, JobManager manager, boolean observable, boolean directRun, AAdapter adapter) {
 		super((record == null) ? data : null, record != null);
+		this.adapter = adapter;
 		this.manager = manager;
 		this.rules = (rules == null) ? OutputRules.NONE : rules;
 		this.account = manager.account(ownerDID);
@@ -166,11 +172,47 @@ public class VenueJob extends Job {
 		return owner.jobs().job(getID());
 	}
 
-	/** Edits the record in the draft; an edit that finishes the Job removes its entry with it. */
+	/**
+	 * Edits the record in the draft; an edit that finishes the Job removes its
+	 * entry with it, and one that cancels it ends what its adapter linked to it
+	 * there too. A finished record takes no edit, so a cancellation seen here is
+	 * the Job's one transition to CANCELLED.
+	 */
 	private AMap<AString, ACell> edit(VenueState draft, JobState job, UnaryOperator<AMap<AString, ACell>> edit) {
 		AMap<AString, ACell> updated = job.update(edit);
-		if (updated != null && Job.isFinished(updated)) draft.jobIndex().remove(getID());
+		if (updated != null && Job.isFinished(updated)) {
+			if (covia.grid.Status.CANCELLED.equals(updated.get(Fields.STATUS))) {
+				endLinks(draft, draft.jobIndex().adapterData(getID()));
+			}
+			draft.jobIndex().remove(getID());
+		}
 		return updated;
+	}
+
+	/**
+	 * Ends what the Job's adapter linked to it, in the cancelling transaction
+	 * ({@link AAdapter#cancelIn}).
+	 *
+	 * @param adapterData What the adapter keeps for the Job, or null
+	 */
+	protected void endLinks(VenueState draft, AMap<AString, ACell> adapterData) {
+		if (adapter != null) adapter.cancelIn(draft, this, adapterData);
+	}
+
+	/** Stops the Job's running work once its cancellation has committed ({@link AAdapter#stop}). */
+	protected void stopWork() {
+		if (adapter != null) adapter.stop(this);
+	}
+
+	/**
+	 * A Job held only here (memory-only, or detached from an erased record)
+	 * committed its cancellation alone, so its links end in a transaction of
+	 * their own; a recorded Job's ended in the cancelling one ({@link #edit}).
+	 */
+	@Override
+	protected void onCancelled() {
+		if (hasLocalRecord()) manager.venue().execute(draft -> endLinks(draft, heldData.get()));
+		stopWork();
 	}
 
 	/** Edit this recorded Job in a caller-owned venue transaction. The updater must
@@ -230,8 +272,9 @@ public class VenueJob extends Job {
 
 	/**
 	 * Cancels this recorded Job in a caller-owned venue transaction, as
-	 * {@link #cancel(String)} does. Run only the successful draft's returned
-	 * notification after commit; it runs the Job's cancel hook.
+	 * {@link #cancel(String)} does, ending what its adapter linked to it in the
+	 * same transaction. Run only the successful draft's returned notification
+	 * after commit; it stops the Job's running work.
 	 *
 	 * @return the notification, or null when the record is missing or the Job has finished
 	 */

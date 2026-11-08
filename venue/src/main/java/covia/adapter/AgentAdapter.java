@@ -98,8 +98,15 @@ import covia.venue.Users;
  */
 public class AgentAdapter extends AAdapter {
 	private ExternalAgents externalAgents() {
-		return new ExternalAgents(engine);
+		return new ExternalAgents(engine, externalChildren);
 	}
+
+	/** The backend job serving each running external turn, by the job asking. */
+	private final ConcurrentHashMap<Blob, Job> externalChildren = new ConcurrentHashMap<>();
+
+	/** The stop signal of each running query or summary transition, by its job. */
+	private final ConcurrentHashMap<Blob, java.util.concurrent.atomic.AtomicBoolean> queryCancellations
+		= new ConcurrentHashMap<>();
 
 	private void requireNative(AgentState agent, String operation) {
 		if (externalAgents().isExternal(agent))
@@ -1619,6 +1626,11 @@ public class AgentAdapter extends AAdapter {
 		// The request completes by writing to its outputPath as its caller: the
 		// request Job keeps the caller's context for that, not the worker's task
 		if (outputPath != null) engine.jobs().keepCallerContext(job, ctx);
+		// Where the task is queued, for cancelIn: kept before the task exists, so
+		// no cancel can find a queued task and not know where it is
+		engine.jobs().updateAdapterData(job, kept -> kept
+			.assoc(Fields.OWNER, target.ownerDID())
+			.assoc(Fields.AGENT_ID, agentId));
 		AgentState.SessionIntake intake = agent.addTaskInSession(sid,
 			ctx.getCallerDID(), session.loads(), taskId, taskData);
 		if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
@@ -1629,8 +1641,12 @@ public class AgentAdapter extends AAdapter {
 			job.fail("Agent no longer exists: " + agentId);
 			return;
 		}
+		if (job.isFinished()) {
+			// Cancelled before the task was queued: nothing else will take it out
+			agent.removeTask(taskId);
+			return;
+		}
 		if (outputPath != null) outputContexts.put(taskId, ctx);
-		leaveQueueOnCancel(job, target.ownerDID(), agentId);
 
 		// Record the session on the task Job so consumers can recover it for the
 		// task's whole lifecycle (the A2A layer maps A2A contextId = session).
@@ -1646,19 +1662,38 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Takes a request's task out of the queue when its caller cancels the Job,
-	 * so the agent never runs work nobody is waiting for. A request Job that
-	 * finishes any other way does so through the run loop, which removes the
-	 * task itself; {@code agent:cancelTask} takes the task first, so this
+	 * Takes a request's task out of the queue in the transaction that cancels
+	 * its Job, so the agent never runs work nobody is waiting for. A request Job
+	 * that finishes any other way does so through the run loop, which removes
+	 * the task itself; {@code agent:cancelTask} takes the task first, so this
 	 * finds nothing.
 	 */
-	private void leaveQueueOnCancel(Job job, AString ownerDID, AString agentId) {
-		Blob taskId = job.getID();
-		job.setCancelHook(() -> {
-			AgentState agent = getAgent(ownerDID, agentId);
-			if (agent != null) agent.removeTask(taskId);
-			outputContexts.remove(taskId);
-		});
+	@Override
+	public void cancelIn(VenueState draft, Job job, AMap<AString, ACell> adapterData) {
+		if (adapterData == null) return;
+		AString owner = RT.ensureString(adapterData.get(Fields.OWNER));
+		AString agentId = RT.ensureString(adapterData.get(Fields.AGENT_ID));
+		if (owner == null || agentId == null) return;
+		User user = draft.users().user(owner);
+		AgentState agent = (user == null) ? null : user.agent(agentId);
+		if (agent != null) agent.removeTask(job.getID());
+	}
+
+	/** Cancelling a job ends everything this adapter is doing for it. */
+	@Override
+	public void stop(Job job) {
+		Blob id = job.getID();
+		outputContexts.remove(id);
+		java.util.concurrent.atomic.AtomicBoolean cancelled = queryCancellations.remove(id);
+		if (cancelled != null) cancelled.set(true);
+		for (ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> sessions : activeChats.values()) {
+			for (ConcurrentHashMap<Blob, Job> chats : sessions.values()) chats.remove(id, job);
+		}
+		try {
+			externalAgents().stop(job);
+		} finally {
+			super.stop(job);
+		}
 	}
 
 	private void handleMessage(Job job, ACell input, RequestContext ctx) {
@@ -1801,16 +1836,14 @@ public class AgentAdapter extends AAdapter {
 		// queues below like any other; the cycle that takes it marks the Job
 		// STARTED, and a response (in the run loop) resolves every waiter that
 		// is STARTED, so registering before queuing never lets an earlier reply
-		// answer this chat. A cancel hook drops the waiter so a caller
+		// answer this chat. Cancelling drops the waiter (stop), so a caller
 		// cancelling their own Job stops awaiting at once.
 		AgentKey chatKey = target.key();
 		ConcurrentHashMap<Blob, Job> agentChats = activeChats
 			.computeIfAbsent(chatKey, k -> new ConcurrentHashMap<>())
 			.computeIfAbsent(sid, k -> new ConcurrentHashMap<>());
 		agentChats.put(job.getID(), job);
-		final ConcurrentHashMap<Blob, Job> chatsRef = agentChats;
-		final Job jobRef = job;
-		job.setCancelHook(() -> chatsRef.remove(jobRef.getID(), jobRef));
+		if (job.isFinished()) agentChats.remove(job.getID(), job);
 
 		// The envelope carries the chat Job id for provenance — turns minted
 		// from it keep the id, tying conversation content back to the job.
@@ -1826,17 +1859,17 @@ public class AgentAdapter extends AAdapter {
 		try {
 			intake = appendChatInput(job, agent, target, session, envelope, ctx, sidHex, jobIdHex);
 		} catch (Throwable failure) {
-			chatsRef.remove(jobRef.getID(), jobRef);
+			agentChats.remove(job.getID(), job);
 			throw failure;
 		}
 		if (intake == null) {
 			// A duplicate delivery must neither append a second input nor await a reply.
-			chatsRef.remove(jobRef.getID(), jobRef);
+			agentChats.remove(job.getID(), job);
 			job.completeWith(Maps.of(Fields.SESSION_ID, sidHex));
 			return;
 		}
 		if (intake != AgentState.SessionIntake.APPLIED) {
-			chatsRef.remove(jobRef.getID(), jobRef);
+			agentChats.remove(job.getID(), job);
 			if (intake == AgentState.SessionIntake.LOADS_ON_EXISTING) {
 				job.fail("loads can only be passed when a session is created — this session already exists");
 			} else if (session.supplied()) {
@@ -2004,16 +2037,20 @@ public class AgentAdapter extends AAdapter {
 			Fields.MESSAGES, messages, Fields.SESSION, snapshot);
 
 		java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
-		job.setCancelHook(() -> cancelled.set(true));
+		Blob jobId = job.getID();
+		queryCancellations.put(jobId, cancelled);
+		if (job.isFinished()) {
+			queryCancellations.remove(jobId, cancelled);
+			cancelled.set(true);
+		} else {
+			job.future().whenComplete((r, e) -> queryCancellations.remove(jobId, cancelled));
+		}
 		// The harness's own context, as in the run loop: caller proofs and
 		// session/task/cycle scopes must not leak into this independent run.
 		RequestContext queryCtx = harnessContext(query.target()).withCancellation(cancelled);
 		CompletableFuture<ACell> transition = engine.jobs().invokeInternal(
 			query.operation(), transitionInput, queryCtx);
-		job.setCancelHook(() -> {
-			cancelled.set(true);
-			transition.cancel(true);
-		});
+		runs(job, transition);
 		return transition.thenApply(result -> {
 			AMap<AString, ACell> tokens = RT.ensureMap(RT.getIn(result, Fields.TOKENS));
 			if (tokens != null) attachTokens(job, tokens);
@@ -3708,7 +3745,6 @@ public class AgentAdapter extends AAdapter {
 		Blob jobId = job.getID();
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if ((tasks != null && tasks.containsKey(jobId)) || agent.getResolved().containsKey(jobId)) {
-			if (reattach) leaveQueueOnCancel(job, ownerDID, agentId);
 			return true;
 		}
 		Blob sid = parseSessionId(RT.ensureString(data.get(Fields.SESSION_ID)));
@@ -3719,11 +3755,10 @@ public class AgentAdapter extends AAdapter {
 		for (long i = 0; i < pending.count(); i++) {
 			if (!jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) continue;
 			if (reattach) {
-				ConcurrentHashMap<Blob, Job> chats = activeChats
+				activeChats
 					.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
-					.computeIfAbsent(sid, k -> new ConcurrentHashMap<>());
-				chats.put(jobId, job);
-				job.setCancelHook(() -> chats.remove(jobId, job));
+					.computeIfAbsent(sid, k -> new ConcurrentHashMap<>())
+					.put(jobId, job);
 			}
 			return true;
 		}
@@ -3766,15 +3801,14 @@ public class AgentAdapter extends AAdapter {
 			job.completeWith(immediateResult);
 			return;
 		}
-		// Make the blocking wait cancellable. A per-caller signal races against
-		// the shared run-loop future: job.cancel() completes the signal, which
-		// unblocks THIS wait without cancelling the loop — other waiters attached
-		// to `completion` are unaffected, and we never touch `completion` itself.
-		CompletableFuture<ACell> cancelSignal = new CompletableFuture<>();
-		job.setCancelHook(() -> cancelSignal.complete(null));
-		// A cancel may have landed between STARTED and hook registration.
-		if (job.isFinished()) { job.setCancelHook(null); return; }
-		CompletableFuture<ACell> raced = completion.applyToEither(cancelSignal, x -> x);
+		if (job.isFinished()) return;
+		// Make the blocking wait cancellable: the job's own future races against
+		// the shared run-loop future, so a cancel unblocks THIS wait without
+		// cancelling the loop. Other waiters attached to `completion` are
+		// unaffected, and we never touch `completion` itself.
+		CompletableFuture<ACell> finished = new CompletableFuture<>();
+		job.future().whenComplete((r, e) -> finished.complete(null));
+		CompletableFuture<ACell> raced = completion.applyToEither(finished, x -> x);
 		try {
 			ACell cycleResult = (waitMs < 0)
 				? raced.join()
@@ -3787,10 +3821,9 @@ public class AgentAdapter extends AAdapter {
 			// unless a cancel already finished the job.
 			if (!job.isFinished()) job.completeWith(immediateResult);
 		} finally {
-			job.setCancelHook(null);
 			// Detach `raced` from `completion` on the timeout path so a
 			// never-draining loop doesn't accumulate dependents.
-			cancelSignal.complete(null);
+			finished.complete(null);
 		}
 	}
 

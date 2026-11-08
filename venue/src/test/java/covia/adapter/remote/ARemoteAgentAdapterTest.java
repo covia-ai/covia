@@ -40,7 +40,12 @@ class ARemoteAgentAdapterTest {
 			ordinary.incrementAndGet(); return CompletableFuture.completedFuture(Strings.create("admin"));
 		}
 	}
-	private static Job job() { return Job.create(Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.PENDING)); }
+	/** A job whose cancellation stops its adapter's work, as a venue job's does. */
+	private Job job() {
+		return new Job(Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.PENDING)) {
+			@Override protected void onCancelled() { adapter.stop(this); }
+		};
+	}
 	private static AMap<AString, ACell> meta(String operation) { return Maps.of(Fields.OPERATION, Maps.of(Fields.ADAPTER, "remoteprobe:" + operation)); }
 
 	@Test void startsOnceAndReleasesTerminalBindings() {

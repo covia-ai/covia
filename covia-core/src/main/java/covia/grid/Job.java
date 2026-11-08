@@ -60,15 +60,6 @@ public class Job {
 	private volatile boolean preserveFailureCause;
 
 	/**
-	 * Optional cancellation hook. Invoked by {@link #cancel()} so the work can
-	 * actually stop (interrupt a sleeping thread, close a connection, etc.)
-	 * rather than just marking the lattice status. Adapters that submit
-	 * interruptible work register a hook such as
-	 * {@code () -> future.cancel(true)}.
-	 */
-	private final AtomicReference<Runnable> onCancel = new AtomicReference<>();
-
-	/**
 	 * Optional pause hook, invoked by {@link #pause()} so the executing adapter
 	 * can actually suspend its work rather than merely flipping the status.
 	 * Registered via {@link #setPauseHook} when a suspendable execution starts;
@@ -284,7 +275,7 @@ public class Job {
 				try {
 					if (Status.CANCELLED.equals(next.get(Fields.STATUS))) {
 						cancelled = true;
-						runCancelHook();
+						onCancelled();
 					}
 					if (continuation != null) continuation.run();
 				} finally {
@@ -577,11 +568,9 @@ public class Job {
 	/**
 	 * Cancel this Job. No effect if already finished.
 	 *
-	 * <p>If a {@linkplain #setCancelHook cancel hook} has been registered, it
-	 * runs after the status transition so the underlying worker can actually
-	 * stop (e.g. interrupt a sleeping thread via {@code future.cancel(true)}).
-	 * Without a hook, cancellation only flips the lattice status and the
-	 * worker must poll {@link #isFinished()} to notice.</p>
+	 * <p>Once the cancellation commits, {@link #onCancelled()} runs, once, so
+	 * a venue's handle can stop the Job's work. A plain handle has none to
+	 * stop: cancellation only flips its status.</p>
 	 */
 	public void cancel() {
 		cancel(null);
@@ -616,25 +605,12 @@ public class Job {
 	}
 
 	/**
-	 * Register a cancellation hook invoked by {@link #cancel()}. Adapters that
-	 * submit interruptible work should register
-	 * {@code () -> future.cancel(true)} so a cancel actually stops the worker
-	 * thread. Pass a {@link java.util.concurrent.Future} from
-	 * {@code ExecutorService.submit(...)}, not a {@link CompletableFuture}
-	 * from {@code runAsync} (the latter ignores {@code mayInterruptIfRunning}).
-	 * Registration after cancellation immediately runs the hook. Each registered
-	 * hook is claimed once even when registration races with cancellation.
-	 *
-	 * @param hook the cancel callback, or null to clear
+	 * Runs once, after this Job's cancellation commits and before it finishes
+	 * ({@link #onFinish}), so a subclass can stop the Job's work. Listeners have
+	 * been told of the cancellation by then. The base does nothing.
 	 */
-	public void setCancelHook(Runnable hook) {
-		onCancel.set(hook);
-		if (Status.CANCELLED.equals(getStatus())) runCancelHook();
-	}
-
-	private void runCancelHook() {
-		Runnable hook = onCancel.getAndSet(null);
-		if (hook != null) hook.run();
+	protected void onCancelled() {
+		// A plain handle has no work of its own to stop
 	}
 
 	/**

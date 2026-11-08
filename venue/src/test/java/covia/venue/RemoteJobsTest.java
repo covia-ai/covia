@@ -28,14 +28,13 @@ class RemoteJobsTest {
 	@Test void transportFailureRetainsOnlySafeEvidence() throws Exception {
 		Engine engine = Engine.createTemp(null);
 		try (RemoteJobs observer = new RemoteJobs(engine, 1, 2)) {
-			Job job = job();
+			Job job = job(j -> observer.attemptCancellation(j, "remote", () -> {
+				throw new java.io.IOException("private-token at secret URL");
+			}));
 			CountDownLatch recorded = new CountDownLatch(1);
 			job.subscribe(j -> {
 				if (Strings.create("unknown").equals(convex.core.lang.RT.getIn(j.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME))) recorded.countDown();
 			});
-			job.setCancelHook(() -> observer.attemptCancellation(job, "remote", () -> {
-				throw new java.io.IOException("private-token at secret URL");
-			}));
 			job.cancel();
 			assertTrue(recorded.await(5, TimeUnit.SECONDS));
 			assertEquals(Strings.create("IOException"), convex.core.lang.RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.CANCELLATION_ERROR_TYPE));
@@ -44,8 +43,17 @@ class RemoteJobsTest {
 		} finally { engine.close(); }
 	}
 
+	private static final AMap<AString, ACell> STARTED_JOB = Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.STARTED);
+
 	private static Job job() {
-		return Job.create(Maps.of(Fields.ID, Blob.fromHex("00112233445566778899aabbccddeeff"), Fields.STATUS, Status.STARTED));
+		return Job.create(STARTED_JOB);
+	}
+
+	/** A job that does {@code onCancelled} when it is cancelled, as a venue job stops its work. */
+	private static Job job(java.util.function.Consumer<Job> onCancelled) {
+		return new Job(STARTED_JOB) {
+			@Override protected void onCancelled() { onCancelled.accept(this); }
+		};
 	}
 
 	/** A job the venue recorded, with an entry to keep its connection in. */
@@ -126,10 +134,9 @@ class RemoteJobsTest {
 
 	@Test void closeLetsACancellationInFlightRecordItsOutcomeWithinTheGraceWindow() throws Exception {
 		RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2);
-		Job job = job();
 		CountDownLatch sending = new CountDownLatch(1);
 		CountDownLatch release = new CountDownLatch(1);
-		job.setCancelHook(() -> observer.attemptCancellation(job, "remote", () -> {
+		Job job = job(j -> observer.attemptCancellation(j, "remote", () -> {
 			sending.countDown();
 			release.await();
 			return RemoteJobs.cancellationResult(Status.CANCELLED);
@@ -146,11 +153,10 @@ class RemoteJobsTest {
 
 	@Test void closeGivesUpOnARequestWhenTheGraceWindowEnds() throws Exception {
 		RemoteJobs observer = new RemoteJobs(TestEngine.ENGINE, 1, 2);
-		Job job = job();
 		CountDownLatch sending = new CountDownLatch(1);
 		CountDownLatch release = new CountDownLatch(1);
 		AtomicReference<CompletableFuture<Void>> attempt = new AtomicReference<>();
-		job.setCancelHook(() -> attempt.set(observer.attemptCancellation(job, "remote", () -> {
+		Job job = job(j -> attempt.set(observer.attemptCancellation(j, "remote", () -> {
 			sending.countDown();
 			release.await();
 			return RemoteJobs.cancellationResult(Status.CANCELLED);
@@ -164,9 +170,8 @@ class RemoteJobsTest {
 		// Its answer is ignored: the attempt began and nothing established its outcome
 		assertEquals(RemoteJobs.OUTCOME_REQUESTED, RT.getIn(job.getData(), Fields.CANCELLATION, RemoteJobs.OUTCOME));
 		// Once closed, a cancellation sends nothing and records why
-		Job late = job();
 		AtomicInteger sent = new AtomicInteger();
-		late.setCancelHook(() -> observer.attemptCancellation(late, "remote", () -> {
+		Job late = job(j -> observer.attemptCancellation(j, "remote", () -> {
 			sent.incrementAndGet();
 			return RemoteJobs.cancellationResult(Status.CANCELLED);
 		}));

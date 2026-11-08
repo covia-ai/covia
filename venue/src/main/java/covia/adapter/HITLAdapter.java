@@ -224,10 +224,7 @@ public class HITLAdapter extends AAdapter {
 			return changed;
 		});
 		parked.run();
-		Blob jobId = job.getID();
-		watchPending(job);
-		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
-		if (timeoutSecs != null) scheduleExpiry(targetDID, id, jobId, timeoutSecs * 1000);
+		if (timeoutSecs != null) scheduleExpiry(targetDID, id, job.getID(), timeoutSecs * 1000);
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
 
@@ -250,49 +247,66 @@ public class HITLAdapter extends AAdapter {
 		}
 	}
 
-	/** Removes the asking agent's pending entry when the job finishes. */
-	private void watchPending(Job job) {
+	/** Takes the asking agent's pending entry away with the job that ended. A pure edit of the draft. */
+	private static void removePending(VenueState venue, Job job) {
 		AString agentId = Engine.agentIdIn(job.getOwner(), job.getCaller());
 		if (agentId == null) return;
-		User owner = engine.getVenueState().users().user(job.getOwner());
+		User owner = venue.users().user(job.getOwner());
 		AgentState agent = owner == null ? null : owner.agent(agentId);
-		if (agent == null || agent.getRecord() == null) return;
-		var cleanup = new java.util.function.Consumer<Job>() {
-			@Override public void accept(Job updated) {
-				if (!updated.isFinished()) return;
-				agent.removePending(updated.getID());
-				updated.unsubscribe(this);
-			}
-		};
-		job.subscribe(cleanup);
-		cleanup.accept(job); // closes completion before listener registration
+		if (agent != null && agent.getRecord() != null) agent.removePending(job.getID());
+	}
+
+	/** The user a request job asked, as its input says. */
+	private static AString askedBy(Job job) {
+		AString target = RT.ensureString(RT.getIn(job.getData(), Fields.INPUT, Hitl.USER));
+		return (target != null) ? target : job.getOwner();
+	}
+
+	/**
+	 * Cancelling a request job resolves its request as cancelled and ends the
+	 * asking agent's wait. Requests opened before the adapter kept its target
+	 * name it only in the job's input.
+	 */
+	@Override
+	public void cancelIn(VenueState draft, Job job, AMap<AString, ACell> adapterData) {
+		AString target = (adapterData == null) ? null : RT.ensureString(adapterData.get(TARGET));
+		if (target == null) target = askedBy(job);
+		User user = draft.users().user(target);
+		if (user != null) user.inbox().request(Strings.create(job.getID().toHexString())).resolve(Hitl.CANCELLED, null);
+		removePending(draft, job);
 	}
 
 	@Override
 	public void recoverJob(Job job) {
-		// Restores legacy waits and arms cleanup if recovery fails
-		engine.getVenueState().execute(venue -> addPending(venue, job, null));
-		watchPending(job);
 		super.recoverJob(job);
-		if (job.isFinished()) return;
-		AMap<AString, ACell> data = job.getData();
-		AString target = RT.ensureString(RT.getIn(data, Fields.INPUT, Hitl.USER));
-		if (target == null) target = job.getOwner();
-		AString targetDID = target;
+		if (job.isFinished()) {
+			engine.getVenueState().execute(venue -> removePending(venue, job));
+			return;
+		}
+		// Restores waits recorded before they were opened with the request
+		engine.getVenueState().execute(venue -> addPending(venue, job, null));
+		AString target = askedBy(job);
 		AString id = Strings.create(job.getID().toHexString());
 		User user = engine.getVenueState().users().user(target);
 		HitlRequest request = (user == null) ? null : user.inbox().request(id);
 		AString status = (request == null) ? null : request.status();
-		if (status != null && !Hitl.OPEN.equals(status)) {
-			// Older records lack a prepared result. Never reissue a grant or pretend
-			// a redacted token is the original answer.
-			if (Hitl.CANCELLED.equals(status)) job.cancel();
-			else if (Hitl.EXPIRED.equals(status)) job.fail(REQUEST_EXPIRED);
-			else if (Hitl.REJECTED.equals(status)) job.fail(rejection(targetDID, RT.getIn(request.getRecord(), Hitl.RESPONSE, Hitl.COMMENT)));
-			else job.fail(RESOLVED_WITHOUT_RESULT);
-			return;
-		}
-		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
+		if (status == null || Hitl.OPEN.equals(status)) return;
+		// Older records lack a prepared result. Never reissue a grant or pretend
+		// a redacted token is the original answer.
+		if (Hitl.CANCELLED.equals(status)) job.cancel();
+		else if (Hitl.EXPIRED.equals(status)) failWithRequest(job, REQUEST_EXPIRED);
+		else if (Hitl.REJECTED.equals(status)) failWithRequest(job, rejection(target, RT.getIn(request.getRecord(), Hitl.RESPONSE, Hitl.COMMENT)));
+		else failWithRequest(job, RESOLVED_WITHOUT_RESULT);
+	}
+
+	/** Fails a request job and ends the asking agent's wait in one transaction. */
+	private void failWithRequest(Job job, String message) {
+		Runnable failed = engine.getVenueState().transact(venue -> {
+			Runnable changed = ((VenueJob) job).failIn(venue, message);
+			if (changed != null) removePending(venue, job);
+			return changed;
+		});
+		if (failed != null) failed.run();
 	}
 
 	/** The job error for a request {@code responder} declined, with their comment if any. */
@@ -747,11 +761,6 @@ public class HITLAdapter extends AAdapter {
 		}
 		if (resolution.unavailable()) log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
 		return true;
-	}
-
-	/** Cancellation uses the same terminal-state arbitration without a session reply. */
-	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
-		return resolveRequest(targetDID, id, status, response, null, null, null, null);
 	}
 
 	/**

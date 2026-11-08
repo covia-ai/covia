@@ -465,7 +465,7 @@ public class JobManager {
 			synchronized (engine.getAuth()) {
 				job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(),
 					parentID, memoryOnly, resultOriented,
-					invocation == Invocation.RUN && ctx.getJob() == null && ctx.getJobId() == null);
+					invocation == Invocation.RUN && ctx.getJob() == null && ctx.getJobId() == null, adapter);
 				// Deletion cannot cancel the accepted job before its quota permit
 				// has been attached for terminal cleanup.
 				if (permit) permitHolders.put(job.getID(), ownerDID);
@@ -920,7 +920,8 @@ public class JobManager {
 	 *        links to its nearest recorded ancestor.
 	 */
 	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString ownerDID,
-			AString callerDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun) {
+			AString callerDID, Blob parentID, boolean memoryOnly, boolean resultOriented, boolean directRun,
+			AAdapter adapter) {
 		if (ownerDID == null || callerDID == null) throw new AuthException("Authentication required");
 
 		long ts = engine.currentTimestamp().longValue();
@@ -952,7 +953,9 @@ public class JobManager {
 			status = status.assoc(Fields.ADAPTER, Strings.create(adapterName));
 		}
 
-		VenueJob job = admit(jobID, status, rules, ownerDID, memoryOnly, directRun, resultOriented);
+		AMap<AString, ACell> admitted = status;
+		VenueJob job = admit(jobID, status, rules, ownerDID, memoryOnly, resultOriented,
+			record -> new VenueJob(record, admitted, rules, ownerDID, this, !memoryOnly, directRun, adapter));
 		if (memoryOnly) log.debug("Started transient job: {}", jobID);
 		else log.info("Submitted job: {}", jobID);
 		return job;
@@ -964,7 +967,8 @@ public class JobManager {
 	 * account monitor that fences deletion.
 	 */
 	private VenueJob admit(Blob jobID, AMap<AString, ACell> status, OutputRules rules,
-			AString ownerDID, boolean memoryOnly, boolean directRun, boolean preserveFailureCause) {
+			AString ownerDID, boolean memoryOnly, boolean preserveFailureCause,
+			java.util.function.Function<JobState, VenueJob> handle) {
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(ownerDID);
 			// Create before publishing the runtime handle; updates only edit existing rows.
@@ -984,7 +988,7 @@ public class JobManager {
 				});
 				record = account.jobs().job(jobID);
 			}
-			VenueJob job = new VenueJob(record, status, rules, ownerDID, this, !memoryOnly, directRun);
+			VenueJob job = handle.apply(record);
 			job.setPreserveFailureCause(preserveFailureCause);
 			activeJobs.put(jobID, job);
 			return job;
@@ -1139,12 +1143,10 @@ public class JobManager {
 			ACell value = data.get(field);
 			if (value != null) status = status.assoc(field, value);
 		}
-		VenueJob mirror = admit(jobID, status, unrecorded.rules(),
-			Attribution.owner(data), false, false, false);
-		mirror.setCancelHook(() -> {
-			AString reason = RT.ensureString(mirror.getData().get(Fields.ERROR));
-			call.cancel((reason != null) ? reason.toString() : null);
-		});
+		AMap<AString, ACell> mirrored = status;
+		AString owner = Attribution.owner(data);
+		VenueJob mirror = admit(jobID, status, unrecorded.rules(), owner, false, false,
+			record -> new MirrorJob(record, mirrored, unrecorded.rules(), owner, this, call));
 		whenFinished(call, () -> {
 			AMap<AString, ACell> outcome = call.getData();
 			try {
@@ -1579,7 +1581,7 @@ public class JobManager {
 			AMap<AString, ACell> record = (state == null) ? null : state.getRecord();
 			if (record == null || Job.isFinished(record)) continue;
 			OutputRules rules = OutputRules.fromCell(RT.getIn(entry, JobIndex.RULES));
-			VenueJob job = new VenueJob(state, record, rules, ownerDID, this);
+			VenueJob job = new VenueJob(state, record, rules, ownerDID, this, runningAdapter(record));
 			activeJobs.put(jobID, job);
 			restored.add(job);
 		}
@@ -1626,7 +1628,12 @@ public class JobManager {
 	 * mirror, or when that adapter is absent or disabled.
 	 */
 	private AAdapter runningAdapter(Job job) {
-		String name = adapterName(job);
+		return runningAdapter(job.getData());
+	}
+
+	/** The live adapter that runs the Job whose record is {@code data}. */
+	private AAdapter runningAdapter(AMap<AString, ACell> data) {
+		String name = adapterName(data);
 		return (name == null) ? null : engine.getAdapter(name);
 	}
 
@@ -1664,9 +1671,13 @@ public class JobManager {
 	 * in the job record.
 	 */
 	private AMap<AString, ACell> resolveJobMeta(Job job) {
-		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
+		return resolveJobMeta(job.getData());
+	}
+
+	private AMap<AString, ACell> resolveJobMeta(AMap<AString, ACell> data) {
+		AString opStr = RT.ensureString(data.get(Fields.OP));
 		if (opStr == null) return null;
-		Asset asset = resolveRecordedOp(opStr, job.getOwner());
+		Asset asset = resolveRecordedOp(opStr, Attribution.owner(data));
 		return (asset != null) ? asset.meta() : null;
 	}
 
@@ -1713,10 +1724,14 @@ public class JobManager {
 	 * operation names; null for a mirror, which no adapter runs.
 	 */
 	private String adapterName(Job job) {
-		if (isMirror(job)) return null;
-		AString recorded = RT.ensureString(job.getData().get(Fields.ADAPTER));
+		return adapterName(job.getData());
+	}
+
+	private String adapterName(AMap<AString, ACell> data) {
+		if (data.get(MIRROR_OF) != null) return null;
+		AString recorded = RT.ensureString(data.get(Fields.ADAPTER));
 		if (recorded != null) return recorded.toString();
-		AMap<AString, ACell> meta = resolveJobMeta(job);
+		AMap<AString, ACell> meta = resolveJobMeta(data);
 		return (meta != null) ? AAdapter.getAdapterName(meta) : null;
 	}
 

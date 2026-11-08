@@ -44,7 +44,10 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 		Binding(Job job, I interaction) {
 			this.job = job;
 			this.interaction = interaction;
-			this.release = j -> { if (j.isFinished()) forgetInteraction(j.getID()); };
+			// A cancelled job's binding goes when its interaction is cancelled (stop)
+			this.release = j -> {
+				if (j.isFinished() && !Status.CANCELLED.equals(j.getStatus())) forgetInteraction(j.getID());
+			};
 		}
 	}
 
@@ -109,7 +112,7 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 			Binding existing = interactions.putIfAbsent(job.getID(), binding);
 			if (existing != null) return existing.interaction;
 			try {
-				job.setCancelHook(interaction::cancel);
+				if (Status.CANCELLED.equals(job.getStatus())) stop(job);
 			} finally {
 				// Late cancellation may invoke provider code immediately. Even a
 				// throwing cancellation must release the terminal binding.
@@ -117,6 +120,20 @@ public abstract class ARemoteAgentAdapter<I extends RemoteInteraction> extends A
 				binding.release.accept(job);
 			}
 			return interaction;
+		}
+	}
+
+	/** Cancelling a job cancels its interaction with the provider, and releases the binding first. */
+	@Override
+	public void stop(Job job) {
+		Binding binding = interactions.remove(job.getID());
+		try {
+			if (binding != null) {
+				binding.job.unsubscribe(binding.release);
+				binding.interaction.cancel();
+			}
+		} finally {
+			super.stop(job);
 		}
 	}
 

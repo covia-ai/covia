@@ -144,9 +144,37 @@ public class GridAdapter extends AAdapter {
 		engine.remoteJobs().observe(job, () -> venue.getJobStatus(id), snapshot -> applyRemote(job, snapshot));
 	}
 
+	/** A running job's remote job: what cancelling the local job cancels. */
+	private record RemoteCall(Venue venue, Blob id) { }
+
+	/** The remote job each running job is watching, by local job id. */
+	private final java.util.concurrent.ConcurrentHashMap<Blob, RemoteCall> remoteCalls =
+		new java.util.concurrent.ConcurrentHashMap<>();
+
+	/** Records the remote job {@code job} runs on. A job already cancelled cancels it at once. */
 	private void bindCancellation(Job job, Venue venue, Blob id) {
-		job.setCancelHook(() -> engine.remoteJobs().attemptCancellation(job, id.toHexString(),
-			() -> RemoteJobs.cancellationResult(id, venue.cancelJob(id))));
+		Blob localId = job.getID();
+		RemoteCall call = new RemoteCall(venue, id);
+		remoteCalls.put(localId, call);
+		if (Status.CANCELLED.equals(job.getStatus())) {
+			cancelRemote(job);
+			return;
+		}
+		job.future().whenComplete((result, error) -> remoteCalls.remove(localId, call));
+	}
+
+	private void cancelRemote(Job job) {
+		RemoteCall call = remoteCalls.remove(job.getID());
+		if (call == null) return;
+		engine.remoteJobs().attemptCancellation(job, call.id().toHexString(),
+			() -> RemoteJobs.cancellationResult(call.id(), call.venue().cancelJob(call.id())));
+	}
+
+	/** Cancelling a local job asks its venue to cancel the remote one. */
+	@Override
+	public void stop(Job job) {
+		cancelRemote(job);
+		super.stop(job);
 	}
 
 	private void applyRemote(Job job, AMap<AString, ACell> snapshot) {

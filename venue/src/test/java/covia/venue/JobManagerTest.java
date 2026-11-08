@@ -222,7 +222,7 @@ public class JobManagerTest {
 				Maps.of(Fields.ADAPTER, Strings.create("test:never")));
 			Job original = eng.jobs().invokeOperation(meta, null, owner);
 			JobState record = eng.getVenueState().users().user(owner.getUserDID()).jobs().job(original.getID());
-			Job job = new VenueJob(record, original.getData(), OutputRules.of(meta), owner.getUserDID(), eng.jobs()) {
+			Job job = new VenueJob(record, original.getData(), OutputRules.of(meta), owner.getUserDID(), eng.jobs(), null) {
 				@Override public void onUpdate(AMap<AString, ACell> next) {
 					if (Status.PAUSED.equals(next.get(Fields.STATUS))) {
 						entered.countDown();

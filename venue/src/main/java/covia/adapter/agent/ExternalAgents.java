@@ -1,5 +1,6 @@
 package covia.adapter.agent;
 
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import convex.core.data.*;
@@ -36,8 +37,22 @@ public final class ExternalAgents {
 	/** In the adapter's data: the DID of the user whose agent it is. */
 	public static final AString OWNER = Strings.intern("agentOwner");
 	private final Engine engine;
+	/** The backend job serving each running external turn, by the job asking: what {@link #stop} cancels. */
+	private final ConcurrentHashMap<Blob, Job> children;
 
-	public ExternalAgents(Engine engine) { this.engine = engine; }
+	/**
+	 * @param children Backend jobs by asking job, kept by the adapter across these short-lived views
+	 */
+	public ExternalAgents(Engine engine, ConcurrentHashMap<Blob, Job> children) {
+		this.engine = engine;
+		this.children = children;
+	}
+
+	/** Cancelling a job that asked an external agent cancels the backend job serving it. */
+	public void stop(Job parent) {
+		Job child = children.remove(parent.getID());
+		if (child != null) child.cancel();
+	}
 
 	/** Checks a definition offered for a new agent: a bad one is the caller's input. */
 	public AMap<AString, ACell> validate(ACell value) {
@@ -148,8 +163,12 @@ public final class ExternalAgents {
 			}
 		};
 		child.subscribe(listener);
-		child.future().whenComplete((v, e) -> child.unsubscribe(listener));
-		parent.setCancelHook(child::cancel);
+		children.put(parent.getID(), child);
+		if (Status.CANCELLED.equals(parent.getStatus())) stop(parent);
+		child.future().whenComplete((v, e) -> {
+			child.unsubscribe(listener);
+			children.remove(parent.getID(), child);
+		});
 		listener.accept(child);
 	}
 

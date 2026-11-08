@@ -6,7 +6,9 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.exception.JobFailedException;
@@ -29,8 +32,8 @@ import covia.grid.Status;
 /**
  * Tests for job cancellation across the venue.
  *
- * Covers: basic cancellation semantics, cancel during await, cancel hook,
- * cancel of agent:chat (slot release), cancel of agent:request (task cleanup),
+ * Covers: basic cancellation semantics, cancel during await, what cancelling
+ * asks of the job's adapter, cancel of agent:chat (slot release), cancel of agent:request (task cleanup),
  * cancel of orchestration (sub-step handling), and cancel propagation
  * through internal invocations.
  */
@@ -91,28 +94,92 @@ public class JobCancellationTest {
 		assertEquals("COMPLETE", job.getStatus().toString());
 	}
 
-	@Test
-	public void testCancelHookFires() {
-		Job job = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), ctx);
-		AtomicBoolean hookCalled = new AtomicBoolean(false);
-		job.setCancelHook(() -> hookCalled.set(true));
+	/** An adapter whose jobs wait for the test, recording what cancelling one asks of it. */
+	private static final class CancelProbe extends AAdapter {
+		final ConcurrentHashMap<Blob, AMap<AString, ACell>> linksEnded = new ConcurrentHashMap<>();
+		final ConcurrentHashMap<Blob, AtomicInteger> linkEdits = new ConcurrentHashMap<>();
+		final ConcurrentHashMap<Blob, AtomicInteger> stops = new ConcurrentHashMap<>();
 
-		job.cancel();
+		@Override public String getName() { return "cancel-probe"; }
+		@Override public String getDescription() { return "Records what cancelling a job asks of its adapter"; }
+		@Override public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {}
+		@Override public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+			return new CompletableFuture<>();
+		}
+		@Override public void cancelIn(VenueState draft, Job job, AMap<AString, ACell> adapterData) {
+			linkEdits.computeIfAbsent(job.getID(), id -> new AtomicInteger()).incrementAndGet();
+			if (adapterData != null) linksEnded.put(job.getID(), adapterData);
+		}
+		@Override public void stop(Job job) {
+			stops.computeIfAbsent(job.getID(), id -> new AtomicInteger()).incrementAndGet();
+			super.stop(job);
+		}
+		void record(Job job, java.util.concurrent.Future<?> work) { runs(job, work); }
+	}
 
-		assertTrue(hookCalled.get(), "Cancel hook should fire on cancellation");
+	private static final CancelProbe PROBE = new CancelProbe();
+	static { TestEngine.ENGINE.registerAdapter(PROBE); }
+
+	private Job probeJob() {
+		return engine.jobs().invokeOperation(Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, "cancel-probe:wait")), Maps.empty(), engine.venueContext());
 	}
 
 	@Test
-	public void testCancelHookDoesNotFireOnFinishedJob() {
-		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
-			Maps.of(Strings.create("value"), Strings.create("x")), ctx);
-		job.awaitResult(5000);
+	public void testCancelAsksTheJobsAdapterToEndItsLinksAndStop() {
+		Job job = probeJob();
+		AString key = Strings.create("kept");
+		engine.jobs().updateAdapterData(job, data -> data.assoc(key, Strings.create("value")));
 
-		AtomicBoolean hookCalled = new AtomicBoolean(false);
-		job.setCancelHook(() -> hookCalled.set(true));
+		job.cancel();
 		job.cancel();
 
-		assertFalse(hookCalled.get(), "Cancel hook should not fire on already-finished job");
+		assertEquals(Strings.create("value"), PROBE.linksEnded.get(job.getID()).get(key),
+			"The adapter should see what it kept for the job");
+		assertEquals(1, PROBE.stops.get(job.getID()).get(), "A job's work should stop once");
+	}
+
+	@Test
+	public void testFinishedJobAsksNothingOfItsAdapter() {
+		Job job = probeJob();
+		job.completeWith(Strings.create("done"));
+
+		job.cancel();
+
+		assertNull(PROBE.linkEdits.get(job.getID()));
+		assertNull(PROBE.stops.get(job.getID()));
+	}
+
+	@Test
+	public void testCancelStopsRecordedWork() {
+		Job job = probeJob();
+		CompletableFuture<ACell> work = new CompletableFuture<>();
+		PROBE.record(job, work);
+
+		job.cancel();
+
+		assertTrue(work.isCancelled());
+	}
+
+	@Test
+	public void testWorkRecordedForACancelledJobStopsAtOnce() {
+		Job job = probeJob();
+		job.cancel();
+		CompletableFuture<ACell> work = new CompletableFuture<>();
+
+		PROBE.record(job, work);
+
+		assertTrue(work.isCancelled());
+	}
+
+	@Test
+	public void testCompletingAJobLeavesItsWorkAlone() {
+		Job job = probeJob();
+		CompletableFuture<ACell> work = new CompletableFuture<>();
+		PROBE.record(job, work);
+		job.completeWith(Strings.create("done"));
+
+		assertFalse(work.isCancelled(), "Only cancelling a job stops its work");
 	}
 
 	// ========== Cancel during awaitResult ==========
