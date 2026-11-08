@@ -22,7 +22,8 @@
 						}
 					]
 				},
-				"includeTimeline": { "type": "boolean", "description": "If true, copy the source agent's timeline (run history). Default false." }
+				"includeTimeline": { "type": "boolean", "description": "If true, copy the source agent's timeline (run history). Default false." },
+				"controller": { "type": "string", "description": "DID of the fork's controller, as for agent:create. Defaults to whoever forks it." }
 			},
 			"required": ["sourceId", "agentId"]
 		},

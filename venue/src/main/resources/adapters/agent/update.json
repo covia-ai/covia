@@ -21,7 +21,8 @@
 						}
 					]
 				},
-				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and frame.loads (#142)." }
+				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and frame.loads (#142)." },
+				"controller": { "type": "string", "description": "DID to hand the agent to as its controller, as for agent:create. Changing an agent another principal controls needs that controller's authority." }
 			},
 			"required": ["agentId"]
 		},

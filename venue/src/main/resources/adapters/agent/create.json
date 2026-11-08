@@ -129,6 +129,10 @@
 				"definition": {
 					"type": "string",
 					"description": "Asset ID of an agent definition carrying the canonical agent.config facet. Retained for compatibility; new callers normally pass the asset reference as a config layer."
+				},
+				"controller": {
+					"type": "string",
+					"description": "DID of the principal whose authority the agent's harness acts with, and whose authority changing the agent needs. Defaults to the creator: you, or for an agent, itself. You may name yourself, one of your agents, or an identity you sign in as."
 				}
 			},
 			"required": [

@@ -20,6 +20,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Principals;
@@ -119,6 +120,36 @@ public class AgentRunLoopIdentityTest {
 	 * the agent has caps, and the caps bound what it switches to the agent's
 	 * own context ({@link Engine#stepContext}, UCAN.md §5.4).
 	 */
+	/**
+	 * An agent a capped agent created runs its transition with that controller's
+	 * authority: in its owner's namespace and attributed to itself, but bound by
+	 * the controller's caps (UCAN.md §5.4).
+	 */
+	@Test
+	public void testATransitionActsWithItsControllersAuthority() {
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "controller",
+			Fields.CONFIG, Maps.of("caps", Vectors.of(
+				Capability.create(Strings.create("g/"), Abilities.AGENT_CREATE),
+				Capability.create(Strings.create("w/shared/"), Capability.CRUD_READ),
+				Maps.of("can", Abilities.INVOKE)))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		RequestContext controller = engine.context(ALICE_DID,
+			Principals.agentDID(ALICE_DID, Strings.create("controller")));
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "controlled",
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/capturectx")), controller).awaitResult(5000);
+		queueMessage(ALICE_DID, "controlled");
+		adapter().wakeAgent(ALICE_DID, Strings.create("controlled"), true).join();
+
+		RequestContext harness = TestAdapter.CAPTURED_CTX.get(ALICE_DID);
+		assertNotNull(harness, "transition must have executed");
+		assertEquals(Principals.agentDID(ALICE_DID, Strings.create("controlled")), harness.getCallerDID());
+		assertEquals(ALICE_DID, harness.getUserDID());
+		assertTrue(harness.hasSeparateAuthority());
+		assertTrue(engine.authorityCovers(harness, Strings.create("w/shared/doc"), Capability.CRUD_READ));
+		assertFalse(engine.authorityCovers(harness, Strings.create("w/private"), Capability.CRUD_READ),
+			"bound by its controller's caps");
+	}
+
 	@Test
 	public void testATransitionRunsAsTheHarnessAndSwitchesToTheAgentsCaps() {
 		AString agentId = Strings.create("capped-harness");

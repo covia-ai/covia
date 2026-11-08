@@ -46,6 +46,7 @@ import covia.adapter.agent.Skills;
 import covia.adapter.agent.ContextLoader;
 import covia.adapter.agent.Loads;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.exception.ConflictException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
@@ -321,9 +322,54 @@ public class AgentAdapter extends AAdapter {
 		AgentKey key() {
 			return new AgentKey(ownerDID, agentId);
 		}
+	}
 
-		RequestContext executionContext() {
-			return RequestContext.ofAgent(ownerDID, agentId);
+	/** The context {@code target}'s harness runs under ({@link Engine#harnessContext}). */
+	private RequestContext harnessContext(AgentTarget target) {
+		return engine.harnessContext(target.ownerDID(), target.agentId());
+	}
+
+	/** Refusal for a {@code controller} input that is not a DID. */
+	public static final String CONTROLLER_NOT_DID = "controller must be a DID";
+
+	/**
+	 * The {@code controller} an input names, which the request must hold the
+	 * authority of ({@link Engine#holdsAuthorityOf}), or null when it names none.
+	 */
+	private AString namedController(RequestContext ctx, ACell input) {
+		ACell named = RT.getIn(input, Fields.CONTROLLER);
+		if (named == null) return null;
+		AString controller = RT.ensureString(named);
+		if (controller == null || !controller.toString().startsWith("did:")) {
+			throw new InvalidInputException(CONTROLLER_NOT_DID);
+		}
+		if (!engine.holdsAuthorityOf(ctx, controller)) {
+			throw new AuthException(Engine.CONTROLLER_NOT_HELD.formatted(controller));
+		}
+		return controller;
+	}
+
+	/**
+	 * The controller of an agent {@code ctx} creates or forks: the one the input
+	 * names, else the principal whose authority the request acts with
+	 * ({@link Engine#actingPrincipal}).
+	 */
+	private AString newController(RequestContext ctx, ACell input) {
+		AString named = namedController(ctx, input);
+		return (named != null) ? named : Engine.actingPrincipal(ctx);
+	}
+
+	/**
+	 * Refuses a change to {@code target} by a request that does not act for its
+	 * {@code controller}. An agent its owner controls needs nothing beyond the
+	 * {@code agent/write} its target was resolved with; any other controller's
+	 * authority must be the request's own ({@link Engine#holdsAuthorityOf}), since
+	 * its harness acts with it.
+	 */
+	private void requireController(RequestContext ctx, AgentTarget target, AString controller) {
+		if (controller == null || controller.equals(target.ownerDID())) return;
+		if (!engine.holdsAuthorityOf(ctx, controller)) {
+			throw new AuthException(Engine.NOT_CONTROLLERS.formatted(target.address(), controller));
 		}
 	}
 
@@ -836,6 +882,7 @@ public class AgentAdapter extends AAdapter {
 				+ "; update it, or delete it with remove=true before creating it again");
 			return;
 		}
+		AString controller = newController(ctx, input);
 
 		AMap<AString, ACell> supplied = RT.ensureMap(input);
 		ACell facet = supplied == null ? null : supplied.get(AgentState.KEY_AGENT);
@@ -858,7 +905,7 @@ public class AgentAdapter extends AAdapter {
 			if (config == null) config = Maps.empty();
 			validateComposedConfig(config);
 			AgentState created = user.createAgent(agentId, config,
-				RT.getIn(input, AgentState.KEY_STATE), definition);
+				RT.getIn(input, AgentState.KEY_STATE), definition, controller);
 			if (created == null) throw new ConflictException("Agent already exists: " + agentId);
 			job.setStatus(Status.STARTED);
 			job.completeWith(identify(target, Maps.of(Fields.STATUS, created.getStatus(), AgentState.KEY_AGENT, definition)));
@@ -976,7 +1023,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		AgentState agent = user.createAgent(agentId, config, initialState);
+		AgentState agent = user.createAgent(agentId, config, initialState, null, controller);
 		if (agent == null) {
 			job.fail("Agent already exists: " + agentId
 				+ "; update it, or delete it with remove=true before creating it again");
@@ -1480,7 +1527,8 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		AgentState target = targetUser.forkAgent(agentId, forkConfig, sourceState, sourceTimeline);
+		AgentState target = targetUser.forkAgent(agentId, forkConfig, sourceState, sourceTimeline,
+			newController(ctx, input));
 		if (target == null) {
 			job.fail("Target agent already exists: " + agentId
 				+ "; delete it with remove=true before forking into this name");
@@ -1959,7 +2007,7 @@ public class AgentAdapter extends AAdapter {
 		job.setCancelHook(() -> cancelled.set(true));
 		// The harness's own context, as in the run loop: caller proofs and
 		// session/task/cycle scopes must not leak into this independent run.
-		RequestContext queryCtx = query.target().executionContext().withCancellation(cancelled);
+		RequestContext queryCtx = harnessContext(query.target()).withCancellation(cancelled);
 		CompletableFuture<ACell> transition = engine.jobs().invokeInternal(
 			query.operation(), transitionInput, queryCtx);
 		job.setCancelHook(() -> {
@@ -2108,6 +2156,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> summary = identify(target, Maps.of(
 			Fields.STATUS, observableStatus(target.ownerDID(), agentId, agent),
 			Fields.AWAITING, awaitingSummary(record),
+			Fields.CONTROLLER, agent.getController(),
 			Fields.CONFIG, record.get(AgentState.KEY_CONFIG)));
 
 		if (record.containsKey(AgentState.KEY_AGENT)) summary = summary.assoc(AgentState.KEY_AGENT, record.get(AgentState.KEY_AGENT));
@@ -2121,7 +2170,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> config = (record.get(AgentState.KEY_CONFIG) instanceof AMap<?, ?> m)
 			? (AMap<AString, ACell>) m : null;
 		AVector<ACell> unavailable = ToolPalette.unavailableConfigTools(
-			engine, target.executionContext(), config, AbstractLLMAdapter.allHarnessToolNames());
+			engine, harnessContext(target), config, AbstractLLMAdapter.allHarnessToolNames());
 		if (!unavailable.isEmpty()) {
 			summary = summary.assoc(Fields.UNAVAILABLE_TOOLS, unavailable);
 		}
@@ -2218,7 +2267,7 @@ public class AgentAdapter extends AAdapter {
 		if (operation == null) { job.fail("Agent has no transition operation configured"); return null; }
 
 		// Resolve the adapter that handles the agent's transition operation.
-		RequestContext agentCtx = agentTarget.executionContext();
+		RequestContext agentCtx = harnessContext(agentTarget);
 		covia.grid.Asset asset = engine.resolveAsset(operation, agentCtx);
 		if (asset == null) { job.fail("Could not resolve agent's operation: " + operation); return null; }
 		AString adapterRef = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
@@ -2315,12 +2364,13 @@ public class AgentAdapter extends AAdapter {
 					ACell tasksCell = record.get(AgentState.KEY_TASKS);
 					if (tasksCell instanceof Index) taskCount = ((Index<?, ?>) tasksCell).count();
 
-					AString status = observableStatus(ctx.getUserDID(), agentId,
-						user.agent(agentId));
+					AgentState listed = user.agent(agentId);
+					AString status = observableStatus(ctx.getUserDID(), agentId, listed);
 					AMap<AString, ACell> summary = Maps.of(
 						Fields.AGENT_ID, agentId,
 						Fields.ADDRESS, Strings.create(ctx.getUserDID() + "/g/" + agentId),
 						Fields.STATUS, status,
+						Fields.CONTROLLER, listed.getController(),
 						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
 					ACell error = record.get(AgentState.KEY_ERROR);
@@ -2836,8 +2886,8 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 		ACell newState = RT.getIn(input, AgentState.KEY_STATE);
-		if (resolved == null && newState == null) {
-			job.fail("At least one of 'config' or 'state' must be provided");
+		if (resolved == null && newState == null && RT.getIn(input, Fields.CONTROLLER) == null) {
+			job.fail("At least one of 'config', 'state' or 'controller' must be provided");
 			return;
 		}
 		// Config's single home is record.config (#144), and loads live on the
@@ -2852,16 +2902,19 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		// The new config is built from the config it replaces and validated
-		// inside the record's own update, so a concurrent change is never
-		// overwritten.
+		// inside the record's own update, checked against the controller the
+		// record holds then, so a concurrent change is never overwritten and a
+		// change of controller is never bypassed.
 		AMap<AString, ACell> changes = resolved;
+		AString controller = namedController(ctx, input);
 		AMap<AString, ACell> newConfig;
 		try {
-			AMap<AString, ACell> committed = agent.updateConfigAndState((changes == null) ? null : current -> {
-				AMap<AString, ACell> composed = mergeConfigMaps(current, changes);
-				validateComposedConfig(composed);
-				return composed;
-			}, newState);
+			AMap<AString, ACell> committed = agent.update(current -> requireController(ctx, target, current),
+				controller, (changes == null) ? null : current -> {
+					AMap<AString, ACell> composed = mergeConfigMaps(current, changes);
+					validateComposedConfig(composed);
+					return composed;
+				}, newState);
 			newConfig = (changes == null) ? null : committed;
 		} catch (InvalidInputException e) {
 			job.fail(e);
@@ -3859,11 +3912,12 @@ public class AgentAdapter extends AAdapter {
 		// in the owner's namespace, deterministically (#91), while the caller
 		// identity is the agent's own sub-principal DID so what the agent did is
 		// attributable to the agent rather than to the human who owns it. It is
-		// the harness's context: the transition operation runs under it and
-		// switches the agent's acts to its caps itself (Engine.stepContext,
-		// UCAN.md §5.4).
-		final RequestContext agentCtx = RequestContext.ofAgent(ownerDID, agentId);
+		// the harness's context, acting with the agent's controller's authority:
+		// the transition operation runs under it and switches the agent's acts
+		// to its caps itself (Engine.harnessContext, Engine.stepContext, UCAN.md
+		// §5.4). A controller that could not act now fails the launch.
 		try {
+			engine.harnessContext(ownerDID, agentId);
 			if (!agent.tryRun()) {
 				// Suspended or terminated since the status read above: an
 				// administrative stop is never overwritten with RUNNING.
@@ -3874,7 +3928,7 @@ public class AgentAdapter extends AAdapter {
 			engine.agentEvents().status(ownerDID, agentId, AgentState.RUNNING, null);
 			final CompletableFuture<ACell> finalCompletion = mine;
 			Thread.ofVirtual().start(
-				() -> executeRunLoop(agentId, ownerDID, agentCtx, finalCompletion));
+				() -> executeRunLoop(agentId, ownerDID, finalCompletion));
 		} catch (RuntimeException | Error t) {
 			// Do not leave an authoritative live slot behind when launch itself
 			// fails before the run loop can enter its own finally block.
@@ -4138,11 +4192,10 @@ public class AgentAdapter extends AAdapter {
 	 * loop — the CAS in {@code wakeAgent} guarantees at most one survives.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	private void executeRunLoop(AString agentId, AString ownerDID,
-			RequestContext ctx, CompletableFuture<ACell> completion) {
-		// ctx is the agent's OWN context (see wakeAgent) — never a waking
-		// caller's. Throughout the run ownerDID == ctx.getUserDID(), while
-		// ctx.getCallerDID() is the agent's own sub-principal DID.
+	private void executeRunLoop(AString agentId, AString ownerDID, CompletableFuture<ACell> completion) {
+		// Each cycle runs under the agent's harness context (Engine.harnessContext)
+		// — never a waking caller's: in ownerDID's namespace, attributed to the
+		// agent's own sub-principal DID, acting with its controller's authority.
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 		ACell lastResult = null;
 		int iteration = 0;
@@ -4294,11 +4347,13 @@ public class AgentAdapter extends AAdapter {
 					filteredInbox = Vectors.empty();
 				}
 
-				// Per-cycle ctx: scope to the agent, picked task, and session so
-				// path resolvers (n/, t/, c/) can address the right slot, and
-				// agent:completeTask / agent:failTask can identify which
-				// agent + task they're acting on, under the cycle's claim.
-				RequestContext cycleCtx = ctx.withAgentId(agentId).withClaim(claim);
+				// Per-cycle ctx: the harness as the agent's controller stands now,
+				// read each cycle as its config is, scoped to the agent, picked
+				// task, and session so path resolvers (n/, t/, c/) can address the
+				// right slot, and agent:completeTask / agent:failTask can identify
+				// which agent + task they're acting on, under the cycle's claim.
+				RequestContext harness = engine.harnessContext(ownerDID, agentId);
+				RequestContext cycleCtx = harness.withAgentId(agentId).withClaim(claim);
 				if (pickedTask != null) {
 					cycleCtx = cycleCtx.withTaskId(pickedTask.getKey(),
 						AgentState.taskRevision(pickedTask.getValue()));
@@ -4351,7 +4406,7 @@ public class AgentAdapter extends AAdapter {
 				// transition output — an errored/cancelled transition produces no
 				// output, and gating on output shape would re-append turns the
 				// adapter already wrote live.
-				boolean framesOwned = isFramesOwningOp(transitionOp, ctx);
+				boolean framesOwned = isFramesOwningOp(transitionOp, harness);
 
 				// Invoke transition. Blocks on the vthread — cheap, and any
 				// work the transition enqueues on the lattice (e.g. a nested

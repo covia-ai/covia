@@ -220,9 +220,20 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 
 	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
 			ACell initialState, AMap<AString, ACell> definition) {
+		return createAgent(agentId, config, initialState, definition, null);
+	}
+
+	/**
+	 * Creates an agent under {@code controller}, the principal whose authority
+	 * its harness runs under (null for this user).
+	 *
+	 * @return the new agent, or null if the id already existed
+	 */
+	public AgentState createAgent(AString agentId, AMap<AString, ACell> config,
+			ACell initialState, AMap<AString, ACell> definition, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
 		AgentState state = new AgentState(context, c, did, agentId);
-		return state.initialiseIfAbsent(config, initialState, definition) ? state : null;
+		return state.initialiseIfAbsent(config, initialState, definition, controller) ? state : null;
 	}
 
 	/**
@@ -238,9 +249,18 @@ public class User extends ALatticeComponent<ACell> implements TransactionalCompo
 	 */
 	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
 			ACell state, convex.core.data.AVector<ACell> timeline) {
+		return forkAgent(agentId, config, state, timeline, null);
+	}
+
+	/**
+	 * As above, under {@code controller}: the principal whose authority the
+	 * fork's harness runs under, or null for this user.
+	 */
+	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
+			ACell state, convex.core.data.AVector<ACell> timeline, AString controller) {
 		AForkableCursor<ACell> c = agentStorage(agentId);
 		AgentState fork = new AgentState(context, c, did, agentId);
-		return fork.initialiseFromForkIfAbsent(config, state, timeline) ? fork : null;
+		return fork.initialiseFromForkIfAbsent(config, state, timeline, controller) ? fork : null;
 	}
 
 	/**

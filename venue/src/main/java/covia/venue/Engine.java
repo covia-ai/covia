@@ -4112,6 +4112,65 @@ public class Engine {
 		return (proofs == null || proofs.isEmpty()) ? kept : kept.assoc(Fields.PROOFS, proofs);
 	}
 
+	/** Why a request may not change an agent another principal controls; the agent and its controller follow. */
+	public static final String NOT_CONTROLLERS = "Changing %s needs the authority of its controller, %s";
+
+	/** Why a request may not make a principal an agent's controller; the principal follows. */
+	public static final String CONTROLLER_NOT_HELD = "Cannot make %s an agent's controller: the request does not hold its authority";
+
+	/**
+	 * Whether {@code ctx} acts with {@code principal}'s whole authority, as
+	 * making it an agent's controller, or changing an agent it controls, needs.
+	 * The authority the request acts with ({@link RequestContext#authorityContext})
+	 * must be that principal, an identity it signs in as, or its owner if it is
+	 * an agent; acting in a namespace that is root of it counts only with an
+	 * unrestricted scope. So a user holds its own and its agents' authority, an
+	 * agent its own, and a capped agent not its owner's or a sibling's. A
+	 * {@code user/sudo} delegate, whose scope is its presented grants, holds no
+	 * other principal's.
+	 */
+	public boolean holdsAuthorityOf(RequestContext ctx, AString principal) {
+		if (ctx == null || principal == null) return false;
+		RequestContext authority = ctx.authorityContext();
+		if (isRootOf(authority.getCallerDID(), principal)) return true;
+		return authority.getCaps() == null && isRootOf(authority.getUserDID(), principal);
+	}
+
+	/**
+	 * The principal whose authority {@code ctx} acts with, which an agent it
+	 * creates or forks takes for its controller: the authority's own principal
+	 * when it acts in its own namespace or is an agent of it, and otherwise the
+	 * namespace it acts for, as a {@code user/sudo} delegate acts for its target.
+	 */
+	public static AString actingPrincipal(RequestContext ctx) {
+		RequestContext authority = ctx.authorityContext();
+		AString caller = authority.getCallerDID();
+		AString user = authority.getUserDID();
+		if (caller == null || caller.equals(user) || agentIdIn(user, caller) != null) return caller;
+		return user;
+	}
+
+	/**
+	 * The context agent {@code agentId}'s harness runs under: the agent in its
+	 * owner's namespace, attributed to the agent, acting with its controller's
+	 * authority as it stands now. For an agent its owner controls that is the
+	 * agent with its owner's whole authority; for any other controller the
+	 * agent acts with that controller's authority
+	 * ({@link RequestContext#withAuthorityOf}), an agent controller's read from
+	 * its caps at each check and none once it is gone.
+	 *
+	 * @throws AuthException when the controller could not act now
+	 */
+	public RequestContext harnessContext(AString owner, AString agentId) {
+		RequestContext harness = RequestContext.ofAgent(owner, agentId);
+		AgentState agent = getAgent(owner, agentId);
+		AString controller = (agent == null) ? null : agent.getController();
+		if (controller == null || controller.equals(owner)) return harness;
+		AString controllerOwner = covia.grid.Principals.isAgentDID(controller)
+			? covia.grid.Principals.userOf(controller) : controller;
+		return harness.withAuthorityOf(context(controllerOwner, controller));
+	}
+
 	/**
 	 * As {@link #context(AString, AString, AVector)}, acting with the authority
 	 * {@link #keptAuthority} kept, if any, rebuilt as it would act now: an
