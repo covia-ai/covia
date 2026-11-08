@@ -325,6 +325,14 @@ public class AgentControllerTest {
 	}
 
 	@Test
+	public void testASudoDelegateHoldsNoControllersAuthority() {
+		RequestContext sudo = engine.sudoContext(bobWith(cap(alice.toString(), Abilities.USER_SUDO)), alice);
+		assertEquals(alice, sudo.getUserDID());
+		assertFalse(engine.holdsAuthorityOf(sudo, alice), "its scope is its presented grants, so it cannot configure her agents");
+		assertEquals(alice, Engine.actingPrincipal(sudo), "what it creates, she controls");
+	}
+
+	@Test
 	public void testTheCapabilityNoticeStatesWhatTheControllerLeaves() {
 		RequestContext parent = parent();
 		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "told", Fields.CONFIG,
