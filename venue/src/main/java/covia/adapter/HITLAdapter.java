@@ -83,6 +83,8 @@ public class HITLAdapter extends AAdapter {
 	public static final String REQUEST_EXPIRED = "No one answered this request before it expired, so no answer will come.";
 	/** Refusal of a request to a user the venue does not host. */
 	public static final String TARGET_NOT_REGISTERED = "HITL target user is not registered at this venue: ";
+	/** A request's job error when the person asked loses their account; {@code %s} is their DID. */
+	public static final String TARGET_DELETED = "The person you asked (%s) no longer has an account on this venue, so no answer will come.";
 	/** A request's job ended before the request could wait for an answer. */
 	public static final String JOB_ENDED = "The job carrying this HITL request has already ended: ";
 	/** An inbox already holds a request under the id of a job opening one. */
@@ -218,7 +220,11 @@ public class HITLAdapter extends AAdapter {
 			}
 			if (!targetUser.inbox().open(record)) throw new IllegalStateException(REQUEST_EXISTS + id);
 			addPending(venue, job, taskId);
-			venue.jobIndex().updateAdapterData(job.getID(), data -> data.assoc(TARGET, targetDID));
+			// The session goes with the request if the target's account does
+			AString askingSession = RT.ensureString(record.get(Fields.SESSION_ID));
+			venue.jobIndex().updateAdapterData(job.getID(), data -> (askingSession == null)
+				? data.assoc(TARGET, targetDID)
+				: data.assoc(TARGET, targetDID).assoc(Fields.SESSION_ID, askingSession));
 			Runnable changed = ((VenueJob) job).updateIn(venue, data -> data.assoc(Fields.STATUS, Status.INPUT_REQUIRED));
 			if (changed == null) throw new ConflictException(JOB_ENDED + id);
 			return changed;
@@ -297,6 +303,58 @@ public class HITLAdapter extends AAdapter {
 		else if (Hitl.EXPIRED.equals(status)) failWithRequest(job, REQUEST_EXPIRED);
 		else if (Hitl.REJECTED.equals(status)) failWithRequest(job, rejection(target, RT.getIn(request.getRecord(), Hitl.RESPONSE, Hitl.COMMENT)));
 		else failWithRequest(job, RESOLVED_WITHOUT_RESULT);
+	}
+
+	/**
+	 * The person a request asked can no longer answer it, so its job fails and
+	 * the agent that asked is told. Idempotent, as the deletion's retry requires.
+	 */
+	@Override
+	public void onUserDeleted(AString did, AMap<AString, ACell> previousUser) {
+		failRequestsToDeletedUsers();
+	}
+
+	/**
+	 * Fails every waiting request whose target has no account. Run on each
+	 * deletion, and at launch for a deletion that finished before this venue's
+	 * jobs were restored: a deleted account takes the request's record with it,
+	 * so nothing else would end the wait.
+	 *
+	 * @return how many requests failed
+	 */
+	private int failRequestsToDeletedUsers() {
+		int failed = 0;
+		for (var entry : engine.getVenueState().jobIndex().all().entrySet()) {
+			Blob jobId = entry.getKey();
+			if (!(engine.jobs().getJob(jobId) instanceof VenueJob job) || job.adapter() != this) continue;
+			if (!Status.INPUT_REQUIRED.equals(job.getStatus())) continue;
+			AMap<AString, ACell> kept = engine.jobs().adapterData(job);
+			AString target = (kept == null) ? null : RT.ensureString(kept.get(TARGET));
+			if (target == null) target = askedBy(job);
+			if (engine.getVenueState().users().user(target) != null) continue;
+			if (failForDeletedTarget(target, job, kept)) failed++;
+		}
+		return failed;
+	}
+
+	private boolean failForDeletedTarget(AString target, Job job, AMap<AString, ACell> kept) {
+		String error = String.format(TARGET_DELETED, target);
+		AString id = Strings.create(job.getID().toHexString());
+		AString owner = job.getOwner();
+		AString agentId = Engine.agentIdIn(owner, job.getCaller());
+		AString session = (kept == null) ? null : RT.ensureString(kept.get(Fields.SESSION_ID));
+		User ownerAccount = engine.getVenueState().users().user(owner);
+		ACell result = Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.CANCELLED, Fields.ERROR, error);
+		// Null when the job finished first
+		Resolution resolution = engine.getVenueState().transact(venue ->
+			settle(venue, job, data -> failed(data, error), owner, agentId, session, engine.getDIDString(), result));
+		if (resolution == null) return false;
+		afterResolution(resolution, id, ownerAccount);
+		return true;
+	}
+
+	private static AMap<AString, ACell> failed(AMap<AString, ACell> data, String error) {
+		return data.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(error)).dissoc(Fields.ERROR_CODE);
 	}
 
 	/** Fails a request job and ends the asking agent's wait in one transaction. */
@@ -701,66 +759,81 @@ public class HITLAdapter extends AAdapter {
 	 * result carries is recorded once the resolution commits, and only then. */
 	private boolean resolveRequest(AString targetDID, AString id, AString status,
 			AMap<AString, ACell> response, AString responder, ACell result, Job job, UCANAdapter.Grant grant) {
-		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
 		AString requester = job == null ? null : job.getOwner();
-		AString requestingAgent = job == null ? null : Engine.agentIdIn(requester, job.getCaller());
 		User requesterAccount = requester == null ? null : engine.getVenueState().users().user(requester);
 		// Null when the request was not open to resolve
 		Resolution resolution = engine.getVenueState().transact(venue -> {
-			var draft = venue.users();
-			Runnable notification = null;
-			Blob waitingTask = null;
-			User target = draft.user(targetDID);
+			User target = venue.users().user(targetDID);
 			HitlRequest request = (target == null) ? null : target.inbox().request(id);
 			AMap<AString, ACell> record = (request == null) ? null : request.getRecord();
 			if (record == null || !request.resolve(status, response)) return null;
-			if (job != null) {
-				Runnable changed = ((VenueJob) job).updateIn(venue, data -> {
-					if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
-					String error = Hitl.REJECTED.equals(status) ? rejection(targetDID, RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED;
-					return data.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(error)).dissoc(Fields.ERROR_CODE);
-				});
-				if (changed == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
-				notification = changed;
-				// Terminal jobs are skipped at restart: no live cleanup listener will
-				// survive to remove this wait, so settle it with the result itself.
-				User owner = draft.user(requester);
-				AgentState askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
-				if (askingAgent != null && askingAgent.getRecord() != null) {
-					AString taskHex = RT.ensureString(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));
-					if (taskHex != null) waitingTask = Blob.fromHex(taskHex.toString());
-					askingAgent.removePending(job.getID());
-				}
-			}
-			if (result == null) return new Resolution(notification, null, false);
-			AString agentId = RT.ensureString(record.get(Hitl.AGENT));
-			AString sidHex = RT.ensureString(record.get(Fields.SESSION_ID));
-			if (agentId == null || sidHex == null) return new Resolution(notification, null, false); // Human/API requester.
-			Blob sid = Blob.fromHex(sidHex.toString());
-			AString owner = Attribution.owner(record);
-			// The result carries the request ID. This is an independent message,
-			// not a chat waiter tied to the now-terminal HITL Job; it goes to the
-			// task whose cycle asked, when there is one, else to the session.
-			if (owner != null && sid != null && agents != null
-					&& agents.deliverToWaiter(draft, owner, agentId, sid, waitingTask, responder,
-						(job != null) ? Strings.create(job.getID().toHexString()) : null, result)) {
-				return new Resolution(notification, new SessionWake(owner, agentId), false);
-			}
-			return new Resolution(notification, null, true);
+			Resolution settled = settle(venue, job, data -> {
+				if (Hitl.ANSWERED.equals(status)) return data.assoc(Fields.STATUS, Status.COMPLETE).assoc(Fields.OUTPUT, result);
+				return failed(data, Hitl.REJECTED.equals(status) ? rejection(targetDID, RT.getIn(result, Hitl.COMMENT)) : REQUEST_EXPIRED);
+			}, Attribution.owner(record), RT.ensureString(record.get(Hitl.AGENT)),
+				RT.ensureString(record.get(Fields.SESSION_ID)), responder, result);
+			if (settled == null) throw new ConflictException(REQUEST_ALREADY_RESOLVED);
+			return settled;
 		});
 		if (resolution == null) return false;
 		if (grant != null) grant.audit(engine.audit());
+		afterResolution(resolution, id, requesterAccount);
+		return true;
+	}
+
+	/**
+	 * Finishes a request's job with {@code outcome}, ends the asking agent's
+	 * wait, and delivers {@code result} to the task or session that asked. A
+	 * pure edit of the draft.
+	 *
+	 * @param job The request's job, or null when it has gone
+	 * @param agentId The agent that asked, or null when a person did
+	 * @param sidHex The session it asked in, or null
+	 * @return What to do after commit, or null when the job had already finished
+	 */
+	private Resolution settle(VenueState venue, Job job, java.util.function.UnaryOperator<AMap<AString, ACell>> outcome,
+			AString askingOwner, AString agentId, AString sidHex, AString responder, ACell result) {
+		var draft = venue.users();
+		Runnable notification = null;
+		Blob waitingTask = null;
+		if (job != null) {
+			notification = ((VenueJob) job).updateIn(venue, outcome);
+			if (notification == null) return null;
+			// Terminal jobs are skipped at restart, so the wait ends with the result
+			AString requestingAgent = Engine.agentIdIn(job.getOwner(), job.getCaller());
+			User owner = draft.user(job.getOwner());
+			AgentState askingAgent = owner == null || requestingAgent == null ? null : owner.agent(requestingAgent);
+			if (askingAgent != null && askingAgent.getRecord() != null) {
+				AString taskHex = RT.ensureString(RT.getIn(askingAgent.getPending().get(job.getID()), Fields.TASK_ID));
+				if (taskHex != null) waitingTask = Blob.fromHex(taskHex.toString());
+				askingAgent.removePending(job.getID());
+			}
+		}
+		if (agentId == null || sidHex == null) return new Resolution(notification, null, false); // Human/API requester.
+		AgentAdapter agents = engine.getAdapter("agent") instanceof AgentAdapter a ? a : null;
+		// The result carries the request ID. This is an independent message,
+		// not a chat waiter tied to the now-terminal HITL Job; it goes to the
+		// task whose cycle asked, when there is one, else to the session.
+		if (askingOwner != null && agents != null
+				&& agents.deliverToWaiter(draft, askingOwner, agentId, Blob.fromHex(sidHex.toString()), waitingTask, responder,
+					(job != null) ? Strings.create(job.getID().toHexString()) : null, result)) {
+			return new Resolution(notification, new SessionWake(askingOwner, agentId), false);
+		}
+		return new Resolution(notification, null, true);
+	}
+
+	/** Makes a committed resolution durable, tells the job's observers and wakes the agent that asked. */
+	private void afterResolution(Resolution resolution, AString id, User requesterAccount) {
 		SessionWake destination = resolution.wake();
 		// Notify live waiters even if the durability barrier fails: the in-memory
 		// transaction is already committed. The responder still receives that error.
 		try { engine.flush(); }
 		finally { if (resolution.notification() != null) resolution.notification().run(); }
-		if (destination != null && requesterAccount != null) synchronized (engine) {
+		if (destination != null && requesterAccount != null && engine.getAdapter("agent") instanceof AgentAdapter agents) synchronized (engine) {
 			requesterAccount.get(); // Fence wake against account deletion/recreation.
 			agents.wakeAgent(destination.owner(), destination.agent(), true);
 		}
 		if (resolution.unavailable()) log.warn("HITL request {} resolved but its asking agent session is unavailable", id);
-		return true;
 	}
 
 	/**
@@ -804,6 +877,8 @@ public class HITLAdapter extends AAdapter {
 			}
 		}
 		if (count > 0) log.info("HITL: re-armed expiry for {} open request(s)", count);
+		int failed = failRequestsToDeletedUsers();
+		if (failed > 0) log.info("HITL: failed {} request(s) to deleted users", failed);
 		return count;
 	}
 }

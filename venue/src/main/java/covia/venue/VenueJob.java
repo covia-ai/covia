@@ -65,6 +65,9 @@ public class VenueJob extends Job {
 		this.directRun = directRun;
 	}
 
+	/** The adapter that runs this Job, or null when none does. */
+	public AAdapter adapter() { return adapter; }
+
 	/** Direct result-only call with no durable Job or venue-wide telemetry. */
 	public boolean isDirectRun() { return directRun && isMemoryOnly() && !observable; }
 

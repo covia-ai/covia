@@ -788,6 +788,71 @@ public class HITLAdapterTest {
 			RT.getIn(token.getCapabilities().get(0), Capability.WITH));
 	}
 
+	// ========== The person asked loses their account ==========
+
+	/** A delegation from the venue letting an agent's owner ask {@code target}. */
+	private RequestContext asking(AString owner, AString agentId, AString target) {
+		RequestContext caller = (agentId == null) ? RequestContext.of(owner) : RequestContext.ofAgent(owner, agentId);
+		String delegation = UcanTokens.grant(engine.getKeyPair(), caller.getCallerDID().toString(),
+			target + "/h/", HITLAdapter.ABILITY_HITL_REQUEST.toString(), HOUR);
+		return caller.withProofs(Vectors.of(UCAN.fromJWT(Strings.create(delegation)).toMap()));
+	}
+
+	@Test
+	public void testDeletingTheTargetFailsTheRequestUnderstandably() {
+		engine.getVenueState().users().ensure(BOB_DID);
+		Job job = request(asking(BOB_DID, null, ALICE_DID), Hitl.request("Report access").to(ALICE_DID.toString())
+			.ask(Hitl.approval("ok", "OK?")).build());
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
+
+		engine.deleteUser(engine.venueContext(), ALICE_DID);
+
+		assertEquals(Status.FAILED, job.getStatus());
+		assertEquals(String.format(HITLAdapter.TARGET_DELETED, ALICE_DID), job.getErrorMessage());
+	}
+
+	@Test
+	public void testDeletingTheTargetTellsTheAgentThatAsked() {
+		AString owner = BOB_DID;
+		AString agentId = Strings.create("deleted-target-agent");
+		engine.getVenueState().users().ensure(owner);
+		engine.jobs().invokeOperation("v/ops/agent/create", Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat", "llmOperation", "v/test/ops/llm")),
+			BOB).awaitResult(5000);
+		AgentState agent = engine.getVenueState().users().user(owner).agent(agentId);
+		Blob sid = Blob.fromHex("d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0");
+		agent.ensureSession(sid, owner);
+		Job job = request(asking(owner, agentId, ALICE_DID).withSessionId(sid), Hitl.request("May I?").to(ALICE_DID.toString())
+			.ask(Hitl.approval("ok", "OK?")).build());
+		assertTrue(agent.getPending().containsKey(job.getID()));
+
+		try (AgentWatch watch = AgentWatch.open(engine, owner, agentId)) {
+			engine.deleteUser(engine.venueContext(), ALICE_DID);
+			assertEquals(Status.FAILED, job.getStatus());
+			assertFalse(agent.getPending().containsKey(job.getID()), "the agent must stop waiting");
+			watch.awaitCycles(1);
+		}
+		String conversation = covia.adapter.agent.GoalTreeContext.activeConversation(RT.ensureMap(
+			RT.getIn(agent.getSession(sid), Fields.FRAMES, CVMLong.ZERO))).toString();
+		assertTrue(conversation.contains(String.format(HITLAdapter.TARGET_DELETED, ALICE_DID)),
+			"the asking session must be told why: " + conversation);
+	}
+
+	@Test
+	public void testDeletingSomeoneElseLeavesTheRequestWaiting() {
+		engine.getVenueState().users().ensure(BOB_DID);
+		AString bystander = engine.managedUserDID(Strings.create("hitl-bystander"));
+		engine.getVenueState().users().ensure(bystander);
+		Job job = request(asking(BOB_DID, null, ALICE_DID), Hitl.request("Report access").to(ALICE_DID.toString())
+			.ask(Hitl.approval("ok", "OK?")).build());
+
+		engine.deleteUser(engine.venueContext(), bystander);
+
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
+		job.cancel();
+	}
+
 	// ========== Expiry and cancellation ==========
 
 	@Test
