@@ -47,7 +47,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.impl.BlobContent;
 import covia.lattice.Covia;
-import covia.venue.storage.AStorage;
+import covia.venue.storage.ContentStorage;
 import covia.venue.storage.MemoryStorage;
 
 public class EngineTest {
@@ -99,7 +99,7 @@ public class EngineTest {
 		}
 
 		@Override
-		protected AStorage createStorage() {
+		protected ContentStorage createStorage() {
 			return storage;
 		}
 
@@ -846,7 +846,7 @@ public class EngineTest {
 				Fields.CONTENT, Maps.of(Fields.SHA256, Hashing.sha256("declared".getBytes()).toHexString()))), null);
 			covia.exception.InvalidInputException mismatch = assertThrows(covia.exception.InvalidInputException.class, () ->
 				dlfsVenue.putContent(dlfsVenue.getMetaValue(mismatchAsset), new ByteArrayInputStream("sent".getBytes())));
-			assertTrue(mismatch.getMessage().startsWith(AStorage.HASH_MISMATCH), mismatch.getMessage());
+			assertTrue(mismatch.getMessage().startsWith(ContentStorage.HASH_MISMATCH), mismatch.getMessage());
 			assertNull(dlfsVenue.getContentStream(dlfsVenue.getMetaValue(mismatchAsset)));
 		} finally {
 			dlfsVenue.close();

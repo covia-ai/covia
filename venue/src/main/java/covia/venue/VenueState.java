@@ -41,7 +41,6 @@ import covia.exception.AuthException;
 import covia.exception.NotFoundException;
 import covia.venue.migration.MigrationStep;
 import covia.venue.migration.VenueMigrations;
-import covia.venue.storage.LatticeStorage;
 
 /**
  * Authoritative state of a running venue application and its domain components.
@@ -464,13 +463,9 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 		return new ScheduleState(context, level(Covia.SCHEDULE));
 	}
 
-	/**
-	 * Gets the venue's content-addressed blob storage.
-	 *
-	 * @return LatticeStorage instance backed by this venue's cursor
-	 */
-	public LatticeStorage contentStorage() {
-		return new LatticeStorage(level(Covia.STORAGE));
+	/** The venue's content, by SHA-256 ({@code :storage}). */
+	public ContentStore contents() {
+		return new ContentStore(level(Covia.STORAGE));
 	}
 
 	/**

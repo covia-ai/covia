@@ -95,7 +95,7 @@ import covia.grid.client.VenueHTTP;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
 import covia.venue.auth.VenueAuthenticator;
-import covia.venue.storage.AStorage;
+import covia.venue.storage.ContentStorage;
 import covia.venue.storage.FileStorage;
 import covia.venue.storage.MemoryStorage;
 
@@ -115,7 +115,7 @@ public class Engine {
 	/**
 	 * Storage instance for content associated with assets
 	 */
-	protected AStorage contentStorage;
+	protected ContentStorage contentStorage;
 
 	/**
 	 * The application's state, laid out as COG-004's root lattice.
@@ -666,7 +666,7 @@ public class Engine {
 	 *
 	 * <p>Reads the "storage" config entry to determine storage type:
 	 * <ul>
-	 *   <li>"lattice" - Uses LatticeStorage backed by venue lattice cursor (default)</li>
+	 *   <li>"lattice" - The venue's own {@link ContentStore} (default)</li>
 	 *   <li>"memory" - Uses simple in-memory storage</li>
 	 *   <li>"file" - Uses FileStorage with configured path</li>
 	 *   <li>"dlfs" - Uses FileStorage backed by local DLFS filesystem</li>
@@ -674,7 +674,7 @@ public class Engine {
 	 *
 	 * @return Configured storage instance
 	 */
-	protected AStorage createStorage() {
+	protected ContentStorage createStorage() {
 		AString storageType = config.getStorageType();
 		String storagePath = config.getStoragePath();
 
@@ -712,7 +712,7 @@ public class Engine {
 			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
-			return venueState.contentStorage();
+			return venueState.contents();
 		}
 	}
 
@@ -950,7 +950,7 @@ public class Engine {
 			}
 		}
 
-		AStorage storage = contentStorage;
+		ContentStorage storage = contentStorage;
 		contentStorage = null;
 		if (storage != null) {
 			try {
@@ -2926,7 +2926,7 @@ public class Engine {
 		} catch (ContentTooLarge e) {
 			throw new InvalidInputException(CONTENT_TOO_LARGE + maxSize + " bytes");
 		} catch (IllegalArgumentException e) {
-			// The storage refuses content that does not match its hash (AStorage.HASH_MISMATCH)
+			// The storage refuses content that does not match its hash (ContentStorage.HASH_MISMATCH)
 			throw new InvalidInputException(e.getMessage(), e);
 		}
 		log.debug("Stored content with SHA256: "+expectedHash);

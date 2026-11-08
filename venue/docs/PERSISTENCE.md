@@ -378,8 +378,8 @@ This has structural problems on at least four axes:
 | `AgentState` | `venue/.../AgentState.java` | one agent's record (gold standard for the pattern) |
 | `AssetStore` | `venue/.../AssetStore.java` | content-addressed asset index |
 | `SecretStore` | `venue/.../SecretStore.java` | encrypted secrets |
-| `Auth` | `venue/.../Auth.java` | OAuth user records |
-| `LatticeStorage` | `venue/.../storage/LatticeStorage.java` | lattice-backed blob CAS |
+| `AuthState` | `venue/.../AuthState.java` | the authentication directory (`:users`): named users' records and their sign-in keys |
+| `ContentStore` | `venue/.../ContentStore.java` | the venue's content by SHA-256 (`:storage`); refuses content that does not match its hash |
 
 **New components introduced by this design (Phase 4 — deferred):**
 

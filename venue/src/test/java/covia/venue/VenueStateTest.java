@@ -289,7 +289,7 @@ public class VenueStateTest {
 
 		assertNotNull(vs.assets(), "Assets component should be available");
 		assertNotNull(vs.users(), "Users component should be available");
-		assertNotNull(vs.contentStorage(), "Storage component should be available");
+		assertNotNull(vs.contents(), "Content component should be available");
 	}
 
 	// ========== State Bootstrapping ==========

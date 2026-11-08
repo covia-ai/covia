@@ -51,7 +51,7 @@ import covia.grid.impl.PathContent;
  * AContent content = storage.getContent(hash);
  * </pre>
  */
-public class FileStorage extends AStorage {
+public class FileStorage implements ContentStorage {
 
 	/** Name prefix of a write still being staged: dot-named, so never a hash. */
 	static final String STAGING_PREFIX = ".staging-";
@@ -146,7 +146,7 @@ public class FileStorage extends AStorage {
 			try (OutputStream os = Files.newOutputStream(staging, StandardOpenOption.WRITE)) {
 				(verify ? new DigestInputStream(in, digest) : in).transferTo(os);
 			}
-			if (verify) checkHash(hash, Hash.wrap(digest.digest()));
+			if (verify) ContentStorage.checkHash(hash, Hash.wrap(digest.digest()));
 			try {
 				Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
 			} catch (AtomicMoveNotSupportedException e) {

@@ -237,7 +237,7 @@ public class FileStorageTest {
 
 		IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () ->
 			storage.storeVerified(hash, new ByteArrayInputStream("impostor".getBytes())));
-		assertTrue(e.getMessage().startsWith(AStorage.HASH_MISMATCH), e.getMessage());
+		assertTrue(e.getMessage().startsWith(ContentStorage.HASH_MISMATCH), e.getMessage());
 
 		assertArrayEquals(data, read(storage, hash), "content already stored is untouched");
 		assertEquals(1, filesIn(tempDir), "the refused write leaves no staging file");
