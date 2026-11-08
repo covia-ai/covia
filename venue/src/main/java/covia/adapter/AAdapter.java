@@ -303,7 +303,8 @@ public abstract class AAdapter {
 
 	/**
 	 * Stop user-owned workers and release external resources after deletion commits.
-	 * Must be idempotent; failures retain a durable retry marker and bar account
+	 * Must be idempotent, including when runs overlap, as a repeated deletion or
+	 * the adapter's replacement can make them; failures retain a durable retry marker and bar account
 	 * recreation. Previous user state is supplied on first deletion only, and is
 	 * null on recovery. Never use it to restore data. Called on disabled adapters
 	 * too; an instance that has never been installed has no runtime to clean up.
