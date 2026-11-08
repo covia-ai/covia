@@ -123,7 +123,7 @@ mount their venue; restart tests unmount a venue and mount it again, or open a
 new application over the same store, as production does
 ([EMBEDDING.md](EMBEDDING.md#starting-and-stopping)).
 
-`VenueState`, `Users`, `User`, `Agent`, `Session`, `Jobs`, `JobState`, `AuthState`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
+`VenueState`, `Users`, `User`, `Agent`, `Session`, `Jobs`, `JobRecord`, `AuthState`, `Schedule`, `AdapterState`, `AssetStore`, `SecretStore` and
 `Workspace` implement upstream `TransactionalComponent`. Ordinary domain
 mutations are atomic; `transact(draft -> ...)` groups several operations into one
 local commit. Choose the component containing all data the operation reads or
@@ -139,9 +139,9 @@ execution after the outer commit. A commit is not an exactly-once external effec
 crash-sensitive dispatch still needs its existing durable claim/recovery protocol.
 Do not introduce I/O or runtime service calls inside retryable callbacks.
 
-A recorded venue job's `JobState` (`user.jobs().job(id)`, null when there is no
+A recorded venue job's `JobRecord` (`user.jobs().job(id)`, null when there is no
 such job) is its primary record. Admission creates it explicitly; updates only
-edit an existing row, and a job removed while a caller holds its `JobState` reads
+edit an existing row, and a job removed while a caller holds its `JobRecord` reads
 as null. `VenueJob` reads and mutates
 that component directly, then runs runtime hooks after commit. History edits and
 late cancellation diagnostics share this record, including after runtime-cache

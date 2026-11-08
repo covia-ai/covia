@@ -28,7 +28,7 @@ public class VenueJob extends Job {
 	/** The adapter that runs this Job and ends it when it is cancelled; null when none does. */
 	private final AAdapter adapter;
 	private final OutputRules rules;
-	private final JobState record;
+	private final JobRecord record;
 	/** Last observed snapshot, used only if the primary record/account is erased. */
 	private volatile AMap<AString, ACell> lastKnown;
 	private final User account;
@@ -40,7 +40,7 @@ public class VenueJob extends Job {
 	private final AtomicReference<AMap<AString, ACell>> heldData = new AtomicReference<>();
 
 	/** An observable recorded Job over its existing record. */
-	VenueJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
+	VenueJob(JobRecord record, AMap<AString, ACell> data, OutputRules rules,
 			AString ownerDID, JobManager manager, AAdapter adapter) {
 		this(record, data, rules, ownerDID, manager, true, false, adapter);
 	}
@@ -52,7 +52,7 @@ public class VenueJob extends Job {
 	 * @param adapter The adapter that runs the Job, which ends it when it is
 	 *        cancelled; null when no adapter runs it
 	 */
-	VenueJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
+	VenueJob(JobRecord record, AMap<AString, ACell> data, OutputRules rules,
 			AString ownerDID, JobManager manager, boolean observable, boolean directRun, AAdapter adapter) {
 		super((record == null) ? data : null, record != null);
 		this.adapter = adapter;
@@ -133,7 +133,7 @@ public class VenueJob extends Job {
 		AMap<AString, ACell> committed;
 		try {
 			committed = manager.venue().transact(draft -> {
-				JobState current = recordIn(draft);
+				JobRecord current = recordIn(draft);
 				if (current == null) throw new AuthException(Users.ACCOUNT_DELETED);
 				return edit(draft, current, data -> {
 					AMap<AString, ACell> next = updater.apply(data);
@@ -168,7 +168,7 @@ public class VenueJob extends Job {
 	 * @return the record, or null when the owner's account or the row is gone
 	 * @throws AuthException when the account was deleted and made again since
 	 */
-	private JobState recordIn(VenueState draft) {
+	private JobRecord recordIn(VenueState draft) {
 		User owner = draft.users().user(account.getDID());
 		if (owner == null) return null;
 		Users.requireCurrent(owner.get(), convex.core.lang.RT.getIn(account.get(), Users.GENERATION));
@@ -181,7 +181,7 @@ public class VenueJob extends Job {
 	 * there too. A finished record takes no edit, so a cancellation seen here is
 	 * the Job's one transition to CANCELLED.
 	 */
-	private AMap<AString, ACell> edit(VenueState draft, JobState job, UnaryOperator<AMap<AString, ACell>> edit) {
+	private AMap<AString, ACell> edit(VenueState draft, JobRecord job, UnaryOperator<AMap<AString, ACell>> edit) {
 		AMap<AString, ACell> updated = job.update(edit);
 		if (updated != null && Job.isFinished(updated)) {
 			if (covia.grid.Status.CANCELLED.equals(updated.get(Fields.STATUS))) {
@@ -237,7 +237,7 @@ public class VenueJob extends Job {
 	 * null means the row was missing, terminal, or the update was rejected. */
 	public Runnable updateIn(VenueState draft, UnaryOperator<AMap<AString, ACell>> updater) {
 		if (isMemoryOnly()) throw new IllegalStateException(RECORDED_JOB_REQUIRED);
-		JobState job = recordIn(draft);
+		JobRecord job = recordIn(draft);
 		if (job == null) return null;
 		var original = new AtomicReference<AMap<AString, ACell>>();
 		AMap<AString, ACell> updated = edit(draft, job, current -> {

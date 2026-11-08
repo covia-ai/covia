@@ -48,7 +48,7 @@ class DomainTransactionTest {
 		assertNotNull(user.jobs().create(id, Maps.of(Fields.ID, id, Fields.STATUS, covia.grid.Status.STARTED)));
 		assertNull(user.jobs().create(id, Maps.of(Fields.STATUS, covia.grid.Status.FAILED)));
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "one");
-		var retained = new AtomicReference<JobState>();
+		var retained = new AtomicReference<JobRecord>();
 		ACell before = venue.get();
 		assertThrows(IllegalStateException.class, () -> user.execute(draft -> {
 			retained.set(draft.jobs().job(id));

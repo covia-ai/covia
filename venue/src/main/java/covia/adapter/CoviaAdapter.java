@@ -43,7 +43,7 @@ import covia.lattice.Owner;
 import covia.lattice.ValuePath;
 import covia.lattice.Workspace;
 import covia.venue.Engine;
-import covia.venue.JobState;
+import covia.venue.JobRecord;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -1303,9 +1303,9 @@ public class CoviaAdapter extends AAdapter {
 			return Located.below(requestUser(state, ctx).agentAt(agentId).session(sessionId), segments);
 		}
 		if (T.equals(namespace)) {
-			JobState job = requestUser(state, ctx).jobs().at(scopedJob(ctx));
+			JobRecord job = requestUser(state, ctx).jobs().at(scopedJob(ctx));
 			Path rest = segments.slice(1);
-			return new Located(job.workspace(), rest, Owner.decide(job, JobState.inScratch(rest)));
+			return new Located(job.workspace(), rest, Owner.decide(job, JobRecord.inScratch(rest)));
 		}
 		return Located.below(requestUser(state, ctx), segments);
 	}

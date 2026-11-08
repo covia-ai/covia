@@ -968,12 +968,12 @@ public class JobManager {
 	 */
 	private VenueJob admit(Blob jobID, AMap<AString, ACell> status, OutputRules rules,
 			AString ownerDID, boolean memoryOnly, boolean preserveFailureCause,
-			java.util.function.Function<JobState, VenueJob> handle) {
+			java.util.function.Function<JobRecord, VenueJob> handle) {
 		synchronized (engine.getAuth()) {
 			engine.getVenueState().users().requireNotDeleted(ownerDID);
 			// Create before publishing the runtime handle; updates only edit existing rows.
 			// Readers can see the row first, so by-id lookups go through liveJob.
-			JobState record = null;
+			JobRecord record = null;
 			if (!memoryOnly) {
 				User account = account(ownerDID);
 				AMap<AString, ACell> entry = Maps.of(JobIndex.OWNER, ownerDID);
@@ -1547,7 +1547,7 @@ public class JobManager {
 		Job live = activeJobs.get(jobID);
 		User user = live instanceof VenueJob job ? job.account()
 			: engine.getVenueState().users().user(ownerDID);
-		JobState state = (user == null) ? null : user.jobs().job(jobID);
+		JobRecord state = (user == null) ? null : user.jobs().job(jobID);
 		if (state != null && state.appendHistory(record) && live instanceof VenueJob job) {
 			job.historyUpdated();
 		}
@@ -1576,7 +1576,7 @@ public class JobManager {
 			AMap<AString, ACell> entry = RT.ensureMap(e.getValue());
 			AString ownerDID = RT.ensureString(RT.getIn(entry, JobIndex.OWNER));
 			User user = (ownerDID == null) ? null : venue().users().user(ownerDID);
-			JobState state = (user == null) ? null : user.jobs().job(jobID);
+			JobRecord state = (user == null) ? null : user.jobs().job(jobID);
 			// An entry goes with its record and with the update that finishes it.
 			AMap<AString, ACell> record = (state == null) ? null : state.getRecord();
 			if (record == null || Job.isFinished(record)) continue;

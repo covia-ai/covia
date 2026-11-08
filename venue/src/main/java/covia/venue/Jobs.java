@@ -19,7 +19,7 @@ import covia.lattice.Workspace;
 
 /**
  * A user's jobs ({@code j/}): job records keyed by job id, each the
- * {@link JobState} of one job.
+ * {@link JobRecord} of one job.
  *
  * <p>Only the venue admits jobs, through {@link #create}. Callers name a job by its hex id, which this
  * component turns into the stored key. Transactions compose admissions,
@@ -72,7 +72,7 @@ public final class Jobs extends IndexComponent<Blob, ACell>
 	 * @return The job, bound to this cursor or transaction draft, or null if
 	 *         there is no such job
 	 */
-	public JobState job(Blob id) {
+	public JobRecord job(Blob id) {
 		return containsKey(id) ? at(id) : null;
 	}
 
@@ -93,7 +93,7 @@ public final class Jobs extends IndexComponent<Blob, ACell>
 	 * @param record Job record
 	 * @return The new job, or null if the job already existed
 	 */
-	JobState create(Blob id, AMap<AString, ACell> record) {
+	JobRecord create(Blob id, AMap<AString, ACell> record) {
 		ACell before = path(id).getAndUpdate(current -> (current == null) ? record : current);
 		return (before == null) ? at(id) : null;
 	}
@@ -114,8 +114,8 @@ public final class Jobs extends IndexComponent<Blob, ACell>
 	 * it: a missing job reads as absent and takes no change. Domain callers use
 	 * {@link #job}, which is null for a missing job.
 	 */
-	public JobState at(Blob id) {
-		return new JobState(context, path(id), owner, id);
+	public JobRecord at(Blob id) {
+		return new JobRecord(context, path(id), owner, id);
 	}
 
 	/**

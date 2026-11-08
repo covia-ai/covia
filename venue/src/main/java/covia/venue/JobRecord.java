@@ -26,8 +26,8 @@ import covia.lattice.Workspace;
 /** Primary record of an existing venue job. Updates never create a missing row.
  * Transactions compose data changes only; execution and notifications belong
  * to the runtime after the enclosing transaction commits. */
-public final class JobState extends ALatticeComponent<ACell>
-		implements TransactionalComponent<ACell, JobState>, Owner {
+public final class JobRecord extends ALatticeComponent<ACell>
+		implements TransactionalComponent<ACell, JobRecord>, Owner {
 	private final VenueContext context;
 	private final AForkableCursor<ACell> edits;
 	private final AString owner;
@@ -39,7 +39,7 @@ public final class JobState extends ALatticeComponent<ACell>
 	 * @param owner DID of the user whose job this is, or null outside any user
 	 * @param id The job's id
 	 */
-	JobState(VenueContext context, AForkableCursor<ACell> storage, AString owner, Blob id) {
+	JobRecord(VenueContext context, AForkableCursor<ACell> storage, AString owner, Blob id) {
 		super(storage);
 		this.context = context;
 		this.owner = owner;
@@ -49,8 +49,8 @@ public final class JobState extends ALatticeComponent<ACell>
 	}
 
 	@Override public AForkableCursor<ACell> cursor() { return edits; }
-	@Override public JobState withCursor(AForkableCursor<ACell> draft) {
-		return new JobState(context, draft, owner, id);
+	@Override public JobRecord withCursor(AForkableCursor<ACell> draft) {
+		return new JobRecord(context, draft, owner, id);
 	}
 
 	/**

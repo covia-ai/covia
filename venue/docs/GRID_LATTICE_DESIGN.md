@@ -426,8 +426,8 @@ larger value.
 | `VenueState` | a path's first segment, its owner's DID, to `Users`; `x/<adapter>` to the adapter's `Workspace` view |
 | `Users` | a user's DID to their `User` (`Users.at`) |
 | `User` | its namespaces: `g/<id>` to `Agent`, `j` to `Jobs`, `s` to `SecretStore`, `h` to `Inbox`, `a` to `AssetStore`, and `w`, `o` to a `Workspace` |
-| `Jobs` | a job id, in hex, to its `JobState` |
-| `JobState` | `temp` to the job's `Workspace`; the rest of the job is read-only |
+| `Jobs` | a job id, in hex, to its `JobRecord` |
+| `JobRecord` | `temp` to the job's `Workspace`; the rest of the job is read-only |
 | `SecretStore` | a secret's name to its `SecretStore.Record`, which its store deletes |
 | `Agent` | `n` to the agent's `Workspace`; `sessions/<id>`, the id in hex, to its `Session`; `tasks` to `Tasks` |
 | `Tasks` | a task's id, in hex, to its `Task`; the agent's access rule covers both |
@@ -511,7 +511,7 @@ however the path was written or where resolution started:
 | `User` | `w`, `o`, `s`, `h`, `a`, `g` and `j` where nothing below claims them | authority over `<did>/<path>`: the user within its own scope, or a grantee |
 | `Agent` | the agent's record and `n` | authority over `<owner>/g/<agent>/<path>` |
 | `Session` | the session, and `c` | the agent serving the session reaches `c` of right; otherwise authority over `<owner>/g/<agent>/sessions/<id>/<path>` |
-| `Jobs`, `JobState` | job records, and `temp` | work running in the job reaches `temp` of right; otherwise authority over `<owner>/j/<id>/<path>` |
+| `Jobs`, `JobRecord` | job records, and `temp` | work running in the job reaches `temp` of right; otherwise authority over `<owner>/j/<id>/<path>` |
 | the venue's view | `v/` | any principal reads of right; nothing changes through it |
 | `AdapterView` | `x/` | authority over `<did>/x/<path>`, and the adapter's own write policy |
 
@@ -897,7 +897,7 @@ accepts complete snapshots signed by the venue's key and keeps the newer
 | `Workspace` (Covia) | A flexible data area reached by path (`w`, `o`, `n`, `c`, a job's `temp`, `x/` views); its changes create no missing level except `createPath` (§4.6) |
 | `Entry` (Covia) | A value in a workspace, at keys fixed when its path was resolved; a path cursor under the workspace's cursor, changed at its key in the level above; no missing level is created except by `createLevels` (§4.6) |
 | `Inbox` (Covia) | A user's HITL requests at `h`, a `MapComponent` keyed by request id; only the venue writes them |
-| `Jobs` (Covia) | A user's jobs at `j`, an `IndexComponent` keyed by job id, each bound as its `JobState`; only the venue admits a job |
+| `Jobs` (Covia) | A user's jobs at `j`, an `IndexComponent` keyed by job id, each bound as its `JobRecord`; only the venue admits a job |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions
@@ -913,7 +913,7 @@ container it holds on the first change, so the stored shapes are plain data:
 | Venue `:value` | `VenueState`: `Timestamped` keyword `Index`, ordered by `Covia.VENUE` | The whole per-venue value as one **whole-value-LWW** node with a stamp-on-write boundary; holds `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:jobs`, `:user-data` |
 | `:schedule` | `Schedule`: `StampedCursor` over a string-keyed map | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |
 | `:user-data → <DID>` | `Users`, `User`: string-keyed map of `StampedCursor` records | Per-user record; every deep write refreshes `meta.updated` |
-| `j` / each Job | `Jobs` (an `Index` by job id), `JobState` (`StampedCursor`) | Existing Job map shape; deep writes such as `t/` refresh `updated` |
+| `j` / each Job | `Jobs` (an `Index` by job id), `JobRecord` (`StampedCursor`) | Existing Job map shape; deep writes such as `t/` refresh `updated` |
 | `g` / each agent | string-keyed map, `Agent` (`StampedCursor`) | Existing agent map shape; deep writes such as `n/` and `c/` refresh `ts` |
 | `s` / `a` | `SecretStore`, `AssetStore` | Plain maps |
 | `w` / `o` / `h` | `Workspace`, `Inbox` over an `{updated, data}` map | `User` presents its `data` through a `StampedCursor` on the container |

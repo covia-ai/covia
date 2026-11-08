@@ -252,7 +252,7 @@ public class VenueStateTest {
 		AString marker = Strings.intern("marker");
 		assertNull(user.jobs().job(jobID), "there is no job before it is created");
 
-		JobState job = user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.PENDING));
+		JobRecord job = user.jobs().create(jobID, Maps.of(Fields.STATUS, Status.PENDING));
 		assertNotNull(job.update(record -> record.assoc(marker, Strings.create("present"))));
 		assertEquals(Strings.create("present"), job.getRecord().get(marker));
 

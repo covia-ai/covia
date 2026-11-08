@@ -16,7 +16,7 @@ final class MirrorJob extends VenueJob {
 
 	private final Job call;
 
-	MirrorJob(JobState record, AMap<AString, ACell> data, OutputRules rules,
+	MirrorJob(JobRecord record, AMap<AString, ACell> data, OutputRules rules,
 			AString ownerDID, JobManager manager, Job call) {
 		super(record, data, rules, ownerDID, manager, null);
 		this.call = call;

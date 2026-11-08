@@ -26,7 +26,7 @@ boolean isPaused();                        // paused family?
 
 `Job` is concrete and serves as the remote/read-only handle (constructed
 from a record snapshot). `VenueJob` is the execution handle for a recorded venue
-job; its data comes directly from the job's `JobState` lattice component, which
+job; its data comes directly from the job's `JobRecord` lattice component, which
 admission (`Jobs.create`) or recovery hands it.
 `JobManager` owns execution, recovery and admission. Transient handles and remote
 client snapshots retain local backing records. Acceptance writes a recorded job's
@@ -175,10 +175,10 @@ record never holds them, and they go with the entry when the job ends
 ## The update path — CAS-committed, terminal-sticky
 
 Lifecycle mutations funnel through `Job.commitUpdate` and its atomic backing-record
-update. For recorded venue jobs this edits `JobState`, not an in-memory copy:
+update. For recorded venue jobs this edits `JobRecord`, not an in-memory copy:
 
 - The **updater and `processUpdate` are side-effect free** and may be retried.
-  `JobState` binds the standard `updated` timestamp policy; account guards and
+  `JobRecord` binds the standard `updated` timestamp policy; account guards and
   parent timestamp/signing policies apply through its cursor.
 - **Hooks run after the primary record commits**: `onUpdate` sends notifications;
   terminal completion also evicts the runtime handle, releases its permit and
@@ -195,7 +195,7 @@ update. For recorded venue jobs this edits `JobState`, not an in-memory copy:
   the original result. Reading `getData()` always reads the primary record while
   it exists, including changes made through other component views.
 
-`JobState` supports upstream transactions for data edits. Obtain it from the
+`JobRecord` supports upstream transactions for data edits. Obtain it from the
 transaction's user draft; never invoke runtime `Job` verbs inside a retryable
 transaction. Runtime dispatch, notifications and future completion belong after
 the enclosing commit. A component commit is local; host flush remains the

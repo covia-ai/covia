@@ -68,7 +68,7 @@ public final class Session extends ALatticeComponent<ACell>
 		return (ctx, ability, path) -> {
 			if (!path.isEmpty() && K_C.equals(path.get(0)) && ctx != null
 					&& owner.equals(ctx.getUserDID()) && agentId.equals(ctx.getAgentId())
-					&& JobState.isId(id, ctx.getSessionId())) {
+					&& JobRecord.isId(id, ctx.getSessionId())) {
 				return AccessPolicy.Need.OF_RIGHT;
 			}
 			return AccessPolicy.Need.authorityOver(AccessPolicy.address(base, path));

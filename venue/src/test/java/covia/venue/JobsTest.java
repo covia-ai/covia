@@ -57,7 +57,7 @@ public class JobsTest {
 		assertNull(jobs.job(ID));
 		assertNull(jobs.getRecord(ID));
 
-		JobState job = jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
+		JobRecord job = jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.STARTED));
 		assertEquals(Status.STARTED, job.getRecord().get(Fields.STATUS));
 		assertNull(jobs.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.FAILED)));
 		assertEquals(1, jobs.size());
@@ -92,7 +92,7 @@ public class JobsTest {
 
 		AMap<AString, ACell> message = Maps.of(Fields.MESSAGE_ID, "first");
 		jobs.execute(draft -> {
-			JobState admitted = draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
+			JobRecord admitted = draft.create(ID, Maps.of(Fields.ID, ID, Fields.STATUS, Status.PENDING));
 			assertTrue(admitted.appendHistory(message));
 			assertNotNull(draft.remove(other));
 			assertNull(jobs.job(ID), "the draft is private until it commits");
