@@ -602,6 +602,7 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 	// ---- live dictation ----
 
 	ACell listen(RequestContext ctx, Settings s, AMap<AString, ACell> in) {
+		requireNamespaceAuthority(ctx);
 		if (!(s.transcriber() instanceof LocalSpeechEngine local)) throw new JobFailedException(LIVE_UNAVAILABLE);
 		int rate = sampleRate(in, null);
 		for (var entry : dictations.entrySet()) {
@@ -615,7 +616,15 @@ public class SpeechAdapter extends AAdapter implements AutoCloseable {
 		return Maps.of("id", id);
 	}
 
+	/** A dictation is its namespace's, reached only with that namespace's authority. */
+	private static void requireNamespaceAuthority(RequestContext ctx) {
+		if (!ctx.actsWithNamespaceAuthority()) {
+			throw new covia.exception.AuthException(RequestContext.NOT_NAMESPACE_AUTHORITY + ctx.getUserDID());
+		}
+	}
+
 	ACell hear(RequestContext ctx, AMap<AString, ACell> in) {
+		requireNamespaceAuthority(ctx);
 		String id = string(in, "id");
 		if (id == null) throw new InvalidInputException(ID_REQUIRED);
 		Listening l = dictations.get(id);

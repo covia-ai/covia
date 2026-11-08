@@ -331,6 +331,20 @@ public class RequestContext {
 		return rights != null;
 	}
 
+	/** Opening of a refusal of namespace state to a request acting with another namespace's authority; the namespace follows. */
+	public static final String NOT_NAMESPACE_AUTHORITY = "This request acts with another principal's authority, which holds nothing of its own in ";
+
+	/**
+	 * Whether this request acts with the authority of the namespace it acts in:
+	 * always, unless it acts with a separate authority from another namespace
+	 * ({@link #withAuthorityOf}). State a namespace keeps with no capability
+	 * resource of its own, such as a Python instance or a dictation, is
+	 * reachable only so.
+	 */
+	public boolean actsWithNamespaceAuthority() {
+		return rights == null || java.util.Objects.equals(getUserDID(), rights.getUserDID());
+	}
+
 	/**
 	 * The context whose authority decides what this request may do: this one,
 	 * or for a request with a separate authority ({@link #withAuthorityOf}), one

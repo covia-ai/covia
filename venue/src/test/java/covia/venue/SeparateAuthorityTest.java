@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
@@ -14,7 +15,10 @@ import convex.core.data.Vectors;
 import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Job;
 import covia.grid.Principals;
+import covia.grid.Status;
+import covia.grid.hitl.Hitl;
 
 /**
  * A request can act with another principal's authority
@@ -115,6 +119,21 @@ class SeparateAuthorityTest {
 		assertFalse(own.hasSeparateAuthority());
 		assertTrue(engine.authorityCovers(own, path("w/notes"), READ));
 		assertFalse(engine.authorityCovers(own, path(bob + "/w/notes"), READ));
+	}
+
+	@Test void askingHomeMeansTheAuthoritysHome() {
+		AString alice = TestEngine.uniqueDID("SeparateAskAlice");
+		AString bob = TestEngine.uniqueDID("SeparateAskBob");
+		engine.getVenueState().users().ensure(alice);
+		AMap<AString, ACell> ask = Hitl.request("Ask").ask(Hitl.approval("ok", "OK?").required()).build();
+
+		Job foreign = engine.jobs().invokeOperation("v/ops/hitl/request", ask, helper(alice, RequestContext.of(bob)));
+		try { foreign.awaitResult(10_000); } catch (Exception expected) {}
+		assertEquals(Status.FAILED, foreign.getStatus(), "Alice's inbox is not Bob's family");
+
+		Job home = engine.jobs().invokeOperation("v/ops/hitl/request", ask, helper(alice, RequestContext.of(alice)));
+		assertEquals(Status.INPUT_REQUIRED, home.getStatus(), home.getErrorMessage());
+		home.cancel();
 	}
 
 	@Test void aStepActsWithTheAgentsOwnAuthority() {

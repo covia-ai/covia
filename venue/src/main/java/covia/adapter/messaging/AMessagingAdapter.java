@@ -297,8 +297,10 @@ public abstract class AMessagingAdapter<S extends MessagingBotSpec, R extends Me
 	private AString resource(AString owner, String name) { return Strings.create(owner + "/" + getName() + "/" + name); }
 
 	protected final ACell handleBots(RequestContext ctx) {
-		AString user = ctx.getUserDID();
-		boolean venue = engine.getDIDString().equals(ctx.getCallerDID());
+		// The namespace's own bots, to a request acting with that namespace's
+		// authority; every bot, to the venue.
+		AString user = ctx.actsWithNamespaceAuthority() ? ctx.getUserDID() : null;
+		boolean venue = engine.getDIDString().equals(ctx.authorityContext().getCallerDID());
 		AVector<ACell> result = Vectors.empty();
 		for (R runner : runnerList()) if (venue || (user != null && user.equals(runner.spec().userDID(engine)))) result = result.conj(runner.status());
 		return Maps.of(K_BOTS, result);

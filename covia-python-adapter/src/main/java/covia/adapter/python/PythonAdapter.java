@@ -604,6 +604,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		if (owner == null || (engine != null && engine.isPublicPrincipal(owner))) {
 			throw new AuthException("Authenticated non-public identity required for Python instances");
 		}
+		if (!ctx.actsWithNamespaceAuthority()) throw new AuthException(RequestContext.NOT_NAMESPACE_AUTHORITY + owner);
 		return owner;
 	}
 
