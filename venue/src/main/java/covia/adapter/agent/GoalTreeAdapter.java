@@ -324,7 +324,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		AVector<ACell> fixedTools = (AVector<ACell>) TaskTools.DEFINITIONS.concat(harness).concat(baseTools);
 		boolean materialiseLive = ContextAssembler.rendered(
 			rootFrames, sourceConfig, cachePrefix) == null;
-		Loads.Snapshot loads = Loads.resolveForInference(engine, capsCtx, indexLoads,
+		Loads.Snapshot loads = Loads.resolveForInference(engine, new Loads.Readers(ctx, capsCtx), indexLoads,
 			(name, owner) -> ToolPalette.excludesLoadName(
 				fixed.toolIndex(), HARNESS_NAMES, name, owner),
 			profile.labels(), materialiseLive);

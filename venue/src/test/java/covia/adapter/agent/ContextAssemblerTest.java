@@ -786,7 +786,7 @@ public class ContextAssemblerTest {
 		assertEquals("v/ops/covia/read", snap.operation("covia_read").toString());
 		assertEquals("skill", RT.getIn(snap.toolProvenance().get(0), Fields.SOURCE).toString());
 		assertEquals("w/skills/toolful", RT.getIn(snap.toolProvenance().get(0), Fields.REF).toString());
-		assertEquals(0, Loads.resolveForInference(engine, ctx, loads,
+		assertEquals(0, Loads.resolveForInference(engine, Loads.Readers.of(ctx), loads,
 			(name, owner) -> false, Labels.BRACKET, false).tools().count(),
 			"a cached inference must not reopen a pinned skill to rediscover tools");
 		// A name fixed by harness or config is never shadowed by a load.
@@ -805,13 +805,13 @@ public class ContextAssemblerTest {
 		AMap<AString, ACell> loads = Maps.of("pinned-tools", Maps.of(
 			Fields.TOOLS, Vectors.of(Strings.create("v/ops/covia/read")),
 			Loads.K_KIND, Loads.KIND_TOOLS));
-		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, loads,
+		Loads.Snapshot initial = Loads.resolveForInference(engine, Loads.Readers.of(ctx), loads,
 			(name, owner) -> false, Labels.BRACKET, true);
 		assertEquals(1, initial.tools().count());
 		assertEquals("v/ops/covia/read", ToolPalette.operation(
 			initial.pinnedToolIndex(), "covia_read").toString());
 
-		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx, loads,
+		Loads.Snapshot cached = Loads.resolveForInference(engine, Loads.Readers.of(ctx), loads,
 			(name, owner) -> false, Labels.BRACKET, false);
 		assertEquals(0, cached.tools().count(),
 			"a cached inference must not resolve an unmaterialised pinned declaration again");

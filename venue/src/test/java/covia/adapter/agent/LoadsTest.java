@@ -121,6 +121,19 @@ public class LoadsTest {
 
 	// ========== declaredLoads: the entry forms ==========
 
+	/** Only the agent's config declares what the harness reads: a caller's tier,
+	 *  or a load the agent makes, never carries the mark (UCAN.md §5.4). */
+	@Test
+	public void testOnlyTheConfigDeclaresWhatTheHarnessReads() {
+		AString key = Strings.create("w/x");
+		ACell declared = Maps.of(key, Maps.of(Loads.K_CONFIGURED, CVMBool.TRUE));
+		assertTrue(Loads.isConfigured(ContextChain.operatorLoads(declared, "config.loads").get(key)));
+		assertFalse(Loads.isConfigured(ContextChain.declaredLoads(declared, "loads").get(key)),
+			"a caller's tier cannot claim it");
+		assertFalse(Loads.isConfigured(AbstractLLMAdapter.buildLoadEntryMeta(100, null)),
+			"nor a load the agent makes");
+	}
+
 	@Test
 	public void testDeclaredLoadsAcceptEveryEntryForm() {
 		AMap<AString, ACell> loads = ContextChain.declaredLoads(Maps.of(
@@ -654,7 +667,7 @@ public class LoadsTest {
 		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_APPENDED));
 		assertNull(RT.getIn(compactedLoads.get(path), Loads.K_TOOL_BINDINGS));
 
-		Loads.Snapshot initial = Loads.resolveForInference(engine, ctx, compactedLoads,
+		Loads.Snapshot initial = Loads.resolveForInference(engine, Loads.Readers.of(ctx), compactedLoads,
 			(name, owner) -> false, Labels.BRACKET, true);
 		assertTrue(all(initial.instructionElements()).contains("CURRENT BODY"));
 		assertFalse(all(initial.instructionElements()).contains("OLD BODY"));
@@ -679,7 +692,7 @@ public class LoadsTest {
 			0L, Fields.DEFINITION, Fields.NAME).toString(),
 			"the same atomic update retains the current dispatch binding");
 
-		Loads.Snapshot cached = Loads.resolveForInference(engine, ctx,
+		Loads.Snapshot cached = Loads.resolveForInference(engine, Loads.Readers.of(ctx),
 			GoalTreeContext.getLoads(persisted), (name, owner) -> false,
 			Labels.BRACKET, false);
 		assertEquals(1, cached.tools().count());

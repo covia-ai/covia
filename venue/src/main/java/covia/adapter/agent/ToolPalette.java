@@ -238,7 +238,7 @@ public final class ToolPalette {
 
 	/** Resolves load-owned tools without parallel route/label projections. */
 	@SuppressWarnings("unchecked")
-	static LoadPalette loadPalette(Engine engine, RequestContext ctx,
+	static LoadPalette loadPalette(Engine engine, Loads.Readers readers,
 			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded,
 			boolean resolvePinned) {
 		AVector<ACell> added = Vectors.empty();
@@ -257,7 +257,7 @@ public final class ToolPalette {
 				if (!resolvePinned && !Loads.isAgentManaged(meta)) continue;
 				AVector<ACell> ops = RT.ensureVector(meta.get(K_TOOLS));
 				if (ops == null || ops.count() == 0) continue;
-				bindings = bindingsForOperations(engine, ctx, ops);
+				bindings = bindingsForOperations(engine, readers.reading(meta), ops);
 			}
 			for (long i = 0; i < bindings.count(); i++) {
 				ACell binding = bindings.get(i);

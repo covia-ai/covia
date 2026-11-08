@@ -94,6 +94,9 @@ public final class Loads {
 	static final AString K_TRUSTED  = Strings.intern("trusted");
 	/** Ownership marker written only by agent-side context/skill loads. */
 	static final AString K_AGENT_MANAGED = Strings.intern("agentManaged");
+	/** Declared by the agent's config, so the harness reads it: stamped by the
+	 *  declaration boundary on every tier, true only for {@code config.loads}. */
+	static final AString K_CONFIGURED = Strings.intern("configured");
 	/** The non-volatile value has already been appended to conversation. */
 	static final AString K_APPENDED = Strings.intern("appended");
 
@@ -219,6 +222,29 @@ public final class Loads {
 			&& spec instanceof AMap<?, ?> m && CVMBool.TRUE.equals(m.get(K_TRUSTED));
 	}
 
+	/** True only when the agent's config declared the load ({@link #K_CONFIGURED}). */
+	static boolean isConfigured(ACell spec) {
+		return spec instanceof AMap<?, ?> m && CVMBool.TRUE.equals(m.get(K_CONFIGURED))
+			&& !isAgentManaged(spec);
+	}
+
+	/**
+	 * Who reads each load's sources. Context assembly is the harness's, so the
+	 * harness reads what the agent's config declares; what the agent or a
+	 * caller added is read under the agent's caps (UCAN.md §5.4).
+	 */
+	public record Readers(RequestContext harness, RequestContext agent) {
+		/** One context reading every load. */
+		public static Readers of(RequestContext ctx) {
+			return new Readers(ctx, ctx);
+		}
+
+		/** The context that reads {@code spec}'s sources. */
+		RequestContext reading(ACell spec) {
+			return isConfigured(spec) ? harness : agent;
+		}
+	}
+
 	/** True when the load contributes tools but no message content. */
 	static boolean isToolOnly(ACell spec) {
 		return spec instanceof AMap<?, ?> m && KIND_TOOLS.equals(m.get(K_KIND));
@@ -286,7 +312,7 @@ public final class Loads {
 	 */
 	public static Snapshot resolve(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect) {
-		return resolve(engine, ctx, effectiveLoads, excluded(fixedNames), dialect, true);
+		return resolve(engine, Readers.of(ctx), effectiveLoads, excluded(fixedNames), dialect, true);
 	}
 
 	/**
@@ -298,46 +324,41 @@ public final class Loads {
 	public static Snapshot resolveForInference(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames, AString dialect,
 			boolean materialiseLive) {
-		return resolve(engine, ctx, effectiveLoads, excluded(fixedNames), dialect, materialiseLive);
+		return resolve(engine, Readers.of(ctx), effectiveLoads, excluded(fixedNames), dialect, materialiseLive);
 	}
 
-	static Snapshot resolveForInference(Engine engine, RequestContext ctx,
+	static Snapshot resolveForInference(Engine engine, Readers readers,
 			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded, AString dialect,
 			boolean materialiseLive) {
-		return resolve(engine, ctx, effectiveLoads, excluded, dialect, materialiseLive);
+		return resolve(engine, readers, effectiveLoads, excluded, dialect, materialiseLive);
 	}
 
 	/** Resolves only contributed tool definitions and routes. No context source
 	 * is read and no operation entry is invoked. */
 	public static Snapshot describe(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> effectiveLoads, Set<String> fixedNames) {
-		return describe(engine, ctx, effectiveLoads, excluded(fixedNames));
+		return describe(engine, Readers.of(ctx), effectiveLoads, excluded(fixedNames), true);
 	}
 
-	static Snapshot describe(Engine engine, RequestContext ctx,
-			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded) {
-		return describe(engine, ctx, effectiveLoads, excluded, true);
-	}
-
-	static Snapshot describe(Engine engine, RequestContext ctx,
+	static Snapshot describe(Engine engine, Readers readers,
 			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded,
 			boolean resolvePinned) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
-		if (resolvePinned) effectiveLoads = materialiseInitial(engine, ctx, effectiveLoads);
+		if (resolvePinned) effectiveLoads = materialiseInitial(engine, readers, effectiveLoads);
 		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
-			engine, ctx, effectiveLoads, excluded, resolvePinned);
+			engine, readers, effectiveLoads, excluded, resolvePinned);
 		return new Snapshot(null, null, null, tools.active(), tools.pinnedIndex(), null,
 			effectiveLoads);
 	}
 
-	private static Snapshot resolve(Engine engine, RequestContext ctx,
+	private static Snapshot resolve(Engine engine, Readers readers,
 			AMap<AString, ACell> effectiveLoads, BiPredicate<String, AString> excluded, AString dialect,
 			boolean materialiseLive) {
 		if (effectiveLoads == null || effectiveLoads.count() == 0) return Snapshot.EMPTY;
-		if (materialiseLive) effectiveLoads = materialiseInitial(engine, ctx, effectiveLoads);
+		if (materialiseLive) effectiveLoads = materialiseInitial(engine, readers, effectiveLoads);
 		ToolPalette.LoadPalette tools = ToolPalette.loadPalette(
-			engine, ctx, effectiveLoads, excluded, materialiseLive);
-		Resolved resolved = resolveElements(engine, ctx, effectiveLoads, dialect, materialiseLive);
+			engine, readers, effectiveLoads, excluded, materialiseLive);
+		Resolved resolved = resolveElements(engine, readers, effectiveLoads, dialect, materialiseLive);
 		return new Snapshot(resolved.instructions(), resolved.exchanges(), resolved.observations(),
 			tools.active(), tools.pinnedIndex(), resolved.diagnostics(), effectiveLoads);
 	}
@@ -378,12 +399,12 @@ public final class Loads {
 	 * update. */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> materialiseInitial(Engine engine,
-			RequestContext ctx, AMap<AString, ACell> loads) {
+			Readers readers, AMap<AString, ACell> loads) {
 		AMap<AString, ACell> updated = loads;
 		for (var entry : loads.entrySet()) {
 			if (!(entry.getValue() instanceof AMap<?, ?> raw)) continue;
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) raw;
-			meta = materialiseEntry(engine, ctx, entry.getKey(), meta);
+			meta = materialiseEntry(engine, readers.reading(meta), entry.getKey(), meta);
 			if (meta != entry.getValue()) updated = updated.assoc(entry.getKey(), meta);
 		}
 		return updated;
@@ -454,7 +475,7 @@ public final class Loads {
 		meta = materialiseEntry(engine, ctx, key, meta);
 		loads = loads.assoc(key, meta);
 		if (isVolatile(meta)) return new Append(loads, Vectors.empty());
-		Resolved resolved = resolveElements(engine, ctx, Maps.of(key, meta), dialect, true);
+		Resolved resolved = resolveElements(engine, Readers.of(ctx), Maps.of(key, meta), dialect, true);
 		AVector<ACell> messages = (AVector<ACell>) resolved.instructions().concat(
 			ContextAssembler.contextExchanges(resolved.exchanges(), eventId));
 		return new Append(loads.assoc(key, meta.assoc(K_APPENDED, CVMBool.TRUE)), messages);
@@ -485,7 +506,7 @@ public final class Loads {
 	 */
 	public static AVector<ACell> elements(Engine engine, RequestContext ctx,
 			AMap<AString, ACell> loads, AString dialect) {
-		Resolved r = resolveElements(engine, ctx, loads, dialect, true);
+		Resolved r = resolveElements(engine, Readers.of(ctx), loads, dialect, true);
 		return r.instructions().concat(r.exchanges());
 	}
 
@@ -497,7 +518,7 @@ public final class Loads {
 			String status, boolean deduplicated) {}
 
 	@SuppressWarnings("unchecked")
-	private static Resolved resolveElements(Engine engine, RequestContext ctx,
+	private static Resolved resolveElements(Engine engine, Readers readers,
 			AMap<AString, ACell> loads, AString dialect, boolean materialiseLive) {
 		AVector<ACell> instructions = Vectors.empty();
 		AVector<ACell> exchanges = Vectors.empty();
@@ -542,7 +563,7 @@ public final class Loads {
 				continue;
 			}
 			loader.beginTrace(entryBudget);
-			Element resolved = element(engine, ctx, loader, key, meta, seenSkillIds,
+			Element resolved = element(engine, readers.reading(meta), loader, key, meta, seenSkillIds,
 				dialect, agentManaged);
 			boolean capped = false;
 			AVector<ACell> messages = resolved.exchanges();

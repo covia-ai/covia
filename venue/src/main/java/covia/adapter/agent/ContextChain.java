@@ -170,6 +170,10 @@ public class ContextChain {
 				&& !convex.core.data.prim.CVMBool.FALSE.equals(declaredTrust);
 			meta = meta.assoc(Loads.K_TRUSTED,
 				convex.core.data.prim.CVMBool.create(trusted));
+			// Only the agent's config declares context the harness reads; a
+			// caller's tier can never claim it (UCAN.md §5.4).
+			meta = meta.assoc(Loads.K_CONFIGURED,
+				convex.core.data.prim.CVMBool.create(operatorOwned));
 			normalised = normalised.assoc(entry.getKey(), meta);
 		}
 		return normalised;

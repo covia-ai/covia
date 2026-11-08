@@ -232,10 +232,11 @@ public final class ContextAssembler {
 	 * copies; nothing here is read from anywhere else.
 	 *
 	 * @param engine the venue
-	 * @param ctx the cycle's request context
-	 * @param capsCtx the capability-narrowed context the agent acts under; pinned
-	 *        context and the skills index resolve under it, as its tool calls do,
-	 *        so whoever configures an agent cannot show it more than its caps cover
+	 * @param ctx the harness's context: the context the config names (pinned
+	 *        entries, the skills index, configured loads) is assembled under it,
+	 *        since context assembly is the harness's (UCAN.md §5.4)
+	 * @param capsCtx the agent's own context, under its caps: its tool calls, and
+	 *        the loads it or a caller adds, run under it
 	 * @param config the effective configuration used to render and invoke L3
 	 * @param sourceConfig the declarative configuration whose equality owns the
 	 *        rendered prefix; ambient resolutions are excluded
@@ -755,7 +756,7 @@ public final class ContextAssembler {
 			ACell entry = entries.get(i);
 			if (volatileContextEntry(entry, "config.context[" + i + "]")) continue;
 			boolean trusted = trusted(entry, true, "config.context[" + i + "]");
-			ContextLoader.Resolved r = loader.resolveValue(entry, spec.capsCtx(), true);
+			ContextLoader.Resolved r = loader.resolveValue(entry, spec.ctx(), true);
 			if (r == null) continue;
 			if (trusted) {
 				instructions = instructions.conj(trustedContextMessage(spec.labels(), r, null));
@@ -809,7 +810,7 @@ public final class ContextAssembler {
 			ACell entry = entries.get(i);
 			if (!volatileContextEntry(entry, "config.context[" + i + "]")) continue;
 			loader.beginTrace(entryBudget);
-			ContextLoader.Resolved r = loader.resolveValue(entry, spec.capsCtx(), true);
+			ContextLoader.Resolved r = loader.resolveValue(entry, spec.ctx(), true);
 			if (r == null) continue;
 			AVector<ACell> instructions = Vectors.empty();
 			AVector<ACell> data = Vectors.empty();
@@ -1018,7 +1019,7 @@ public final class ContextAssembler {
 
 	/** One line per discoverable skill, {@code (loaded)} against those in context; absent without sources. */
 	static AMap<AString, ACell> skillsIndex(Spec spec) {
-		return skillsIndex(spec.engine(), spec.capsCtx(), spec.config(), spec.effectiveLoads(),
+		return skillsIndex(spec.engine(), spec.ctx(), spec.config(), spec.effectiveLoads(),
 			spec.toolCalling(), spec.labels());
 	}
 

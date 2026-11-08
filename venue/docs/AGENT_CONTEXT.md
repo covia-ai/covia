@@ -831,7 +831,11 @@ appendEvent(frame, resolvedChange)             →  frame.conversation'
 assemble(Spec)                                 →  Prompt
 ```
 
-- **Authority** first: everything that reads the lattice reads under the agent's capability-narrowed context.
+- **Authority** first: the context the config names (the system prompt,
+  `config.context`, `config.loads`, the skills index) is assembled by the
+  harness, with its owner's authority; the agent's tool calls, and the loads it
+  makes or a caller adds, read under its capability-narrowed context
+  ([UCAN.md §5.4](./UCAN.md)).
 - **Snapshot** fixes the declarative and effective config, session/frame state
   and request authority used by the cycle. The model setup is resolved here,
   once: the LLM operation, the effective config (the identity prompt as text,
@@ -1186,7 +1190,7 @@ state.
 |------------|---------|
 | `config` | Effective configuration used for rendering and the L3 invocation |
 | `sourceConfig` | Declarative configuration used only to validate `renderedContext` |
-| `ctx` / `capsCtx` | The cycle's request context, and the agent's capability-narrowed context, under which pinned context, the skills index and tool calls resolve |
+| `ctx` / `capsCtx` | The harness's context, under which the context the config names is assembled, and the agent's capability-narrowed context, under which its tool calls and the loads it or a caller adds resolve |
 | `sessionId`, `headNotice`, `budget`, `labels`, `toolCalling`, `cachePrefix` | Stable rendering parameters captured for this call; `cachePrefix` selects retained versus ephemeral initial rendering |
 | `tools` | Candidate initial manifest, persisted only when caching is enabled |
 | `loadElements`, `loadExchanges` | Candidate non-volatile starting loads, persisted only when caching is enabled |
