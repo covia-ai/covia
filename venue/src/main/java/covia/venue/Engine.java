@@ -3236,6 +3236,9 @@ public class Engine {
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now,
 			AString destination) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return proofsCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now, destination);
+		}
 		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now, destination);
 	}
 
@@ -3248,6 +3251,9 @@ public class Engine {
 	public boolean proofsStructurallyCover(RequestContext ctx, AString resource,
 			AString ability, long now) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return proofsStructurallyCover(ctx.authorityContext(), ctx.inNamespace(resource), ability, now);
+		}
 		return covia.lattice.CapabilityChecker.proofsStructurallyCover(
 			ctx.getProofs(), ctx.getCallerDID(), rootAuthorityPolicy(),
 			resource, ability, now);
@@ -3661,6 +3667,9 @@ public class Engine {
 	 *  {@code nb.url} caveat, in the public scope or a presented proof, must cover it. */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null || resource == null || ability == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return crossUserAllows(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
 		// The venue's explicitly addressed asset catalog is public. This is NOT
 		// true of another user's /a/: knowing a hash is not authorisation to read
 		// someone else's asset. On user-facing APIs a bare hash names the caller's
@@ -3795,6 +3804,10 @@ public class Engine {
 	 *  (a secret into an outbound request): a grant's {@code nb.url} caveat must
 	 *  cover it. */
 	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability, AString destination) {
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			requireStanding(ctx);
+			return requireLocalAccess(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
 		if (ownedByCaller(ctx, resource)) {
 			requireAuthority(ctx, resource, ability, destination);   // own namespace → scope seam
 			AString owner = ownerOf(resource);
@@ -3866,6 +3879,10 @@ public class Engine {
 	 */
 	public void requireGrantable(RequestContext ctx, AString namespace, AString resource, AString can,
 			Long exp, AString destination) {
+		if (ctx.hasSeparateAuthority()) {
+			requireGrantable(ctx.authorityContext(), namespace, ctx.inNamespace(resource), can, exp, destination);
+			return;
+		}
 		AString grant = Strings.create("grant/" + can);
 		AString owner = isHosted(resource) ? ownerOf(resource) : namespace;
 		// Presented grants are checked against the whole namespace for a match-any resource.
@@ -4188,6 +4205,9 @@ public class Engine {
 	 *  {@code nb.url} caveat must cover it. */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability, AString destination) {
 		if (ctx == null) return false;
+		if (ctx.hasSeparateAuthority()) {
+			return authorityCovers(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+		}
 		if (isAnothers(ctx, resource)) return crossUserAllows(ctx, resource, ability, destination);
 		return scopeOrHeldCovers(ctx, resource, ability, destination);
 	}
@@ -4222,6 +4242,10 @@ public class Engine {
 	/** As above for a use that sends a value to {@code destination}. */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability, AString destination) {
 		requireStanding(ctx);
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			requireAuthority(ctx.authorityContext(), ctx.inNamespace(resource), ability, destination);
+			return;
+		}
 		if (authorityCovers(ctx, resource, ability, destination)) return;
 		if (ctx != null && isAnothers(ctx, resource)) throw anothersDenial(ctx, resource, ability);
 		throw scopeDenial(ctx, resource, ability, destination);
@@ -4250,6 +4274,11 @@ public class Engine {
 	 */
 	public void requireInvoke(RequestContext ctx, AString operation) {
 		requireStanding(ctx);
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			// A reference, checked as given against the authority's scope.
+			requireInvoke(ctx.authorityContext(), operation);
+			return;
+		}
 		if (ctx != null && scopeOrHeldCovers(ctx, operation, Abilities.INVOKE, null)) return;
 		throw scopeDenial(ctx, operation, Abilities.INVOKE, null);
 	}
@@ -4274,6 +4303,10 @@ public class Engine {
 	public void requireStanding(RequestContext ctx) {
 		if (ctx != null && ctx.getJob() instanceof VenueJob job) job.requireAccount();
 		if (ctx != null) venueState.users().requireNotDeleted(ctx.getUserDID());
+		// A separate authority acts only while its own account stands too.
+		if (ctx != null && ctx.hasSeparateAuthority()) {
+			venueState.users().requireNotDeleted(ctx.authorityContext().getUserDID());
+		}
 	}
 
 	/**
@@ -4524,7 +4557,7 @@ public class Engine {
 		String name = secretRef.startsWith("did:")
 			? secretRef.substring(secretRef.indexOf("/s/") + 3) : secretName(secretRef);
 		if (name.isEmpty() || name.indexOf('/') >= 0) return null;   // one secret name, as secret:set requires
-		if (!isOwnSecret(owner, ctx)) {
+		if (!isOwnSecret(owner, ctx.authorityContext())) {
 			requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
 				destination != null ? Strings.create(destination) : null);
 		}
@@ -4542,7 +4575,7 @@ public class Engine {
 	public boolean isOwnSecretRef(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return false;
 		AString owner = secretOwner(secretRef, ctx.getUserDID());
-		return owner != null && isOwnSecret(owner, ctx);
+		return owner != null && isOwnSecret(owner, ctx.authorityContext());
 	}
 
 	/**
