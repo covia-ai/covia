@@ -267,8 +267,9 @@ Adapter-owned state uses `AdapterState`; see
   poll: an agent's run-loop events (`AgentWatch`), a Job's updates
   (`TestEngine.awaitJob`), a `TestAdapter.TestGate` that holds
   `v/test/ops/hold` work in flight, or a `TestSignal` a stub calls
-- Size and durability assertions call `engine.flush()` first: the venue
-  persists on a 100 ms sweep
+- Size and durability assertions call `engine.flush()` first: otherwise state
+  reaches the store only when the host's sync worker next runs, if whoever
+  opened the host runs one
 - A test that needs an Etch store of its own (restart, recovery, GC, the root,
   identity) gets it from `TestTemp.etch` or `TestTemp.etchFile`, never
   `@TempDir` or `EtchStore.createTemp` (`TestTemp` says why); a test server

@@ -102,9 +102,19 @@ clock and signing policy and share storage; there is no component-parent policy
 inheritance. `application.sync()` only reconciles application working state.
 `application.host().sync()` publishes the current root, and
 `application.host().flush()` supplies the durability barrier. Engine calls these
-in order for its sweeps and explicit flush. A concurrent write remains pending
+in order for an explicit `flush()` and on close. A concurrent write remains pending
 when the host finishes publishing an older snapshot; the host does not merge
 that stale snapshot back into current state.
+
+Whoever opens the host decides when state is published and saved, and runs the
+host's workers for it: `host.autoSync(interval, application::sync)` publishes the
+application on an interval, and `host.autoFlush(interval)` forces the store to
+disk on another. `VenueServer` starts both once its venue is running, every
+`VenueServer.SYNC_INTERVAL` (100 ms) and `VenueServer.FLUSH_INTERVAL` (10 s), so
+a process crash loses at most the last interval's writes and a machine crash the
+last flush interval's. The engine runs no worker of its own. Each worker reports
+its first failure, which the venue logs at ERROR. Closing the host stops them,
+then syncs the application and checkpoints once more.
 
 Engine now requires a `CoviaApplication`; the raw-cursor constructors and
 `PersistenceHandler` have been removed on this experimental branch. Embedders
@@ -220,7 +230,7 @@ remains an internal integration primitive, not an authorised public endpoint.
 Bootstrap catalog changes use `Workspace.transact` over the narrow
 venue-owned workspace. The materialiser is ordinary code operating on that draft,
 with no component/storage/rebinding wrapper of its own. DLFS file writes are live component edits;
-publication still belongs to Engine's host sweep or flush.
+publication still belongs to the host's sync worker or an explicit flush.
 
 The design history below describes the earlier 0.8.17 implementation and deferred
 ideas. Its `RootComponent`, cursor callbacks and implicit parent-policy APIs are

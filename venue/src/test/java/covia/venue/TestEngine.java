@@ -63,17 +63,28 @@ public class TestEngine {
 	private static volatile convex.etch.EtchStore collected;
 
 	static {
+		CoviaApplication application;
 		try {
 			STORE = TestTemp.etch("covia-test");
 			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
+			application = CoviaApplication.open(STORE, keyPair);
 			ENGINE = new Engine(new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))),
-				CoviaApplication.open(STORE, keyPair), keyPair).start();
+				application, keyPair).start();
 		} catch (java.io.IOException e) {
 			throw new ExceptionInInitializerError(e);
 		}
 		Engine.addDemoAssets(ENGINE);
+		// This class opened the host, so it runs the host's workers, as a venue server does.
+		var host = application.host();
+		host.autoSync(covia.venue.server.VenueServer.SYNC_INTERVAL, application::sync);
+		host.autoFlush(covia.venue.server.VenueServer.FLUSH_INTERVAL);
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 			ENGINE.close();
+			try {
+				host.close();
+			} catch (java.io.IOException e) {
+				throw new java.io.UncheckedIOException(e);
+			}
 			STORE.close();
 			convex.etch.EtchStore successor = collected;
 			if (successor != null) successor.close();

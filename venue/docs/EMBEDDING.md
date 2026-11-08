@@ -14,11 +14,14 @@ out-of-process clients and agents, and never required of an embedder.
 the configuration. `VenueServer.launch(config, store)` adopts a store you have
 already opened: the venue closes it when it closes, or if launch fails.
 
-The venue opens a `LatticeHost` over the store, and closes in this order:
+The venue opens a `LatticeHost` over the store and, once the venue is running,
+starts the host's sync and flush workers
+([PERSISTENCE.md](PERSISTENCE.md#snapshot-implementation-contract)). It closes in
+this order:
 1. the engine, which stops intake, gives work in flight the shutdown grace
    window ([JOBS.md](JOBS.md#shutdown)) and makes its final flush;
 2. the node;
-3. the host, whose `close()` makes the final checkpoint;
+3. the host, whose `close()` stops its workers and makes the final checkpoint;
 4. the store.
 
 `getHost()` returns that host. You may checkpoint it, for example before
@@ -28,10 +31,14 @@ acknowledging work that must be durable. Never close it yourself.
 `CoviaApplication.open(store, keyPair)`, or `connect(host, keyPair)` over a
 host you already run, then run
 `new Engine(config, application, keyPair).start()`: the application must sign
-as the engine's key. `Engine.close()` makes its
-final flush but never closes the host or the store: whoever opens a host
-closes it. So close the engine, then `application.host().close()`, then the
-store.
+as the engine's key. Whoever opens a host runs its workers and closes it. Once
+the engine is running, start
+`host.autoSync(VenueServer.SYNC_INTERVAL, application::sync)` and
+`host.autoFlush(VenueServer.FLUSH_INTERVAL)`, or intervals of your own; without
+them the venue publishes and saves only when it flushes or closes.
+`Engine.close()` makes its final flush but never closes the host or the store.
+So close the engine, then `application.host().close()`, which stops the workers,
+then the store.
 
 **The venue's state.** The application holds one working copy of each venue
 it signs as: `application.venue(venueKey)` returns it, and the engine works on
@@ -155,6 +162,7 @@ identity token through an operation", and HELD_KEYS.md.
 | `user.workspaceRoot()` with keys from `WorkspaceRoot.parseStringPath("w/...")` | `user.workspace()` with a path inside `w` from `CoviaPath.parse` (see User data) |
 | `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
 | `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
+| The engine publishing and flushing its host in the background | Whoever opens the host starts `host.autoSync` and `host.autoFlush` (see "An engine on your own host"); `VenueServer` does |
 
 ## Upgrading from 0.9.x
 

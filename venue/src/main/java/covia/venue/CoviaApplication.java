@@ -64,17 +64,15 @@ public final class CoviaApplication
 	private final DLFSRegion dlfs;
 	/** The host the factory opened or connected to; it owns storage and durability. */
 	private final LatticeHost<Index<Keyword, ACell>> host;
-	private final boolean ephemeral;
 	/** The clock, and signer if any, of venue components built through this application. */
 	private final VenueContext venueContext;
 
 	private CoviaApplication(AForkableCursor<Index<Keyword, ACell>> cursor, VenueContext venueContext,
-			DLFSRegion dlfs, LatticeHost<Index<Keyword, ACell>> host, boolean ephemeral) {
+			DLFSRegion dlfs, LatticeHost<Index<Keyword, ACell>> host) {
 		super(cursor);
 		this.venueContext = Objects.requireNonNull(venueContext, "venueContext");
 		this.dlfs = Objects.requireNonNull(dlfs, "dlfs");
 		this.host = host;
-		this.ephemeral = ephemeral;
 		this.regions = new Regions(cursor);
 		this.venues = venueRecords(regions);
 	}
@@ -138,7 +136,7 @@ public final class CoviaApplication
 	/** As {@link #connect(LatticeHost)}, its venue components using the given policy. */
 	public static CoviaApplication connect(
 			LatticeHost<Index<Keyword, ACell>> host, VenueContext context) {
-		return install(host, context, false);
+		return install(host, context);
 	}
 
 	/** Creates an in-memory application for tests and embedded ephemeral use. */
@@ -151,7 +149,7 @@ public final class CoviaApplication
 
 	/** Creates an in-memory application whose venue components use the given policy. */
 	public static CoviaApplication create(VenueContext context) {
-		return install(LatticeHost.create(Index.none(), new MemoryStore()), context, true);
+		return install(LatticeHost.create(Index.none(), new MemoryStore()), context);
 	}
 
 	/**
@@ -164,7 +162,7 @@ public final class CoviaApplication
 			throw new IllegalArgumentException("Venue key pair must not be null");
 		}
 		LatticeHost<Index<Keyword, ACell>> host = LatticeHost.open(Index.none(), store);
-		return install(host, VenueContext.SYSTEM.withSigner(keyPair), false);
+		return install(host, VenueContext.SYSTEM.withSigner(keyPair));
 	}
 
 	/**
@@ -172,13 +170,13 @@ public final class CoviaApplication
 	 * shared DLFS region and the application, and hands the region over.
 	 */
 	private static CoviaApplication install(LatticeHost<Index<Keyword, ACell>> host,
-			VenueContext context, boolean ephemeral) {
+			VenueContext context) {
 		Regions shared = new Regions(host.cursor());
 		DLFSRegion dlfs = shared.create(Covia.DLFS,
 			(AForkableCursor<AHashMap<ACell, SignedData<AHashMap<AString, AVector<ACell>>>>> cursor)
 				-> DLFSRegion.connect(cursor, host.store()));
 		// Live over the host's root, so Engine's state and the host's are one.
-		CoviaApplication application = new CoviaApplication(host.cursor(), context, dlfs, host, ephemeral);
+		CoviaApplication application = new CoviaApplication(host.cursor(), context, dlfs, host);
 		host.addApplication(application);
 		host.addApplication(shared);
 		return application;
@@ -227,10 +225,5 @@ public final class CoviaApplication
 	/** Host-owned persistence and durability boundary. */
 	public LatticeHost<Index<Keyword, ACell>> host() {
 		return host;
-	}
-
-	/** Whether this application was created as an in-memory ephemeral host. */
-	boolean isEphemeral() {
-		return ephemeral;
 	}
 }

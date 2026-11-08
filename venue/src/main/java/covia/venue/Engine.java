@@ -15,8 +15,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -214,13 +212,6 @@ public class Engine {
 	public static final java.util.Set<String> KERNEL_ADAPTERS = java.util.Set.of(
 		"covia", "agent", "dlfs", "hitl", "http", "file", "grid", "venue");
 
-	/**
-	 * Background sweep daemon — periodically publishes the connected venue
-	 * state and invokes the store durability barrier. See
-	 * {@code venue/docs/PERSISTENCE.md}.
-	 */
-	private ScheduledExecutorService persistenceSweep;
-
 	/** Explicit lifecycle: construction is inert; start/close own active resources. */
 	private enum Lifecycle { NEW, STARTING, PREPARED, STARTED, FAILED, CLOSING, CLOSED }
 	private volatile Lifecycle lifecycle = Lifecycle.NEW;
@@ -229,29 +220,6 @@ public class Engine {
 	private final CompletableFuture<Void> launchCancelled = new CompletableFuture<>();
 	public static final String LAUNCH_ALREADY_CLAIMED = "Engine launch requires a new or prepared engine and may be called only once";
 	public static final String START_DURING_LAUNCH = "Engine activation is owned by the in-progress launch";
-
-	/** How often the persistence sweep daemon runs (ms). */
-	private static final long SWEEP_INTERVAL_MS = 100;
-
-	/**
-	 * How often the sweep forces a store-level fsync. The sweep runs every
-	 * {@link #SWEEP_INTERVAL_MS} but only crosses the host's durability barrier
-	 * if at least this many ms have elapsed since the last flush. Bounds the
-	 * data-loss window on unclean shutdown (kernel panic, power loss, hard
-	 * VM stop) to roughly this interval. App-requested {@link #flush()} resets
-	 * the counter, so explicit flushes naturally suppress the periodic one.
-	 *
-	 * <p>Package-private (non-final, volatile) so tests can shrink the
-	 * interval to exercise the cadence quickly. Tests must restore the
-	 * original value. Volatile ensures the sweep daemon thread sees the
-	 * change without a synchronisation primitive — without this, the JIT
-	 * may cache the field per thread and tests changing it from the test
-	 * thread won't affect the sweep.</p>
-	 */
-	static volatile long FLUSH_INTERVAL_MS = 10_000;
-
-	/** Timestamp of the last completed flush. Initialised at construction. */
-	private volatile long lastFlushMillis;
 
 	/**
 	 * Assembles an inert runtime over a caller-owned application. The host must
@@ -266,7 +234,6 @@ public class Engine {
 		this.keyPair = java.util.Objects.requireNonNull(keyPair, "keyPair");
 		validateDeclaredIdentity();
 		this.lattice = application.cursor();
-		this.lastFlushMillis = System.currentTimeMillis();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
 		this.venueProofs = new covia.venue.auth.VenueProofs(this);
@@ -355,9 +322,8 @@ public class Engine {
 	 * explicitly invoked by the hook execute immediately; await their results when
 	 * subsequent setup or recovered work depends on them. Do not start workers,
 	 * recover work, publish the catalogue or call start/launch from the hook.
-	 * Do not wait for work that requires a running worker or scheduler. The
-	 * persistence sweep may run while setup is pending, but
-	 * inbound adapter workers and scheduled operations remain paused. Configured
+	 * Do not wait for work that requires a running worker or scheduler. Inbound
+	 * adapter workers and scheduled operations remain paused. Configured
 	 * secrets and available configured MCP tools are in place before the hook.</p>
 	 *
 	 * <p>Recovered work may execute after the hook completes, before this method
@@ -526,8 +492,8 @@ public class Engine {
 	 * Restores state and opens storage without firing schedules or starting
 	 * adapter-owned workers. This is a low-level assembly seam; prefer
 	 * {@link #launch(Function)} for the complete shared startup sequence.
-	 * Preparation starts the persistence sweep but does not install adapters or
-	 * recover work. Closing a prepared engine releases all engine-owned resources.
+	 * Preparation does not install adapters or recover work. Closing a prepared
+	 * engine releases all engine-owned resources.
 	 *
 	 * @return this engine
 	 * @throws IOException if content storage cannot be initialised
@@ -603,7 +569,6 @@ public class Engine {
 
 			bootstrapUsers();
 			registerAdapter(auth);
-			startPersistenceSweep();
 			lifecycle = Lifecycle.PREPARED;
 			return this;
 		} catch (IOException | RuntimeException | Error failure) {
@@ -701,19 +666,6 @@ public class Engine {
 			auth.installFirstAuthenticationKeys(id, keys, getDIDString());
 		}
 	}
-
-	private void startPersistenceSweep() {
-		// In-memory engines have nothing external to flush and get no daemon.
-		if (application.isEphemeral() || application.host().store() == null) return;
-		this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
-			Thread t = new Thread(r, "covia-persistence-sweep");
-			t.setDaemon(true);
-			return t;
-		});
-		this.persistenceSweep.scheduleWithFixedDelay(
-			this::sweep, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
-	}
-
 
 	/**
 	 * Creates the appropriate storage instance based on configuration.
@@ -846,8 +798,8 @@ public class Engine {
 	 *
 	 * <p>Retained for request-boundary publication by VenueServer and embedded
 	 * venue routes carrying {@code VenueRouteFeature.LATTICE_SYNC}. Physical
-	 * durability remains the responsibility of {@link #flush()} and the
-	 * background sweep.</p>
+	 * durability remains the responsibility of {@link #flush()} and of the
+	 * flush worker run by whoever opened the host.</p>
 	 */
 	public void syncState() {
 		if (lifecycle == Lifecycle.CLOSING || lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.FAILED) {
@@ -873,40 +825,14 @@ public class Engine {
 	// ========================================================================
 
 	/**
-	 * Background sweep step. Publishes the application, signing the venue's
-	 * record, through the host policy, then periodically invokes the physical
-	 * durability barrier.
-	 *
-	 * <p>Called from the persistence sweep daemon. Publishing an unchanged root
-	 * is cheap on idle venues.</p>
-	 */
-	private void sweep() {
-		if (lifecycle != Lifecycle.STARTED) return;
-		try {
-			publishApplicationRoot();
-			// Periodic durability barrier. The propagator's setRootData
-			// writes new root data to the mmap'd Etch but does not fsync;
-			// the OS may take minutes to write dirty pages out on its own.
-			// Forcing fsync every FLUSH_INTERVAL_MS bounds the unclean-
-			// shutdown data-loss window. Cheap on idle venues — fsync of
-			// an unchanged file is a no-op below the kernel.
-			if (System.currentTimeMillis() - lastFlushMillis >= FLUSH_INTERVAL_MS) {
-				flushStore();
-				lastFlushMillis = System.currentTimeMillis();
-			}
-		} catch (Exception e) {
-			log.warn("Persistence sweep failed", e);
-		}
-	}
-
-	/**
 	 * Publishes the complete hosted root and invokes the host store's physical
 	 * durability barrier.
 	 *
-	 * <p>Use sparingly — most writes don't need this. The background sweep
-	 * publishes every {@code SWEEP_INTERVAL_MS} (100 ms), so a process crash
-	 * loses at most that much, and forces the store to disk every
-	 * {@code FLUSH_INTERVAL_MS} (10 s), which bounds the loss on a machine crash.
+	 * <p>Use sparingly — most writes don't need this. Whoever opened the host
+	 * runs its sync and flush workers ({@code VenueServer} every
+	 * {@link covia.venue.server.VenueServer#SYNC_INTERVAL} and
+	 * {@link covia.venue.server.VenueServer#FLUSH_INTERVAL}), which bound what a
+	 * process crash and a machine crash lose.
 	 * Commit state in transactions; call {@code flush()} where Covia promises
 	 * durability to someone outside: before acknowledging (an accepted job
 	 * handle, a webhook receipt, a login) and before an external effect that
@@ -919,7 +845,6 @@ public class Engine {
 		} catch (java.io.IOException e) {
 			throw new java.io.UncheckedIOException("flush failed", e);
 		}
-		lastFlushMillis = System.currentTimeMillis();
 	}
 
 	private void flushStore() throws IOException {
@@ -927,8 +852,8 @@ public class Engine {
 	}
 
 	/**
-	 * Stops the persistence sweep, runs a final flush, and releases engine
-	 * resources. After close, the engine cannot be used.
+	 * Runs a final flush and releases engine resources, leaving the host and
+	 * its store open. After close, the engine cannot be used.
 	 *
 	 * <p>Must be called BEFORE {@code nodeServer.close()} so final publication
 	 * and durability complete while the host is still available.
@@ -1010,22 +935,6 @@ public class Engine {
 			}
 			launchModules = null;
 			launchBuiltIns = null;
-		}
-
-		// Persistence sweep is acquired last, so it is stopped first.
-		ScheduledExecutorService sweepExecutor = persistenceSweep;
-		persistenceSweep = null;
-		if (sweepExecutor != null) {
-			sweepExecutor.shutdown();
-			try {
-				if (!sweepExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
-					sweepExecutor.shutdownNow();
-				}
-			} catch (InterruptedException e) {
-				sweepExecutor.shutdownNow();
-				Thread.currentThread().interrupt();
-				recordCloseFailure(startupFailure, "Interrupted while stopping persistence sweep", e);
-			}
 		}
 
 		// Stop timers before the final durability barrier so no new jobs or

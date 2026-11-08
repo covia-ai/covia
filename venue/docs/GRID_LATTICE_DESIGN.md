@@ -836,10 +836,11 @@ result that differs from both inputs, and rejects an invalid signature.
   clears stale `RUNNING` and session fences, drops intake for terminal jobs,
   keeps jobless tasks, and wakes only remaining queued work. No agent execution
   is resumed mid-run.
-- **Publication** runs every 100 ms, with a store durability barrier every 10
-  seconds; request hooks may publish sooner. `engine.flush()` is the
-  synchronous barrier, and `Engine.close()` publishes and flushes before the
-  host and store close.
+- **Publication** runs on the host's sync and flush workers, which whoever opens
+  the host starts ([PERSISTENCE.md](PERSISTENCE.md#snapshot-implementation-contract));
+  request hooks may publish sooner. `engine.flush()` is the synchronous
+  barrier, and `Engine.close()` publishes and flushes before the host and store
+  close.
 - **A crash** loses only writes since the last persistence point; the store
   always holds a coherent snapshot, so a client polling a job may see it return
   to that point. A backup may restore a newer snapshot signed by the same venue.

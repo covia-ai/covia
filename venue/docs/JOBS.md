@@ -390,8 +390,8 @@ monitor (`JobManager.shutdown`):
    the record, so no thread outlives the venue on a job's account.
 
 Then requests already sent to remote venues may run until the grace window
-ends ([Remote delegation](#remote-delegation)), the persistence sweep stops and
-the final flush runs, carrying the suspended states.
+ends ([Remote delegation](#remote-delegation)), and the final flush runs,
+carrying the suspended states.
 
 ## Admission
 

@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -113,6 +114,21 @@ public class VenueServer {
 	/** The lattice host this venue opened over {@link #store}; it owns persistence */
 	protected LatticeHost<Index<Keyword, ACell>> host;
 
+	/** The Covia application this venue runs on {@link #host}. */
+	protected CoviaApplication application;
+
+	/**
+	 * How often the host's sync worker publishes the application, which bounds
+	 * what a process crash loses. The venue opened the host, so it runs the worker.
+	 */
+	public static final Duration SYNC_INTERVAL = Duration.ofMillis(100);
+
+	/**
+	 * How often the host's flush worker forces its store to disk, which bounds
+	 * what a machine crash loses.
+	 */
+	public static final Duration FLUSH_INTERVAL = Duration.ofSeconds(10);
+
 	/** NodeServer for (future) replication; it does not persist */
 	protected NodeServer<Index<Keyword, ACell>> nodeServer;
 
@@ -177,7 +193,7 @@ public class VenueServer {
 				this.store = createStore(this.config);
 			}
 			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
-			CoviaApplication application = CoviaApplication.open(store, keyPair);
+			this.application = CoviaApplication.open(store, keyPair);
 			this.host = application.host();
 			this.nodeServer = new NodeServer<>(host, NodeConfig.port(-1));
 			nodeServer.launch();
@@ -772,6 +788,19 @@ public class VenueServer {
 		} catch (IOException e) {
 			throw new java.io.UncheckedIOException(e);
 		}
+		startHostWorkers();
+	}
+
+	/**
+	 * Starts the host's sync and flush workers once the venue is running: the
+	 * venue opened the host, so it decides when state is published and saved.
+	 * Closing the host stops them. Each worker reports its first failure.
+	 */
+	private void startHostWorkers() {
+		host.autoSync(SYNC_INTERVAL, application::sync).failure()
+			.thenAccept(e -> log.error("Venue persistence: the host's sync worker failed", e));
+		host.autoFlush(FLUSH_INTERVAL).failure()
+			.thenAccept(e -> log.error("Venue persistence: the host's flush worker failed", e));
 	}
 
 	/**
@@ -1423,14 +1452,15 @@ public class VenueServer {
 	}
 
 	/**
-	 * Full shutdown: stops HTTP server, drains the engine's persistence sweep
-	 * and runs a final flush, then closes NodeServer, the lattice host and store.
+	 * Full shutdown: stops the HTTP server, closes the engine, which runs its
+	 * final flush, then closes NodeServer, the lattice host and the store.
 	 *
 	 * <p>The engine.close() must run BEFORE nodeServer.close() so its final
 	 * root publication and durability barrier complete while the host remains
 	 * available. NodeServer saves nothing on close. This venue opened the host,
-	 * so it closes it after the node: the host's final checkpoint is the last
-	 * save before the store closes. See {@code venue/docs/PERSISTENCE.md} §5.3.</p>
+	 * so it closes it after the node: closing the host stops its sync and flush
+	 * workers, and its final checkpoint is the last save before the store
+	 * closes. EMBEDDING.md, "Starting and stopping", gives the same order.</p>
 	 */
 	public void close() {
 		closeResources(null);
@@ -1463,7 +1493,7 @@ public class VenueServer {
 		Engine ownedEngine = engine;
 		if (ownedEngine != null) {
 			try {
-				ownedEngine.close(); // stops sweep daemon, runs final synchronous flush
+				ownedEngine.close(); // runs the final synchronous flush
 			} catch (RuntimeException e) {
 				recordCloseFailure(launchFailure, "Engine close failed", e);
 			}

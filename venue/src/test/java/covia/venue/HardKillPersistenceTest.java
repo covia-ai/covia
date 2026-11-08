@@ -223,7 +223,7 @@ public class HardKillPersistenceTest {
 	//   Cycle 1 (child A), then SIGKILL:
 	//     • flushed write           → must survive (the core flush() guarantee)
 	//     • burst of flushed writes → all must survive (coalescing / no lost update)
-	//     • unflushed + sweep wait  → must survive (background sweep durability)
+	//     • unflushed + sync wait   → must survive (the host's sync worker)
 	//     • unflushed + immediate   → may or may not survive (corruption probe only)
 	//   Cycle 2 (child B), then SIGKILL:
 	//     • restore loads the whole cycle-1 dataset (proves no corruption), adds
@@ -253,12 +253,12 @@ public class HardKillPersistenceTest {
 					"burst write #" + i + " should succeed");
 			}
 
-			// Unflushed write, then wait out several sweep cycles (100ms interval)
-			// so the background sweep + propagator persist it before the kill.
+			// Unflushed write, then wait out several runs of the host's sync worker
+			// (VenueServer.SYNC_INTERVAL) so it persists the write before the kill.
 			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive sweep.txt swept-content"));
 			assertEquals("OK", child.send("SLEEP 2000"));
 
-			// Unflushed write with NO sleep before the kill — races the sweep, so
+			// Unflushed write with NO sleep before the kill — races the sync worker, so
 			// survival is not asserted; this is the corruption probe (cycle 2's
 			// restore below proves the store is not corrupted by an aborted write).
 			assertEquals("OK", child.send("WRITE_NOFLUSH test-drive race.txt maybe-survives"));
@@ -295,7 +295,7 @@ public class HardKillPersistenceTest {
 					"burst write #" + i + " must survive both hard-kills");
 			}
 			assertEquals("swept-content", readDLFS(reader, "test-drive", "sweep.txt"),
-				"swept (unflushed) write must survive — sweep had 2s to propagate before the kill");
+				"unflushed write must survive — the sync worker had 2s to persist it before the kill");
 			assertEquals("second", readDLFS(reader, "test-drive", "cycle2.txt"),
 				"cycle-2 write must survive its hard-kill (accumulation across cycles)");
 

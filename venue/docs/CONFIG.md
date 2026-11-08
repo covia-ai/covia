@@ -678,8 +678,7 @@ returned stage when setup depends on their results. The hook must return a non-n
 stage covering all prerequisite setup. It must not start autonomous workers,
 perform recovery or wait for operations requiring running workers or schedules.
 Recovery skips already-live Jobs started by the hook. Recovered work can execute
-after the hook completes, before launch returns. The persistence sweep can run
-during setup. The hook may override configured secrets; startup does not provision
+after the hook completes, before launch returns. The hook may override configured secrets; startup does not provision
 them again afterwards. Configured MCP discovery retains its best-effort policy:
 the hook is not a guarantee that every remote server was reachable.
 Adapters must start autonomous workers in `AAdapter.start()`, not
