@@ -7,6 +7,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -1708,15 +1709,37 @@ public class Engine {
 
 	/**
 	 * A started venue with a fresh key pair, mounted in an in-memory
-	 * application of its own whose update timer runs, so its scheduled events
-	 * fire by themselves. For tests and throwaway use.
+	 * application of its own, on a clock held at the current time and with no
+	 * update timer: nothing fires unless its application is updated. For unit
+	 * tests and throwaway use.
 	 */
 	public static Engine createTemp(AMap<AString,ACell> config) {
+		return createTemp(DrivenClock.at(Instant.now()), config);
+	}
+
+	/**
+	 * As {@link #createTemp(AMap)}, on the given clock: move it, then update
+	 * the {@linkplain #application() application} to act on the new time.
+	 */
+	public static Engine createTemp(DrivenClock clock, AMap<AString,ACell> config) {
+		return startTemp(CoviaApplication.create(clock.policy()), config);
+	}
+
+	/**
+	 * As {@link #createTemp(AMap)}, on the system clock with the update timer
+	 * running, so scheduled events fire by themselves. For integration and
+	 * smoke tests.
+	 */
+	public static Engine createRealTime(AMap<AString,ACell> config) {
+		CoviaApplication application = CoviaApplication.create();
+		Engine engine = startTemp(application, config);
+		application.autoUpdate();
+		return engine;
+	}
+
+	private static Engine startTemp(CoviaApplication application, AMap<AString,ACell> config) {
 		try {
-			CoviaApplication application = CoviaApplication.create();
-			Engine engine = application.mount(AKeyPair.generate(), config).start();
-			application.autoUpdate();
-			return engine;
+			return application.mount(AKeyPair.generate(), config).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -3609,7 +3632,7 @@ public class Engine {
 	}
 
 	/** The application this venue is mounted in. */
-	CoviaApplication application() {
+	public CoviaApplication application() {
 		return application;
 	}
 

@@ -146,9 +146,9 @@ Nothing in the scheduler keeps time. The application's **update**
 each mounted venue in mount order, and a venue's update starts its events due
 by then. Whoever opens the application decides when it runs:
 `CoviaApplication.autoUpdate()` starts a timer that calls it when the earliest
-next event across the venues is due by the clock, and a venue server,
-`Engine.createTemp` and the shared test engine start one. An embedder that
-drives the clock steps the application itself instead
+next event across the venues is due by the clock, and a venue server and
+`Engine.createRealTime` start one. An embedder that drives the clock, and a
+unit test's engine, step the application themselves instead
 ([EMBEDDING.md](./EMBEDDING.md#time)).
 
 **One lock per venue** covers every index mutation — `schedule`, `cancel`,

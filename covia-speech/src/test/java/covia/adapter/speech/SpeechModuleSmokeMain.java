@@ -18,7 +18,7 @@ public final class SpeechModuleSmokeMain {
 
 	public static void main(String[] args) throws Exception {
 		try (FakeSpeechApi api = new FakeSpeechApi()) {
-			Engine engine = Engine.createTemp(Maps.of(
+			Engine engine = Engine.createRealTime(Maps.of(
 				Config.MODULES, Vectors.of(Maps.of("path", args[0])),
 				Config.ADAPTERS, Maps.of("speech", Maps.of("baseUrl", api.baseUrl()))));
 			try {

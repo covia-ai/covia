@@ -50,7 +50,7 @@ public class LLMAgentOllamaIT {
 
 	@BeforeEach
 	public void setup() {
-		engine = Engine.createTemp(null);
+		engine = Engine.createRealTime(null);
 		Engine.addDemoAssets(engine);
 	}
 

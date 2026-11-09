@@ -42,7 +42,7 @@ public final class SonnyLabsModuleSmokeMain {
 		});
 		fake.start();
 
-		Engine engine = Engine.createTemp(Maps.of(
+		Engine engine = Engine.createRealTime(Maps.of(
 			Config.MODULES, Vectors.of(Maps.of("path", args[0])),
 			Config.ADAPTERS, Maps.of("sonnylabs", Maps.of(
 				"baseUrl", "http://localhost:" + fake.getAddress().getPort()))));

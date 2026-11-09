@@ -153,6 +153,12 @@ List<Job> started = application.update().get(); // start what is due by then
 for (Job job : started) job.awaitResult();      // when the test needs them finished
 ```
 
+`Engine.createTemp(clock, config)` does this setup in one call: an in-memory
+venue on `clock` with no timer, updated with `engine.application().update()`.
+`Engine.createTemp(config)` is the same on a clock held at the current time, so
+nothing fires unless you update it. `Engine.createRealTime(config)` uses the
+system clock and starts the timer, for integration and smoke tests.
+
 ## Routes
 
 Routes you add with `VenueServer.launch(config, extraRoutes)` share the
