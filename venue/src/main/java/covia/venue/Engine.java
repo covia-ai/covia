@@ -4531,12 +4531,13 @@ public class Engine {
 	/** The refusal of another principal's resource the request holds no rights to. */
 	private static covia.exception.AuthException anothersDenial(RequestContext ctx, AString resource, AString ability) {
 		AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
-		return new covia.exception.AuthException("Access denied: " + ability + " on " + resource
+		return RequestContext.denied(ctx, "Access denied: " + ability + " on " + resource
 			+ " — accessing another user's resource requires " + ability + " rights"
 			+ ((proofs == null || proofs.isEmpty())
 				? " (no proof presented)" : " (the presented proofs do not cover it)")
 			+ (isTalkAbility(ability)
-				? "; the target's accepts policy does not admit this caller" : ""));
+				? "; the target's accepts policy does not admit this caller" : ""),
+			resource, ability);
 	}
 
 	/**
@@ -4564,10 +4565,11 @@ public class Engine {
 	private static covia.exception.AuthException scopeDenial(RequestContext ctx, AString resource, AString ability,
 			AString destination) {
 		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability, destination) : null;
-		return new covia.exception.AuthException(denial != null ? denial
+		return RequestContext.denied(ctx, denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
-				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
+				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""),
+			resource, ability);
 	}
 
 	/**

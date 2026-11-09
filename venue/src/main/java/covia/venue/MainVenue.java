@@ -94,9 +94,7 @@ public class MainVenue {
 				// or packaging problem whose reason sits several exceptions down.
 				log.error("Venue '{}' failed to start: {}",
 					RT.getIn(venueConfig, Fields.NAME), describeStartupFailure(e), e);
-				for (VenueServer started : servers) {
-					try { started.close(); } catch (Exception ignored) { /* exiting anyway */ }
-				}
+				closeAll(servers);
 				System.exit(70); // EX_SOFTWARE
 				return;
 			}
@@ -105,26 +103,7 @@ public class MainVenue {
 		}
 		process.arm();
 
-		// On JVM shutdown (e.g. `docker stop` → SIGTERM) flush each venue's
-		// accumulated state before the process exits. Registered on Convex's
-		// shared, priority-ordered Shutdown registry at SERVICE, the slot for
-		// services, so the venue's final root publication + fsync via the
-		// idempotent Engine.close() completes before Convex closes its servers
-		// (SERVER) and Etch files (ETCH). NodeServer saves nothing on close, so
-		// this flush is the venue's last save. Deliberately not a second
-		// Runtime.addShutdownHook: that would run concurrently with Convex's
-		// shutdown and race the store close/flush.
-		Shutdown.addHook(Shutdown.SERVICE, () -> {
-			log.info("Shutdown signal received — flushing {} venue(s)", servers.size());
-			for (VenueServer server: servers) {
-				try {
-					server.getEngine().close();
-				} catch (Exception e) {
-					log.warn("Venue flush on shutdown failed", e);
-				}
-			}
-			log.info("All venues flushed");
-		});
+		closeOnJvmShutdown(servers);
 
 		// Desktop presence: a tray icon per venue with Open / Close / Exit —
 		// best-effort; headless or unsupported desktops, COVIA_NO_TRAY=1 and any
@@ -136,6 +115,33 @@ public class MainVenue {
 		VenueRelauncher.signalMainVenueReady();
 	}
 	
+	/**
+	 * Closes the venues when the JVM shuts down, as {@code docker stop} causes.
+	 *
+	 * <p>Registered at {@link Shutdown#SERVICE}, so each venue has stopped taking
+	 * requests and saved before Convex closes its servers and Etch files. A
+	 * separate {@code Runtime.addShutdownHook} would run alongside that and race
+	 * the store's close.</p>
+	 */
+	static void closeOnJvmShutdown(List<VenueServer> servers) {
+		Shutdown.addHook(Shutdown.SERVICE, () -> {
+			log.info("Shutdown signal received — closing {} venue(s)", servers.size());
+			closeAll(servers);
+			log.info("All venues closed");
+		});
+	}
+
+	/** Runs each venue's full close; a venue that fails does not stop the rest. */
+	static void closeAll(List<VenueServer> servers) {
+		for (VenueServer server: servers) {
+			try {
+				server.close();
+			} catch (RuntimeException e) {
+				log.warn("Venue close failed", e);
+			}
+		}
+	}
+
 	private static void configureLogging(ACell config) throws JoranException, IOException {
 		// Suppress Logback internal messages before any logging initialisation
 		//ch.qos.logback.classic.Logger rootLogger = 

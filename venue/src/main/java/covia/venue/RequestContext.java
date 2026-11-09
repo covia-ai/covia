@@ -10,6 +10,7 @@ import convex.core.data.Blob;
 import convex.core.data.Vectors;
 import convex.core.data.Strings;
 import covia.exception.AuthException;
+import covia.exception.CapabilityDeniedException;
 import covia.grid.Authority;
 import covia.grid.Job;
 import covia.grid.Principals;
@@ -759,7 +760,7 @@ public class RequestContext {
 	 */
 	public void requireCapability(AString resource, AString ability) {
 		String denial = grantsDenial(resource, ability);
-		if (denial != null) throw new AuthException(denial);
+		if (denial != null) throw denied(this, denial, resource, ability);
 	}
 
 	/**
@@ -780,7 +781,16 @@ public class RequestContext {
 		if (grants == null) grants = Vectors.empty();
 		String denial = CapabilityChecker.allows(grants, resource, ability,
 			authority.getUserDID(), authority.getDID(), op, invocationInput, gate);
-		if (denial != null) throw new AuthException(denial);
+		if (denial != null) throw denied(this, denial, resource, ability);
+	}
+
+	/**
+	 * The refusal of {@code (resource, ability)} to the authority of {@code ctx}
+	 * (null for a request with no context), with the resource as it resolves there.
+	 */
+	static CapabilityDeniedException denied(RequestContext ctx, String reason, AString resource, AString ability) {
+		if (ctx == null) return new CapabilityDeniedException(reason, resource, ability, null);
+		return new CapabilityDeniedException(reason, ctx.inNamespace(resource), ability, ctx.authorityContext().getCallerDID());
 	}
 
 	/**

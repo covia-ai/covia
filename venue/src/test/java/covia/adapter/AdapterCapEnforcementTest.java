@@ -21,7 +21,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.auth.ucan.Capability;
 import covia.api.Fields;
-import covia.exception.AuthException;
+import covia.exception.CapabilityDeniedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
@@ -91,7 +91,7 @@ public class AdapterCapEnforcementTest {
 	}
 
 	private static boolean capDenied(String msg) {
-		return msg.contains(AuthException.class.getName());
+		return msg.contains(CapabilityDeniedException.class.getName());
 	}
 
 	private static AMap<AString, ACell> m(Object... kv) {

@@ -39,6 +39,7 @@ import convex.core.crypto.PFXTools;
 import convex.core.data.Blob;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
+import convex.core.util.Shutdown;
 import convex.core.store.AStore;
 import convex.core.data.Hash;
 import convex.core.data.Ref;
@@ -136,10 +137,12 @@ public class VenueServer {
 	protected CoviaWebApp webApp;
 	protected Engine engine;
 
-	/** Guards {@link #close()} so a double-invocation (explicit close + JVM
-	 *  shutdown, or repeated calls) is a safe no-op. */
+	/** Set when this venue starts releasing its resources, by {@link #close()} or a failed launch. */
 	private final java.util.concurrent.atomic.AtomicBoolean closed =
 			new java.util.concurrent.atomic.AtomicBoolean(false);
+
+	/** Runs {@link #close()} once; a later caller waits until it has finished. */
+	private final Shutdown.Once closeOnce = Shutdown.once(() -> closeResources(null));
 
 	protected CoviaAPI api;
 	protected MCP mcp;
@@ -1481,9 +1484,12 @@ public class VenueServer {
 	 * so it closes it after the node: closing the host stops its sync and flush
 	 * workers, and its final checkpoint is the last save before the store
 	 * closes. EMBEDDING.md, "Starting and stopping", gives the same order.</p>
+	 *
+	 * <p>The close runs once. A caller that finds it under way waits for it, so a
+	 * JVM shutdown cannot close the store files beneath a save in progress.</p>
 	 */
 	public void close() {
-		closeResources(null);
+		closeOnce.run();
 	}
 
 	/**

@@ -535,8 +535,11 @@ copy and publishes it. Since Convex 0.8.18, `NodeServer.close()` neither
 publishes nor flushes. Whoever opened the host closes it: a standalone
 `VenueServer` closes its host after the node, and `LatticeHost.close()` makes
 the final checkpoint before the store closes. An Engine running on an
-embedder's host never closes it; its final flush is its last save. On JVM shutdown, `MainVenue` closes each engine from a hook at
-`Shutdown.SERVICE`, before Convex closes its servers and Etch files.
+embedder's host never closes it; its final flush is its last save.
+
+On JVM shutdown, `MainVenue` runs each venue's full `VenueServer.close()` from
+a hook at `Shutdown.SERVICE`, before Convex closes its servers and Etch files.
+The close runs once: a caller that finds it under way waits for it.
 
 ### 5.4 Request-boundary publication
 

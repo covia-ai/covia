@@ -51,8 +51,9 @@ public class SecretUseTest {
 		engine.close();
 	}
 
+	/** The venue's time, which is held: a token's expiry is judged against this, not the wall clock. */
 	private static long now() {
-		return System.currentTimeMillis() / 1000;
+		return engine.currentTimestamp().longValue() / 1000;
 	}
 
 	private static AVector<ACell> useOf(AString resource, String url) {

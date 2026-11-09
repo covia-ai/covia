@@ -161,6 +161,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Fixed
 
+- A venue told to stop (SIGTERM, `docker stop`) stops taking requests before its final save, then closes completely, as the tray's Close and Exit do.
 - An agent's session history keeps a failed tool call's whole message; the model is shown the first 1024 characters and how many more there are.
 - A model provider's HTTP 403 no longer reports a refused API key, and model call failures carry the provider's error code and message exactly as sent.
 - A HITL request fails with a message saying why when the person asked loses their account, and the agent that asked is told (#674).
