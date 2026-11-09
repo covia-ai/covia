@@ -1884,19 +1884,30 @@ public class Engine {
 	}
 
 	public static final String USER_PATH_UNAUTHENTICATED = "User path resolution requires an authenticated user";
-	/** The refusal for a path that reaches no namespace, naming those a caller can use (GRID_LATTICE_DESIGN.md §4.1). */
-	public static final String USER_PATH_NO_NAMESPACE = "A path must start at a namespace: w (workspace), o (operations), "
+	/** The wording of {@link #noNamespaceMessage}: the namespaces a caller can use (GRID_LATTICE_DESIGN.md §4.1). */
+	private static final String USER_PATH_NO_NAMESPACE = "A path must start at a namespace: w (workspace), o (operations), "
 		+ "a (assets), g (agents), j (jobs), s (secrets), h (human-in-the-loop requests), v (venue definitions), "
 		+ "x/<adapter> (adapter views), and within a running agent, session or job n, c or t";
 	/** Opening of the refusal for a did: path that is not a valid DID URL. */
 	public static final String INVALID_DID_URL = "Invalid DID URL: ";
+
+	/**
+	 * The refusal for a path that reaches no namespace. Every route that
+	 * refuses one builds its message here, so the message can follow the request.
+	 *
+	 * @param ctx The request being refused, or null if there is none
+	 * @return The message for that request
+	 */
+	public static String noNamespaceMessage(RequestContext ctx) {
+		return USER_PATH_NO_NAMESPACE;
+	}
 
 	private ParsedUserPath parseUserPath(RequestContext ctx, AString ref) {
 		if (ctx == null || ctx.getUserDID() == null) {
 			throw new AuthException(USER_PATH_UNAUTHENTICATED);
 		}
 		if (ref == null || ref.isEmpty()) {
-			throw new InvalidInputException(USER_PATH_NO_NAMESPACE);
+			throw new InvalidInputException(noNamespaceMessage(ctx));
 		}
 
 		// The owner is the DID as written (ownerOf); what follows it is a path
@@ -1916,7 +1927,7 @@ public class Engine {
 		}
 
 		if (path.isEmpty()) {
-			throw new InvalidInputException(USER_PATH_NO_NAMESPACE);
+			throw new InvalidInputException(noNamespaceMessage(ctx));
 		}
 		return new ParsedUserPath(ownerDID, path, Strings.create(ownerDID + CoviaPath.address(path)));
 	}

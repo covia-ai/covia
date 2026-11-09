@@ -469,10 +469,10 @@ public class EngineTest {
 		RequestContext ctx = venue.venueContext();
 		InvalidInputException empty = assertThrows(InvalidInputException.class,
 			() -> venue.resolveUserPath(ctx, Strings.EMPTY, false));
-		assertEquals(Engine.USER_PATH_NO_NAMESPACE, empty.getMessage());
+		assertEquals(Engine.noNamespaceMessage(ctx), empty.getMessage());
 		InvalidInputException bare = assertThrows(InvalidInputException.class,
 			() -> venue.resolveUserPath(ctx, Strings.create(venue.getDIDString()), false));
-		assertEquals(Engine.USER_PATH_NO_NAMESPACE, bare.getMessage());
+		assertEquals(Engine.noNamespaceMessage(ctx), bare.getMessage());
 		InvalidInputException malformed = assertThrows(InvalidInputException.class,
 			() -> venue.resolveUserPath(ctx, Strings.create("did:"), false));
 		assertTrue(malformed.getMessage().startsWith(Engine.INVALID_DID_URL), malformed.getMessage());

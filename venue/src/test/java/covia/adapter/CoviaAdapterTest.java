@@ -607,7 +607,7 @@ public class CoviaAdapterTest {
 	public void testListNeedsAPath() {
 		Job job = engine.jobs().invokeOperation("v/ops/covia/list", Maps.empty(), ALICE);
 		assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
-		assertEquals(Engine.USER_PATH_NO_NAMESPACE, job.getErrorMessage());
+		assertEquals(Engine.noNamespaceMessage(ALICE), job.getErrorMessage());
 	}
 
 	@Test

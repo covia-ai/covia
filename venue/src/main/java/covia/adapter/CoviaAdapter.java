@@ -1283,7 +1283,7 @@ public class CoviaAdapter extends AAdapter {
 		}
 		Path segments = CoviaPath.of(path);
 		// A principal's record is never one value to hand out: a path reaches a namespace
-		if (segments.isEmpty()) throw new InvalidInputException(Engine.USER_PATH_NO_NAMESPACE);
+		if (segments.isEmpty()) throw new InvalidInputException(Engine.noNamespaceMessage(ctx));
 		AString namespace = segments.get(0);
 		if (Namespace.X.equals(namespace)) {
 			AString owner = (ctx == null) ? null : ctx.getUserDID();
