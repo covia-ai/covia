@@ -163,7 +163,7 @@ sources you trust.
 | Read one without loading it | `skills_read skill=<path or a/hash>` |
 | Import a SKILL.md from a file root or DLFS drive | `skills_import source=file://<root>/<dir>/SKILL.md` — one file per call, lands at `w/skills/<name>`; the venue's `v/skills/building/skill-import` skill covers the options |
 | See exactly what an agent would send its model | `agent_context agentId=<name> message="…"` (or `task=…`, `sessionId=…`) — the level-3 input for that call with budget and band marks, plus cache marks when enabled |
-| List sessions and read their history | `agent_sessions agentId=<name>` then `agent_history agentId=<name> sessionId=<id>`; entries come back exactly as stored, newest first unless `start`/`end`/`limit` select a range by position |
+| List sessions and read their history | `agent_sessions agentId=<name>` then `agent_history agentId=<name> sessionId=<id>`; entries come back exactly as stored, oldest to newest; with no range you get the newest page, and `start`/`end`/`limit` select one by position |
 | Compact an idle session as its owner | `agent_compact_session agentId=<name> sessionId=<id> summary="…"` — keeps the exact old vector under the compaction record and returns metadata only |
 | Rebuild an idle session's cached provider prefix | `agent_reload_context agentId=<name> sessionId=<id>` — forces a same-config refresh on the next cached inference while preserving conversation and loads; uncached models retain no prefix |
 | Audit what an agent did in a cycle | `covia_read path=g/<name>/timeline` — each entry holds the cycle's `context`, `tools` and `inferences` (per call: `sent`, `reply`, `calls` with results and `ms`; a `subgoal` call carries its child `frame`) |
