@@ -334,7 +334,7 @@ java -jar target/covia.jar [config.json]
 - `docs/GRID_LATTICE_DESIGN.md` — lattice design
 - `docs/MIGRATE.md` — venue migration: requirements, ownership and design,
   each migration in this build with its code, and how migration is tested
-- `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
-  `docs/GOAL_TREE.md` — agent architecture
+- `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TASKS.md`,
+  `docs/AGENT_TEMPLATES.md`, `docs/GOAL_TREE.md` — agent architecture
 - `docs/READ_API.md` — job-free read surface
 - `../AGENTS.md` — project-level guide; `../BUILD.md` — release flow
