@@ -158,6 +158,46 @@ public class AgentSuspensionTest {
 		assertEquals(0, agent.getTasks().count());
 	}
 
+	private static void assertCarriesTheCode(Job job) {
+		assertEquals(TestAdapter.FAILLLM_CODE, job.getErrorCode());
+		assertEquals(TestAdapter.FAILLLM_DETAIL, job.getErrorDetail());
+	}
+
+	@Test
+	public void aSuspensionKeepsTheFailuresCodeAndDetailUntilResumed(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		Agent agent = create(owner, "coded-setup", "coded-setup");
+		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "coded-setup", Fields.MESSAGE, Strings.create("hello")), owner);
+		assertThrows(Exception.class, () -> chat.awaitResult(10_000));
+		assertCarriesTheCode(chat);
+
+		assertEquals(Agent.SUSPENDED, agent.getStatus());
+		assertEquals(TestAdapter.FAILLLM_CODE, agent.getErrorCode().toString());
+		assertEquals(TestAdapter.FAILLLM_DETAIL, agent.getErrorDetail());
+
+		var info1 = engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, "coded-setup"), owner).awaitResult(5000);
+		assertEquals(TestAdapter.FAILLLM_CODE, convex.core.lang.RT.getIn(info1, Fields.ERROR_CODE).toString());
+		assertEquals(TestAdapter.FAILLLM_DETAIL, convex.core.lang.RT.getIn(info1, Fields.ERROR_DETAIL));
+
+		engine.jobs().invokeOperation("v/ops/agent/resume",
+			Maps.of(Fields.AGENT_ID, "coded-setup"), owner).awaitResult(5000);
+		assertNull(agent.getErrorCode(), "resuming clears the fault");
+		assertNull(agent.getErrorDetail(), "resuming clears the fault");
+	}
+
+	@Test
+	public void aFailedTaskCarriesTheFailuresCodeAndDetail(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		Agent agent = create(owner, "coded-content", "coded-content");
+		Job task = request(owner, "coded-content", "go");
+		assertThrows(Exception.class, () -> task.awaitResult(10_000));
+		assertCarriesTheCode(task);
+		assertEquals(Agent.SLEEPING, awaitRest(agent, owner));
+		assertNull(agent.getErrorCode(), "a failure of the work is not a fault in the agent");
+	}
+
 	@Test
 	public void aChatTakenByACycleThatCannotContinueFails(TestInfo info) throws Exception {
 		// Its message is already in the conversation and would never be

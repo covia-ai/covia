@@ -283,8 +283,17 @@ public class VenueJob extends Job {
 	 * @return the notification, or null when the record is missing or the Job has finished
 	 */
 	public Runnable failIn(VenueState draft, String message) {
-		return updateIn(draft, data -> data.assoc(Fields.STATUS, covia.grid.Status.FAILED)
-			.assoc(Fields.ERROR, Strings.create(message)).dissoc(Fields.ERROR_CODE));
+		return failIn(draft, null, null, message);
+	}
+
+	/** As {@link #failIn(VenueState, String)}, with an optional code and structured detail. */
+	public Runnable failIn(VenueState draft, String code, ACell detail, String message) {
+		return updateIn(draft, data -> {
+			AMap<AString, ACell> failed = data.assoc(Fields.STATUS, covia.grid.Status.FAILED)
+				.assoc(Fields.ERROR, Strings.create(message));
+			failed = (code == null) ? failed.dissoc(Fields.ERROR_CODE) : failed.assoc(Fields.ERROR_CODE, Strings.create(code));
+			return (detail == null) ? failed.dissoc(Fields.ERROR_DETAIL) : failed.assoc(Fields.ERROR_DETAIL, detail);
+		});
 	}
 
 	/**

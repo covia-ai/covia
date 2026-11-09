@@ -1928,6 +1928,62 @@ public class LangChainAdapterTest {
 		assertTrue(note.contains("first\n   second for " + key), note);
 	}
 
+	private static covia.exception.CoviaException refusedWith(String body) {
+		return assertInstanceOf(covia.exception.CoviaException.class,
+			LangChainAdapter.providerFailure("anthropic", "claude-x", false, null, forbidden(body)));
+	}
+
+	@Test
+	public void testAFailureCarriesWhatTheProviderAnsweredAsValues() {
+		String body = "{\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"" + PROVIDER_TEXT + "\"},\"request_id\":\"req_1\"}";
+		var failure = refusedWith(body);
+		assertEquals(LangChainAdapter.PROVIDER_CODE.formatted("permission_error"), failure.getErrorCode());
+		ACell detail = failure.getErrorDetail();
+		assertEquals(CVMLong.create(403), RT.getIn(detail, "status"));
+		assertEquals("permission_error", RT.getIn(detail, "code").toString());
+		assertEquals(PROVIDER_TEXT, RT.getIn(detail, "message").toString());
+		assertEquals(body, RT.getIn(detail, "body").toString(), "the whole response is kept");
+		assertEquals("anthropic", RT.getIn(detail, "provider").toString());
+		assertEquals("claude-x", RT.getIn(detail, "model").toString());
+	}
+
+	@Test
+	public void testAProviderCodeIsAnErrorCodeOnlyWhenItIsAnIdentifier() {
+		assertEquals(LangChainAdapter.PROVIDER_CODE.formatted("budget_exceeded"),
+			refusedWith("{\"error\":\"budget_exceeded\"}").getErrorCode());
+
+		var freeText = refusedWith("{\"error\":\"you have spent it all\"}");
+		assertNull(freeText.getErrorCode());
+		assertEquals("you have spent it all", RT.getIn(freeText.getErrorDetail(), "message").toString());
+
+		var oddCode = refusedWith("{\"error\":{\"code\":\"not an id\",\"message\":\"m\"}}");
+		assertNull(oddCode.getErrorCode());
+		assertEquals("not an id", RT.getIn(oddCode.getErrorDetail(), "code").toString(), "the detail keeps it as sent");
+
+		var notJson = refusedWith("<html>" + PROVIDER_TEXT + "</html>");
+		assertNull(notJson.getErrorCode());
+		assertEquals("<html>" + PROVIDER_TEXT + "</html>", RT.getIn(notJson.getErrorDetail(), "body").toString());
+	}
+
+	@Test
+	public void testEveryFailureTypeCarriesTheAnswerAndNoAnswerCarriesNothing() {
+		for (RuntimeException e : new RuntimeException[] {
+				new dev.langchain4j.exception.RateLimitException(new dev.langchain4j.exception.HttpException(429, "{\"error\":\"slow_down\"}")),
+				new dev.langchain4j.exception.InternalServerException(new dev.langchain4j.exception.HttpException(529, "{\"error\":\"slow_down\"}")),
+				new dev.langchain4j.exception.ModelNotFoundException(new dev.langchain4j.exception.HttpException(404, "{\"error\":\"slow_down\"}")),
+				new dev.langchain4j.exception.AuthenticationException(new dev.langchain4j.exception.HttpException(401, "{\"error\":\"slow_down\"}"))}) {
+			var failure = assertInstanceOf(covia.exception.CoviaException.class,
+				LangChainAdapter.providerFailure("anthropic", "claude-x", true, null, e));
+			assertEquals(LangChainAdapter.PROVIDER_CODE.formatted("slow_down"), failure.getErrorCode(), e.toString());
+			assertNotNull(failure.getErrorDetail(), e.toString());
+		}
+
+		var unreachable = assertInstanceOf(covia.exception.CoviaException.class, LangChainAdapter.providerFailure("openai", "gpt", false, null,
+			new RuntimeException("request failed", new java.net.ConnectException("Connection refused"))));
+		assertNull(unreachable.getErrorCode());
+		assertNull(unreachable.getErrorDetail());
+	}
+
 	@Test
 	public void testOtherRefusalsSayWhatTheProviderSaid() {
 		assertPassesOn(ResponseException.class, LangChainAdapter.REQUEST_REFUSED, 402,
@@ -2015,6 +2071,7 @@ public class LangChainAdapterTest {
 			assertEquals(LangChainAdapter.REQUEST_REFUSED.formatted("anthropic", "spent-test-model",
 				LangChainAdapter.providerNote(403, spent.getCause())), spent.getMessage());
 			assertTrue(spent.getMessage().contains("budget_exceeded"), spent.getMessage());
+			assertEquals(LangChainAdapter.PROVIDER_CODE.formatted("budget_exceeded"), ((covia.exception.CoviaException) spent).getErrorCode());
 
 			Throwable context = failureOf(adapter.invokeFuture(venue, meta,
 				input.assoc(Strings.create("model"), Strings.create("context-test-model"))));

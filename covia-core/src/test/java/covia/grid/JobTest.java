@@ -154,6 +154,41 @@ public class JobTest {
 	}
 
 	@Test
+	public void aFailureCarriesItsCodeAndDetailToTheJob() {
+		String code = "example:refused";
+		var detail = Maps.of(Fields.STATUS, Status.FAILED);
+
+		Job direct = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		direct.fail(new InvalidInputException("Refused").withError(code, detail));
+		assertEquals(code, direct.getErrorCode());
+		assertEquals(detail, direct.getErrorDetail());
+		JobFailedException failure = assertThrows(JobFailedException.class, Job.create(direct.getData())::getOutput);
+		assertEquals(code, failure.getErrorCode());
+		assertEquals(detail, failure.getErrorDetail());
+
+		Job wrapped = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		wrapped.fail(new InvalidInputException("Outer", new InvalidInputException("Inner").withError(code, detail)));
+		assertEquals(code, wrapped.getErrorCode(), "a cause's code is the failure's");
+		assertEquals(detail, wrapped.getErrorDetail());
+
+		Job plain = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		plain.fail(code, detail, "Refused");
+		assertEquals(code, plain.getErrorCode());
+		assertEquals(detail, plain.getErrorDetail());
+	}
+
+	@Test
+	public void aJobThatFailsOnAnotherJobDoesNotTakeOnItsCode() {
+		Job inner = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		inner.fail("example:inner", Maps.of(Fields.STATUS, Status.FAILED), "Inner failed");
+
+		Job outer = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		outer.fail(new JobFailedException(inner));
+		assertNull(outer.getErrorCode());
+		assertNull(outer.getErrorDetail());
+	}
+
+	@Test
 	public void testCancellationRunsOnceAndSeesCommittedState() {
 		var calls = new java.util.concurrent.atomic.AtomicInteger();
 		var holder = new java.util.concurrent.atomic.AtomicReference<Job>();

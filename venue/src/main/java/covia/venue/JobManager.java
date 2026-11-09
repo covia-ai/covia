@@ -1119,7 +1119,7 @@ public class JobManager {
 		Fields.CALLER, Fields.OWNER, Fields.PARENT, Fields.CREATED };
 
 	/** What a mirror copies from its call when the call ends. */
-	private static final AString[] OUTCOME_FIELDS = { Fields.OUTPUT, Fields.ERROR, Fields.ERROR_CODE };
+	private static final AString[] OUTCOME_FIELDS = { Fields.OUTPUT, Fields.ERROR, Fields.ERROR_CODE, Fields.ERROR_DETAIL };
 
 	/**
 	 * A recorded job for a call that has none, so a caller who stops waiting

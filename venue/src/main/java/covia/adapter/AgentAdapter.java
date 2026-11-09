@@ -533,14 +533,28 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Fails the session's chats the agent has taken; chats still queued keep waiting. */
-	private void failTakenChats(AgentKey key, Blob sid, String error, AMap<AString, ACell> cycleTokens) {
+	private void failTakenChats(AgentKey key, Blob sid, AMap<AString, ACell> fault, AMap<AString, ACell> cycleTokens) {
 		if (sid == null) return;
 		ConcurrentHashMap<Blob, Job> waiters = sessionChats(key, sid);
 		if (waiters == null) return;
 		for (Job chat : removeTakenChats(waiters).values()) {
 			if (cycleTokens != null) attachTokens(chat, cycleTokens);
-			chat.fail(error);
+			chat.fail(faultCode(fault), fault.get(Fields.ERROR_DETAIL), fault.get(Fields.ERROR).toString());
 		}
+	}
+
+	/** The {@code errorCode} a recorded failure holds, or null. */
+	private static String faultCode(AMap<AString, ACell> fault) {
+		AString code = RT.ensureString(fault.get(Fields.ERROR_CODE));
+		return (code != null) ? code.toString() : null;
+	}
+
+	/** {@code to} with the {@code errorCode} and {@code errorDetail} that {@code from} holds. */
+	private static AMap<AString, ACell> withFaultCode(AMap<AString, ACell> to, ACell from) {
+		AString code = RT.ensureString(RT.getIn(from, Fields.ERROR_CODE));
+		if (code != null) to = to.assoc(Fields.ERROR_CODE, code);
+		ACell detail = RT.getIn(from, Fields.ERROR_DETAIL);
+		return (detail != null) ? to.assoc(Fields.ERROR_DETAIL, detail) : to;
 	}
 
 	private boolean isRunning(AgentKey key) {
@@ -2205,7 +2219,7 @@ public class AgentAdapter extends AAdapter {
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(Agent.KEY_ERROR);
-		if (error != null) summary = summary.assoc(Agent.KEY_ERROR, error);
+		if (error != null) summary = withFaultCode(summary.assoc(Agent.KEY_ERROR, error), record);
 		ACell suspension = record.get(Agent.KEY_SUSPENSION);
 		if (suspension != null) summary = summary.assoc(Agent.KEY_SUSPENSION, suspension);
 		@SuppressWarnings("unchecked")
@@ -2416,7 +2430,7 @@ public class AgentAdapter extends AAdapter {
 						Fields.AWAITING, awaitingSummary(record),
 						Fields.TASKS, CVMLong.create(taskCount));
 					ACell error = record.get(Agent.KEY_ERROR);
-					if (error != null) summary = summary.assoc(Fields.ERROR, error);
+					if (error != null) summary = withFaultCode(summary.assoc(Fields.ERROR, error), record);
 					ACell suspension = record.get(Agent.KEY_SUSPENSION);
 					if (suspension != null) summary = summary.assoc(Agent.KEY_SUSPENSION, suspension);
 					agents = agents.conj(summary);
@@ -3575,7 +3589,8 @@ public class AgentAdapter extends AAdapter {
 			Job request = engine.jobs().getJob(taskId);
 			if (Status.FAILED.equals(RT.ensureString(completion.get(Fields.STATUS)))) {
 				ACell err = completion.get(Fields.ERROR);
-				end(draft, agent, taskId, request, (err == null) ? "Task failed" : err.toString());
+				end(draft, agent, taskId, request, (err == null) ? "Task failed" : err.toString(),
+					faultCode(completion), completion.get(Fields.ERROR_DETAIL));
 				return;
 			}
 			AString outputPath = (request == null) ? null
@@ -3631,10 +3646,15 @@ public class AgentAdapter extends AAdapter {
 
 		/** The task leaves the agent and its request fails with {@code error}. */
 		private void end(VenueState draft, Agent agent, Blob taskId, Job request, String error) {
+			end(draft, agent, taskId, request, error, null, null);
+		}
+
+		/** As above, with the failure's optional code and structured detail. */
+		private void end(VenueState draft, Agent agent, Blob taskId, Job request, String error, String code, ACell detail) {
 			agent.removeTask(taskId);
 			settled.add(taskId);
-			AgentAdapter.settle(draft, request, after, recorded -> recorded.failIn(draft, error),
-				live -> live.fail(error));
+			AgentAdapter.settle(draft, request, after, recorded -> recorded.failIn(draft, code, detail, error),
+				live -> live.fail(code, detail, error));
 		}
 
 		/** Releases the settled requests' callers and starts the writes that could not join the transaction. */
@@ -4544,9 +4564,10 @@ public class AgentAdapter extends AAdapter {
 				completion.completeExceptionally(e);
 				return;
 			}
-			String failure = describeFailure(e);
-			suspendOnError(ownerDID, agentId, failure);
-			holdForResume(ownerDID, agentId, failure);
+			AMap<AString, ACell> fault = covia.exception.CoviaException.recordingError(
+				Maps.of(Fields.ERROR, Strings.create(describeFailure(e))), e);
+			suspendOnError(ownerDID, agentId, fault);
+			holdForResume(ownerDID, agentId, fault);
 			run.end(Agent.SUSPENDED);
 			completion.completeExceptionally(e);
 		} finally {
@@ -4592,6 +4613,8 @@ public class AgentAdapter extends AAdapter {
 		ACell newState = RT.getIn(transitionResult, Agent.KEY_STATE);
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
+		AMap<AString, ACell> fault = (leanError == null) ? null
+			: withFaultCode(Maps.of(Fields.ERROR, Strings.create(leanError.toString())), transitionResult);
 		// A null state result is "no change" (Agent.applyStateChange), so a
 		// timed-out transition simply leaves the record's state alone. Frames a
 		// transition returns serve its direct callers only: a session's
@@ -4709,8 +4732,8 @@ public class AgentAdapter extends AAdapter {
 					cycleEntry.assoc(Fields.RESULT, Strings.create(TRANSITION_CANCELLED)).assoc(Fields.CANCELLED, CVMBool.TRUE));
 				return new Merge(record, run, true);
 			}
-			if (failsPickedTask) current.resolveTask(pickedTask.getKey(), -1, completion(pickedTask.getKey(),
-				pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError));
+			if (failsPickedTask) current.resolveTask(pickedTask.getKey(), -1, withFaultCode(completion(pickedTask.getKey(),
+				pickedTask.getValue(), Status.FAILED, Fields.ERROR, leanError), fault));
 			AMap<AString, ACell> results = run.taskResults(current);
 			AMap<AString, ACell> record = current.mergeRunResult(snapshotState, newState, results,
 				(results == null) ? cycleEntry : cycleEntry.assoc(Fields.TASK_RESULTS, results),
@@ -4725,7 +4748,7 @@ public class AgentAdapter extends AAdapter {
 			AString detail = Agent.suspensionDetail(merged);
 			if (detail == null) detail = Strings.create(TRANSITION_CANCELLED);
 			if (merged != null && Agent.SUSPENDED.equals(merged.get(Agent.KEY_STATUS))) {
-				holdForResume(callerDID, agentId, detail.toString());
+				holdForResume(callerDID, agentId, Maps.of(Fields.ERROR, detail));
 			}
 			tap.end(Maps.of(Fields.ERROR, detail, Fields.CANCELLED, CVMBool.TRUE));
 			return null;
@@ -4845,7 +4868,7 @@ public class AgentAdapter extends AAdapter {
 		// task above, and here the chats it was answering. Work it never took
 		// stays queued, and the agent carries on with it.
 		if (leanError != null && !cannotContinue) {
-			failTakenChats(key, pickedSessionBlob, leanError.toString(), cycleTokens);
+			failTakenChats(key, pickedSessionBlob, fault, cycleTokens);
 		}
 
 		// An agent that cannot continue — its model setup is wrong, its
@@ -4856,10 +4879,9 @@ public class AgentAdapter extends AAdapter {
 		// waits for the cause to be fixed and the agent resumed. The run loop
 		// exits at the top of the next iteration via the SUSPENDED check.
 		if (cannotContinue) {
-			AString errStr = Strings.create(leanError.toString());
-			agent.suspend(errStr);
-			engine.agentEvents().status(callerDID, agentId, Agent.SUSPENDED, errStr);
-			holdForResume(callerDID, agentId, errStr.toString());
+			agent.suspend(fault);
+			engine.agentEvents().status(callerDID, agentId, Agent.SUSPENDED, RT.ensureString(fault.get(Fields.ERROR)));
+			holdForResume(callerDID, agentId, fault);
 		}
 
 		ACell lastResult = Maps.of(
@@ -4892,7 +4914,8 @@ public class AgentAdapter extends AAdapter {
 	private AMap<AString, ACell> failedTransition(Throwable reason, CycleRecord.Failure carried) {
 		String failure = covia.exception.FaultException.isFault(reason) ? reason.getMessage()
 			: TRANSITION_FAILED + describeFailure(reason);
-		AMap<AString, ACell> failed = Maps.of(Fields.ERROR, Strings.create(failure));
+		AMap<AString, ACell> failed = covia.exception.CoviaException.recordingError(
+			Maps.of(Fields.ERROR, Strings.create(failure)), reason);
 		if (carried == null) return failed;
 		failed = failed.assoc(Fields.CYCLE, carried.result().cycle());
 		return (carried.result().tokens() == null) ? failed : failed.assoc(Fields.TOKENS, carried.result().tokens());
@@ -4902,17 +4925,17 @@ public class AgentAdapter extends AAdapter {
 	 * Holds a suspended agent's work for its resume: queued tasks and chats
 	 * stay, and each waiting Job says the agent is suspended. Only what the
 	 * stopped cycle took and cannot give back is settled: a chat whose message
-	 * is already in its conversation fails with {@code error}, and a task the
+	 * is already in its conversation fails with {@code fault}, and a task the
 	 * stopped cycle resolved is handed back, as its merge would have done.
 	 */
-	private void holdForResume(AString ownerDID, AString agentId, String error) {
+	private void holdForResume(AString ownerDID, AString agentId, AMap<AString, ACell> fault) {
 		AgentKey key = new AgentKey(ownerDID, agentId);
 		Agent agent = getAgent(ownerDID, agentId);
 		if (agent == null) return;
 		handBackResolved(ownerDID, agentId);
 		ConcurrentHashMap<Blob, ConcurrentHashMap<Blob, Job>> agentChats = activeChats.get(key);
 		if (agentChats != null) {
-			for (Blob sid : agentChats.keySet()) failTakenChats(key, sid, error, null);
+			for (Blob sid : agentChats.keySet()) failTakenChats(key, sid, fault, null);
 		}
 		noteSuspended(key, agent);
 	}
@@ -5379,13 +5402,12 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	private void suspendOnError(AString callerDID, AString agentId, String failure) {
+	private void suspendOnError(AString callerDID, AString agentId, AMap<AString, ACell> fault) {
 		try {
 			Agent agent = getAgent(callerDID, agentId);
 			if (agent != null) {
-				AString error = Strings.create(failure);
-				agent.suspend(error);
-				engine.agentEvents().status(callerDID, agentId, Agent.SUSPENDED, error);
+				agent.suspend(fault);
+				engine.agentEvents().status(callerDID, agentId, Agent.SUSPENDED, RT.ensureString(fault.get(Fields.ERROR)));
 			}
 		} catch (Exception inner) {
 			log.warn("Failed to set agent error state", inner);

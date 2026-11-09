@@ -533,6 +533,18 @@ public class Job {
 	}
 
 	/**
+	 * Optional structured detail of a failed or rejected job, defined by its
+	 * producer as {@link #getErrorCode} is.
+	 * @return The producer's detail, or null when none is supplied
+	 */
+	public ACell getErrorDetail() {
+		AMap<AString, ACell> data = getData();
+		ACell status = data.get(Fields.STATUS);
+		if (!Status.FAILED.equals(status) && !Status.REJECTED.equals(status)) return null;
+		return data.get(Fields.ERROR_DETAIL);
+	}
+
+	/**
 	 * The principal that made this job's call: a user, one of a user's agents
 	 * or a {@code user/sudo} delegate.
 	 * @return the caller's DID, or null when the job records none
@@ -821,18 +833,29 @@ public class Job {
 	 * @param message Human-readable explanation
 	 */
 	public void fail(String code, String message) {
+		fail(code, null, message);
+	}
+
+	/**
+	 * Fails with an optional code and structured detail, committed with the message.
+	 * @param code Optional producer-defined code; null leaves the field absent
+	 * @param detail Optional producer-defined detail; null leaves the field absent
+	 * @param message Human-readable explanation
+	 */
+	public void fail(String code, ACell detail, String message) {
 		if (isFinished()) return;
 		update(job -> {
 			job = job.assoc(Fields.STATUS, Status.FAILED);
 			job = job.assoc(Fields.ERROR, Strings.create(message));
 			job = code == null ? job.dissoc(Fields.ERROR_CODE)
 				: job.assoc(Fields.ERROR_CODE, Strings.create(code));
-			return job;
+			return detail == null ? job.dissoc(Fields.ERROR_DETAIL) : job.assoc(Fields.ERROR_DETAIL, detail);
 		});
 	}
 
 	/** Fail this Job with what it {@linkplain #report reports} of {@code cause},
-	 * retained, not persisted, for result-oriented in-process callers. */
+	 * retained, not persisted, for result-oriented in-process callers. Any code
+	 * and detail the failure carries are committed with it. */
 	public void fail(Throwable cause) {
 		fail(cause, UnaryOperator.identity());
 	}
@@ -840,9 +863,9 @@ public class Job {
 	/** Fail with supporting state in the same transition; the decorator must be pure. */
 	protected void fail(Throwable cause, UnaryOperator<AMap<AString, ACell>> decorate) {
 		CoviaException reported = (cause == null) ? null : report(cause);
-		String detail = (reported == null) ? "Operation failed" : reported.getMessage();
-		commitUpdate(job -> decorate.apply(job).assoc(Fields.STATUS, Status.FAILED)
-			.assoc(Fields.ERROR, Strings.create(detail)).dissoc(Fields.ERROR_CODE), reported, null);
+		String message = (reported == null) ? "Operation failed" : reported.getMessage();
+		commitUpdate(job -> CoviaException.recordingError(decorate.apply(job), reported)
+			.assoc(Fields.STATUS, Status.FAILED).assoc(Fields.ERROR, Strings.create(message)), reported, null);
 	}
 
 	/** What failed, when a Job reports a fault in its work: its operation as the caller referred to it follows. */

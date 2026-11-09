@@ -132,6 +132,8 @@ public class Fields {
 	public static final StringShort ERROR = Strings.intern("error");
 	/** Optional adapter-specific failure code; absent for unclassified failures. */
 	public static final StringShort ERROR_CODE = Strings.intern("errorCode");
+	/** Optional structured detail of a failure, defined by its producer. */
+	public static final StringShort ERROR_DETAIL = Strings.intern("errorDetail");
 	
 	// MCP stuff
 	public static final StringShort ADAPTER = Strings.intern("adapter");
