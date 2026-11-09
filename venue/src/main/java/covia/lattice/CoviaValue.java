@@ -65,7 +65,7 @@ public class CoviaValue<V extends ACell> extends ValueComponent<V> {
 	}
 
 	@Override
-	protected CoviaValue<V> rebind(AForkableCursor<V> cursor) {
+	public CoviaValue<V> rebind(AForkableCursor<V> cursor) {
 		return new CoviaValue<>(cursor);
 	}
 

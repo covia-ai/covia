@@ -41,9 +41,11 @@ public final class AdapterState extends ALatticeComponent<ACell>
 		this.generation = generation;
 	}
 
-	@Override public AdapterState withCursor(AForkableCursor<ACell> draft) {
-		return new AdapterState(context, draft, name, owner, generation);
+	@Override public AdapterState rebind(AForkableCursor<ACell> cursor) {
+		return new AdapterState(context, cursor, name, owner, generation);
 	}
+
+	@Override public AdapterState withCursor(AForkableCursor<ACell> cursor) { return rebind(cursor); }
 
 	static void validateName(String name) {
 		if (name == null || !ADAPTER_NAME.matcher(name).matches()) {

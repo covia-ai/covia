@@ -44,8 +44,13 @@ public final class ContentStore extends IndexComponent<ABlob, ABlob>
 	}
 
 	@Override
-	public ContentStore withCursor(AForkableCursor<Index<ABlob, ABlob>> draft) {
-		return new ContentStore(draft);
+	public ContentStore rebind(AForkableCursor<Index<ABlob, ABlob>> cursor) {
+		return new ContentStore(cursor);
+	}
+
+	@Override
+	public ContentStore withCursor(AForkableCursor<Index<ABlob, ABlob>> cursor) {
+		return rebind(cursor);
 	}
 
 	/**

@@ -160,7 +160,7 @@ class VenueMigrationTest {
 	@Test void malformedRawStateCannotBeSilentlyReinitialised() {
 		for (ACell value : new ACell[] {Vectors.of("bad root"), Maps.of("version", 1)}) {
 			VenueState venue = VenueState.create(AKeyPair.generate())
-				.withCursor(convex.lattice.cursor.Cursors.root(value));
+				.rebind(convex.lattice.cursor.Cursors.root(value));
 			assertEquals(VenueState.INVALID_STATE,
 				assertThrows(IllegalStateException.class, () -> venue.initialise(DID, NO_SECRETS)).getMessage());
 			assertSame(value, venue.get());
