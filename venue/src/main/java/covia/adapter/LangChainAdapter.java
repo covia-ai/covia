@@ -155,9 +155,6 @@ public class LangChainAdapter extends AAdapter {
 	// answered, the %s after the model takes providerNote: its status and its
 	// error exactly as sent.
 
-	/** The {@code errorCode} of a failure whose provider gave a code. */
-	static final String PROVIDER_CODE = "langchain:%s";
-
 	/** The provider refused the venue's own API key: the operator's to fix. */
 	public static final String OPERATOR_KEY_REFUSED =
 		"Model provider %s refused the venue's API key for model %s%s; the venue operator must configure a valid key";
@@ -674,7 +671,7 @@ public class LangChainAdapter extends AAdapter {
 		if (e instanceof CoviaException || causedBy(e, InterruptedException.class)) return e;
 		Integer status = httpStatus(e);
 		String note = providerNote(status, e);
-		CoviaException failure;
+		RuntimeException failure;
 		if (ollamaUrl != null && isConnectFailure(e)) {
 			// Almost always topology: a Dockerised venue reaching for its own localhost (#224).
 			String at = origin(ollamaUrl);
@@ -713,12 +710,7 @@ public class LangChainAdapter extends AAdapter {
 			return e;
 		}
 		failure.initCause(e);
-		AMap<AString, ACell> answer = providerAnswer(e);
-		if (answer == null) return failure;
-		AString code = RT.ensureString(answer.get(K_CODE));
-		String id = (code != null) ? identifier(code.toString()) : null;
-		return failure.withError((id != null) ? PROVIDER_CODE.formatted(id) : null,
-			answer.assoc(Fields.PROVIDER, Strings.create(provider)).assoc(Fields.MODEL, Strings.create(model)));
+		return failure;
 	}
 
 	/** A status for a message, from httpStatus: " (HTTP 400)", or nothing when unknown. */
@@ -729,50 +721,31 @@ public class LangChainAdapter extends AAdapter {
 	/**
 	 * The status and the provider's error exactly as it sent it, for a message:
 	 * " (HTTP 403, permission_error: This key may not use that model)". From
-	 * a JSON answer that is its {@code message}, after its {@code code} when
-	 * that says more. Any other answer is passed on whole. Nothing is edited
-	 * or shortened (ERRORS.md).
+	 * a JSON answer that is {@code message}, after {@code code} or {@code type}
+	 * beside it, from the {@code error} object or the answer itself, or an
+	 * {@code error} that is a string. Any other answer is passed on whole.
+	 * Nothing is edited or shortened (ERRORS.md).
 	 */
 	static String providerNote(Integer status, Throwable e) {
-		AMap<AString, ACell> answer = providerAnswer(e);
-		AString body = (answer != null) ? RT.ensureString(answer.get(Fields.BODY)) : null;
-		if (body == null || body.toString().isBlank()) return httpNote(status);
-		ACell said = answer.get(Fields.MESSAGE);
-		if (said == null) return " (HTTP " + status + ": " + body + ")";
-		ACell code = answer.get(K_CODE);
-		return " (HTTP " + status + ((code != null && !code.equals(said)) ? ", " + code : "") + ": " + said + ")";
-	}
-
-	/**
-	 * What the provider answered to a failed call, every part as it sent it, or
-	 * null when it gave no HTTP answer: {@code status} and {@code body}, and
-	 * from a JSON body its {@code message} and {@code code}. The message is
-	 * {@code message} in the {@code error} object or the body itself, or an
-	 * {@code error} that is a string; the code is {@code code} or {@code type}
-	 * beside it, or an {@code error} string that reads as an identifier.
-	 */
-	static AMap<AString, ACell> providerAnswer(Throwable e) {
 		var http = httpFailure(e);
-		if (http == null) return null;
-		AMap<AString, ACell> answer = Maps.of(Fields.STATUS, CVMLong.create(http.statusCode()));
+		if (http == null) return httpNote(status);
 		String body = http.getMessage();
-		if (body == null) return answer;
-		answer = answer.assoc(Fields.BODY, Strings.create(body));
-		AMap<AString, ACell> json = jsonObject(body);
-		if (json == null) return answer;
+		if (body == null || body.isBlank()) return httpNote(status);
 		AString code = null;
-		AString said;
-		if (json.get(Fields.ERROR) instanceof AString error) {
-			said = error;
-			if (identifier(error.toString()) != null) code = error;
-		} else {
-			AMap<AString, ACell> detail = (json.get(Fields.ERROR) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : json;
-			said = RT.ensureString(detail.get(Fields.MESSAGE));
-			code = RT.ensureString(detail.get(K_CODE));
-			if (code == null) code = RT.ensureString(detail.get(K_TYPE));
+		AString said = null;
+		AMap<AString, ACell> answer = jsonObject(body);
+		if (answer != null) {
+			if (answer.get(Fields.ERROR) instanceof AString error) {
+				said = error;
+			} else {
+				AMap<AString, ACell> detail = (answer.get(Fields.ERROR) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : answer;
+				said = RT.ensureString(detail.get(Fields.MESSAGE));
+				code = RT.ensureString(detail.get(K_CODE));
+				if (code == null) code = RT.ensureString(detail.get(K_TYPE));
+			}
 		}
-		if (code != null) answer = answer.assoc(K_CODE, code);
-		return (said != null) ? answer.assoc(Fields.MESSAGE, said) : answer;
+		if (said == null) return " (HTTP " + status + ": " + body + ")";
+		return " (HTTP " + status + ((code != null) ? ", " + code : "") + ": " + said + ")";
 	}
 
 	private static AMap<AString, ACell> jsonObject(String text) {

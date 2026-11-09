@@ -1158,9 +1158,6 @@ suspended agent fail with `errorCode: "agent:suspended"`; their message names
 the stop and advises asking the stopping caller, or retains fault-recovery
 advice for an ordinary failure. `by` is `ctx.getCallerDID()`, including through
 sudo; an intermediary is not relabelled as the agent on whose behalf it acted.
-A fault's `errorCode` and `errorDetail`, where the failure gave them, sit on the
-record beside `error` and are exposed with it, and the chats and tasks a failed
-cycle fails carry them. Resuming clears them.
 
 **All mutations are atomic.** Each operation is a single compare-and-swap
 on the agent's lattice cell, so concurrent operations against the same

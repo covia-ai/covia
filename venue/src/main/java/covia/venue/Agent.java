@@ -600,18 +600,6 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		return (r != null) ? RT.ensureString(r.get(K_ERROR)) : null;
 	}
 
-	/** The code of the fault that suspended this agent, or null when it has none. */
-	public AString getErrorCode() {
-		AMap<AString, ACell> r = getRecord();
-		return (r != null) ? RT.ensureString(r.get(Fields.ERROR_CODE)) : null;
-	}
-
-	/** The structured detail of the fault that suspended this agent, or null when it has none. */
-	public ACell getErrorDetail() {
-		AMap<AString, ACell> r = getRecord();
-		return (r != null) ? r.get(Fields.ERROR_DETAIL) : null;
-	}
-
 	/** One description for the stop event, cancelled cycle and waiting callers. */
 	public static AString suspensionDetail(AMap<AString, ACell> record) {
 		if (record == null) return null;
@@ -693,12 +681,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	}
 
 	public void clearError() {
-		update(Agent::withoutFault);
-	}
-
-	/** {@code r} without the fault it records: its error, code and detail. */
-	private static AMap<AString, ACell> withoutFault(AMap<AString, ACell> r) {
-		return r.dissoc(K_ERROR).dissoc(Fields.ERROR_CODE).dissoc(Fields.ERROR_DETAIL);
+		update(r -> r.dissoc(K_ERROR));
 	}
 
 	/** Removes a task, queued or resolved. */
@@ -959,7 +942,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	public boolean tryResume() {
 		AMap<AString, ACell> before = getAndUpdate(r ->
 			SUSPENDED.equals(RT.ensureString(r.get(K_STATUS)))
-				? withoutFault(r).assoc(K_STATUS, SLEEPING).dissoc(KEY_SUSPENSION) : r);
+				? r.assoc(K_STATUS, SLEEPING).dissoc(K_ERROR).dissoc(KEY_SUSPENSION) : r);
 		// A deleted agent has no record to resume.
 		return before != null && SUSPENDED.equals(RT.ensureString(before.get(K_STATUS)));
 	}
@@ -993,27 +976,18 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		}
 		AMap<AString, ACell> suspension = stop;
 		AMap<AString, ACell> stopped = update(r -> TERMINATED.equals(r.get(K_STATUS)) ? r
-			: withStatus(withoutFault(r), SUSPENDED).assoc(KEY_SUSPENSION, suspension));
+			: withStatus(r, SUSPENDED).assoc(KEY_SUSPENSION, suspension).dissoc(K_ERROR));
 		return stopped != null && SUSPENDED.equals(stopped.get(K_STATUS)) ? stopped : null;
 	}
 
 	/** Sets a fault suspension without overwriting a deliberate stop racing the failure. */
 	public void suspend(AString error) {
-		suspend(Maps.of(K_ERROR, error));
+		update(r -> faultSuspension(r, error));
 	}
 
-	/** As {@link #suspend(AString)}, for a fault recorded as its {@code error} and any {@code errorCode} and {@code errorDetail}. */
-	public void suspend(AMap<AString, ACell> fault) {
-		update(r -> faultSuspension(r, fault));
-	}
-
-	private static AMap<AString, ACell> faultSuspension(AMap<AString, ACell> r, AMap<AString, ACell> fault) {
+	private static AMap<AString, ACell> faultSuspension(AMap<AString, ACell> r, AString error) {
 		if (r.containsKey(KEY_SUSPENSION) || TERMINATED.equals(r.get(K_STATUS))) return r;
-		AMap<AString, ACell> suspended = withStatus(withoutFault(r), SUSPENDED).assoc(K_ERROR, fault.get(K_ERROR));
-		ACell code = fault.get(Fields.ERROR_CODE);
-		if (code != null) suspended = suspended.assoc(Fields.ERROR_CODE, code);
-		ACell detail = fault.get(Fields.ERROR_DETAIL);
-		return (detail != null) ? suspended.assoc(Fields.ERROR_DETAIL, detail) : suspended;
+		return withStatus(r, SUSPENDED).assoc(K_ERROR, error);
 	}
 
 	/**
@@ -1186,10 +1160,11 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			AVector<ACell> turnsToAppend,
 			AMap<AString, ACell> cycleTokens) {
 		return transact(draft -> {
-			draft.update(r -> withoutFault(r)
+			draft.update(r -> r
 				.assoc(K_STATE, applyStateChange(r.get(K_STATE), snapshotState, newState))
 				.assoc(K_TASKS, removeCompletedTasks(extractTasks(r), taskResults))
 				.assoc(K_TIMELINE, extractTimeline(r).conj(timelineEntry))
+				.dissoc(K_ERROR)
 				.dissoc(K_IN_CYCLE));
 			if (historySid != null) draft.session(historySid).finishCycle(turnsToAppend, cycleTokens);
 			return draft.getRecord();

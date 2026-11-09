@@ -28,15 +28,8 @@ public class JobFailedException extends CoviaException {
 		return job;
 	}
 
-	/** The failed Job's optional adapter-specific code, or null for an unclassified failure. */
-	@Override
+	/** Optional adapter-specific code, or null for an unclassified failure. */
 	public String getErrorCode() {
 		return job.getErrorCode();
-	}
-
-	/** The failed Job's optional structured detail, or null when it has none. */
-	@Override
-	public convex.core.data.ACell getErrorDetail() {
-		return job.getErrorDetail();
 	}
 }

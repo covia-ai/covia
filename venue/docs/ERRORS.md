@@ -78,13 +78,11 @@ status and whichever key was used, after the venue's words and the status
 provider says about it, and a provider that puts a secret in an error message
 has made its own mistake, so the venue neither edits nor shortens the text.
 
-A failure the provider answered also carries that answer as values, whichever
-exception type it maps to. `CoviaException.getErrorDetail` is
-`{provider, model, status, code, message, body}` (`LangChainAdapter.providerAnswer`):
-each part as sent, `body` the whole response, and `code` and `message` absent
-where the answer has none. `getErrorCode` is `langchain:<code>` when the
-provider's code reads as an identifier. A failure with no answer, such as a
-timeout or a lost connection, carries neither.
+What the provider answered stays as the cause of the exception the adapter
+raises: langchain4j's `HttpException`, with the status and the whole response,
+is in its cause chain, in process only, for an adapter that wants to read it.
+The venue's own failure handling knows only its own exceptions and never reads
+that cause.
 
 A database's error text may quote stored values, so the `sql` adapter never
 passes it on. The caller gets what failed, the SQLState and vendor code, and,
@@ -178,7 +176,7 @@ for the scope awaiting to report.
 | Surface | Expected failure | Fault | Contract |
 |---|---|---|---|
 | REST | The status the route lists for the situation, with the reason as the error body's `detail` (RFC 9457 problem details, written by `ApiErrors`); a refusal the route does not list is a 400 | 500 with the report as `detail`; one the venue reports for the request names its id (`X-Request-Id`) | COG-21; [READ_API.md](READ_API.md) for `/values` |
-| Jobs | `FAILED` with the reason as `error`, and an `errorCode` and `errorDetail` where the adapter defines them | `FAILED` with the report as `error` | COG-8; [JOBS.md](JOBS.md) |
+| Jobs | `FAILED` with the reason as `error`, and an `errorCode` where the adapter defines one | `FAILED` with the report as `error` | COG-8; [JOBS.md](JOBS.md) |
 | Agent tool loop | An `Error:` result carrying the reason | An `Error:` result carrying the report | [AGENT_LOOP.md](AGENT_LOOP.md) |
 | MCP | A tool result marked `isError` carrying the reason | A tool result marked `isError` carrying the report | [OPERATIONS.md](OPERATIONS.md#mcp-exposure) |
 | A2A | The JSON-RPC error the situation maps to | `INTERNAL` with the report | [A2A_AGENTS.md](A2A_AGENTS.md#errors) |

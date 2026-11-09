@@ -1801,19 +1801,13 @@ public class TestAdapter extends AAdapter {
 
     /** The reason {@code failllm} gives for each failure it scripts. */
     public static final String FAILLLM_REASON = "failllm scripted failure: %s";
-    /** The code {@code failllm} gives the failures that carry one. */
-    public static final String FAILLLM_CODE = "test:scripted";
-    /** The structured detail {@code failllm} gives the failures that carry one. */
-    public static final AMap<AString, ACell> FAILLLM_DETAIL = Maps.of(Fields.STATUS, CVMLong.create(403));
 
     /**
      * A level-3 LLM that fails the way its {@code model} names, for the
      * agent run loop's failure rules (AGENT_LOOP.md §3.4): {@code setup}
      * ({@code ConfigurationException}), {@code unavailable}, {@code value} (a
-     * failure value), {@code content} ({@code InvalidInputException}),
-     * {@code bug} ({@code IllegalStateException}), or {@code coded-setup} and
-     * {@code coded-content}, as their namesakes with {@link #FAILLLM_CODE} and
-     * {@link #FAILLLM_DETAIL}. A {@code :<gate>} suffix
+     * failure value), {@code content} ({@code InvalidInputException}) or
+     * {@code bug} ({@code IllegalStateException}). A {@code :<gate>} suffix
      * waits at that {@link TestGate} first, so a test can queue more work
      * while the cycle is held. Any other model replies with text.
      */
@@ -1833,8 +1827,6 @@ public class TestAdapter extends AAdapter {
                 case "value" -> Status.failure(reason);
                 case "content" -> throw new InvalidInputException(reason);
                 case "bug" -> throw new IllegalStateException(reason);
-                case "coded-setup" -> throw new covia.exception.ConfigurationException(reason).withError(FAILLLM_CODE, FAILLLM_DETAIL);
-                case "coded-content" -> throw new InvalidInputException(reason).withError(FAILLLM_CODE, FAILLLM_DETAIL);
                 default -> Maps.of("role", Strings.create("assistant"), "content", Strings.create("ok"));
             };
         }, VIRTUAL_EXECUTOR);

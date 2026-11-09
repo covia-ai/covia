@@ -74,30 +74,23 @@ means "not measured", never zero.
 
 `error` remains the human-readable explanation. `errorCode` is an optional
 string whose meaning is defined by the producing adapter, not a universal
-Covia error taxonomy, and `errorDetail` an optional structured value it defines
-in the same way. By default there are neither: `job.fail(message)` leaves them
-absent, and the framework never infers one from message wording or exception
-type. Adapters opt in with `job.fail(code, message)` or
-`job.fail(code, detail, message)`, or by throwing a `CoviaException` given them
-with `withError(code, detail)`, which `job.fail(exception)` commits, from the
-exception or its cause chain. Use an adapter prefix to avoid collisions.
+Covia error taxonomy. By default there is no code: `job.fail(message)` and
+`job.fail(exception)` leave it absent, and the framework never infers one from
+message wording or exception type. Adapters opt in with
+`job.fail(code, message)`; use an adapter prefix to avoid collisions.
 
 For example, the agent adapter supplies `agent:unknown-session` when chat,
 query or context rejects a supplied session that does not exist. A client that
 understands that specific contract can choose to start a fresh conversation.
 Other agent failures are not automatically coded; `agent:message` can create a
-missing session and does not reject it on that basis. A failed model call
-carries the provider's code and answer ([ERRORS.md](ERRORS.md#messages)).
+missing session and does not reject it on that basis.
 
-Both travel with the persisted job record and REST job snapshots.
-`getErrorCode()` and `getErrorDetail()` on `Job` and on `CoviaException` return
-them, or `null` when absent. Consumers must treat absent or unfamiliar codes as
-generic failures and must not guess from the message. Codes do not change
-status or authorise retries, and a job that fails on another job's
-`JobFailedException` does not take on its code; recovery remains the
-application's choice. An agent's failed cycle does pass them on, to the chats
-and tasks it fails and to a suspended agent's record
-([AGENT_LOOP.md](AGENT_LOOP.md)).
+The code travels with the persisted job record and REST job snapshots.
+`Job.getErrorCode()` and `JobFailedException.getErrorCode()` return it, or
+`null` when absent. Consumers must treat absent or unfamiliar codes as generic
+failures and must not guess from the message. Codes do not change status,
+authorise retries, or automatically propagate through wrapper jobs; recovery
+remains the application's choice.
 
 ## Record fields: `caller`, `owner`, `op`, `adapter` and `parent`
 
