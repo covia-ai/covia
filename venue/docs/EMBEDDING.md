@@ -113,7 +113,13 @@ clock)`.
 The clock may stand still. It may give several writes the same time, and a
 test may hold it or step it by zero: a local write overwrites the venue's own
 state, and a merge on an equal timestamp keeps the local value, so no write is
-lost to a tie. Step a driven clock forward only.
+lost to a tie.
+
+The clock may step back, as a host's clock can. New writes are stamped with
+the earlier time, except that a stamp a later write has to beat in a merge
+(`updated`, and the venue's and an agent's timestamp) stays at its latest
+value, so no write is lost. Job IDs keep increasing, jobs already running
+carry on, and a scheduled event waits until the clock reads its time.
 
 Scheduled events fire when the application is updated.
 `application.update()` reads the clock once and starts, in each mounted venue,
@@ -132,7 +138,7 @@ at once is `scheduler.maxConcurrency` ([CONFIG.md](CONFIG.md)).
 
 `DrivenClock` is a clock you move yourself. `DrivenClock.at(instant)` creates
 one, `policy()` gives the policy for the application, and `set(millis)` and
-`advance(ms)` move it; a step backwards is refused (`DrivenClock.BACKWARDS`).
+`advance(ms)` move it, in either direction.
 The clock only holds the time: moving it starts nothing, so update the
 application after each step. To mint tokens on the same time, pass
 `clock::millis` as the clock above.

@@ -113,8 +113,6 @@ public class Scheduler {
 	private volatile boolean shutdown = false;
 	/** Schedule writes during assembly take part in no update until start. */
 	private boolean started = false;
-	/** The latest time an update asked for: the drain starts what is due by then. */
-	private long target = Long.MIN_VALUE;
 	/** Events claimed whose operation's invocation has not yet returned. */
 	private int starting = 0;
 	/** The times of those events, counted, so an update knows what it still waits for. */
@@ -366,7 +364,6 @@ public class Scheduler {
 		lock.lock();
 		try {
 			if (!takingPart()) return CompletableFuture.completedFuture(List.of());
-			if (now > target) target = now;
 			waiters.add(new Waiter(now, new ArrayList<>(), done));
 		} finally {
 			lock.unlock();
@@ -429,6 +426,7 @@ public class Scheduler {
 		lock.lock();
 		try {
 			int max = engine.config().getSchedulerMaxConcurrency();
+			long target = latestWaiting();
 			while (takingPart() && starting < max) {
 				Index<Blob, ACell> idx = index();
 				if (idx.isEmpty()) break;
@@ -486,6 +484,18 @@ public class Scheduler {
 			}
 			drain();
 		}
+	}
+
+	/**
+	 * The latest time an update still waiting asked for, which is what a drain
+	 * starts events due by, or {@link Long#MIN_VALUE} when none is waiting, so
+	 * nothing starts without an update and a clock that stepped back is
+	 * followed. Under the lock.
+	 */
+	private long latestWaiting() {
+		long latest = Long.MIN_VALUE;
+		for (Waiter w : waiters) latest = Math.max(latest, w.time());
+		return latest;
 	}
 
 	/** Adds a claimed event's Job to each waiting update it was due by. Under the lock. */
