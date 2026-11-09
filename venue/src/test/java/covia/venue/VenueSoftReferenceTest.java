@@ -83,8 +83,7 @@ public class VenueSoftReferenceTest {
 			venue.contents().store(uploadHash, upload);
 			assertTrue(holdsStrongly(venue, valueOf("first")), "a write stays in memory until it is persisted");
 			engine.flush();
-			// Interim (covia#678): nothing strong at all, straight after a flush, is
-			// what the venue's read-back gives. The assertions below hold without it.
+			// Only writes not yet synced may be strong, and here there are none.
 			assertEquals(0, strongCells(venue).size(), "everything persisted is held softly");
 
 			update(user, "second");
