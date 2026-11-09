@@ -179,17 +179,6 @@ public class CoviaAdapterTest {
 			"a refused path writes nothing");
 	}
 
-	@Test
-	public void testReadEmptyPath() {
-		// Empty path returns entire user root
-		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, ""), ALICE);
-		ACell result = job.awaitResult(5000);
-
-		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
-		assertNotNull(RT.getIn(result, "value"), "Should return user root");
-	}
-
 	/**
 	 * Regression: covia:read navigating a Blob-keyed {@code Index} by its hex
 	 * key. The sessions Index is a JSON leaf inside the agent record, so typed
@@ -598,17 +587,10 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testListTopLevel() {
-		// No path — list top-level namespaces
-		Job job = engine.jobs().invokeOperation("v/ops/covia/list",
-			Maps.empty(), ALICE);
-		ACell result = job.awaitResult(5000);
-
-		assertNotNull(result);
-		assertEquals(Strings.create("Map"), RT.getIn(result, "type"));
-		AVector<ACell> keys = RT.getIn(result, "keys");
-		assertNotNull(keys);
-		assertTrue(keys.count() > 0, "Should have at least the 'g' namespace");
+	public void testListNeedsAPath() {
+		Job job = engine.jobs().invokeOperation("v/ops/covia/list", Maps.empty(), ALICE);
+		assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
+		assertEquals(Engine.USER_PATH_NO_NAMESPACE, job.getErrorMessage());
 	}
 
 	@Test
