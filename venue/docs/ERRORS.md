@@ -63,19 +63,20 @@ failure's reason or a fault's report.
 ## Messages
 
 A message is written for the caller. It says what failed in the venue's words,
-and may follow that with a remote's own error message, marked as the remote's
-and bounded in length. It never carries a credential the venue added to the
-request, a secret value, another principal's data, a URL that may carry a
-credential, or a stack trace. A failure from a remote service or provider says
-what failed and its status; the response stays on the exception
-(`ResponseException.response`) for code that needs it. A remote is named by its
-URL's origin (`AAdapter.origin`), since a path or query may carry a credential.
-A provider's error code or request id is quoted only when it is an identifier
-(`AAdapter.identifier`).
+and may follow that with a remote's own error message, marked as the remote's.
+The venue's words never carry a credential, a secret value, another principal's
+data, a URL that may carry a credential, or a stack trace. A failure from a
+remote service says what failed and its status; the response stays on the
+exception (`ResponseException.response`) for code that needs it. A remote is
+named by its URL's origin (`AAdapter.origin`), since a path or query may carry
+a credential. A remote's error code or request id is quoted only when it is an
+identifier (`AAdapter.identifier`).
 
-A model provider's refusal, rate limit or server error carries its status, code and message
-(`LangChainAdapter.providerNote`), with the API key the venue sent removed. A
-refused key (401) quotes nothing, since that text is about the key.
+A model provider's error is passed on exactly as the provider sent it, on every
+status and whichever key was used, after the venue's words and the status
+(`LangChainAdapter.providerNote`). Whoever may use a key may see what the
+provider says about it, and a provider that puts a secret in an error message
+has made its own mistake, so the venue neither edits nor shortens the text.
 
 A database's error text may quote stored values, so the `sql` adapter never
 passes it on. The caller gets what failed, the SQLState and vendor code, and,

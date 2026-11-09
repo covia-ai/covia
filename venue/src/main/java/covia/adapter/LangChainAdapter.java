@@ -152,19 +152,15 @@ public class LangChainAdapter extends AAdapter {
 
 	// ========== Provider failures (ERRORS.md) ==========
 	// Each names the provider and model and what failed. Where the provider
-	// answered, the %s after the model takes providerNote: its status and what
-	// it said. A refused key quotes nothing, since that text is about the key.
+	// answered, the %s after the model takes providerNote: its status and its
+	// error exactly as sent.
 
 	/** The provider refused the venue's own API key: the operator's to fix. */
 	public static final String OPERATOR_KEY_REFUSED =
-		"Model provider %s refused the venue's API key for model %s; the venue operator must configure a valid key";
+		"Model provider %s refused the venue's API key for model %s%s; the venue operator must configure a valid key";
 	/** The provider refused the API key the caller supplied, as input or from its own secrets. */
 	public static final String CALLER_KEY_REFUSED =
-		"Model provider %s refused the API key supplied for model %s; check the apiKey input or the secret it comes from";
-	/** The most of a provider's own text a message carries. */
-	static final int MAX_PROVIDER_TEXT = 500;
-	/** Stands in for the key the venue sent, should a provider's text echo it. */
-	static final String KEY_REMOVED = "[API key]";
+		"Model provider %s refused the API key supplied for model %s%s; check the apiKey input or the secret it comes from";
 	public static final String PROVIDER_RATE_LIMITED =
 		"Model provider %s rate-limited the request for model %s%s; retry later";
 	public static final String PROVIDER_TIMED_OUT =
@@ -174,7 +170,7 @@ public class LangChainAdapter extends AAdapter {
 	public static final String PROVIDER_UNREACHABLE =
 		"Could not reach model provider %s for model %s, or the connection failed; check the url and retry";
 	public static final String MODEL_NOT_FOUND =
-		"Model provider %s has no model %s, or the url names no model API; check the model id and the url";
+		"Model provider %s has no model %s%s, or the url names no model API; check the model id and the url";
 	public static final String FEATURE_NOT_SUPPORTED =
 		"Model provider %s does not support a feature this request uses for model %s";
 	public static final String CONTENT_FILTERED =
@@ -185,7 +181,7 @@ public class LangChainAdapter extends AAdapter {
 		"Model provider %s answered for model %s with a response the venue could not read";
 	/** A context-size refusal, recognised by {@link AbstractLLMAdapter#CONTEXT_TOO_LARGE}. */
 	public static final String PROVIDER_CONTEXT_TOO_LARGE = AbstractLLMAdapter.CONTEXT_TOO_LARGE
-		+ ": model provider %s refused the request for model %s";
+		+ ": model provider %s refused the request for model %s%s";
 	/** Ollama refused the connection: almost always topology, Docker against the host (#224). */
 	public static final String OLLAMA_UNREACHABLE = "Ollama not reachable at %s — if the venue runs in Docker,"
 		+ " set adapters.langchain.ollamaUrl in venue config (or the OLLAMA_BASE_URL environment variable)"
@@ -525,7 +521,7 @@ public class LangChainAdapter extends AAdapter {
 					result = callModel(provider, resolvedModelName, chatModel, resolvedMessages, tools,
 						responseFormatCell, cacheMarks);
 				} catch (RuntimeException e) {
-					throw providerFailure(provider, resolvedModelName, key, ollamaUrl, e);
+					throw providerFailure(provider, resolvedModelName, key.operators(), ollamaUrl, e);
 				}
 				if (legacyOutput) {
 					// Wrap assistant message as {response: content}
@@ -666,14 +662,15 @@ public class LangChainAdapter extends AAdapter {
 	 * {@code NotSupportedException}. The agent harness relies on this split
 	 * (AGENT_LOOP.md §3.4).</p>
 	 *
-	 * @param key the API key sent: whose it is says who can fix a refused key,
-	 *        and its value is removed from anything quoted
+	 * @param operatorKey whether the API key sent is the venue's own, which
+	 *        says who can fix a refused key
 	 * @param ollamaUrl the Ollama base URL called, or null for a hosted provider
 	 */
-	static RuntimeException providerFailure(String provider, String model, ApiKey key,
+	static RuntimeException providerFailure(String provider, String model, boolean operatorKey,
 			String ollamaUrl, RuntimeException e) {
 		if (e instanceof CoviaException || causedBy(e, InterruptedException.class)) return e;
 		Integer status = httpStatus(e);
+		String note = providerNote(status, e);
 		RuntimeException failure;
 		if (ollamaUrl != null && isConnectFailure(e)) {
 			// Almost always topology: a Dockerised venue reaching for its own localhost (#224).
@@ -681,29 +678,29 @@ public class LangChainAdapter extends AAdapter {
 			failure = new UnavailableException(OLLAMA_UNREACHABLE.formatted(at != null ? at : "its configured url"));
 		} else if (e instanceof dev.langchain4j.exception.AuthenticationException) {
 			// langchain4j maps 401 and 403 alike; only a 401 says the key was not accepted.
-			failure = new ConfigurationException(Integer.valueOf(403).equals(status)
-				? REQUEST_REFUSED.formatted(provider, model, providerNote(status, key, e))
-				: (key.operators() ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED).formatted(provider, model));
+			String refused = Integer.valueOf(403).equals(status) ? REQUEST_REFUSED
+				: operatorKey ? OPERATOR_KEY_REFUSED : CALLER_KEY_REFUSED;
+			failure = new ConfigurationException(refused.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
-			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model, providerNote(status, key, e)));
+			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
 			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
-			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, providerNote(status, key, e)));
+			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {
-			failure = new ConfigurationException(MODEL_NOT_FOUND.formatted(provider, model));
+			failure = new ConfigurationException(MODEL_NOT_FOUND.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.UnsupportedFeatureException) {
 			failure = new NotSupportedException(FEATURE_NOT_SUPPORTED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
 			failure = new ResponseException(CONTENT_FILTERED.formatted(provider, model));
 		} else if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
 			failure = mentionsContextSize(e)
-				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model))
-				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, providerNote(status, key, e)));
+				? new InvalidInputException(PROVIDER_CONTEXT_TOO_LARGE.formatted(provider, model, note))
+				: new ResponseException(REQUEST_REFUSED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.JsonReadException) {
 			failure = new ResponseException(MALFORMED_RESPONSE.formatted(provider, model));
 		} else if (status != null) {
-			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, providerNote(status, key, e)));
+			failure = new ResponseException(REQUEST_REFUSED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.UnresolvedModelServerException
 				|| causedBy(e, java.io.IOException.class)
 				|| causedBy(e, java.nio.channels.UnresolvedAddressException.class)) {
@@ -722,47 +719,33 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	/**
-	 * The status and what the provider said, for a message:
-	 * " (HTTP 403, permission_error: This key may not use that model)". The code
-	 * is {@code error} when that reads as an identifier, else {@code code} or
-	 * {@code type}, from the {@code error} object or the answer itself. The text
-	 * is {@code message} beside it, an {@code error} that is free text, or a
-	 * body that is not JSON. The key the venue sent is removed first.
+	 * The status and the provider's error exactly as it sent it, for a message:
+	 * " (HTTP 403, permission_error: This key may not use that model)". From
+	 * a JSON answer that is {@code message}, after {@code code} or {@code type}
+	 * beside it, from the {@code error} object or the answer itself, or an
+	 * {@code error} that is a string. Any other answer is passed on whole.
+	 * Nothing is edited or shortened (ERRORS.md).
 	 */
-	static String providerNote(Integer status, ApiKey key, Throwable e) {
+	static String providerNote(Integer status, Throwable e) {
 		var http = httpFailure(e);
 		if (http == null) return httpNote(status);
 		String body = http.getMessage();
-		if (body != null && key.value() != null && !key.value().isEmpty()) {
-			body = body.replace(key.value(), KEY_REMOVED);
-		}
-		String code = null;
-		String text = null;
+		if (body == null || body.isBlank()) return httpNote(status);
+		AString code = null;
+		AString said = null;
 		AMap<AString, ACell> answer = jsonObject(body);
-		if (answer == null) {
-			if (body != null && !body.stripLeading().startsWith("<")) text = body;   // not a markup error page
-		} else if (answer.get(Fields.ERROR) instanceof AString said) {
-			code = identifier(said.toString());
-			if (code == null) text = said.toString();
-		} else {
-			AMap<AString, ACell> detail = (answer.get(Fields.ERROR) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : answer;
-			AString named = RT.ensureString(detail.get(K_CODE));
-			if (named == null) named = RT.ensureString(detail.get(K_TYPE));
-			if (named != null) code = identifier(named.toString());
-			AString said = RT.ensureString(detail.get(Fields.MESSAGE));
-			if (said != null) text = said.toString();
+		if (answer != null) {
+			if (answer.get(Fields.ERROR) instanceof AString error) {
+				said = error;
+			} else {
+				AMap<AString, ACell> detail = (answer.get(Fields.ERROR) instanceof AMap<?, ?> object) ? RT.ensureMap(object) : answer;
+				said = RT.ensureString(detail.get(Fields.MESSAGE));
+				code = RT.ensureString(detail.get(K_CODE));
+				if (code == null) code = RT.ensureString(detail.get(K_TYPE));
+			}
 		}
-		text = providerText(text);
-		if (code == null && text == null) return httpNote(status);
-		return " (HTTP " + status + ((code != null) ? ", " + code : "") + ((text != null) ? ": " + text : "") + ")";
-	}
-
-	/** {@code text} on one line and bounded, or null when there is nothing to say. */
-	private static String providerText(String text) {
-		if (text == null) return null;
-		String line = text.strip().replaceAll("\\s+", " ");
-		if (line.isEmpty()) return null;
-		return (line.length() > MAX_PROVIDER_TEXT) ? line.substring(0, MAX_PROVIDER_TEXT) + "..." : line;
+		if (said == null) return " (HTTP " + status + ": " + body + ")";
+		return " (HTTP " + status + ((code != null) ? ", " + code : "") + ": " + said + ")";
 	}
 
 	private static AMap<AString, ACell> jsonObject(String text) {

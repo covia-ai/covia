@@ -1787,20 +1787,20 @@ public class LangChainAdapterTest {
 	public void testOllamaConnectFailureNamesTheVenueKnob() {
 		RuntimeException connect = new RuntimeException("request failed",
 			new java.net.ConnectException("Connection refused"));
-		RuntimeException failure = LangChainAdapter.providerFailure("ollama", "qwen", CALLER_KEY,
+		RuntimeException failure = LangChainAdapter.providerFailure("ollama", "qwen", false,
 			"http://user:pw@localhost:11434/", connect);
 		assertInstanceOf(UnavailableException.class, failure);
 		assertEquals(LangChainAdapter.OLLAMA_UNREACHABLE.formatted("http://localhost:11434"), failure.getMessage());
 		assertSame(connect, failure.getCause());
 
 		// A hosted provider's connect failure says it could not be reached
-		failure = LangChainAdapter.providerFailure("openai", "gpt", CALLER_KEY, null, connect);
+		failure = LangChainAdapter.providerFailure("openai", "gpt", false, null, connect);
 		assertInstanceOf(UnavailableException.class, failure);
 		assertEquals(LangChainAdapter.PROVIDER_UNREACHABLE.formatted("openai", "gpt"), failure.getMessage());
 
 		// Anything not recognised passes through untouched, as the venue bug it is
 		RuntimeException other = new RuntimeException("model not found: qwen");
-		assertSame(other, LangChainAdapter.providerFailure("ollama", "qwen", CALLER_KEY,
+		assertSame(other, LangChainAdapter.providerFailure("ollama", "qwen", false,
 			"http://localhost:11434", other));
 	}
 
@@ -1809,9 +1809,6 @@ public class LangChainAdapterTest {
 	/** Text a provider's answer carries. */
 	private static final String PROVIDER_TEXT = "PROVIDER-SAYS-this-123";
 
-	private static final String SENT_KEY = "sk-the-key-the-venue-sent";
-	private static final LangChainAdapter.ApiKey CALLER_KEY = new LangChainAdapter.ApiKey(SENT_KEY, false);
-
 	private static dev.langchain4j.exception.HttpException http(int status, String body) {
 		return new dev.langchain4j.exception.HttpException(status, body + " " + PROVIDER_TEXT);
 	}
@@ -1819,7 +1816,7 @@ public class LangChainAdapterTest {
 	private static <T extends Throwable> T assertMapped(Class<T> type, String message,
 			RuntimeException providerFailure, boolean operatorKey) {
 		RuntimeException failure = LangChainAdapter.providerFailure("anthropic", "claude-x",
-			new LangChainAdapter.ApiKey(SENT_KEY, operatorKey), null, providerFailure);
+			operatorKey, null, providerFailure);
 		T typed = assertInstanceOf(type, failure, "mapped type for " + providerFailure);
 		assertEquals(message, failure.getMessage());
 		assertSame(providerFailure, failure.getCause(), "the provider's failure stays as the cause");
@@ -1829,7 +1826,7 @@ public class LangChainAdapterTest {
 	/** As assertMapped, for a failure that gives what the provider said after its status. */
 	private static void assertPassesOn(Class<? extends Throwable> type, String message, int status,
 			RuntimeException providerFailure) {
-		String note = LangChainAdapter.providerNote(status, CALLER_KEY, providerFailure);
+		String note = LangChainAdapter.providerNote(status, providerFailure);
 		Throwable failure = assertMapped(type, message.formatted("anthropic", "claude-x", note), providerFailure, false);
 		assertTrue(failure.getMessage().contains(PROVIDER_TEXT), failure.getMessage());
 	}
@@ -1837,10 +1834,12 @@ public class LangChainAdapterTest {
 	@Test
 	public void testProviderFailuresAreTyped() {
 		var auth = new dev.langchain4j.exception.AuthenticationException(http(401, "invalid x-api-key"));
+		String refusedKey = LangChainAdapter.providerNote(401, auth);
+		assertTrue(refusedKey.contains(PROVIDER_TEXT), refusedKey);
 		assertMapped(ConfigurationException.class,
-			LangChainAdapter.OPERATOR_KEY_REFUSED.formatted("anthropic", "claude-x"), auth, true);
+			LangChainAdapter.OPERATOR_KEY_REFUSED.formatted("anthropic", "claude-x", refusedKey), auth, true);
 		assertMapped(ConfigurationException.class,
-			LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x"), auth, false);
+			LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x", refusedKey), auth, false);
 
 		assertPassesOn(UnavailableException.class, LangChainAdapter.PROVIDER_RATE_LIMITED, 429,
 			new dev.langchain4j.exception.RateLimitException(http(429, "slow down")));
@@ -1857,9 +1856,8 @@ public class LangChainAdapterTest {
 			new dev.langchain4j.exception.UnresolvedModelServerException(
 				new java.nio.channels.UnresolvedAddressException()), false);
 
-		assertMapped(ConfigurationException.class,
-			LangChainAdapter.MODEL_NOT_FOUND.formatted("anthropic", "claude-x"),
-			new dev.langchain4j.exception.ModelNotFoundException(http(404, "no such model")), false);
+		assertPassesOn(ConfigurationException.class, LangChainAdapter.MODEL_NOT_FOUND, 404,
+			new dev.langchain4j.exception.ModelNotFoundException(http(404, "no such model")));
 		assertMapped(NotSupportedException.class,
 			LangChainAdapter.FEATURE_NOT_SUPPORTED.formatted("anthropic", "claude-x"),
 			new dev.langchain4j.exception.UnsupportedFeatureException("topK " + PROVIDER_TEXT), false);
@@ -1886,7 +1884,7 @@ public class LangChainAdapterTest {
 		var refusal = forbidden(body);
 		for (boolean operatorKey : new boolean[] { true, false }) {
 			var failure = assertMapped(ConfigurationException.class, LangChainAdapter.REQUEST_REFUSED.formatted("anthropic", "claude-x",
-				LangChainAdapter.providerNote(403, new LangChainAdapter.ApiKey(SENT_KEY, operatorKey), refusal)), refusal, operatorKey);
+				LangChainAdapter.providerNote(403, refusal)), refusal, operatorKey);
 			for (String part : said) assertTrue(failure.getMessage().contains(part), failure.getMessage());
 		}
 	}
@@ -1904,34 +1902,30 @@ public class LangChainAdapterTest {
 			"invalid_model", PROVIDER_TEXT);
 		assertForbidden("{\"error\":\"you have spent it all " + PROVIDER_TEXT + "\"}", "you have spent it all", PROVIDER_TEXT);
 		assertForbidden(PROVIDER_TEXT + " as plain text", PROVIDER_TEXT);
+		assertForbidden("{\"error\":{}}", "{\"error\":{}}");
 	}
 
 	@Test
-	public void testAnAnswerWithNothingToPassOnGivesTheStatus() {
-		for (String body : new String[] { "<html>" + PROVIDER_TEXT + "</html>", "", "{\"error\":{}}" }) {
+	public void testAnEmptyAnswerGivesTheStatus() {
+		for (String body : new String[] { "", "  \n" }) {
 			assertMapped(ConfigurationException.class, LangChainAdapter.REQUEST_REFUSED
 				.formatted("anthropic", "claude-x", LangChainAdapter.httpNote(403)), forbidden(body), false);
 		}
 	}
 
 	@Test
-	public void testTheKeySentIsRemovedFromWhatTheProviderSaid() {
+	public void testWhatTheProviderSaidIsPassedOnExactly() {
+		String key = "sk-the-key-that-was-sent";
 		for (String body : new String[] {
-				"{\"error\":{\"message\":\"" + PROVIDER_TEXT + " for " + SENT_KEY + "\"}}",
-				"{\"error\":\"" + SENT_KEY + " " + PROVIDER_TEXT + "\"}",
-				PROVIDER_TEXT + " for " + SENT_KEY}) {
-			RuntimeException failure = LangChainAdapter.providerFailure("anthropic", "claude-x", CALLER_KEY, null, forbidden(body));
-			assertFalse(failure.getMessage().contains(SENT_KEY), failure.getMessage());
-			assertTrue(failure.getMessage().contains(PROVIDER_TEXT), failure.getMessage());
+				"first\n\n   second",
+				"x".repeat(5000),
+				"<html><body>" + PROVIDER_TEXT + "</body></html>",
+				PROVIDER_TEXT + " for " + key}) {
+			String note = LangChainAdapter.providerNote(403, forbidden(body));
+			assertTrue(note.contains(body), note);
 		}
-	}
-
-	@Test
-	public void testWhatTheProviderSaidIsOneBoundedLine() {
-		String note = LangChainAdapter.providerNote(403, CALLER_KEY, forbidden("first\n\n   second"));
-		assertTrue(note.contains("first second"), note);
-		note = LangChainAdapter.providerNote(403, CALLER_KEY, forbidden("x".repeat(LangChainAdapter.MAX_PROVIDER_TEXT * 10)));
-		assertTrue(note.length() < LangChainAdapter.MAX_PROVIDER_TEXT * 2, "bounded, was " + note.length());
+		String note = LangChainAdapter.providerNote(403, forbidden("{\"error\":{\"message\":\"first\\n   second for " + key + "\"}}"));
+		assertTrue(note.contains("first\n   second for " + key), note);
 	}
 
 	@Test
@@ -1949,17 +1943,19 @@ public class LangChainAdapterTest {
 				"This model's maximum context length is 128000 tokens"}) {
 			var refusal = new dev.langchain4j.exception.InvalidRequestException(http(400, body));
 			InvalidInputException failure = assertMapped(InvalidInputException.class,
-				LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("anthropic", "claude-x"), refusal, false);
+				LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("anthropic", "claude-x",
+					LangChainAdapter.providerNote(400, refusal)), refusal, false);
 			assertTrue(failure.getMessage().startsWith(AbstractLLMAdapter.CONTEXT_TOO_LARGE));
+			assertTrue(failure.getMessage().contains(PROVIDER_TEXT), failure.getMessage());
 		}
 	}
 
 	@Test
 	public void testExpectedFailuresAndCancellationsPassThrough() {
 		InvalidInputException ours = new InvalidInputException("messages[0] has no role");
-		assertSame(ours, LangChainAdapter.providerFailure("openai", "gpt", CALLER_KEY, null, ours));
+		assertSame(ours, LangChainAdapter.providerFailure("openai", "gpt", false, null, ours));
 		RuntimeException cancelled = new RuntimeException(new InterruptedException());
-		assertSame(cancelled, LangChainAdapter.providerFailure("openai", "gpt", CALLER_KEY, null, cancelled));
+		assertSame(cancelled, LangChainAdapter.providerFailure("openai", "gpt", false, null, cancelled));
 	}
 
 	/**
@@ -2004,27 +2000,29 @@ public class LangChainAdapterTest {
 
 			Throwable operators = failureOf(adapter.invokeFuture(venue, meta, input));
 			assertInstanceOf(ConfigurationException.class, operators);
-			assertEquals(LangChainAdapter.OPERATOR_KEY_REFUSED.formatted("anthropic", "claude-x"), operators.getMessage());
+			assertEquals(LangChainAdapter.OPERATOR_KEY_REFUSED.formatted("anthropic", "claude-x",
+				LangChainAdapter.providerNote(401, operators.getCause())), operators.getMessage());
 
 			Throwable callers = failureOf(adapter.invokeFuture(venue, meta,
 				input.assoc(Strings.create("apiKey"), Strings.create("sk-caller"))));
 			assertInstanceOf(ConfigurationException.class, callers);
-			assertEquals(LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x"), callers.getMessage());
+			assertEquals(LangChainAdapter.CALLER_KEY_REFUSED.formatted("anthropic", "claude-x",
+				LangChainAdapter.providerNote(401, callers.getCause())), callers.getMessage());
 
 			Throwable spent = failureOf(adapter.invokeFuture(venue, meta,
 				input.assoc(Strings.create("model"), Strings.create("spent-test-model"))));
 			assertInstanceOf(ConfigurationException.class, spent);
 			assertEquals(LangChainAdapter.REQUEST_REFUSED.formatted("anthropic", "spent-test-model",
-				LangChainAdapter.providerNote(403, new LangChainAdapter.ApiKey("venue-key", true), spent.getCause())), spent.getMessage());
+				LangChainAdapter.providerNote(403, spent.getCause())), spent.getMessage());
 			assertTrue(spent.getMessage().contains("budget_exceeded"), spent.getMessage());
 
 			Throwable context = failureOf(adapter.invokeFuture(venue, meta,
 				input.assoc(Strings.create("model"), Strings.create("context-test-model"))));
 			assertInstanceOf(InvalidInputException.class, context);
-			assertEquals(LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("anthropic", "context-test-model"),
-				context.getMessage());
+			assertEquals(LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("anthropic", "context-test-model",
+				LangChainAdapter.providerNote(400, context.getCause())), context.getMessage());
 			for (Throwable t : new Throwable[] {operators, callers, context}) {
-				assertFalse(t.getMessage().contains(PROVIDER_TEXT), t.getMessage());
+				assertTrue(t.getMessage().contains(PROVIDER_TEXT), t.getMessage());
 			}
 		} finally {
 			provider.stop(0);
