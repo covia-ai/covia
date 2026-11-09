@@ -2514,8 +2514,9 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
-			K_START, CVMLong.create(page.start()),
 			K_ENTRIES, page.entries());
+		// A caller that passed start knows it; one that did not has no other way to learn it.
+		if (start == null) result = result.assoc(K_START, CVMLong.create(page.start()));
 		return page.hasMore() ? result.assoc(K_NEXT, CVMLong.create(page.next())) : result;
 	}
 

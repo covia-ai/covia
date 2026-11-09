@@ -7275,6 +7275,7 @@ public class AgentAdapterTest {
 
 		ACell forward = readHistory(scoped, Maps.of("start", 0L, "end", 7L, Fields.LIMIT, 3L));
 		assertEquals(stored.slice(0, 3), entries(forward));
+		assertNull(RT.getIn(forward, "start"), "the caller already knows it");
 		assertEquals(CVMLong.create(3), RT.getIn(forward, "next"), "the range was longer than limit");
 		ACell rest = readHistory(scoped, Maps.of("start", 3L, "end", 7L, Fields.LIMIT, 4L));
 		assertEquals(stored.slice(3, 7), entries(rest));
@@ -7331,9 +7332,9 @@ public class AgentAdapterTest {
 
 		ACell past = readHistory(owner, target.assoc(Strings.create("start"), CVMLong.create(50)));
 		assertEquals(0, entries(past).count());
-		assertEquals(CVMLong.create(2), RT.getIn(past, "start"));
 		ACell overlong = readHistory(owner, target.assoc(Strings.create("end"), CVMLong.create(50)));
 		assertEquals(2, entries(overlong).count());
+		assertEquals(CVMLong.ZERO, RT.getIn(overlong, "start"), "a clamped end leaves the caller no other way to know");
 
 		ACell nothing = readHistory(owner, Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, empty.toHexString()));
 		assertEquals(CVMBool.TRUE, RT.getIn(nothing, "found"));

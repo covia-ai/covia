@@ -347,7 +347,7 @@ The listing and history operations have two explicit modes. From an agent execut
 
 `agent:history` returns a session's root-frame history exactly as stored, by position, 0 being the oldest entry: user and assistant turns, tool calls and results in full, unanswered turns, diagnostics, compaction summaries and opaque provider continuation data. `start` and `end` select a range, `end` not included, and `limit` (default 20, at most 100) bounds the entries returned; it counts entries, not bytes, and each entry comes back whole. With no range it returns the newest entries, with `end` alone the newest `limit` before it, and with `start` alone it reads forward. A position past the end of the history reads as the end. Omitting `sessionId` reads the session the caller is in or, outside one, the newest visible session.
 
-The result is `{found, sessionId, start, next?, entries}`. `entries[i]` is at position `start + i`, and `next`, present when the range was longer than `limit`, is the position to continue from. To go further back, pass the returned `start` as `end`.
+The result is `{found, sessionId, start?, next?, entries}`. `start` is present only when the input had none, and is the position of the first entry returned. `entries[i]` is at position `start + i`, and `next`, present when the range was longer than `limit`, is the position to continue from. To go further back, pass the position the last read began at as `end`.
 
 A compaction summary stands for the range in its `historyRange`. In an agent's context it reads `[Compacted: turns a–b] …`, and `start=a, end=b+1` reads those entries back; a summary among them names its own range, read the same way.
 
