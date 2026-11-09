@@ -318,7 +318,7 @@ public class DLFSAdapterTest {
 	public void testDriveDeletionWinsOlderSnapshot() throws Exception {
 		var key = AKeyPair.generate();
 		var time = DrivenClock.at(Instant.now());
-		var application = CoviaApplication.create(time);
+		var application = TestEngine.application(time);
 		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
@@ -700,7 +700,7 @@ public class DLFSAdapterTest {
 	public void testLongLivedDriveUsesCurrentVenueClockAndOwnerKey() throws Exception {
 		AKeyPair venueKey = AKeyPair.generate();
 		var time = DrivenClock.at(Instant.now());
-		CoviaApplication application = CoviaApplication.create(time);
+		CoviaApplication application = TestEngine.application(time);
 		Engine isolated = application.mount(venueKey, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);

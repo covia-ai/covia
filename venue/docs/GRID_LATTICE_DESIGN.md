@@ -803,9 +803,8 @@ boundaries.
 `CoviaApplication`, an upstream `ALatticeApplication` sharing its host's live
 cursor, composes `:grid` from standard components: a `Regions` holding
 `:venues` (an `OwnedMap` of signed venue records) and `:meta` (a
-`LatticeComponent` over `CASLattice`). Incoming state goes to those components,
-and other regions are left alone. `:dlfs` is a `DLFSRegion` that the host's
-service registers beside it and hands to it. `VenueState` works on an unsigned
+`LatticeComponent` over `CASLattice`), and `:dlfs` from a `DLFSRegion`. Incoming
+state goes to those components, and other regions are left alone. `VenueState` works on an unsigned
 draft of the venue's signed entry (`OwnedMap.draft`), holding the venue value as
 a Convex `Timestamped` record: local edits stamp it, and incoming merges keep
 the newest without re-stamping. `Users` gives lifecycle-guarded user views, and DLFS uses
@@ -919,7 +918,7 @@ container it holds on the first change, so the stored shapes are plain data:
 
 | Level | Component and stored shape | Purpose |
 |-------|----------------------------|---------|
-| Root | `CoviaApplication`: `Regions` over a keyword `Index` | `:grid`, a `Regions` of `:venues` and `:meta`; `:dlfs` is a sibling region its service registers |
+| Root | `CoviaApplication`: `Regions` over a keyword `Index` | `:grid`, a `Regions` of `:venues` and `:meta`, and `:dlfs` |
 | `:grid → :venues` | `OwnedMap` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
 | Venue `:value` | `VenueState`: `Timestamped` keyword `Index`, ordered by `Covia.VENUE` | The whole per-venue value as one **whole-value-LWW** node with a stamp-on-write boundary; holds `:version`, `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:adapters`, `:adapter-versions`, `:user-deletions`, `:jobs`, `:user-data` |
 | `:schedule` | `Schedule`: `StampedCursor` over a string-keyed map | Extensible `{updated, events, ...}` record; writes under `events` refresh `updated` and preserve sibling metadata |

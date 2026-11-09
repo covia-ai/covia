@@ -42,6 +42,8 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.cvm.Keywords;
 import convex.core.data.Keyword;
+import convex.core.store.MemoryStore;
+import convex.lattice.LatticeHost;
 import convex.core.data.Maps;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.Strings;
@@ -1719,28 +1721,26 @@ public class Engine {
 	}
 
 	/**
-	 * As {@link #createTemp(AMap)}, on the given clock: move it, then update
-	 * the {@linkplain #application() application} to act on the new time.
+	 * As {@link #createTemp(AMap)}, on the given clock. On a {@link DrivenClock}
+	 * move it, then update the {@linkplain #application() application} to act
+	 * on the new time.
 	 */
-	public static Engine createTemp(DrivenClock clock, AMap<AString,ACell> config) {
-		return startTemp(CoviaApplication.create(clock), config);
-	}
-
-	/**
-	 * As {@link #createTemp(AMap)}, on the system clock with the update timer
-	 * running, so scheduled events fire by themselves. For integration and
-	 * smoke tests.
-	 */
-	public static Engine createRealTime(AMap<AString,ACell> config) {
-		return startTemp(CoviaApplication.create(), config);
-	}
-
-	private static Engine startTemp(CoviaApplication application, AMap<AString,ACell> config) {
+	public static Engine createTemp(VenueClock clock, AMap<AString,ACell> config) {
+		var host = LatticeHost.create(new MemoryStore());
+		var application = host.addApplication(new CoviaApplication(host, clock));
 		try {
 			return application.mount(AKeyPair.generate(), config).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}
+	}
+
+	/**
+	 * As {@link #createTemp(AMap)}, on the system clock, so scheduled events
+	 * fire by themselves. For integration and smoke tests.
+	 */
+	public static Engine createRealTime(AMap<AString,ACell> config) {
+		return createTemp(VenueClock.SYSTEM, config);
 	}
 
 	/**

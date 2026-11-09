@@ -117,9 +117,8 @@ its first failure, which the venue logs at ERROR. Closing the host stops them,
 then syncs the application and checkpoints once more.
 
 The application runs the venues mounted in it: `application.mount(keyPair,
-config)` builds a venue's engine, and nothing else does. Embedders connect the
-application to their existing `LatticeHost`, or open it over their store, and
-mount their venue; restart tests unmount a venue and mount it again, or open a
+config)` builds a venue's engine, and nothing else does. Embedders build the
+application on their own `LatticeHost` and mount their venue; restart tests unmount a venue and mount it again, or open a
 new application over the same store, as production does
 ([EMBEDDING.md](EMBEDDING.md#starting-and-stopping)).
 
@@ -536,8 +535,7 @@ copy and publishes it. Since Convex 0.8.18, `NodeServer.close()` neither
 publishes nor flushes. Whoever opened the host closes it: a standalone
 `VenueServer` closes its host after the node, and `LatticeHost.close()` makes
 the final checkpoint before the store closes. An Engine running on an
-embedder's host (`CoviaApplication.connect`) never closes it; its final flush is
-its last save. On JVM shutdown, `MainVenue` closes each engine from a hook at
+embedder's host never closes it; its final flush is its last save. On JVM shutdown, `MainVenue` closes each engine from a hook at
 `Shutdown.SERVICE`, before Convex closes its servers and Etch files.
 
 ### 5.4 Request-boundary publication
@@ -611,7 +609,7 @@ Three phases (was four), each independently mergeable, each with tests.
 through `RootComponent.sync()` and physical durability through
 `RootComponent.flush()`.
 
-- `CoviaApplication` connects Covia to the `NodeServer`'s hosted root.
+- `CoviaApplication` runs on the root of the `LatticeHost` the `NodeServer` replicates.
 - **Engine** owns the flush and close ordering; the host's workers publish in the background.
 - `Engine.flush()` performs application sync → application flush.
 - Focused tests cover the explicit barrier and close-time drain.

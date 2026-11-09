@@ -48,7 +48,7 @@ class DrivenClockTest {
 
 	@BeforeAll
 	static void launch() throws IOException {
-		CoviaApplication application = CoviaApplication.create(CLOCK);
+		CoviaApplication application = TestEngine.application(CLOCK);
 		engine = application.mount(AKeyPair.generate(),
 			new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).launch();
 	}
@@ -81,7 +81,7 @@ class DrivenClockTest {
 		assertEquals(t + 2 * MINUTE, clock.millis());
 		clock.set(t - MINUTE);
 		assertEquals(t - MINUTE, clock.millis(), "it can be set earlier");
-		assertEquals(CVMLong.create(t - MINUTE), clock.policy().currentTimestamp(), "its policy reads the same time");
+		assertEquals(CVMLong.create(t - MINUTE), clock.get(), "as a timestamp it reads the same time");
 	}
 
 	@Test

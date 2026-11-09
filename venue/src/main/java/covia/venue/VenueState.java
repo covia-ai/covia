@@ -28,6 +28,8 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
+import convex.core.store.MemoryStore;
+import convex.lattice.LatticeHost;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.TransactionalComponent;
 import convex.lattice.OwnedMap;
@@ -130,7 +132,10 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 * @return New VenueState instance
 	 */
 	public static VenueState create(AKeyPair kp) {
-		return CoviaApplication.create(kp).venue(kp.getAccountKey());
+		var host = LatticeHost.create(new MemoryStore());
+		var application = host.addApplication(new CoviaApplication(host));
+		application.mount(kp, new Config(null));
+		return application.venue(kp.getAccountKey());
 	}
 
 	/** The application's copy of a venue, signing with the context's signer. */

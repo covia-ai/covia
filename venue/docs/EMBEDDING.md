@@ -14,10 +14,11 @@ out-of-process clients and agents, and never required of an embedder.
 the configuration. `VenueServer.launch(config, store)` adopts a store you have
 already opened: the venue closes it when it closes, or if launch fails.
 
-The venue opens a `LatticeHost` over the store and, once the venue is running,
+The venue opens a `LatticeHost` over the store and registers its application on
+the system clock, or one you pass (see Time). Once the venue is running, it
 starts the host's sync and flush workers
-([PERSISTENCE.md](PERSISTENCE.md#snapshot-implementation-contract)) and the
-application's update timer (see Time). It closes in this order:
+([PERSISTENCE.md](PERSISTENCE.md#snapshot-implementation-contract)). It closes
+in this order:
 1. the application, which stops the timer and unmounts the venue: its engine
    stops intake, gives work in flight the shutdown grace window
    ([JOBS.md](JOBS.md#shutdown)) and makes its final flush;
@@ -28,25 +29,34 @@ application's update timer (see Time). It closes in this order:
 `getHost()` returns that host. You may checkpoint it, for example before
 acknowledging work that must be durable. Never close it yourself.
 
-**A venue on your own host.** Open the application with
-`CoviaApplication.open(store)`, or `connect(host)` over a host you already run.
-It holds Covia's lattice regions and runs the venues mounted in it, each with
-its own key pair. `application.mount(keyPair, config)` mounts a venue and
-returns its engine, inert until you `launch()` or `start()` it; mounting a
-venue that is already mounted is refused (`CoviaApplication.ALREADY_MOUNTED`).
-`application.engine(venueKey)` returns a mounted venue's engine.
+**A venue on your own host.** Your main class assembles the stack, as for any
+Convex lattice service:
 
-Whoever opens a host runs its workers and closes it. Once the venue is running,
-start `host.autoSync(VenueServer.SYNC_INTERVAL, application::sync)` and
-`host.autoFlush(VenueServer.FLUSH_INTERVAL)`, or intervals of your own; without
-them the venue publishes and saves only when it flushes or closes. The
-application fires scheduled events itself (see Time).
+```java
+var host = LatticeHost.open(store);
+var application = host.addApplication(new CoviaApplication(host)); // or (host, clock), see Time
+Engine engine = application.mount(keyPair, config).start();
+host.autoSync(VenueServer.SYNC_INTERVAL, application::sync);
+host.autoFlush(VenueServer.FLUSH_INTERVAL);
+```
+
+The application holds Covia's lattice regions and runs the venues mounted in
+it, each with its own key pair. A host has one application, and so one clock
+and one timer however many venues it runs. `application.mount(keyPair, config)`
+mounts a venue and returns its engine, inert until you `launch()` or `start()`
+it; mounting a venue that is already mounted is refused
+(`CoviaApplication.ALREADY_MOUNTED`). `application.engine(venueKey)` returns a
+mounted venue's engine.
+
+Whoever opens a host runs its workers and closes it. Use the intervals above or
+your own; without the workers the venue publishes and saves only when it
+flushes or closes. The application fires scheduled events itself (see Time).
 
 `application.unmount(venueKey)` closes the venue's engine, which makes its
 final flush, signs the venue's copy into its record and forgets it; closing
 the engine does the same, and the venue can then be mounted again.
 `application.close()` stops the update timer and unmounts every venue. Neither
-closes the host or the store. So close the application, then `application.host().close()`, which
+closes the host or the store. So close the application, then the host, which
 stops the workers, then the store.
 
 **The venue's state.** The application holds one working copy of each mounted
@@ -54,9 +64,7 @@ venue: `application.venue(venueKey)` returns it, and the venue's engine works
 on the same copy. Edits to it sign nothing until `application.sync()` signs the
 venue's record; `application.host().sync()` then publishes the root. A running
 engine does both. Code that edits the venue with no engine running calls them
-itself. `open(store, keyPair)`, `connect(host, keyPair)` and
-`create(keyPair)` mount that venue with the default configuration, for such
-code; mount it yourself to give it a configuration.
+itself.
 
 **JVM shutdown.** Register your shutdown work with
 `Shutdown.addHook(Shutdown.SERVICE, task)` (`convex.core.util.Shutdown`). It
@@ -70,7 +78,8 @@ schema versions, Covia's and each adapter's, without starting a venue.
 **Migrating.** Migration is a call, not only a start-up event:
 - `engine.migrate()` migrates the venue and every installed adapter's state,
   enabled or disabled, in one transaction, at any time.
-- Before launch, open the application over the store and call
+- Before launch, build the application on a host over the store, mount the
+  venue and call
   `application.venue(venueKey).migrate(SecretStore.keys(venueKeyPair), adapters)`
   with your adapters' `stateMigration()`, then `application.sync()` and
   `application.host().sync()`. The venue's secret store keys let a step read
@@ -88,9 +97,15 @@ own code. See [MIGRATE.md](MIGRATE.md).
 ## Time
 
 The venue's clock belongs to the application, and every venue mounted in it
-shares that clock. An application runs on the system clock unless you give it a
-`DrivenClock`: `CoviaApplication.create(clock)`, `open(store, clock)` or
-`connect(host, clock)`.
+shares that clock. Your main class chooses it: `new CoviaApplication(host, clock)`,
+or `VenueServer.launch(config, store, routes, beforeStart, clock)`, where a null
+store opens the one the configuration names. Left out, it is the system clock,
+`VenueClock.SYSTEM`.
+
+A `VenueClock` says what time it is and runs a task after a delay, which the
+application uses to wake when the earliest event across its venues falls due.
+`DrivenClock` is one you move yourself. Implement the interface to run the venue
+on a scheduler of your own.
 
 Every timestamp the venue and its adapters write comes from that clock: jobs,
 agents, scheduled events, HITL requests, user records, DLFS file times and
@@ -124,21 +139,21 @@ Its future completes when each has started (its operation's invocation has
 returned) and gives their Jobs; how each resolves is its own, so wait on the
 Job for that. A step that leaves the time unchanged still starts what is due,
 such as an event added since with a past time.
-An application on the system clock has a timer that updates it whenever a venue
-has something due, until the application closes, and logs the timer's first
-failure. You may still call `update()` on it yourself. How many events a venue
+The application's clock wakes it to update whenever a venue has something due,
+until the application closes, and the application logs the first failure of an
+update. You may still call `update()` yourself. How many events a venue
 starts at once is `scheduler.maxConcurrency` ([CONFIG.md](CONFIG.md)).
 
-`DrivenClock` is a clock you move yourself, and an application on one has no
-timer. `DrivenClock.at(instant)` creates one, and `set(millis)` and
+`DrivenClock.at(instant)` creates a driven clock, and `set(millis)` and
 `advance(ms)` move it, in either direction.
-The clock only holds the time: moving it starts nothing, so update the
+It only holds the time and wakes nothing, so update the
 application after each step. To mint tokens on the same time, pass
 `clock::millis` as the clock above.
 
 ```java
 DrivenClock clock = DrivenClock.at(Instant.parse("2026-01-01T00:00:00Z"));
-CoviaApplication application = CoviaApplication.create(clock);
+var host = LatticeHost.create(new MemoryStore());
+var application = host.addApplication(new CoviaApplication(host, clock));
 Engine engine = application.mount(AKeyPair.generate(), config).launch();
 // ... act, then check what the venue wrote at that time
 clock.advance(60_000);              // one minute later
@@ -147,10 +162,10 @@ for (Job job : started) job.awaitResult();      // when the test needs them fini
 ```
 
 `Engine.createTemp(clock, config)` does this setup in one call: an in-memory
-venue on `clock` with no timer, updated with `engine.application().update()`.
+venue on `clock`, updated with `engine.application().update()`.
 `Engine.createTemp(config)` is the same on a clock held at the current time, so
 nothing fires unless you update it. `Engine.createRealTime(config)` uses the
-system clock, so its timer runs, for integration and smoke tests.
+system clock, so events fire by themselves, for integration and smoke tests.
 
 ## Routes
 
@@ -241,8 +256,8 @@ identity token through an operation", and HELD_KEYS.md.
 | `workspaceRoot().write` creating missing levels | `createPath` for them first, in the same transaction |
 | `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
 | The engine publishing and flushing its host in the background | Whoever opens the host starts `host.autoSync` and `host.autoFlush` (see "A venue on your own host"); `VenueServer` does |
-| `new Engine(config, application, keyPair)` | `application.mount(keyPair, config)` on an application from `open(store)`, `connect(host)` or `create()`; `Engine`'s constructors are no longer public |
-| `CoviaApplication.create(context)`, `open(store, context)` or `connect(host, context)` | The same without a context, on the system clock, or with a `DrivenClock` (see Time); each venue brings its key to `mount(keyPair, config)` |
+| `new Engine(config, application, keyPair)` | `application.mount(keyPair, config)`; `Engine`'s constructors are no longer public |
+| `CoviaApplication.open`, `create` or `connect` | Open or create the `LatticeHost` yourself, then `host.addApplication(new CoviaApplication(host))`, or `(host, clock)` (see Time); each venue brings its key to `mount(keyPair, config)` |
 | `CoviaApplication.CANNOT_SIGN` | `CoviaApplication.NOT_MOUNTED`, for a venue that is not mounted |
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |

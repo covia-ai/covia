@@ -3,55 +3,32 @@ package covia.venue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Future;
 
 import covia.exception.ShuttingDownException;
 
 /**
- * An application's update timer, which it has unless it runs on a
- * {@link DrivenClock}: calls {@link CoviaApplication#update()} when the
- * earliest next event across the mounted venues is due by the application's
- * clock. A venue whose next event moves earlier tells it ({@link #dueAt});
- * after each update it asks every venue again. Each update runs on a virtual
- * thread of its own.
- *
- * <p>Pending wake-ups wait on one daemon thread shared by every timer in the
- * JVM, which ends while none is pending, so a timer with nothing due holds no
- * thread.</p>
+ * An application's update timer: has the application's clock call
+ * {@link CoviaApplication#update()} when the earliest next event across the
+ * mounted venues is due. A venue whose next event moves earlier tells it
+ * ({@link #dueAt}); after each update it asks every venue again. A
+ * {@link DrivenClock} wakes nothing, so there its holder updates instead.
  */
 final class AutoUpdate implements AutoCloseable {
 
-	/** Idle time after which the shared timer thread ends. */
-	private static final long KEEP_ALIVE_SECONDS = 10;
-
-	/** Waits for every timer's next wake-up, then hands the update to a virtual thread. */
-	private static final ScheduledThreadPoolExecutor WAKE_UPS = wakeUps();
-
-	private static ScheduledThreadPoolExecutor wakeUps() {
-		ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, r -> {
-			Thread t = new Thread(r, "covia-update-timer");
-			t.setDaemon(true);
-			return t;
-		});
-		executor.setRemoveOnCancelPolicy(true);
-		executor.setKeepAliveTime(KEEP_ALIVE_SECONDS, TimeUnit.SECONDS);
-		executor.allowCoreThreadTimeOut(true);
-		return executor;
-	}
-
 	private final CoviaApplication application;
+	private final VenueClock clock;
 	private final CompletableFuture<Throwable> failure = new CompletableFuture<>();
 
 	/** The pending wake-up, or null. Guarded by this. */
-	private ScheduledFuture<?> armed;
+	private Future<?> armed;
 	/** The time the pending wake-up is for, or {@link Long#MAX_VALUE}. Guarded by this. */
 	private long armedAt = Long.MAX_VALUE;
 	private boolean closed;
 
-	AutoUpdate(CoviaApplication application) {
+	AutoUpdate(CoviaApplication application, VenueClock clock) {
 		this.application = application;
+		this.clock = clock;
 	}
 
 	/**
@@ -77,11 +54,8 @@ final class AutoUpdate implements AutoCloseable {
 		if (closed || time >= armedAt) return;
 		if (armed != null) armed.cancel(false);
 		armedAt = time;
-		long now = application.venueContext().currentTimestamp().longValue();
-		long delay = (time <= now) ? 0 : time - now;
-		armed = WAKE_UPS.schedule(
-			() -> Thread.ofVirtual().name("covia-update").start(this::tick),
-			delay, TimeUnit.MILLISECONDS);
+		long now = clock.get().longValue();
+		armed = clock.schedule((time <= now) ? 0 : time - now, this::tick);
 	}
 
 	/**

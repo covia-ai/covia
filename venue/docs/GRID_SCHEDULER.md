@@ -144,9 +144,9 @@ handle that has moved on; `list` always reports the current key.
 Nothing in the scheduler keeps time. The application's **update**
 (`CoviaApplication.update()`) reads the application's clock once and updates
 each mounted venue in mount order, and a venue's update starts its events due
-by then. An application on the system clock has a timer that calls it when the
-earliest next event across the venues is due. One on a `DrivenClock`, as a unit
-test's engine is, has none: whoever moves the clock calls the update
+by then. The application's clock (`VenueClock`) wakes it for an update when the
+earliest next event across the venues is due. A `DrivenClock`, as a unit test's
+engine has, wakes nothing: whoever moves the clock calls the update
 ([EMBEDDING.md](./EMBEDDING.md#time)).
 
 **One lock per venue** covers every index mutation — `schedule`, `cancel`,
