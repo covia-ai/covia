@@ -73,7 +73,7 @@ class DiscordAdapterTest {
 		var key=convex.core.crypto.AKeyPair.generate();
 		AMap<AString,ACell> settings=Maps.of("apiUrl",api.url(),"bots",Maps.of("startup",
 			Maps.of("token","startup-token","user",OWNER,"operation","v/test/ops/echo","allow",Vectors.of("alice"))));
-		Engine prepared=covia.venue.CoviaApplication.create().mount(key,
+		Engine prepared=covia.venue.TestEngine.application().mount(key,
 			Maps.of(Config.ADAPTERS,Maps.of("discord",settings))).prepare();
 		FakeGatewayHub isolatedGateway=new FakeGatewayHub();
 		try {

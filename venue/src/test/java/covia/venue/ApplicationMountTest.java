@@ -128,15 +128,6 @@ public class ApplicationMountTest {
 	}
 
 	@Test
-	public void anApplicationPolicySignsAsNoVenue() {
-		VenueContext signing = VenueContext.SYSTEM.withSigner(AKeyPair.generate());
-		ConfigurationException created = assertThrows(ConfigurationException.class, () -> CoviaApplication.create(signing));
-		assertEquals(CoviaApplication.POLICY_SIGNS, created.getMessage());
-		LatticeHost<Index<convex.core.data.Keyword, ACell>> host = LatticeHost.create(Index.none(), new MemoryStore());
-		assertThrows(ConfigurationException.class, () -> CoviaApplication.connect(host, signing));
-	}
-
-	@Test
 	public void anApplicationWithoutVenuesRunsNone() {
 		CoviaApplication application = CoviaApplication.create();
 		AccountKey venueKey = AKeyPair.generate().getAccountKey();

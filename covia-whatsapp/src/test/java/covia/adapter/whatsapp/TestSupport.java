@@ -131,7 +131,7 @@ final class TestSupport {
     }
     /** A venue on {@code clock}, which the test moves. */
     Fixture(AMap<AString,ACell> spec, DrivenClock clock) throws Exception {
-      this(CoviaApplication.create(clock.policy())
+      this(CoviaApplication.create(clock)
         .mount(AKeyPair.generate(), CONFIG).start(), spec, new WhatsAppAdapter());
     }
     private Fixture(Engine engine, AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {

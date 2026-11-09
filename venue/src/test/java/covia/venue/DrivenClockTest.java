@@ -48,7 +48,7 @@ class DrivenClockTest {
 
 	@BeforeAll
 	static void launch() throws IOException {
-		CoviaApplication application = CoviaApplication.create(CLOCK.policy());
+		CoviaApplication application = CoviaApplication.create(CLOCK);
 		engine = application.mount(AKeyPair.generate(),
 			new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).launch();
 	}

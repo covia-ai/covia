@@ -669,8 +669,7 @@ Call launch once on a new or prepared engine; do not call `start()` first.
 It installs the built-ins and configured modules, publishes the catalogue,
 provisions configured secrets, seeds MCP, awaits the hook, recovers Jobs and
 queued agent work, then activates workers and takes part in the application's
-updates. An application you open yourself fires scheduled events only once you
-start `application.autoUpdate()` or step it (EMBEDDING.md, Time).
+updates (EMBEDDING.md, Time).
 Do not copy this sequence into the application. `prepare()` and `start()`
 remain low-level APIs for manually assembled runtimes and tests: they do not
 provide a complete venue bootstrap.

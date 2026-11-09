@@ -60,7 +60,7 @@ class SteppedSchedulerTest {
 
 	@BeforeAll
 	static void launch() throws IOException {
-		application = CoviaApplication.create(CLOCK.policy());
+		application = CoviaApplication.create(CLOCK);
 		engine = application.mount(AKeyPair.generate(), config(null)).launch();
 	}
 
@@ -179,7 +179,7 @@ class SteppedSchedulerTest {
 
 	@Test
 	void aLimitOfOneStartsDueEventsOneAfterAnother(TestInfo info) throws Exception {
-		CoviaApplication single = CoviaApplication.create(CLOCK.policy());
+		CoviaApplication single = CoviaApplication.create(CLOCK);
 		try {
 			Engine venue = single.mount(AKeyPair.generate(), config(1)).launch();
 			RequestContext ctx = user(venue, info);
@@ -296,7 +296,7 @@ class SteppedSchedulerTest {
 	@Test
 	void anEventDueWhileTheVenueIsClosingStaysForItsNextStart(TestInfo info) throws Exception {
 		AtomicBoolean closing = new AtomicBoolean();
-		CoviaApplication closable = CoviaApplication.create(CLOCK.policy());
+		CoviaApplication closable = CoviaApplication.create(CLOCK);
 		try {
 			Engine venue = closable.mount(AKeyPair.generate(), config(null), (cfg, app, key) -> new Engine(cfg, app, key) {
 				@Override public boolean isClosing() { return closing.get() || super.isClosing(); }
@@ -380,7 +380,7 @@ class SteppedSchedulerTest {
 		AString did = TestEngine.uniqueDID(info);
 		Blob kept;
 		Blob lost;
-		CoviaApplication first = CoviaApplication.open(store, CLOCK.policy());
+		CoviaApplication first = CoviaApplication.open(store, CLOCK);
 		try {
 			Engine venue = first.mount(key, config(null)).launch();
 			venue.getVenueState().users().ensure(did);
@@ -396,7 +396,7 @@ class SteppedSchedulerTest {
 			first.close();
 		}
 		CLOCK.advance(60_000); // both fall due while the venue is down
-		CoviaApplication second = CoviaApplication.open(store, CLOCK.policy());
+		CoviaApplication second = CoviaApplication.open(store, CLOCK);
 		try {
 			Engine venue = second.mount(key, config(null)).launch();
 			Job keptJob = venue.jobs().getJob(kept);
@@ -421,9 +421,6 @@ class SteppedSchedulerTest {
 		CoviaApplication timed = CoviaApplication.create();
 		try {
 			Engine venue = timed.mount(AKeyPair.generate(), config(null)).launch();
-			AutoUpdate timer = timed.autoUpdate();
-			assertEquals(CoviaApplication.AUTO_UPDATING,
-				assertThrows(IllegalStateException.class, timed::autoUpdate).getMessage());
 			RequestContext ctx = user(venue, info);
 			Scheduler scheduler = venue.gridScheduler();
 			String name = "timer-due-" + ctx.getUserDID();
@@ -436,11 +433,34 @@ class SteppedSchedulerTest {
 				gate.release();
 				assertTrue(scheduler.cancel(later, ctx));
 			}
-			assertFalse(timer.failure().toCompletableFuture().isDone(), "the timer reported no failure");
-			timer.close();
-			timed.autoUpdate().close(); // closing one lets another start
+			assertFalse(timed.timer().failure().toCompletableFuture().isDone(), "the timer reported no failure");
 		} finally {
 			timed.close();
+		}
+	}
+
+	@Test
+	void theTimerStartsWhatWasAlreadyDueWhenAVenueStarts(TestInfo info) throws Exception {
+		MemoryStore store = new MemoryStore();
+		AKeyPair key = AKeyPair.generate();
+		String name = "timer-at-start-" + TestEngine.uniqueDID(info);
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(name)) {
+			CoviaApplication first = CoviaApplication.open(store, CLOCK);
+			try {
+				Engine venue = first.mount(key, config(null)).launch();
+				// Long past by the system clock the venue runs on next
+				venue.gridScheduler().schedule(HOLD_START, gate(name), user(venue, info), CLOCK.millis() + HOUR);
+			} finally {
+				first.close();
+			}
+			CoviaApplication second = CoviaApplication.open(store);
+			try {
+				second.mount(key, config(null)).launch();
+				entered(gate, "the timer starts the event the venue already had due");
+				gate.release();
+			} finally {
+				second.close();
+			}
 		}
 	}
 }

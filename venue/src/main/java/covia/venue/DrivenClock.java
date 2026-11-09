@@ -59,11 +59,8 @@ public final class DrivenClock {
 		return time.addAndGet(ms);
 	}
 
-	/**
-	 * The policy to give {@code CoviaApplication.create}, {@code open} or
-	 * {@code connect}, whose write clock is this clock.
-	 */
-	public VenueContext policy() {
+	/** The application policy whose write clock is this clock. */
+	VenueContext policy() {
 		return policy;
 	}
 }

@@ -39,10 +39,8 @@ venue that is already mounted is refused (`CoviaApplication.ALREADY_MOUNTED`).
 Whoever opens a host runs its workers and closes it. Once the venue is running,
 start `host.autoSync(VenueServer.SYNC_INTERVAL, application::sync)` and
 `host.autoFlush(VenueServer.FLUSH_INTERVAL)`, or intervals of your own; without
-them the venue publishes and saves only when it flushes or closes. Whoever
-opens the application likewise decides when scheduled events fire: start
-`application.autoUpdate()`, or step the application yourself (see Time);
-without either, no scheduled event, agent wake or HITL timeout fires.
+them the venue publishes and saves only when it flushes or closes. The
+application fires scheduled events itself (see Time).
 
 `application.unmount(venueKey)` closes the venue's engine, which makes its
 final flush, signs the venue's copy into its record and forgets it; closing
@@ -89,12 +87,10 @@ own code. See [MIGRATE.md](MIGRATE.md).
 
 ## Time
 
-The venue's clock belongs to the application's policy. Give one to
-`CoviaApplication.create(policy)`, `open(store, policy)` or
-`connect(host, policy)` as `VenueContext.create(clock)`, where `clock` supplies
-the time in epoch milliseconds as a `CVMLong`. Without one the application uses
-the system clock (`VenueContext.SYSTEM`). Every venue mounted in the
-application shares it.
+The venue's clock belongs to the application, and every venue mounted in it
+shares that clock. An application runs on the system clock unless you give it a
+`DrivenClock`: `CoviaApplication.create(clock)`, `open(store, clock)` or
+`connect(host, clock)`.
 
 Every timestamp the venue and its adapters write comes from that clock: jobs,
 agents, scheduled events, HITL requests, user records, DLFS file times and
@@ -128,16 +124,13 @@ Its future completes when each has started (its operation's invocation has
 returned) and gives their Jobs; how each resolves is its own, so wait on the
 Job for that. A step that leaves the time unchanged still starts what is due,
 such as an event added since with a past time.
-`application.autoUpdate()` starts a timer that updates the application
-whenever a venue has something due, and returns it: `failure()` reports its
-first failure and `close()` stops it, as does closing the application. One
-runs at a time (`CoviaApplication.AUTO_UPDATING`). It waits in real time for
-the clock's distance to the next event, so on a clock you drive, step the
-application yourself rather than starting it. How many events a venue starts
-at once is `scheduler.maxConcurrency` ([CONFIG.md](CONFIG.md)).
+An application on the system clock has a timer that updates it whenever a venue
+has something due, until the application closes, and logs the timer's first
+failure. You may still call `update()` on it yourself. How many events a venue
+starts at once is `scheduler.maxConcurrency` ([CONFIG.md](CONFIG.md)).
 
-`DrivenClock` is a clock you move yourself. `DrivenClock.at(instant)` creates
-one, `policy()` gives the policy for the application, and `set(millis)` and
+`DrivenClock` is a clock you move yourself, and an application on one has no
+timer. `DrivenClock.at(instant)` creates one, and `set(millis)` and
 `advance(ms)` move it, in either direction.
 The clock only holds the time: moving it starts nothing, so update the
 application after each step. To mint tokens on the same time, pass
@@ -145,7 +138,7 @@ application after each step. To mint tokens on the same time, pass
 
 ```java
 DrivenClock clock = DrivenClock.at(Instant.parse("2026-01-01T00:00:00Z"));
-CoviaApplication application = CoviaApplication.create(clock.policy());
+CoviaApplication application = CoviaApplication.create(clock);
 Engine engine = application.mount(AKeyPair.generate(), config).launch();
 // ... act, then check what the venue wrote at that time
 clock.advance(60_000);              // one minute later
@@ -157,7 +150,7 @@ for (Job job : started) job.awaitResult();      // when the test needs them fini
 venue on `clock` with no timer, updated with `engine.application().update()`.
 `Engine.createTemp(config)` is the same on a clock held at the current time, so
 nothing fires unless you update it. `Engine.createRealTime(config)` uses the
-system clock and starts the timer, for integration and smoke tests.
+system clock, so its timer runs, for integration and smoke tests.
 
 ## Routes
 
@@ -249,12 +242,11 @@ identity token through an operation", and HELD_KEYS.md.
 | `VenueState.migrate(adapters)`, `migrate()` | `migrate(SecretStore.keys(venueKeyPair), adapters)`, `migrate(keys)` |
 | The engine publishing and flushing its host in the background | Whoever opens the host starts `host.autoSync` and `host.autoFlush` (see "A venue on your own host"); `VenueServer` does |
 | `new Engine(config, application, keyPair)` | `application.mount(keyPair, config)` on an application from `open(store)`, `connect(host)` or `create()`; `Engine`'s constructors are no longer public |
-| `CoviaApplication.create(context)` or `connect(host, context)` with a context from `withSigner(keyPair)` | Pass the context without a signer, then `mount(keyPair, config)`; a context with a signer is refused (`CoviaApplication.POLICY_SIGNS`) |
+| `CoviaApplication.create(context)`, `open(store, context)` or `connect(host, context)` | The same without a context, on the system clock, or with a `DrivenClock` (see Time); each venue brings its key to `mount(keyPair, config)` |
 | `CoviaApplication.CANNOT_SIGN` | `CoviaApplication.NOT_MOUNTED`, for a venue that is not mounted |
 | Several engines in turn over one application | Close (or `unmount`) the venue's engine, then mount it again |
 | Closing the engine, then the host | Close the application (or the engine), then the host |
 | `AuthMiddleware.withTransportGrants(ctx, ucans[, verifier])` | `engine.withTransportGrants(ctx, ucans)`, which verifies with the venue's DID verifier and clock |
-| Scheduled events, agent wakes and HITL timeouts firing by themselves on an engine you mounted | Whoever opens the application starts `application.autoUpdate()` or calls `application.update()` (see Time); `VenueServer` and `Engine.createTemp` start the timer |
 
 ## Upgrading from 0.9.x
 

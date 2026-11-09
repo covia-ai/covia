@@ -26,6 +26,15 @@
 			<scope>provided</scope>
 		</dependency>
 
+		<!-- The shared test fixture -->
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>${project.version}</version>
+			<type>test-jar</type>
+			<scope>test</scope>
+		</dependency>
+
 		<!-- Telegram Bot API client (OkHttp + Gson + Kotlin stdlib), shaded
 		     into the module jar and isolated child-first by the module loader. -->
 		<dependency>

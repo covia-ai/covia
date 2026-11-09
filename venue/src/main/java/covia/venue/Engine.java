@@ -1723,7 +1723,7 @@ public class Engine {
 	 * the {@linkplain #application() application} to act on the new time.
 	 */
 	public static Engine createTemp(DrivenClock clock, AMap<AString,ACell> config) {
-		return startTemp(CoviaApplication.create(clock.policy()), config);
+		return startTemp(CoviaApplication.create(clock), config);
 	}
 
 	/**
@@ -1732,10 +1732,7 @@ public class Engine {
 	 * smoke tests.
 	 */
 	public static Engine createRealTime(AMap<AString,ACell> config) {
-		CoviaApplication application = CoviaApplication.create();
-		Engine engine = startTemp(application, config);
-		application.autoUpdate();
-		return engine;
+		return startTemp(CoviaApplication.create(), config);
 	}
 
 	private static Engine startTemp(CoviaApplication application, AMap<AString,ACell> config) {

@@ -213,7 +213,7 @@ public class TestEngine {
 
 	/** An in-memory application of a test's own, on a held clock, with no venue mounted. */
 	public static CoviaApplication application() {
-		return CoviaApplication.create(heldClock().policy());
+		return CoviaApplication.create(heldClock());
 	}
 
 	/** As {@link #application()}, with this key pair's venue mounted in the default configuration. */
@@ -225,7 +225,7 @@ public class TestEngine {
 
 	/** An application of a test's own over this store, on a held clock, with no venue mounted. */
 	public static CoviaApplication application(AStore store) throws IOException {
-		return CoviaApplication.open(store, heldClock().policy());
+		return CoviaApplication.open(store, heldClock());
 	}
 
 	/** As {@link #application(AStore)}, with this key pair's venue mounted in the default configuration. */
@@ -237,7 +237,7 @@ public class TestEngine {
 
 	/** An application of a test's own on this host, on a held clock, with no venue mounted. */
 	public static CoviaApplication application(LatticeHost<Index<Keyword, ACell>> host) {
-		return CoviaApplication.connect(host, heldClock().policy());
+		return CoviaApplication.connect(host, heldClock());
 	}
 
 	/** As {@link #application(LatticeHost)}, with this key pair's venue mounted in the default configuration. */
@@ -286,7 +286,7 @@ public class TestEngine {
 
 		/** As {@link #mount()}, with different configuration for this run. */
 		public Engine mount(AMap<AString, ACell> runConfig) {
-			return CoviaApplication.connect(new LatticeHost<>(state, null), clock.policy()).mount(key, runConfig);
+			return CoviaApplication.connect(new LatticeHost<>(state, null), clock).mount(key, runConfig);
 		}
 
 		/** The venue as its state stands now, as a crash would leave it: this one's later writes do not reach it. */

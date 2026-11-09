@@ -43,7 +43,7 @@ public class UserMetaStampTest {
 	@BeforeAll
 	public static void launch() throws IOException {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(CLOCK.policy());
+		CoviaApplication application = CoviaApplication.create(CLOCK);
 		engine = application.mount(key,
 			new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
 		Engine.addDemoAssets(engine);

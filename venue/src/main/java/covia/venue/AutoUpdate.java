@@ -10,18 +10,18 @@ import java.util.concurrent.TimeUnit;
 import covia.exception.ShuttingDownException;
 
 /**
- * An application's update timer ({@link CoviaApplication#autoUpdate()}): calls
- * {@link CoviaApplication#update()} when the earliest next event across the
- * mounted venues is due by the application's clock. A venue whose next event
- * moves earlier tells it ({@link #dueAt}); after each update it asks every
- * venue again. Each update runs on a virtual thread of its own.
+ * An application's update timer, which it has unless it runs on a
+ * {@link DrivenClock}: calls {@link CoviaApplication#update()} when the
+ * earliest next event across the mounted venues is due by the application's
+ * clock. A venue whose next event moves earlier tells it ({@link #dueAt});
+ * after each update it asks every venue again. Each update runs on a virtual
+ * thread of its own.
  *
  * <p>Pending wake-ups wait on one daemon thread shared by every timer in the
  * JVM, which ends while none is pending, so a timer with nothing due holds no
- * thread. The timer waits in real time for the clock's distance to the next
- * event, so it suits the system clock, not one an embedder steps.</p>
+ * thread.</p>
  */
-public final class AutoUpdate implements AutoCloseable {
+final class AutoUpdate implements AutoCloseable {
 
 	/** Idle time after which the shared timer thread ends. */
 	private static final long KEEP_ALIVE_SECONDS = 10;
@@ -58,21 +58,18 @@ public final class AutoUpdate implements AutoCloseable {
 	 * Completes with the first failure an update or a look at the venues' next
 	 * due times raised. The timer keeps running after it.
 	 */
-	public CompletionStage<Throwable> failure() {
+	CompletionStage<Throwable> failure() {
 		return failure;
 	}
 
 	/** Stops the timer: no further update starts. One already running finishes. */
 	@Override
-	public void close() {
-		synchronized (this) {
-			if (closed) return;
-			closed = true;
-			if (armed != null) armed.cancel(false);
-			armed = null;
-			armedAt = Long.MAX_VALUE;
-		}
-		application.autoUpdateClosed(this);
+	public synchronized void close() {
+		if (closed) return;
+		closed = true;
+		if (armed != null) armed.cancel(false);
+		armed = null;
+		armedAt = Long.MAX_VALUE;
 	}
 
 	/** Wakes by {@code time} on the application's clock, if not already waking sooner. */
@@ -89,10 +86,9 @@ public final class AutoUpdate implements AutoCloseable {
 
 	/**
 	 * Arms for the earliest time any venue next needs an update. Takes the
-	 * venues' locks, so it runs where no lock is held: on the caller starting
-	 * the timer, or on an update's own thread.
+	 * venues' locks, so it runs where no lock is held: on an update's own thread.
 	 */
-	void refresh() {
+	private void refresh() {
 		long due;
 		try {
 			due = application.nextDue();

@@ -20,6 +20,10 @@
 			<version>${project.version}</version><scope>provided</scope>
 		</dependency>
 		<dependency>
+			<groupId>ai.covia</groupId><artifactId>venue</artifactId>
+			<version>${project.version}</version><type>test-jar</type><scope>test</scope>
+		</dependency>
+		<dependency>
 			<groupId>net.dv8tion</groupId><artifactId>JDA</artifactId><version>${jda.version}</version>
 		</dependency>
 		<dependency>

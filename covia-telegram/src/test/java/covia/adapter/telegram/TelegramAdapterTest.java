@@ -122,7 +122,7 @@ public class TelegramAdapterTest {
 			AMap<AString, ACell> botSettings = Maps.of("apiUrl", fake.apiUrl(), "bots",
 				Maps.of("startup", botConfig(FakeTelegramServer.TOKEN, OWNER.toString(),
 					"operation", "v/test/ops/echo", Vectors.of(CVMLong.create(ALLOWED_ID)))));
-			Engine prepared = covia.venue.CoviaApplication.create().mount(key,
+			Engine prepared = covia.venue.TestEngine.application().mount(key,
 				Maps.of(Config.ADAPTERS, Maps.of("telegram", botSettings))).prepare();
 			try {
 				TelegramAdapter deferred = new TelegramAdapter();

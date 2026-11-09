@@ -202,7 +202,7 @@ public class EngineTest {
 
 		AKeyPair key = AKeyPair.generate();
 		var application = CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null),
-			VenueContext.create(() -> CVMLong.create(1_000L)));
+			DrivenClock.at(java.time.Instant.ofEpochMilli(1_000L)));
 		LifecycleTestEngine engine = LifecycleTestEngine.mount(application, key, false);
 		AString did = Strings.create("did:test:connected-engine-state");
 		Blob jobId = Blob.parse("0x0001");
