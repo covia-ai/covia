@@ -54,9 +54,11 @@ public final class Session extends ALatticeComponent<ACell>
 		this.policy = (owner == null) ? null : sessionPolicy(owner, agentId, id);
 	}
 
-	@Override public Session withCursor(AForkableCursor<ACell> draft) {
-		return new Session(context, draft, owner, agentId, id);
+	@Override public Session rebind(AForkableCursor<ACell> cursor) {
+		return new Session(context, cursor, owner, agentId, id);
 	}
+
+	@Override public Session withCursor(AForkableCursor<ACell> cursor) { return rebind(cursor); }
 
 	/**
 	 * The agent serving a session reaches its {@code c} of right; anything else

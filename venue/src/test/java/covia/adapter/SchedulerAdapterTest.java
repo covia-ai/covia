@@ -103,7 +103,7 @@ public class SchedulerAdapterTest {
 	@Test
 	public void testScheduleRecurringDefaultsFirstFireOneIntervalOut() throws Exception {
 		ACell every = Maps.of(s("every"), CVMLong.create(HOUR));
-		long before = System.currentTimeMillis();
+		long before = engine.currentTimestamp().longValue();
 		ACell scheduled = invoke("v/ops/scheduler/schedule", Maps.of(
 			s("operation"), s("v/test/ops/echo"),
 			s("input"), s("tick"),

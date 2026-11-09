@@ -45,8 +45,13 @@ import covia.api.Fields;
  */
 public class SecretStore extends MapComponent<AString, ACell> implements TransactionalComponent<AHashMap<AString, ACell>, SecretStore> {
 	@Override
-	public SecretStore withCursor(AForkableCursor<AHashMap<AString, ACell>> draft) {
-		return new SecretStore(context, draft);
+	public SecretStore rebind(AForkableCursor<AHashMap<AString, ACell>> cursor) {
+		return new SecretStore(context, cursor);
+	}
+
+	@Override
+	public SecretStore withCursor(AForkableCursor<AHashMap<AString, ACell>> cursor) {
+		return rebind(cursor);
 	}
 
 	private final VenueContext context;

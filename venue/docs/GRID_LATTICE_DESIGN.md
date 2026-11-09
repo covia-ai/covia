@@ -79,8 +79,9 @@ them.
   ordinary characters. DLFS paths are the exception, being filesystem paths
   ([ADAPTERS.md](ADAPTERS.md)).
 - **A path reaches a namespace.** An empty path, `/` or a DID alone names no
-  place, because a principal's record is never one value to hand out. As a
-  capability's `with`, `/` and a DID alone are scopes: the whole namespace.
+  place, because a principal's record is never one value to hand out; the
+  refusal names the namespaces of §4.1 a caller can use. As a capability's
+  `with`, `/` and a DID alone are scopes: the whole namespace.
 - **A context-rooted namespace after a DID names no place**, because no
   principal's data holds one: an agent's workspace is
   `<did>/g/<agent>/n/…`, and the venue's view shows `<venue>/w/global/…`.
@@ -131,7 +132,7 @@ section.
 
 A user's record also holds the venue's bookkeeping, its activity times
 (Appendix A, *User meta record*) and its account lifecycle. No path names
-them, and a read of the whole account returns them with the rest (§4.6).
+them.
 
 `n/`, `c/`, `t/` and `v/` are context-rooted (§4.5). An `x/` route is the
 adapter's own view, which it presents per principal under its own rules, and
@@ -428,10 +429,9 @@ those rules itself uses them.
 **A read returns the value as stored.** Reading a path gives the value at the
 cursor of the component it resolves to, exactly as that cursor holds it, and
 the reader interprets it; no component filters or reshapes what a read
-returns. A path to a whole account reads its record, the venue's bookkeeping
-included. That record's layout is internal and may move: a caller reads what
-it needs by the paths and operations that name it, not by its place in a
-larger value.
+returns. An account's record has no path of its own (§3.2): its layout is
+internal and may move, so a caller reads what it needs by the paths and
+operations that name it, not by its place in a larger value.
 
 | Component | Routes |
 |-----------|--------|
@@ -774,9 +774,8 @@ not count, by design. Deleting a user (`user:delete`) removes their subtree,
 so store GC can reclaim its cells.
 
 `meta` is the venue's bookkeeping, not the user's data, so no path names it
-and no change by path reaches it (§4.6): users cannot forge their activity. A
-read of the whole account returns it with the rest of the record. Operators see it in `user:info`
-and `user:list`; it is not part of a user's export. New per-identity
+and no change by path reaches it (§4.6): users cannot forge their activity.
+Operators see it in `user:info` and `user:list`; it is not part of a user's export. New per-identity
 fields belong in `meta`, not as further top-level keys.
 
 ### A.3 Update Logic

@@ -39,7 +39,7 @@ class UserDeletionsRegionTest {
 	}
 
 	private static VenueState read(ACell value) {
-		return VenueState.create(AKeyPair.generate()).withCursor(Cursors.root(value));
+		return VenueState.create(AKeyPair.generate()).rebind(Cursors.root(value));
 	}
 
 	@Test void theIndexMovesExactlyToItsRegion() {

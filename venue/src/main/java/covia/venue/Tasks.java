@@ -28,8 +28,13 @@ public final class Tasks extends IndexComponent<Blob, ACell>
 	}
 
 	@Override
-	public Tasks withCursor(AForkableCursor<Index<Blob, ACell>> draft) {
-		return new Tasks(draft);
+	public Tasks rebind(AForkableCursor<Index<Blob, ACell>> cursor) {
+		return new Tasks(cursor);
+	}
+
+	@Override
+	public Tasks withCursor(AForkableCursor<Index<Blob, ACell>> cursor) {
+		return rebind(cursor);
 	}
 
 	/** {@code <hex>} names a task; anything else names nothing. */

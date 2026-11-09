@@ -25,8 +25,13 @@ import covia.lattice.CoviaValue;
  */
 public class AssetStore extends IndexComponent<ABlob, AVector<ACell>> implements TransactionalComponent<Index<ABlob, AVector<ACell>>, AssetStore> {
 	@Override
-	public AssetStore withCursor(AForkableCursor<Index<ABlob, AVector<ACell>>> draft) {
-		return new AssetStore(draft);
+	public AssetStore rebind(AForkableCursor<Index<ABlob, AVector<ACell>>> cursor) {
+		return new AssetStore(cursor);
+	}
+
+	@Override
+	public AssetStore withCursor(AForkableCursor<Index<ABlob, AVector<ACell>>> cursor) {
+		return rebind(cursor);
 	}
 
 	/** An asset's hash and the positions below it name data in its record, read-only. */

@@ -61,8 +61,13 @@ public final class JobIndex extends IndexComponent<Blob, ACell>
 	}
 
 	@Override
-	public JobIndex withCursor(AForkableCursor<Index<Blob, ACell>> draft) {
-		return new JobIndex(draft);
+	public JobIndex rebind(AForkableCursor<Index<Blob, ACell>> cursor) {
+		return new JobIndex(cursor);
+	}
+
+	@Override
+	public JobIndex withCursor(AForkableCursor<Index<Blob, ACell>> cursor) {
+		return rebind(cursor);
 	}
 
 	/** Every entry, by job id; empty when no job is unfinished. */

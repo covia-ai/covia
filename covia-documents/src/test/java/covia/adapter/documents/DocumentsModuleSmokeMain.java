@@ -23,7 +23,7 @@ public final class DocumentsModuleSmokeMain {
 	private DocumentsModuleSmokeMain() {}
 
 	public static void main(String[] args) throws Exception {
-		Engine engine = Engine.createTemp(Maps.of(
+		Engine engine = Engine.createRealTime(Maps.of(
 			Config.MODULES, Vectors.of(Maps.of("path", args[0])),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of("docs", args[1]))));

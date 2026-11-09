@@ -266,6 +266,15 @@ Adapter-owned state uses `AdapterState`; see
   poll: an agent's run-loop events (`AgentWatch`), a Job's updates
   (`TestEngine.awaitJob`), a `TestAdapter.TestGate` that holds
   `v/test/ops/hold` work in flight, or a `TestSignal` a stub calls
+- Unit tests run on a held clock with no update timer: `TestEngine.ENGINE` and
+  `Engine.createTemp(config)` hold theirs at the current time, so nothing fires
+  in the middle of another test. A test that moves time takes a venue of its
+  own, `Engine.createTemp(clock, config)` with a `DrivenClock`, and calls
+  `engine.application().update()` after each step (`SteppedSchedulerTest`).
+  `Engine.createRealTime` is the system clock and timer, for integration and
+  smoke tests; `BothClocksTest` runs the engine on both. A venue behind HTTP
+  (`VenueServer`, `TestServer`, `TwoVenueTestServer`) stays on the system clock
+  and timer
 - Size and durability assertions call `engine.flush()` first: otherwise state
   reaches the store only when the host's sync worker next runs, if whoever
   opened the host runs one

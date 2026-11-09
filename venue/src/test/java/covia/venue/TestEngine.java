@@ -49,7 +49,10 @@ public class TestEngine {
 
 	/**
 	 * Shared Engine instance for venue unit tests. Lazily initialised on
-	 * first access. Static — survives the JVM, no per-test setup cost.
+	 * first access. Static — survives the JVM, no per-test setup cost. Its
+	 * clock is held at the time it starts and no update timer runs, so nothing
+	 * falls due by itself. Tests share it, so none moves it: a test that moves
+	 * time takes a venue of its own ({@link Engine#createTemp(DrivenClock, convex.core.data.AMap)}).
 	 */
 	public static final Engine ENGINE;
 
@@ -67,19 +70,18 @@ public class TestEngine {
 		try {
 			STORE = TestTemp.etch("covia-test");
 			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
-			application = CoviaApplication.open(STORE);
+			application = CoviaApplication.open(STORE, DrivenClock.at(java.time.Instant.now()).policy());
 			ENGINE = application.mount(keyPair,
 				new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
 		} catch (java.io.IOException e) {
 			throw new ExceptionInInitializerError(e);
 		}
 		Engine.addDemoAssets(ENGINE);
-		// This class opened the host and the application, so it runs the host's
-		// workers and the update timer, as a venue server does.
+		// This class opened the host, so it runs the host's workers, as a venue
+		// server does.
 		var host = application.host();
 		host.autoSync(covia.venue.server.VenueServer.SYNC_INTERVAL, application::sync);
 		host.autoFlush(covia.venue.server.VenueServer.FLUSH_INTERVAL);
-		application.autoUpdate();
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 			application.close();
 			try {

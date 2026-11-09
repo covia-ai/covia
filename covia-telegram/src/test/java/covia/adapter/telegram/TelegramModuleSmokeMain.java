@@ -45,7 +45,7 @@ public final class TelegramModuleSmokeMain {
 								Strings.create("user"), owner,
 								Strings.create("operation"), Strings.create("v/test/ops/echo"),
 								Strings.create("open"), convex.core.data.prim.CVMBool.TRUE)))));
-			Engine engine = Engine.createTemp(config);
+			Engine engine = Engine.createRealTime(config);
 			try {
 				Engine.addDemoAssets(engine);
 				AAdapter adapter = engine.getAdapter("telegram");

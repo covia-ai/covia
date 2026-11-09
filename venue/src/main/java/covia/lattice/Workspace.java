@@ -52,8 +52,13 @@ public final class Workspace extends ALatticeComponent<ACell>
 	}
 
 	@Override
-	public Workspace withCursor(AForkableCursor<ACell> draft) {
-		return new Workspace(draft);
+	public Workspace rebind(AForkableCursor<ACell> cursor) {
+		return new Workspace(cursor);
+	}
+
+	@Override
+	public Workspace withCursor(AForkableCursor<ACell> cursor) {
+		return rebind(cursor);
 	}
 
 	/**

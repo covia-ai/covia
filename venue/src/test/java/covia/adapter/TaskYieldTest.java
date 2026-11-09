@@ -9,12 +9,10 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
-import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -33,11 +31,10 @@ import covia.venue.User;
  * back: a person's answer, a call past its time limit, or a wake time. One
  * that yields with none of these fails at once (AGENT_LOOP.md §4.6). Every
  * case is driven by test transitions and lattice state, with no clock waits:
- * the tests wait on the run loop's own events.
+ * the tests wait on the run loop's own events. A wake time's own scenario runs
+ * on both kinds of clock in {@code BothClocksTest}.
  */
 public class TaskYieldTest {
-
-	private static final long HOUR_MS = 3_600_000;
 
 	private final Engine engine = TestEngine.ENGINE;
 
@@ -73,51 +70,6 @@ public class TaskYieldTest {
 		}
 		assertEquals(1, timelineCount(agent), "the task ran once, not until the loop cap");
 		assertEquals(0, agent.getTasks().count());
-	}
-
-	@Test
-	public void aWakeTimeParksTheTaskUntilItComes(TestInfo info) throws Exception {
-		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
-		long later = System.currentTimeMillis() + HOUR_MS;
-		Agent agent = create(owner, "wake-yield",
-			Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
-			Maps.of(Fields.WAKE_TIME, CVMLong.create(later)));
-		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "wake-yield")) {
-			Job job = request(owner, "wake-yield", "come back later");
-			watch.awaitRest(1);
-			Blob taskId = job.getID();
-			ACell row = agent.getTasks().get(taskId);
-			assertTrue(Task.isParked(row), "a yield with a wake time parks the task");
-			assertEquals(CVMLong.create(later), RT.getIn(row, Fields.WAKE_TIME));
-			assertFalse(job.isFinished(), "the caller's job waits with its task");
-
-			// Before its wake time a parked task is not work, so a plain kick runs nothing.
-			engine.jobs().invokeOperation("v/ops/agent/trigger",
-				Maps.of(Fields.AGENT_ID, "wake-yield", Fields.FORCE, false), owner).awaitResult(5000);
-			assertEquals(1, timelineCount(agent));
-
-			// A forced kick runs a cycle, but not on the parked task.
-			engine.jobs().invokeOperation("v/ops/agent/trigger",
-				Maps.of(Fields.AGENT_ID, "wake-yield"), owner).awaitResult(10_000);
-			assertEquals(2, timelineCount(agent));
-			assertNull(RT.getIn(agent.getTimeline().get(1), Fields.TASKS),
-				"a forced kick does not present a parked task");
-			assertTrue(Task.isParked(agent.getTasks().get(taskId)));
-
-			// Time passes: the wake time is now behind us, the scheduler fires, and the task runs.
-			engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
-				Agent.ThreadKind.TASK, taskId, System.currentTimeMillis() - 1);
-			watch.awaitRest(3);
-			assertNotNull(RT.getIn(agent.getTimeline().get(2), Fields.TASKS),
-				"the task's own wake presents it again");
-			assertTrue(Task.isParked(agent.getTasks().get(taskId)),
-				"it asked for a later wake again, so it is parked again");
-			assertFalse(job.isFinished());
-
-			// Leave nothing armed in the shared engine.
-			engine.gridScheduler().setThreadWakeTime(owner.getUserDID(), agent,
-				Agent.ThreadKind.TASK, taskId, 0);
-		}
 	}
 
 	@Test

@@ -85,8 +85,13 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	public static final String INVALID_ADAPTER_VERSION = "Adapter state version must be a non-negative integer: ";
 	public static final String INVALID_STATE_VERSION = "Adapter state version must not be negative: ";
 	@Override
-	public VenueState withCursor(AForkableCursor<ACell> draft) {
-		return new VenueState(draft, ownerKey, context);
+	public VenueState rebind(AForkableCursor<ACell> cursor) {
+		return new VenueState(cursor, ownerKey, context);
+	}
+
+	@Override
+	public VenueState withCursor(AForkableCursor<ACell> cursor) {
+		return rebind(cursor);
 	}
 
 	private final AccountKey ownerKey;
@@ -695,7 +700,7 @@ public class VenueState extends ALatticeComponent<ACell> implements Transactiona
 	 */
 	@Override
 	public VenueState fork() {
-		return withCursor(storage.fork());
+		return rebind(storage.fork());
 	}
 
 }
