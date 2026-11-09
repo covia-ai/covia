@@ -76,8 +76,9 @@ EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
   contract or decide its answers.
 - **Message wording lives in constants:** a refusal or error message is built
   from a constant on the class that owns it (`VenueAuthenticator.Reason`,
-  `Auth.KEY_ALREADY_BOUND`), and tests assert against the constant, never the
-  wording, so a rewording breaks no test.
+  `Auth.KEY_ALREADY_BOUND`). No test fails on a change of wording: it compares
+  with that constant or checks a definite expectation, such as that a
+  non-empty message exists.
 - **Expected failures are typed:** a failure a caller can cause or act on is a
   `CoviaException` subtype whose message says what failed and why, raised
   where that is known; library exceptions are wrapped where they are called.
