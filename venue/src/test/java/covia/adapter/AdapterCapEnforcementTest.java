@@ -21,6 +21,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.auth.ucan.Capability;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
@@ -57,8 +58,8 @@ public class AdapterCapEnforcementTest {
 		unrestricted = RequestContext.of(DID); // no caps
 	}
 
-	/** Invoke an op directly on its adapter; return the cause-chain message
-	 *  (empty if it completed without throwing). */
+	/** Invoke an op directly on its adapter; return the cause-chain exception
+	 *  types and messages (empty if it completed without throwing). */
 	private static String direct(String adapter, String op, AMap<AString, ACell> input, RequestContext ctx) {
 		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
 			Maps.of(Fields.ADAPTER, Strings.create(adapter + ":" + op)));
@@ -68,7 +69,9 @@ public class AdapterCapEnforcementTest {
 		} catch (Exception e) {
 			StringBuilder sb = new StringBuilder();
 			for (Throwable c = e; c != null; c = c.getCause()) {
-				if (c.getMessage() != null) sb.append(c.getMessage()).append(" | ");
+				sb.append(c.getClass().getName()).append(": ");
+				if (c.getMessage() != null) sb.append(c.getMessage());
+				sb.append(" | ");
 			}
 			return sb.toString();
 		}
@@ -88,7 +91,7 @@ public class AdapterCapEnforcementTest {
 	}
 
 	private static boolean capDenied(String msg) {
-		return msg.contains("Capability denied");
+		return msg.contains(AuthException.class.getName());
 	}
 
 	private static AMap<AString, ACell> m(Object... kv) {

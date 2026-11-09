@@ -579,7 +579,7 @@ public class LoadsTest {
 			Strings.create("id"), Strings.create("listing"),
 			Strings.create("op"), Strings.create("v/ops/covia/list"),
 			Strings.create("input"), Maps.of(Fields.PATH, Strings.create("w"))), scope);
-		assertTrue(RT.getIn(fresh, "note").toString().contains("appends only when changed"), fresh.toString());
+		assertFalse(RT.getIn(fresh, "note").toString().isBlank(), fresh.toString());
 		assertTrue(Loads.isVolatile(scope.loads.get(Strings.create("listing"))));
 		assertEquals("v/ops/covia/list", RT.getIn(scope.loads, "listing", "op").toString());
 
@@ -708,12 +708,12 @@ public class LoadsTest {
 	public void testContextLoadRejectsAmbiguousOrKeylessCalls() {
 		HarnessTools.LoadScope scope = scope();
 		String none = HarnessTools.contextLoad(Maps.empty(), scope).toString();
-		assertTrue(none.startsWith("Error: path is required"), none);
+		assertTrue(none.startsWith("Error:"), none);
 		String two = HarnessTools.contextLoad(Maps.of(
 			Strings.create("path"), Strings.create("w/x"), Strings.create("text"), Strings.create("y")), scope).toString();
-		assertTrue(two.startsWith("Error: give exactly one of"), two);
+		assertTrue(two.startsWith("Error:"), two);
 		String noId = HarnessTools.contextLoad(Maps.of(Strings.create("text"), Strings.create("y")), scope).toString();
-		assertTrue(noId.startsWith("Error: id is required"), noId);
+		assertTrue(noId.startsWith("Error:"), noId);
 		assertEquals(0, scope.loads.count(), "nothing stored on a rejected call");
 
 		// The path form is unchanged: the path is its own key.

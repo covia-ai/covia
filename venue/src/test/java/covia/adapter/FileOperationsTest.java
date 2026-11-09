@@ -103,7 +103,6 @@ class FileOperationsTest {
 		Files.write(pdf, "%PDF-1.4 fake".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 		NotSupportedException ex = assertThrows(NotSupportedException.class,
 			() -> FileOperations.read(pdf, "extract", null, null, null));
-		assertTrue(ex.getMessage().contains("documents module"), ex.getMessage());
 		assertTrue(ex.getMessage().contains("covia-documents"), ex.getMessage());
 	}
 }

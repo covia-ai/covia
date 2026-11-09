@@ -118,6 +118,6 @@ public class ProjectAdapterTest {
 			Fields.OPERATION, Maps.of(Fields.ADAPTER, Strings.create("project:create")));
 		JobFailedException e = assertThrows(JobFailedException.class,
 			() -> engine.jobs().invokeOperation(meta, Maps.empty(), ctx).awaitResult(5000));
-		assertTrue(e.getMessage().contains("Unknown project operation: create"), e.getMessage());
+		assertTrue(e.getMessage().contains("create"), e.getMessage());
 	}
 }

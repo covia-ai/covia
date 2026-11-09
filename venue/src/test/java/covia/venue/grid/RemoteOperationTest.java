@@ -258,8 +258,8 @@ public class RemoteOperationTest {
 				deadRef, Maps.of("first", "x", "second", "y"), caller));
 		assertFalse(ex.getMessage().contains("Cannot resolve operation"),
 			"a down venue must not masquerade as a missing operation");
-		assertTrue(ex.getMessage().toLowerCase().contains("could not fetch"),
-			"the error must say the fetch failed, got: " + ex.getMessage());
+		assertTrue(ex.getMessage().contains(opId.toHexString()),
+			"the error must name the operation that failed to fetch, got: " + ex.getMessage());
 
 		assertEquals(0, TwoVenueTestServer.ENGINE_A.jobs().getJobs(caller).count(),
 			"a rejected invoke must leave no job record behind");
@@ -286,7 +286,7 @@ public class RemoteOperationTest {
 		assertEquals(Status.FAILED, job.getStatus(),
 			"the job must reach FAILED — not hang as STARTED behind the throw");
 		assertTrue(ex.getMessage() != null
-				&& ex.getMessage().toLowerCase().contains("could not fetch"),
+				&& ex.getMessage().contains(deadDef.substring(deadDef.lastIndexOf('/') + 1)),
 			"the job failure must carry the meaningful fetch error, got: " + ex.getMessage());
 	}
 

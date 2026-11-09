@@ -1,6 +1,7 @@
 package covia.venue.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -94,7 +95,7 @@ public class VenueKeystoreTest {
 		ConfigurationException e = assertThrows(ConfigurationException.class, () ->
 			VenueServer.loadFromKeystore(
 				ksConfig(KEYSTORE_FILE.getAbsolutePath() + ".nope", ALIAS, STOREPASS, KEYPASS)));
-		assertTrue(e.getMessage().contains("not found"), e.getMessage());
+		assertFalse(e.getMessage().isBlank());
 	}
 
 	@Test

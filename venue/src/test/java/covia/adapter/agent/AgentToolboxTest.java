@@ -200,7 +200,7 @@ public class AgentToolboxTest {
 					Maps.of("path", PINNED_PATH)), null);
 			exercisedHarness.add(HarnessTools.CONTEXT_UNLOAD);
 			assertTrue(RT.getIn(firstCall(unloaded), Fields.RESULT).toString()
-				.contains("pinned_context and cannot be unloaded"), where);
+				.contains(PINNED_PATH), where);
 			assertTrue(messages(unloaded).toString().contains(PINNED_MARKER),
 				where + " context_unload removed pinned context: " + unloaded);
 

@@ -134,8 +134,8 @@ public class TaskYieldTest {
 		try (AgentWatch watch = AgentWatch.open(engine, owner.getUserDID(), "past-wake")) {
 			Job job = request(owner, "past-wake", "spin");
 			assertThrows(Exception.class, () -> job.awaitResult(10_000));
-			assertTrue(job.getErrorMessage().contains("loop iterations"),
-				"the cap fails the task: " + job.getErrorMessage());
+			assertEquals(Status.FAILED, job.getStatus(), "the cap fails the task");
+			assertFalse(job.getErrorMessage().isBlank());
 			watch.awaitEvent("run:end", e -> AgentEvents.RUN_END.equals(e.type()));
 		}
 		assertEquals(0, agent.getTasks().count());
