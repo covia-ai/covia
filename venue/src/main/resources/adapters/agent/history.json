@@ -22,11 +22,7 @@
 			"properties": {
 				"found": { "type": "boolean", "description": "False when the session is missing or hidden; no other field is then present." },
 				"sessionId": { "type": "string", "description": "The session read." },
-				"title": { "type": "string", "description": "The session's title, when it has one." },
-				"size": { "type": "integer", "description": "Number of entries in the whole history." },
-				"contextStart": { "type": "integer", "description": "Position where the entries now in the agent's context begin." },
 				"start": { "type": "integer", "description": "Position of the first entry returned." },
-				"end": { "type": "integer", "description": "End of the range read; that position is not included." },
 				"next": { "type": "integer", "description": "Present only when the range held more than limit entries: the position to continue from." },
 				"entries": { "type": "array", "items": { "type": "object" }, "description": "The stored entries, unchanged, oldest first. entries[i] is at position start + i." }
 			}

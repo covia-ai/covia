@@ -6729,7 +6729,6 @@ public class AgentAdapterTest {
 		AVector<ACell> kept = entries(afterCompaction);
 		assertEquals(before, kept.slice(0, 4), "the replaced turns stay readable, exactly");
 		assertEquals(archive, kept.get(4), "followed by their summary");
-		assertEquals(CVMLong.create(4), RT.getIn(afterCompaction, "contextStart"));
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
@@ -7062,7 +7061,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
 			.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
-		assertEquals("Prefixed session", RT.getIn(read, "title").toString());
+		assertEquals("Prefixed session", RT.getIn(agent.getSession(sid), "meta", "title").toString());
 
 		ACell deleted = engine.jobs().invokeOperation("v/ops/agent/delete-session",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
@@ -7198,8 +7197,6 @@ public class AgentAdapterTest {
 
 		ACell whole = readHistory(scoped, Maps.empty());
 		assertEquals(stored, entries(whole), "every entry, in the context or not, as stored");
-		assertEquals(CVMLong.create(stored.count()), RT.getIn(whole, "size"));
-		assertEquals(CVMLong.create(7), RT.getIn(whole, "contextStart"));
 		assertEquals(CVMLong.ZERO, RT.getIn(whole, "start"));
 		assertNull(RT.getIn(whole, "next"));
 
@@ -7214,7 +7211,6 @@ public class AgentAdapterTest {
 
 		ACell forward = readHistory(scoped, Maps.of("start", 0L, "end", 7L, Fields.LIMIT, 3L));
 		assertEquals(stored.slice(0, 3), entries(forward));
-		assertEquals(CVMLong.create(7), RT.getIn(forward, "end"));
 		assertEquals(CVMLong.create(3), RT.getIn(forward, "next"), "the range was longer than limit");
 		ACell rest = readHistory(scoped, Maps.of("start", 3L, "end", 7L, Fields.LIMIT, 4L));
 		assertEquals(stored.slice(3, 7), entries(rest));
@@ -7272,14 +7268,11 @@ public class AgentAdapterTest {
 		ACell past = readHistory(owner, target.assoc(Strings.create("start"), CVMLong.create(50)));
 		assertEquals(0, entries(past).count());
 		assertEquals(CVMLong.create(2), RT.getIn(past, "start"));
-		assertEquals(CVMLong.create(2), RT.getIn(past, "end"));
 		ACell overlong = readHistory(owner, target.assoc(Strings.create("end"), CVMLong.create(50)));
 		assertEquals(2, entries(overlong).count());
-		assertEquals(CVMLong.create(2), RT.getIn(overlong, "end"));
 
 		ACell nothing = readHistory(owner, Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, empty.toHexString()));
 		assertEquals(CVMBool.TRUE, RT.getIn(nothing, "found"));
-		assertEquals(CVMLong.ZERO, RT.getIn(nothing, "size"));
 		assertEquals(0, entries(nothing).count());
 
 		assertHistoryRefused(owner, target.assoc(Strings.create("start"), CVMLong.create(-1)),

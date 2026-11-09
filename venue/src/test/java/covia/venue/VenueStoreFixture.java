@@ -157,7 +157,7 @@ public final class VenueStoreFixture {
 		ACell history = run(client, "agent/history", Maps.of("agentId", AGENT,
 			"sessionId", RT.getIn(user, "sessionId")));
 		require(text(history).contains("baseline message for " + name), "Stored conversation missing for " + name);
-		equal("Baseline " + name, text(RT.getIn(history, "title")));
+		require(text(run(client, "agent/sessions", Maps.of("agentId", AGENT))).contains("Baseline " + name), "Session title missing for " + name);
 		if (updated) require(text(history).contains("upgraded message for " + name), "Continued conversation missing");
 	}
 
