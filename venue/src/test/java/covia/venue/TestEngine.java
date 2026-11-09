@@ -102,7 +102,7 @@ public class TestEngine {
 		// This class opened the host, so it runs the host's workers, as a venue
 		// server does.
 		var host = application.host();
-		host.autoSync(covia.venue.server.VenueServer.SYNC_INTERVAL, application::sync);
+		host.autoSync(covia.venue.server.VenueServer.SYNC_INTERVAL, application::publish);
 		host.autoFlush(covia.venue.server.VenueServer.FLUSH_INTERVAL);
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 			application.close();

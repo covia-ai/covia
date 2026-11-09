@@ -728,7 +728,7 @@ public class Engine {
 	 * Ensures the venue entry exists at [:grid :venues &lt;accountKey&gt; :value].
 	 * Venues are keyed by AccountKey in OwnerLattice; the DID is stored inside venue state.
 	 *
-	 * <p>The Engine keeps this state connected to the application root. A
+	 * <p>This state is the application's one working copy of the venue. A
 	 * successful component mutation therefore updates the venue's authoritative
 	 * in-memory state immediately. Components may still create a short-lived
 	 * {@link VenueState#transact} when a bounded group of writes must commit or be
@@ -814,11 +814,11 @@ public class Engine {
 
 	/**
 	 * Publishes the application through its caller-owned host: the application
-	 * signs the venue's working copy into its record, then the host publishes.
+	 * signs the venue's working copy into its record, the host publishes, and
+	 * the copy reads back what the host persisted.
 	 */
 	private void publishApplicationRoot() {
-		application.sync();
-		application.host().sync();
+		application.publish();
 	}
 
 	// ========================================================================
