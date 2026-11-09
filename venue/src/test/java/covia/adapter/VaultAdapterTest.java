@@ -39,7 +39,7 @@ public class VaultAdapterTest {
 	}
 
 	private ACell run(String op, ACell input) {
-		return engine.jobs().invokeOperation(
+		return engine.jobs().callOperation(
 			op, input, RequestContext.of(aliceDID)
 		).awaitResult(5000);
 	}
@@ -48,7 +48,7 @@ public class VaultAdapterTest {
 	public void testVaultCreatesItsDriveOnFirstWrite() {
 		// Vault names its own drive, so its first write creates it. Until then a
 		// read finds no drive and creates nothing.
-		var list = engine.jobs().invokeOperation("v/ops/vault/list", Maps.empty(),
+		var list = engine.jobs().callOperation("v/ops/vault/list", Maps.empty(),
 			RequestContext.of(aliceDID));
 		assertThrows(Exception.class, () -> list.awaitResult(5000));
 		assertTrue(list.getErrorMessage().contains(DLFSAdapter.DRIVE_NOT_FOUND), list.getErrorMessage());
@@ -68,22 +68,22 @@ public class VaultAdapterTest {
 		RequestContext fileWriter = RequestContext.of(aliceDID).withCaps(Vectors.of(
 			Capability.create(Strings.create("dlfs/vault/note.txt"), Capability.CRUD_WRITE),
 			Capability.create(Strings.create("dlfs/vault/other.txt"), Capability.CRUD_WRITE)));
-		var refused = engine.jobs().invokeOperation("v/ops/vault/write",
+		var refused = engine.jobs().callOperation("v/ops/vault/write",
 			Maps.of("path", "note.txt", "content", "first"), fileWriter);
 		assertThrows(Exception.class, () -> refused.awaitResult(5000));
 		assertEquals(0, RT.ensureVector(RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives")).count());
 
 		RequestContext driveWriter = RequestContext.of(aliceDID).withCaps(Vectors.of(
 			Capability.create(Strings.create("dlfs/vault/"), Capability.CRUD_WRITE)));
-		engine.jobs().invokeOperation("v/ops/vault/write",
+		engine.jobs().callOperation("v/ops/vault/write",
 			Maps.of("path", "note.txt", "content", "second"), driveWriter).awaitResult(5000);
 		assertEquals(Vectors.of("vault"),
 			RT.getIn(run("v/ops/dlfs/list-drives", Maps.empty()), "drives"));
 
-		engine.jobs().invokeOperation("v/ops/vault/write",
+		engine.jobs().callOperation("v/ops/vault/write",
 			Maps.of("path", "note.txt", "content", "third"), fileWriter).awaitResult(5000);
 		assertEquals("third", RT.getIn(run("v/ops/vault/read", Maps.of("path", "note.txt")), "content").toString());
-		var created = engine.jobs().invokeOperation("v/ops/vault/write",
+		var created = engine.jobs().callOperation("v/ops/vault/write",
 			Maps.of("path", "other.txt", "content", "new"), fileWriter);
 		assertThrows(Exception.class, () -> created.awaitResult(5000));
 	}
@@ -158,10 +158,10 @@ public class VaultAdapterTest {
 			Engine.addDemoAssets(configured);
 			AString did = TestEngine.uniqueDID("configured-vault");
 			RequestContext ctx = RequestContext.of(did);
-			configured.jobs().invokeOperation("v/ops/vault/write",
+			configured.jobs().callOperation("v/ops/vault/write",
 				Maps.of("path", "note.txt", "content", "configured"), ctx)
 				.awaitResult(5000);
-			ACell result = configured.jobs().invokeOperation("v/ops/dlfs/read",
+			ACell result = configured.jobs().callOperation("v/ops/dlfs/read",
 				Maps.of("drive", "documents", "path", "note.txt"), ctx)
 				.awaitResult(5000);
 			assertEquals("configured", RT.getIn(result, "content").toString());
@@ -182,7 +182,7 @@ public class VaultAdapterTest {
 	public void testNoAuthFails() {
 		// Anonymous context should fail
 		assertThrows(Exception.class, () ->
-			engine.jobs().invokeOperation(
+			engine.jobs().callOperation(
 				"v/ops/vault/list", Maps.empty(), RequestContext.ANONYMOUS
 			).awaitResult(5000)
 		);

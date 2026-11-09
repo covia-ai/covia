@@ -101,4 +101,31 @@ public class InvocationAuthorityTest {
 		denied(engine.jobs().prepareTracked(ECHO, Maps.empty(), empty).start(), Abilities.INVOKE);
 		denied(engine.jobs().prepareUntracked(ECHO, Maps.empty(), empty).start(), Abilities.INVOKE);
 	}
+
+	@Test void deferredArbitraryTargetStillRequiresInvoke() {
+		var input = Maps.of("delay", 0, "operation", ECHO, "input", Maps.empty());
+		Job job = engine.jobs().callOperation("v/test/ops/delay", input, owner.withCaps(Vectors.empty()));
+		denied(job, Abilities.INVOKE);
+	}
+
+	@Test void boundToolsStillEnforceResourceCaveats() {
+		var input = Maps.of("path", "w/result", "value", 42);
+		var write = cap("w/", Capability.CRUD_WRITE);
+		RequestContext deny = owner.withCaps(Vectors.of(write.assoc(Capability.NB,
+			Maps.of("gate", "v/test/ops/denygate"))));
+		denied(engine.jobs().startToolOperation(WRITE, input, deny).job(), Capability.CRUD_WRITE);
+		RequestContext allow = owner.withCaps(Vectors.of(write.assoc(Capability.NB,
+			Maps.of("gate", "v/test/ops/allowgate"))));
+		assertNotNull(engine.jobs().runToolOperation(WRITE, input, allow).join());
+	}
+
+	@Test void admittedCallerCanUseBoundAgentEndpointWithoutInvoke() {
+		engine.jobs().callOperation("v/ops/agent/create", Maps.of("agentId", "public-agent",
+			"config", Maps.of("operation", "v/test/ops/taskcomplete", "accepts", "anyone")), owner)
+			.awaitResult(5000);
+		RequestContext asker = RequestContext.of(TestEngine.uniqueDID("admitted-asker")).withCaps(Vectors.empty());
+		var input = Maps.of("agentId", owner.getUserDID() + "/g/public-agent", "input", Maps.of("task", "hello"));
+		denied(engine.jobs().invokeOperation("v/ops/agent/request", input, asker), Abilities.INVOKE);
+		assertNotNull(engine.jobs().callOperation("v/ops/agent/request", input, asker).awaitResult(5000));
+	}
 }

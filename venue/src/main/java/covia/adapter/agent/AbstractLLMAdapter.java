@@ -1056,7 +1056,8 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * with a live tap, the progress the operation publishes while it runs is
 	 * announced against the tool call that invoked it.
 	 *
-	 * @param resolved the operation already resolved from {@code operation}, or null
+	 * @param resolved the definition resolved for an unbound, caller-selected
+	 *        reference, or null for a bound tool route
 	 * @param record whether the call's job is recorded from the start
 	 */
 	private ACell invokeOperation(AString operation, Operation resolved, ACell input,
@@ -1074,7 +1075,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			// session. Direct/API callers retain the ordinary parked-Job contract.
 			if ("v/ops/hitl/request".equals(operation.toString())
 					&& ctx.getAgentId() != null && ctx.getSessionId() != null) {
-				Job job = engine.jobs().callOperation(operation.toString(), input, ctx);
+				Job job = (resolved == null)
+					? engine.jobs().callOperation(operation.toString(), input, ctx)
+					: engine.jobs().invokeOperation(operation, resolved, input, ctx);
 				String error = job.getErrorMessage();
 				if (error != null) return Strings.create("Error: " + error);
 				AMap<AString, ACell> receipt = Maps.of(
@@ -1089,7 +1092,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 				if (relay != null) relay.watch(job);
 			};
 			CompletableFuture<ACell> call = (resolved != null)
-				? engine.jobs().invokeInternal(operation, resolved, input, ctx, watch, record)
+				? engine.jobs().invokeReference(operation, resolved, input, ctx, watch, record)
 				: engine.jobs().invokeInternal(operation, input, ctx, watch, record);
 			ACell result = call.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();

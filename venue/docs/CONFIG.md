@@ -507,7 +507,7 @@ container; it does not replace the container image.
 
 This is process-wide authority, distinct from adapter management. Direct venue
 execution is allowed; delegation requires `venue/restart` on
-`<venue DID>/process` (as well as `invoke` on the operation). There is no
+`<venue DID>/process` (plus `invoke` on its reference when called through a generic invocation surface). There is no
 configuration bypass or enable flag.
 
 ## Shutdown (`shutdown.graceMs`)
@@ -839,8 +839,8 @@ bound retained native state.
 
 Callers never provide source, script paths, or unrestricted global names. The
 operator configures each template and must explicitly list its callable
-functions. All four management operations also pass through ordinary,
-path-scoped `invoke` capability checks. Omit `instances` entirely to expose none
+functions. Generic invocation of these management operations additionally
+checks `invoke` on the operation reference; bound calls retain their action checks. Omit `instances` entirely to expose none
 of this management surface.
 
 Python is a separate loadable module and is not present in `covia.jar` or the
@@ -2510,9 +2510,9 @@ comes from a principal, and the binding identifies which.
   current `config.caps`, never its owner.
 - **A sender only `open: true` admits** is anonymous: the venue's public
   principal, under `auth.public.caps`. They may ask only an agent whose
-  `accepts` is `"anyone"`, and only if the operator lets anonymous callers
-  invoke the operation that asks (`v/ops/agent/chat`, or the binding's
-  operation). With public access off, they are not served.
+  `accepts` is `"anyone"`. The configured handler is a bound call, so it
+  checks its action authority without requiring `invoke` on the handler.
+  With public access off, they are not served.
 - **The authentication record** travels with the request: the binding, the
   provider-scoped identity it authenticated, how delivery was verified, and
   the channel in one shape for every provider — `sender {id, handle?, name?}`,
@@ -2529,8 +2529,8 @@ comes from a principal, and the binding identifies which.
 
 A `user: "public"` binding's allow-listed senders are the public principal
 too, so they are bound by the public scope. A capped agent's own binding asks
-it as the agent, so the agent's `caps` need `agent/message` on itself and
-`invoke` on `v/ops/agent/chat`.
+it as the agent, so the agent's `caps` need `agent/message` on itself.
+The bound chat call needs no additional `invoke` grant.
 
 ### Telegram bots (covia-telegram)
 
@@ -3149,13 +3149,11 @@ registered **only** when an `a2a` block is present. Without it, `POST /a2a` and
 - `agentInfo` — surfaced in the agent card (`name`/`description`, plus
   `organization`/`providerUrl` for the card's `provider`). All optional.
 
-**Auth note:** `SendMessage` invokes `defaultChatOp` as the *calling*
-identity. Under the default read-only public scope an unauthenticated caller
-cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
-`SendMessage` from an unauthenticated client, either authenticate the caller
-or widen `auth.public.caps` to permit the op — do the latter only on a
-loopback-bound (`bindAddress: 127.0.0.1`) throwaway venue, never a
-LAN-reachable one. The agent-card GET is public and works regardless.
+**Auth note:** `SendMessage` calls the configured `defaultChatOp` as the
+calling identity. It is a bound endpoint, so no generic `invoke` grant is
+required. The operation still enforces its resource authority: a pure echo
+can run under the read-only public scope; a protected action can be refused.
+The agent-card GET is public and works regardless.
 
 **Per-agent endpoints (COG-14):** beyond the front door, every hosted agent is
 addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
@@ -3172,11 +3170,10 @@ agent. Task calls reach only the asker's own tasks for that agent.
 
 `a2a: {public: true}` publishes the card; it admits nobody. `accepts:
 "anyone"` lets anonymous callers ask. They ask as the venue's public
-principal, so the operator decides whether they may at all: an explicit
-`auth.public.caps` must grant `invoke` on `v/ops/agent/request` (and on
-`v/ops/agent/message` to continue a task), and `crud/read` on the public
-principal's jobs to follow them. The read-only default grants the reads but
-no `invoke`, so anonymous askers are refused until the operator opts in.
+principal when public access is enabled. The target's `accepts: "anyone"`
+provides the action authority; the bound endpoint needs no `invoke` grant.
+Following tasks still needs `crud/read` on the public principal's jobs,
+which the read-only public default grants.
 Every anonymous caller is that one principal, so they share its jobs: under a
 read-only scope any of them can read an anonymous task by its id, and none can
 cancel it. An older config with `a2a.caps` on a public agent reads as

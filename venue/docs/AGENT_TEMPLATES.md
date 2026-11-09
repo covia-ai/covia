@@ -140,8 +140,9 @@ All fields are optional. Missing fields get platform defaults.
 > this page.
 
 > **Private tool definitions need metadata read access.** Adding a user-scoped
-> operation such as `w/ops/risk/issue-limit` to `tools` requires both `invoke`
-> authority for the operation and `crud/read` authority for its definition path.
+> operation such as `w/ops/risk/issue-limit` to `tools` requires `crud/read`
+> authority for its definition path. Calling that bound tool does not require
+> `invoke`; its action still requires authority over the resources it uses.
 > The runtime must read the operation metadata to build the provider tool name,
 > description, and input schema. A definition that is missing or unreadable is
 > omitted from the provider palette and reported in `agent:create` warnings,

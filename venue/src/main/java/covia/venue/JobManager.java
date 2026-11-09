@@ -237,7 +237,12 @@ public class JobManager {
 		// Scope the context to the caller-supplied reference — the only point
 		// the human path form still exists — so requireInvoke can check a
 		// resource-precise invoke capability (#211).
-		return dispatchOperation(resolveOperation(ref, ctx).meta(), input, ctx.withOp(ref), false, Invocation.INVOKE);
+		return invokeOperation(ref, resolveOperation(ref, ctx), input, ctx);
+	}
+
+	/** Generic invocation of the definition the framework already resolved for {@code ref}. */
+	public Job invokeOperation(AString ref, Operation operation, ACell input, RequestContext ctx) {
+		return dispatchOperation(operation.meta(), input, ctx.withOp(ref), false, Invocation.INVOKE);
 	}
 
 	/**
@@ -433,7 +438,7 @@ public class JobManager {
 	private enum Invocation {
 		INVOKE(true, false, true), RUN(true, true, true), TOOL(true, true, false),
 		CALL(true, false, false), CALL_RUN(true, true, false),
-		INTERNAL(false, true, false), TRACKED(false, false, false),
+		INTERNAL(false, true, false), INTERNAL_INVOKE(false, true, true), TRACKED(false, false, false),
 		SCHEDULED(false, false, true), SCHEDULED_TRANSIENT(false, true, true);
 		final boolean admission;
 		final boolean result;
@@ -739,10 +744,20 @@ public class JobManager {
 			RequestContext ctx, Consumer<Job> watch, boolean record) {
 		// Always local — see invokeOperation(AString,...): resolution
 		// returns definitions, never remote execution handles.
-		// Scope to the caller-supplied reference for resource-precise
-		// invoke-gating (#211) — this seam also covers the agent tool loop,
-		// which dispatches config.tools references through here.
+		// Retain the bound reference for attribution and resource caveats.
 		return invokeInternal(op.meta(), input, ctx.withOp(ref), watch, record);
+	}
+
+	/**
+	 * Invokes a caller-selected reference resolved by the framework, for example
+	 * an agent's raw-reference fallback outside its bound tool palette. Retains
+	 * internal composition's observation and recording rules, but checks invoke
+	 * on the reference. The supplied operation must be the definition resolved
+	 * for that reference under this context.
+	 */
+	public CompletableFuture<ACell> invokeReference(AString ref, Operation op, ACell input,
+			RequestContext ctx, Consumer<Job> watch, boolean record) {
+		return executeInternal(op.meta(), input, ctx.withOp(ref), watch, record, Invocation.INTERNAL_INVOKE);
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
@@ -751,10 +766,15 @@ public class JobManager {
 
 	private CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx,
 			Consumer<Job> watch, boolean record) {
+		return executeInternal(meta, input, ctx, watch, record, Invocation.INTERNAL);
+	}
+
+	private CompletableFuture<ACell> executeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx,
+			Consumer<Job> watch, boolean record, Invocation invocation) {
 		try {
 			boolean memoryOnly = !record && allowsInternal(meta)
 				&& !(isReadOnly(meta) && engine.config().isRecordReadOnlyOperations());
-			Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, Invocation.INTERNAL);
+			Prepared prepared = prepareOperation(meta, input, ctx, memoryOnly, invocation);
 			if (watch != null) watch.accept(prepared.job());
 			Job job = prepared.start();
 			return operationResultFuture(job, meta, input);

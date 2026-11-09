@@ -558,9 +558,14 @@ whether the Job is durable:
 - `runOperation` — public result-oriented reference invocation, with the same
   location-scoped `invoke` check as `invokeOperation`. Returns the operation
   result rather than a Job handle and applies normal top-level admission.
+- `callOperation` — a trusted endpoint or tool binding with a durable Job.
+  It retains resource checks without an arbitrary-lookup permission check.
+  Metadata-direct dispatch likewise already has a selected definition.
 - `runToolOperation` — a call to a tool binding selected by the serving
   registry, not an arbitrary reference chosen in the call's input. No blanket
   `invoke` check; all action-specific checks still apply.
+- `invokeReference` — the agent loop's raw-reference fallback, with an
+  `invoke` check and internal composition's observation and recording rules.
 - `invokeInternal` — trusted in-process framework composition for agent transitions,
   LLM calls, tool calls, and capability gates. Returns the operation result
   future and is exempt from top-level admission.

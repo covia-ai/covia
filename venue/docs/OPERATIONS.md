@@ -470,8 +470,10 @@ disabled or excluded tools are not listed. Older venues may omit this metadata:
 treat absence as unknown, not as evidence that an operation is unavailable.
 
 This is runtime discovery metadata, not part of the immutable operation asset.
-Exposure does not grant permission to invoke an operation: the normal capability
-checks still apply. REST/native invocation remains subject to its own checks
+Exposure binds a direct tool; it grants no authority over the resources the
+operation uses. Those resource checks still apply, without a blanket `invoke`
+requirement for a bound tool. Generic REST/native invocation additionally
+checks `invoke` on the requested reference and remains subject to its own checks
 and operation restrictions, independently of MCP exposure.
 
 A `tools/call` that the venue accepts and that then fails answers a tool result

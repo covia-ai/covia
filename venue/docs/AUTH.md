@@ -759,8 +759,8 @@ do, and a bearer for that identity would carry it beyond the bound, so the
 operation refuses that shape. A sub-principal (an agent, a delegate) mints only
 its own identity, which the venue bounds again wherever it is used.
 
-It requires `invoke` on `v/ops/auth/identity-token` and `secret/write` on
-`s/RELAY_TOKEN`. Agents write into their owner's secret store under their
+It requires `secret/write` on `s/RELAY_TOKEN`. A generic invocation also
+requires `invoke` on the operation reference; a bound identity tool does not. Agents write into their owner's secret store under their
 existing capability scope. The bearer is encrypted there; the result contains
 only `{secret, sub, aud, exp}`, never the token or private key. An agent can
 use `s/RELAY_TOKEN` as a model relay `apiKey`, subject to its separate

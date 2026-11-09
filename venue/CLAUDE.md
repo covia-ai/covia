@@ -182,8 +182,8 @@ the asker's own, and the agent serves it as itself, under its own
 `config.caps`, so an owner who wants a narrower public face publishes a
 dedicated agent. Agent config `a2a: {public: true}` publishes the card and
 admits nobody. Anonymous callers ask as the venue's public principal, so
-`auth.public.caps` must also permit the action on the target agent. The
-bound A2A endpoint does not require generic `invoke` authority.
+the target's admission policy can authorise the action. The bound A2A
+endpoint does not require generic `invoke` authority.
 Anonymous denials are existence-hiding 404s; authenticated callers without
 standing receive 403. A2A introduces no new authority.
 

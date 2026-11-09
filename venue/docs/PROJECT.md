@@ -647,7 +647,8 @@ showing which are accepted, and the skill makes the order explicit.
 
 ### 6.6 Capability enforcement
 
-No new abilities. Every operation is `invoke`-gated as usual, then:
+No new abilities. Generic invocation additionally requires `invoke` on the
+operation reference. Bound tools enforce the following action checks directly:
 
 | Operation | Requires |
 |-----------|----------|

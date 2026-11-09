@@ -714,8 +714,8 @@ proxies. External means execution controlled outside Covia's own agent loop;
 the transport may be HTTP, a local CLI, or an SDK.
 
 Subclasses select interaction operations with `isInteractionOperation` and
-implement `startInteraction`. The base claims `Job.start` once, checks invoke
-authority, routes messages, binds cancellation and removes live bindings on
+implement `startInteraction`. The base claims `Job.start` once, routes
+messages, binds cancellation and removes live bindings on
 terminal completion. Administrative operations retain `invokeFuture` dispatch.
 Providers validate their target, credentials, options and resource authority
 before effects. Construct a passive `RemoteInteraction` and bind it with
@@ -1051,7 +1051,8 @@ are bounded and in memory, so a restart loses only messages not yet collected.
    the job lifecycle. Apply the resource gates its action needs before
    effects, and use `getSubOperation(meta)` for dispatch. If it accepts an
    arbitrary operation reference to execute, use the generic invocation path
-   (or enforce `Engine.requireInvoke` on that target before remote submission);
+   (or use `JobManager.requireRemoteInvoke` with the target and submitted input
+   before remote submission);
    do not substitute an invocation check for the target's resource checks. Refuse what
    the caller can fix with the Covia type for it, such as
    `InvalidInputException` for bad input, whose message says what is wrong

@@ -731,7 +731,8 @@ advertised skill authorises adding that definition. Anything else requires an
 explicit resource-scoped `skill/load` or `tool/load` grant. For these two
 opt-ins a null capability scope is not consent. The ordinary read checks still
 apply while resolving metadata, and every eventual operation call independently
-requires `invoke` at its point of action.
+checks its resource authority. A bound tool needs no `invoke` grant; a generic
+invocation tool checks `invoke` on its target reference.
 
 In cached mode, if such a load is present while a context is first materialised
 (or explicitly rebuilt), its definitions enter `renderedContext.tools`. An

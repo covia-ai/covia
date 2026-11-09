@@ -45,6 +45,7 @@ class AgentFacetTest {
         volatile ACell previous;
         volatile ACell message;
         boolean waiting;
+        boolean requiresRead;
         private final String name;
         Probe(String name) { this.name = name; }
         public String getName() { return name; }
@@ -56,6 +57,7 @@ class AgentFacetTest {
         }
         public ACell agentSession(Job job) { return Strings.create("provider-session"); }
         protected void startInteraction(Job job, RequestContext context, AMap<AString, ACell> meta, ACell input) {
+            if (requiresRead) engine.requireAuthority(context, Strings.create("w/backend"), convex.auth.ucan.Capability.CRUD_READ);
             starts.incrementAndGet(); child = job;
             bindInteraction(job, new RemoteInteraction() {
                 public void cancel() { cancels.incrementAndGet(); }
@@ -161,7 +163,8 @@ class AgentFacetTest {
         assertEquals(0, probe.starts.get());
     }
 
-    @Test void configuredAgentCapsBoundBackendInvocation() throws Exception {
+    @Test void configuredAgentCapsBoundBackendResources() throws Exception {
+        probe.requiresRead = true;
         run("create", target().assoc(Agent.KEY_AGENT, facet())
             .assoc(Fields.CONFIG, Maps.of("caps", Vectors.empty())));
         Job denied = invoke("chat", target().assoc(Fields.MESSAGE, Strings.create("hello")));

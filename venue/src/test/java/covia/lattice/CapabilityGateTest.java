@@ -366,6 +366,8 @@ public class CapabilityGateTest {
 				Fields.AGENT_ID, "gated-agent",
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
+					Fields.TOOLS, Vectors.of(Maps.of("name", "v/test/ops/echo",
+						"operation", "v/test/ops/echo")),
 					"llmOperation", "v/test/ops/toolllm",
 					"caps", gatedCaps("v/test/ops", "invoke", "v/test/ops/denygate"))
 			),

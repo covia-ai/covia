@@ -169,7 +169,7 @@ public class AgentConfigAuthorityTest {
 			cap("v/ops/llmagent/chat", INVOKE), cap("v/test/ops/toolllm", INVOKE)));
 		Job borrowed = run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "wide",
 			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
-			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo"))), sibling);
+			Fields.MESSAGES, Vectors.of(Maps.of("role", "user", "content", "issue-334-read"))), sibling);
 		assertEquals(Status.FAILED, borrowed.getStatus());
 		assertTrue(borrowed.getErrorMessage().contains(
 			Engine.NOT_AGENTS_STEP.formatted(sibling.getCallerDID(), "wide")), borrowed.getErrorMessage());
@@ -178,16 +178,18 @@ public class AgentConfigAuthorityTest {
 	@Test
 	public void testAStepRunsUnderItsAgentsOwnCaps() {
 		assertComplete(run("v/ops/agent/create", Maps.of(Fields.AGENT_ID, "narrow",
-			Fields.CONFIG, config(Vectors.of(cap("v/test/ops/toolllm", INVOKE)))), ALICE));
+			Fields.CONFIG, config(Vectors.of(cap("v/test/ops/toolllm", INVOKE)))
+				.assoc(Fields.TOOLS, Vectors.of("v/ops/covia/read"))), ALICE));
 		// Whatever caps the step's input names, it runs under the agent's record.
 		ACell widened = Maps.of(Fields.AGENT_ID, "narrow",
 			Agent.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm",
+				Fields.TOOLS, Vectors.of("v/ops/covia/read"),
 				"caps", Vectors.of(Maps.of(Capability.CAN, Capability.TOP))),
-			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo")));
+			Fields.MESSAGES, Vectors.of(Maps.of("role", "user", "content", "issue-334-read")));
 		Job chat = run("v/ops/llmagent/chat", widened, ALICE);
 		assertComplete(chat);
-		assertTrue(RT.getIn(chat.getOutput(), Fields.RESPONSE).toString().contains("v/test/ops/echo"),
-			"the tool stays outside the agent's caps");
+		assertTrue(RT.getIn(chat.getOutput(), Fields.RESPONSE).toString().contains("crud/read"),
+			"the resource stays outside the agent's caps");
 
 		Job none = run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "absent",
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))), ALICE);

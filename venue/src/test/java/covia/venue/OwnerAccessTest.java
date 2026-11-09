@@ -65,7 +65,7 @@ public class OwnerAccessTest {
 		agent.ensureSession(OTHER_SESSION, alice);
 		agent.session(SESSION).workspace().write(CoviaPath.parse("draft"), Strings.create("c-draft"));
 		agent.session(OTHER_SESSION).workspace().write(CoviaPath.parse("draft"), Strings.create("c-other"));
-		Job echo = engine.jobs().invokeOperation("v/test/ops/echo", Maps.of("message", "scope"), ALICE);
+		Job echo = engine.jobs().callOperation("v/test/ops/echo", Maps.of("message", "scope"), ALICE);
 		echo.awaitResult(5000);
 		job = echo.getID();
 		user.jobs().scratch(job).write(CoviaPath.parse("scratch"), Strings.create("t-scratch"));
@@ -222,7 +222,7 @@ public class OwnerAccessTest {
 	private Job run(String op, ACell input, RequestContext ctx) {
 		Job job;
 		try {
-			job = engine.jobs().invokeOperation(op, input, ctx);
+			job = engine.jobs().callOperation(op, input, ctx);
 		} catch (RuntimeException refused) {
 			return Job.failure(String.valueOf(refused.getMessage()));
 		}

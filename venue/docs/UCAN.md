@@ -1206,11 +1206,13 @@ tool palette, not a caller-supplied operation reference. Its action still
 needs the appropriate authority: a direct write tool needs `crud/write` on
 its target. Passing that same operation reference to a generic invocation
 surface needs `invoke` on the reference **as well as** the write authority.
-Creating a Job is not by itself a reason to require `invoke`.
+Creating a Job is not by itself a reason to require `invoke`. An agent call
+that names a raw operation reference outside its bound palette is a generic
+invocation and requires the location grant, even when carried in a tool call.
 
 Generic invocation surfaces include REST `/invoke` and `/run`, and the
-`grid:invoke` and `grid:run` tools. A direct call to `grid:run` is a bound
-tool call, but that tool's action is to invoke the operation in its `operation`
+`grid:invoke` and `grid:run` tools, and the target of `user:sudo`. A direct
+call to `grid:run` is a bound tool call, but that tool's action is to invoke the operation in its `operation`
 argument: the `invoke` grant must cover that target, not merely
 `v/ops/grid/run`. Scheduled reference invocations check the target when they
 fire. The target's resource checks apply in every case. An invocation may be

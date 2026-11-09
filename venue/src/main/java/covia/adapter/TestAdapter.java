@@ -497,7 +497,7 @@ public class TestAdapter extends AAdapter {
 				// On JDK 25 before 25.0.3 (JDK-8370887) this virtual-thread sleep
 				// can overrun by tens of seconds.
 				Thread.sleep(delay.longValue());
-				ACell result = engine.jobs().invokeInternal(RT.ensureString(op), opInput, ctx).join();
+				ACell result = engine.jobs().runOperation(RT.ensureString(op), opInput, ctx, false).join();
 				job.completeWith(result);
     		} catch (InterruptedException e) {
     			// cancelled — Job.cancel already updated lattice status
