@@ -184,6 +184,7 @@ class VenueMigrationEndToEndTest {
 			seed.cursor().updateAndGet(value -> RT.assocIn(value, Maps.of(Strings.create("events"), Index.of(EVENT,
 				Maps.of(Fields.OP, "v/test/ops/echo", Fields.OWNER, USER, Strings.create("actor"), agentDID,
 					Strings.create("by"), agentDID, Strings.create("time"), Long.MAX_VALUE))), Covia.SCHEDULE));
+			Map<AString, ACell> releasedAgents = ReleasedAgents.seed(seed, USER);
 
 			// Before a start: the read-only check finds version 0 and writes nothing.
 			application.sync();
@@ -234,6 +235,7 @@ class VenueMigrationEndToEndTest {
 			assertFalse(venue.users().user(venueDID).secrets().exists(remoteRef));
 			assertEquals(4, venue.jobIndex().all().count(), "only the unfinished jobs have entries");
 			assertEquals(job, venue.users().user(USER).cursor().path(Namespace.J, JOB).get(), "the history chain is gone");
+			ReleasedAgents.assertUntouched(venue, USER, releasedAgents);
 			// Lazy parts are still in their older shapes.
 			assertNull(RT.getIn(venue.get(), Covia.ADAPTERS, Strings.create("unloaded")));
 			assertTrue(venue.users().user(USER).secrets().exists(LEGACY_GRANT));
@@ -298,6 +300,8 @@ class VenueMigrationEndToEndTest {
 			for (var region : List.of(Covia.VERSION, Covia.ADAPTERS, Covia.ADAPTER_VERSIONS, Covia.USER_DELETIONS, Covia.JOBS)) {
 				assertSame(RT.getIn(current, region), RT.getIn(venue.get(), region), region.toString());
 			}
+
+			ReleasedAgents.assertActAsConfigured(engine, USER);
 		} finally {
 			engine.close();
 		}
