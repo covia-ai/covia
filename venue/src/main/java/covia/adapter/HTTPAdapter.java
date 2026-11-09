@@ -40,6 +40,8 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
+import covia.exception.AuthException;
+import covia.exception.CapabilityDeniedException;
 import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
@@ -465,6 +467,7 @@ public class HTTPAdapter extends AAdapter {
 		AString bearerSecret=RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
 		AMap<AString, ACell> secretHeaders = optionalMap(input, Fields.SECRET_HEADERS);
 		boolean follow = !CVMBool.FALSE.equals(RT.getIn(input, Fields.FOLLOW_REDIRECTS)) && maxRedirects > 0;
+		Map<String, String> urlRedactions = new LinkedHashMap<>();
 
 		try {
 			String method = "GET"; // default
@@ -483,7 +486,6 @@ public class HTTPAdapter extends AAdapter {
 			// this op reports (final url, redirect trail, error chain) is masked
 			// back to its placeholder via urlRedactions so the resolved token is
 			// never persisted or surfaced.
-			Map<String, String> urlRedactions = new LinkedHashMap<>();
 			String finalUrl = resolveUrlSecrets(url.toString(), ctx, urlRedactions);
 			if (queryParams != null && !queryParams.isEmpty()) {
 				StringBuilder queryString = new StringBuilder();
@@ -512,6 +514,14 @@ public class HTTPAdapter extends AAdapter {
 			finalUrl = targetUri.toString();
 			boolean unrestricted = outboundUnrestricted(ctx);
 			validateURL(targetUri, unrestricted);
+			// Substitution can change which path is sent (for example a secret
+			// containing '#'). The preliminary template check is not authority
+			// for that different destination. Check every URL credential again
+			// against the final URI before any request is made.
+			for (String placeholder : new HashSet<>(urlRedactions.values())) {
+				String ref = placeholder.substring(1, placeholder.length() - 1);
+				resolveSecret(Strings.create(ref), ctx, "url secret", finalUrl);
+			}
 
 			String bodyText = (bodyField == null) ? "" : JSON.printPretty(bodyField).toString();
 
@@ -581,6 +591,13 @@ public class HTTPAdapter extends AAdapter {
 
 		} catch (URISyntaxException e) {
 			throw new InvalidInputException(HTTPURLs.INVALID_URL);
+		} catch (CapabilityDeniedException e) {
+			if (urlRedactions.isEmpty()) throw e;
+			throw new CapabilityDeniedException(redact(e.getMessage(), urlRedactions),
+				e.getResource(), e.getAbility(), e.getAuthority());
+		} catch (AuthException e) {
+			if (urlRedactions.isEmpty()) throw e;
+			throw new AuthException(redact(e.getMessage(), urlRedactions));
 		}
 	}
 

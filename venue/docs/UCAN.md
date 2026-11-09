@@ -257,6 +257,8 @@ For example, `/api/../admin` is checked and sent as `/admin`, so a grant for
 `/api` does not cover it. Encoded path separators, backslashes, nested percent
 encoding and ambiguous dot parameters are refused; paths cannot traverse above
 the URL root. Queries and fragments do not participate in path normalisation.
+Inline URL secrets are checked again against the fully substituted URL before
+sending; a template match alone cannot authorise a different resolved path.
 The caveat prefix uses the same normal form. The matcher also normalises
 defensively for callers outside the HTTP API.
 

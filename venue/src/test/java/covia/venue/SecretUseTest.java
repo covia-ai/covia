@@ -326,6 +326,22 @@ public class SecretUseTest {
 				}
 			}
 
+			// The public store needs secret/use even in its own namespace. A
+			// template grant must not cover a different path after substitution.
+			AString publicDID = Strings.create(engine.getDIDString() + ":public");
+			engine.getVenueState().users().ensure(publicDID).secrets().store("URL_TOKEN", "private-value#", encKey);
+			RequestContext publicCaller = RequestContext.of(publicDID)
+				.withCaps(useOf(Strings.create("s/URL_TOKEN"), base + "/api/secret/allowed"));
+			pathSeen.set(null);
+			assertEquals("private-value#", engine.resolveSecret("s/URL_TOKEN", publicCaller, base + "/api/secret/allowed"));
+			Job denied = engine.jobs().callOperation("v/ops/http/get",
+				Maps.of("url", base + "/api/{s/URL_TOKEN}/allowed"), publicCaller);
+			assertThrows(RuntimeException.class, () -> denied.awaitResult(10_000));
+			assertFalse(denied.isComplete());
+			assertTrue(denied.getErrorMessage().contains("url caveat"), denied.getErrorMessage());
+			assertFalse(denied.getData().toString().contains("private-value"), denied.getErrorMessage());
+			assertNull(pathSeen.get(), "the fully substituted destination must be checked before sending");
+
 		} finally {
 			echo.stop(0);
 		}
