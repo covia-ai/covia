@@ -1,10 +1,21 @@
 package covia.venue;
 
+import java.io.IOException;
+import java.time.Instant;
 import java.util.function.Supplier;
 
+import convex.core.crypto.AKeyPair;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Strings;
 import convex.core.data.Maps;
 import convex.core.data.AString;
+import convex.core.store.AStore;
+import convex.lattice.LatticeHost;
+import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.Root;
 
 /**
  * Shared {@link Engine} singleton for venue unit tests that don't need their
@@ -20,9 +31,10 @@ import convex.core.data.AString;
  * field) and isolate per-test state via {@link #uniqueDID(String)} — each
  * test gets its own user namespace, so writes don't collide.</p>
  *
- * <p><b>When NOT to use:</b> tests that exercise persistence/restart
- * (require their own EtchStore) — those should mount their own venue
- * ({@code CoviaApplication.mount}) or use {@code VenueServer.launch}.
+ * <p><b>When NOT to use:</b> tests that exercise persistence/restart.
+ * A restart in memory takes {@link #restartable}; a venue over a store or host
+ * of the test's own takes an {@link #application}, which is the one place a
+ * test's venue gets its clock. {@code VenueServer.launch} is for tests over HTTP.
  * Examples: {@link EnginePersistenceTest}, {@link VenueServerPersistenceTest},
  * {@link VenueRestartTest}, {@link DLFSPersistenceTest},
 	 * {@link EngineSchedulerRebuildTest}. Tests that need bespoke engine
@@ -70,7 +82,7 @@ public class TestEngine {
 		try {
 			STORE = TestTemp.etch("covia-test");
 			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
-			application = CoviaApplication.open(STORE, DrivenClock.at(java.time.Instant.now()).policy());
+			application = application(STORE);
 			ENGINE = application.mount(keyPair,
 				new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
 		} catch (java.io.IOException e) {
@@ -144,6 +156,112 @@ public class TestEngine {
 	public static AString uniqueDID(String discriminator) {
 		int run = RUN.get();
 		return Strings.create("did:key:z6Mk-test-" + discriminator + (run > 1 ? "-run" + run : ""));
+	}
+
+	// ========== Venues of a test's own ==========
+
+	/** The clock of a venue a test makes for itself: held at the current time, with no update timer. */
+	private static DrivenClock heldClock() {
+		return DrivenClock.at(Instant.now());
+	}
+
+	/** An in-memory application of a test's own, on a held clock, with no venue mounted. */
+	public static CoviaApplication application() {
+		return CoviaApplication.create(heldClock().policy());
+	}
+
+	/** As {@link #application()}, with this key pair's venue mounted in the default configuration. */
+	public static CoviaApplication application(AKeyPair key) {
+		CoviaApplication application = application();
+		application.mount(key, new Config(null));
+		return application;
+	}
+
+	/** An application of a test's own over this store, on a held clock, with no venue mounted. */
+	public static CoviaApplication application(AStore store) throws IOException {
+		return CoviaApplication.open(store, heldClock().policy());
+	}
+
+	/** As {@link #application(AStore)}, with this key pair's venue mounted in the default configuration. */
+	public static CoviaApplication application(AStore store, AKeyPair key) throws IOException {
+		CoviaApplication application = application(store);
+		application.mount(key, new Config(null));
+		return application;
+	}
+
+	/** An application of a test's own on this host, on a held clock, with no venue mounted. */
+	public static CoviaApplication application(LatticeHost<Index<Keyword, ACell>> host) {
+		return CoviaApplication.connect(host, heldClock().policy());
+	}
+
+	/** As {@link #application(LatticeHost)}, with this key pair's venue mounted in the default configuration. */
+	public static CoviaApplication application(LatticeHost<Index<Keyword, ACell>> host, AKeyPair key) {
+		CoviaApplication application = application(host);
+		application.mount(key, new Config(null));
+		return application;
+	}
+
+	/** A venue of a test's own that it can stop and start again; see {@link Restartable}. */
+	public static Restartable restartable(AMap<AString, ACell> config) {
+		return new Restartable(Cursors.root(Index.<Keyword, ACell>none()), AKeyPair.generate(), config);
+	}
+
+	/**
+	 * One venue a test runs, stops and runs again over the same lattice state
+	 * and key, as across a restart. Each run is a new application on the same
+	 * held clock, which the test moves if time must pass ({@link #clock()}).
+	 */
+	public static final class Restartable {
+		private final Root<Index<Keyword, ACell>> state;
+		private final AKeyPair key;
+		private final AMap<AString, ACell> config;
+		private final DrivenClock clock = heldClock();
+
+		private Restartable(Root<Index<Keyword, ACell>> state, AKeyPair key, AMap<AString, ACell> config) {
+			this.state = state;
+			this.key = key;
+			this.config = config;
+		}
+
+		/** Mounts the venue and starts it; close the engine before the next start. */
+		public Engine start() throws IOException {
+			return mount().start();
+		}
+
+		/** As {@link #start()}, with different configuration for this run. */
+		public Engine start(AMap<AString, ACell> runConfig) throws IOException {
+			return mount(runConfig).start();
+		}
+
+		/** Mounts the venue without starting it, for a test that launches or prepares it itself. */
+		public Engine mount() {
+			return mount(config);
+		}
+
+		/** As {@link #mount()}, with different configuration for this run. */
+		public Engine mount(AMap<AString, ACell> runConfig) {
+			return CoviaApplication.connect(new LatticeHost<>(state, null), clock.policy()).mount(key, runConfig);
+		}
+
+		/** The venue as its state stands now, as a crash would leave it: this one's later writes do not reach it. */
+		public Restartable crashed() {
+			return new Restartable(Cursors.root(state.get()), key, config);
+		}
+
+		/** The clock every run is on. */
+		public DrivenClock clock() {
+			return clock;
+		}
+
+		/** The venue's key pair. */
+		public AKeyPair key() {
+			return key;
+		}
+
+		/** The lattice state the runs share. */
+		public Root<Index<Keyword, ACell>> state() {
+			return state;
+		}
 	}
 
 	/**

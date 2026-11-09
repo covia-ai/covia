@@ -17,8 +17,8 @@ import covia.adapter.messaging.ConversationSessions;
 import covia.api.Fields;
 import covia.lattice.CoviaPath;
 import covia.lattice.Workspace;
-import covia.venue.CoviaApplication;
 import covia.venue.Engine;
+import covia.venue.TestEngine;
 import covia.venue.User;
 
 /**
@@ -55,7 +55,7 @@ class WhatsAppMigrationTest {
 
 	@Test void releaseStateReachesTheAdapter() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		Engine engine = CoviaApplication.create().mount(key, Maps.empty()).prepare();
+		Engine engine = TestEngine.application().mount(key, Maps.empty()).prepare();
 		try {
 			// 0.9.11 kept adapter state in the venue user's workspace.
 			User host = engine.getVenueState().users().user(engine.getDIDString());

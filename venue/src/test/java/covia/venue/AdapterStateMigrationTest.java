@@ -96,7 +96,7 @@ class AdapterStateMigrationTest {
 
 	private static Engine prepared(AMap<AString, ACell> config) throws IOException {
 		AKeyPair key = AKeyPair.generate();
-		return CoviaApplication.create().mount(key, config).prepare();
+		return TestEngine.application().mount(key, config).prepare();
 	}
 
 	@Test void legacyStateMigratesOnceInOrderWithItsVersion() throws Exception {
@@ -203,7 +203,7 @@ class AdapterStateMigrationTest {
 
 	@Test void startUpMigrationIsOneTransactionWithTheVenue() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		try (var store = application.hostStore()) {
 			Engine refused = application.mount(key, Maps.empty());
 			// A legacy venue: no :version, old-shaped state for one adapter, and
@@ -285,7 +285,7 @@ class AdapterStateMigrationTest {
 
 	@Test void anEmbedderMigratesAStoreWithItsAdaptersBeforeLaunch() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		Engine engine = application.mount(key, Maps.empty());
 		VenueState venue = application.venue(key.getAccountKey());
 		venue.cursor().set(Index.<Keyword, ACell>none()
@@ -316,7 +316,7 @@ class AdapterStateMigrationTest {
 
 	@Test void anAdapterThisBuildLacksKeepsItsStateAndVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		Engine engine = application.mount(key, Maps.empty());
 		// The state and version of an adapter from a module this venue no longer loads.
 		application.venue(key.getAccountKey()).cursor().set(Index.<Keyword, ACell>none()
@@ -350,7 +350,7 @@ class AdapterStateMigrationTest {
 
 	@Test void registrationNeedsAPreparedEngineAndAValidVersion() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		Engine unprepared = CoviaApplication.create().mount(key, Maps.empty());
+		Engine unprepared = TestEngine.application().mount(key, Maps.empty());
 		try {
 			assertEquals(Engine.ADAPTER_BEFORE_PREPARE,
 				assertThrows(IllegalStateException.class, () -> unprepared.registerAdapter(new Versioned(NAME, 1))).getMessage());

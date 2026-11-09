@@ -34,15 +34,12 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.UnavailableException;
@@ -296,10 +293,9 @@ public class VenueIdentityProofTest {
 			// The first venue's status request goes unanswered until it has closed, with no
 			// grace window, so it has nothing left to send when the credentials are counted
 			peer.holdStatus = new CountDownLatch(1);
-			Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -311,7 +307,7 @@ public class VenueIdentityProofTest {
 			peer.holdStatus.countDown();
 			// The address no longer answers challenges
 			peer.key = null;
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -334,14 +330,13 @@ public class VenueIdentityProofTest {
 			// Its status request goes unanswered until the first venue has closed, so
 			// that venue has nothing left to send when the requests are counted
 			peer.holdStatus = new CountDownLatch(1);
-			Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
-				String credential = UcanTokens.identityToken(key, peer.claims, 300);
+				String credential = UcanTokens.identityToken(venue.key(), peer.claims, 300);
 				RequestContext caller = first.venueContext().withRawUcans(Vectors.of(Strings.create(credential)));
 				job = first.jobs().invokeOperation(GRID_RUN, input(peer.url(), "caller"), caller);
 				assertTrue(peer.statusAsked.await(5, TimeUnit.SECONDS), "the venue observes the job it handed over");
@@ -351,7 +346,7 @@ public class VenueIdentityProofTest {
 			} finally { first.close(); }
 			peer.holdStatus.countDown();
 			int requests = peer.discoveries.get() + peer.challenges.get() + peer.calls.get();
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();

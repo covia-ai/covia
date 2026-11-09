@@ -10,23 +10,17 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
-import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.lattice.LatticeHost;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.TestAdapter;
@@ -38,7 +32,6 @@ import covia.venue.Agent;
 import covia.venue.Task;
 import covia.venue.AgentWatch;
 import covia.venue.Config;
-import covia.venue.CoviaApplication;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -250,14 +243,13 @@ public class LateToolResultTest {
 		Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
 	private static final AString RESTART_OWNER = Strings.create("did:key:zLateCallRestart");
 
-	/** A store as a crash leaves it: a task parked on a late call that is still running. */
-	private record Crashed(Root<Index<Keyword, ACell>> store, AKeyPair keyPair, Blob taskId, Blob mirrorId) {}
+	/** A venue as a crash leaves it: a task parked on a late call that is still running. */
+	private record Crashed(TestEngine.Restartable venue, Blob taskId, Blob mirrorId) {}
 
 	private Crashed crashWhileACallRuns(String agentId) throws Exception {
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(RESTART_CONFIG);
 		RequestContext owner = RequestContext.of(RESTART_OWNER);
-		Engine first = CoviaApplication.connect(new LatticeHost<>(cursor, null)).mount(keyPair, RESTART_CONFIG).start();
+		Engine first = venue.start();
 		Engine.addDemoAssets(first);
 		createAgent(first, owner, agentId, "v/test/ops/toolllm");
 		String gateName = agentId + "-" + System.identityHashCode(first);
@@ -271,7 +263,7 @@ public class LateToolResultTest {
 			assertTrue(Task.isParked(agent.getTasks().get(job.getID())));
 			assertEquals(1, agent.getPending().count(), "the late call waits in the pending index");
 			first.syncState();
-			Crashed crashed = new Crashed(Cursors.root(cursor.get()), keyPair, job.getID(),
+			Crashed crashed = new Crashed(venue.crashed(), job.getID(),
 				agent.getPending().entryAt(0).getKey());
 			first.close();
 			return crashed;
@@ -279,8 +271,7 @@ public class LateToolResultTest {
 	}
 
 	private static Engine restart(Crashed crashed) throws Exception {
-		Engine e = CoviaApplication.connect(new LatticeHost<>(crashed.store(), null)).mount(crashed.keyPair(),
-			RESTART_CONFIG).start();
+		Engine e = crashed.venue().start();
 		Engine.addDemoAssets(e);
 		return e;
 	}

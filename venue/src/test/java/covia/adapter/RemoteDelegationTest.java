@@ -16,14 +16,10 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.exception.ShuttingDownException;
 import covia.grid.Job;
@@ -283,10 +279,9 @@ class RemoteDelegationTest {
 
 	@Test void recoveredGridRunRetainsCancellationOwnership() throws Exception {
 		try (CancellationPeer peer = new CancellationPeer("grid")) {
-			var cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -294,7 +289,7 @@ class RemoteDelegationTest {
 				awaitRemoteId(job);
 			} finally { first.close(); }
 			assertEquals(0, peer.cancels.get());
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -340,15 +335,14 @@ class RemoteDelegationTest {
 		});
 		peer.start();
 		String url = "http://127.0.0.1:" + peer.getAddress().getPort();
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair key = AKeyPair.generate();
 		// The caller dials the loopback peer, which the guard allows only when the operator lists it
 		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
+		TestEngine.Restartable venue = TestEngine.restartable(config);
 		RequestContext user = RequestContext.of(Strings.create(covia.grid.auth.UcanTokens.did(AKeyPair.generate())));
 		ACell message = Maps.of("role", "user", "parts", Vectors.of(Maps.of("type", "text", "text", "hello")));
-		Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+		Engine first = venue.start();
 		Engine.addDemoAssets(first);
 		// Another user's secret, which the caller uses under a grant presented with the request
 		AKeyPair ownerKey = AKeyPair.generate();
@@ -363,7 +357,7 @@ class RemoteDelegationTest {
 		try {
 			setSecret(first, user, "first-token");
 			first.getVenueState().users().ensure(ownerDID).secrets().store("SHARED", "granted-token",
-				covia.venue.SecretStore.keys(key));
+				covia.venue.SecretStore.keys(venue.key()));
 			first.jobs().invokeOperation("v/ops/secret/set",
 				Maps.of(Fields.NAME, "DELETED", Fields.VALUE, "deleted-token"), user).awaitResult(5000);
 			fromSecret = first.jobs().invokeOperation("v/ops/a2a/raw/send",
@@ -387,7 +381,7 @@ class RemoteDelegationTest {
 			setSecret(first, user, "second-token");
 			first.jobs().invokeOperation("v/ops/secret/delete", Maps.of(Fields.NAME, "DELETED"), user).awaitResult(5000);
 		} finally { first.close(); }
-		Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();
@@ -500,10 +494,9 @@ class RemoteDelegationTest {
 
 	@Test void observerRestartReattachesToTheSameRemoteJob() throws Exception {
 		try (Peer peer = new Peer()) {
-			Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -512,7 +505,7 @@ class RemoteDelegationTest {
 			} finally { first.close(); }
 			assertFalse(job.isFinished(), "shutdown must not invent a remote cancellation");
 			peer.complete.set(true);
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			Engine second = venue.start();
 			second.jobs().recoverJobs();
 			try {
 				Job recovered = second.jobs().getJob(job.getID(), second.venueContext());
@@ -532,15 +525,14 @@ class RemoteDelegationTest {
 
 	@Test void recoveryRechecksAUserTargetAgainstTheGuard() throws Exception {
 		try (Peer peer = new Peer()) {
-			Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> unlisted = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 				Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 			// The peer listens on loopback, which the guard refuses a user unless the operator allows it
 			AMap<AString, ACell> listed = unlisted.assoc(Config.ADAPTERS,
 				Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
+			TestEngine.Restartable venue = TestEngine.restartable(listed);
 			RequestContext user = RequestContext.of(Strings.create("did:key:z6MkRecoveryRechecksUser"));
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, listed).start();
+			Engine first = venue.start(listed);
 			Engine.addDemoAssets(first);
 			Job job;
 			try {
@@ -548,7 +540,7 @@ class RemoteDelegationTest {
 				awaitRemoteId(job);
 			} finally { first.close(); }
 			// The operator has since withdrawn the peer's host from the allow list
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, unlisted).start();
+			Engine second = venue.start(unlisted);
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();

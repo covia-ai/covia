@@ -114,7 +114,7 @@ public class JobManagerTest {
 	@Test
 	public void legacyUnfinishedJobsRecoverInTheirCurrentShape() throws Exception {
 		convex.core.crypto.AKeyPair key = convex.core.crypto.AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		Engine venue = application.mount(key, Maps.empty());
 		try {
 			AString caller = Strings.create("did:test:legacy-unfinished");

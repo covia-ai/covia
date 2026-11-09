@@ -77,7 +77,7 @@ class BundledAdapterMigrationTest {
 
 	@Test void versionedBundledAdaptersMigrateAtStartUp() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		Engine engine = application.mount(key, Maps.empty());
 		try {
 			// A release-era venue: no :version, each versioned adapter's version 0
@@ -110,7 +110,7 @@ class BundledAdapterMigrationTest {
 	/** The general mechanics, run by the real test adapter's steps across successive starts of one venue. */
 	@Test void theTestAdapterRunsTheGeneralMechanics() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		AMap<AString, ACell> disabled = Maps.of(Config.ADAPTERS, Maps.of("test", Maps.of(Config.ENABLED, CVMBool.FALSE)));
 		List<ACell> states = STATES.get("test");
 		ACell migrated = states.get(states.size() - 1);

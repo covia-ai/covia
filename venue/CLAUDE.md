@@ -271,7 +271,10 @@ Adapter-owned state uses `AdapterState`; see
   in the middle of another test. A test that moves time takes a venue of its
   own, `Engine.createTemp(clock, config)` with a `DrivenClock`, and calls
   `engine.application().update()` after each step (`SteppedSchedulerTest`).
-  `Engine.createRealTime` is the system clock and timer, for integration and
+  A test never opens a `CoviaApplication` itself unless that is what it tests:
+  `TestEngine.restartable(config)` is a venue it can restart in memory, and
+  `TestEngine.application(...)` an application over its own store or host, both
+  on a held clock. `Engine.createRealTime` is the system clock and timer, for integration and
   smoke tests; `BothClocksTest` runs the engine on both. A venue behind HTTP
   (`VenueServer`, `TestServer`, `TwoVenueTestServer`) stays on the system clock
   and timer

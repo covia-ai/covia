@@ -15,8 +15,6 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.adapter.remote.VenueRemoteAgent;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -195,10 +193,9 @@ class RemoteAgentAdapterTest {
 
 	@Test void freshEngineReattachesWithoutResubmitting() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
@@ -206,7 +203,7 @@ class RemoteAgentAdapterTest {
 				await(original, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished()); assertEquals(0, peer.cancels.get());
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -222,13 +219,12 @@ class RemoteAgentAdapterTest {
 
 	@Test void agentFacadeRecoversParentAndChildWithoutResubmission() throws Exception {
 		try (Peer peer = new Peer()) {
-			var cursor = convex.lattice.cursor.Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-			AKeyPair key = AKeyPair.generate();
 			// The venue's own agent dials the loopback peer, and agents pass the
 			// outbound guard, so the operator allows the peer's host
 			AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 				Config.ADAPTERS, Maps.of("http", Maps.of("allowedHosts", Vectors.of("127.0.0.1"))));
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			TestEngine.Restartable venue = TestEngine.restartable(config);
+			Engine first = venue.start();
 			Engine.addDemoAssets(first);
 			Job original;
 			try {
@@ -239,7 +235,7 @@ class RemoteAgentAdapterTest {
 				await(original, j -> Status.INPUT_REQUIRED.equals(j.getStatus()));
 			} finally { first.close(); }
 			assertFalse(original.isFinished());
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -263,12 +259,11 @@ class RemoteAgentAdapterTest {
 	 * task, which runs on.
 	 */
 	@Test void localCallsResumeAfterARestartAsTheirCallers() throws Exception {
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
-		AKeyPair key = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config(true));
 		AString user = TestEngine.uniqueDID("RemoteAgentResume");
 		RequestContext ctx = RequestContext.of(user);
 		Job asked, waited, served, anonymous;
-		Engine first = start(cursor, key, true);
+		Engine first = start(venue, true);
 		try {
 			agent(first, ctx, "asker", "v/test/ops/askhuman");
 			agent(first, ctx, "waiter", "v/test/ops/never");
@@ -290,7 +285,7 @@ class RemoteAgentAdapterTest {
 			for (Job call : new Job[] {asked, waited, anonymous}) await(call, RemoteAgentAdapterTest::following);
 		} finally { first.close(); }
 
-		Engine second = start(cursor, key, false);
+		Engine second = start(venue, false);
 		try {
 			Job resumed = second.jobs().getJob(asked.getID(), ctx);
 			assertFalse(resumed.isFinished(), "the call follows its task again");
@@ -341,12 +336,16 @@ class RemoteAgentAdapterTest {
 		} finally { engine.close(); }
 	}
 
-	/** A venue over {@code cursor}, launched as it is at boot, with public access on or off. */
-	private static Engine start(Root<Index<Keyword, ACell>> cursor, AKeyPair key, boolean publicAccess) throws Exception {
-		AMap<AString, ACell> config = Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
+	/** Configuration with public access on or off. */
+	private static AMap<AString, ACell> config(boolean publicAccess) {
+		return Maps.of(Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, publicAccess, Config.CAPS, "unrestricted")));
-		return covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(key, config).launch();
+	}
+
+	/** {@code venue}, launched as it is at boot, with public access on or off. */
+	private static Engine start(TestEngine.Restartable venue, boolean publicAccess) throws Exception {
+		return venue.mount(config(publicAccess)).launch();
 	}
 
 	private static void agent(Engine engine, RequestContext ctx, String id, String operation) {

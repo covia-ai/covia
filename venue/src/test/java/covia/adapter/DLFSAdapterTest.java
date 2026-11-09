@@ -283,7 +283,7 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDriveDeleteSurvivesSaveInFlight() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create();
+		var application = TestEngine.application();
 		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
@@ -364,7 +364,7 @@ public class DLFSAdapterTest {
 	@Test
 	public void testIndependentFileEditsStillMerge() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create();
+		var application = TestEngine.application();
 		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
@@ -640,7 +640,7 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDLFSWritesPublishThroughHost() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create();
+		var application = TestEngine.application();
 		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		try {
 			Engine.addDemoAssets(isolated);
@@ -658,7 +658,7 @@ public class DLFSAdapterTest {
 	@Test
 	public void testRecreateSurvivesConcurrentStaleSync() throws Exception {
 		var key = AKeyPair.generate();
-		var application = CoviaApplication.create();
+		var application = TestEngine.application();
 		Engine isolated = application.mount(key, Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 		CountDownLatch syncEntered = new CountDownLatch(1);
 		CountDownLatch releaseSync = new CountDownLatch(1);

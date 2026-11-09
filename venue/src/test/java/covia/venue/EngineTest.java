@@ -87,7 +87,7 @@ public class EngineTest {
 
 		/** Mounts a new venue on a host over {@code cursor}, with this engine as its runtime. */
 		static LifecycleTestEngine mount(Root<Index<Keyword, ACell>> cursor, boolean failAfterSchedulerStart) {
-			return mount(CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)),
+			return mount(TestEngine.application(new convex.lattice.LatticeHost<>(cursor, null)),
 				AKeyPair.generate(), failAfterSchedulerStart);
 		}
 

@@ -67,10 +67,10 @@ public class DLFSPersistenceTest {
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(CoviaApplication.open(store).host(), NodeConfig.port(-1));
+				new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			node.launch();
 
-			engine = CoviaApplication.connect(node.getHost()).mount(venueKey, Maps.of(
+			engine = TestEngine.application(node.getHost()).mount(venueKey, Maps.of(
 				Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 			Engine.addDemoAssets(engine);
 
@@ -131,7 +131,7 @@ public class DLFSPersistenceTest {
 		{
 			store = EtchStore.create(etchFile);
 			node =
-				new NodeServer<>(CoviaApplication.open(store).host(), NodeConfig.port(-1));
+				new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			node.launch();
 
 			// Verify restore — root level
@@ -141,7 +141,7 @@ public class DLFSPersistenceTest {
 			assertNotNull(dlfs, ":dlfs region should survive restart");
 
 			// Check the cursor chain that DLFSAdapter would use
-			engine = CoviaApplication.connect(node.getHost()).mount(venueKey, Maps.of(
+			engine = TestEngine.application(node.getHost()).mount(venueKey, Maps.of(
 				Config.USERS, Maps.of(Config.AUTO_CREATE, true))).start();
 			Engine.addDemoAssets(engine);
 

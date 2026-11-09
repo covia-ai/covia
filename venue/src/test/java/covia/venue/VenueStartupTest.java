@@ -178,7 +178,7 @@ public class VenueStartupTest {
 		VenueServer server = null;
 		try (ServerSocket reserved = new ServerSocket(0)) {
 			AMap<AString, ACell> config = config(key, reserved.getLocalPort());
-			Engine seed = CoviaApplication.open(store).mount(key, config).prepare();
+			Engine seed = TestEngine.application(store).mount(key, config).prepare();
 			try {
 				seed.registerAdapter(new StartupAdapter());
 				seed.materialiseBootstrapState();
@@ -223,7 +223,7 @@ public class VenueStartupTest {
 		AKeyPair key = AKeyPair.generate();
 		EtchStore store = TestTemp.etch("startup-agent-config");
 		AMap<AString, ACell> cfg = config(key, 0);
-		Engine seed = CoviaApplication.open(store).mount(key, cfg).prepare();
+		Engine seed = TestEngine.application(store).mount(key, cfg).prepare();
 		try {
 			AString owner = seed.getDIDString();
 			Agent agent = seed.getVenueState().users().ensure(owner).ensureAgent(
@@ -312,7 +312,7 @@ public class VenueStartupTest {
 		AKeyPair key = AKeyPair.generate();
 		EtchStore store = TestTemp.etch("startup-newer-adapter");
 		java.io.File file = store.getFile();
-		CoviaApplication application = CoviaApplication.open(store, key);
+		CoviaApplication application = TestEngine.application(store, key);
 		long supported = new covia.adapter.TestAdapter().stateVersion();
 		application.venue(key.getAccountKey()).cursor().set(convex.core.data.Index.<convex.core.data.Keyword, ACell>none()
 			.assoc(covia.lattice.Covia.ADAPTERS, Maps.of("test", Maps.of("users", Maps.empty())))
@@ -388,7 +388,7 @@ public class VenueStartupTest {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-startup")) {
 			AMap<AString, ACell> config = config(key, 0);
-			CoviaApplication application = CoviaApplication.open(store);
+			CoviaApplication application = TestEngine.application(store);
 			Engine seed = application.mount(key, config).prepare();
 			seed.registerAdapter(new StartupAdapter());
 			seed.materialiseBootstrapState();
@@ -442,7 +442,7 @@ public class VenueStartupTest {
 	public void embeddedLaunchFailureReleasesWorkersButKeepsCallerStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-failure")) {
-			CoviaApplication application = CoviaApplication.open(store);
+			CoviaApplication application = TestEngine.application(store);
 			Engine engine = application.mount(key, config(key, 0));
 			StartupAdapter adapter = new StartupAdapter();
 			IllegalStateException failure = new IllegalStateException(HOOK_FAILURE);
@@ -465,7 +465,7 @@ public class VenueStartupTest {
 	public void failedEmbeddedActivationSuspendsRecoveredJobsBeforeClosingAdapters() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-recovered-failure")) {
-			CoviaApplication application = CoviaApplication.open(store);
+			CoviaApplication application = TestEngine.application(store);
 			Engine engine = application.mount(key, config(key, 0));
 			AtomicInteger suspended = new AtomicInteger();
 			StartupAdapter adapter = new StartupAdapter() {
@@ -501,7 +501,7 @@ public class VenueStartupTest {
 	public void cancellingEmbeddedLaunchReleasesHookWaitWithoutOwningHookOrStore() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-cancel")) {
-			CoviaApplication application = CoviaApplication.open(store);
+			CoviaApplication application = TestEngine.application(store);
 			Engine engine = application.mount(key, config(key, 0));
 			StartupAdapter adapter = new StartupAdapter();
 			CompletableFuture<Void> hook = new CompletableFuture<>();
@@ -528,7 +528,7 @@ public class VenueStartupTest {
 	public void closingEmbeddedEngineReleasesPendingLaunch() throws Exception {
 		AKeyPair key = AKeyPair.generate();
 		try (EtchStore store = TestTemp.etch("embedded-close")) {
-			Engine engine = CoviaApplication.open(store).mount(key, config(key, 0));
+			Engine engine = TestEngine.application(store).mount(key, config(key, 0));
 			CompletableFuture<Void> inHook = new CompletableFuture<>();
 			CompletableFuture<Engine> ready = engine.launchAsync(prepared -> {
 				inHook.complete(null);

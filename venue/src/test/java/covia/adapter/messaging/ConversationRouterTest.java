@@ -19,6 +19,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.venue.Agent;
 import covia.venue.Engine;
+import covia.venue.TestEngine;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -317,7 +318,7 @@ class ConversationRouterTest {
 			}
 		}
 		var store = new FlushStore();
-		var engine = covia.venue.CoviaApplication.connect(
+		var engine = TestEngine.application(
 				convex.lattice.LatticeHost.create(convex.core.data.Index.none(), store))
 			.mount(convex.core.crypto.AKeyPair.generate(), Maps.empty());
 		engine.start();

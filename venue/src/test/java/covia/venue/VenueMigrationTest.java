@@ -138,7 +138,7 @@ class VenueMigrationTest {
 
 	@Test void storedVersionsAreReadWithoutWriting() throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = TestEngine.application(key);
 		try (var store = application.hostStore()) {
 			assertTrue(VenueState.peekVersions(store, key.getAccountKey()).isEmpty(), "a fresh store holds no venue");
 			ACell record = Index.<Keyword, ACell>none()
@@ -169,7 +169,7 @@ class VenueMigrationTest {
 
 	private static IllegalStateException assertStartupRejected(ACell record, String reason) throws Exception {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create();
+		CoviaApplication application = TestEngine.application();
 		try (var store = application.hostStore()) {
 			Engine engine = application.mount(key, Maps.empty());
 			application.venue(key.getAccountKey()).cursor().set(record);
@@ -190,7 +190,7 @@ class VenueMigrationTest {
 
 	@Test void eachVenueOwnsItsVersionAndUnknownFieldsSurviveMigration() {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(key);
+		CoviaApplication application = TestEngine.application(key);
 		VenueState local = application.venue(key.getAccountKey());
 		AKeyPair peerKey = AKeyPair.generate();
 		VenueState peer = VenueState.fromRoot(application.cursor(), peerKey.getAccountKey(),

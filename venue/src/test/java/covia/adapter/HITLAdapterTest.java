@@ -338,7 +338,7 @@ public class HITLAdapterTest {
 		String token = UcanTokens.grant(BOB_KP, BOB_DID.toString(), BOB_DID + "/w/invoices/", "crud/read", HOUR);
 		var store = new BarrierStore();
 		{
-			var first = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty());
+			var first = TestEngine.application(store).mount(key, Maps.empty());
 			first.start();
 			try {
 				Engine.addDemoAssets(first);
@@ -374,7 +374,7 @@ public class HITLAdapterTest {
 		}
 		{
 			// A restart: a new application over what the store retained.
-			var second = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty()).start();
+			var second = TestEngine.application(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();

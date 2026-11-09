@@ -8,17 +8,12 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
-import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -109,11 +104,10 @@ public class JobShutdownTest {
 	@Test
 	public void pausableJobIsPausedAndRestoredAtBoot() throws Exception {
 		AMap<AString, ACell> config = config(0);
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config);
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceShutdownParked"));
 
-		Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config).start();
+		Engine first = venue.start();
 		Engine.addDemoAssets(first);
 		Job parked = first.jobs().invokeOperation(NEVER, Maps.empty(), alice); // its adapter can suspend it
 		Job slow;
@@ -127,7 +121,7 @@ public class JobShutdownTest {
 		assertEquals(Status.PAUSED, parked.getStatus(), "a pausable job is suspended, not cancelled");
 		assertEquals(Status.CANCELLED, slow.getStatus(), "in-process work is cancelled with zero grace");
 
-		Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config).start();
+		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

@@ -21,8 +21,8 @@ import convex.lattice.LatticeHost;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.Config;
-import covia.venue.CoviaApplication;
 import covia.venue.Engine;
+import covia.venue.TestEngine;
 import covia.venue.TestTemp;
 import covia.venue.server.VenueServer;
 
@@ -63,7 +63,7 @@ class WebhookInboxTest {
 
 	@Test void retriesDurabilityBarrierEvenForDuplicateReceipts() throws Exception {
 		FlushStore store = new FlushStore();
-		Engine engine = CoviaApplication.connect(LatticeHost.create(Index.none(), store))
+		Engine engine = TestEngine.application(LatticeHost.create(Index.none(), store))
 			.mount(AKeyPair.generate(), Maps.empty());
 		engine.start();
 		try {

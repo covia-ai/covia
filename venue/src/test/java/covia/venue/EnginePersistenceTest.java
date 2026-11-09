@@ -71,7 +71,7 @@ public class EnginePersistenceTest {
 		long future = VenueState.CURRENT_VERSION + 1;
 		ACell before;
 		try (var store = convex.etch.EtchStore.create(file)) {
-			CoviaApplication application = CoviaApplication.open(store, key);
+			CoviaApplication application = TestEngine.application(store, key);
 			VenueState venue = application.venue(key.getAccountKey());
 			venue.initialise(Strings.create("did:test:future"), NO_SECRETS);
 			venue.cursor().path(Covia.VERSION).set(convex.core.data.prim.CVMLong.create(future));

@@ -8,17 +8,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
-import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.adapter.AAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -195,29 +190,28 @@ public class JobMirrorTest {
 		AMap<AString, ACell> config = Maps.of(
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0));
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(Index.<Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config);
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceMirrorRestart"));
 
-		Engine first = CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config).start();
+		Engine first = venue.start();
 		Engine.addDemoAssets(first);
 		String gateName = "mirror-restart-" + System.identityHashCode(first);
 		Job call;
 		Job mirror;
-		Root<Index<Keyword, ACell>> crashed;
+		TestEngine.Restartable crashed;
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
 			call = heldCall(first, alice, gate, Maps.of("gate", gateName));
 			mirror = first.jobs().mirror(call);
 			first.syncState();
 			// The store as a crash would leave it, with the mirror still running
-			crashed = Cursors.root(cursor.get());
+			crashed = venue.crashed();
 			first.close();
 		}
 		assertEquals(Status.CANCELLED, mirror.getStatus(), "shutdown cancels a mirror by the default path");
 		assertEquals(AAdapter.VENUE_SHUT_DOWN, error(mirror));
 		assertEquals(Status.CANCELLED, call.getStatus(), "and with it the call");
 
-		Engine second = CoviaApplication.connect(new convex.lattice.LatticeHost<>(crashed, null)).mount(keyPair, config).start();
+		Engine second = crashed.start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

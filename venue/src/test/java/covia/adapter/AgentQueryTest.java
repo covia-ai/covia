@@ -33,6 +33,7 @@ import covia.venue.Agent;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.Session;
+import covia.venue.TestEngine;
 
 /** Queries and cached summaries use real dispatch and LLM runtimes, with a deterministic provider. */
 public class AgentQueryTest {
@@ -704,7 +705,7 @@ public class AgentQueryTest {
 		Blob jobId;
 		try (convex.etch.EtchStore store = covia.venue.TestTemp.etch("summarise-persist")) {
 			file = store.getFile();
-			engine = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty()).start();
+			engine = TestEngine.application(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();
@@ -717,7 +718,7 @@ public class AgentQueryTest {
 			} finally { engine.close(); }
 		}
 		try (convex.etch.EtchStore store = convex.etch.EtchStore.create(file)) {
-			engine = covia.venue.CoviaApplication.open(store).mount(key, Maps.empty()).start();
+			engine = TestEngine.application(store).mount(key, Maps.empty()).start();
 			try {
 				Engine.addDemoAssets(engine);
 				owner = engine.venueContext();

@@ -65,7 +65,7 @@ public class VenueStateTest {
 	@Test
 	public void testApplicationHoldsOneCopyOfEachMountedVenue() {
 		AKeyPair kp = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(kp);
+		CoviaApplication application = TestEngine.application(kp);
 		VenueState venue = application.venue(kp.getAccountKey());
 		assertSame(venue, application.venue(kp.getAccountKey()), "every caller shares the venue's one copy");
 
@@ -77,7 +77,7 @@ public class VenueStateTest {
 	@Test
 	public void testApplicationSyncSignsTheVenueIntoItsRecord() {
 		AKeyPair kp = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(kp);
+		CoviaApplication application = TestEngine.application(kp);
 		VenueState venue = application.venue(kp.getAccountKey());
 		venue.assets().store(Strings.create("{\"name\":\"Published\"}"), null);
 		assertNull(RT.getIn(application.cursor().get(), Covia.GRID, Covia.VENUES, kp.getAccountKey()),
@@ -96,7 +96,7 @@ public class VenueStateTest {
 		try (MemoryStore store = new MemoryStore()) {
 			LatticeHost<Index<convex.core.data.Keyword, ACell>> root =
 				LatticeHost.create(Index.none(), store);
-			CoviaApplication application = CoviaApplication.connect(root, kp);
+			CoviaApplication application = TestEngine.application(root, kp);
 			VenueState venue = application.venue(kp.getAccountKey());
 
 			venue.initialise(Strings.create("did:key:test"), NO_SECRETS);

@@ -89,10 +89,10 @@ public class VenueRestartTest {
 		// ========== Stage 1: Create engine via NodeServer, register adapters, run operations ==========
 
 		{
-			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(CoviaApplication.open(store).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			activeNode = ns;
 			ns.launch();
-			Engine engine = CoviaApplication.connect(ns.getHost()).mount(kp, config).start();
+			Engine engine = TestEngine.application(ns.getHost()).mount(kp, config).start();
 			activeEngine = engine;
 			Engine.addDemoAssets(engine);
 
@@ -162,10 +162,10 @@ public class VenueRestartTest {
 		// ========== Stage 3: Restart with the same store ==========
 
 		{
-			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(CoviaApplication.open(store).host(), NodeConfig.port(-1));
+			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(TestEngine.application(store).host(), NodeConfig.port(-1));
 			activeNode = ns2;
 			ns2.launch(); // restores from store
-			Engine engine2 = CoviaApplication.connect(ns2.getHost()).mount(kp, config).start();
+			Engine engine2 = TestEngine.application(ns2.getHost()).mount(kp, config).start();
 			activeEngine = engine2;
 			Engine.addDemoAssets(engine2);
 			engine2.jobs().recoverJobs();

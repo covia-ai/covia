@@ -6,13 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.data.AString;
 import convex.core.data.ACell;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.crypto.AKeyPair;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.exception.AuthException;
 import covia.exception.RateLimitException;
 import covia.grid.Job;
@@ -149,19 +144,18 @@ public class JobConcurrencyCapTest {
 				Config.ENABLED, true,
 				Strings.create("maxConcurrentJobsPerUser"), 1L,
 				Strings.create("blockMs"), 0L));
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config);
 		RequestContext alice = caller("did:key:zAliceRecoveredCap");
 		Job paused;
 
-		Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config).start();
+		Engine first = venue.start();
 		Engine.addDemoAssets(first);
 		paused = never(first, alice);
 		first.jobs().pauseJob(paused.getID(), alice);
 		first.syncState();
 		first.close();
 
-		Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config).start();
+		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

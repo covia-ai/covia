@@ -10,17 +10,12 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
-import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -30,6 +25,7 @@ import covia.venue.AgentWatch;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 /**
  * An agent request is a task, not an ephemeral call: the request Job is the
@@ -55,8 +51,7 @@ public class AgentRestartTest {
 
 	@Test
 	public void requestSurvivesRestartAndCompletesAfterBoot() throws Exception {
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config());
 		RequestContext alice = RequestContext.of(ALICE);
 		String agentId = "survivor";
 		String gateName = "agent-restart-" + System.nanoTime();
@@ -65,7 +60,7 @@ public class AgentRestartTest {
 		// Phase 1: hold the transition at a deterministic gate. Waiting only for
 		// RUNNING races the executor entering a fixed sleep under full-suite load.
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config()).start();
+			Engine first = venue.start();
 			try {
 				Engine.addDemoAssets(first);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
@@ -94,7 +89,7 @@ public class AgentRestartTest {
 			// The persisted config still names the gate; let the recovered cycle
 			// cross it immediately rather than adding timing to phase 2.
 			gate.release();
-			Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config()).start();
+			Engine second = venue.start();
 			try {
 				Engine.addDemoAssets(second);
 				second.jobs().recoverJobs();
@@ -128,8 +123,7 @@ public class AgentRestartTest {
 	 */
 	@Test
 	public void resolvedTaskIsHandedBackAfterRestart() throws Exception {
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config());
 		RequestContext alice = RequestContext.of(ALICE);
 		String agentId = "resolver";
 		String gateName = "agent-handback-" + System.nanoTime();
@@ -138,7 +132,7 @@ public class AgentRestartTest {
 
 		// Phase 1: the cycle completes its task, then holds before its merge.
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config()).start();
+			Engine first = venue.start();
 			try {
 				Engine.addDemoAssets(first);
 				first.jobs().invokeOperation("v/ops/agent/create", Maps.of(
@@ -160,7 +154,7 @@ public class AgentRestartTest {
 		}
 
 		// Phase 2: boot on the same lattice; reconciliation hands the task back.
-		Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config()).start();
+		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();
@@ -188,8 +182,7 @@ public class AgentRestartTest {
 	 */
 	@Test
 	public void parkedTaskSurvivesRestartOnlyWithSomethingDurableToWaitOn() throws Exception {
-		Root<Index<Keyword, ACell>> cursor = Cursors.root(convex.core.data.Index.<convex.core.data.Keyword, ACell>none());
-		AKeyPair keyPair = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config());
 		RequestContext alice = RequestContext.of(ALICE);
 		AMap<AString, ACell> later = Maps.of(Fields.WAKE_TIME,
 			convex.core.data.prim.CVMLong.create(System.currentTimeMillis() + 3_600_000));
@@ -198,7 +191,7 @@ public class AgentRestartTest {
 
 		// Phase 1: both tasks yield with a wake time and park. One then loses
 		// its wake time, standing in for a task whose only wait was in memory.
-		Engine first = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config()).start();
+		Engine first = venue.start();
 		try {
 			Engine.addDemoAssets(first);
 			for (String agentId : new String[] {"parked-waking", "parked-orphan"}) {
@@ -225,7 +218,7 @@ public class AgentRestartTest {
 		}
 
 		// Phase 2: boot on the same lattice and run the boot reconciliation.
-		Engine second = covia.venue.CoviaApplication.connect(new convex.lattice.LatticeHost<>(cursor, null)).mount(keyPair, config()).start();
+		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
 			second.jobs().recoverJobs();

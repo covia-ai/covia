@@ -10,16 +10,11 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.lattice.LatticeHost;
-import convex.lattice.cursor.Cursors;
-import convex.lattice.cursor.Root;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -70,11 +65,10 @@ class JobIndexTest {
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.SHUTDOWN, Maps.of(Config.GRACE_MS, 0),
 			Config.OUTPUT_VALIDATION, Strings.create("strict"));
-		Root<Index<Keyword, ACell>> root = Cursors.root(Index.<Keyword, ACell>none());
-		AKeyPair key = AKeyPair.generate();
+		TestEngine.Restartable venue = TestEngine.restartable(config);
 		RequestContext alice = RequestContext.of(Strings.create("did:key:zAliceJobIndexRules"));
 
-		Engine first = CoviaApplication.connect(new LatticeHost<>(root, null)).mount(key, config).start();
+		Engine first = venue.start();
 		Job secret, shaped;
 		try {
 			Engine.addDemoAssets(first);
@@ -86,7 +80,7 @@ class JobIndexTest {
 			first.close();
 		}
 
-		Engine second = CoviaApplication.connect(new LatticeHost<>(root, null)).mount(key, config).start();
+		Engine second = venue.start();
 		try {
 			Engine.addDemoAssets(second);
 			// The path now names an operation that declares neither.
