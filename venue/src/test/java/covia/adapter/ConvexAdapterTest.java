@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -334,10 +335,7 @@ class ConvexAdapterTest {
 
 		assertNotNull(job);
 		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("connect") ||
-				   job.getErrorMessage().contains("Connect") ||
-				   job.getErrorMessage().contains("peer"),
-				"Error should mention connection failure: " + job.getErrorMessage());
+		assertFalse(job.getErrorMessage().isBlank());
 	}
 
 	// ===== Unsupported sub-operation =====

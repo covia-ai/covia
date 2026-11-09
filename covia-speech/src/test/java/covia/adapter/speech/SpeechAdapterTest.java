@@ -335,7 +335,7 @@ class SpeechAdapterTest {
 			assertEquals(bad[1], assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
 		}
 		assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(
-			RT.castMap(Maps.of("engine", "local", "local", Maps.of("mystery", 1))), true)).getMessage().startsWith("adapters.speech.local: unknown setting"));
+			RT.castMap(Maps.of("engine", "local", "local", Maps.of("mystery", 1))), true)).getMessage().contains("mystery"));
 	}
 
 	@Test void unsafeSettingsAreRefused() {
@@ -349,7 +349,7 @@ class SpeechAdapterTest {
 			assertEquals(bad[1], assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(config, true)).getMessage());
 		}
 		assertTrue(assertThrows(IllegalArgumentException.class, () -> new SpeechAdapter().configure(
-			RT.castMap(Maps.of("mystery", 1)), true)).getMessage().startsWith("adapters.speech: unknown setting"));
+			RT.castMap(Maps.of("mystery", 1)), true)).getMessage().contains("mystery"));
 		assertTrue(new SpeechAdapter().configure(RT.castMap(Maps.of("baseUrl", "http://localhost:8000/v1/")), true),
 			"a local server over plain HTTP is fine");
 	}

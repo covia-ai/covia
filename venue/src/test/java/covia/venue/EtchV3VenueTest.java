@@ -28,6 +28,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.DLFSAdapter;
 import covia.api.Fields;
+import covia.exception.ConfigurationException;
 import covia.venue.server.VenueServer;
 
 /**
@@ -108,7 +109,7 @@ public class EtchV3VenueTest {
 		Exception wrongKey = assertThrows(Exception.class,
 			() -> VenueServer.launch(config(storePath, WRONG_KEY_HEX)).close(),
 			"a wrong Etch encryption key must fail the launch");
-		assertTrue(failureContains(wrongKey, "encrypted under key"),
+		assertTrue(failureHasCause(wrongKey, ConfigurationException.class),
 			"wrong key must fail at hint identification with a diagnostic, got: " + wrongKey);
 
 		// Opening without any etch policy must not succeed either — the file
@@ -125,9 +126,9 @@ public class EtchV3VenueTest {
 		again.close();
 	}
 
-	private static boolean failureContains(Throwable failure, String text) {
+	private static boolean failureHasCause(Throwable failure, Class<? extends Throwable> type) {
 		for (Throwable current = failure; current != null; current = current.getCause()) {
-			if (String.valueOf(current.getMessage()).contains(text)) return true;
+			if (type.isInstance(current)) return true;
 		}
 		return false;
 	}

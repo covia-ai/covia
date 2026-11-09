@@ -133,7 +133,7 @@ public class VenueIdentityGuardTest {
 
 		ConfigurationException failure = assertThrows(ConfigurationException.class,
 				() -> VenueServer.launch(serverConfig(storePath, wrong)));
-		assertTrue(failure.getMessage().contains("Venue key mismatch"),
+		assertTrue(failure.getMessage().contains(didFor(owner)),
 			"identity guard diagnostic must survive constructor rollback: " + failure);
 
 		EtchStore reopened = EtchStore.create(storePath.toFile());
@@ -177,7 +177,7 @@ public class VenueIdentityGuardTest {
 		EtchStore adopted = EtchStore.create(storePath.toFile());
 		ConfigurationException failure = assertThrows(ConfigurationException.class,
 			() -> VenueServer.launch(serverConfig(storePath, wrong), adopted));
-		assertTrue(failure.getMessage().contains("Venue key mismatch"));
+		assertTrue(failure.getMessage().contains(didFor(owner)));
 
 		EtchStore reopened = EtchStore.create(storePath.toFile());
 		reopened.close(); // failed venue launch also owns and releases the store

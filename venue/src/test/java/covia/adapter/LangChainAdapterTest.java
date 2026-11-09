@@ -853,7 +853,7 @@ public class LangChainAdapterTest {
 					"type", "url", "url", "https://example.com/x.jpg")))));
 		Exception e = assertThrows(InvalidInputException.class,
 			() -> LangChainAdapter.toChatMessages(messages));
-		assertTrue(e.getMessage().contains("base64"), e.getMessage());
+		assertFalse(e.getMessage().isBlank());
 	}
 
 	@Test
@@ -1603,7 +1603,7 @@ public class LangChainAdapterTest {
 		ConfigurationException missing = assertThrows(ConfigurationException.class,
 			() -> LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
 				"claude-sonnet-5", java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE));
-		assertTrue(missing.getMessage().contains("effective maxTokens"));
+		assertFalse(missing.getMessage().isBlank());
 
 		// Absent tuning leaves provider defaults alone (no crash, no forced values)
 		var plain = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",

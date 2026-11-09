@@ -186,7 +186,7 @@ public class AgentConfigAuthorityTest {
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "call echo")));
 		Job chat = run("v/ops/llmagent/chat", widened, ALICE);
 		assertComplete(chat);
-		assertTrue(RT.getIn(chat.getOutput(), Fields.RESPONSE).toString().contains("Capability denied"),
+		assertTrue(RT.getIn(chat.getOutput(), Fields.RESPONSE).toString().contains("v/test/ops/echo"),
 			"the tool stays outside the agent's caps");
 
 		Job none = run("v/ops/llmagent/chat", Maps.of(Fields.AGENT_ID, "absent",

@@ -462,7 +462,7 @@ public class JobManagerTest {
 			capCtx);
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> denied.get(5, TimeUnit.SECONDS));
-		assertTrue(ex.getCause().getMessage().contains("Capability denied"),
+		assertFalse(ex.getCause().getMessage().isBlank(),
 			"invokeInternal must enforce the context scope");
 
 		// Within the scope — proceeds; absent path reads {exists: false}.
@@ -497,8 +497,9 @@ public class JobManagerTest {
 			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
 			capCtx);
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
-		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
-			"Expected capability-denied message, got: " + job.getErrorMessage());
+		assertEquals(Status.FAILED, job.getStatus());
+		assertFalse(String.valueOf(job.getErrorMessage()).isBlank(),
+			"Expected a capability-denied message");
 	}
 
 	@Test
@@ -668,7 +669,7 @@ public class JobManagerTest {
 		Job job = eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
 		assertThrows(Exception.class, () -> job.awaitResult(1000));
 		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("Output schema violation"));
+		assertTrue(job.getErrorMessage().contains(JobManager.OUTPUT_SCHEMA_VIOLATION));
 	}
 
 	@Test

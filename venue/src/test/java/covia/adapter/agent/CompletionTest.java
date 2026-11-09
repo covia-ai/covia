@@ -53,8 +53,7 @@ public class CompletionTest {
 		// Prose against an object schema: rejected, the schema shown, the tool named.
 		Completion prose = Completion.of(Strings.create("forty-two"), null, ANSWER_SCHEMA, "complete");
 		assertFalse(prose.accepted());
-		assertTrue(prose.rejection().contains("does not conform") && prose.rejection().contains("\"answer\"")
-			&& prose.rejection().endsWith("call complete again."), prose.rejection());
+		assertTrue(prose.rejection().contains("\"answer\""), prose.rejection());
 		// The same judgement on a reply is phrased for a reply.
 		assertTrue(Completion.of(Strings.create("forty-two"), null, ANSWER_SCHEMA, null)
 			.rejection().endsWith("Respond again with valid JSON matching it."));

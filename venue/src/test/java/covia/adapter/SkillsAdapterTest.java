@@ -156,7 +156,7 @@ public class SkillsAdapterTest {
 		String message = assertThrows(RuntimeException.class,
 			() -> call("v/ops/skills/list",
 				Maps.of(K_SKILLSET, Vectors.of(Strings.create("w/skills"))), ctx)).getMessage();
-		assertTrue(message.contains("skillset") || message.contains("string"), message);
+		assertTrue(message.contains("skillset"), message);
 	}
 
 	// ========== read ==========
@@ -303,11 +303,11 @@ public class SkillsAdapterTest {
 		assertTrue(assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLSETS, Strings.create("v/skills/root")), true))
-			.getMessage().contains("must be an array"));
+			.getMessage().contains(SkillsAdapter.K_DEFAULT_SKILLSETS.toString()));
 		assertTrue(assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of(
 				SkillsAdapter.K_DEFAULT_SKILLS, Vectors.of(CVMLong.create(42))), true))
-			.getMessage().contains("ref strings"));
+			.getMessage().contains(SkillsAdapter.K_DEFAULT_SKILLS.toString()));
 		assertTrue(adapter.configure(Maps.of(
 			SkillsAdapter.K_DEFAULT_SKILLSETS, Vectors.of(Strings.create("v/skills/root"))), true));
 		assertTrue(adapter.configure(Maps.empty(), true));

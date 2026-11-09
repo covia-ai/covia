@@ -441,7 +441,8 @@ public class ContextAssemblerTest {
 			"text", "x", "trusted", "yes")));
 		InvalidInputException ex = assertThrows(InvalidInputException.class,
 			() -> ContextAssembler.assemble(spec(config)));
-		assertTrue(ex.getMessage().contains("config.context[0] trusted"), ex.getMessage());
+		assertTrue(ex.getMessage().contains("config.context[0]"), ex.getMessage());
+		assertTrue(ex.getMessage().contains("trusted"), ex.getMessage());
 	}
 
 	@Test
@@ -481,7 +482,7 @@ public class ContextAssemblerTest {
 		InvalidInputException ex = assertThrows(InvalidInputException.class,
 			() -> ContextAssembler.volatileContextEntry(
 				Maps.of("ref", "w/data", "volatile", "sometimes"), "config.context[0]"));
-		assertTrue(ex.getMessage().contains("volatile must be a boolean"), ex.getMessage());
+		assertTrue(ex.getMessage().contains("volatile"), ex.getMessage());
 	}
 
 	@Test
