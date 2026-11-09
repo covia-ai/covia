@@ -664,6 +664,16 @@ public class HTTPTest {
 		}, "Unsupported HTTP method should throw");
 	}
 
+	@Test public void testHTTPAdapterRefusesAPaddedMethod() {
+		HTTPAdapter adapter = new HTTPAdapter();
+		assertThrows(RuntimeException.class, () -> {
+			adapter.invokeFuture(null, Maps.of(), Maps.of(
+				"url", TestServer.BASE_URL + "/api/v1/status",
+				"method", " GET"
+			)).join();
+		}, "a padded name is no method");
+	}
+
 	@Test public void testHTTPAdapterSupportedMethods() {
 		HTTPAdapter adapter = new HTTPAdapter();
 		// Allow localhost so SSRF checks pass

@@ -239,6 +239,8 @@ class LocalSpeechEngineTest {
 				"a caller cannot make the venue fetch another voice");
 			assertEquals(LocalSpeechEngine.VOICE_NUMBER, assertThrows(InvalidInputException.class,
 				() -> engine.speak(wavOf("hi", "alloy", null, null), null)).getMessage());
+			assertEquals(LocalSpeechEngine.VOICE_NUMBER, assertThrows(InvalidInputException.class,
+				() -> engine.speak(wavOf("hi", " 1", null, null), null)).getMessage());
 			assertEquals(LocalSpeechEngine.NO_SUCH_VOICE.formatted("test-voice", 2), assertThrows(InvalidInputException.class,
 				() -> engine.speak(wavOf("hi", "3", null, null), null)).getMessage());
 			assertEquals(LocalSpeechEngine.NOTHING_SAID, assertThrows(JobFailedException.class,

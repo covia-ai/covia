@@ -97,7 +97,7 @@ public class McpClientSession implements AutoCloseable {
 
 		final URI uri;
 		try {
-			uri = new URI(serverUrl.trim());
+			uri = new URI(serverUrl);
 		} catch (URISyntaxException e) {
 			throw new IllegalArgumentException(URL_MALFORMED, e);
 		}

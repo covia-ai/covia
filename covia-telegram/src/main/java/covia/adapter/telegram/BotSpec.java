@@ -134,7 +134,7 @@ public record BotSpec(
 	/** A Bot API chat or user target as a Telegram id; null for anything else ({@code @channel}, blank…). */
 	static Long targetId(Object target) {
 		if (target == null) return null;
-		String s = String.valueOf(target).trim();
+		String s = String.valueOf(target);
 		if (!s.matches("-?\\d+")) return null;
 		try {
 			return Long.parseLong(s);

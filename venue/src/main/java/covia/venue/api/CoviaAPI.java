@@ -1162,12 +1162,12 @@ public class CoviaAPI extends ACoviaAPI {
 	 * @throws InvalidInputException if {@code wait} is present but malformed
 	 */
 	static long parseWaitMs(String queryParam, ACell bodyField) {
-		if (queryParam != null) return parseWaitToken(queryParam.trim());
+		if (queryParam != null) return parseWaitToken(queryParam);
 		if (bodyField == null) return 0;
 		if (convex.core.data.prim.CVMBool.TRUE.equals(bodyField)) return MAX_WAIT_MS;
 		if (convex.core.data.prim.CVMBool.FALSE.equals(bodyField)) return 0;
 		if (bodyField instanceof convex.core.data.prim.CVMLong l) return clampWait(l.longValue());
-		if (bodyField instanceof AString s) return parseWaitToken(s.toString().trim());
+		if (bodyField instanceof AString s) return parseWaitToken(s.toString());
 		throw new InvalidInputException(
 			"Invalid wait value: expected boolean or milliseconds, got " + bodyField.getClass().getSimpleName());
 	}
@@ -1891,9 +1891,9 @@ public class CoviaAPI extends ACoviaAPI {
 
 	private static AMap<AString, ACell> putLongParam(AMap<AString, ACell> m, Context ctx, String name) {
 		String v = ctx.queryParam(name);
-		if (v == null || v.isBlank()) return m;
+		if (v == null || v.isEmpty()) return m;
 		try {
-			return m.assoc(Strings.intern(name), CVMLong.create(Long.parseLong(v.trim())));
+			return m.assoc(Strings.intern(name), CVMLong.create(Long.parseLong(v)));
 		} catch (NumberFormatException e) {
 			throw new InvalidInputException("Invalid integer query parameter '" + name + "': " + v);
 		}

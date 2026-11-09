@@ -331,7 +331,7 @@ public class TelegramAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 		if (methodCell == null || methodCell.isEmpty()) {
 			throw new InvalidInputException("method is required: a Bot API method name such as sendPhoto");
 		}
-		String method = methodCell.toString().trim();
+		String method = methodCell.toString();
 		if (!method.matches("[A-Za-z]+")) throw new InvalidInputException("method must be a Bot API method name: " + method);
 		if (MANAGED_METHODS.contains(method)) {
 			throw new NotSupportedException("Bot API method " + method + " is managed by the venue's own "

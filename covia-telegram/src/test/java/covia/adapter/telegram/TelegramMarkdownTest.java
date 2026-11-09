@@ -237,6 +237,7 @@ public class TelegramMarkdownTest {
 		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Maps.of("text", "x"), "MarkdownV2"));
 		assertEquals("MarkdownV2", BotRunner.formattedParseMode(Strings.create("x"), "MarkdownV2"));
 		assertEquals(null, BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", "Shouty"), null));
+		assertEquals(null, BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", " " + TelegramMarkdown.PARSE_MODE), null));
 		assertEquals("HTML", BotRunner.formattedParseMode(Maps.of("text", "x", "parse_mode", "html"), null),
 			"matched as Telegram matches it, sent as Telegram spells it");
 		// A blank markdown gives way to text.

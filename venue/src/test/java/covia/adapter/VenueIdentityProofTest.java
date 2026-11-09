@@ -256,6 +256,7 @@ public class VenueIdentityProofTest {
 		assertTrue(VenueDID.provenAt("https://venue.example.com:8443", "did:web:venue.example.com%3A8443"));
 		assertTrue(VenueDID.provenAt("http://localhost:8080", "did:web:localhost%3A8080"));
 		assertFalse(VenueDID.provenAt("http://venue.example.com", "did:web:venue.example.com"));
+		assertFalse(VenueDID.provenAt(" https://venue.example.com", "did:web:venue.example.com"));
 		assertFalse(VenueDID.provenAt("https://venue.example.com:8443", "did:web:venue.example.com"));
 		assertFalse(VenueDID.provenAt("https://evil.example", "did:web:venue.example.com"));
 		assertFalse(VenueDID.provenAt("https://venue.example.com", UNPROVABLE_DID));

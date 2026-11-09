@@ -201,6 +201,14 @@ public class DocumentsAdapterTest {
 			assertEquals(2L, RT.ensureLong(RT.getIn(out, "pages")).longValue());
 			assertEquals(Strings.create("Quarterly Report"), RT.getIn(out, "meta", "title"));
 
+			// A page or range is written exactly.
+			for (String padded : new String[] {" 2", "2 ", "1 - 2"}) {
+				Job refused = engine.jobs().invokeOperation("v/ops/file/read", Maps.of(
+					"root", "docs", "path", "report.pdf", "mode", "extract", "pages", padded), ctx);
+				try { refused.awaitResult(10_000); } catch (Exception ignored) {}
+				assertEquals(Status.FAILED, refused.getStatus(), padded);
+			}
+
 			// Plain text still extracts (as itself), and the other modes are untouched.
 			Job notes = engine.jobs().invokeOperation("v/ops/file/read", Maps.of(
 				"root", "docs", "path", "notes.txt", "mode", "extract"), ctx);

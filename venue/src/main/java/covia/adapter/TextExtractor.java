@@ -113,7 +113,7 @@ public interface TextExtractor {
 				(last != null) ? (int) last.longValue() : null };
 		}
 		AString s = RT.ensureString(spec);
-		String text = (s != null) ? s.toString().trim() : "";
+		String text = (s != null) ? s.toString() : "";
 		try {
 			int dash = text.indexOf('-');
 			if (s == null || text.isEmpty()) throw new NumberFormatException();
@@ -121,8 +121,8 @@ public interface TextExtractor {
 				int n = Integer.parseInt(text);
 				return new Integer[] { n, n };
 			}
-			String a = text.substring(0, dash).trim();
-			String b = text.substring(dash + 1).trim();
+			String a = text.substring(0, dash);
+			String b = text.substring(dash + 1);
 			return new Integer[] {
 				a.isEmpty() ? null : Integer.parseInt(a),
 				b.isEmpty() ? null : Integer.parseInt(b) };

@@ -127,6 +127,9 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	public static final String UNKNOWN_REQUEST =
 		"This connection request is unknown or has expired; start again with oauth:connect";
 
+	/** A requested scope that is not one scope name. */
+	public static final String SCOPE_NOT_A_NAME = "scopes entries must be scope names, with no whitespace";
+
 	/** A completion code no approved connect is waiting on. */
 	public static final String UNKNOWN_COMPLETION =
 		"This completion code is unknown, used or expired; start again with oauth:connect";
@@ -479,8 +482,8 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			List<String> list = new ArrayList<>();
 			for (long i = 0; i < v.count(); i++) {
 				AString s = RT.ensureString(v.get(i));
-				if (s == null || s.toString().isBlank()) throw new InvalidInputException("scopes entries must be strings");
-				list.add(s.toString().trim());
+				if (s == null || !s.toString().matches("\\S+")) throw new InvalidInputException(SCOPE_NOT_A_NAME);
+				list.add(s.toString());
 			}
 			scopes = List.copyOf(list);
 		}
@@ -512,7 +515,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 	 */
 	private String returnTo(AString raw) {
 		if (raw == null || raw.isEmpty()) return null;
-		String value = raw.toString().trim();
+		String value = raw.toString();
 		for (String prefix : returnToAllow) if (under(value, prefix)) return value;
 		throw new InvalidInputException(RETURN_TO_REFUSED);
 	}

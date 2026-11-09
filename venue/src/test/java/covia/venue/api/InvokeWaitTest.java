@@ -48,6 +48,13 @@ public class InvokeWaitTest {
 	}
 
 	@Test
+	public void testPaddedFormsAreRefused() {
+		assertThrows(covia.exception.InvalidInputException.class, () -> CoviaAPI.parseWaitMs(" true", null));
+		assertThrows(covia.exception.InvalidInputException.class, () -> CoviaAPI.parseWaitMs("5000 ", null));
+		assertThrows(covia.exception.InvalidInputException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create(" 2500")));
+	}
+
+	@Test
 	public void testBodyFieldForms() {
 		assertEquals(CoviaAPI.MAX_WAIT_MS, CoviaAPI.parseWaitMs(null, CVMBool.TRUE));
 		assertEquals(0L, CoviaAPI.parseWaitMs(null, CVMBool.FALSE));

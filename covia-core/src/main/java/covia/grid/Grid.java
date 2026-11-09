@@ -125,7 +125,6 @@ public class Grid {
 		if (conn == null || conn.isBlank()) {
 			throw new IllegalArgumentException("Venue reference is required");
 		}
-		conn=conn.trim();
 		if (conn.startsWith("http")) {
 			URI uri=URI.create(conn);
 			return VenueHTTP.create(uri, venueDID, auth);

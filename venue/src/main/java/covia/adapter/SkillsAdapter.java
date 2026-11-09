@@ -399,7 +399,7 @@ public class SkillsAdapter extends AAdapter {
 		if (skillset == null && rawSkillset != null) {
 			throw new InvalidInputException("skillset must be one writable directory path, e.g. 'w/skills'");
 		}
-		String dir = (skillset == null) ? DEFAULT_IMPORT_SKILLSET : skillset.toString().strip();
+		String dir = (skillset == null) ? DEFAULT_IMPORT_SKILLSET : skillset.toString();
 		while (dir.endsWith("/")) dir = dir.substring(0, dir.length() - 1);
 		if (dir.isEmpty()) {
 			throw new InvalidInputException("skillset must be a directory path such as 'w/skills'");

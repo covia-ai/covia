@@ -245,7 +245,7 @@ final class LocalSpeechEngine implements SpeechEngine {
 	private static int voiceNumber(String voice) {
 		if (voice == null) return 0;
 		try {
-			int sid = Integer.parseInt(voice.strip());
+			int sid = Integer.parseInt(voice);
 			if (sid < 0) throw new InvalidInputException(VOICE_NUMBER);
 			return sid;
 		} catch (NumberFormatException e) {

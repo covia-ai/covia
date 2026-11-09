@@ -110,7 +110,7 @@ public final class VenueChallenge {
 		if (url == null) return null;
 		URI uri;
 		try {
-			uri = new URI(url.trim());
+			uri = new URI(url);
 		} catch (URISyntaxException e) {
 			return null;
 		}

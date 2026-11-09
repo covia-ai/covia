@@ -66,6 +66,12 @@ public class McpClientSessionTest {
 	}
 
 	@Test
+	public void testRefusesAPaddedServerUrl() {
+		assertThrows(IllegalArgumentException.class, () -> McpClientSession.endpointUrl(" https://venue.example/mcp"));
+		assertThrows(IllegalArgumentException.class, () -> McpClientSession.endpointUrl("https://venue.example/mcp "));
+	}
+
+	@Test
 	public void testRejectsNonHttpServerWithActionableError() {
 		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
 			() -> McpClientSession.endpointUrl("did:web:venue.example"));

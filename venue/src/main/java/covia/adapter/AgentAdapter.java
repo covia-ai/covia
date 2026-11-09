@@ -23,6 +23,7 @@ import convex.core.util.JSON;
 import covia.grid.Asset;
 import covia.grid.Attribution;
 import convex.core.data.AVector;
+import convex.core.data.ABlob;
 import convex.core.data.Blob;
 import convex.core.data.Cells;
 import convex.core.data.Index;
@@ -1732,9 +1733,11 @@ public class AgentAdapter extends AAdapter {
 		if (externalAgents().isExternal(agent)) {
 			if (failIfSuspended(job, agent, agentId)) return;
 			ACell task = RT.getIn(input, Fields.TASK_ID);
+			Blob taskId = (task instanceof ABlob b) ? b.toFlatBlob() : HexId.parse(RT.ensureString(task));
+			if (task != null && taskId == null) { job.fail(new InvalidInputException(INVALID_TASK_ID + task)); return; }
 			Blob sid = parseSessionId(RT.ensureString(RT.getIn(input, Fields.SESSION_ID)));
 			if (sid == null && task != null) {
-				Job parent = engine.jobs().getJob(Job.parseID(task));
+				Job parent = engine.jobs().getJob(taskId);
 				if (parent != null) sid = parseSessionId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
 			}
 			if (sid == null) throw new NotSupportedException(ExternalAgents.NO_ACTIVE_TURN);

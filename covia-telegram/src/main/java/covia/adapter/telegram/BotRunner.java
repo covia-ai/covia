@@ -739,7 +739,7 @@ final class BotRunner implements MessagingBot<BotSpec> {
 	static String formattedParseMode(ACell result, String botParseMode) {
 		if (result instanceof AMap<?, ?> && RT.getIn(result, TelegramAdapter.K_PARSE_MODE_PARAM) instanceof AString mode) {
 			for (String known : BotSpec.PARSE_MODES) {
-				if (known.equalsIgnoreCase(mode.toString().strip())) return known;
+				if (known.equalsIgnoreCase(mode.toString())) return known;
 			}
 		}
 		return botParseMode;

@@ -9,9 +9,15 @@ class GridTest {
 	@Test
 	void bareVenueLabelsAreRejectedWithoutGuessing() {
 		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-			() -> Grid.connect(" venue-3 "));
+			() -> Grid.connect("venue-3"));
 		assertTrue(error.getMessage().contains("Unqualified venue reference 'venue-3'"));
 		assertTrue(error.getMessage().contains("registered venue resolver"));
+	}
+
+	@Test
+	void aPaddedReferenceIsNoReference() {
+		assertThrows(IllegalArgumentException.class, () -> Grid.connect(" https://venue.example"));
+		assertThrows(IllegalArgumentException.class, () -> Grid.connect(" did:web:venue.example"));
 	}
 
 	@Test

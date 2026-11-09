@@ -399,12 +399,26 @@ public class TelegramAdapterTest {
 		assertEquals(Status.FAILED, managed.getStatus());
 		assertTrue(String.valueOf(managed.getErrorMessage()).contains("managed"), managed.getErrorMessage());
 
+		// A padded name is no method
+		Job padded = engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
+			"method", " sendPhoto", "params", Maps.of("chat_id", CVMLong.create(ALLOWED_ID), "photo", "x")), RequestContext.of(OWNER));
+		try { padded.awaitResult(10_000); } catch (Exception ignored) {}
+		assertEquals(Status.FAILED, padded.getStatus());
+
 		// Other users are denied
 		Job denied = engine.jobs().invokeOperation("v/ops/telegram/call", Maps.of(
 			"bot", "echo", "method", "sendPhoto", "params", Maps.of("chat_id", 1, "photo", "x")), RequestContext.of(OTHER));
 		try { denied.awaitResult(10_000); } catch (Exception ignored) {}
 		assertEquals(Status.FAILED, denied.getStatus());
 		assertTrue(String.valueOf(denied.getErrorMessage()).contains("denied"), denied.getErrorMessage());
+	}
+
+	@Test
+	public void testATargetIdIsExactlyAnId() {
+		assertEquals(Long.valueOf(42), BotSpec.targetId("42"));
+		assertEquals(Long.valueOf(-42), BotSpec.targetId(CVMLong.create(-42)));
+		assertEquals(null, BotSpec.targetId(" 42"));
+		assertEquals(null, BotSpec.targetId("42 "));
 	}
 
 	@Test

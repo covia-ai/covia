@@ -111,6 +111,13 @@ class AgentFacetTest {
         assertEquals(2, probe.starts.get());
     }
 
+    @Test void messageToAnExternalAgentRefusesATaskIdThatIsNotHex() throws Exception {
+        create();
+        Job job = invoke("message", target().assoc(Fields.TASK_ID, Strings.create("not-hex")).assoc(Fields.MESSAGE, Strings.create("x")));
+        assertEquals(Status.FAILED, job.getStatus());
+        assertEquals(AgentAdapter.INVALID_TASK_ID + "not-hex", job.getErrorMessage());
+    }
+
     @Test void messageToAgentWhoseBackendIsUnloadedIsUnavailable() throws Exception {
         create(); probe.waiting = true;
         Job first = invoke("request", target().assoc(Fields.INPUT, Maps.of("task", "wait")));

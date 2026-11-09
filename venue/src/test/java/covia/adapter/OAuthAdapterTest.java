@@ -803,9 +803,14 @@ public class OAuthAdapterTest {
 				assertTrue(unknown.contains("No OAuth provider 'nope'") && unknown.contains("fake"), unknown);
 				assertTrue(failed(run(engine, "v/ops/oauth/connect", Maps.empty(), alice)).contains("provider is required"));
 				// returnTo is an app under an operator prefix: not elsewhere, not a lookalike, not a venue path.
-				for (String refused : List.of("https://evil.example/steal", "app://done.evil.example/x", "app://donex", "/settings")) {
+				for (String refused : List.of("https://evil.example/steal", "app://done.evil.example/x", "app://donex", "/settings",
+						" app://done", "app://done ")) {
 					assertTrue(failed(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake", "returnTo", refused), alice))
 						.contains(OAuthAdapter.RETURN_TO_REFUSED), refused);
+				}
+				for (String refused : List.of(" read", "read ", "read write", " ")) {
+					assertEquals(OAuthAdapter.SCOPE_NOT_A_NAME, failed(run(engine, "v/ops/oauth/connect",
+						Maps.of("provider", "fake", "scopes", Vectors.of(refused)), alice)), refused);
 				}
 				for (String allowed : List.of("app://done", "app://done/x", "app://done?tab=1", "app://done#x")) {
 					ok(run(engine, "v/ops/oauth/connect", Maps.of("provider", "fake", "returnTo", allowed), alice));

@@ -132,7 +132,7 @@ public final class VenueDID {
 		if (target.equals(did)) return true;
 		try {
 			URI expected = Grid.webDIDAddress(DID.fromString(did));
-			URI actual = URI.create(target.trim());
+			URI actual = URI.create(target);
 			return expected.getScheme().equalsIgnoreCase(actual.getScheme())
 				&& expected.getHost() != null
 				&& expected.getHost().equalsIgnoreCase(actual.getHost())

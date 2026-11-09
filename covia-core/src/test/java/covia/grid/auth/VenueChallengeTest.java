@@ -148,5 +148,6 @@ public class VenueChallengeTest {
 		assertNull(VenueChallenge.normalise("https://user@venue.example"));
 		assertNull(VenueChallenge.normalise("https://venue.example/?q=1"));
 		assertNull(VenueChallenge.normalise("did:key:z6Mk"));
+		assertNull(VenueChallenge.normalise(" https://venue.example"));
 	}
 }

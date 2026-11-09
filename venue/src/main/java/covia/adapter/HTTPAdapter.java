@@ -478,7 +478,7 @@ public class HTTPAdapter extends AAdapter {
 		try {
 			String method = "GET"; // default
 			if (methodField != null) {
-				method = methodField.toString().trim().toUpperCase(Locale.ROOT);
+				method = methodField.toString().toUpperCase(Locale.ROOT);
 			}
 			if (!METHODS.contains(method)) {
 				throw new InvalidInputException("Unsupported HTTP method: " + method);
