@@ -35,6 +35,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- Agents explicitly distinguish ordinary chat from assigned tasks before using task-completion tools; context previews include the live reply guidance.
+
 - HTTP redirects recheck credential grants at each destination, preventing same-origin redirects from escaping a granted URL path.
 
 - Outbound HTTP URLs are normalised before destination checks and sending, preventing dot-segment escapes from URL-scoped credential grants.

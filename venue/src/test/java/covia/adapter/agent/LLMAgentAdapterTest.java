@@ -2629,6 +2629,15 @@ public class LLMAgentAdapterTest {
 	public void testTaskMessageNoTasks() {
 		assertNull(previewTasks(RequestContext.of(ALICE_DID), null).message());
 		assertNull(previewTasks(null, Vectors.empty()).message());
+		TaskTools.Tasks chat = previewTasks(RequestContext.of(ALICE_DID), Vectors.empty());
+		var completed = chat.complete(completeCall("Yes, I'm here."), null);
+		assertEquals(TaskTools.NO_TASK.formatted(TaskTools.COMPLETE), completed.result().toString());
+		assertNull(completed.terminalStatus());
+		var failed = chat.fail(new ToolCycleEngine.ToolCall(Strings.create("f1"), TaskTools.FAIL,
+			Maps.of(Fields.ERROR, "no task"), 0), null);
+		assertEquals(TaskTools.NO_TASK.formatted(TaskTools.FAIL), failed.result().toString());
+		assertNull(failed.terminalStatus());
+		assertFalse(chat.resolved(), "misusing a task control cannot resolve unrelated work");
 	}
 
 	@Test

@@ -753,7 +753,11 @@ An adapter or plugin loading or unloading mutates the venue capability registry,
 
 The same rule applies to conditional capabilities. The static `complete_task` /
 `fail_task` schemas stay in the fixed harness manifest and reject calls when no
-task is in scope. Skill and `more_tools` loads append exact addition/removal
+task is in scope. When those controls are offered without an outstanding task,
+the current-turn notices explicitly say that no task is assigned, that these
+controls must not be called, and that ordinary chat is answered with a normal
+reply. This status is re-rendered outside the cached prefix; it does not mutate
+the tool vector or enter conversation history. Skill and `more_tools` loads append exact addition/removal
 state and use the fixed `invoke_tool` dispatcher where the provider has no
 native representation. `context_unload`
 removes any agent-managed load, including a tool-only load, so it also retracts
@@ -1034,7 +1038,18 @@ One line, changing daily, taken from the Spec's clock — never from the system 
 Tool resolution failures observed during initialisation or a current append — reported so the agent adapts rather than calling into a void. The adapter registry is not polled by assembly; a restored operation becomes available through an explicit tool-state event or prefix rebuild.
 
 ### 5.13 Outstanding task
-Present only when the agent has a task it must complete or fail. A `user` message rendered last on every inference — after the tool-loop messages and after the notices — so it is the thing nearest the reply, and never baked into history: the model sees only tasks still outstanding. The same on every runtime, with `complete_task` / `fail_task` offered only while it is present — the framework's task boundary (`TaskTools`). A goal-tree frame's *goal* is its opening turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
+When an assigned task is outstanding, a `user` message names it last on every
+inference — after tool-loop messages and notices. It is never baked into
+history: only still-outstanding tasks appear. Without an outstanding task, a
+root frame that advertises `complete_task` / `fail_task` receives an explicit
+no-task notice instead, directing it to answer ordinary chat normally. A child
+frame without these controls does not receive that notice.
+
+The task-control definitions remain in the root's fixed tool vector across
+chat and task turns. Their presence alone does not mean a task is assigned;
+calling them without a task still fails. `agent:context`, `agent:step` and live
+inferences render the same task status. A goal-tree frame's *goal* is its opening
+turn, not this slot; see [GOAL_TREE.md](./GOAL_TREE.md), “Sessions and Frames”.
 
 ---
 

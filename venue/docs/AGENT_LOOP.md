@@ -743,7 +743,7 @@ A frame is offered the harness tools listed in `config.tools`, and:
 
 | Tool | Also offered | Never offered |
 |------|--------------|---------------|
-| `complete_task`, `fail_task` | At the root frame, always; a call with no task outstanding is refused | In a child frame: the task is the root's |
+| `complete_task`, `fail_task` | At the root frame, always; an explicit current-turn notice says when no task is assigned, and calls then are refused | In a child frame: the task is the root's |
 | `skill_load` | When the agent declares skills or skillsets | |
 | `context_unload` | When the agent declares skills or skillsets, or with `more_tools`, whose results are loads | |
 | `invoke_tool` | With `skill_load` or `more_tools`, which add tools later | |

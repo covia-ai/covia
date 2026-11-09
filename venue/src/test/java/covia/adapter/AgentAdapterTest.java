@@ -1088,6 +1088,10 @@ public class AgentAdapterTest {
 		assertEquals(CVMLong.create(1), RT.getIn(withMessage, "marks", "head"));
 		assertEquals(Strings.create("bracket"), withMessage.get(Strings.intern("labels")));
 		assertNotNull(withMessage.get(Strings.intern("cacheMarks")), "the input is a cache breakpoint");
+		assertTrue(RT.getIn(messages.get(messages.count() - 1), "content").toString()
+			.contains(covia.adapter.agent.ContextAssembler.NO_TASK_NOTICE));
+		assertTrue(RT.getIn(messages.get(messages.count() - 1), "content").toString()
+			.contains(covia.adapter.agent.ContextAssembler.REPLY_NOTICE), "inspection includes the live reply notice");
 
 		// A task renders exactly as the tool loop renders it, task tools offered.
 		AMap<AString, ACell> withTask = RT.ensureMap(engine.jobs().invokeOperation("v/ops/agent/context",
