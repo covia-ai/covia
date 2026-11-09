@@ -3,7 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicLong;
+import java.time.Instant;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -33,8 +33,8 @@ import convex.core.lang.RT;
  */
 public class UserMetaStampTest {
 
-	/** The venue's write clock. Only ever moves forward, so tests may share it. */
-	private static final AtomicLong CLOCK = new AtomicLong(1_000);
+	/** The venue's write clock. Tests may share it, since it only moves forward. */
+	private static final DrivenClock CLOCK = DrivenClock.at(Instant.ofEpochMilli(1_000));
 	private static Engine engine;
 
 	private AString ALICE_DID;
@@ -43,8 +43,7 @@ public class UserMetaStampTest {
 	@BeforeAll
 	public static void launch() throws IOException {
 		AKeyPair key = AKeyPair.generate();
-		CoviaApplication application = CoviaApplication.create(
-			VenueContext.create(() -> CVMLong.create(CLOCK.get())));
+		CoviaApplication application = CoviaApplication.create(CLOCK.policy());
 		engine = application.mount(key,
 			new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
 		Engine.addDemoAssets(engine);
@@ -69,7 +68,7 @@ public class UserMetaStampTest {
 	/** Advances the write clock past the current stamp. The venue reads it at
 	 *  the next logical write. */
 	private void tick() {
-		CLOCK.incrementAndGet();
+		CLOCK.advance(1);
 	}
 
 	@Test
@@ -152,7 +151,7 @@ public class UserMetaStampTest {
 	public void testAgentTimestampNeverMovesBackward() {
 		Agent agent = user.ensureAgent("ratchet-agent", Maps.empty(), null);
 		AString ts = Strings.intern("ts");
-		CVMLong future = CVMLong.create(CLOCK.get() + 60_000);
+		CVMLong future = CVMLong.create(CLOCK.millis() + 60_000);
 		agent.cursor().updateAndGet(value ->
 			((convex.core.data.AMap<AString, ACell>) value).assoc(ts, future));
 

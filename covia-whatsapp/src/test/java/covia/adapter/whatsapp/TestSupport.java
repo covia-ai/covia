@@ -8,13 +8,11 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import com.sun.net.httpserver.HttpServer;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.*;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.adapter.messaging.*;
@@ -131,9 +129,9 @@ final class TestSupport {
     Fixture(AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {
       this(Engine.createTemp(CONFIG), spec, adapter);
     }
-    /** A venue whose clock is {@code clock}, in epoch milliseconds, which the test moves. */
-    Fixture(AMap<AString,ACell> spec, AtomicLong clock) throws Exception {
-      this(CoviaApplication.create(VenueContext.create(() -> CVMLong.create(clock.get())))
+    /** A venue on {@code clock}, which the test moves. */
+    Fixture(AMap<AString,ACell> spec, DrivenClock clock) throws Exception {
+      this(CoviaApplication.create(clock.policy())
         .mount(AKeyPair.generate(), CONFIG).start(), spec, new WhatsAppAdapter());
     }
     private Fixture(Engine engine, AMap<AString,ACell> spec, WhatsAppAdapter adapter) throws Exception {

@@ -130,16 +130,19 @@ the clock's distance to the next event, so on a clock you drive, step the
 application yourself rather than starting it. How many events a venue starts
 at once is `scheduler.maxConcurrency` ([CONFIG.md](CONFIG.md)).
 
-A test drives the clock with a supplier over a value it sets, and updates the
-application after each step:
+`DrivenClock` is a clock you move yourself. `DrivenClock.at(instant)` creates
+one, `policy()` gives the policy for the application, and `set(millis)` and
+`advance(ms)` move it; a step backwards is refused (`DrivenClock.BACKWARDS`).
+The clock only holds the time: moving it starts nothing, so update the
+application after each step. To mint tokens on the same time, pass
+`clock::millis` as the clock above.
 
 ```java
-AtomicLong now = new AtomicLong(Instant.parse("2026-01-01T00:00:00Z").toEpochMilli());
-CoviaApplication application =
-	CoviaApplication.create(VenueContext.create(() -> CVMLong.create(now.get())));
+DrivenClock clock = DrivenClock.at(Instant.parse("2026-01-01T00:00:00Z"));
+CoviaApplication application = CoviaApplication.create(clock.policy());
 Engine engine = application.mount(AKeyPair.generate(), config).launch();
 // ... act, then check what the venue wrote at that time
-now.addAndGet(60_000);              // one minute later
+clock.advance(60_000);              // one minute later
 List<Job> started = application.update().get(); // start what is due by then
 for (Job job : started) job.awaitResult();      // when the test needs them finished
 ```
