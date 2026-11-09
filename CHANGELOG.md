@@ -35,7 +35,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
-- `invoke` scopes generic operation lookup by location; direct tools use their action permissions without an invocation grant.
+- `invoke` scopes generic operation lookup by location; direct tools use their action permissions without an invocation grant. Rebuild adapter modules with the venue.
 
 - Requires Convex 0.8.19.
 - `agent:message`, `agent:cancelTask` and a job named in an agent's context take an id with or without `0x`, as other id inputs do (#669).
