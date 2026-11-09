@@ -3,8 +3,6 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
@@ -34,24 +32,15 @@ import covia.lattice.CapabilityChecker;
  * Tests for the UCAN capability flow: issue tokens, present as proofs,
  * verify cross-user access.
  *
- * <p>One venue for the class, with a public hostname: the custodial (managed)
- * users here need one and {@link TestEngine#ENGINE} has none. Per-test key
- * pairs (and therefore per-test Alice/Bob/Carol DIDs) isolate user namespaces —
- * Alice's {@code w/shared/doc} and {@code w/private/secret} written in setup
- * live under a different DID for each test method, so writes don't
- * collide across tests.</p>
+ * <p>Per-test key pairs (and therefore per-test Alice/Bob/Carol DIDs) isolate
+ * user namespaces — Alice's {@code w/shared/doc} and {@code w/private/secret}
+ * written in setup live under a different DID for each test method, so writes
+ * don't collide across tests.</p>
  */
 public class UCANTest {
 
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 
-	@BeforeAll
-	static void startEngine() {
-		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("ucan.test.covia.example"),
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		Engine.addDemoAssets(engine);
-	}
 	private final AKeyPair venueKP = engine.getKeyPair();
 	private final AString venueDID = engine.getDIDString();
 
@@ -77,7 +66,7 @@ public class UCANTest {
 		BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
 		CAROL_DID = UCAN.toDIDKey(CAROL_KP.getAccountKey());
 		String method = info.getTestMethod().map(m -> m.getName()).orElse("unknown");
-		CUSTODIAL_DID = engine.managedUserDID(Strings.create("ucan-" + method));
+		CUSTODIAL_DID = TestEngine.uniqueManagedDID("ucan-" + method);
 		engine.getVenueState().users().ensure(CUSTODIAL_DID);
 		ALICE = RequestContext.of(ALICE_DID);
 		BOB = RequestContext.of(BOB_DID);
@@ -93,11 +82,6 @@ public class UCANTest {
 	}
 
 	private static final long HOUR = 3600;
-
-	@AfterAll
-	static void closeEngine() {
-		engine.close();
-	}
 
 	@Test
 	public void testNoTokenIsUnrestricted() {

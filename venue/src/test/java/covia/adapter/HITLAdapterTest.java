@@ -5,8 +5,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.parallel.Isolated;
@@ -60,15 +58,7 @@ import covia.venue.User;
 @Isolated("silences the AAdapter logger")
 public class HITLAdapterTest {
 
-	private static Engine engine;
-
-	@BeforeAll
-	static void startEngine() {
-		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("hitl.test.covia.example"),
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
-		Engine.addDemoAssets(engine);
-	}
+	private static final Engine engine = TestEngine.ENGINE;
 
 	private AKeyPair BOB_KP;
 	private AString ALICE_DID;
@@ -82,16 +72,11 @@ public class HITLAdapterTest {
 	public void setup(TestInfo info) {
 		BOB_KP = AKeyPair.generate();
 		String method = info.getTestMethod().map(m -> m.getName()).orElse("unknown");
-		ALICE_DID = engine.managedUserDID(Strings.create("hitl-" + method));
+		ALICE_DID = TestEngine.uniqueManagedDID("hitl-" + method);
 		engine.getVenueState().users().ensure(ALICE_DID);
 		BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
 		ALICE = RequestContext.of(ALICE_DID);
 		BOB = RequestContext.of(BOB_DID);
-	}
-
-	@AfterAll
-	static void closeEngine() {
-		engine.close();
 	}
 
 	// ========== Helpers ==========
@@ -846,7 +831,7 @@ public class HITLAdapterTest {
 	@Test
 	public void testRecoveryFailsARequestWhoseTargetAlreadyWent() {
 		Engine isolated = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("hitl.test.covia.example"),
+			Config.HOSTNAME, Strings.create(TestEngine.HOSTNAME),
 			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		try {
 			Engine.addDemoAssets(isolated);
@@ -873,7 +858,7 @@ public class HITLAdapterTest {
 	@Test
 	public void testDeletingSomeoneElseLeavesTheRequestWaiting() {
 		engine.getVenueState().users().ensure(BOB_DID);
-		AString bystander = engine.managedUserDID(Strings.create("hitl-bystander"));
+		AString bystander = TestEngine.uniqueManagedDID("hitl-bystander");
 		engine.getVenueState().users().ensure(bystander);
 		Job job = request(asking(BOB_DID, null, ALICE_DID), Hitl.request("Report access").to(ALICE_DID.toString())
 			.ask(Hitl.approval("ok", "OK?")).build());

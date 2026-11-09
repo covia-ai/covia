@@ -11,8 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.UCAN;
@@ -35,7 +33,6 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.lattice.Covia;
 import covia.lattice.CoviaPath;
-import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -43,19 +40,7 @@ import covia.venue.User;
 
 class UserAdapterTest {
 
-	private static Engine engine;
-
-	@BeforeAll
-	static void setup() {
-		engine = Engine.createTemp(Maps.of(
-			Config.HOSTNAME, Strings.create("venue.example.com")));
-		Engine.addDemoAssets(engine);
-	}
-
-	@AfterAll
-	static void close() {
-		if (engine != null) engine.close();
-	}
+	private static final Engine engine = TestEngine.ENGINE;
 
 	@Test
 	void adapterAndOperationsAreInstalled() {
@@ -87,7 +72,7 @@ class UserAdapterTest {
 		assertEquals(external, RT.getIn(create(Maps.of(Fields.DID, external)), Fields.DID));
 
 		ACell managed = create(Maps.of("username", "alice"));
-		AString expected = Strings.create("did:web:venue.example.com:u:alice");
+		AString expected = Strings.create("did:web:" + TestEngine.HOSTNAME + ":u:alice");
 		assertEquals(expected, RT.getIn(managed, Fields.DID));
 		assertNotNull(engine.getVenueState().users().user(expected));
 		assertEquals(expected,
@@ -111,9 +96,10 @@ class UserAdapterTest {
 	void venueIsRootForWhatItHosts() {
 		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
 		AString venue = engine.getDIDString();
-		AString managed = Strings.create("did:web:venue.example.com:u:alice");
+		AString managed = Strings.create("did:web:" + TestEngine.HOSTNAME + ":u:alice");
 		AString self = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		AString external = Strings.create("did:web:identity.example:u:dana");
+		// The venue hosts this identity by the end of the test, so no other run may reuse it
+		AString external = Strings.create("did:web:identity.example:u:" + AKeyPair.generate().getAccountKey().toHexString());
 
 		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + "/w/notes")));
 		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + ":admin/w/notes")),
@@ -121,7 +107,7 @@ class UserAdapterTest {
 		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + ":g:helper/x/crypto/keys/")),
 			"a hosted user's agent is hosted too");
 		assertFalse(policy.acceptsRoot(venue,
-			Strings.create("did:web:venue.example.com.evil:u:alice/w/notes")),
+			Strings.create("did:web:" + TestEngine.HOSTNAME + ".evil:u:alice/w/notes")),
 			"a hostname-prefix lookalike must not enter the managed namespace");
 
 		assertFalse(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
@@ -160,8 +146,7 @@ class UserAdapterTest {
 
 	@Test
 	void didKeyVenueIsRootForIdentitiesNestedBelowIt() {
-		// The class's own venue has a hostname; the shared one is a did:key venue
-		Engine didKeyVenue = TestEngine.ENGINE;
+		Engine didKeyVenue = engine;
 		RootAuthorityPolicy policy = didKeyVenue.rootAuthorityPolicy();
 		AString venue = didKeyVenue.getDIDString();
 		AString issued = Strings.create(venue + ":u:alice");

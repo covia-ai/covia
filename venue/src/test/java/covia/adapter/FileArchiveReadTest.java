@@ -4,16 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.ACell;
 import convex.core.data.AVector;
@@ -23,28 +20,22 @@ import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
-import covia.venue.Config;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 /** FileAdapter read-through into zip/jar archives via the {@code x.zip!/entry}
  *  convention (jdk.zipfs), including the safety guarantee that a read never
  *  creates an archive. */
 public class FileArchiveReadTest {
 
-	@TempDir static Path workspace;
-
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	private static final String DID = "did:key:z6Mk-test-FileArchiveReadTest";
 
 	@BeforeAll
 	static void setup() throws IOException {
-		engine = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of("work", workspace.toAbsolutePath().toString()))));
-		Engine.addDemoAssets(engine);
-
 		// A real archive in the root: readme.txt, dir/, dir/inner.txt
-		try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(workspace.resolve("app.zip")))) {
+		ByteArrayOutputStream archive = new ByteArrayOutputStream();
+		try (ZipOutputStream zos = new ZipOutputStream(archive)) {
 			zos.putNextEntry(new ZipEntry("readme.txt"));
 			zos.write("hello".getBytes());
 			zos.closeEntry();
@@ -54,14 +45,10 @@ public class FileArchiveReadTest {
 			zos.write("nested".getBytes());
 			zos.closeEntry();
 		}
-		Files.writeString(workspace.resolve("notazip.txt"), "plain");
+		TestEngine.writeTempFile("FileArchiveReadTest/app.zip", archive.toByteArray());
+		TestEngine.writeTempFile("FileArchiveReadTest/notazip.txt", "plain");
 		// A .zip-named file that is NOT actually a zip — exercises the mount failure.
-		Files.writeString(workspace.resolve("fake.zip"), "not really a zip");
-	}
-
-	@AfterAll
-	static void teardown() {
-		engine.close();
+		TestEngine.writeTempFile("FileArchiveReadTest/fake.zip", "not really a zip");
 	}
 
 	private RequestContext ctx() { return RequestContext.of(Strings.create(DID)); }
@@ -83,19 +70,19 @@ public class FileArchiveReadTest {
 
 	@Test
 	public void testReadEntryFromZip() {
-		ACell r = run("v/ops/file/read", Maps.of("root", "work", "path", "app.zip!/readme.txt"));
+		ACell r = run("v/ops/file/read", Maps.of("root", "tmp", "path", "FileArchiveReadTest/app.zip!/readme.txt"));
 		assertEquals("hello", RT.ensureString(RT.getIn(r, "content")).toString());
 	}
 
 	@Test
 	public void testReadNestedEntry() {
-		ACell r = run("v/ops/file/read", Maps.of("root", "work", "path", "app.zip!/dir/inner.txt"));
+		ACell r = run("v/ops/file/read", Maps.of("root", "tmp", "path", "FileArchiveReadTest/app.zip!/dir/inner.txt"));
 		assertEquals("nested", RT.ensureString(RT.getIn(r, "content")).toString());
 	}
 
 	@Test
 	public void testListInsideZip() {
-		ACell root = run("v/ops/file/list", Maps.of("root", "work", "path", "app.zip!/"));
+		ACell root = run("v/ops/file/list", Maps.of("root", "tmp", "path", "FileArchiveReadTest/app.zip!/"));
 		AVector<?> top = RT.ensureVector(RT.getIn(root, "entries"));
 		boolean hasReadme = false, hasDir = false;
 		for (long i = 0; i < top.count(); i++) {
@@ -105,14 +92,14 @@ public class FileArchiveReadTest {
 		}
 		assertTrue(hasReadme && hasDir, "zip root listing must show readme.txt and dir");
 
-		ACell sub = run("v/ops/file/list", Maps.of("root", "work", "path", "app.zip!/dir"));
+		ACell sub = run("v/ops/file/list", Maps.of("root", "tmp", "path", "FileArchiveReadTest/app.zip!/dir"));
 		AVector<?> subEntries = RT.ensureVector(RT.getIn(sub, "entries"));
 		assertEquals("inner.txt", RT.ensureString(RT.getIn(subEntries.get(0), "name")).toString());
 	}
 
 	@Test
 	public void testStatEntry() {
-		ACell r = run("v/ops/file/stat", Maps.of("root", "work", "path", "app.zip!/readme.txt"));
+		ACell r = run("v/ops/file/stat", Maps.of("root", "tmp", "path", "FileArchiveReadTest/app.zip!/readme.txt"));
 		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(r, "exists"));
 		assertEquals("file", RT.ensureString(RT.getIn(r, "type")).toString());
 		assertEquals(5L, RT.ensureLong(RT.getIn(r, "size")).longValue());
@@ -120,22 +107,23 @@ public class FileArchiveReadTest {
 
 	@Test
 	public void testStatMissingEntryInExistingZip() {
-		ACell r = run("v/ops/file/stat", Maps.of("root", "work", "path", "app.zip!/nope.txt"));
+		ACell r = run("v/ops/file/stat", Maps.of("root", "tmp", "path", "FileArchiveReadTest/app.zip!/nope.txt"));
 		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(r, "exists"));
 	}
 
 	@Test
 	public void testReadMissingArchiveDoesNotCreateIt() {
-		Job job = runRaw("v/ops/file/read", Maps.of("root", "work", "path", "missing.zip!/x"));
+		Job job = runRaw("v/ops/file/read", Maps.of("root", "tmp", "path", "FileArchiveReadTest/missing.zip!/x"));
 		assertEquals(Status.FAILED, job.getStatus(), "reading into a missing archive must fail");
-		assertFalse(Files.exists(workspace.resolve("missing.zip")),
+		ACell stat = run("v/ops/file/stat", Maps.of("root", "tmp", "path", "FileArchiveReadTest/missing.zip"));
+		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(stat, "exists"),
 			"the read path must NEVER create the archive file");
 	}
 
 	@Test
 	public void testReadNonZipFails() {
 		// .zip extension triggers archive mode; the bytes are not a zip → mount fails.
-		Job job = runRaw("v/ops/file/read", Maps.of("root", "work", "path", "fake.zip!/x"));
+		Job job = runRaw("v/ops/file/read", Maps.of("root", "tmp", "path", "FileArchiveReadTest/fake.zip!/x"));
 		assertEquals(Status.FAILED, job.getStatus(), "a non-zip file must not mount as an archive");
 		assertFalse(job.getErrorMessage().isBlank());
 	}
@@ -144,21 +132,21 @@ public class FileArchiveReadTest {
 	public void testLiteralBangFilenameIsLiteral() {
 		// '!' NOT following a .zip/.jar extension is an ordinary filename character
 		// (jar-URL '!' is an archive construct, not a file-path one) — round-trips.
-		run("v/ops/file/write", Maps.of("root", "work", "path", "note!important.txt", "content", "hi"));
-		ACell r = run("v/ops/file/read", Maps.of("root", "work", "path", "note!important.txt"));
+		run("v/ops/file/write", Maps.of("root", "tmp", "path", "FileArchiveReadTest/note!important.txt", "content", "hi"));
+		ACell r = run("v/ops/file/read", Maps.of("root", "tmp", "path", "FileArchiveReadTest/note!important.txt"));
 		assertEquals("hi", RT.ensureString(RT.getIn(r, "content")).toString());
 	}
 
 	@Test
 	public void testEntryEscapeRejected() {
-		Job job = runRaw("v/ops/file/read", Maps.of("root", "work", "path", "app.zip!/../escape"));
+		Job job = runRaw("v/ops/file/read", Maps.of("root", "tmp", "path", "FileArchiveReadTest/app.zip!/../escape"));
 		assertEquals(Status.FAILED, job.getStatus(), "an entry escaping the archive must be rejected");
 	}
 
 	@Test
 	public void testWriteIntoArchiveRejected() {
 		Job job = runRaw("v/ops/file/write", Maps.of(
-			"root", "work", "path", "app.zip!/injected.txt", "content", "x"));
+			"root", "tmp", "path", "FileArchiveReadTest/app.zip!/injected.txt", "content", "x"));
 		assertEquals(Status.FAILED, job.getStatus(), "writing into an archive via file: must be rejected");
 		assertFalse(job.getErrorMessage().isBlank());
 	}

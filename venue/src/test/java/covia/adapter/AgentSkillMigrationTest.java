@@ -5,19 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -29,7 +24,6 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
 import covia.api.Fields;
-import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -41,14 +35,10 @@ import covia.venue.TestEngine;
  * {@code agent:create}, no new plumbing. The wedge's claim is that the created
  * agent then <em>resolves</em> the migrated skill in its live skills index, so
  * it thinks on Covia's own loop with the ported know-how in scope.
- *
- * <p>Uses a bespoke engine because the import source is a host {@code file://}
- * root, mirroring {@link SkillsImportTest}.</p>
  */
 public class AgentSkillMigrationTest {
 
-	@TempDir static Path work;
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	private AString did;
 	private RequestContext ctx;
 
@@ -76,18 +66,8 @@ public class AgentSkillMigrationTest {
 		"You are Acme's support agent. Follow the refund policy skill exactly.";
 
 	@BeforeAll
-	static void setup() throws IOException {
-		engine = Engine.createTemp(Maps.of(
-			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
-			"file", Maps.of("roots", Maps.of("work", work.toAbsolutePath().toString()))));
-		Engine.addDemoAssets(engine);
-		Files.createDirectories(work.resolve("refund-policy"));
-		Files.writeString(work.resolve("refund-policy/SKILL.md"), REFUND_SKILL);
-	}
-
-	@AfterAll
-	static void teardown() {
-		engine.close();
+	static void setup() {
+		TestEngine.writeTempFile("AgentSkillMigrationTest/refund-policy/SKILL.md", REFUND_SKILL);
 	}
 
 	@BeforeEach
@@ -120,7 +100,7 @@ public class AgentSkillMigrationTest {
 	public void testMigrateSkillAndSystemPromptIntoNativeAgent() {
 		// 1. Ingest the source agent's SKILL.md as a native Covia skill.
 		ACell imported = call("v/ops/skills/import", Maps.of(K_SOURCE,
-			Strings.create("file://work/refund-policy/SKILL.md")));
+			Strings.create("file://tmp/AgentSkillMigrationTest/refund-policy/SKILL.md")));
 		assertEquals("w/skills/refund-policy", str(imported, "path"));
 		assertEquals("refund-policy", str(imported, "name"));
 		assertEquals(false, RT.bool(RT.getIn(imported, Strings.intern("existed"))));

@@ -47,12 +47,13 @@ import covia.grid.auth.VenueAuth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.server.AuthMiddleware;
 import io.javalin.http.Context;
 
 /** Credential/evidence boundaries, without contacting an external identity provider. */
 class AuthResultTest {
-	private static Engine engine;
+	private static final Engine engine = TestEngine.ENGINE;
 	/** A venue that accepts tokens with no expiry. */
 	private static Engine relaxed;
 	private static VenueAuthenticator auth;
@@ -63,8 +64,6 @@ class AuthResultTest {
 
 	@BeforeAll
 	static void setup() {
-		engine = Engine.createTemp(Maps.of(Config.HOSTNAME, "auth-result.example"));
-		Engine.addDemoAssets(engine);
 		relaxed = Engine.createTemp(Maps.of(Config.AUTH, Maps.of("requireExp", false)));
 		auth = new VenueAuthenticator(engine);
 		key = AKeyPair.generate();
@@ -75,7 +74,6 @@ class AuthResultTest {
 
 	@AfterAll
 	static void close() {
-		if (engine != null) engine.close();
 		if (relaxed != null) relaxed.close();
 	}
 
@@ -453,7 +451,7 @@ class AuthResultTest {
 			encoded, caller).awaitResult(5000);
 		assertEquals(data, restored);
 		assertEquals(data.getHash(), restored.getHash());
-		var state = engine.adapterState("auth-result-test");
+		var state = relaxed.adapterState("auth-result-test");
 		state.write("event", restored);
 		assertEquals(data, state.read("event"));
 		assertEquals(details, state.read("event/authentication/details"));

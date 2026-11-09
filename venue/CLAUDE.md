@@ -244,8 +244,11 @@ Adapter-owned state uses `AdapterState`; see
 
 ### Testing
 
-- Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`)
-  — never a fresh Engine per test unless persistence/restart is under test
+- Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`,
+  `TestEngine.uniqueManagedDID` for a user the venue hosts)
+  — never a fresh Engine per test unless persistence/restart is under test. It
+  has a fictitious public hostname (`TestEngine.HOSTNAME`) and the default `tmp`
+  file root, which a class fills with `TestEngine.writeTempFile`
 - Every test class can run again in the same JVM, which is how an intermittent
   failure is reproduced: a scratch JUnit `LauncherFactory` harness loops the
   class under CPU load with the suite's parallel settings, calling

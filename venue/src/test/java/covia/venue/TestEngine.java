@@ -79,14 +79,21 @@ public class TestEngine {
 	public static final convex.etch.EtchStore STORE;
 	private static volatile convex.etch.EtchStore collected;
 
+	/**
+	 * The shared engine's fictitious public hostname, which lets it host managed
+	 * ({@code did:web}) users. Its own identity stays the key-derived did:key.
+	 */
+	public static final String HOSTNAME = "shared.test.covia.example";
+
 	static {
 		CoviaApplication application;
 		try {
 			STORE = TestTemp.etch("covia-test");
 			convex.core.crypto.AKeyPair keyPair = convex.core.crypto.AKeyPair.generate();
 			application = application(STORE);
-			ENGINE = application.mount(keyPair,
-				new Config(Maps.of(Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
+			ENGINE = application.mount(keyPair, new Config(Maps.of(
+				Config.HOSTNAME, Strings.create(HOSTNAME),
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)))).start();
 		} catch (java.io.IOException e) {
 			throw new ExceptionInInitializerError(e);
 		}
@@ -107,6 +114,33 @@ public class TestEngine {
 			convex.etch.EtchStore successor = collected;
 			if (successor != null) successor.close();
 		}, "test-engine-shutdown"));
+	}
+
+	/**
+	 * Writes a text file in the shared engine's temp file root ({@code tmp}, the
+	 * root a venue with no configured roots has), making its directories. A
+	 * class keeps its files in a directory named after itself, so they meet no
+	 * other class's; running the class again overwrites them.
+	 */
+	public static void writeTempFile(String path, String text) {
+		writeTempFile(path, "content", text);
+	}
+
+	/** Writes a binary file in the shared engine's temp file root; see {@link #writeTempFile(String, String)}. */
+	public static void writeTempFile(String path, byte[] bytes) {
+		writeTempFile(path, "bytes", java.util.Base64.getEncoder().encodeToString(bytes));
+	}
+
+	private static void writeTempFile(String path, String field, String value) {
+		int dir = path.lastIndexOf('/');
+		if (dir > 0) {
+			ENGINE.jobs().invokeOperation("v/ops/file/mkdir",
+				Maps.of("root", "tmp", "path", path.substring(0, dir), "parents", true),
+				ENGINE.venueContext()).awaitResult(5000);
+		}
+		ENGINE.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "tmp", "path", path, field, value),
+			ENGINE.venueContext()).awaitResult(5000);
 	}
 
 	/** Parks the successor of an online GC cycle on {@link #STORE} so it is closed cleanly at exit. */
@@ -158,6 +192,16 @@ public class TestEngine {
 	public static AString uniqueDID(String discriminator) {
 		int run = RUN.get();
 		return Strings.create("did:key:z6Mk-test-" + discriminator + (run > 1 ? "-run" + run : ""));
+	}
+
+	/**
+	 * A managed ({@code did:web}) user of the shared engine that no earlier run
+	 * used; the counterpart of {@link #uniqueDID(String)} for a test that needs a
+	 * user the venue hosts. The discriminator must be a valid username.
+	 */
+	public static AString uniqueManagedDID(String discriminator) {
+		int run = RUN.get();
+		return ENGINE.managedUserDID(Strings.create(discriminator + (run > 1 ? "-run" + run : "")));
 	}
 
 	// ========== Venues of a test's own ==========

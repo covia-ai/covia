@@ -852,11 +852,16 @@ public class EngineTest {
 
 	@Test
 	public void testDIDDocumentDefaultsToDIDKey() {
-		// No public hostname (shared temp engine defaults to localhost):
+		// No public hostname (the default, localhost):
 		// the document id IS the canonical did:key and there is no alias.
-		AMap<AString, ACell> ddo = venue.getDIDDocument("https://localhost:8080/api/v1");
-		assertEquals(venue.getDIDString(), ddo.get(Strings.create("id")));
-		assertNull(ddo.get(Strings.create("alsoKnownAs")));
+		Engine plain = Engine.createTemp(null);
+		try {
+			AMap<AString, ACell> ddo = plain.getDIDDocument("https://localhost:8080/api/v1");
+			assertEquals(plain.getDIDString(), ddo.get(Strings.create("id")));
+			assertNull(ddo.get(Strings.create("alsoKnownAs")));
+		} finally {
+			plain.close();
+		}
 	}
 
 	@Test
