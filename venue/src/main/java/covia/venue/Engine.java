@@ -1884,25 +1884,20 @@ public class Engine {
 			throw new InvalidInputException(USER_PATH_EMPTY);
 		}
 
-		AString ownerDID;
+		// The owner is the DID as written (ownerOf); what follows it is a path
+		// read as a bare path is, so a name means the same with its owner or without.
+		AString ownerDID = ownerOf(ref);
 		convex.core.data.Path path;
-		if (ref.startsWith(NS_DID)) {
-			DIDURL didURL;
+		if (ownerDID != null) {
 			try {
-				didURL = DIDURL.create(ref.toString());
+				DIDURL.create(ownerDID.toString());
 			} catch (IllegalArgumentException e) {
 				throw new InvalidInputException(INVALID_DID_URL + ref + " (" + e.getMessage() + ")", e);
 			}
-			// The DID is the URL up to its first '/', exactly as written: a did:web
-			// DID keeps its colons and %3A, so it names the principal whose
-			// authority is checked
-			String url = ref.toString();
-			int slash = url.indexOf('/');
-			ownerDID = Strings.create(slash < 0 ? url : url.substring(0, slash));
-			path = CoviaPath.parse(didURL.getPath());
+			path = CoviaPath.parse(CapabilityChecker.canonicalResource(ref.toString(), null).substring(ownerDID.toString().length()));
 		} else {
 			ownerDID = ctx.getUserDID();
-			path = CoviaPath.parse(stripLeadingSlash(ref).toString());
+			path = CoviaPath.parse(ref.toString());
 		}
 
 		if (path.isEmpty()) {
@@ -4233,9 +4228,7 @@ public class Engine {
 		/** The agent namespace {@code resource} lies in, a bare path being in {@code owner}'s; null when it lies in none. */
 		static AgentPlace of(AString resource, AString owner) {
 			if (resource == null) return null;
-			String value = resource.toString();
-			while (value.startsWith("/")) value = value.substring(1);
-			value = CapabilityChecker.canonicalResource(value, owner);
+			String value = CapabilityChecker.canonicalResource(resource.toString(), owner);
 			if (value == null || !value.startsWith("did:")) return null;
 			int slash = value.indexOf('/');
 			if (slash < 0 || !value.startsWith(Namespace.G + "/", slash + 1)) return null;
@@ -4476,7 +4469,7 @@ public class Engine {
 	 *  {@code /}), or null for a bare/relative resource. */
 	public static AString ownerOf(AString resource) {
 		if (resource == null) return null;
-		String s = resource.toString();
+		String s = CapabilityChecker.canonicalResource(resource.toString(), null);
 		if (!s.startsWith("did:")) return null;
 		int slash = s.indexOf('/');
 		return Strings.create(slash < 0 ? s : s.substring(0, slash));

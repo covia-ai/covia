@@ -47,10 +47,17 @@ public final class CoviaPath {
 
 	// ========== Making paths ==========
 
-	/** Splits a slash-separated path into its segments, keeping each as written; a leading or trailing slash is ignored. */
+	/** {@code path} without its leading slashes, which change nothing about what it names. */
+	static String relative(String path) {
+		int start = 0;
+		while (start < path.length() && path.charAt(start) == '/') start++;
+		return path.substring(start);
+	}
+
+	/** Splits a slash-separated path into its segments, keeping each as written; leading and trailing slashes are ignored. */
 	public static Path parse(String path) {
 		if (path == null) return EMPTY;
-		if (path.startsWith("/")) path = path.substring(1);
+		path = relative(path);
 		if (path.endsWith("/")) path = path.substring(0, path.length() - 1);
 		if (path.isEmpty()) return EMPTY;
 

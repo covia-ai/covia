@@ -206,7 +206,7 @@ public class UCANAdapter extends AAdapter {
 			AMap<AString, ACell> cap = RT.castMap(att.get(i));
 			AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 			String w = (with != null) ? with.toString() : null;
-			if (cap == null || w == null || w.contains("://")) {
+			if (cap == null || w == null || CapabilityChecker.isScheme(w)) {
 				throw new InvalidInputException("att[" + i + "].with must be a resource path — "
 					+ "bare (in the namespace you act in, e.g. w/) or a DID URL "
 					+ "(e.g. " + basePrefix + "w/)");
@@ -215,15 +215,13 @@ public class UCANAdapter extends AAdapter {
 			if (can == null) {
 				throw new InvalidInputException("att[" + i + "].can (ability) is required");
 			}
-			if (!w.startsWith("did:")) {
-				String path = w.startsWith("/") ? w.substring(1) : w;
-				if (path.isEmpty()) {
-					throw new InvalidInputException("att[" + i + "].with must name a resource — "
-						+ "an empty path would grant your entire namespace; say so explicitly ("
-						+ basePrefix + ") if that is intended");
-				}
-				cap = cap.assoc(Capability.WITH, Strings.create(basePrefix + path));
+			String absolute = CapabilityChecker.canonicalResource(w, base);
+			if (w.isEmpty() || absolute.equals(basePrefix)) {
+				throw new InvalidInputException("att[" + i + "].with must name a resource — "
+					+ "an empty path would grant your entire namespace; say so explicitly ("
+					+ base + ") if that is intended");
 			}
+			cap = cap.assoc(Capability.WITH, Strings.create(absolute));
 			AString resource = RT.ensureString(cap.get(Capability.WITH));
 			if (keyIssuer != null) {
 				if (!VenueAuthenticator.signsInAs(keyIssuer, Engine.ownerOf(resource))) {

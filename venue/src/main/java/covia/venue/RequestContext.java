@@ -373,10 +373,9 @@ public class RequestContext {
 	public AString inNamespace(AString resource) {
 		AString user = getUserDID();
 		if (resource == null || user == null) return resource;
-		String value = resource.toString();
-		while (value.startsWith("/")) value = value.substring(1);
-		if (value.isEmpty() || value.equals("v") || value.startsWith("v/")) return resource;
-		String resolved = CapabilityChecker.canonicalResource(value, user);
+		String bare = CapabilityChecker.canonicalResource(resource.toString(), null);
+		if (bare.isEmpty() || bare.equals("v") || bare.startsWith("v/")) return resource;
+		String resolved = CapabilityChecker.canonicalResource(resource.toString(), user);
 		return resolved.equals(resource.toString()) ? resource : Strings.create(resolved);
 	}
 
@@ -707,12 +706,8 @@ public class RequestContext {
 
 	/** Bare capability resources execute in a sub-principal's user namespace. */
 	private AString proofResource(AString resource) {
-		if (!authority.isSubPrincipal() || resource == null) return resource;
-		String value = resource.toString();
-		if (value.startsWith("did:") || value.contains("://")) return resource;
-		while (value.startsWith("/")) value = value.substring(1);
-		if (value.isEmpty()) return resource;
-		return Strings.create(authority.getUserDID() + "/" + value);
+		if (!authority.isSubPrincipal() || resource == null || CapabilityChecker.isScheme(resource.toString())) return resource;
+		return Strings.create(CapabilityChecker.canonicalResource(resource.toString(), authority.getUserDID()));
 	}
 
 	/**

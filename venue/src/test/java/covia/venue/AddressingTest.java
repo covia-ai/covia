@@ -51,17 +51,12 @@ public class AddressingTest {
 	@Test
 	public void testEveryWayOfWritingAPathNamesTheSamePlace() {
 		assertEquals(Strings.create("mine"), read("w/notes"));
-		assertEquals(Strings.create("mine"), read("/w/notes"), "one leading slash names the request's root");
+		assertEquals(Strings.create("mine"), read("/w/notes"), "a leading slash changes nothing");
+		assertEquals(Strings.create("mine"), read("//w/notes"), "however many there are");
 		assertEquals(Strings.create("mine"), read(alice + "/w/notes"));
+		assertEquals(Strings.create("mine"), read("/" + alice + "/w/notes"), "before a DID as well");
 		assertEquals(Strings.create("mine"), read(Vectors.of(alice, "w", "notes")), "an array starting with a DID is that DID URL");
 		assertEquals(Strings.create("mine"), read(Vectors.of("w", "notes")));
-	}
-
-	@Test
-	public void testADIDStartsAPathOnlyAsItsFirstElement() {
-		String slashed = "/" + alice + "/w/notes";
-		assertEquals(String.format(CoviaPath.NO_SUCH_PATH, slashed, "/" + alice), noPlace(slashed));
-		assertNull(engine.resolvePath(Strings.create(slashed), ALICE));
 	}
 
 	@Test

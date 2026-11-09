@@ -227,9 +227,8 @@ public final class ConversationRouter {
 	/** The binding's agent as a full address. A relative reference names an agent
 	 * of the binding's user, wherever the message comes from. */
 	private AString agentAddress() {
-		String agent = spec.agent();
+		String agent = covia.lattice.CapabilityChecker.canonicalResource(spec.agent(), null);
 		if (agent.startsWith("did:")) return Strings.create(agent);
-		if (agent.startsWith("/")) agent = agent.substring(1);
 		if (agent.startsWith("g/")) agent = agent.substring(2);
 		return Strings.create(spec.userDID(engine) + "/g/" + agent);
 	}

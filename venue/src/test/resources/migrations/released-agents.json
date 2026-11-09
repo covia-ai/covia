@@ -121,10 +121,10 @@
   },
   {
     "id": "released-leading-slash",
-    "why": "A with written with a leading slash has never matched a path, so it grants nothing",
+    "why": "A leading slash on a with changes nothing",
     "config": {"caps": [{"with": "/w/leading/", "can": "crud/read"}]},
-    "may": [],
-    "mayNot": [["crud/read", "w/leading/doc"]]
+    "may": [["crud/read", "w/leading/doc"]],
+    "mayNot": [["crud/read", "w/other/doc"]]
   },
   {
     "id": "released-no-with",

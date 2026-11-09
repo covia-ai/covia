@@ -249,8 +249,8 @@ public class CapabilityChecker {
 	/**
 	 * Normalises verified UCAN token maps so a bare capability resource means
 	 * <b>the token issuer's own namespace</b>: each bare (non-DID, non-scheme),
-	 * non-empty {@code att[i].with} is rewritten to {@code "<iss>/<path>"} (one
-	 * leading slash stripped). Applied recursively through map-form {@code prf}
+	 * non-empty {@code att[i].with} is resolved there ({@link #canonicalResource}).
+	 * Applied recursively through map-form {@code prf}
 	 * chains, each hop against its own issuer — so a bare path in a
 	 * re-delegation binds to the re-delegator, and passing another principal's
 	 * authority onward still requires the absolute form.
@@ -289,16 +289,13 @@ public class CapabilityChecker {
 	 */
 	public static AString bindGate(AString gate, AString owner) {
 		if (gate == null || owner == null || !isBareGate(gate)) return gate;
-		String path = gate.toString();
-		while (path.startsWith("/")) path = path.substring(1);
-		return Strings.create(owner + "/" + path);
+		return Strings.create(canonicalResource(gate.toString(), owner));
 	}
 
 	/** Whether a gate reference is a bare path whose meaning depends on its owner. */
 	static boolean isBareGate(AString gate) {
-		String g = gate.toString();
-		while (g.startsWith("/")) g = g.substring(1);
-		if (g.isEmpty() || g.startsWith("did:") || g.contains("://") || g.startsWith("v/")) return false;
+		String g = CoviaPath.relative(gate.toString());
+		if (g.isEmpty() || g.startsWith("did:") || isScheme(g) || g.startsWith("v/")) return false;
 		return Hash.parse(g) == null;
 	}
 
@@ -326,10 +323,10 @@ public class CapabilityChecker {
 				AMap<AString, ACell> cap = RT.castMap(capCell);
 				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 				String w = (with != null) ? with.toString() : null;
-				if (w != null && !w.isEmpty() && !w.startsWith("did:") && !w.contains("://")) {
-					String path = w.startsWith("/") ? w.substring(1) : w;
-					if (!path.isEmpty()) {
-						cap = cap.assoc(Capability.WITH, Strings.create(iss + "/" + path));
+				if (w != null && !isScheme(w)) {
+					String bound = canonicalResource(w, iss);
+					if (!bound.equals(w)) {
+						cap = cap.assoc(Capability.WITH, Strings.create(bound));
 						capCell = cap;
 						changed = true;
 					}
@@ -575,35 +572,43 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * Canonicalises a resource to its absolute, owner-scoped form for matching.
+	 * The canonical form of a resource name: the one place a name is resolved
+	 * in a namespace.
 	 *
-	 * <p>A capability resource is absolute: it names its owner. A bare lattice
-	 * path ({@code "w/health/bp"}) is the owner's own resource and is prefixed
-	 * with the owner DID → {@code "<owner>/w/health/bp"}. A resource that is
-	 * already a DID URL (a cross-user path, {@code "did:key:…/w/…"}, or the
-	 * DID-scoped {@code "did:key:…/dlfs/…"}) or scheme-qualified ({@code "file://…"})
-	 * is absolute as-is and returned unchanged. With no owner context ({@code ownerDID == null})
-	 * the resource is returned as given (compare-as-is).</p>
+	 * <p>Leading slashes change nothing. A bare name ({@code "w/health/bp"}) is
+	 * resolved in {@code namespace} → {@code "<namespace>/w/health/bp"}, and
+	 * {@code "/"} is that namespace's root. A DID URL or scheme reference
+	 * ({@code "file://…"}) already says where it is. With a null
+	 * {@code namespace} a bare name stays bare, which is the form it is stored
+	 * in. The empty name has no canonical form and is returned as it is.</p>
 	 *
-	 * <p>Applied identically to the op's resource and each cap's {@code with}, so
-	 * an absolute (token) grant and a bare (agent-config) grant match a bare
-	 * own-namespace operation the same way.</p>
+	 * <p>The namespace is only where the name is resolved, not whose authority
+	 * uses it. Applied identically to an operation's resource and each grant's
+	 * {@code with}, so an absolute and a bare grant match alike.</p>
 	 */
-	public static String canonicalResource(String resource, AString ownerDID) {
+	public static String canonicalResource(String resource, AString namespace) {
 		if (resource == null || resource.isEmpty()) return resource;
-		if (resource.startsWith("did:")) return resource;   // already owner-qualified (DID URL)
+		String name = CoviaPath.relative(resource);
+		if (name.isEmpty()) return (namespace == null) ? "/" : namespace + "/";
+		if (name.startsWith("did:")) return name;
 		// Legacy own-drive shorthand: "dlfs://<drive>/…" is accepted and normalised
-		// to the DID-scoped path form "dlfs/<drive>/…" (then owner-scoped below), so
-		// existing agent caps written in the scheme form keep working. Cross-user
-		// UCAN grants use the path form only — the scheme form never reaches the
-		// fail-closed proof path.
-		if (resource.startsWith("dlfs://")) {
-			resource = "dlfs/" + resource.substring("dlfs://".length());
-		} else if (resource.contains("://")) {
-			return resource;                                  // scheme-qualified (file://)
+		// to the DID-scoped path form "dlfs/<drive>/…", so existing agent caps
+		// written in the scheme form keep working. Cross-user UCAN grants use the
+		// path form only — the scheme form never reaches the fail-closed proof path.
+		if (name.startsWith("dlfs://")) {
+			name = "dlfs/" + name.substring("dlfs://".length());
+		} else if (isScheme(name)) {
+			return name;
 		}
-		if (ownerDID == null) return resource;               // no owner context — compare as given
-		return ownerDID + "/" + resource;                    // bare lattice path → owner-scoped
+		return (namespace == null) ? name : namespace + "/" + name;
+	}
+
+	/** Whether {@code name} is a scheme reference ({@code scheme://…}), once any leading slashes are ignored. */
+	public static boolean isScheme(String name) {
+		if (name == null) return false;
+		String relative = CoviaPath.relative(name);
+		int slash = relative.indexOf('/');
+		return slash > 0 && relative.charAt(slash - 1) == ':' && relative.startsWith("//", slash);
 	}
 
 	/**
@@ -622,8 +627,7 @@ public class CapabilityChecker {
 			AMap<AString, ACell> grant = RT.castMap(caps.get(i));
 			AString with = (grant == null) ? null : RT.ensureString(grant.get(Capability.WITH));
 			if (with == null) continue;
-			String value = with.toString();
-			while (value.startsWith("/")) value = value.substring(1);
+			String value = CoviaPath.relative(with.toString());
 			if (!value.equals("n") && !value.startsWith("n/")) continue;
 			resolved = resolved.assoc(i, grant.assoc(Capability.WITH, Strings.create(Namespace.G + "/" + agentId + "/" + value)));
 		}
@@ -710,7 +714,7 @@ public class CapabilityChecker {
 
 	/** {@code with} made absolute in {@code owner}'s namespace, except the venue's {@code v/} view, which is every namespace's. */
 	private static AString absoluteWith(AString with, AString owner) {
-		String value = with.toString();
+		String value = CoviaPath.relative(with.toString());
 		if (value.equals("v") || value.startsWith("v/")) return with;
 		return Strings.create(canonicalResource(value, owner));
 	}

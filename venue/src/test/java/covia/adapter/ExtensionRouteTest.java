@@ -163,8 +163,8 @@ class ExtensionRouteTest {
 		assertSame(delegated.getExecutionScope(), probe.received.getExecutionScope());
 		assertNull(probe.received.getAgentId());
 		assertNull(probe.received.getSessionId());
-		assertThrows(CompletionException.class, () -> write("/" + resource + "/label", Strings.create("lost"), delegated),
-			"a DID sets where a path starts only as its first element");
+		write("/" + resource + "/label", Strings.create("slashed"), delegated);
+		assertEquals(Strings.create("slashed"), read(resource + "/label", delegated), "a leading slash changes nothing");
 		write(resource + "/label", Strings.create("delegated"), delegated);
 		run("append", Maps.of(Fields.PATH, resource + "/items", Fields.VALUE, 3L), delegated);
 		assertEquals(Strings.create("delegated"), read(path("/label"), alice));

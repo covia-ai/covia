@@ -1371,13 +1371,11 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * The path as a DID URL when it starts with an owner DID, otherwise null: a
 	 * string whose first element is a DID, or an array whose first element is
-	 * one. A DID sets where a path starts only as its first element, so with a
-	 * slash before it the path starts at the request's user, where a DID names
-	 * nothing.
+	 * one. A leading slash changes nothing, as on any path.
 	 */
 	private static AString didPath(ACell path) {
 		AString raw = RT.ensureString(path);
-		if (raw != null) return raw.startsWith(DID_PREFIX) ? raw : null;
+		if (raw != null) return (Engine.ownerOf(raw) != null) ? raw : null;
 		if (!(path instanceof AVector<?>)) return null;
 		Path segments = CoviaPath.of(path);
 		if (segments.isEmpty() || !segments.get(0).startsWith(DID_PREFIX)) return null;
