@@ -641,7 +641,7 @@ public class TestAdapter extends AAdapter {
 		if (model != null && "context-too-large-test".equals(model.toString())) {
 			// As a provider refuses a context larger than its model's window.
 			throw new covia.exception.InvalidInputException(
-				LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("test", model));
+				LangChainAdapter.PROVIDER_CONTEXT_TOO_LARGE.formatted("test", model, ""));
 		}
 		if (model != null && ("length-then-answer-test".equals(model.toString())
 				|| "always-length-test".equals(model.toString()))) {
