@@ -55,6 +55,7 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.adapter.agent.ExternalAgents;
+import covia.grid.HexId;
 import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
@@ -1737,8 +1738,8 @@ public class AgentAdapter extends AAdapter {
 		SessionSpec session = null;
 		Blob sid;
 		if (taskIdHex != null) {
-			taskId = Blob.fromHex(taskIdHex.toString());
-			if (taskId == null) { job.fail("Invalid taskId format: " + taskIdHex); return; }
+			taskId = HexId.parse(taskIdHex);
+			if (taskId == null) { job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex)); return; }
 			ACell taskData = agent.getTasks().get(taskId);
 			AString taskSid = (taskData instanceof AMap<?, ?> map)
 				? RT.ensureString(map.get(Fields.SESSION_ID)) : null;
@@ -2983,8 +2984,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 		requireNative(agent, "cancelTask");
 
-		// Parse hex task ID to Blob: null for text that is not hex
-		Blob taskId = Blob.fromHex(taskIdHex.toString());
+		Blob taskId = HexId.parse(taskIdHex);
 		if (taskId == null) {
 			job.fail(new InvalidInputException(INVALID_TASK_ID + taskIdHex));
 			return;

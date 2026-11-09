@@ -20,6 +20,7 @@ import convex.core.lang.RT;
 import convex.auth.ucan.Capability;
 import covia.adapter.agent.ContextLoader;
 import covia.api.Fields;
+import covia.exception.NotFoundException;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -422,6 +423,37 @@ public class ContextLoaderTest {
 			Strings.intern("required"), CVMBool.TRUE
 		);
 		assertThrows(RuntimeException.class, () -> loader.resolveEntry(entry, ctx));
+	}
+
+	@Test
+	public void aJobMayBeNamedWithThePrefix() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of(Strings.create("message"), Strings.create("hello world")),
+			ctx);
+		job.awaitResult(5000);
+		AString prefixed = Strings.create("0x" + job.getID().toHexString());
+
+		String content = RT.ensureString(RT.getIn(
+			loader.resolveEntry(Maps.of(Strings.intern("job"), prefixed), ctx), Strings.intern("content"))).toString();
+		assertTrue(content.contains("hello world"));
+
+		assertEquals("hello world", loader.resolveText(
+			Maps.of(Strings.intern("job"), prefixed, Strings.intern("path"), Strings.create("message")), ctx));
+	}
+
+	@Test
+	public void textThatIsNoJobIdNamesNoJob() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of(Strings.create("message"), Strings.create("hello world")),
+			ctx);
+		job.awaitResult(5000);
+		AString spaced = Strings.create(job.getID().toHexString() + " ");
+
+		assertNull(loader.resolveEntry(Maps.of(Strings.intern("job"), spaced), ctx));
+		assertThrows(NotFoundException.class, () -> loader.resolveEntry(
+			Maps.of(Strings.intern("job"), spaced, Strings.intern("required"), CVMBool.TRUE), ctx));
+		assertThrows(NotFoundException.class, () -> loader.resolveText(
+			Maps.of(Strings.intern("job"), spaced), ctx));
 	}
 
 	// ========== Grid operation entries ==========

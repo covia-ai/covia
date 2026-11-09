@@ -538,6 +538,23 @@ public class AgentCycleTest {
 	}
 
 	@Test
+	public void aContinuationMayNameItsTaskWithThePrefix(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		String gateName = gateName("prefixed-continuation");
+		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			stepAgent(owner, "prefixed-task");
+			Job task = request(owner, "prefixed-task", "hold:" + gateName + " yield");
+			awaitGate(gate);
+			message(owner, "prefixed-task", Maps.of(Fields.TASK_ID, Strings.create("0x" + task.getID().toHexString()),
+				Fields.MESSAGE, Strings.create("complete")));
+			gate.release();
+
+			ACell result = task.awaitResult(10_000);
+			assertEquals(Strings.create("complete"), RT.getIn(result, Fields.OUTPUT, Fields.INPUT));
+		}
+	}
+
+	@Test
 	public void aTaskWhoseSessionIsGoneStillRuns(TestInfo info) throws Exception {
 		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
 		String gateName = gateName("orphan");

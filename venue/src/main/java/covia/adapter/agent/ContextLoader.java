@@ -23,6 +23,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.grid.HexId;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -252,8 +253,7 @@ public class ContextLoader {
 		}
 		AString jobId = RT.ensureString(entry.get(K_JOB));
 		if (jobId != null) {
-			AMap<AString, ACell> jobData = engine.jobs().getJobData(
-				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
+			AMap<AString, ACell> jobData = namedJob(jobId, ctx);
 			if (jobData == null) throw new NotFoundException("job not found: " + jobId, jobId.toString());
 			ACell status = jobData.get(Fields.STATUS);
 			if (!Strings.create("COMPLETE").equals(status)) {
@@ -501,6 +501,12 @@ public class ContextLoader {
 		return AAdapter.await(result, 10_000, "Context operation " + op);
 	}
 
+	/** The record of the job a context entry names; null when no job has that id, as text that is no id never does. */
+	private AMap<AString, ACell> namedJob(AString jobId, RequestContext ctx) {
+		convex.core.data.Blob id = HexId.parse(jobId);
+		return (id == null) ? null : engine.jobs().getJobData(id, ctx);
+	}
+
 	/**
 	 * Resolves a job result entry by reading the job output.
 	 */
@@ -509,8 +515,7 @@ public class ContextLoader {
 		AMap<AString, ACell> provenance = Maps.of(K_JOB, jobId);
 		if (path != null) provenance = provenance.assoc(K_PATH, path);
 		try {
-			AMap<AString, ACell> jobData = engine.jobs().getJobData(
-				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
+			AMap<AString, ACell> jobData = namedJob(jobId, ctx);
 			if (jobData == null) {
 				if (required) throw new NotFoundException("Required context job not found: " + jobId, jobId.toString());
 				return null;

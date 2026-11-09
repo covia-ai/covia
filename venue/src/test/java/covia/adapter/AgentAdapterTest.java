@@ -5840,6 +5840,70 @@ public class AgentAdapterTest {
 		}
 	}
 
+	@Test
+	public void testCancelTaskTakesAnIdWithThePrefix() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "cancel-prefixed",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("cancel-prefixed");
+		Blob taskId = Blob.createRandom(new java.util.Random(7), 16);
+		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
+
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/cancel-task",
+			Maps.of(Fields.AGENT_ID, "cancel-prefixed",
+				Fields.TASK_ID, "0x" + taskId.toHexString()),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CANCELLED));
+		assertEquals(0, agent.getTasks().count());
+	}
+
+	@Test
+	public void testCancelTaskRefusesAnIdWithWhitespace() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "cancel-spaced",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("cancel-spaced");
+		Blob taskId = Blob.createRandom(new java.util.Random(8), 16);
+		agent.tasks().add(taskId, Maps.of("question", "What is 2+2?"));
+		String spaced = taskId.toHexString() + " ";
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/cancel-task",
+			Maps.of(Fields.AGENT_ID, "cancel-spaced", Fields.TASK_ID, spaced),
+			RequestContext.of(ALICE_DID));
+
+		assertThrows(RuntimeException.class, () -> job.awaitResult(5000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertEquals(AgentAdapter.INVALID_TASK_ID + spaced, job.getErrorMessage());
+		assertEquals(1, agent.getTasks().count());
+	}
+
+	@Test
+	public void testMessageRefusesATaskIdThatIsNotHex() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "message-spaced",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "message-spaced",
+				Fields.TASK_ID, " abcd",
+				Fields.MESSAGE, "hello"),
+			RequestContext.of(ALICE_DID));
+
+		assertThrows(RuntimeException.class, () -> job.awaitResult(5000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertEquals(AgentAdapter.INVALID_TASK_ID + " abcd", job.getErrorMessage());
+	}
+
 	// ========== Agent.removeTask ==========
 
 	@Test
