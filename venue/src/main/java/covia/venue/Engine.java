@@ -1883,8 +1883,10 @@ public class Engine {
 	}
 
 	public static final String USER_PATH_UNAUTHENTICATED = "User path resolution requires an authenticated user";
-	public static final String USER_PATH_EMPTY = "User path must not be empty";
-	public static final String USER_PATH_NO_NAMESPACE = "User path must include a namespace";
+	/** The refusal for a path that reaches no namespace, naming those a caller can use (GRID_LATTICE_DESIGN.md §4.1). */
+	public static final String USER_PATH_NO_NAMESPACE = "A path must start at a namespace: w (workspace), o (operations), "
+		+ "a (assets), g (agents), j (jobs), s (secrets), h (human-in-the-loop requests), v (venue definitions), "
+		+ "x/<adapter> (adapter views), and within a running agent, session or job n, c or t";
 	/** Opening of the refusal for a did: path that is not a valid DID URL. */
 	public static final String INVALID_DID_URL = "Invalid DID URL: ";
 
@@ -1893,7 +1895,7 @@ public class Engine {
 			throw new AuthException(USER_PATH_UNAUTHENTICATED);
 		}
 		if (ref == null || ref.isEmpty()) {
-			throw new InvalidInputException(USER_PATH_EMPTY);
+			throw new InvalidInputException(USER_PATH_NO_NAMESPACE);
 		}
 
 		// The owner is the DID as written (ownerOf); what follows it is a path
