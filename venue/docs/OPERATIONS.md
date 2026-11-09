@@ -457,7 +457,7 @@ MCP `tools/list` identifies each advertised tool's operation reference in the
 standard tool `_meta` extension map (#558):
 
 ```json
-{"name": "agent_session_read", "_meta": {"ai.covia/operation": "v/ops/agent/session-read"}}
+{"name": "agent_history", "_meta": {"ai.covia/operation": "v/ops/agent/history"}}
 ```
 
 The value is the exact venue-relative reference in the MCP dispatch registry,

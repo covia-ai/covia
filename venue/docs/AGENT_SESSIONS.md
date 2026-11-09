@@ -68,7 +68,7 @@ creates new Jobs while retaining the conversation identity. A task ID and a
 session ID have different lifetimes.
 
 The local session records the initial input and returned reply in its frames.
-`agent:sessions` and `agent:session-read` expose those local records, not the
+`agent:sessions` and `agent:history` expose those local records, not the
 provider's complete internal history or every continuation message. The provider
 owns its working context; subsequent calls use its saved conversation ID rather
 than replaying the local transcript.
@@ -325,7 +325,7 @@ side effects and pending messages are not consumed. Because this operation
 writes session metadata, it requires `agent/write` authority, including when
 the saved result is already current.
 
-### 5.2 Agent-safe retrospective operations
+### 5.2 Session listing and history
 
 This section describes the current operations. The common history foundation
 for [#597](https://github.com/covia-ai/covia/issues/597) is specified in
@@ -337,17 +337,19 @@ historical execution checkpoints are not required.
 | Op | Purpose |
 |----|---------|
 | `agent:sessions` | List bounded session metadata, newest first; owners pass `agentId`, the running agent may omit it |
-| `agent:sessionRead` | Read a bounded safe transcript projection; `archiveDepth` optionally opens nested compaction records before applying the bounds; `current` reads back the caller's own session outside its context |
+| `agent:history` | Read a session's history exactly as stored, by position |
 | `agent:renameSession` | Set or clear a session's human-facing title (owner management surface) |
 | `agent:compactSession` | Select owner-supplied assistant memory for an idle session while retaining the covered history |
 | `agent:reloadContext` | Clear an idle session's materialised provider prefix so the next inference rebuilds current prompt/tools/pinned context; conversation and loads stay exact |
 | `agent:deleteSession` | Permanently remove a session (owner management surface; audit-sensitive) |
 
-The retrospective operations have two explicit modes. From an agent execution context, omitting `agentId` self-scopes the call and requires only invocation capability for the exact operation asset. An owner or other authorised caller supplies `agentId`; normal `crud/read` resolution for `g/<agentId>` then applies. Neither mode confers generic `g/` read access. The in-scope caller session is excluded. Missing, current, unfinished and policy-vetoed sessions all produce exactly `{"found":false}` from `agent:sessionRead`, avoiding an existence oracle.
+The listing and history operations have two explicit modes. From an agent execution context, omitting `agentId` self-scopes the call and requires only invocation capability for the exact operation asset. An owner or other authorised caller supplies `agentId`; normal `crud/read` resolution for `g/<agentId>` then applies. Neither mode confers generic `g/` read access. `agent:sessions` leaves out the caller's own session. Missing and policy-vetoed sessions both produce exactly `{"found":false}` from `agent:history`, avoiding an existence oracle; venue policy applies to the session the caller is in as to any other.
 
-The projection contains completed user/final-assistant turns and, by default, compacted summaries, each marked `compacted` with the `turns` it stands for. `archiveDepth` opens at most that many nested compaction records and then applies the same safe projection and response bounds. `skip` passes over that many of the newest projected messages, and `older` says whether messages remain before the page, so a reader can page back to the start. Provider tool calls, tool results, framework diagnostics and an unanswered tail remain in the durable audit transcript but are never exposed by this operation. Both turn count and total content are bounded, including a single oversized turn.
+`agent:history` returns a session's root-frame history exactly as stored, by position, 0 being the oldest entry: user and assistant turns, tool calls and results in full, unanswered turns, diagnostics, compaction summaries and opaque provider continuation data. `start` and `end` select a range, `end` not included, and `limit` (default 20, at most 100) bounds the entries returned; it counts entries, not bytes, and each entry comes back whole. With no range it returns the newest entries, with `end` alone the newest `limit` before it, and with `start` alone it reads forward. A position past the end of the history reads as the end. Omitting `sessionId` reads the session the caller is in or, outside one, the newest visible session.
 
-**Reading back the current session.** With `current: true`, from its own execution context, an agent reads the session it is in, but only what is no longer in its context: the turns its compaction summaries stand for, earlier summaries among them (opened with `archiveDepth`). Entries in the active context are never served again, and a session never compacted returns no messages. This is how an agent recovers the exact words its own summary paraphrases. A summary in its context names the turns it stands for (`[Compacted: turns 1020–1075] …`, by position in the session's history), and `from`/`to` read exactly those turns; a summary among them names its own turns in the same way, so the agent can go back step by step. It is the current-session part of [#597](https://github.com/covia-ai/covia/issues/597); search, time-based navigation and one projection shared with owners remain open there.
+The result is `{found, sessionId, title?, size, contextStart, start, end, next?, entries}`. `entries[i]` is at position `start + i`, `end` is the end of the range read, and `next`, present when the range was longer than `limit`, is the position to continue from. To go further back, pass the returned `start` as `end`. Entries before `contextStart` are no longer in the agent's context.
+
+A compaction summary stands for the range in its `historyRange`. In an agent's context it reads `[Compacted: turns a–b] …`, and `start=a, end=b+1` reads those entries back; a summary among them names its own range, read the same way.
 
 `agent:compactSession` is the explicit owner management surface and requires agent-write authority. It only mutates a quiescent session. Versioned frames append a summary with `historyRange` coverage and advance `contextStart`; legacy frames retain the replaced vector under `items`. Provenance is stamped on the summary, and the Job returns only bounded metadata rather than a second copy of the transcript. Future turns append after the summary normally. The in-band `compact` harness tool applies the same transform from either built-in LLM runtime.
 
@@ -370,7 +372,7 @@ can call these existing functions directly; no new REST endpoint is required.
 | Read `frame.conversation`, including nested summary `items`, for an existing inspector, export or archive walker | `GoalTreeContext.archivedConversation(frame)` |
 | Read the selected entries for current model context, leaving summaries unexpanded | `GoalTreeContext.activeConversation(frame)` |
 | Render selected entries as native messages and summary memory | `ConversationRenderer.renderFull(frame, dialect)` |
-| Preserve the current bounded, completed-cycle retrospective projection | `ConversationRenderer.historical(frame, maxTurns, maxChars, archiveDepth)` |
+| Read a frame's history by position, unchanged | `ConversationHistory.open(frame).read(start, end, limit)` |
 | Append stored turns without knowing the frame format | `GoalTreeContext.appendTurn(frame, turn)` / `appendTurns(frame, turns)` |
 | Read a session transcript through the TypeScript SDK | `(await agent.getSession(id)).conversation`, or `await agent.transcript(id)` |
 
@@ -420,7 +422,7 @@ covia_read  path=g/Assistant/sessions/<sid>/meta            — one session's me
 covia_read  path=g/Assistant/sessions/<sid>/frames/0        — frame record (check its storage format)
 ```
 
-These generic operations remain the owner/operator inspection surface and require the corresponding lattice capabilities. Agent configurations should receive the exact `agent:sessions` / `agent:sessionRead` invoke capabilities instead of broad `g/<agent>/sessions` read access.
+These generic operations remain the owner/operator inspection surface and require the corresponding lattice capabilities. Agent configurations should receive the exact `agent:sessions` / `agent:history` invoke capabilities instead of broad `g/<agent>/sessions` read access.
 
 ### 5.4 Default session rule
 

@@ -180,9 +180,9 @@ public class GoalTreeCrashResumeTest {
 		assertEquals(retained, GoalTreeContext.history(appended).slice(0, retained.count()));
 		assertEquals(8, GoalTreeContext.countTurns(appended));
 		assertEquals(CVMLong.create(8), RT.getIn(reopened.getSession(sid), "meta", "turns"));
-		ACell read = third.jobs().invokeOperation("v/ops/agent/session-read", Maps.of(Fields.AGENT_ID, agentId,
-			Fields.SESSION_ID, sid.toHexString(), "archiveDepth", 2L), alice).awaitResult(5000);
-		assertEquals(8, RT.ensureVector(RT.getIn(read, Fields.MESSAGES)).count());
+		ACell read = third.jobs().invokeOperation("v/ops/agent/history", Maps.of(Fields.AGENT_ID, agentId,
+			Fields.SESSION_ID, sid.toHexString(), Fields.LIMIT, 100L), alice).awaitResult(5000);
+		assertEquals(GoalTreeContext.history(appended), RT.getIn(read, "entries"));
 	}
 
 	@Test

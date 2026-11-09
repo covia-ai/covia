@@ -117,8 +117,8 @@ sibling summaries; the exact archive semantics are part of the canonical
 context-state contract.
 
 **There is no separate archive.** Authorised operators can read the nested
-lattice value directly; `agent:sessionRead` can open a bounded `archiveDepth`
-while continuing to omit tool scratch, diagnostics and unfinished cycles.
+lattice value directly; `agent:history` reads any range of the history by
+position, exactly as stored.
 
 ## The Frame Stack
 

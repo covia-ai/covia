@@ -85,8 +85,8 @@ class AgentFacetTest {
         ACell second = run("chat", target().assoc(Fields.MESSAGE, Strings.create("two")).assoc(Fields.SESSION_ID, sid));
         assertEquals(sid, RT.getIn(second, Fields.SESSION_ID));
         assertEquals(Strings.create("provider-session"), probe.previous);
-        ACell history = run("session-read", target().assoc(Fields.SESSION_ID, sid));
-        assertEquals(4, RT.ensureVector(RT.getIn(history, Fields.MESSAGES)).count());
+        ACell history = run("history", target().assoc(Fields.SESSION_ID, sid));
+        assertEquals(4, RT.ensureVector(RT.getIn(history, "entries")).count());
         assertEquals(Maps.of(Fields.ADAPTER, "facetprobe"), RT.getIn(run("info", target()), Agent.KEY_AGENT));
     }
 

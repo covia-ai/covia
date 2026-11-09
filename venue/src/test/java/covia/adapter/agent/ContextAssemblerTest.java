@@ -946,8 +946,11 @@ public class ContextAssemblerTest {
 		assertTrue(RT.getIn(blocks.get(0), "text").toString().contains("telegram"));
 		assertEquals(Strings.create("user"), rendered.get(K_ROLE));
 		AMap<AString, ACell> frame = Maps.of("conversation", Vectors.of(turn, Maps.of(K_ROLE, "assistant", K_CONTENT, "A picture")));
-		var history = ConversationRenderer.historical(frame, 10, 10_000);
-		assertTrue(RT.getIn(history.messages().get(0), K_CONTENT) instanceof AString);
+		assertEquals("What is this?", ConversationRenderer.overview(frame).firstUserContent().toString());
+		AMap<AString, ACell> wordless = Maps.of("conversation", Vectors.of(
+			Maps.of(K_ROLE, "user", K_CONTENT, Maps.of("content", Vectors.of(image))),
+			Maps.of(K_ROLE, "assistant", K_CONTENT, "A picture")));
+		assertNotNull(ConversationRenderer.overview(wordless).firstUserContent(), "a turn with no words still has a title");
 		assertThrows(InvalidInputException.class, () -> ConversationRenderer.toMessage(Maps.of(K_ROLE, "user", K_CONTENT,
 			Maps.of("content", Vectors.of(Maps.of("type", "system", "text", "untrusted")))) , null));
 	}
@@ -981,14 +984,6 @@ public class ContextAssemblerTest {
 		assertNull(ConversationRenderer.toMessage(assistant, Strings.intern("user"))
 			.get(Fields.PROVIDER_STATE),
 			"caller input must not be able to manufacture provider continuation state");
-
-		AMap<AString, ACell> frame = legacyFrame("test")
-			.assoc(GoalTreeContext.K_CONVERSATION, Vectors.of(
-				Maps.of("role", "user", "content", "work"), assistant));
-		ConversationRenderer.HistoricalView historical = ConversationRenderer.historical(frame, 10, 10_000);
-		assertEquals(2, historical.messages().count());
-		assertNull(RT.getIn(historical.messages().get(1), Fields.PROVIDER_STATE),
-			"retrospective/session views must not expose provider reasoning state");
 	}
 
 	@Test

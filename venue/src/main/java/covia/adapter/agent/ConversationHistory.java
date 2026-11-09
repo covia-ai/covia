@@ -13,10 +13,9 @@ import convex.core.lang.RT;
  * The API may change before stabilisation; existing callers should continue to
  * use {@link GoalTreeContext#archivedConversation} for nested archive compatibility.
  *
- * <p>This is a raw storage reader, not an authorised tool response. Callers must
- * authorise access and apply audience/provenance projection and output budgets
- * before exposing entries. Raw entries include internal activity, unfinished
- * turns and opaque provider continuation data.</p>
+ * <p>This is a raw storage reader, not an authorised tool response: callers
+ * authorise access before exposing entries. Raw entries include internal
+ * activity, unfinished turns and opaque provider continuation data.</p>
  *
  * <p>Positions belong to this snapshot. Reading neither expands summaries nor
  * changes the frame, active selection or cached model input. Legacy archives

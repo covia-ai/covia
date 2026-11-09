@@ -203,8 +203,8 @@ without interpretation. A provider edge may restore it only when both
 `provider` and `model` match the current inference; other providers, model
 changes, malformed state and unknown block types ignore it. It is currently
 used for Anthropic signed and redacted thinking blocks on assistant tool-use
-turns. It is not assistant content, is omitted from retrospective session
-projections, and is not duplicated in `renderedContext`. Compaction keeps it in
+turns. It is not assistant content and is not duplicated in `renderedContext`;
+`agent:history` returns it with the rest of the stored entry. Compaction keeps it in
 the exact archived `items` but does not replay archived state through the
 provider-visible summary.
 
@@ -260,7 +260,7 @@ The label renderer therefore handles only blocks that genuinely travel as instru
 | Agent-loaded skill — the path is its unload key | `[Loaded skill: <name> — unload key: <path>]` | `<loaded-skill name="…" unload-key="…">` | `## Loaded skill: <name> — unload key: <path>` |
 | Trusted operator context | `[Pinned context: <label>]` | `<pinned-context label="…">` | `## Pinned context: <label>` |
 | Late system message (§3.2.1) | `[system: …]` | `<system>` | `## System` |
-| Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:sessionRead` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
+| Compacted conversation segment (assistant memory): the first and last turn it stands for, by position in the frame's history, so `agent:history` can read exactly those back | `[Compacted: turns <from>–<to>] <summary>` | `<compacted from="…" to="…">` | `## Compacted: turns <from>–<to>` |
 | Ancestor context (goal tree) | `[Ancestor Context]` | `<ancestors>` | `## Ancestor context` |
 | Tool-failure diagnostic | `[Tool failure: <name>] <reason>` | `<tool-failure name="…">` | `## Tool failure: <name>` |
 | Who a turn comes from (COG-20 §4): before a user turn whose caller, binding, authenticated identity, chat, thread or space differs from the turn before it, rendered from the stored turn alone; names are never rendered | `[From: <relationship> <principal> — <method> <binding>: sender <id> @<handle>, <kind> chat <id>, thread <id>, space <id>]` | `<from principal="…" relationship="…" method="…" binding="…" sender="…" handle="…" chat="…" chat-kind="…" thread="…" space="…"/>` | `## From: …` |
@@ -500,9 +500,9 @@ or null for an ordinary entry. Following coverage is explicit, not automatic
 expansion. Live appends and compaction do not change an existing snapshot.
 
 This preview may change before stabilisation. It does not replace the existing
-compatibility accessors or the policy-aware retrospective operations. It returns
-raw entries, including tool activity, unfinished turns and provider continuation
-data; hosts retain their authorisation, audience rules and response budgets.
+compatibility accessors. It returns raw entries, including tool activity,
+unfinished turns and provider continuation data; hosts retain their
+authorisation. `agent:history` is its authorised tool surface.
 Entry counts do not bound bytes or tokens. Opening may inspect the entire frame
 history; subsequent page reads use immutable vector slices. There is no external
 cursor registry, child-history navigation or REST endpoint in this preview.
@@ -990,7 +990,7 @@ or the validated active history suffix. `history(frame)` returns retained storag
 `appendTurn/appendTurns` append to the correct field. Observation recording,
 interruption repair, counts and terminal-result checks use these same boundaries.
 `archivedConversation(frame)` reconstructs the exact legacy-shaped selection
-from backward ranges for retrospective readers and ancestor `CellExplorer`
+from backward ranges for session listings and ancestor `CellExplorer`
 rendering. It performs no IO and does not mutate cached context. This preserves
 ancestor prompt bytes as well as the active frame's model input.
 
@@ -1264,10 +1264,10 @@ The storage/accessor foundation in §1.3 is implemented. Remaining divergences:
 - **History navigation and internal activity (#597).** Writers, rendering,
   retrospective reads and migration support versioned history and summary
   ranges. Existing embedders can use the compatibility accessors without a new
-  REST API. `ConversationHistory` offers frame-range reads as a preview Java API.
-  Tool-facing navigation, oversized-entry fragments and retained-child
-  links remain deferred under #597; `sessionRead` still excludes the caller's
-  current session and limits archive depth to eight. Existing cycle records retain completed
+  REST API. `agent:history` reads a frame's history by position, through
+  `ConversationHistory`. Search, navigation by time, a size budget in bytes,
+  oversized-entry fragments and retained-child links remain deferred under
+  #597. Existing cycle records retain completed
   children. Initialisation still combines source resolution with initial
   rendering; making resolved inputs explicit remains separate work.
 

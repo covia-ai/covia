@@ -37,6 +37,7 @@ import convex.core.util.Utils;
 import covia.adapter.agent.AbstractLLMAdapter;
 import covia.adapter.agent.CannotContinueException;
 import covia.adapter.agent.ContextAssembler;
+import covia.adapter.agent.ConversationHistory;
 import covia.adapter.agent.ConversationRenderer;
 import covia.adapter.agent.GoalTreeContext;
 import covia.adapter.agent.ToolPalette;
@@ -172,6 +173,13 @@ public class AgentAdapter extends AAdapter {
 		"Summarise this conversation concisely, preserving the key facts, decisions, outstanding questions and next actions. "
 		+ "Use only the conversation and context already provided; return the summary itself.";
 
+	/** Refuses a session listing or history read that names no agent, outside an agent. */
+	static final String SESSION_TARGET_REQUIRED = "agentId is required outside an agent execution context";
+	/** Refuses a history position that is not a whole number from 0; names the field. */
+	static final String HISTORY_POSITION_INVALID = "%s must be a position in the history: a whole number from 0";
+	/** Refuses a history range running backwards. */
+	static final String HISTORY_RANGE_INVALID = "end must not be before start";
+
 	private static final AString K_START = Strings.intern("start");
 	private static final AString K_END   = Strings.intern("end");
 	private static final AString K_SOURCE_ID        = Strings.intern("sourceId");
@@ -203,16 +211,11 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FOUND            = Strings.intern("found");
 	private static final AString K_COUNT            = Strings.intern("count");
 	private static final AString K_TURN_COUNT       = Strings.intern("turnCount");
-	private static final AString K_MAX_TURNS        = Strings.intern("maxTurns");
-	private static final AString K_MAX_CHARS        = Strings.intern("maxChars");
-	private static final AString K_ARCHIVE_DEPTH    = Strings.intern("archiveDepth");
-	private static final AString K_TRUNCATED        = Strings.intern("truncated");
-	private static final AString K_CURRENT          = Strings.intern("current");
-	private static final AString K_SKIP             = Strings.intern("skip");
-	private static final AString K_OLDER            = Strings.intern("older");
-	private static final AString K_FROM_TURN        = Strings.intern("from");
-	private static final AString K_TO_TURN          = Strings.intern("to");
-	private static final AString K_META             = Strings.intern("meta");
+	private static final AString K_SIZE             = Strings.intern("size");
+	private static final AString K_CONTEXT_START    = Strings.intern("contextStart");
+	private static final AString K_NEXT             = Strings.intern("next");
+	private static final AString K_ENTRIES          = Strings.intern("entries");
+	private static final AString K_META            = Strings.intern("meta");
 	private static final AString K_FRAMES           = Strings.intern("frames");
 	private static final AString K_TITLE            = Strings.intern("title");
 	private static final AString K_CREATED          = Strings.intern("created");
@@ -630,7 +633,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/compact-session", BASE + "compactSession.json");
 		installAsset("agent/reload-context", BASE + "reloadContext.json");
 		installAsset("agent/sessions",       BASE + "sessions.json");
-		installAsset("agent/session-read",   BASE + "sessionRead.json");
+		installAsset("agent/history",        BASE + "history.json");
 
 		// Install standard agent templates at v/agents/templates/<name>.
 		// Discoverable via covia_list path=v/agents/templates and usable in
@@ -699,8 +702,8 @@ public class AgentAdapter extends AAdapter {
 				case "sessions" -> {
 					return CompletableFuture.completedFuture(doSessions(ctx, input));
 				}
-				case "sessionRead" -> {
-					return CompletableFuture.completedFuture(doSessionRead(ctx, input));
+				case "history" -> {
+					return CompletableFuture.completedFuture(doHistory(ctx, input));
 				}
 				default -> {
 					// Everything else — create, update, fork, chat, message,
@@ -867,7 +870,7 @@ public class AgentAdapter extends AAdapter {
 				case "compactSession" -> handleCompactSession(job, input, ctx);
 				case "reloadContext" -> handleReloadContext(job, input, ctx);
 				case "sessions"      -> handleSessions(job, input, ctx);
-				case "sessionRead"   -> handleSessionRead(job, input, ctx);
+				case "history"       -> handleHistory(job, input, ctx);
 				case "completeTask" -> handleCompleteTask(job, input, ctx);
 				case "failTask"     -> handleFailTask(job, input, ctx);
 				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
@@ -2428,15 +2431,12 @@ public class AgentAdapter extends AAdapter {
 		return Maps.of(Strings.intern("agents"), agents);
 	}
 
-	// ========== Agent-safe past-session projection (#403) ==========
+	// ========== Session listing and history (#403, #597) ==========
 
 	private static final int DEFAULT_SESSION_LIMIT = 20;
 	private static final int MAX_SESSION_LIMIT = 100;
-	private static final int DEFAULT_HISTORY_TURNS = 20;
-	private static final int MAX_HISTORY_TURNS = 100;
-	private static final int DEFAULT_HISTORY_CHARS = 8_000;
-	private static final int MAX_HISTORY_CHARS = 100_000;
-	private static final int MAX_ARCHIVE_DEPTH = 8;
+	private static final int DEFAULT_HISTORY_ENTRIES = 20;
+	private static final int MAX_HISTORY_ENTRIES = 100;
 	private static final int MAX_SESSION_TITLE_CHARS = 120;
 
 	private record SessionSummary(Blob id, AMap<AString, ACell> session,
@@ -2449,9 +2449,9 @@ public class AgentAdapter extends AAdapter {
 		job.completeWith(doSessions(ctx, input));
 	}
 
-	private void handleSessionRead(Job job, ACell input, RequestContext ctx) {
+	private void handleHistory(Job job, ACell input, RequestContext ctx) {
 		job.setStatus(Status.STARTED);
-		job.completeWith(doSessionRead(ctx, input));
+		job.completeWith(doHistory(ctx, input));
 	}
 
 	/** Lists completed sessions for the self agent or an explicitly readable target. */
@@ -2480,88 +2480,73 @@ public class AgentAdapter extends AAdapter {
 			Fields.OFFSET, CVMLong.create(start));
 	}
 
-	/** Reads a bounded projection of one session, or the newest when omitted. */
-	private AMap<AString, ACell> doSessionRead(RequestContext ctx, ACell input) {
+	/**
+	 * Reads part of a session's history exactly as stored, by position. Omitting
+	 * sessionId reads the session the caller is in, or else the newest visible.
+	 */
+	private AMap<AString, ACell> doHistory(RequestContext ctx, ACell input) {
 		SessionAccess access = resolveSessionAccess(ctx, input);
-		int maxTurns = boundedInt(input, K_MAX_TURNS,
-			DEFAULT_HISTORY_TURNS, 1, MAX_HISTORY_TURNS);
-		int maxChars = boundedInt(input, K_MAX_CHARS,
-			DEFAULT_HISTORY_CHARS, 1, MAX_HISTORY_CHARS);
-		int archiveDepth = boundedInt(input, K_ARCHIVE_DEPTH, 0, 0, MAX_ARCHIVE_DEPTH);
-		int skip = boundedInt(input, K_SKIP, 0, 0, Integer.MAX_VALUE);
-		ACell current = RT.getIn(input, K_CURRENT);
-		if (current != null && !(current instanceof CVMBool)) {
-			throw new InvalidInputException("current must be a boolean");
-		}
-		if (CVMBool.TRUE.equals(current)) return doCurrentSessionRead(ctx, access, input, maxTurns, maxChars, archiveDepth, skip);
+		Long start = historyPosition(input, K_START);
+		Long end = historyPosition(input, K_END);
+		if (start != null && end != null && end < start) throw new InvalidInputException(HISTORY_RANGE_INVALID);
+		int limit = boundedInt(input, Fields.LIMIT, DEFAULT_HISTORY_ENTRIES, 1, MAX_HISTORY_ENTRIES);
 
 		AString requested = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
-		SessionSummary summary;
-		if (requested == null) {
-			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
-			if (summaries.isEmpty()) return sessionNotFound();
-			summary = summaries.get(0);
-		} else {
-			Blob sid = parseSessionId(requested);
+		Blob sid;
+		AMap<AString, ACell> session;
+		if (requested != null) {
+			sid = parseSessionId(requested);
 			if (sid == null || sid.count() != 16) {
 				throw new InvalidInputException("sessionId must be a 16-byte hex string");
 			}
-			summary = summarizeSession(ctx, access, sid, access.agent().getSession(sid));
-			if (summary == null) return sessionNotFound();
+			session = access.agent().getSession(sid);
+		} else if (access.excludedSession() != null) {
+			sid = access.excludedSession();
+			session = access.agent().getSession(sid);
+		} else {
+			List<SessionSummary> summaries = visibleSessionSummaries(ctx, access);
+			if (summaries.isEmpty()) return sessionNotFound();
+			sid = summaries.get(0).id();
+			session = summaries.get(0).session();
 		}
+		if (session == null || !isVisibleToPolicies(ctx, access, sid, session)) return sessionNotFound();
 
-		AMap<AString, ACell> frame = rootFrame(summary.session());
-		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
-			frame, maxTurns, maxChars, archiveDepth, skip);
+		AMap<AString, ACell> frame = rootFrame(session);
+		ConversationHistory history = ConversationHistory.open(frame);
+		ConversationHistory.Page page = readHistory(history, start, end, limit);
 		AMap<AString, ACell> result = Maps.of(
 			K_FOUND, CVMBool.TRUE,
-			Fields.SESSION_ID, Strings.create(summary.id().toHexString()),
-			K_CREATED, CVMLong.create(summary.created()),
-			Fields.UPDATED, CVMLong.create(summary.updated()),
-			K_TURN_COUNT, CVMLong.create(summary.turnCount()),
-			Fields.MESSAGES, view.messages(),
-			K_TRUNCATED, CVMBool.create(view.truncated()),
-			K_OLDER, CVMBool.create(view.older()));
-		if (summary.title() != null) result = result.assoc(K_TITLE, summary.title());
-		return result;
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			K_SIZE, CVMLong.create(history.size()),
+			K_CONTEXT_START, CVMLong.create(history.contextStart()),
+			K_START, CVMLong.create(page.start()),
+			K_END, CVMLong.create(page.end()),
+			K_ENTRIES, page.entries());
+		if (page.hasMore()) result = result.assoc(K_NEXT, CVMLong.create(page.next()));
+		AString title = sessionTitle(session, ConversationRenderer.overview(frame));
+		return (title != null) ? result.assoc(K_TITLE, title) : result;
 	}
 
 	/**
-	 * The caller's own current session, as far as it is no longer in the
-	 * caller's context: the turns its compaction summaries stand for. Live
-	 * turns are never served again; a session never compacted has nothing to
-	 * read. Same safe projection, bounds and paging as any other session.
+	 * One page of a range: from {@code start} when given, otherwise the newest
+	 * {@code limit} entries before {@code end} (the end of the history by
+	 * default). Positions past the end of the history read as its end.
 	 */
-	@SuppressWarnings("unchecked")
-	private AMap<AString, ACell> doCurrentSessionRead(RequestContext ctx, SessionAccess access, ACell input,
-			int maxTurns, int maxChars, int archiveDepth, int skip) {
-		Blob sid = ctx.getSessionId();
-		if (RT.getIn(input, Fields.SESSION_ID) != null) {
-			throw new InvalidInputException("current reads the caller's own session; omit sessionId");
+	private static ConversationHistory.Page readHistory(ConversationHistory history, Long start, Long end, int limit) {
+		long size = history.size();
+		long last = (end != null) ? Math.min(end, size) : size;
+		long first = (start != null) ? Math.min(start, last) : Math.max(0, last - limit);
+		return history.read(first, last, limit);
+	}
+
+	/** An optional position in a history, or null when the field is absent. */
+	private static Long historyPosition(ACell input, AString field) {
+		ACell value = RT.getIn(input, field);
+		if (value == null) return null;
+		if (!(value instanceof CVMLong number) || number.longValue() < 0) {
+			throw new InvalidInputException(HISTORY_POSITION_INVALID.formatted(field));
 		}
-		if (sid == null || access.excludedSession() == null || !sid.equals(access.excludedSession())) {
-			throw new InvalidInputException("current is only for an agent reading the session it is in");
-		}
-		AMap<AString, ACell> session = access.agent().getSession(sid);
-		AMap<AString, ACell> frame = (session != null) ? rootFrame(session) : null;
-		if (frame == null) return sessionNotFound();
-		ACell from = RT.getIn(input, K_FROM_TURN), to = RT.getIn(input, K_TO_TURN);
-		if ((from == null) != (to == null)) throw new InvalidInputException("from and to go together");
-		if (from != null && (!(from instanceof CVMLong) || !(to instanceof CVMLong))) {
-			throw new InvalidInputException("from and to must be turn numbers");
-		}
-		ConversationRenderer.HistoricalView view = (from != null)
-			? ConversationRenderer.historicalTurns(frame, ((CVMLong) from).longValue(), ((CVMLong) to).longValue(),
-				maxTurns, maxChars, skip)
-			: ConversationRenderer.historicalBeforeContext(frame, maxTurns, maxChars, archiveDepth, skip);
-		return Maps.of(
-			K_FOUND, CVMBool.TRUE,
-			K_CURRENT, CVMBool.TRUE,
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
-			K_TURN_COUNT, CVMLong.create(view.turnCount()),
-			Fields.MESSAGES, view.messages(),
-			K_TRUNCATED, CVMBool.create(view.truncated()),
-			K_OLDER, CVMBool.create(view.older()));
+		return number.longValue();
 	}
 
 	private SessionAccess resolveSessionAccess(RequestContext ctx, ACell input) {
@@ -2584,8 +2569,7 @@ public class AgentAdapter extends AAdapter {
 		AString owner = ctx.getUserDID();
 		AString agentId = ctx.getAgentId();
 		if (owner == null || agentId == null) {
-			throw new InvalidInputException(
-				"Past-session operations require an agent execution context");
+			throw new InvalidInputException(SESSION_TARGET_REQUIRED);
 		}
 		User user = engine.getVenueState().users().user(owner);
 		Agent agent = (user != null) ? user.agent(agentId) : null;
@@ -2617,23 +2601,28 @@ public class AgentAdapter extends AAdapter {
 
 	private SessionSummary summarizeSession(RequestContext ctx, SessionAccess access, Blob sid,
 			AMap<AString, ACell> session) {
-		if (session == null || !isSessionVisible(ctx, access, sid, session)) return null;
-		ConversationRenderer.HistoricalView view = ConversationRenderer.historical(
-			rootFrame(session), 0, 0);
-		if (view.turnCount() == 0) return null;
+		Blob excluded = access.excludedSession();
+		if (session == null || (excluded != null && sid.equals(excluded))
+				|| !isVisibleToPolicies(ctx, access, sid, session)) return null;
+		ConversationRenderer.SessionOverview overview = ConversationRenderer.overview(rootFrame(session));
+		if (overview.turnCount() == 0) return null;
 		AMap<AString, ACell> meta = RT.ensureMap(session.get(K_META));
 		long created = longValue((meta != null) ? meta.get(K_CREATED) : null, 0);
-		long updated = view.updated();
+		long updated = overview.updated();
 		if (updated == 0 && meta != null) updated = longValue(meta.get(Fields.UPDATED), created);
 		if (updated == 0) updated = created;
-		AString title = cleanTitle((meta != null) ? RT.ensureString(meta.get(K_TITLE)) : null);
-		if (title == null) title = cleanTitle(view.firstUserContent());
-		return new SessionSummary(sid, session, title, created, updated, view.turnCount());
+		return new SessionSummary(sid, session, sessionTitle(session, overview), created, updated, overview.turnCount());
 	}
 
-	private boolean isSessionVisible(RequestContext ctx, SessionAccess access, Blob sid,
+	/** A session's stored title, or else its first words. */
+	private static AString sessionTitle(AMap<AString, ACell> session, ConversationRenderer.SessionOverview overview) {
+		AMap<AString, ACell> meta = RT.ensureMap(session.get(K_META));
+		AString title = cleanTitle((meta != null) ? RT.ensureString(meta.get(K_TITLE)) : null);
+		return (title != null) ? title : cleanTitle(overview.firstUserContent());
+	}
+
+	private boolean isVisibleToPolicies(RequestContext ctx, SessionAccess access, Blob sid,
 			AMap<AString, ACell> session) {
-		if (access.excludedSession() != null && sid.equals(access.excludedSession())) return false;
 		AgentTarget target = access.target();
 		SessionVisibilityContext visibility = new SessionVisibilityContext(
 			ctx, target.ownerDID(), target.agentId(), sid, session);

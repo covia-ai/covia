@@ -12,7 +12,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 - Agents have a `controller`, the principal whose authority they act with, narrowed by their `caps`: whoever creates or forks the agent, or one it names that the creator holds the authority of. Changing an agent's config or controller needs that controller's authority; `agent:info` and `agent:list` show it.
 - `user:info` and `user:list` report each user's storage: workspace and DLFS drives, in bytes.
-- `agent:sessionRead` reads the turns behind the caller's own compaction summaries (#597).
+- `agent:history` reads a session's history exactly as stored, by position, and replaces `agent:sessionRead` (#597).
 - Agent `accepts: "anyone"` admits every caller, anonymous ones included.
 - An LLM agent's context names who each turn comes from (COG-20 §4).
 - `ucan:issue` takes `prf` to pass on part of a grant made to the venue (#636).

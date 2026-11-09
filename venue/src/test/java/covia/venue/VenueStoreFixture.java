@@ -154,8 +154,8 @@ public final class VenueStoreFixture {
 		ACell record = client.getJobData(text(RT.getIn(user, "jobId"))).get(20, TimeUnit.SECONDS);
 		equal("COMPLETE", text(RT.getIn(record, "status")));
 		equal(Maps.of("owner", name), RT.getIn(record, "output"));
-		ACell history = run(client, "agent/session-read", Maps.of("agentId", AGENT,
-			"sessionId", RT.getIn(user, "sessionId"), "maxChars", 20000));
+		ACell history = run(client, "agent/history", Maps.of("agentId", AGENT,
+			"sessionId", RT.getIn(user, "sessionId")));
 		require(text(history).contains("baseline message for " + name), "Stored conversation missing for " + name);
 		equal("Baseline " + name, text(RT.getIn(history, "title")));
 		if (updated) require(text(history).contains("upgraded message for " + name), "Continued conversation missing");

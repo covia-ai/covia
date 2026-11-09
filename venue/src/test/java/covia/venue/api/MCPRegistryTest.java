@@ -80,7 +80,7 @@ public class MCPRegistryTest {
 
 	@Test public void testDiscoveryReferencesUseRegistryPathsNotToolNames() {
 		var defaults = toolReferences(mcp(freshEngine(), Maps.empty()));
-		assertEquals("v/ops/agent/session-read", defaults.get("agent_session_read"));
+		assertEquals("v/ops/agent/history", defaults.get("agent_history"));
 		assertFalse(defaults.containsValue("v/ops/json/merge"), "excluded operations stay hidden");
 		assertFalse(defaults.containsValue("v/test/ops/echo"), "excluded paths stay hidden");
 

@@ -6723,21 +6723,13 @@ public class AgentAdapterTest {
 		assertNull(compactedRoot.get(Strings.intern("renderedContext")),
 			"compaction is one explicit rendered-prefix rebuild boundary");
 
-		ACell summaryView = engine.jobs().invokeOperation("v/ops/agent/session-read",
+		ACell afterCompaction = engine.jobs().invokeOperation("v/ops/agent/history",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex),
 			alice).awaitResult(5000);
-		AVector<ACell> summaryMessages = RT.ensureVector(
-			RT.getIn(summaryView, Fields.MESSAGES));
-		assertEquals(1, summaryMessages.count(), "archives are summary-only by default");
-		assertEquals("assistant", RT.getIn(summaryMessages.get(0), "role").toString());
-
-		ACell expandedView = engine.jobs().invokeOperation("v/ops/agent/session-read",
-			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
-				"archiveDepth", 1L), alice).awaitResult(5000);
-		AVector<ACell> expandedMessages = RT.ensureVector(
-			RT.getIn(expandedView, Fields.MESSAGES));
-		assertEquals(4, expandedMessages.count());
-		assertEquals("first", RT.getIn(expandedMessages.get(0), "content").toString());
+		AVector<ACell> kept = entries(afterCompaction);
+		assertEquals(before, kept.slice(0, 4), "the replaced turns stay readable, exactly");
+		assertEquals(archive, kept.get(4), "followed by their summary");
+		assertEquals(CVMLong.create(4), RT.getIn(afterCompaction, "contextStart"));
 
 		engine.jobs().invokeOperation("v/ops/agent/chat",
 			Maps.of(Fields.AGENT_ID, "compact-session-agent", Fields.SESSION_ID, sidHex,
@@ -7012,10 +7004,10 @@ public class AgentAdapterTest {
 		assertNull(RT.getIn(result, Fields.WARNINGS), String.valueOf(result));
 	}
 
-	// ========== agent-safe past sessions (#403) ==========
+	// ========== session listing and history (#403, #597) ==========
 
 	@Test
-	public void testOwnerCanUseSafePastSessionProjection() {
+	public void testOwnerReadsASessionHistoryAndOthersAreRefused() {
 		AString agentId = Strings.create("owner-session-agent");
 		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
 			.ensureAgent(agentId, Maps.empty(), null);
@@ -7031,13 +7023,13 @@ public class AgentAdapterTest {
 		assertEquals(1, sessions.count());
 		assertEquals(sid.toHexString(), RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
 
-		ACell read = engine.jobs().invokeOperation("v/ops/agent/session-read",
+		ACell read = engine.jobs().invokeOperation("v/ops/agent/history",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sid.toHexString()), owner)
 			.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
-		assertEquals(2, RT.ensureVector(RT.getIn(read, Fields.MESSAGES)).count());
+		assertEquals(2, entries(read).count());
 
-		Job denied = engine.jobs().invokeOperation("v/ops/agent/session-read",
+		Job denied = engine.jobs().invokeOperation("v/ops/agent/history",
 			Maps.of(Fields.AGENT_ID, ALICE_DID + "/g/" + agentId,
 				Fields.SESSION_ID, sid.toHexString()), RequestContext.of(BOB_DID));
 		assertThrows(covia.exception.JobFailedException.class, () -> denied.awaitResult(5000));
@@ -7066,7 +7058,7 @@ public class AgentAdapterTest {
 				Fields.TITLE, "Prefixed session"), owner).awaitResult(5000);
 		assertEquals(sid.toHexString(), RT.getIn(renamed, Fields.SESSION_ID).toString());
 
-		ACell read = engine.jobs().invokeOperation("v/ops/agent/session-read",
+		ACell read = engine.jobs().invokeOperation("v/ops/agent/history",
 			Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, prefixed), owner)
 			.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
@@ -7080,7 +7072,7 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testPastSessionsAreSelfScopedCurrentExcludedAndNeedNoRawReadCap() {
+	public void testAnAgentReadsItsOwnHistoryWithoutRawReadCap() {
 		AString agentId = Strings.create("past-session-agent");
 		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
 			.ensureAgent(agentId, Maps.empty(), null);
@@ -7097,29 +7089,34 @@ public class AgentAdapterTest {
 			turn("user", "current topic", 300),
 			turn("assistant", "current answer", 310));
 
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("v/ops/agent/sessions"), Strings.create("invoke")),
+			Capability.create(Strings.create("v/ops/agent/history"), Strings.create("invoke")));
 		RequestContext scoped = RequestContext.ofAgent(ALICE_DID, agentId)
 			.withSessionId(current)
-			.withCaps(Vectors.of(
-				Capability.create(Strings.create("v/ops/agent/sessions"), Strings.create("invoke")),
-				Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke"))));
+			.withCaps(caps);
 		ACell listed = engine.jobs().invokeOperation(
 			"v/ops/agent/sessions", Maps.empty(), scoped).awaitResult(5000);
 		AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
-		assertEquals(2, sessions.count());
+		assertEquals(2, sessions.count(), "the listing is of the other sessions");
 		assertEquals(newer.toHexString(), RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
 		assertEquals("Newest topic", RT.getIn(sessions.get(0), "title").toString());
 		assertEquals("Older topic", RT.getIn(sessions.get(1), "title").toString());
 		assertEquals(2L, ((CVMLong) RT.getIn(sessions.get(0), "turnCount")).longValue());
 
-		ACell read = engine.jobs().invokeOperation(
-			"v/ops/agent/session-read", Maps.empty(), scoped).awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
-		assertEquals(newer.toHexString(), RT.getIn(read, Fields.SESSION_ID).toString());
-		assertEquals(2, RT.ensureVector(RT.getIn(read, Fields.MESSAGES)).count());
+		RequestContext inOlder = RequestContext.ofAgent(ALICE_DID, agentId).withSessionId(older).withCaps(caps);
+		ACell here = readHistory(inOlder, Maps.empty());
+		assertEquals(older.toHexString(), RT.getIn(here, Fields.SESSION_ID).toString(), "the session it is in, newest or not");
+		assertEquals(List.of("  Older\n topic  ", "older answer"), contents(entries(here)), "as stored");
+
+		RequestContext noSession = RequestContext.ofAgent(ALICE_DID, agentId).withCaps(caps);
+		ACell newest = readHistory(noSession, Maps.empty());
+		assertEquals(current.toHexString(), RT.getIn(newest, Fields.SESSION_ID).toString(), "outside a session, the newest");
+		assertEquals(List.of("current topic", "current answer"), contents(entries(newest)));
 	}
 
 	@Test
-	public void testPastSessionMissingCurrentAndPolicyVetoAreIndistinguishable() {
+	public void testMissingAndPolicyHiddenHistoriesAreIndistinguishable() {
 		AString agentId = Strings.create("private-past-session-agent");
 		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
 			.ensureAgent(agentId, Maps.empty(), null);
@@ -7133,11 +7130,12 @@ public class AgentAdapterTest {
 				turn("assistant", "answer", 110));
 		}
 
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("v/ops/agent/history"), Strings.create("invoke")),
+			Capability.create(Strings.create("v/ops/agent/sessions"), Strings.create("invoke")));
 		RequestContext scoped = RequestContext.ofAgent(ALICE_DID, agentId)
 			.withSessionId(current)
-			.withCaps(Vectors.of(
-				Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke")),
-				Capability.create(Strings.create("v/ops/agent/sessions"), Strings.create("invoke"))));
+			.withCaps(caps);
 		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
 		try (AgentAdapter.SessionVisibilityRegistration ignored =
 				adapter.registerSessionVisibilityPolicy(candidate -> {
@@ -7148,32 +7146,33 @@ public class AgentAdapterTest {
 					}
 					return true;
 				})) {
-			ACell absent = readPastSession(scoped, missing);
-			ACell active = readPastSession(scoped, current);
-			ACell vetoed = readPastSession(scoped, hidden);
+			ACell absent = readHistory(scoped, Maps.of(Fields.SESSION_ID, missing.toHexString()));
+			ACell vetoed = readHistory(scoped, Maps.of(Fields.SESSION_ID, hidden.toHexString()));
 			assertEquals(Maps.of("found", false), absent);
-			assertEquals(absent, active);
-				assertEquals(absent, vetoed);
-				assertEquals(1, ((AMap<?, ?>) vetoed).count());
-				assertEquals(CVMBool.TRUE, RT.getIn(readPastSession(scoped, visible), "found"));
+			assertEquals(absent, vetoed);
+			assertEquals(CVMBool.TRUE, RT.getIn(readHistory(scoped, Maps.of(Fields.SESSION_ID, visible.toHexString())), "found"));
+			assertEquals(CVMBool.TRUE, RT.getIn(readHistory(scoped, Maps.of(Fields.SESSION_ID, current.toHexString())), "found"),
+				"an agent may name the session it is in");
 
-				ACell listed = engine.jobs().invokeOperation(
-					"v/ops/agent/sessions", Maps.empty(), scoped).awaitResult(5000);
-				AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
-				assertEquals(1, sessions.count(), "current and policy-hidden sessions must be omitted");
-				assertEquals(visible.toHexString(),
-					RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
+			RequestContext insideHidden = RequestContext.ofAgent(ALICE_DID, agentId).withSessionId(hidden).withCaps(caps);
+			assertEquals(absent, readHistory(insideHidden, Maps.empty()), "policy applies to the session it is in too");
+
+			ACell listed = engine.jobs().invokeOperation(
+				"v/ops/agent/sessions", Maps.empty(), scoped).awaitResult(5000);
+			AVector<ACell> sessions = RT.ensureVector(RT.getIn(listed, "sessions"));
+			assertEquals(1, sessions.count(), "current and policy-hidden sessions are not listed");
+			assertEquals(visible.toHexString(),
+				RT.getIn(sessions.get(0), Fields.SESSION_ID).toString());
 		}
 	}
 
 	@SuppressWarnings("unchecked")
 	@Test
-	public void testAnAgentReadsBackTheCompactedPartOfTheSessionItIsIn() {
+	public void testHistoryNavigatesPositionsAcrossCompaction() {
 		AString agentId = Strings.create("own-history-agent");
 		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
 			.ensureAgent(agentId, Maps.empty(), null);
 		Blob current = Blob.fromHex("30000000000000000000000000000001");
-		Blob plain = Blob.fromHex("30000000000000000000000000000002");
 		agent.ensureSession(current, Strings.create("test-caller"));
 		assertTrue(agent.session(current).updateFrames(null, frames -> {
 			AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
@@ -7188,77 +7187,127 @@ public class AgentAdapterTest {
 				turn("assistant", "live answer", 170)));
 			return frames.assoc(0, root);
 		}));
-		setConversation(agent, plain, turn("user", "never compacted", 100), turn("assistant", "fine", 110));
 
 		RequestContext scoped = RequestContext.ofAgent(ALICE_DID, agentId)
 			.withSessionId(current)
 			.withCaps(Vectors.of(
-				Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke"))));
+				Capability.create(Strings.create("v/ops/agent/history"), Strings.create("invoke"))));
 		AMap<AString, ACell> before = agent.getRecord();
-		assertEquals(Maps.of("found", false), readPastSession(scoped, current),
-			"without current, the session in context stays unread");
-
-		ACell read = readCurrent(scoped, Maps.empty());
-		assertEquals(CVMBool.TRUE, RT.getIn(read, "found"));
-		assertEquals(CVMBool.TRUE, RT.getIn(read, "current"));
-		AVector<ACell> messages = RT.ensureVector(RT.getIn(read, Fields.MESSAGES));
-		assertEquals(3, messages.count(), "the second summary's turns, the live ones left out: " + messages);
-		assertEquals(CVMBool.TRUE, RT.getIn(messages.get(0), "compacted"), "a summary is never taken for something said");
-		assertEquals(CVMLong.create(4), RT.getIn(messages.get(0), "turns"));
-		assertEquals(List.of("third question", "third answer"), contents(messages.slice(1, 3)));
-		assertNull(RT.getIn(messages.get(1), "compacted"));
-
-		AVector<ACell> opened = RT.ensureVector(RT.getIn(readCurrent(scoped, Maps.of("archiveDepth", 1L)), Fields.MESSAGES));
-		assertEquals(List.of("first question", "first answer", "second question", "second answer",
-			"third question", "third answer"), contents(opened), "every turn behind both summaries");
-
-		ACell newest = readCurrent(scoped, Maps.of("archiveDepth", 1L, "maxTurns", 2L));
-		assertEquals(List.of("third question", "third answer"), contents(RT.ensureVector(RT.getIn(newest, Fields.MESSAGES))));
-		assertEquals(CVMBool.TRUE, RT.getIn(newest, "older"));
-		ACell oldest = readCurrent(scoped, Maps.of("archiveDepth", 1L, "maxTurns", 2L, "skip", 4L));
-		assertEquals(List.of("first question", "first answer"), contents(RT.ensureVector(RT.getIn(oldest, Fields.MESSAGES))));
-		assertEquals(CVMBool.FALSE, RT.getIn(oldest, "older"), "paged back to the start");
-
-		// What the agent sees names the turns its summary stands for, and those numbers read them back.
 		AMap<AString, ACell> root = RT.ensureMap(RT.getIn(agent.getSession(current), Fields.FRAMES, CVMLong.ZERO));
+		AVector<ACell> stored = GoalTreeContext.history(root);
+
+		ACell whole = readHistory(scoped, Maps.empty());
+		assertEquals(stored, entries(whole), "every entry, in the context or not, as stored");
+		assertEquals(CVMLong.create(stored.count()), RT.getIn(whole, "size"));
+		assertEquals(CVMLong.create(7), RT.getIn(whole, "contextStart"));
+		assertEquals(CVMLong.ZERO, RT.getIn(whole, "start"));
+		assertNull(RT.getIn(whole, "next"));
+
+		ACell newest = readHistory(scoped, Maps.of(Fields.LIMIT, 3L));
+		assertEquals(stored.slice(7, 10), entries(newest), "no range is the newest entries");
+		assertEquals(CVMLong.create(7), RT.getIn(newest, "start"));
+		assertNull(RT.getIn(newest, "next"), "nothing newer remains");
+
+		ACell back = readHistory(scoped, Maps.of("end", RT.getIn(newest, "start"), Fields.LIMIT, 3L));
+		assertEquals(stored.slice(4, 7), entries(back), "going back: the returned start as end");
+		assertEquals(CVMLong.create(4), RT.getIn(back, "start"));
+
+		ACell forward = readHistory(scoped, Maps.of("start", 0L, "end", 7L, Fields.LIMIT, 3L));
+		assertEquals(stored.slice(0, 3), entries(forward));
+		assertEquals(CVMLong.create(7), RT.getIn(forward, "end"));
+		assertEquals(CVMLong.create(3), RT.getIn(forward, "next"), "the range was longer than limit");
+		ACell rest = readHistory(scoped, Maps.of("start", 3L, "end", 7L, Fields.LIMIT, 4L));
+		assertEquals(stored.slice(3, 7), entries(rest));
+		assertNull(RT.getIn(rest, "next"));
+
+		ACell fromHere = readHistory(scoped, Maps.of("start", 8L));
+		assertEquals(stored.slice(8, 10), entries(fromHere), "start alone reads forward");
+
+		// What the agent sees names the positions its summary stands for, and those read them back.
 		String marker = String.valueOf(RT.getIn(ConversationRenderer.renderFull(root).get(0), "content"));
 		java.util.regex.Matcher m = java.util.regex.Pattern.compile("^\\[Compacted: turns (\\d+)–(\\d+)\\] Second summary\\.$").matcher(marker);
 		assertTrue(m.matches(), "the marker names its turns: " + marker);
-		AVector<ACell> named = RT.ensureVector(RT.getIn(readCurrent(scoped,
-			Maps.of("from", Long.parseLong(m.group(1)), "to", Long.parseLong(m.group(2)))), Fields.MESSAGES));
-		assertEquals(3, named.count(), "the first summary and the turns after it: " + named);
-		assertEquals(CVMBool.TRUE, RT.getIn(named.get(0), "compacted"));
-		assertEquals(List.of("third question", "third answer"), contents(named.slice(1, 3)));
-		AVector<ACell> first = RT.ensureVector(RT.getIn(readCurrent(scoped,
-			Maps.of("from", RT.getIn(named.get(0), "from"), "to", RT.getIn(named.get(0), "to"))), Fields.MESSAGES));
-		assertEquals(List.of("first question", "first answer", "second question", "second answer"), contents(first),
-			"the summary inside names its own turns, read the same way");
-		Job inContext = engine.jobs().invokeOperation("v/ops/agent/session-read",
-			Maps.of("current", true, "from", 0L, "to", 1000L), scoped);
-		assertThrows(Exception.class, () -> inContext.awaitResult(5000), "turns in the context are not served again");
+		AVector<ACell> named = entries(readHistory(scoped,
+			Maps.of("start", Long.parseLong(m.group(1)), "end", Long.parseLong(m.group(2)) + 1)));
+		assertEquals(stored.slice(4, 7), named, "the first summary and the turns after it");
+		assertEquals(List.of(CVMLong.ZERO, CVMLong.create(4)), RT.getIn(named.get(0), "historyRange"),
+			"the summary among them names its own range");
 
-		assertEquals(before, agent.getRecord(), "reading back changes nothing");
-
-		RequestContext inPlain = RequestContext.ofAgent(ALICE_DID, agentId).withSessionId(plain)
-			.withCaps(Vectors.of(Capability.create(Strings.create("v/ops/agent/session-read"), Strings.create("invoke"))));
-		assertEquals(0, RT.ensureVector(RT.getIn(readCurrent(inPlain, Maps.empty()), Fields.MESSAGES)).count(),
-			"a session never compacted has nothing outside its context");
+		assertEquals(before, agent.getRecord(), "reading changes nothing");
 	}
 
-	private ACell readCurrent(RequestContext ctx, AMap<AString, ACell> input) {
-		return engine.jobs().invokeOperation("v/ops/agent/session-read",
-			input.assoc(Strings.create("current"), CVMBool.TRUE), ctx).awaitResult(5000);
+	@Test
+	public void testHistoryReturnsEveryEntryWhole() {
+		AString agentId = Strings.create("whole-history-agent");
+		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(agentId, Maps.empty(), null);
+		Blob sid = Blob.fromHex("31000000000000000000000000000001");
+		String longFailure = "Error: " + "x".repeat(ConversationRenderer.MAX_TOOL_FAILURE_CHARS * 10);
+		AVector<ACell> turns = Vectors.of(
+			turn("user", "question", 100),
+			Maps.of("role", "assistant", "toolCalls", Vectors.of(Maps.of("id", "c1", "name", "lookup")),
+				Fields.PROVIDER_STATE, Maps.of("opaque", "kept")),
+			Maps.of("role", "tool", "id", "c1", "name", "lookup", "content", longFailure, "isError", true),
+			Maps.of("role", "tool", "id", "c2", "name", "fetch", "structuredContent", Maps.of("value", 1L)),
+			turn("system", "a diagnostic", 120),
+			turn("user", "no answer yet", 130));
+		setConversation(agent, sid, turns.toArray(new ACell[0]));
+
+		ACell read = readHistory(RequestContext.of(ALICE_DID), Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sid.toHexString()));
+		assertEquals(turns, entries(read), "tool activity, diagnostics and the unanswered turn, all unchanged");
+	}
+
+	@Test
+	public void testHistoryRangesClampToTheEndAndRefuseNonsense() {
+		AString agentId = Strings.create("range-history-agent");
+		Agent agent = engine.getVenueState().users().ensure(ALICE_DID)
+			.ensureAgent(agentId, Maps.empty(), null);
+		Blob sid = Blob.fromHex("32000000000000000000000000000001");
+		Blob empty = Blob.fromHex("32000000000000000000000000000002");
+		setConversation(agent, sid, turn("user", "one", 100), turn("assistant", "two", 110));
+		agent.ensureSession(empty, Strings.create("test-caller"));
+		RequestContext owner = RequestContext.of(ALICE_DID);
+		AMap<AString, ACell> target = Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, sid.toHexString());
+
+		ACell past = readHistory(owner, target.assoc(Strings.create("start"), CVMLong.create(50)));
+		assertEquals(0, entries(past).count());
+		assertEquals(CVMLong.create(2), RT.getIn(past, "start"));
+		assertEquals(CVMLong.create(2), RT.getIn(past, "end"));
+		ACell overlong = readHistory(owner, target.assoc(Strings.create("end"), CVMLong.create(50)));
+		assertEquals(2, entries(overlong).count());
+		assertEquals(CVMLong.create(2), RT.getIn(overlong, "end"));
+
+		ACell nothing = readHistory(owner, Maps.of(Fields.AGENT_ID, agentId, Fields.SESSION_ID, empty.toHexString()));
+		assertEquals(CVMBool.TRUE, RT.getIn(nothing, "found"));
+		assertEquals(CVMLong.ZERO, RT.getIn(nothing, "size"));
+		assertEquals(0, entries(nothing).count());
+
+		assertHistoryRefused(owner, target.assoc(Strings.create("start"), CVMLong.create(-1)),
+			AgentAdapter.HISTORY_POSITION_INVALID.formatted("start"));
+		assertHistoryRefused(owner, target.assoc(Strings.create("end"), Strings.create("soon")),
+			AgentAdapter.HISTORY_POSITION_INVALID.formatted("end"));
+		assertHistoryRefused(owner, target.assoc(Strings.create("start"), CVMLong.create(2)).assoc(Strings.create("end"), CVMLong.create(1)),
+			AgentAdapter.HISTORY_RANGE_INVALID);
+	}
+
+	private void assertHistoryRefused(RequestContext ctx, AMap<AString, ACell> input, String reason) {
+		Job job = engine.jobs().invokeOperation("v/ops/agent/history", input, ctx);
+		assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains(reason), job.getErrorMessage());
+	}
+
+	private ACell readHistory(RequestContext ctx, AMap<AString, ACell> input) {
+		return engine.jobs().invokeOperation("v/ops/agent/history", input, ctx).awaitResult(5000);
+	}
+
+	private static AVector<ACell> entries(ACell read) {
+		return RT.ensureVector(RT.getIn(read, "entries"));
 	}
 
 	private static List<String> contents(AVector<ACell> messages) {
 		List<String> out = new ArrayList<>();
 		for (ACell m : messages) out.add(String.valueOf(RT.getIn(m, "content")));
 		return out;
-	}
-
-	private ACell readPastSession(RequestContext ctx, Blob sid) {
-		return engine.jobs().invokeOperation("v/ops/agent/session-read",
-			Maps.of(Fields.SESSION_ID, sid.toHexString()), ctx).awaitResult(5000);
 	}
 
 	private static ACell turn(String role, String content, long ts) {
