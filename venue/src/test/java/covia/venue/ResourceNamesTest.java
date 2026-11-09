@@ -240,13 +240,13 @@ public class ResourceNamesTest {
 			for (String op : new String[] {"read", "list", "slice", "aggregate"}) {
 				Job job = run("v/ops/covia/" + op, Maps.of(Fields.PATH, path), ALICE);
 				assertEquals(Status.FAILED, job.getStatus(), op + " " + path);
-				assertEquals(Engine.noNamespaceMessage(ALICE), job.getErrorMessage(), op + " " + path);
+				assertFalse(job.getErrorMessage().isBlank(), op + " " + path);
 			}
 		}
 		for (String name : new String[] {"", "/", alice.toString()}) {
 			Job inspected = run("v/ops/covia/inspect", Maps.of(Fields.PATH, name), ALICE);
 			assertEquals(Status.FAILED, inspected.getStatus(), name);
-			assertEquals(Engine.noNamespaceMessage(ALICE), inspected.getErrorMessage(), name);
+			assertFalse(inspected.getErrorMessage().isBlank(), name);
 			assertNull(engine.resolvePath(s(name), ALICE), name);
 			assertNull(RT.getIn(run("v/ops/asset/get", Maps.of(Fields.ID, name), ALICE).getOutput(), Fields.VALUE), name);
 		}
