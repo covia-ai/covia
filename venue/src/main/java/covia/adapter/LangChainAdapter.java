@@ -167,7 +167,7 @@ public class LangChainAdapter extends AAdapter {
 	public static final String PROVIDER_RATE_LIMITED =
 		"Model provider %s rate-limited the request for model %s%s; retry later";
 	public static final String PROVIDER_TIMED_OUT =
-		"Model provider %s did not answer in time for model %s; retry later";
+		"Model provider %s did not answer in time for model %s%s; retry later";
 	public static final String PROVIDER_FAILED =
 		"Model provider %s failed to answer for model %s%s; retry later";
 	public static final String PROVIDER_UNREACHABLE =
@@ -687,7 +687,7 @@ public class LangChainAdapter extends AAdapter {
 		} else if (e instanceof dev.langchain4j.exception.RateLimitException) {
 			failure = new UnavailableException(PROVIDER_RATE_LIMITED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.TimeoutException) {
-			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model));
+			failure = new UnavailableException(PROVIDER_TIMED_OUT.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.InternalServerException) {
 			failure = new UnavailableException(PROVIDER_FAILED.formatted(provider, model, note));
 		} else if (e instanceof dev.langchain4j.exception.ModelNotFoundException) {

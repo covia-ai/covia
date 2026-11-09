@@ -1844,8 +1844,10 @@ public class LangChainAdapterTest {
 		assertPassesOn(UnavailableException.class, LangChainAdapter.PROVIDER_RATE_LIMITED, 429,
 			new dev.langchain4j.exception.RateLimitException(http(429, "slow down")));
 		assertMapped(UnavailableException.class,
-			LangChainAdapter.PROVIDER_TIMED_OUT.formatted("anthropic", "claude-x"),
+			LangChainAdapter.PROVIDER_TIMED_OUT.formatted("anthropic", "claude-x", ""),
 			new dev.langchain4j.exception.TimeoutException(new java.net.http.HttpTimeoutException(PROVIDER_TEXT)), false);
+		assertPassesOn(UnavailableException.class, LangChainAdapter.PROVIDER_TIMED_OUT, 408,
+			new dev.langchain4j.exception.TimeoutException(http(408, "request timeout")));
 		assertPassesOn(UnavailableException.class, LangChainAdapter.PROVIDER_FAILED, 529,
 			new dev.langchain4j.exception.InternalServerException(http(529, "overloaded")));
 		assertMapped(UnavailableException.class,
