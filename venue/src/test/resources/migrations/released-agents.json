@@ -22,7 +22,7 @@
   },
   {
     "id": "released-reader",
-    "why": "0.10.0's reader template: an empty with covers the owner's whole namespace",
+    "why": "0.10.0's reader template: an empty with matches any resource, for only the abilities its can names",
     "config": {
       "systemPrompt": "You are a read-only data analyst.",
       "tools": ["v/ops/covia/inspect", "v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/slice"],
@@ -127,11 +127,18 @@
     "mayNot": [["crud/read", "w/leading/doc"]]
   },
   {
-    "id": "released-wildcard",
-    "why": "A grant of every ability with no with covers the owner's namespace, and only that",
-    "config": {"caps": [{"can": "*"}]},
-    "may": [["crud/write", "w/report"], ["invoke", "v/test/ops/echo"]],
-    "mayNot": [["crud/read", "did:test:migration-e2e-other/w/shared/doc"]]
+    "id": "released-no-with",
+    "why": "An absent with matches any resource, for only the abilities its can names; a separate rule refuses another user's resources",
+    "config": {"caps": [{"can": "crud/read"}]},
+    "may": [["crud/read", "w/report"]],
+    "mayNot": [["crud/write", "w/report"], ["crud/read", "did:test:migration-e2e-other/w/shared/doc"]]
+  },
+  {
+    "id": "released-any-ability",
+    "why": "A can of * is every ability, on only the resources its with names",
+    "config": {"caps": [{"with": "w/open/", "can": "*"}]},
+    "may": [["crud/write", "w/open/doc"], ["crud/delete", "w/open/doc"]],
+    "mayNot": [["crud/read", "w/closed/doc"]]
   },
   {
     "id": "released-destination",
