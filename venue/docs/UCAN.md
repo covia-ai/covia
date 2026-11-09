@@ -268,10 +268,15 @@ and effective port, and a path equal to the caveat's or below it at a `/`
 boundary (a caveat path ending in `/` covers everything under it; query and
 fragment never matter). A use that supplies no destination, such as signing
 with a stored seed, never satisfies a `url` caveat. On a delegation path every
-link's `url` must cover the use, so a re-delegation can never widen it. The
-check is made once, on the request url: the http adapter drops credential
-headers on a cross-origin redirect, but a same-origin redirect may land on a
-path outside the prefix on the covered host.
+link's `url` must cover the use, so a re-delegation can never widen it. Before
+following each redirect, the HTTP adapter rechecks `secret/use` or `oauth/use`
+for every retained credential header against the normalised next destination.
+A denial fails the job before sending that hop. Cross-origin redirects strip
+credential headers and their references; returning to the original origin does
+not restore them. Literal caller-supplied headers have no grant to recheck.
+Requests using inline URL secrets remain bound to those secrets' grants for
+the entire redirect chain, even when a redirect removes the value from the URL;
+this avoids guessing how a server may have re-encoded the credential.
 
 ### 3.4 Risk Hierarchy
 

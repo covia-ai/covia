@@ -179,7 +179,10 @@ name their resolved destination; ambiguous encoded separators, nested path
 encoding, dot parameters and traversal above the root are refused. Normalisation
 preserves reserved path escapes and query data. A grant for `/api` therefore
 cannot send a credential to `/api/../admin`. The rule applies to redirect targets
-as well as initial requests. `outbound/any` exempts host restrictions, not URL
+as well as initial requests. The HTTP adapter rechecks authority for retained
+credential headers on every hop and refuses the redirect before sending when
+a grant no longer covers the destination. Requests with URL secret placeholders
+remain within those grants for their entire redirect chain. `outbound/any` exempts host restrictions, not URL
 syntax or normalisation.
 
 Use `engine.outboundUrl(ctx, url)` for caller-selected destinations: its return

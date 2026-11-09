@@ -1409,8 +1409,12 @@ Currently defined:
   reported URLs can still redact them.
 - `http.maxRedirects` — the longest redirect chain `http:*` follows (default
   `5`, at most `20`; `0` returns 3xx responses unfollowed). Every hop is
-  checked by the SSRF guard as the first request is, credentials are dropped
-  on a change of origin, and a loop or a longer chain fails the request naming
+  checked by the SSRF guard as the first request is. Retained secret and OAuth
+  headers must also be authorised for each normalised redirect destination;
+  a denial stops the request before that hop. Credential headers are dropped
+  on a change of origin and are never restored later in the chain. Inline URL
+  secrets constrain the whole chain to their granted destinations, even if a
+  redirect removes them. A loop or a longer chain fails the request naming
   the chain.
 - `convex.peer` — the Convex peer that `convex:query` and `convex:transact` use
   (default `peer.convex.live:18888`; `host:port`, `tcp://host:port` or

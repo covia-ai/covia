@@ -1037,6 +1037,8 @@ public class HTTPTest {
 		a.createContext("/home", x -> redirect(x, 302, "/land"));
 		a.createContext("/land", echo);
 		b.createContext("/land", echo);
+		a.createContext("/roundtrip", x -> redirect(x, 302, bRoot + "/return"));
+		b.createContext("/return", x -> redirect(x, 302, base(a) + "/home"));
 		a.start();
 		b.start();
 		try {
@@ -1060,6 +1062,13 @@ public class HTTPTest {
 			away.awaitResult(10_000);
 			assertEquals("null|null|null|keep|true", body(away));
 			assertEquals(bRoot + "/land", RT.getIn(away.getOutput(), "url").toString());
+
+			// Dropped credentials must not be reacquired on returning to the origin.
+			Job roundtrip = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(
+				Fields.URL, base(a) + "/roundtrip", Fields.SECRET_HEADERS, secrets,
+				Fields.BEARER_SECRET, "s/TOKEN"), RequestContext.of(caller));
+			roundtrip.awaitResult(10_000);
+			assertTrue(body(roundtrip).startsWith("null|null|null|"), body(roundtrip));
 
 			// A literal Authorization header is a credential too.
 			Job literal = TestServer.ENGINE.jobs().invokeOperation("v/ops/http/get", Maps.of(

@@ -276,6 +276,18 @@ public class SecretUseTest {
 				out.write(body);
 			}
 		});
+		AtomicReference<String> redirectTarget = new AtomicReference<>();
+		echo.createContext("/api/redirect", exchange -> {
+			exchange.getResponseHeaders().set("Location", redirectTarget.get());
+			exchange.sendResponseHeaders(302, -1);
+			exchange.close();
+		});
+		echo.createContext("/api/next", exchange -> {
+			exchange.getResponseHeaders().set("Location", "/api/%2e%2e/admin");
+			exchange.sendResponseHeaders(307, -1);
+			exchange.close();
+		});
+
 		echo.start();
 		try {
 			String base = "http://localhost:" + echo.getAddress().getPort();
@@ -326,6 +338,23 @@ public class SecretUseTest {
 				}
 			}
 
+			for (String field : new String[] {"bearerSecret", "secretHeaders"}) {
+				var input = Maps.of("url", base + "/api/redirect", field,
+					field.equals("bearerSecret") ? ref : Maps.of("X-Api-Key", ref));
+				redirectTarget.set("/api/items");
+				engine.jobs().callOperation("v/ops/http/get", input, bob).awaitResult(10_000);
+				assertEquals("/api/items", pathSeen.get());
+				assertEquals(field.equals("bearerSecret") ? "Bearer alice-token" : "alice-token", seen.get());
+				for (String target : new String[] {"/admin", "/api/../admin", "/api/%2e%2e/admin", "/api/next"}) {
+					redirectTarget.set(target);
+					pathSeen.set(null);
+					Job refused = engine.jobs().callOperation("v/ops/http/get", input, bob);
+					assertThrows(RuntimeException.class, () -> refused.awaitResult(10_000));
+					assertTrue(refused.getErrorMessage().contains("secret/use"), refused.getErrorMessage());
+					assertNull(pathSeen.get(), "no request to the forbidden redirect target: " + target);
+				}
+			}
+
 			// The public store needs secret/use even in its own namespace. A
 			// template grant must not cover a different path after substitution.
 			AString publicDID = Strings.create(engine.getDIDString() + ":public");
@@ -341,6 +370,26 @@ public class SecretUseTest {
 			assertTrue(denied.getErrorMessage().contains("url caveat"), denied.getErrorMessage());
 			assertFalse(denied.getData().toString().contains("private-value"), denied.getErrorMessage());
 			assertNull(pathSeen.get(), "the fully substituted destination must be checked before sending");
+
+			engine.getVenueState().users().ensure(publicDID).secrets().store("URL_TOKEN", "inline-private-token", encKey);
+			RequestContext urlCaller = RequestContext.of(publicDID)
+				.withCaps(useOf(Strings.create("s/URL_TOKEN"), base + "/api"));
+			redirectTarget.set("/api/items?token=inline-private-token");
+			Job allowedUrl = engine.jobs().callOperation("v/ops/http/get",
+				Maps.of("url", base + "/api/redirect?token={s/URL_TOKEN}"), urlCaller);
+			allowedUrl.awaitResult(10_000);
+			assertEquals("/api/items?token=inline-private-token", pathSeen.get());
+			assertFalse(allowedUrl.getData().toString().contains("inline-private-token"));
+			for (String target : new String[] {"/admin?token=inline-private-token", "/admin"}) {
+				redirectTarget.set(target);
+				pathSeen.set(null);
+				Job refused = engine.jobs().callOperation("v/ops/http/get",
+					Maps.of("url", base + "/api/redirect?token={s/URL_TOKEN}"), urlCaller);
+				assertThrows(RuntimeException.class, () -> refused.awaitResult(10_000));
+				assertTrue(refused.getErrorMessage().contains("url caveat"), refused.getErrorMessage());
+				assertFalse(refused.getData().toString().contains("inline-private-token"));
+				assertNull(pathSeen.get());
+			}
 
 		} finally {
 			echo.stop(0);

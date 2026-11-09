@@ -78,7 +78,9 @@ import covia.venue.RequestContext;
  * and refused on a loop; 303 re-requests with GET, 301/302 do so for POST, and
  * 307/308 keep the method and body. Credentials — {@code Authorization},
  * {@code Cookie}, every {@code secretHeaders} value and the bearer — are
- * dropped on a change of origin (scheme, host or port) and kept within one.
+ * dropped on a change of origin (scheme, host or port). Retained secret and
+ * OAuth headers are authorised again for each destination. URL-secret grants
+ * constrain every hop, even if a redirect removes the value from the URL.
  * The result names the final {@code url} and lists the {@code redirects}
  * taken; {@code followRedirects: false} returns the redirect response itself.</p>
  */
@@ -382,7 +384,7 @@ public class HTTPAdapter extends AAdapter {
 	 * credentials. {@link #follow} derives the next hop's request.
 	 */
 	private record Outbound(String method, String body, LinkedHashMap<String, String> headers,
-			Set<String> credentials) {
+			Set<String> credentials, Map<String, CredentialSource> sources) {
 
 		HttpRequest build(URI uri) {
 			HttpRequest.Builder b = HttpRequest.newBuilder().uri(uri).timeout(Duration.ofSeconds(30));
@@ -419,8 +421,51 @@ public class HTTPAdapter extends AAdapter {
 				if (bodyDropped && (name.equals("content-type") || name.equals("content-length"))) continue;
 				next.put(h.getKey(), h.getValue());
 			}
-			return new Outbound(nextMethod, nextBody, next, credentials);
+			Map<String, CredentialSource> retained = new LinkedHashMap<>();
+			for (var entry : sources.entrySet()) {
+				if (hasHeader(next, entry.getKey())) retained.put(entry.getKey(), entry.getValue());
+			}
+			return new Outbound(nextMethod, nextBody, next, credentials, Map.copyOf(retained));
 		}
+	}
+
+	/** Authority to obtain a header value, retained only while that header travels. */
+	private record CredentialSource(String reference, boolean bearer) { }
+
+	private String credentialValue(CredentialSource source, RequestContext ctx, String destination) {
+		String ref = source.reference();
+		String value = source.bearer() && ref.startsWith(TokenSource.PREFIX)
+			? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()), destination)
+			: resolveSecret(Strings.create(ref), ctx, source.bearer() ? "bearerSecret" : "secretHeaders", destination);
+		return source.bearer() ? "Bearer " + value : value;
+	}
+
+	/** Re-authorise retained headers; URL-secret grants constrain the whole chain. */
+	private Outbound authorizeRedirect(Outbound request, URI target, RequestContext ctx,
+			Map<String, String> redactions) {
+		String destination = target.toString();
+		try {
+			LinkedHashMap<String, String> headers = new LinkedHashMap<>(request.headers());
+			for (var entry : request.sources().entrySet()) {
+				putHeader(headers, entry.getKey(), credentialValue(entry.getValue(), ctx, destination));
+			}
+			for (String placeholder : new HashSet<>(redactions.values())) {
+				String ref = placeholder.substring(1, placeholder.length() - 1);
+				resolveSecret(Strings.create(ref), ctx, "url secret", destination);
+			}
+			return new Outbound(request.method(), request.body(), headers, request.credentials(), request.sources());
+		} catch (AuthException e) {
+			throw redactDenial(e, redactions);
+		}
+	}
+
+	private static AuthException redactDenial(AuthException e, Map<String, String> redactions) {
+		if (redactions.isEmpty()) return e;
+		String message = redact(e.getMessage(), redactions);
+		if (e instanceof CapabilityDeniedException denied) {
+			return new CapabilityDeniedException(message, denied.getResource(), denied.getAbility(), denied.getAuthority());
+		}
+		return new AuthException(message);
 	}
 
 	/** Sets a header, replacing any existing one of the same name in any case. */
@@ -530,6 +575,7 @@ public class HTTPAdapter extends AAdapter {
 			// User-Agent when the caller set none (#422).
 			LinkedHashMap<String, String> outHeaders = new LinkedHashMap<>();
 			Set<String> credentials = new HashSet<>(CREDENTIAL_HEADERS);
+			Map<String, CredentialSource> sources = new LinkedHashMap<>();
 			if (headers != null) {
 				for (MapEntry<AString, ACell> me : headers.entryVector()) {
 					putHeader(outHeaders, me.getKey().toString(), scalar(me.getValue(), Fields.HEADERS, me.getKey()));
@@ -553,7 +599,9 @@ public class HTTPAdapter extends AAdapter {
 						throw new InvalidInputException(
 							"secretHeaders contains the same header more than once: " + header);
 					}
-					putHeader(outHeaders, header.toString(), resolveSecret(secret, ctx, "secretHeaders", finalUrl));
+					CredentialSource source = new CredentialSource(secret.toString(), false);
+					putHeader(outHeaders, header.toString(), credentialValue(source, ctx, finalUrl));
+					sources.put(canonical, source);
 					credentials.add(canonical);
 				}
 			}
@@ -565,11 +613,9 @@ public class HTTPAdapter extends AAdapter {
 					throw new InvalidInputException(
 						"Specify Authorization in either secretHeaders or bearerSecret, not both");
 				}
-				String ref = bearerSecret.toString();
-				String bearer = ref.startsWith(TokenSource.PREFIX)
-					? connectionToken(ctx, ref.substring(TokenSource.PREFIX.length()), finalUrl)
-					: resolveSecret(bearerSecret, ctx, "bearerSecret", finalUrl);
-				putHeader(outHeaders, "Authorization", "Bearer " + bearer);
+				CredentialSource source = new CredentialSource(bearerSecret.toString(), true);
+				putHeader(outHeaders, "Authorization", credentialValue(source, ctx, finalUrl));
+				sources.put("authorization", source);
 			}
 
 			// The declared body is a JSON value and bodyText is its JSON encoding.
@@ -584,20 +630,15 @@ public class HTTPAdapter extends AAdapter {
 				outHeaders.put(USER_AGENT_HEADER, userAgent);
 			}
 
-			Outbound request = new Outbound(method, bodyText, outHeaders, Set.copyOf(credentials));
+			Outbound request = new Outbound(method, bodyText, outHeaders, Set.copyOf(credentials), Map.copyOf(sources));
 			Set<URI> visited = new HashSet<>();
 			visited.add(targetUri);
-			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions, unrestricted);
+			return send(targetUri, request, follow, maxRedirects, Vectors.empty(), visited, urlRedactions, unrestricted, ctx);
 
 		} catch (URISyntaxException e) {
 			throw new InvalidInputException(HTTPURLs.INVALID_URL);
-		} catch (CapabilityDeniedException e) {
-			if (urlRedactions.isEmpty()) throw e;
-			throw new CapabilityDeniedException(redact(e.getMessage(), urlRedactions),
-				e.getResource(), e.getAbility(), e.getAuthority());
 		} catch (AuthException e) {
-			if (urlRedactions.isEmpty()) throw e;
-			throw new AuthException(redact(e.getMessage(), urlRedactions));
+			throw redactDenial(e, urlRedactions);
 		}
 	}
 
@@ -607,7 +648,7 @@ public class HTTPAdapter extends AAdapter {
 	 * longer than the limit and refused targets fail the job naming the chain.
 	 */
 	private CompletableFuture<ACell> send(URI uri, Outbound request, boolean follow, int hopsLeft,
-			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions, boolean unrestricted) {
+			AVector<ACell> trail, Set<URI> visited, Map<String, String> redactions, boolean unrestricted, RequestContext ctx) {
 		return httpClient.sendAsync(request.build(uri), HttpResponse.BodyHandlers.ofString())
 			.thenCompose(response -> {
 				int code = response.statusCode();
@@ -638,8 +679,8 @@ public class HTTPAdapter extends AAdapter {
 				} catch (InvalidInputException e) {
 					throw new ResponseException("Redirect refused: " + e.getMessage() + " — " + chain(hops), response);
 				}
-				return send(next, request.follow(code, sameOrigin(uri, next)), true, hopsLeft - 1, hops, visited, redactions,
-					unrestricted);
+				Outbound redirected = authorizeRedirect(request.follow(code, sameOrigin(uri, next)), next, ctx, redactions);
+				return send(next, redirected, true, hopsLeft - 1, hops, visited, redactions, unrestricted, ctx);
 			});
 	}
 

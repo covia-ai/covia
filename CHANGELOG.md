@@ -35,6 +35,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Changed
 
+- HTTP redirects recheck credential grants at each destination, preventing same-origin redirects from escaping a granted URL path.
+
 - Outbound HTTP URLs are normalised before destination checks and sending, preventing dot-segment escapes from URL-scoped credential grants.
 
 - `invoke` scopes generic operation lookup by location; direct tools use their action permissions without an invocation grant. Rebuild adapter modules with the venue.
