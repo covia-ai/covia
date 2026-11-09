@@ -272,7 +272,9 @@ Adapter-owned state uses `AdapterState`; see
   own, `Engine.createTemp(clock, config)` with a `DrivenClock`, and calls
   `engine.application().update()` after each step (`SteppedSchedulerTest`).
   `Engine.createRealTime` is the system clock and timer, for integration and
-  smoke tests; `BothClocksTest` runs the engine on both
+  smoke tests; `BothClocksTest` runs the engine on both. A venue behind HTTP
+  (`VenueServer`, `TestServer`, `TwoVenueTestServer`) stays on the system clock
+  and timer
 - Size and durability assertions call `engine.flush()` first: otherwise state
   reaches the store only when the host's sync worker next runs, if whoever
   opened the host runs one
