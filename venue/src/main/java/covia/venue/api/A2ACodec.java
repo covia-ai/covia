@@ -540,7 +540,7 @@ public class A2ACodec {
 		ACell id = jobData.get(Fields.ID);
 		if (id instanceof Blob b) return b;
 		if (id instanceof convex.core.data.ABlob b) return b.toFlatBlob();
-		if (id instanceof AString s) return Blob.parse(s.toString());
+		if (id instanceof AString s) return Blob.fromHex(s.toString());
 		throw new IllegalArgumentException("Job record has no id");
 	}
 

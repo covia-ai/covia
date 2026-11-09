@@ -182,10 +182,10 @@ public final class ExternalAgents {
 		Job child = childId == null ? null : engine.jobs().getJob(Job.parseID(childId), engine.context(owner));
 		if (agent == null || child == null) {
 			job.fail(MISSING_CHILD);
-			if (agent != null) agent.session(Job.parseID(job.getData().get(Fields.SESSION_ID))).finishExternalTurn(job.getID(), null, null);
+			if (agent != null) agent.session(Blob.fromHex(job.getData().get(Fields.SESSION_ID).toString())).finishExternalTurn(job.getID(), null, null);
 			return true;
 		}
-		attach(job, child, agent, Job.parseID(job.getData().get(Fields.SESSION_ID)),
+		attach(job, child, agent, Blob.fromHex(job.getData().get(Fields.SESSION_ID).toString()),
 			backend(stored(agent)));
 		return true;
 	}

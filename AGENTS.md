@@ -65,6 +65,10 @@ EC2, venue-4 on Azure), and a push to `master` the stable GCP venues
   `Strings.create` is for dynamic strings.
 - **Data:** persistent values use the Convex `ACell` types (`AMap`,
   `AVector`, `Index`).
+- **Clean values inside:** tidying (trimming, a `0x` prefix) happens only
+  where external input arrives. Internal values and config are in their exact
+  format and are used as they are, never re-normalised; tests hold that
+  invariant.
 - **Jobs:** every job operation goes through `engine.jobs()`.
 - **API contracts are defined in docs:** every externally used API contract
   is defined in the relevant design doc or COG, in terms its callers can see,

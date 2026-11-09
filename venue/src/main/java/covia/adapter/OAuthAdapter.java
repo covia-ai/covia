@@ -302,7 +302,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 				for (long i = 0; i < v.count(); i++) {
 					AString s = RT.ensureString(v.get(i));
 					if (s == null || s.toString().isBlank()) throw new ConfigurationException("adapters.oauth.returnTo entries must be URL prefixes");
-					prefixes.add(s.toString().trim());
+					prefixes.add(s.toString());
 				}
 				allow = List.copyOf(prefixes);
 			}
@@ -349,7 +349,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 			for (long i = 0; i < v.count(); i++) {
 				AString s = RT.ensureString(v.get(i));
 				if (s == null || s.toString().isBlank()) throw new ConfigurationException("adapters.oauth.providers." + name + ".scopes entries must be strings");
-				list.add(s.toString().trim());
+				list.add(s.toString());
 			}
 			scopes = List.copyOf(list);
 		}
@@ -390,7 +390,7 @@ public class OAuthAdapter extends AAdapter implements TokenSource {
 
 	private static String text(AMap<AString, ACell> m, AString key) {
 		AString s = RT.ensureString(m.get(key));
-		return (s != null && !s.toString().isBlank()) ? s.toString().trim() : null;
+		return (s != null && !s.toString().isBlank()) ? s.toString() : null;
 	}
 
 	private static String or(String a, String b) {

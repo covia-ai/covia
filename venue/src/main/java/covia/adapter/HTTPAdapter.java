@@ -142,7 +142,7 @@ public class HTTPAdapter extends AAdapter {
 				if (s == null || s.toString().isBlank()) {
 					throw new ConfigurationException("adapters.http.userAgent must be a non-empty string");
 				}
-				agent = s.toString().trim();
+				agent = s.toString();
 			}
 			allow = hosts(config.get(K_ALLOWED_HOSTS), K_ALLOWED_HOSTS);
 			block = hosts(config.get(K_BLOCKED_HOSTS), K_BLOCKED_HOSTS);
@@ -173,11 +173,11 @@ public class HTTPAdapter extends AAdapter {
 		Set<String> out = new HashSet<>();
 		for (long i = 0; i < values.count(); i++) {
 			AString host = RT.ensureString(values.get(i));
-			if (host == null || host.toString().isBlank()) {
+			if (host == null || !host.toString().matches("\\S+")) {
 				throw new ConfigurationException("adapters.http." + key
 					+ " entries must be host names, got: " + values.get(i));
 			}
-			out.add(GuardedResolver.hostKey(host.toString().trim()));
+			out.add(GuardedResolver.hostKey(host.toString()));
 		}
 		return Set.copyOf(out);
 	}

@@ -568,7 +568,7 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		if (key == null) throw new IllegalArgumentException(where + ".did must be a did:key, got: " + did);
 		AString address = RT.ensureString(RT.getIn(raw, K_ADDRESS));
 		if (address == null) throw new IllegalArgumentException(where + ".address must be host:port");
-		String text = address.toString().trim();
+		String text = address.toString();
 		try {
 			URI uri = new URI(text.contains("://") ? text : "tcp://" + text);
 			if (!"tcp".equals(uri.getScheme()) || uri.getHost() == null || uri.getPort() <= 0) {

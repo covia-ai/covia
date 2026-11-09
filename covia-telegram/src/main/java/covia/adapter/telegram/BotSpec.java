@@ -222,7 +222,7 @@ public record BotSpec(
 				if (id != null) {
 					ids.add(id.longValue());
 				} else if (e instanceof AString s) {
-					String v = s.toString().trim();
+					String v = s.toString();
 					if (v.matches("-?\\d+")) {
 						ids.add(Long.parseLong(v));
 					} else {

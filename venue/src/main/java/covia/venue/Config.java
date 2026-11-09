@@ -1619,7 +1619,7 @@ public class Config {
 					"must be a 32-byte hex string, {\"env\": name} or {\"file\": path}");
 			}
 		}
-		convex.core.data.Blob key = convex.core.data.Blob.fromHex(hex.trim());
+		convex.core.data.Blob key = convex.core.data.Blob.fromHex(hex);
 		if (key == null || key.count() != 32) {
 			throw malformed("etch.key", "must resolve to exactly 32 bytes of hex");
 		}
@@ -2009,7 +2009,7 @@ public class Config {
 		LinkedHashSet<String> result = new LinkedHashSet<>();
 		for (long i = 0; i < vector.count(); i++) {
 			AString entry = RT.ensureString(vector.get(i));
-			String did = (entry == null) ? null : entry.toString().trim();
+			String did = (entry == null) ? null : entry.toString();
 			if (did == null || !did.startsWith("did:") || did.length() <= 4) {
 				throw new ConfigurationException(
 					"mcp.auth.allowedDids entries must be non-empty DID strings");
@@ -2143,9 +2143,8 @@ public class Config {
 			if (raw == null || raw.isBlank()) {
 				throw new IllegalArgumentException(label + " must not be empty");
 			}
-			String value = raw.trim();
 			try {
-				URI uri = new URI(value);
+				URI uri = new URI(raw);
 				String scheme = uri.getScheme();
 				String host = uri.getHost();
 				if (scheme == null || host == null || uri.isOpaque()
@@ -2215,8 +2214,7 @@ public class Config {
 		boolean any = false;
 		boolean loopback = false;
 		boolean none = false;
-		for (String rawValue : values) {
-			String value = rawValue.trim();
+		for (String value : values) {
 			switch (value) {
 				case "*" -> any = true;
 				case "loopback" -> loopback = true;

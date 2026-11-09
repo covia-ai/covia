@@ -1115,6 +1115,8 @@ public class HTTPTest {
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("userAgent", "  "), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("allowedHosts", "not-a-list"), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(1)), false));
+		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("blockedHosts", Vectors.of(" evil.example")), false),
+			"a padded entry would silently block nothing");
 
 		// Reconfiguring with nothing restores the defaults.
 		assertTrue(adapter.configure(Maps.empty(), false));

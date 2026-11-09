@@ -30,6 +30,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.grid.Attribution;
+import covia.grid.HexId;
 import covia.grid.Job;
 import covia.venue.Agent;
 import covia.venue.Engine;
@@ -435,10 +436,8 @@ public class HITLAdapter extends AAdapter {
 		if (id == null) throw new InvalidInputException("id is required");
 		// Records key on bare hex, but REST renders job ids 0x-prefixed —
 		// accept both, so a pasted job id just works.
-		String idStr = id.toString();
-		if (idStr.startsWith("0x") || idStr.startsWith("0X")) {
-			id = Strings.create(idStr.substring(2));
-		}
+		Blob given = HexId.parse(id);
+		if (given != null) id = Strings.create(given.toHexString());
 
 		// Structural authorisation: respond reads the CALLER's own inbox only.
 		User user = engine.getVenueState().users().user(caller);
@@ -455,13 +454,13 @@ public class HITLAdapter extends AAdapter {
 		// Lazy expiry: an expiry event not yet fired (the venue has not been
 		// updated past its time) must not let an expired request be answered.
 		if (request.isExpired(engine.currentTimestamp().longValue())) {
-			expireRequest(caller, id, Blob.parse(id.toString()));
+			expireRequest(caller, id, Blob.fromHex(id.toString()));
 			throw new NotSupportedException("HITL request " + id + " has expired");
 		}
 
 		AString outcome = RT.ensureString(RT.getIn(input, Hitl.OUTCOME));
 		AString comment = RT.ensureString(RT.getIn(input, Hitl.COMMENT));
-		Job job = engine.jobs().getJob(Blob.parse(id.toString()));
+		Job job = engine.jobs().getJob(Blob.fromHex(id.toString()));
 		if (Hitl.REJECT.equals(outcome)) {
 			return resolveReject(user, id, comment, job);
 		}
@@ -799,7 +798,7 @@ public class HITLAdapter extends AAdapter {
 		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
 		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
 		if (target == null || id == null) throw new InvalidInputException("user and id are required");
-		Blob jobId = Blob.parse(id.toString());
+		Blob jobId = Blob.fromHex(id.toString());
 		if (jobId == null) throw new InvalidInputException("id is not a HITL request id: " + id);
 		expireRequest(target, id, jobId);
 		User user = engine.getVenueState().users().user(target);

@@ -81,7 +81,7 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 		if(ac!=null) {
 			AVector<ACell> v=RT.ensureVector(ac); if(v==null) throw new IllegalArgumentException(where+".allow must be an array");
 			for(long i=0;i<v.count();i++) { ACell e=v.get(i); String x;
-				if(e instanceof CVMLong n) x=Long.toUnsignedString(n.longValue()); else if(e instanceof AString s) x=s.toString().trim();
+				if(e instanceof CVMLong n) x=Long.toUnsignedString(n.longValue()); else if(e instanceof AString s) x=s.toString();
 				else throw new IllegalArgumentException(where+".allow entries must be Discord user ids or usernames");
 				if(x.startsWith("@")) x=x.substring(1); if(x.matches("[0-9]+")) ids.add(x); else if(!x.isBlank()) names.add(x.toLowerCase(Locale.ROOT));
 			}

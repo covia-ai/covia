@@ -9,7 +9,8 @@ ephemeral dev shape and the venue-setup skill for persistent personal configs).
 Core venue configuration is validated completely before storage or the HTTP
 listener is opened. A known field with the wrong type, an out-of-range value,
 or an unsupported enum value is always a fatal startup error; Covia never
-silently substitutes a default for malformed operator intent.
+silently substitutes a default for malformed operator intent. Values are read
+exactly as written, with no whitespace removed.
 
 Unknown core fields warn by default and are ignored. This keeps a configuration
 usable across mixed Covia versions while still making typos visible in operator

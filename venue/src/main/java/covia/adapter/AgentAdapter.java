@@ -522,7 +522,7 @@ public class AgentAdapter extends AAdapter {
 		if (waiters == null) return;
 		for (long i = 0; i < taken.count(); i++) {
 			AString jobHex = RT.ensureString(RT.getIn(taken.get(i), Fields.JOB_ID));
-			Blob jobId = (jobHex != null) ? Blob.parse(jobHex.toString()) : null;
+			Blob jobId = storedId(jobHex);
 			Job chat = (jobId != null) ? waiters.get(jobId) : null;
 			if (chat != null && Status.PENDING.equals(chat.getStatus())) chat.setStatus(Status.STARTED);
 		}
@@ -1738,7 +1738,7 @@ public class AgentAdapter extends AAdapter {
 			Blob sid = parseSessionId(RT.ensureString(RT.getIn(input, Fields.SESSION_ID)));
 			if (sid == null && task != null) {
 				Job parent = engine.jobs().getJob(taskId);
-				if (parent != null) sid = parseSessionId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
+				if (parent != null) sid = storedId(RT.ensureString(parent.getData().get(Fields.SESSION_ID)));
 			}
 			if (sid == null) throw new NotSupportedException(ExternalAgents.NO_ACTIVE_TURN);
 			externalAgents().deliver(agent, task, sid, messageContent);
@@ -1758,7 +1758,7 @@ public class AgentAdapter extends AAdapter {
 			ACell taskData = agent.getTasks().get(taskId);
 			AString taskSid = (taskData instanceof AMap<?, ?> map)
 				? RT.ensureString(map.get(Fields.SESSION_ID)) : null;
-			sid = parseSessionId(taskSid);
+			sid = storedId(taskSid);
 			if (sid == null) { job.fail("Task not found: " + taskIdHex); return; }
 			AString suppliedSid = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 			if (suppliedSid != null) {
@@ -3846,7 +3846,7 @@ public class AgentAdapter extends AAdapter {
 		if ((tasks != null && tasks.containsKey(jobId)) || agent.getResolved().containsKey(jobId)) {
 			return true;
 		}
-		Blob sid = parseSessionId(RT.ensureString(data.get(Fields.SESSION_ID)));
+		Blob sid = storedId(RT.ensureString(data.get(Fields.SESSION_ID)));
 		if (sid == null) return false;
 		AVector<ACell> pending = agent.getSessionPending(sid);
 		if (pending == null) return false;
@@ -4435,8 +4435,7 @@ public class AgentAdapter extends AAdapter {
 				//   2. else the first session with non-empty pending
 				//   3. else null (no session traffic)
 				AString pickedSession = pickSessionForCycle(pickedTask, agent);
-				Blob pickedSessionBlob = (pickedSession != null)
-					? Blob.parse(pickedSession.toString()) : null;
+				Blob pickedSessionBlob = storedId(pickedSession);
 				// Read the session record ONCE and derive the presented inbox
 				// from it — a second lattice read would let a message land in
 				// between, making the drain count, the adapter's view and the
@@ -4916,7 +4915,7 @@ public class AgentAdapter extends AAdapter {
 				java.util.LinkedHashSet<Blob> order = new java.util.LinkedHashSet<>();
 				for (long i = 0; filteredInbox != null && i < filteredInbox.count(); i++) {
 					AString jid = RT.ensureString(RT.getIn(filteredInbox.get(i), Fields.JOB_ID));
-					Blob id = (jid != null) ? Blob.parse(jid.toString()) : null;
+					Blob id = storedId(jid);
 					if (id != null && answered.containsKey(id)) order.add(id);
 				}
 				order.addAll(answered.keySet());
@@ -6039,6 +6038,11 @@ public class AgentAdapter extends AAdapter {
 
 	private static AString taskIdHex(Blob id) {
 		return Strings.create(id.toHexString());
+	}
+
+	/** A session or job id the venue wrote, which is always bare hex; null for none. */
+	private static Blob storedId(AString hex) {
+		return (hex == null) ? null : Blob.fromHex(hex.toString());
 	}
 
 	/** Accepts canonical hex and the {@code 0x}-prefixed form emitted by CVM data. */

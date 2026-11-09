@@ -650,7 +650,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		if (claim == null) return r;
 		AMap<AString, ACell> next = r.dissoc(K_IN_CYCLE);
 		AString sidHex = RT.ensureString(RT.getIn(claim, Fields.SESSION_ID));
-		Blob sid = (sidHex == null) ? null : Blob.parse(sidHex.toString());
+		Blob sid = (sidHex == null) ? null : Blob.fromHex(sidHex.toString());
 		if (sid == null || !(next.get(K_SESSIONS) instanceof Index<?, ?> index)) return next;
 		Index<Blob, ACell> sessions = (Index<Blob, ACell>) index;
 		if (!(sessions.get(sid) instanceof AMap<?, ?> found)) return next;
@@ -850,7 +850,7 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 		if (!(taskData instanceof AMap<?, ?> task)) return false;
 		if (Task.hasOwnWork(task, now)) return true;
 		AString sid = RT.ensureString(task.get(Fields.SESSION_ID));
-		Blob sessionId = (sid == null) ? null : Blob.parse(sid.toString());
+		Blob sessionId = (sid == null) ? null : Blob.fromHex(sid.toString());
 		AMap<AString, ACell> session = (sessionId == null) ? null : getSession(sessionId);
 		return session != null && Session.sessionHasWork(session);
 	}

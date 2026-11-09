@@ -134,7 +134,7 @@ public class AgentCycleTest {
 	}
 
 	private static Blob sessionOf(Job job) {
-		return Blob.parse(RT.ensureString(job.getData().get(Fields.SESSION_ID)).toString());
+		return Blob.fromHex(RT.ensureString(job.getData().get(Fields.SESSION_ID)).toString());
 	}
 
 	private static AString hex(Job job) {
@@ -535,6 +535,21 @@ public class AgentCycleTest {
 			assertEquals(1, userTurns(agent, sid, script).count());
 			assertEquals(1, userTurns(agent, sid, "complete").count(), "the continuation is presented once");
 		}
+	}
+
+	@Test
+	public void aSessionNamedWithThePrefixIsHeldAsBareHex(TestInfo info) throws Exception {
+		RequestContext owner = RequestContext.of(TestEngine.uniqueDID(info));
+		stepAgent(owner, "bare-session");
+		Job first = chat(owner, "bare-session", null, "reply");
+		first.awaitResult(10_000);
+		String bare = sessionOf(first).toHexString();
+
+		Job second = engine.jobs().invokeOperation("v/ops/agent/chat", Maps.of(Fields.AGENT_ID, "bare-session",
+			Fields.MESSAGE, Strings.create("reply"), Fields.SESSION_ID, Strings.create("0x" + bare)), owner);
+		second.awaitResult(10_000);
+
+		assertEquals(Strings.create(bare), second.getData().get(Fields.SESSION_ID));
 	}
 
 	@Test

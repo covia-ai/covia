@@ -177,7 +177,7 @@ public class OAuthProvider {
 		for (long i = 0; i < uris.count(); i++) {
 			AString u = RT.ensureString(uris.get(i));
 			if (u == null || u.toString().isBlank()) throw new ConfigurationException("auth.oauth.provider.clients." + id + ".redirectUris entries must be URIs");
-			String uri = u.toString().trim();
+			String uri = u.toString();
 			URI parsed;
 			try {
 				parsed = URI.create(uri);
@@ -211,7 +211,7 @@ public class OAuthProvider {
 			for (long i = 0; i < sc.count(); i++) {
 				AString s = RT.ensureString(sc.get(i));
 				if (s == null || s.toString().isBlank()) throw new ConfigurationException("auth.oauth.provider.clients." + id + ".scopes entries must be strings");
-				scopes.add(s.toString().trim());
+				scopes.add(s.toString());
 			}
 		}
 		return new Client(id, List.copyOf(redirects), secretRef, isPublic, List.copyOf(scopes), str(settings.get(K_NAME)));
@@ -583,7 +583,7 @@ public class OAuthProvider {
 
 	private static String str(ACell c) {
 		AString s = RT.ensureString(c);
-		return (s != null && !s.toString().isBlank()) ? s.toString().trim() : null;
+		return (s != null && !s.toString().isBlank()) ? s.toString() : null;
 	}
 
 	private static Boolean bool(ACell c) {
