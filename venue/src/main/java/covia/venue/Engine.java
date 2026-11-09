@@ -1827,17 +1827,6 @@ public class Engine {
 	// without an "operation" field) is opaque data, not a reference. This
 	// keeps the resolver primitive simple and explicit.
 
-	/** Namespace prefix for immutable content-addressed assets (leading slash optional: a/ or /a/) */
-	private static final AString NS_ASSET = Strings.intern("a/");
-	/** Namespace prefix for DID URLs */
-	private static final AString NS_DID   = Strings.intern("did:");
-	/** Optional leading-slash sugar, stripped before virtual/workspace resolution */
-	private static final AString SLASH    = Strings.intern("/");
-
-	/** Strips a single optional leading slash: {@code "/w/x"} → {@code "w/x"}; {@code "w/x"} unchanged. */
-	private static AString stripLeadingSlash(AString ref) {
-		return ref.startsWith(SLASH) ? ref.slice(1) : ref;
-	}
 
 	/**
 	 * A physical path in a user's local namespace. Relative paths belong to the
@@ -1936,7 +1925,7 @@ public class Engine {
 	 */
 	public void requireReadable(RequestContext ctx, AString ref) {
 		if (ref == null) return;
-		if (ref.startsWith(NS_DID) && !isLocalDIDResource(ref)) return;
+		if (ownerOf(ref) != null && !isLocalDIDResource(ref)) return;
 		try {
 			requireMetadataRead(ctx, ref);
 		} catch (IllegalArgumentException malformed) {
@@ -1959,7 +1948,7 @@ public class Engine {
 	public void requirePathRead(RequestContext ctx, AString path) {
 		if (path == null) return;
 		if (!(getAdapter("covia") instanceof CoviaAdapter covia)
-				|| (path.startsWith(NS_DID) && !isLocalDIDResource(path))) {
+				|| (ownerOf(path) != null && !isLocalDIDResource(path))) {
 			requireResourceAccess(ctx, path, Capability.CRUD_READ);
 			return;
 		}
@@ -2006,26 +1995,10 @@ public class Engine {
 	public ACell resolvePathUnchecked(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
 
-		// 1. Bare hex hash → look up in CAS
-		Hash h = Hash.parse(ref);
-		if (h != null) {
-			Asset asset = getAsset(h, ctx);
-			return (asset != null) ? asset.meta() : null;
-		}
-
-		// 2. a/<hash> or /a/<hash> → look up in CAS (leading slash optional)
-		AString localRef = stripLeadingSlash(ref);
-		if (localRef.startsWith(NS_ASSET)) {
-			Hash ah = Hash.parse(localRef.slice(2));
-			if (ah == null) return null;
-			Asset asset = getAsset(ah, ctx);
-			return (asset != null) ? asset.meta() : null;
-		}
-
-		// 3. DID URL — a local asset; remote asset fetch is handled by
-		// resolveAsset. Asset catalog refs and user paths share the platform
-		// DID-path grammar, so any other DID URL is a path into a user here.
-		if (ref.startsWith(NS_DID)) {
+		if (ownerOf(ref) != null) {
+			// A DID URL — a local asset; remote asset fetch is handled by
+			// resolveAsset. Asset catalog refs and user paths share the platform
+			// DID-path grammar, so any other DID URL is a path into a user here.
 			Asset local = resolveLocalDIDURL(ref, ctx);
 			if (local != null) return local.meta();
 			try {
@@ -2033,11 +2006,16 @@ public class Engine {
 			} catch (AuthException | InvalidInputException | IllegalArgumentException e) {
 				return null;
 			}
-		} else if (CoviaPath.parse(localRef.toString()).isEmpty()) {
-			return null;   // names no namespace
+		} else {
+			Hash hash = AssetAdapter.parseAssetId(ref);
+			if (hash != null) {
+				Asset asset = getAsset(hash, ctx);
+				return (asset != null) ? asset.meta() : null;
+			}
+			if (CoviaPath.parse(ref.toString()).isEmpty()) return null;   // names no namespace
 		}
 
-		// 4. A lattice path, from the component its request names
+		// A lattice path, from the component its request names
 		return readLatticePath(ref, ctx);
 	}
 
@@ -2124,7 +2102,7 @@ public class Engine {
 		// Remote DID URLs: fetch the content-addressed definition from the
 		// publishing venue (hash-verified). The returned Asset carries no
 		// venue — execution, if any, is local. See resolveDIDURL.
-		if (ref.startsWith(NS_DID)) {
+		if (ownerOf(ref) != null) {
 			Asset asset = resolveDIDURL(ref, ctx, checked, fetch);
 			if (asset != null) return asset;
 			// Fall through — DID URL might be unresolvable but other forms
@@ -2196,9 +2174,9 @@ public class Engine {
 	 *       taking the publisher's word for the name → hash binding (the
 	 *       definition itself is still hash-verified on fetch).</li>
 	 * </ul>
-	 * Exactly one of {@code hash} / {@code name} is non-null. The DID
-	 * string is kept unescaped ({@code did:key:VENUE:public}, not
-	 * URL-encoded) to match user-record keying.
+	 * Exactly one of {@code hash} / {@code name} is non-null. The DID is
+	 * {@link #ownerOf the owner as written}, as user records are keyed, so
+	 * the read looks in the store its access check was made against.
 	 */
 	private record AssetRef(String didString, String method, Hash hash, String name) {}
 
@@ -2207,29 +2185,18 @@ public class Engine {
 	 * {@code /v/…} (named catalog) path. Returns null for any other shape.
 	 */
 	private AssetRef parseAssetRef(AString ref) {
-		DIDURL didurl;
+		AString owner = ownerOf(ref);
+		if (owner == null) return null;
+		String method;
 		try {
-			didurl = DIDURL.create(ref.toString());
+			method = DIDURL.create(owner.toString()).getDID().getMethod();
 		} catch (IllegalArgumentException e) {
 			return null;
 		}
-		String path = didurl.getPath();
-		if (path == null) return null;
-
-		// Reconstruct the unescaped DID string — DID.toString() URL-encodes
-		// colons in the id, which would break sub-id keys like "VENUE:public".
-		DID did = didurl.getDID();
-		String didString = "did:" + did.getMethod() + ":" + did.getID();
-
-		if (path.startsWith("/a/")) {
-			Hash hash = Hash.parse(path.substring(3));
-			if (hash == null) return null;
-			return new AssetRef(didString, did.getMethod(), hash, null);
-		}
-		if (path.startsWith("/v/")) {
-			return new AssetRef(didString, did.getMethod(), null, path.substring(1));
-		}
-		return null;
+		Hash hash = AssetAdapter.parseAssetId(ref);
+		if (hash != null) return new AssetRef(owner.toString(), method, hash, null);
+		String path = CapabilityChecker.canonicalResource(ref.toString(), null).substring(owner.toString().length());
+		return path.startsWith("/v/") ? new AssetRef(owner.toString(), method, null, path.substring(1)) : null;
 	}
 
 	/** Looks up a parsed asset reference in exactly the named DID's store. */
@@ -2515,31 +2482,11 @@ public class Engine {
 	public Hash resolveHash(AString ref) {
 		if (ref == null) return null;
 
-		// 1. Bare hex hash
-		Hash h = Hash.parse(ref);
+		Hash h = AssetAdapter.parseAssetId(ref);
 		if (h != null) return h;
+		if (ownerOf(ref) != null) return null;   // local only — no remote dispatch
 
-		// 2. Namespace prefix (leading slash is optional, as in resolvePath)
-		AString assetRef = stripLeadingSlash(ref);
-		if (assetRef.startsWith(NS_ASSET)) {
-			return Hash.parse(assetRef.slice(2));
-		}
-
-		// 3. DID URL (local only — no remote dispatch)
-		if (ref.startsWith(NS_DID)) {
-			try {
-				DIDURL didurl = DIDURL.create(ref.toString());
-				String path = didurl.getPath();
-				if (path != null && path.startsWith("/a/")) {
-					return Hash.parse(path.substring(3));
-				}
-			} catch (IllegalArgumentException e) {
-				return null;
-			}
-			return null;
-		}
-
-		// 4. Catalog path or other resolvable form — go through resolveAsset
+		// Catalog path or other resolvable form — go through resolveAsset
 		// to get the canonical hash from the resolved asset metadata.
 		Asset asset = resolveAsset(ref);
 		return (asset != null) ? asset.getID() : null;
@@ -2662,7 +2609,7 @@ public class Engine {
 		// An asset is read as an asset; a path into the lattice is read as data
 		// where it lives, and what it holds is then resolved as content.
 		if (covia.adapter.AssetAdapter.parseAssetId(ref) != null
-				|| (ref.startsWith(NS_DID) && !isLocalDIDResource(ref))) {
+				|| (ownerOf(ref) != null && !isLocalDIDResource(ref))) {
 			requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
 		} else {
 			requirePathRead(ctx, ref);
@@ -2672,7 +2619,7 @@ public class Engine {
 		// metadata. Keep the fetch transient: asset:pin remains the operation that
 		// adopts metadata + bytes into the caller's local CAS. did:key references
 		// with no locally held owner cannot be fetched and resolve as absent.
-		if (ref.startsWith(NS_DID) && !isLocalDIDResource(ref)) {
+		if (ownerOf(ref) != null && !isLocalDIDResource(ref)) {
 			Asset remoteAsset = resolveDIDURL(ref, ctx);
 			if (remoteAsset == null) return null;
 			ACell remoteContent = fetchRemoteContent(ctx, ref);
@@ -4805,15 +4752,15 @@ public class Engine {
 	 *  {@code s/NAME} or {@code /s/NAME} (the caller's own), or {@code <did>/s/NAME}
 	 *  (another principal's, usable under a {@code secret/use} grant). */
 	public static boolean isSecretRef(String value) {
-		return value != null && (value.startsWith("s/") || value.startsWith("/s/")
-			|| (value.startsWith("did:") && value.contains("/s/")));
+		if (value == null) return false;
+		String name = CapabilityChecker.canonicalResource(value, null);
+		return name.startsWith("s/") || (name.startsWith("did:") && name.contains("/s/"));
 	}
 
 	/** The secret name a reference points at: {@code s/} or {@code /s/} stripped, a bare name unchanged. */
 	public static String secretName(String secretRef) {
-		return secretRef.startsWith("/s/") ? secretRef.substring(3)
-			: secretRef.startsWith("s/") ? secretRef.substring(2)
-			: secretRef;
+		String name = CapabilityChecker.canonicalResource(secretRef, null);
+		return name.startsWith("s/") ? name.substring(2) : name;
 	}
 
 	/**
@@ -4850,8 +4797,9 @@ public class Engine {
 		if (secretRef == null || ctx == null || ctx.getUserDID() == null) return null;
 		AString owner = secretOwner(secretRef, ctx.getUserDID());
 		if (owner == null) return null;
-		String name = secretRef.startsWith("did:")
-			? secretRef.substring(secretRef.indexOf("/s/") + 3) : secretName(secretRef);
+		AString named = ownerOf(Strings.create(secretRef));
+		String name = (named == null) ? secretName(secretRef)
+			: CapabilityChecker.canonicalResource(secretRef, null).substring(named.toString().length() + 3);
 		if (name.isEmpty() || name.indexOf('/') >= 0) return null;   // one secret name, as secret:set requires
 		if (!isOwnSecret(owner, ctx.authorityContext())) {
 			requireLocalAccess(ctx, Strings.create(owner + "/s/" + name), Abilities.SECRET_USE,
@@ -4889,11 +4837,10 @@ public class Engine {
 	/** The DID whose store {@code secretRef} names: {@code caller} for the own
 	 *  forms, the whole DID of {@code <did>/s/NAME}; null when malformed. */
 	private static AString secretOwner(String secretRef, AString caller) {
-		if (!secretRef.startsWith("did:")) return caller;
+		AString owner = ownerOf(Strings.create(secretRef));
+		if (owner == null) return caller;
 		// <did>/s/NAME: the owner is the whole DID, never a path under one.
-		int idx = secretRef.indexOf("/s/");
-		if (idx < 0 || secretRef.lastIndexOf('/', idx - 1) >= 0) return null;
-		return Strings.create(secretRef.substring(0, idx));
+		return CapabilityChecker.canonicalResource(secretRef, null).startsWith("/s/", owner.toString().length()) ? owner : null;
 	}
 
 	/** A user's own secrets are its own to use, and so its agents' (UCAN.md

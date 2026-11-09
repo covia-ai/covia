@@ -639,10 +639,8 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private static Hash parseCallerAssetId(String ref) {
 		if (ref == null) return null;
-		if (ref.startsWith("/a/")) return Hash.parse(ref.substring(3));
-		if (ref.startsWith("a/")) return Hash.parse(ref.substring(2));
-		if (ref.startsWith("did:")) return null;
-		return Hash.parse(ref);
+		AString name = Strings.create(ref);
+		return (covia.venue.Engine.ownerOf(name) != null) ? null : covia.adapter.AssetAdapter.parseAssetId(name);
 	}
 	
 	@OpenApi(path = ROUTE + "assets/{id}/content",

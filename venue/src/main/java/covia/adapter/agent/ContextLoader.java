@@ -23,6 +23,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -351,8 +352,7 @@ public class ContextLoader {
 	 */
 	public static boolean isLatticePath(Engine engine, RequestContext ctx, String ref) {
 		if (ref == null) return false;
-		String s = ref.startsWith("/") ? ref.substring(1) : ref;
-		if (s.indexOf('/') < 0) return false;
+		if (CapabilityChecker.canonicalResource(ref, null).indexOf('/') < 0) return false;
 		return engine.getAdapter("covia") instanceof CoviaAdapter covia && covia.isLatticePath(ctx, Strings.create(ref));
 	}
 
@@ -367,12 +367,9 @@ public class ContextLoader {
 	 */
 	public static boolean isAssetReference(String ref) {
 		if (ref == null || ref.isEmpty() || ref.contains(" ")) return false;
-		if (ref.startsWith("did:")) return true;
-		if (ref.startsWith("file:/") || ref.startsWith("dlfs/") || ref.startsWith("dlfs://")) return true;
-		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return true; // hex hash
-		// Leading slash optional (mirrors resolvePath). a/ is the bare asset-ref
-		// form (matches AssetAdapter.parseAssetId).
-		String s = ref.startsWith("/") ? ref.substring(1) : ref;
+		String s = CapabilityChecker.canonicalResource(ref, null);
+		if (s.startsWith("did:") || s.startsWith("file:/") || s.startsWith("dlfs/")) return true;
+		if (s.length() == 64 && s.matches("[0-9a-fA-F]+")) return true; // hex hash
 		return s.startsWith("a/") || s.startsWith("v/");
 	}
 

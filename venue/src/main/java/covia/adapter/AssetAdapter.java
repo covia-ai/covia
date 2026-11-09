@@ -12,6 +12,7 @@ import convex.core.crypto.Hashing;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.data.Path;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
@@ -26,7 +27,11 @@ import covia.exception.NotFoundException;
 import covia.exception.NotSupportedException;
 import covia.exception.UnavailableException;
 import covia.grid.Asset;
+import covia.lattice.CapabilityChecker;
+import covia.lattice.CoviaPath;
+import covia.lattice.Namespace;
 import covia.venue.AssetStore;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -227,47 +232,47 @@ public class AssetAdapter extends AAdapter {
 	}
 
 	/**
-	 * Parses an asset hash from an ID string. Accepts bare hash, a/<hash>,
-	 * /a/<hash>, or did:key:.../a/<hash> formats.
+	 * The asset a reference names by hash: a bare hash, {@code a/<hash>} or
+	 * {@code <did>/a/<hash>}, and nothing else; null for any other name, such
+	 * as a path that merely has {@code a} among its segments.
 	 */
-	/** Parses hash-form asset references (bare hex, a/<hash>, DID URL /a/ forms).
-	 *  Public: the engine's reference-addressed content resolution uses it. */
 	public static Hash parseAssetId(AString idStr) {
 		if (idStr == null) return null;
-		String s = idStr.toString();
-		// Strip DID prefix if present: did:key:z6Mk.../a/<hash> → <hash>
-		int aPos = s.indexOf("/a/");
-		if (aPos >= 0) {
-			s = s.substring(aPos + 3);
-		} else if (s.startsWith("a/")) {
-			// Bare a/<hash> form — matches the user-namespace convention
-			// used by other prefixes (w/, o/, etc.) and the asset_list tool
-			// description.
-			s = s.substring(2);
-		}
-		return Hash.parse(s);
+		AString owner = Engine.ownerOf(idStr);
+		String name = CapabilityChecker.canonicalResource(idStr.toString(), null);
+		Path path = CoviaPath.parse((owner == null) ? name : name.substring(owner.toString().length()));
+		if (path.count() == 2 && Namespace.A.equals(path.get(0))) return Hash.parse(path.get(1));
+		return (path.count() == 1 && owner == null) ? Hash.parse(path.get(0)) : null;
+	}
+
+	/**
+	 * Whether {@code ctx} may read {@code id}, and the store to read it from:
+	 * an asset takes {@code asset/read} (a cross-user reference it can't cover
+	 * is a denial, not a silent miss), and a path is read as data, where it
+	 * lives ({@link Engine#requirePathRead}).
+	 */
+	private AString requireReadable(RequestContext ctx, AString id, Hash hash) {
+		if (hash != null) return engine.requireLocalAccess(ctx, id, Abilities.ASSET_READ);
+		engine.requirePathRead(ctx, id);
+		AString owner = Engine.ownerOf(id);
+		return (owner != null) ? owner : ctx.getUserDID();
 	}
 
 	@SuppressWarnings("unchecked")
 	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = referenceArg(input, Fields.ID);
-		// An asset (a/) is per-DID exactly like a workspace path (w/): reading
-		// another user's asset needs read rights — a cross-user ref the caller
-		// can't cover is a denial, not a silent miss. readAs is the store to read
-		// from (own, or the owner's for an authorised cross-user read).
-		AString readAs = engine.requireLocalAccess(ctx, idStr, Abilities.ASSET_READ);
+		Hash hash = parseAssetId(idStr);
+		AString readAs = requireReadable(ctx, idStr, hash);
 
 		// Hash-form refs go through the CAS record (preserves the canonical
 		// metadata bytes). Other forms walk the universal resolver.
 		AMap<AString, ACell> meta = null;
-		Hash hash = parseAssetId(idStr);
 		if (hash != null) {
 			AVector<?> record = engine.getAssetRecord(hash, readAs);
 			if (record != null) {
 				meta = RT.ensureMap(record.get(AssetStore.POS_META));
 			}
 		} else {
-			// Read checked above (asset/read); crud/read must not be required too.
 			ACell value = engine.resolvePathUnchecked(idStr, ctx);
 			if (value instanceof AMap) meta = (AMap<AString, ACell>) value;
 		}
@@ -313,9 +318,9 @@ public class AssetAdapter extends AAdapter {
 			throw new UnavailableException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
 		}
 
-		// CAS fallback: an asset (a/) is per-DID like w — gate the cross-user read
-		// (deny, not a silent miss) and read the owner's record when authorised.
-		AString readAs = engine.requireLocalAccess(ctx, idStr, Abilities.ASSET_READ);
+		// CAS fallback: read the owner's record when authorised.
+		Hash hash = parseAssetId(idStr);
+		AString readAs = requireReadable(ctx, idStr, hash);
 
 		// Locate the CAS record for the source. Hash-form refs name the record
 		// directly. For non-hash refs we resolve the path, derive the CAD3 hash
@@ -323,16 +328,14 @@ public class AssetAdapter extends AAdapter {
 		// non-CAS workspace values that have never been stored as assets won't
 		// have a record, and the call returns exists: false.
 		AVector<?> record = null;
-		Hash hash = parseAssetId(idStr);
 		if (hash != null) {
 			record = engine.getAssetRecord(hash, readAs);
 		} else {
-			// Read checked above (asset/read).
 			ACell value = engine.resolvePathUnchecked(idStr, ctx);
 			if (value instanceof AMap) {
 				Hash derived = ((AMap<AString, ACell>) value).getHash();
-				String source = idStr.toString();
-				AString recordOwner = (source.startsWith("v/") || source.startsWith("/v/"))
+				String source = CapabilityChecker.canonicalResource(idStr.toString(), null);
+				AString recordOwner = source.startsWith("v/")
 					? engine.getDIDString() : readAs;
 				record = engine.getAssetRecord(derived, recordOwner);
 			}
@@ -465,9 +468,11 @@ public class AssetAdapter extends AAdapter {
 		// source, and may it create a durable asset in its own store? Do not ask
 		// for asset/store on the source path — that both misses private-read
 		// ownership and describes the wrong action.
-		AString readAbility = (parseAssetId(pathStr) != null)
-			? Abilities.ASSET_READ : Capability.CRUD_READ;
-		engine.requireResourceAccess(ctx, pathStr, readAbility);
+		if (parseAssetId(pathStr) != null) {
+			engine.requireResourceAccess(ctx, pathStr, Abilities.ASSET_READ);
+		} else {
+			engine.requirePathRead(ctx, pathStr);
+		}
 		engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
 
 		AString metaString;
@@ -479,14 +484,15 @@ public class AssetAdapter extends AAdapter {
 		// generic path resolver would only return the metadata.
 		Hash existingHash = parseAssetId(pathStr);
 		if (existingHash != null) {
-			boolean local = !pathStr.startsWith("did:") || engine.isLocalDIDResource(pathStr);
+			boolean explicitOwner = Engine.ownerOf(pathStr) != null;
+			boolean local = !explicitOwner || engine.isLocalDIDResource(pathStr);
 			AString owner = local
 				? engine.requireLocalAccess(ctx, pathStr, Abilities.ASSET_READ) : null;
 			AVector<?> record = local ? engine.getAssetRecord(existingHash, owner) : null;
 			if (record != null) {
 				metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
 				content = record.get(AssetStore.POS_CONTENT);
-			} else if (pathStr.startsWith("did:")) {
+			} else if (explicitOwner) {
 				// Remote adoption — pin IS the explicit act that makes a
 				// remote definition durable. Metadata arrives hash-verified;
 				// content (if the metadata declares any) sha256-verified.
@@ -509,7 +515,7 @@ public class AssetAdapter extends AAdapter {
 						+ " (got " + value.getClass().getSimpleName() + ")");
 				}
 				metaString = JSON.printPretty((AMap<AString, ACell>) value);
-			} else if (pathStr.startsWith("did:")) {
+			} else if (Engine.ownerOf(pathStr) != null) {
 				// Named remote reference (did:web:.../v/ops/...): adopt like
 				// any other remote definition. resolvePath is local-only, so
 				// a miss here is the expected route for remote bindings.
