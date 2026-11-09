@@ -26,7 +26,7 @@ public final class PythonModuleSmokeMain {
 		AMap<AString, ACell> config = Maps.of(
 			Config.MODULES, Vectors.of(Maps.of(
 				"path", args[0], "config", moduleConfig)));
-		Engine engine = Engine.createTemp(config);
+		Engine engine = Engine.createRealTime(config);
 		try {
 			Engine.addDemoAssets(engine);
 			AAdapter adapter = engine.getAdapter("python");

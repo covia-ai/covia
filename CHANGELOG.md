@@ -38,6 +38,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Requires Convex 0.8.19.
 - A leading slash changes nothing in any resource name, including a capability's `with` and before a DID.
 - `asset:get`, `asset:getContent` and `asset:pin` check a path as a path: reading one needs `crud/read`.
+- `covia:read`, `list`, `slice`, `inspect` and `aggregate`, and the `/values` routes, refuse an empty path, `/` or a DID alone, naming the namespaces to use instead: a user's record is never returned whole.
 - A venue roots grants over every identity it hosts, self-sovereign users included, valid at that venue only.
 - `ucan:issue` hands on only what its caller could grant: what it is root of, where its caps include `grant/<can>`, or what a presented `grant/<can>` right covers, through the grant's expiry.
 - An agent's `caps` and `accepts` take no check of their own when set: `caps` can never exceed the authority of the agent's controller, so what an agent creates stays within what it can do.

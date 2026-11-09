@@ -181,7 +181,7 @@ public final class AgentWatch implements AutoCloseable {
 			AgentEvents.Event e = events.get(i);
 			sb.append(e.type());
 			if (AgentEvents.STATUS.equals(e.type()) || AgentEvents.RUN_END.equals(e.type())) {
-				sb.append('=').append(RT.getIn(e.data(), Fields.STATUS));
+				sb.append('=').append((Object) RT.getIn(e.data(), Fields.STATUS));
 			}
 		}
 		sb.append(']');

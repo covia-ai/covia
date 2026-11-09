@@ -44,11 +44,10 @@ import covia.grid.Status;
 
 /**
  * Tests for the per-venue grid {@link Scheduler}. Firing is exercised
- * deterministically via {@link Scheduler#trigger} (fire-by-handle) — no
- * wall-clock sleeps — except the tests that let the shared engine's update
- * timer fire an immediately-due event. Owner isolation makes these safe under
- * the shared parallel engine. Stepping on a driven clock is
- * {@link SteppedSchedulerTest}. See {@code venue/docs/GRID_SCHEDULER.md}.
+ * deterministically via {@link Scheduler#trigger} (fire-by-handle). Owner
+ * isolation makes these safe under the shared parallel engine. Firing by an
+ * update is {@link SteppedSchedulerTest} and {@link BothClocksTest}. See
+ * {@code venue/docs/GRID_SCHEDULER.md}.
  */
 public class SchedulerTest {
 
@@ -57,7 +56,7 @@ public class SchedulerTest {
 	private AString did;
 	private RequestContext ctx;
 
-	/** Comfortably beyond any test run, so the update timer never fires these mid-test. */
+	/** How far ahead {@link #future} schedules: never due on the shared engine's held clock. */
 	private static final long HOUR = 3_600_000L;
 
 	private static AString s(String x) { return Strings.create(x); }
@@ -328,9 +327,9 @@ public class SchedulerTest {
 
 	@Test
 	public void testListSaysWhoScheduledAndWhen() {
-		long before = System.currentTimeMillis();
+		long before = engine.currentTimestamp().longValue();
 		Blob mine = sched.schedule(s("v/test/ops/echo"), s("mine"), ctx, future());
-		long after = System.currentTimeMillis();
+		long after = engine.currentTimestamp().longValue();
 		AMap<AString, ACell> rec = only(sched.list(ctx));
 		assertEquals(did, rec.get(Schedule.K_CALLER), "a user's own event names the user");
 		assertFalse(rec.containsKey(Schedule.K_OWNER), "and no other owner");
@@ -502,26 +501,6 @@ public class SchedulerTest {
 		assertTrue(result != null, "a caps-covered deferred op must run, not be denied");
 	}
 
-	// -------------------------------------------------------------- timer firing
-
-	/**
-	 * An immediately-due event is fired by the shared engine's update timer
-	 * without any manual trigger. Its operation waits at a test gate: an update
-	 * claims an event before it dispatches the fire, so once the gate is
-	 * reached the event has left the owner's list.
-	 */
-	@Test
-	public void testTimerFiresImmediatelyDueEvent() throws Exception {
-		String gateName = "timer-fires-" + did;
-		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			sched.schedule(s("v/test/ops/hold"), Maps.of("gate", gateName), ctx, System.currentTimeMillis());
-
-			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the timer should fire the immediately-due event");
-			assertTrue(sched.list(ctx).isEmpty(),
-				"the timer should fire and remove an immediately-due event: " + sched.list(ctx));
-		}
-	}
-
 	// --------------------------------------------------------------- recurrence
 
 	@Test
@@ -550,37 +529,6 @@ public class SchedulerTest {
 			"every must be an integer");
 	}
 
-	/**
-	 * An immediately-due recurring event fires, then re-inserts itself one
-	 * interval on under the same id — so the handle the caller holds still
-	 * cancels it, although the index key has moved with the time prefix.
-	 */
-	@Test
-	public void testRecurringEventReinsertsAndKeepsHandle() throws Exception {
-		long start = System.currentTimeMillis();
-		String gateName = "recurring-fires-" + did;
-		Blob handle;
-		AMap<AString, ACell> rec;
-		// The fire waits at a test gate: the update moves the event to its next
-		// slot before it dispatches the fire, so once the gate is reached it has.
-		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
-			handle = sched.schedule(s("v/test/ops/hold"), Maps.of("gate", gateName), ctx, start, everyHour(), null,
-				s("hourly tick"));
-			assertTrue(gate.awaitEntered(10, TimeUnit.SECONDS), "the recurring event should fire");
-			rec = only(sched.list(ctx));
-		}
-		assertEquals(CVMLong.create(start + HOUR), rec.get(Schedule.K_TIME),
-			"re-inserted one interval on from its original slot");
-		assertEquals(everyHour(), rec.get(Schedule.K_REPEAT));
-		assertNotEquals(handle, rec.get(Schedule.K_HANDLE), "the index key moves with the time prefix");
-		assertTrue(((CVMLong) rec.get(Schedule.K_LAST_FIRED)).longValue() >= start);
-		assertEquals(did, rec.get(Schedule.K_CALLER), "attribution moves with the event");
-		assertEquals(s("hourly tick"), rec.get(Schedule.K_DESCRIPTION));
-		assertInstanceOf(CVMLong.class, rec.get(Schedule.K_CREATED), "created moves with the event");
-
-		assertTrue(sched.cancel(handle, ctx), "the original handle must still cancel the moved event");
-		assertTrue(sched.list(ctx).isEmpty());
-	}
 
 	@Test
 	public void testTriggerRecurringKeepsSchedule() throws Exception {

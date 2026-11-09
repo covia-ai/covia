@@ -469,7 +469,7 @@ public class EngineTest {
 		RequestContext ctx = venue.venueContext();
 		InvalidInputException empty = assertThrows(InvalidInputException.class,
 			() -> venue.resolveUserPath(ctx, Strings.EMPTY, false));
-		assertEquals(Engine.USER_PATH_EMPTY, empty.getMessage());
+		assertEquals(Engine.USER_PATH_NO_NAMESPACE, empty.getMessage());
 		InvalidInputException bare = assertThrows(InvalidInputException.class,
 			() -> venue.resolveUserPath(ctx, Strings.create(venue.getDIDString()), false));
 		assertEquals(Engine.USER_PATH_NO_NAMESPACE, bare.getMessage());

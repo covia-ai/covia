@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static covia.adapter.slack.TestSupport.*;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -63,12 +62,13 @@ class SlackAdapterTest {
 			var challenge = f.webhook(Maps.of("type", "url_verification", "challenge", "challenge"));
 			assertEquals(200, challenge.status()); assertEquals("challenge", new String(challenge.body(), StandardCharsets.UTF_8));
 			byte[] body = "{ \"type\": \"url_verification\", \"challenge\": \"unicode ✓\" }".getBytes(StandardCharsets.UTF_8);
-			assertEquals(200, f.adapter.handleWebhook("c-main", signed(body, Instant.now().getEpochSecond())).status());
-			assertEquals(401, f.adapter.handleWebhook("c-main", signed(body, Instant.now().getEpochSecond() - 301)).status());
-			assertEquals(401, f.adapter.handleWebhook("c-main", signed(body, Instant.now().getEpochSecond() + 301)).status());
-			var request = signed(body, Instant.now().getEpochSecond());
+			long now = f.engine.currentTimestamp().longValue() / 1000;
+			assertEquals(200, f.adapter.handleWebhook("c-main", signed(body, now)).status());
+			assertEquals(401, f.adapter.handleWebhook("c-main", signed(body, now - 301)).status());
+			assertEquals(401, f.adapter.handleWebhook("c-main", signed(body, now + 301)).status());
+			var request = signed(body, now);
 			assertEquals(401, f.adapter.handleWebhook("c-main", new WebhookRequest("POST", request.headers(), Map.of(), "{}".getBytes(StandardCharsets.UTF_8))).status());
-			assertEquals(400, f.adapter.handleWebhook("c-main", signed("{".getBytes(StandardCharsets.UTF_8), Instant.now().getEpochSecond())).status());
+			assertEquals(400, f.adapter.handleWebhook("c-main", signed("{".getBytes(StandardCharsets.UTF_8), now)).status());
 			assertEquals(405, f.adapter.handleWebhook("c-main", new WebhookRequest("GET", Map.of(), Map.of(), new byte[0])).status());
 			assertTrue(f.api.sends.isEmpty());
 		}
